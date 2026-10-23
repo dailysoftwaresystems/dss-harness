@@ -98,10 +98,10 @@ public static class WorkflowValidator
         ["openAgents"] = (step, _) => step.Then is not null,
 
         // A fold's, or a deletion's that folds, and those a refresh and a rebase share with it.
-        ["foldNewRows"] = (step, _) => Folds(step),
-        ["foldOutside"] = (step, _) => Folds(step),
-        ["foldTwoChanges"] = (step, _) => Folds(step) || step.Type is "refresh" or "rebase",
-        ["foldConflicts"] = (step, _) => Folds(step) || step.Type is "refresh" or "rebase",
+        ["foldNewRows"] = (step, _) => WorkflowStepTypes.Folds(step),
+        ["foldOutside"] = (step, _) => WorkflowStepTypes.Folds(step),
+        ["foldTwoChanges"] = (step, _) => WorkflowStepTypes.Folds(step) || step.Type is "refresh" or "rebase",
+        ["foldConflicts"] = (step, _) => WorkflowStepTypes.Folds(step) || step.Type is "refresh" or "rebase",
 
         // A reasoning step's conversation at a limit of its own.
         ["turnLimit"] = (step, _) => step.Type == "reason",
@@ -114,10 +114,6 @@ public static class WorkflowValidator
         ["checksPending"] = (step, _) => step.Type == "ci-wait",
         ["checksUnsettled"] = (step, _) => step.Type == "ci-wait",
     };
-
-    /// <summary>Whether <paramref name="step"/> folds an agent's work: a fold, or a deletion that does not discard it.</summary>
-    private static bool Folds(WorkflowStep step)
-        => step.Type == "fold" || (step.Type == "delete-agent" && step.DiscardUncommitted is not true);
 
     /// <summary>V26: the most steps one workflow may declare, the recovery's among them, for they run. How deep a flow nests is <see cref="WorkflowFileParser.MaxDepth"/>'s own bound.</summary>
     internal const int MostSteps = 200;
@@ -1104,12 +1100,15 @@ public static class WorkflowValidator
         /// </summary>
         private void WaitsForTheAgent(Entry entry, Entry create, string does)
         {
-            // An alternative to the step that builds a work item runs in its place, with its dependencies (V44).
-            var waiter = _definition.Amend is { } amend && (entry.Path == amend.WhenChangeScope || entry.Path == amend.WhenRemoveScope)
-                ? amend.WhenAddScope
-                : entry.Path;
+            // An alternative to the step that builds a work item runs in its place, with its dependencies (V44): it - and,
+            // where it is a group, every step inside it, as inside any group - waits for what the builder waits for,
+            // beside what its own dependencies reach.
+            var waits = FlowGraph.Waits(_definition, entry.Path, create.Path)
+                || (_definition.Amend is { } amend
+                    && new[] { amend.WhenChangeScope, amend.WhenRemoveScope }.Any(alternative => entry.Path == alternative || entry.Path.StartsWith(alternative + ".", StringComparison.Ordinal))
+                    && FlowGraph.Waits(_definition, amend.WhenAddScope, create.Path));
 
-            if (!FlowGraph.Waits(_definition, waiter, create.Path))
+            if (!waits)
             {
                 _problems.Add($"step '{entry.Path}' {does} the agent '{create.Path}' makes, and does not wait for it: name '{create.Step.Name}', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made");
             }

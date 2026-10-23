@@ -378,6 +378,19 @@ public static class WorkflowStepTypes
     public static StepType? Find(string type) => All.FirstOrDefault(known => string.Equals(known.Type, type, StringComparison.Ordinal));
 
     /// <summary>
+    /// Whether <paramref name="step"/> folds an agent's work into the main tree, as written: a <c>fold</c>, and a
+    /// <c>delete-agent</c> that does not discard it. The one rule the definition's check asks a fold's questions of it by
+    /// and its runner folds through the run's ledger by; the runner leaves out, besides, a deletion of an agent whose
+    /// deletion already began, which folds nothing more.
+    /// </summary>
+    /// <param name="step">A step of a workflow.</param>
+    public static bool Folds(WorkflowStep step)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+        return step.Type == "fold" || (step.Type == "delete-agent" && step.DiscardUncommitted is not true);
+    }
+
+    /// <summary>
     /// Whether <paramref name="step"/> makes an agent when it runs, which the run names itself
     /// (<see cref="OrchestrationRules.GeneratedAgentPrefix"/> and a number): a create-agent step, and a reason step that
     /// reads and begins work of its own. A reason step that writes works in the agent its <c>in</c> names, and one that

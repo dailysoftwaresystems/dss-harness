@@ -240,6 +240,125 @@ public sealed class FlowOthersTests
     }
 
     /// <summary>
+    /// A person's retry of a step of others gives a target whose turn a fail answer ended its turn again, as it gives any
+    /// target that failed - unlike a resume, which leaves an answer's ending standing - and those done keep what they did.
+    /// </summary>
+    [Fact]
+    public async Task AStepOfOthersRetriedByAPerson_GivesATargetAFailAnswerEndedItsTurnAgain()
+    {
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", """
+            name: flow
+            maxOpenAgents: 4
+            steps:
+              - name: one
+                type: create-agent
+                agent: worker.md
+              - name: two
+                type: create-agent
+                agent: worker.md
+                dependsOn: [one]
+              - name: three
+                type: create-agent
+                agent: worker.md
+                dependsOn: [two]
+              - name: refresh
+                type: refresh
+                others: one
+                dependsOn: [three]
+                onFailure: pause
+                answers:
+                  foldConflicts: fail
+            """);
+        var conflicted = true;
+        var runner = new Runner().On("refresh", run => run.Target == "a2" && conflicted
+            ? FlowStepResult.Standing(new FlowDryRun(RequestStanding.Refused, [], [], [RefusalKind.Conflict], "1 path conflicts") { Conflicting = ["src/a.cs"], Target = run.Target, Agent = run.Target })
+            : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new Facts(), new JumpingClock());
+
+        var paused = await coordinator.RunAsync(Token);
+        var refresh = coordinator.Instances["refresh"];
+
+        Assert.Equal(FlowRunStatus.Paused, paused.Status);
+        Assert.Equal((FlowTargetRecord.Failed, "foldConflicts"), (refresh.Targets![0].State, refresh.Targets[0].EndedByQuestion));
+
+        conflicted = false;
+        Assert.True(coordinator.TryAnswer(Assert.Single(coordinator.OpenQuestions).Id, "retry", out var problem), problem);
+        var end = await coordinator.RunAsync(Token);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(
+            [new FlowTargetRecord("a2", FlowTargetRecord.Done, 1, HarnessExit.Success), new FlowTargetRecord("a3", FlowTargetRecord.Done, 1, HarnessExit.Success)],
+            coordinator.Instances["refresh"].Targets);
+        Assert.Equal(2, runner.Runs.Count(run => run.Instance == "refresh" && run.Target == "a2"));
+        Assert.Equal(1, runner.Runs.Count(run => run.Instance == "refresh" && run.Target == "a3"));
+    }
+
+    /// <summary>
+    /// A pause that meets a step of others mid-turn lets the turn end, as it lets any machine step end, and starts no
+    /// other target's: the target whose turn it was is recorded as it ended, the next has not begun, and the resume gives
+    /// it its turn.
+    /// </summary>
+    [Fact]
+    public async Task APauseMidTurn_LetsTheTurnEnd_AndTheNextTargetWaitsForTheResume()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var a2 = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new Runner().Async("refresh", run =>
+        {
+            if (run.Target != "a2")
+            {
+                return null;
+            }
+
+            started.TrySetResult();
+            return a2.Task;
+        });
+        var coordinator = new FlowCoordinator(Others, runner, new Facts(), new JumpingClock());
+
+        var session = coordinator.RunAsync(Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
+        coordinator.RequestPause("command");
+        a2.SetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var paused = await session;
+
+        Assert.Equal(FlowRunStatus.Paused, paused.Status);
+        Assert.Equal(
+            [new FlowTargetRecord("a2", FlowTargetRecord.Done, 1, HarnessExit.Success), new FlowTargetRecord("a3", FlowTargetRecord.NotStarted, 0)],
+            coordinator.Instances["refresh"].Targets);
+        Assert.DoesNotContain(runner.Runs, run => run.Target == "a3");
+
+        var end = await coordinator.RunAsync(Token);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(
+            [new FlowTargetRecord("a2", FlowTargetRecord.Done, 1, HarnessExit.Success), new FlowTargetRecord("a3", FlowTargetRecord.Done, 1, HarnessExit.Success)],
+            coordinator.Instances["refresh"].Targets);
+        Assert.Single(runner.Runs, run => run.Target == "a2");
+    }
+
+    /// <summary>
+    /// A runner that answers a target's turn did not pass, with the code of success, is the engine's own fault: the target
+    /// fails 70 saying what it answered - never failed with 0, which every record reads as done - and so does the step.
+    /// </summary>
+    [Fact]
+    public async Task ATargetARunnerFailsWithTheCodeOfSuccess_Fails70_SayingSo()
+    {
+        var runner = new Runner().On("refresh", run => run.Target == "a2"
+            ? FlowStepResult.Ended(passed: false, HarnessExit.Success, "it could not")
+            : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(Others, runner, new Facts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(Token);
+        var refresh = coordinator.Instances["refresh"];
+        var failed = refresh.Targets![0];
+
+        Assert.Equal((FlowTargetRecord.Failed, HarnessExit.InternalError), (failed.State, failed.Exit));
+        Assert.Equal("'refresh' answered that it did not pass, with 0, the code of success: it could not", failed.Error);
+        Assert.Null(failed.Problem());
+        Assert.Equal((FlowInstanceState.Failed, HarnessExit.InternalError), (refresh.State, refresh.Exit));
+    }
+
+    /// <summary>
     /// A step of others run again by a retry claims the tree of the target it gives its turn again before it starts:
     /// while another step holds that tree, it waits on the claim, and runs the target once the tree is free.
     /// </summary>

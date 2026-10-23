@@ -313,6 +313,19 @@ public sealed record FlowStepResult
     public static FlowStepResult Ended(bool passed, int exit, string? error = null, JsonNode? output = null, IReadOnlyList<FlowPreExistingReport>? preExisting = null)
         => new() { Asked = null, Passed = passed, Exit = exit, Error = error, Output = output, PreExisting = preExisting ?? [] };
 
+    /// <summary>
+    /// A result for a step whose call of a service ended as <paramref name="outcome"/> did, short of success: its code, its
+    /// cause - a held lock, which the retry table waits out - and its words, or <paramref name="error"/> where the step says
+    /// them itself. The one way a runner hands on a failed outcome, so none drops the cause the code alone cannot say.
+    /// </summary>
+    /// <param name="outcome">How the call ended.</param>
+    /// <param name="error">The step's own words for it; null for the outcome's.</param>
+    public static FlowStepResult Failed(CommandOutcome outcome, string? error = null)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        return Ended(passed: false, outcome.ExitCode, error ?? outcome.Message) with { Cause = outcome.Cause };
+    }
+
     /// <summary>A result for a step that asks: no ending, the question open.</summary>
     public static FlowStepResult Asking(FlowQuestion question)
         => new() { Asked = question, Passed = false, Exit = HarnessExit.Incomplete };

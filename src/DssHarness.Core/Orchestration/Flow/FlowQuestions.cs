@@ -256,8 +256,7 @@ public static class FlowQuestions
     public static int FailCodeOf(string kind)
         => kind switch
         {
-            "foldNewRows" or "foldLostRows" or "foldOverCells" or "foldTwoChanges" or "foldConflicts" or FoldOutside
-                => DssHarness.Core.Results.HarnessExit.Refused,
+            _ when FoldKinds.Contains(kind, StringComparer.Ordinal) => DssHarness.Core.Results.HarnessExit.Refused,
             "turnLimit" or "stepBudget" or "truncated" or "contextLimit"
                 => DssHarness.Core.Results.HarnessExit.CommandFailed,
             "noChecks" => 2,
@@ -281,6 +280,23 @@ public static class FlowQuestions
 
     /// <summary>The question a fold's dry run raises where it would write a path its <c>within</c> leaves out.</summary>
     public const string FoldOutside = "foldOutside";
+
+    /// <summary>
+    /// Every kind of question a fold family step's dry run raises (<see cref="FoldQuestionOf"/>): each consent's
+    /// (<see cref="KindOf"/>), a conflict's and a path outside a fold's <c>within</c>.
+    /// </summary>
+    public static readonly IReadOnlyList<string> FoldKinds = [.. Enum.GetValues<ConsentKind>().Select(KindOf), "foldConflicts", FoldOutside];
+
+    /// <summary>
+    /// Whether <paramref name="answer"/> to a fold family step's question of <paramref name="kind"/> gives its consent by
+    /// name, which the step's dry run made again is held to: <c>allow</c> or <c>merge</c>, where the kind offers it.
+    /// </summary>
+    /// <param name="kind">The question's kind.</param>
+    /// <param name="answer">The answer, as the kind spells it.</param>
+    public static bool GivesConsent(string kind, string answer)
+        => FoldKinds.Contains(kind, StringComparer.Ordinal)
+            && answer is "allow" or "merge"
+            && OptionsOf(kind, step: null).Contains(answer, StringComparer.Ordinal);
 
     /// <summary>The question kind a consent a fold family step's dry run lacks is named by.</summary>
     /// <param name="consent">The consent.</param>

@@ -100,7 +100,11 @@ public sealed record FlowCodebaseGraph(
     string? Generated,
     int? MapTokens)
 {
-    /// <summary>The shape the block gives the run's graph, every key it leaves out at its default.</summary>
+    /// <summary>
+    /// The shape the block gives the run's graph, every key it leaves out at its default: read from the block, never
+    /// written with it - the run's frozen definition, and its digest, hold what the file says, not this build's defaults.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public Codebase.CodebaseGraphShape Shape => Codebase.CodebaseGraphShape.Of(Include, Exclude, Languages, MaxFileBytes, Generated, MapTokens);
 }
 
@@ -369,8 +373,9 @@ public sealed record WorkflowStep
     /// <summary>
     /// The longest one attempt of a step that runs may take, in whole minutes, where the file says: counted by the engine
     /// from each start of the step and never while it waits on a question, and past it the step is stopped and ends
-    /// incomplete (21). Absent, the step has no limit of its own. A reason step's handoff turn at a pause is bounded by
-    /// the pause's own handoffSeconds, not by this. Never a group's or a pause step's key.
+    /// incomplete (21). Absent, its type's own limit where the type says one (<see cref="WorkflowStepTypes.TimeLimitOf"/>),
+    /// else none. A reason step's handoff turn at a pause is bounded by the workflow's top-level <c>handoffSeconds</c>
+    /// (<see cref="WorkflowDefinition.HandoffSeconds"/>), not by this. Never a group's or a pause step's key.
     /// </summary>
     public int? TimeoutMinutes { get; init; } = null;
 

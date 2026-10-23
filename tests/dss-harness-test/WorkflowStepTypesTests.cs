@@ -272,4 +272,24 @@ public sealed class WorkflowStepTypesTests
         Assert.Null(WorkflowStepTypes.TimeLimitOf(new WorkflowStep { Name = "group" }));
         Assert.Equal(["graphify-codebase"], WorkflowStepTypes.All.Where(type => type.DefaultTimeoutMinutes is not null).Select(type => type.Type));
     }
+
+    /// <summary>
+    /// Which steps fold an agent's work into the main tree, by the one rule the definition's check and the step's runner
+    /// both read: a fold, and a deletion that does not discard it.
+    /// </summary>
+    [Fact]
+    public void WhichStepsFold_AreAFold_AndADeletionThatKeepsTheWork()
+    {
+        WorkflowStep[] steps =
+        [
+            new() { Name = "fold", Type = "fold" },
+            new() { Name = "delete", Type = "delete-agent" },
+            new() { Name = "discard", Type = "delete-agent", DiscardUncommitted = true },
+            new() { Name = "refresh", Type = "refresh" },
+            new() { Name = "rebase", Type = "rebase" },
+            new() { Name = "group" },
+        ];
+
+        Assert.Equal(["fold", "delete"], steps.Where(WorkflowStepTypes.Folds).Select(step => step.Name));
+    }
 }

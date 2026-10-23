@@ -152,6 +152,47 @@ public sealed class FlowCoordinatorTests
             => runners.Any(entry => entry.Runner == runner && entry.WritesTree);
     }
 
+    /// <summary>A run's records that keep only the last snapshot written, and tell a test the first change whose snapshot holds what it waits for.</summary>
+    private sealed class Snapshots : IFlowRecords
+    {
+        private readonly List<(Func<FlowSnapshot, bool> Holds, TaskCompletionSource<FlowSnapshot> Seen)> _waits = [];
+
+        /// <summary>The last snapshot written.</summary>
+        public FlowSnapshot? Last { get; private set; }
+
+        /// <summary>The first snapshot written after this call that <paramref name="holds"/> holds of.</summary>
+        public Task<FlowSnapshot> SeenAsync(Func<FlowSnapshot, bool> holds)
+        {
+            var seen = new TaskCompletionSource<FlowSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            lock (_waits)
+            {
+                _waits.Add((holds, seen));
+            }
+
+            return seen.Task;
+        }
+
+        /// <inheritdoc/>
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+        {
+            lock (_waits)
+            {
+                Last = snapshot;
+
+                foreach (var (_, seen) in _waits.Where(wait => wait.Holds(snapshot)))
+                {
+                    seen.TrySetResult(snapshot);
+                }
+            }
+        }
+
+        /// <inheritdoc/>
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+        {
+        }
+    }
+
     /// <summary>Steps ready at once start in a fixed order: declaration order, then instance id.</summary>
     [Fact]
     public async Task StepsReadyAtOnce_StartInDeclarationOrderThenInstanceId()
@@ -223,6 +264,139 @@ public sealed class FlowCoordinatorTests
         _ = await new FlowCoordinator(absent, given, new RunnerFacts(), new JumpingClock()).RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal("fast-only", given.Runs.Single().Step.Filter);
+    }
+
+    /// <summary>
+    /// An expression the engine asks whether something holds that reads neither true nor false - a test step's filterWhen
+    /// where the step starts, a when where a step is drawn, a repeat's until - is unreadable: what reads it fails 12,
+    /// saying why, and is never ended as the engine's own fault, nor does it end the session.
+    /// </summary>
+    [Fact]
+    public async Task AnExpressionReadingNeitherTrueNorFalse_IsUnreadable_WhereverATruthIsAsked()
+    {
+        const string Neither = "'input.mode' is a text, and nothing is read as true or as false but true and false";
+        var definition = Parse("""
+            name: flow
+            inputs:
+              - name: mode
+                default: 'on'
+            steps:
+              - name: verify
+                type: test
+                filter: 'fast-only'
+                filterWhen: input.mode
+                onFailure: continue
+              - name: drawn
+                type: orient
+                when: input.mode
+                onFailure: continue
+              - name: loop
+                onFailure: continue
+                repeat:
+                  until: input.mode
+                  maxIterations: 2
+                steps:
+                  - name: attempt
+                    type: orient
+            """);
+        var runner = new FakeRunner();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(
+            (FlowInstanceState.Failed, HarnessExit.ConfigInvalid, $"expression 'filterWhen' of 'verify': {Neither}"),
+            (coordinator.Instances["verify"].State, coordinator.Instances["verify"].Exit, coordinator.Instances["verify"].Error));
+        Assert.Equal(
+            (FlowInstanceState.Failed, HarnessExit.ConfigInvalid, $"expression 'when' of 'drawn': {Neither}"),
+            (coordinator.Instances["drawn"].State, coordinator.Instances["drawn"].Exit, coordinator.Instances["drawn"].Error));
+        Assert.Equal((FlowInstanceState.Failed, HarnessExit.ConfigInvalid), (coordinator.Instances["loop"].State, coordinator.Instances["loop"].Exit));
+        Assert.Equal(["loop#1.attempt"], runner.Started);
+    }
+
+    /// <summary>
+    /// A step whose create-agent step ended otherwise than done - skipped, or failed and passed over - is never run: what
+    /// it depends on lets it start, and the agent it works in was never made, so it is NotRun, saying so, and no runner is
+    /// asked to work in an agent that is not there.
+    /// </summary>
+    [Fact]
+    public async Task AStepWhoseAgentWasNeverMade_IsNotRun_SayingSo()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: skipped
+                type: create-agent
+                agent: worker.md
+                when: run.name == 'nobody'
+              - name: failed
+                type: create-agent
+                agent: worker.md
+                onFailure: continue
+              - name: build
+                type: build
+                in: skipped
+                dependsOn: [skipped]
+              - name: fold
+                type: fold
+                of: failed
+                dependsOn: [failed]
+            """);
+        var runner = new FakeRunner().On("failed", FlowStepResult.Ended(passed: false, HarnessExit.Refused, "a run holds the main tree"));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+        var build = coordinator.Instances["build"];
+        var fold = coordinator.Instances["fold"];
+
+        Assert.Equal((FlowInstanceState.NotRun, FlowNotRunCause.AgentNotMade), (build.State, build.NotRunCause));
+        Assert.Equal("the agent it works in was never made: 'skipped' is Skipped", build.NotRunBecause);
+        Assert.Equal((FlowInstanceState.NotRun, FlowNotRunCause.AgentNotMade), (fold.State, fold.NotRunCause));
+        Assert.Equal("the agent it works in was never made: 'failed' is Failed", fold.NotRunBecause);
+        Assert.Equal(["failed"], runner.Started);
+    }
+
+    /// <summary>
+    /// The agent a step works on is the one it was drawn or started with: a deletion keeps naming the agent it deleted
+    /// once the run is sent back to its create-agent step and that step's new visit makes another - so its record, its
+    /// directory and the agents a resume counts open never take the new agent for the one deleted.
+    /// </summary>
+    [Fact]
+    public async Task ADeletionKeepsNamingTheAgentItDeleted_AfterItsCreateAgentMakesAnother()
+    {
+        var definition = Parse("""
+            name: flow
+            maxOpenAgents: 3
+            steps:
+              - name: make
+                type: create-agent
+                agent: worker.md
+              - name: drop
+                type: delete-agent
+                of: make
+                dependsOn: [make]
+              - name: check
+                type: orient
+                dependsOn: [drop]
+              - name: again
+                type: orient
+                on: {step: check, outcome: failure, codes: [20]}
+                then: make
+            """);
+        var records = new Snapshots();
+        var runner = new FakeRunner().On("check", run => run.Visit == 1
+            ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "red")
+            : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+        var steps = records.Last!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(("a1", "a1"), (steps["make"].Made, steps["drop"].Agent));
+        Assert.Equal(("a2", "a2"), (steps["make+2"].Made, steps["drop+2"].Agent));
+        Assert.Equal(["a1", "a2"], runner.Runs.Where(run => run.Step.Name == "drop").Select(run => run.WorksIn));
     }
 
     /// <summary>A step waits for its dependency until that dependency ends, and then runs.</summary>
@@ -1135,6 +1309,153 @@ public sealed class FlowCoordinatorTests
         Assert.Null(stopped.Error);
     }
 
+    /// <summary>Three agents made, and a rebase of every one but the first's, each target's turn bounded by a minute and never retried.</summary>
+    private static WorkflowDefinition TimedOthers()
+        => Parse("""
+            name: flow
+            maxOpenAgents: 4
+            steps:
+              - name: one
+                type: create-agent
+                agent: worker.md
+              - name: two
+                type: create-agent
+                agent: worker.md
+                dependsOn: [one]
+              - name: three
+                type: create-agent
+                agent: worker.md
+                dependsOn: [two]
+              - name: rebase
+                type: rebase
+                others: one
+                dependsOn: [three]
+                timeoutMinutes: 1
+                retries: 0
+                onFailure: continue
+            """);
+
+    /// <summary>
+    /// A target's turn past its time limit ends that target alone - incomplete, saying so - and the next target has its
+    /// turn: each target is ended on its own, and the step fails with the code of the one that failed once each has.
+    /// </summary>
+    [Fact]
+    public async Task ATargetPastItsTimeLimit_EndsThatTargetAlone_TheNextHasItsTurn()
+    {
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        _ = runner.OnAsync("rebase", async run =>
+        {
+            if (run.Target == "a2")
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, TokenOf(runner, run.Instance));
+            }
+
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(TimedOthers(), runner, new RunnerFacts(), clock);
+
+        var session = coordinator.RunAsync(cancel);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var rebase = coordinator.Instances["rebase"];
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(
+            [
+                new FlowTargetRecord("a2", FlowTargetRecord.Failed, 1, HarnessExit.Incomplete, "passed its timeoutMinutes (1)"),
+                new FlowTargetRecord("a3", FlowTargetRecord.Done, 1, HarnessExit.Success),
+            ],
+            rebase.Targets);
+        Assert.Equal((FlowInstanceState.Failed, HarnessExit.Incomplete, "target 'a2': passed its timeoutMinutes (1)"), (rebase.State, rebase.Exit, rebase.Error));
+    }
+
+    /// <summary>
+    /// A target whose runner does not end within the drain's bound of the stop its time limit made is recorded failed in
+    /// the step's targets, saying so, never left as a turn not ended: the next target has its turn, on its own tree, while
+    /// that runner still runs.
+    /// </summary>
+    [Fact]
+    public async Task ATargetWhoseRunnerOutlivesTheDrain_IsRecordedFailed_InTheStepsTargets()
+    {
+        var cancel = TestContext.Current.CancellationToken;
+        var gate = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner().OnAsync("rebase", run => run.Target == "a2" ? gate.Task : Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)));
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(TimedOthers(), runner, new RunnerFacts(), clock);
+
+        var session = coordinator.RunAsync(cancel);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromSeconds(90));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var rebase = coordinator.Instances["rebase"];
+        const string Outlived = "passed its timeoutMinutes (1), and its runner did not end within 90 s of the stop";
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(
+            [
+                new FlowTargetRecord("a2", FlowTargetRecord.Failed, 1, HarnessExit.Incomplete, Outlived),
+                new FlowTargetRecord("a3", FlowTargetRecord.Done, 1, HarnessExit.Success),
+            ],
+            rebase.Targets);
+        Assert.Equal((FlowInstanceState.Failed, HarnessExit.Incomplete, $"target 'a2': {Outlived}"), (rebase.State, rebase.Exit, rebase.Error));
+        Assert.Equal(["a2", "a3"], runner.Runs.Where(run => run.Instance == "rebase").Select(run => run.Target));
+        gate.SetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+    }
+
+    /// <summary>
+    /// A step failed past its drain's bound keeps what it claimed until its runner ends, for that runner may still be at
+    /// work in the tree: a step that claims the same tree waits on the claim, and runs once the runner has answered.
+    /// </summary>
+    [Fact]
+    public async Task AStepFailedPastItsDrainBound_AdmitsNoWriterOfItsTreeUntilItsRunnerEnds()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+                timeoutMinutes: 1
+                onFailure: continue
+              - name: next
+                type: build
+                dependsOn: [gate]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var gate = runner.Hold("gate");
+        var clock = new TimerClock();
+        var records = new Snapshots();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+        var after = records.SeenAsync(snapshot => snapshot.Steps.Any(step => step.Instance == "next"
+            && (step.State == FlowInstanceState.Running || step.WaitsOn.Count > 0)));
+
+        var session = coordinator.RunAsync(cancel);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromSeconds(90));
+        var next = (await after.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Steps.Single(step => step.Instance == "next");
+
+        Assert.Equal(FlowInstanceState.NotStarted, next.State);
+        Assert.Equal(["claim"], next.WaitsOn);
+        Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["gate"].State);
+        Assert.DoesNotContain("next", runner.Started.ToArray());
+
+        gate.Done();
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["gate", "next"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["next"].State);
+    }
+
     /// <summary>The architecture says what a step's time limit is, as the reader, the validator and the coordinator hold it.</summary>
     [Fact]
     public void TheArchitecture_SaysWhatAStepsTimeLimitIs()
@@ -1142,17 +1463,21 @@ public sealed class FlowCoordinatorTests
         Assert.Contains(
             "Every step that runs - every typed step but a `pause` step, which only asks (`StepType.Asks`) - may say `timeoutMinutes` "
                 + "(`WorkflowStepTypes.Running`): the longest one attempt of it may take, in whole minutes from 1 to "
-                + $"{WorkflowStep.MostTimeoutMinutes.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} (`WorkflowStep.MostTimeoutMinutes`); "
+                + $"{WorkflowStep.MostTimeoutMinutes.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} (`WorkflowStep.MostTimeoutMinutes`) - "
+                + $"absent, its type's own limit where the type says one (`{nameof(WorkflowStepTypes)}.{nameof(WorkflowStepTypes.TimeLimitOf)}`), else none; "
                 + "a group, which runs nothing of its own, and a `pause` step are refused the key where the file is read, and a `ci-wait`'s is "
                 + "always more than its `waitMinutes` (absent, `WorkflowStep.DefaultWaitMinutes`). The coordinator counts it with the engine's "
                 + "clock from each start of the step - an attempt, or its run after a question of its own was answered (a timer armed at `Start`, "
                 + "disarmed as its runner answers) - and never while the step waits on a question; a reason step's handoff turn at a pause is "
-                + "bounded by the pause's `handoffSeconds`, not by it, and its run at the resume counts anew, while a machine step a pause leaves "
-                + "running keeps its count. Past it the step is stopped as a stop stops one - its runner cancelled, a reason step's minutes "
+                + "bounded by the workflow's top-level `handoffSeconds`, not by it, and its run at the resume counts anew, while a machine step a "
+                + "pause leaves running keeps its count. Past it the step is stopped as a stop stops one - its runner cancelled, a reason step's minutes "
                 + "counted - and, once its runner has answered, ends `Failed` with 21 whatever it answered, its error saying "
                 + "`passed its timeoutMinutes (<n>)`: a machine or leg step runs again by the retry table's row for 21, a reasoning step goes to "
                 + "its handlers and its `onFailure`. A runner that does not end within `PointOfNoReturn.SafePauseDrain` of that stop fails the "
-                + "step all the same, saying so; it goes to its handlers and its `onFailure` and is not retried. Both stops share one body "
+                + "step all the same, saying so; it goes to its handlers and its `onFailure` and is not retried - of a step of `others`, the "
+                + "target whose turn it was fails so, and the step goes on with the next. What that attempt claimed stays held until its runner "
+                + $"answers (`{nameof(FlowInstance)}.{nameof(FlowInstance.Lingering)}`), a stop's drained step's too, so nothing that conflicts with what "
+                + "the runner may still write starts meanwhile, a later attempt of the step itself among it. Both stops share one body "
                 + "(`StopWork`). A pause leaves a step its limit stopped to end as that stop ends it, with no handoff turn - a failure it owes "
                 + "while the run is paused waits for the next session - and a stop of the run records it stopped, as it records every step in "
                 + "flight.",
@@ -2170,7 +2495,8 @@ public sealed class FlowCoordinatorTests
 
     /// <summary>
     /// A completion that comes from an attempt that is over - one a stop gave up on once its drain bound passed - is
-    /// dropped: it says nothing of the attempt the run is on now, which ends as its own runner says.
+    /// dropped: it says nothing of the attempt the run is on now, which ends as its own runner says. Until it comes, what
+    /// that attempt claimed is held, so the next attempt never builds beside a runner still at work in its tree.
     /// </summary>
     [Fact]
     public async Task ALateCompletionOfAnEarlierAttempt_IsDropped()
@@ -2207,12 +2533,15 @@ public sealed class FlowCoordinatorTests
 
         Assert.Equal(FlowRunStatus.Stopped, stopped.Status);
 
+        // Resumed while the first attempt's runner still runs: the second attempt waits for the tree it holds.
         session = coordinator.RunAsync(cancel);
-        await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+
+        Assert.False(secondStarted.Task.IsCompleted, "the second attempt started while the first attempt's runner still held its tree");
 
         // The first attempt's runner ends at last, failed: the run is on the second attempt, which it says nothing of.
         _ = first.TrySetResult(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the first attempt's late end"));
-        await coordinator.SettledAsync(cancel);
+        await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
         _ = second.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
 
         var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);

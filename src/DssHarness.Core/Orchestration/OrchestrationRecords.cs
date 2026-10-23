@@ -365,13 +365,22 @@ public sealed record SeedRecord
     /// </summary>
     public List<string>? Absent { get; init; }
 
+    /// <summary>
+    /// Whether handing the agent the main tree's uncommitted state stopped part way as it was made, so its seed names only
+    /// what was handed before it stopped: the agent is not whole (<see cref="AgentService.MakingUnfinished"/>) until a seed
+    /// finishes the hand-over, which writes it absent. True or absent, so a whole agent's seed says nothing of it.
+    /// </summary>
+    public bool? HandOverStopped { get; init; }
+
     /// <summary>Every path it shares with the main tree: each a fold weighs whatever the agent's status says.</summary>
     [JsonIgnore]
     public IEnumerable<string> Weighed => Paths.Keys.Concat(Absent ?? []);
 
     /// <summary>What is wrong with it; null when nothing is.</summary>
     public string? Problem()
-        => Empty && (Paths.Count > 0 || Absent is { Count: > 0 }) ? "it was handed nothing, and names paths it shares"
+        => HandOverStopped is false ? "it says its hand-over did not stop, which only its absence says"
+            : Empty && HandOverStopped is true ? "it was handed nothing, and says handing it over stopped part way"
+            : Empty && (Paths.Count > 0 || Absent is { Count: > 0 }) ? "it was handed nothing, and names paths it shares"
             : Executable?.FirstOrDefault(path => !Paths.ContainsKey(path)) is { } stray ? $"'{stray}' is named executable, and it holds no file there"
             : Absent?.FirstOrDefault(Paths.ContainsKey) is { } both ? $"'{both}' is named both as a file and as absent"
             : Absent?.Count != Absent?.Distinct(StringComparer.Ordinal).Count() ? "it names a path absent twice"

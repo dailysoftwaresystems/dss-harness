@@ -588,7 +588,7 @@ public sealed class FoldStepTests
             [("f1", 1, "stopped"), ("f2", 2, "interrupted"), ("f3", 3, "interrupted"), ("f4", 4, "applied")],
             folds.Select(fold => (fold.Id, fold.Attempt, fold.State)));
         Assert.All(folds, fold => Assert.False(Assert.Single(fold.Paths).Changed));
-        Assert.Empty(FoldLedger.Uncommitted(kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)));
+        Assert.Empty(FoldLedger.Uncommitted(kit.Harness.OrchestrationStore.ReadFolds(kit.Layout), differing: null));
     }
 
     /// <summary>
@@ -687,6 +687,99 @@ public sealed class FoldStepTests
         Assert.Contains("AGENT 2", OrchestrationKit.Read(worktree, Both), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A ledger whose read of the main tree fails as well loses nothing the apply said: an apply that threw goes on with its
+    /// own exception - its intent left for the next attempt, which settles it - and one that answered is kept in the step's
+    /// directory, with the ledger's entry it was intended under, before the settle that fails.
+    /// </summary>
+    [Fact]
+    public async Task ALedgerThatCannotReadTheTree_KeepsTheApplysOwnException_AndWhatItAnswered()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\n");
+        var named = new AgentPlanned([], [], [], [], null) { Written = ["b.txt"] };
+        var sound = Answer(HarnessExit.Success, "would fold", RequestStanding.Sound, [], [], planned: named);
+        var folded = Answer(HarnessExit.Success, "folded", RequestStanding.Sound, [], []);
+        var tree = new UnreadableWhenAsked(kit.Harness.FileSystem, Path.Combine(kit.Main, "b.txt"));
+        var ledger = new FoldLedger(kit.Harness.OrchestrationStore, tree, TimeProvider.System);
+        var agents = Substitute.For<IAgentService>();
+        var applies = 0;
+        agents.FoldAsync(Arg.Any<FoldAgentRequest>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                if (!call.Arg<FoldAgentRequest>().Apply)
+                {
+                    return Task.FromResult(sound);
+                }
+
+                // The tree cannot be read from the moment the apply is called: the read after it fails.
+                tree.Unreadable = true;
+                return ++applies == 1 ? Task.FromException<UseCaseResult<AgentVerbFacts>>(new IOException("the disk went away")) : Task.FromResult(folded);
+            });
+        FoldStepRunner Folding() => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, ledger, kit.Harness.GraphSyncs);
+
+        var thrown = await Assert.ThrowsAsync<IOException>(() => Folding().RunAsync(Run(kit, Fold()), Token));
+
+        Assert.Equal("the disk went away", thrown.Message);
+        Assert.Equal(FlowFoldEntry.Intended, kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Of("f1")!.State);
+
+        tree.Unreadable = false;
+        var unsettled = await Assert.ThrowsAsync<IOException>(() => Folding().RunAsync(Run(kit, Fold(), attempt: 2), Token));
+        var applied = kit.Harness.OrchestrationStore.ReadFoldRecord(kit.Layout.InstanceDirectory("fold", Agent))!.Applied;
+
+        Assert.Equal(UnreadableWhenAsked.Message, unsettled.Message);
+        Assert.Equal((HarnessExit.Success, "folded", "f2"), (applied!.ExitCode, applied.Summary, applied.Ledger));
+        Assert.Equal(
+            [("f1", FlowFoldEntry.Interrupted), ("f2", FlowFoldEntry.Intended)],
+            kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Folds.Select(fold => (fold.Id, fold.State)));
+    }
+
+    /// <summary>
+    /// A deletion run again once its agent was deleted - its ending cut off before it was recorded, by a stop that drained
+    /// it, a time limit or a crash - is done, with the output its directory kept of the apply: it calls nothing, folds
+    /// nothing again, and its agent counts open no more.
+    /// </summary>
+    [Fact]
+    public async Task ADeletionRunAgainOnceItsAgentWasDeleted_IsDone_WithWhatItsApplyKept()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+
+        var deleted = await Deleting(kit).RunAsync(Run(kit, Delete()), Token);
+        var agents = Substitute.For<IAgentService>();
+        var again = await new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs)
+            .RunAsync(Run(kit, Delete(), attempt: 2), Token);
+
+        Assert.True(deleted.Passed, deleted.Error);
+        Assert.True(again.Passed, again.Error);
+        Assert.Equal(deleted.Output!.ToJsonString(), again.Output!.ToJsonString());
+        Assert.Single(kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Folds);
+        Assert.Empty(agents.ReceivedCalls());
+
+        // With no apply kept - its record never written - it is done all the same, saying nothing of what it folded.
+        File.Delete(Path.Combine(kit.Layout.InstanceDirectory("delete", Agent), OrchestratorLayout.StepFoldFileName));
+        var bare = await Deleting(kit).RunAsync(Run(kit, Delete(), attempt: 3), Token);
+
+        Assert.True(bare.Passed, bare.Error);
+        Assert.Null(bare.Output);
+    }
+
+    /// <summary>
+    /// A fold's within is matched by the case rule it is given, the one paths are compared by where the tree is: a path
+    /// written in another case is within it where names ignore case, and outside it where they do not; with no within,
+    /// nothing is outside.
+    /// </summary>
+    [Fact]
+    public void AFoldsWithin_MatchesByTheCaseRuleOfTheTree()
+    {
+        Assert.Empty(FoldWithin.Outside(["Src/A.cs", "src/b.cs"], ["src/**"], StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(["Src/A.cs"], FoldWithin.Outside(["Src/A.cs", "src/b.cs"], ["src/**"], StringComparison.Ordinal));
+        Assert.Empty(FoldWithin.Outside(["anything.txt"], null, StringComparison.Ordinal));
+    }
+
     private static WorkflowStep Fold() => new() { Name = "fold", Type = "fold", Of = "made" };
 
     private static WorkflowStep Delete() => new() { Name = "delete", Type = "delete-agent", Of = "made" };
@@ -775,5 +868,18 @@ public sealed class FoldStepTests
         public void Used(long tokens, double usd) { }
 
         public void HandoffTaken() { }
+    }
+
+    /// <summary>The real file system, except that one file cannot be read while <see cref="Unreadable"/> says so, as while another program holds it.</summary>
+    private sealed class UnreadableWhenAsked(DssHarness.Core.FileSystem.IFileSystem inner, string held) : PassThroughFileSystem(inner)
+    {
+        public const string Message = "the file is held by another program";
+
+        public bool Unreadable { get; set; }
+
+        public override Stream OpenRead(string path)
+            => Unreadable && string.Equals(Path.GetFullPath(path), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase)
+                ? throw new IOException(Message)
+                : base.OpenRead(path);
     }
 }

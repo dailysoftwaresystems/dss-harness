@@ -38,9 +38,10 @@ public sealed record FlowFoldLedgerFile(int Schema, string Run, IReadOnlyList<Fl
 /// <param name="Agent">The agent whose work it folds.</param>
 /// <param name="State">
 /// What became of it: <c>intended</c> (written before the verb is called, and nothing after yet), <c>applied</c> (the verb
-/// went through), <c>stopped</c> (it wrote part of it and stopped, 21), <c>refused</c> (it wrote nothing: its trees moved,
-/// or a holder stood in the way) or <c>interrupted</c> (a crash cut it off after its intent, and the next attempt read what
-/// it left).
+/// went through), <c>stopped</c> (it wrote part of it and stopped, 21), <c>refused</c> (it refused, writing nothing: its
+/// trees moved, or a holder stood in the way), <c>failed</c> (it failed otherwise, after it may have written part of it)
+/// or <c>interrupted</c> (a crash cut it off after its intent, and the next attempt read what it left). Each but an intent
+/// and a refusal says what the main tree held at each path once it was settled.
 /// </param>
 /// <param name="IntendedAt">When its intent was written.</param>
 /// <param name="Paths">Every path it meant to write in the main tree, the registry files its rows change among them, in order.</param>
@@ -72,8 +73,11 @@ public sealed record FlowFoldEntry(
     /// <summary>The state of an entry whose intent a crash left, settled by the next attempt.</summary>
     public const string Interrupted = "interrupted";
 
+    /// <summary>The state of an entry whose verb failed otherwise than by a refusal, after it may have written part of it.</summary>
+    public const string Failed = "failed";
+
     /// <summary>The states an entry stands in.</summary>
-    public static readonly IReadOnlyList<string> States = [Intended, "applied", "stopped", Refused, Interrupted];
+    public static readonly IReadOnlyList<string> States = [Intended, "applied", "stopped", Refused, Failed, Interrupted];
 
     /// <summary>The step types that fold through the ledger.</summary>
     public static readonly IReadOnlyList<string> Types = ["fold", "delete-agent"];
@@ -82,20 +86,13 @@ public sealed record FlowFoldEntry(
     /// <param name="n">Its place, from 1.</param>
     public static string IdOf(int n) => $"f{n.ToString(CultureInfo.InvariantCulture)}";
 
-    /// <summary>
-    /// Whether the entry holds what no commit has taken yet: an intent nobody settled - what it wrote cannot be told - or
-    /// a path it changed that no commit names.
-    /// </summary>
-    [JsonIgnore]
-    public bool Uncommitted => State == Intended || Paths.Any(path => path.Changed == true && path.Committed is null);
-
     /// <summary>What is wrong with this entry; null when nothing is.</summary>
     public string? Problem()
         => string.IsNullOrWhiteSpace(Id) || Id[0] != 'f' || !int.TryParse(Id.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out var n) || n < 1 ? $"'{Id}' is not a fold's id"
             : !FlowInstanceId.IsWellFormed(Instance) ? $"'{Instance}' is not an instance id"
             : Attempt < 1 ? $"its attempt is {Attempt.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
             : !Types.Contains(Type, StringComparer.Ordinal) ? $"'{Type}' is not a step that folds"
-            : string.IsNullOrWhiteSpace(Agent) ? "it names no agent"
+            : OrchestrationRules.NameProblem(Agent) is { } name ? $"its agent: {name}"
             : !States.Contains(State, StringComparer.Ordinal) ? $"'{State}' is not a state a fold stands in"
             : (State == Intended) != (SettledAt is null) ? "it is settled exactly when it says what became of it"
             : Paths.FirstOrDefault(path => path.Problem() is not null) is { } wrong ? wrong.Problem()
@@ -107,20 +104,22 @@ public sealed record FlowFoldEntry(
             : null;
 }
 
-/// <summary>One path a fold meant to write, with the digest the main tree held there before and the one it left.</summary>
+/// <summary>
+/// One path a fold meant to write, with the digest the main tree held there before and the one it left. Whether what it
+/// left is committed is never written here: it is read from the main tree (<see cref="FoldLedger.Uncommitted"/>), so a
+/// commit by a step of the run and one made by hand count alike.
+/// </summary>
 /// <param name="Path">The path, relative to the tree and spelt with forward slashes.</param>
 /// <param name="What">What the fold does to it: <c>written</c>, <c>deleted</c>, <c>merged</c>, or <c>registry</c> for a registry file its rows change.</param>
 /// <param name="Before">The SHA-256 the main tree held there when the intent was written; null where it held no file.</param>
 /// <param name="Left">The SHA-256 it held once the fold was settled; null where it holds no file, and while nothing was read.</param>
 /// <param name="Changed">Whether what it left is not what it held before; null while nothing was read.</param>
-/// <param name="Committed">The commit that took what it left; null until one did, and on a path it did not change.</param>
 public sealed record FlowFoldPath(
     string Path,
     string What,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Before,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Left = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] bool? Changed = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Committed = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] bool? Changed = null)
 {
     /// <summary>What a fold does to a path, as the ledger names it.</summary>
     public static readonly IReadOnlyList<string> Whats = ["written", "deleted", "merged", "registry"];
@@ -132,8 +131,6 @@ public sealed record FlowFoldPath(
             : (OrchestrationRules.DigestProblem(Before, Path, allowNone: true) ?? OrchestrationRules.DigestProblem(Left, Path, allowNone: true)) is { } digest ? digest
             : Changed is { } changed && changed == string.Equals(Before, Left, StringComparison.Ordinal) ? $"'{Path}' says it changed where what it left is {(changed ? "what it held" : "not what it held")}"
             : Changed is null && Left is not null ? $"'{Path}' names what the fold left and not whether it changed"
-            : Committed is not null && Changed != true ? $"'{Path}' is committed and was not changed"
-            : OrchestrationRules.CommitProblem(Committed, "commit") is { } commit ? commit
             : null;
 }
 
@@ -169,7 +166,7 @@ public sealed record FlowFoldRecord(
     public string? Problem()
         => !FlowInstanceId.IsWellFormed(Instance) ? $"'{Instance}' is not an instance id"
             : Attempt < 1 ? $"its attempt is {Attempt.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
-            : string.IsNullOrWhiteSpace(Agent) ? "it names no agent"
+            : OrchestrationRules.NameProblem(Agent) is { } name ? $"its agent: {name}"
             : !Types.Contains(Type, StringComparer.Ordinal) ? $"'{Type}' is not a step of the fold family"
             : Granted.FirstOrDefault(grant => grant.Problem() is not null) is { } grant ? $"a consent it was given: {grant.Problem()}"
             : Asked?.Problem() is { } asked ? $"its question: {asked}"
@@ -212,7 +209,7 @@ public sealed record FlowFoldAsked(string Kind, IReadOnlyList<string> Named, int
 {
     /// <summary>What is wrong with this entry; null when nothing is.</summary>
     public string? Problem()
-        => string.IsNullOrWhiteSpace(Kind) ? "its kind is empty"
+        => !FlowQuestions.FoldKinds.Contains(Kind, StringComparer.Ordinal) ? $"'{Kind}' is not a question a fold family step asks"
             : AnswerAt < 0 ? $"its answer stands at {AnswerAt.ToString(CultureInfo.InvariantCulture)}"
             : null;
 }
@@ -226,9 +223,9 @@ public sealed record FlowFoldGrant(string Kind, IReadOnlyList<string> Named, str
 {
     /// <summary>What is wrong with this entry; null when nothing is.</summary>
     public string? Problem()
-        => string.IsNullOrWhiteSpace(Kind) ? "its kind is empty"
+        => !FlowQuestions.FoldKinds.Contains(Kind, StringComparer.Ordinal) ? $"'{Kind}' is not a question a fold family step asks"
             : !FlowQuestionIds.IsWellFormed(Question) ? $"'{Question}' is not a question's id"
-            : Answer is not ("allow" or "merge") ? $"'{Answer}' gives no consent"
+            : !FlowQuestions.GivesConsent(Kind, Answer) ? $"'{Answer}' gives no consent"
             : Named.Count == 0 ? "it names nothing it was given for"
             : null;
 }
@@ -254,8 +251,8 @@ public sealed record FlowFoldApplied(int ExitCode, string Summary, string? Stand
 /// </summary>
 /// <param name="Agent">The agent.</param>
 /// <param name="State">
-/// Where it stands: <c>notStarted</c> (its turn has not ended), <c>done</c>, <c>failed</c>, or <c>passedOver</c> (it was
-/// deleted, or lost its worktree, before its turn).
+/// Where it stands: <c>notStarted</c> (its turn has not ended), <c>done</c>, <c>failed</c>, or <c>passedOver</c> (a
+/// <c>delete-agent</c> step of the run closed it before its turn).
 /// </param>
 /// <param name="Attempts">How many attempts its turn has run.</param>
 /// <param name="Exit">The code its turn ended with; null until it ended.</param>
@@ -276,7 +273,7 @@ public sealed record FlowTargetRecord(string Agent, string State, int Attempts, 
     /// <summary>The state of a target whose turn ended failed.</summary>
     public const string Failed = "failed";
 
-    /// <summary>The state of a target that was gone before its turn.</summary>
+    /// <summary>The state of a target a deletion of the run closed before its turn.</summary>
     public const string PassedOver = "passedOver";
 
     /// <summary>The states a target stands in.</summary>
@@ -286,12 +283,18 @@ public sealed record FlowTargetRecord(string Agent, string State, int Attempts, 
     [JsonIgnore]
     public bool Ended => State != NotStarted;
 
-    /// <summary>What is wrong with this entry; null when nothing is.</summary>
+    /// <summary>
+    /// What is wrong with this entry; null when nothing is. Its agent is held to the one name rule, for it names the
+    /// directory the target's records are kept in; and its code to where it stands: a target done names the code of
+    /// success, one that failed any other, and one whose turn has not ended, or that was passed over, none.
+    /// </summary>
     public string? Problem()
-        => string.IsNullOrWhiteSpace(Agent) ? "it names no agent"
+        => OrchestrationRules.NameProblem(Agent) is { } name ? $"its agent: {name}"
             : !States.Contains(State, StringComparer.Ordinal) ? $"'{State}' is not where a target stands"
             : Attempts < 0 ? $"its attempts are {Attempts.ToString(CultureInfo.InvariantCulture)}"
             : State == Failed && Exit is null ? "a target that failed names its code"
+            : State == Failed && Exit == HarnessExit.Success ? $"a target that failed names {HarnessExit.Success}, the code of success"
+            : State == Done && Exit != HarnessExit.Success ? $"a target done names {HarnessExit.Success}, the code of success, and no other"
             : State is NotStarted or PassedOver && Exit is not null ? $"a target {State} names no code"
             : Cause is { } cause && (!FlowRecordNames.Is<OutcomeCause>(cause) || cause == nameof(OutcomeCause.None)) ? $"'{cause}' is not a cause an ending is recorded with"
             : (Cause ?? EndedByQuestion) is not null && State != Failed ? "only a target that failed names a cause or a question that ended it"

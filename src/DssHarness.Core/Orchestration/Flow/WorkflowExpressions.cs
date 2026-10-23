@@ -360,7 +360,7 @@ public static class WorkflowExpressions
     /// nothing, which no run could fill.
     /// </summary>
     /// <param name="text">A template's text.</param>
-    /// <returns>The problem, in words, or <see langword="null"/> where every placeholder is closed.</returns>
+    /// <returns>The problem, in words, or <see langword="null"/> where every placeholder is closed and names something.</returns>
     public static string? TemplateSyntaxProblem(string text)
     {
         ArgumentNullException.ThrowIfNull(text);

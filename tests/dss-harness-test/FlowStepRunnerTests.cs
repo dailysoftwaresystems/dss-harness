@@ -644,6 +644,36 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.Equal("""{"agent":"a1"}""", again.Output!.ToJsonString());
     }
 
+    /// <summary>
+    /// A making refused because a run holds the main tree ends the step with the cause of a held lock, which the retry
+    /// table waits out, rather than as a failure; once the tree is let go the agent is made.
+    /// </summary>
+    [Fact]
+    public async Task CreateAgent_RefusedForAHeldMainTree_CarriesTheHeldLocksCause()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var layout = await RunAsync(harness, repository);
+        var run = Run(CreateStep, repository.Path, made: new FlowMadeAgent("a1", "model-one"));
+        var attempt = await harness.RunLock.TryAcquireAsync(
+            new HarnessLayout(repository.Path, repository.Path),
+            new LockRequest { Host = "local", Tree = repository.Path, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "test" },
+            Token);
+        FlowStepResult refused;
+
+        await using (attempt.Handle ?? throw new InvalidOperationException($"the test could not hold the main tree: {attempt.HeldBy}"))
+        {
+            refused = await Create(harness).RunAsync(run, Token);
+        }
+
+        Assert.Equal((false, HarnessExit.Refused, OutcomeCause.LockHeld), (refused.Passed, refused.Exit, refused.Cause));
+        Assert.True(FlowRetry.RunsAgain(refused.Exit, refused.Cause));
+        Assert.Null(harness.OrchestrationStore.ReadAgent(layout, "a1"));
+
+        var made = await Create(harness).RunAsync(run, Token);
+
+        Assert.True(made.Passed, made.Error);
+    }
+
     /// <summary>An agent made part way, its worktree's commit recorded and never seeded, is finished by seeding it.</summary>
     [Fact]
     public async Task CreateAgent_FinishesAnAgentMadePartWay_ByItsSeeding()
@@ -659,6 +689,45 @@ public sealed class FlowStepRunnerTests : IDisposable
 
         Assert.True(finished.Passed, finished.Error);
         Assert.NotNull(harness.OrchestrationStore.ReadSeed(layout, "a1"));
+    }
+
+    /// <summary>
+    /// A making whose hand-over of the main tree's uncommitted state stopped part way is not whole: made again by hand it
+    /// says so, never that it is already as asked, and the step run again hands it the rest by seeding it - so the step
+    /// never passes with an agent missing part of what it was to be handed.
+    /// </summary>
+    [Fact]
+    public async Task CreateAgent_WhoseHandOverStoppedPartWay_IsFinishedBySeedingTheRest()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
+        var stopping = kit.Harness.Agents(new AgentServiceTests.UncopyableFileSystem(kit.Harness.FileSystem, Path.Combine(kit.Main, "b.txt")), kit.Harness.AnchorRegistryService);
+        var run = Run(CreateStep, kit.Main, made: new FlowMadeAgent("ag", "model-b"), run: "o1");
+
+        var stopped = await new CreateAgentRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, stopping).RunAsync(run, Token);
+
+        Assert.Equal((false, HarnessExit.Incomplete), (stopped.Passed, stopped.Exit));
+        var part = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
+        Assert.Equal(["a.txt"], part.Paths.Keys);
+        Assert.True(part.HandOverStopped);
+
+        var typed = await kit.Harness.AgentService.CreateAsync(kit.Main, "o1", "ag", "model-b", empty: false, session: null, Token);
+
+        Assert.Equal(HarnessExit.Refused, typed.ExitCode);
+        Assert.Equal(
+            "Agent 'ag' of 'o1' exists, and making it did not finish: handing it the main tree's uncommitted state stopped part way, and its seed names only "
+                + "what it was handed; 'dssharness seed-agent o1 ag --force' hands it the rest.",
+            typed.Message);
+
+        var finished = await Create(kit.Harness).RunAsync(run, Token);
+        var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
+
+        Assert.True(finished.Passed, finished.Error);
+        Assert.Equal(["a.txt", "b.txt"], seed.Paths.Keys.Order(StringComparer.Ordinal));
+        Assert.Null(seed.HandOverStopped);
+        Assert.Null(AgentService.MakingUnfinished(kit.Record("ag"), seed));
     }
 
     /// <summary>An agent made part way with no commit recorded is deleted, its work abandoned, and its name spent; a deleted one's name is spent too.</summary>

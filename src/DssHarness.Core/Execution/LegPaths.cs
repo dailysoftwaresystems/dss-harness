@@ -402,13 +402,40 @@ public static partial class LegPathNames
     /// Matched rather than searched for by name, so that a name nobody declared is found and refused
     /// instead of surviving into a command line.
     /// <para>
-    /// The name is <see cref="NamePattern"/>.
+    /// The name is <see cref="NamePattern"/>; the first two shapes are <see cref="LiteralPattern"/>.
     /// </para>
     /// </remarks>
     [GeneratedRegex(
-        @"(?<doubled>\{\{|\}\})|(?<other>\$\{[^}]*\})|\{(?<name>" + NamePattern + @")\}",
+        LiteralPattern + @"|\{(?<name>" + NamePattern + @")\}",
         RegexOptions.CultureInvariant)]
     private static partial Regex Placeholder { get; }
+
+    /// <summary>
+    /// The brace groups every template the tool fills writes as text: a doubled brace, <c>{{</c> or
+    /// <c>}}</c>, which stands for one, and another expander's <c>${...}</c>, up to its first
+    /// <c>}</c>, left as written. The one spelling of them, which this vocabulary's placeholders and
+    /// a workflow's templates (<see cref="Orchestration.Flow.FlowTemplate"/>) are both read by.
+    /// </summary>
+    private const string LiteralPattern = @"(?<doubled>\{\{|\}\})|(?<other>\$\{[^}]*\})";
+
+    [GeneratedRegex(@"\G(?:" + LiteralPattern + ")", RegexOptions.CultureInvariant)]
+    private static partial Regex LiteralHere { get; }
+
+    /// <summary>
+    /// The brace group <see cref="LiteralPattern"/> names that starts at <paramref name="at"/> of
+    /// <paramref name="template"/> - the text it writes and how much of the template it takes - or
+    /// null where none starts there.
+    /// </summary>
+    /// <param name="template">The template, as it is written.</param>
+    /// <param name="at">Where to look.</param>
+    public static (string Text, int Length)? LiteralAt(string template, int at)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+
+        var match = LiteralHere.Match(template, at);
+
+        return !match.Success ? null : (match.Groups["doubled"].Success ? match.Value[..1] : match.Value, match.Length);
+    }
 
     /// <summary>
     /// What a name in braces is made of: a letter or <c>_</c>, then letters, digits, <c>_</c>, <c>-</c>

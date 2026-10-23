@@ -150,11 +150,21 @@ public sealed class FlowPauseTests
             return FlowStepResult.Ended(passed: true, HarnessExit.Success);
         }
 
+        /// <summary>Every handoff turn asked, with what it was asked with.</summary>
+        public List<FlowStepRun> HandoffRuns { get; } = [];
+
         /// <inheritdoc/>
         public Task<string?> HandoffAsync(FlowStepRun run, CancellationToken cancellationToken)
-            => _handoffs.TryGetValue(run.Step.Name, out var account)
+        {
+            lock (HandoffRuns)
+            {
+                HandoffRuns.Add(run);
+            }
+
+            return _handoffs.TryGetValue(run.Step.Name, out var account)
                 ? account(run, cancellationToken)
                 : Task.FromResult<string?>(null);
+        }
     }
 
     /// <summary>A held step's completion, in the test's hand.</summary>
@@ -249,6 +259,48 @@ public sealed class FlowPauseTests
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal(2, runner.Started.Count(started => started == "think"));
         Assert.Contains("after", runner.Started);
+    }
+
+    /// <summary>
+    /// A handoff turn is asked with every fact the attempt it hands off was asked with - where the run works and the agent
+    /// the step works in among them, by which a runner finds the conversation it goes on with - and no handoff of its own.
+    /// </summary>
+    [Fact]
+    public async Task AHandoffTurn_IsAskedWithEveryFactItsAttemptWasAskedWith()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: worker.md
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                in: make
+                dependsOn: [make]
+            """);
+        var place = new FlowRunPlace("repository", "r1", null, definition);
+        var runner = new FakeRunner().HandsOff("think", "what I did");
+        _ = runner.Hold("think");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), place: place);
+
+        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+        await runner.StartedAsync("think");
+        coordinator.RequestPause("command");
+        _ = await session;
+
+        var asked = runner.Runs.Single(run => run.Instance == "think");
+        var handedOff = Assert.Single(runner.HandoffRuns);
+
+        Assert.Same(place, handedOff.Place);
+        Assert.Equal("a1", handedOff.WorksIn);
+        Assert.Equal(
+            (asked.Instance, asked.Attempt, asked.Visit, asked.Place, asked.WorksIn, asked.Made, asked.Target, asked.Issue),
+            (handedOff.Instance, handedOff.Attempt, handedOff.Visit, handedOff.Place, handedOff.WorksIn, handedOff.Made, handedOff.Target, handedOff.Issue));
+        Assert.Equal(asked.Read, handedOff.Read);
+        Assert.Null(handedOff.Handoff);
     }
 
     /// <summary>An agent that gives no account still leaves a handoff: the engine writes it, saying that the agent's answer held none.</summary>

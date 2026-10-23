@@ -69,7 +69,7 @@ public sealed class CreateAgentRunner(IHarnessContextLoader contextLoader, IHost
 
             return seeded.Outcome.Succeeded
                 ? Made(made.Name)
-                : FlowStepResult.Ended(passed: false, seeded.Outcome.ExitCode, $"agent '{made.Name}' of '{place.Run}' was made part way, and finishing its seeding did not succeed: {seeded.Outcome.Message}");
+                : FlowStepResult.Failed(seeded.Outcome, $"agent '{made.Name}' of '{place.Run}' was made part way, and finishing its seeding did not succeed: {seeded.Outcome.Message}");
         }
 
         if (record is { State: AgentStates.Deleted })
@@ -90,7 +90,7 @@ public sealed class CreateAgentRunner(IHarnessContextLoader contextLoader, IHost
 
             return deleted.Outcome.Succeeded
                 ? Spent($"agent '{made.Name}' of '{place.Run}' {why}, so it was deleted{(unfinished ? ", its work abandoned" : string.Empty)}; its name is spent, and the step's next attempt makes a new agent")
-                : FlowStepResult.Ended(passed: false, deleted.Outcome.ExitCode, $"agent '{made.Name}' of '{place.Run}' {why}, and deleting it did not finish: {deleted.Outcome.Message}");
+                : FlowStepResult.Failed(deleted.Outcome, $"agent '{made.Name}' of '{place.Run}' {why}, and deleting it did not finish: {deleted.Outcome.Message}");
         }
 
         // None, and it is made; one there, whole, is answered as already made where it is what the step asked for, and
@@ -101,7 +101,7 @@ public sealed class CreateAgentRunner(IHarnessContextLoader contextLoader, IHost
 
         return created.Outcome.Succeeded
             ? Made(made.Name)
-            : FlowStepResult.Ended(passed: false, created.Outcome.ExitCode, created.Outcome.Message);
+            : FlowStepResult.Failed(created.Outcome);
     }
 
     /// <summary>The step's ending where the agent it was named can never be its agent: it fails, and the name is spent.</summary>

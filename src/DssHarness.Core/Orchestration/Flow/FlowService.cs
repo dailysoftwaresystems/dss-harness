@@ -228,7 +228,7 @@ public sealed class FlowService(
 
         try
         {
-            (layout, runContext) = _sessions.Create(
+            (layout, runContext) = await _sessions.CreateAsync(
                 context.Layout,
                 workflow,
                 run,
@@ -236,18 +236,20 @@ public sealed class FlowService(
                 checkout.Head,
                 checkout.Branch,
                 refusal: name => StartRefusal(checkout, workflow, resolved, name)
-                    ?? FlowRunPaths.RefusalAtStart(_pathBudget, context, name, workflow, _platform.PlatformKey));
+                    ?? FlowRunPaths.RefusalAtStart(_pathBudget, context, name, workflow, _platform.PlatformKey),
+                cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
             return new CommandOutcome(ex.ExitCode, ex.Message);
         }
 
+        // A base that cannot be told held the checkout's branch to nothing: the start says so, never silently.
         return await SessionAsync(
             context,
             layout,
             RunCommand,
-            reclaimed: null,
+            checkout.BaseUnknown(FlowTemplate.PullRequestBase(workflow, resolved, layout.Name, out _)),
             () => (workflow, runContext, null),
             answered: null,
             interrupts,
@@ -276,7 +278,7 @@ public sealed class FlowService(
 
         try
         {
-            reclaimed = _sessions.Claim(context.Layout, layout);
+            reclaimed = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -431,7 +433,7 @@ public sealed class FlowService(
 
         try
         {
-            reclaimed = _sessions.Claim(context.Layout, layout);
+            reclaimed = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -665,7 +667,7 @@ public sealed class FlowService(
         HarnessContext context,
         OrchestratorLayout layout,
         string command,
-        string? reclaimed,
+        string? opening,
         Func<(WorkflowDefinition Definition, FlowRunContext Context, FlowResumeState? Resume)> begin,
         (string Question, string Answer, string? Text)? answered,
         FlowInterrupts? interrupts,
@@ -676,9 +678,11 @@ public sealed class FlowService(
         var inbox = false;
         var offered = new Dictionary<string, Task<FlowHandedOver>>(StringComparer.Ordinal);
 
-        if (reclaimed is not null)
+        // What the session says before anything else: a dead owner it reclaimed, or what a start could not hold its
+        // checkout to.
+        if (opening is not null)
         {
-            said.Add(reclaimed);
+            said.Add(opening);
         }
 
         // Cut off by its terminal, the session answers for the run as every command over it does, the session itself

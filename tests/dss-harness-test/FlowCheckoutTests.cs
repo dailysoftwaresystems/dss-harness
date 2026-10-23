@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Git;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
 
@@ -224,6 +225,45 @@ public sealed class FlowCheckoutTests : IDisposable
         Assert.Equal(On("main").StartRefusal("main"), On("main").StartRefusal(null));
         Assert.Null(On("main").StartRefusal("release"));
         Assert.Null((On("main") with { RemoteDefault = null }).StartRefusal(null));
+    }
+
+    /// <summary>
+    /// A start whose base cannot be told, where the repository has a remote - no pull-request base, and the remote names
+    /// no default here, or no remote is the run's - says so, naming the branch it held to none and the way to tell it;
+    /// a base told, a detached HEAD, which refuses, and no remote at all say nothing.
+    /// </summary>
+    [Fact]
+    public void AStartWhoseBaseCannotBeTold_SaysSo()
+    {
+        var unknown = new FlowCheckout("work", "abc", false, [], [], ["origin"], "origin", null);
+
+        Assert.Equal(
+            "the branch the run's pull request is opened against cannot be told here - no pull-request step names a base, and remote "
+                + "'origin' names no default branch here - so the main checkout's branch 'work' was held to none: name the base on the "
+                + "pull-request step, or read the remote's own with git remote set-head origin --auto",
+            unknown.BaseUnknown(null));
+        Assert.Equal(
+            "the branch the run's pull request is opened against cannot be told here - no pull-request step names a base, and no remote "
+                + "is the one the run's branch goes to (the push step names none, the branch tracks none, and none is origin) - so the main "
+                + "checkout's branch 'work' was held to none: name the base on the pull-request step, or the remote on the push step",
+            (unknown with { Remotes = ["upstream", "fork"], Remote = null }).BaseUnknown(null));
+        Assert.Null(unknown.BaseUnknown("release"));
+        Assert.Null((unknown with { RemoteDefault = "main" }).BaseUnknown(null));
+        Assert.Null((unknown with { Branch = null }).BaseUnknown(null));
+        Assert.Null((unknown with { Remotes = [], Remote = null }).BaseUnknown(null));
+    }
+
+    /// <summary>A branch tracks no remote only where git says its key is not set: a configuration git cannot read is said, never read as none.</summary>
+    [Fact]
+    public async Task ATrackedRemoteGitCannotRead_IsSaid_NeverReadAsNone()
+    {
+        var (harness, repository, _) = await WithOriginAsync();
+        File.AppendAllText(Path.Combine(repository.Path, ".git", "config"), "[branch \"work\"\n\tremote = broken\n");
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.GitClient.TrackedRemoteAsync(repository.Path, "work", Token));
+
+        Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
+        Assert.StartsWith("git could not read the remote branch 'work' tracks: ", refused.Message, StringComparison.Ordinal);
     }
 
     /// <summary>The pull request's base is filled from the inputs and the run's name; with no pull-request base, none; a name that reads nothing, why.</summary>

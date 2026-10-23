@@ -56,17 +56,11 @@ public static class FlowTemplate
                 textAt = at;
             }
 
-            if (Holds(template, at, "{{") || Holds(template, at, "}}"))
+            // A doubled brace and another expander's group are text, by the configuration's own rule of them.
+            if (Execution.LegPathNames.LiteralAt(template, at) is { } literal)
             {
-                text.Append(template[at]);
-                at += 2;
-                continue;
-            }
-
-            if (Holds(template, at, "${") && template.IndexOf('}', at + 2) is var expanded and >= 0)
-            {
-                text.Append(template, at, expanded + 1 - at);
-                at = expanded + 1;
+                text.Append(literal.Text);
+                at += literal.Length;
                 continue;
             }
 
@@ -192,8 +186,4 @@ public static class FlowTemplate
             },
             out problem);
     }
-
-    /// <summary>Whether <paramref name="template"/> holds <paramref name="pair"/> at <paramref name="at"/>.</summary>
-    private static bool Holds(string template, int at, string pair)
-        => string.CompareOrdinal(template, at, pair, 0, pair.Length) == 0;
 }
