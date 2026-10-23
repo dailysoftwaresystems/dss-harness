@@ -1228,7 +1228,8 @@ public sealed class CodebaseGraphService(
         /// The check of <paramref name="paths"/>: each one the tree keeps looked at, and a file whose size or time moved - or
         /// was never recorded, is not older than the tree's last whole sync (<see cref="Tree.Written"/>), or could not be read
         /// - listed again as a sync by its path lists it; one whose blob moved read again, one that is a link now kept as one,
-        /// one gone taken out, and one that could not be read read again, taken where it reads now and changing nothing where
+        /// one gone taken out - but one a link lies along, kept as a link - and one that could not be read read again, taken
+        /// where it reads now and changing nothing where
         /// it still does not; the tree linked again and written where any changed - its head as its last sync recorded it, and
         /// dirty where a file moved or went; then each extract the files name read, before any sync can take it out.
         /// </summary>
@@ -1248,9 +1249,11 @@ public sealed class CodebaseGraphService(
                 var entry = current.Entries[path];
                 var standing = _service._fileSystem.StandingOf(Absolute(path));
 
+                // A file not there is gone, but where a link lies along it - its directory replaced by one leading where no
+                // such file is - which makes it a link, as a listing lists it: git is asked of neither.
                 if (standing is null)
                 {
-                    moved[path] = null;
+                    moved[path] = ThroughLink(path) ? new Listed(null, Link: true, Submodule: false) : null;
                     continue;
                 }
 
@@ -1519,8 +1522,9 @@ public sealed class CodebaseGraphService(
 
         /// <summary>
         /// Every file of the tree the graph keeps - or of <paramref name="paths"/> alone - with its blob and what git records
-        /// it as: the index's paths and objects, less what is gone, the changed and untracked ones with the blobs git gives
-        /// their working files - less what no implementation is ever given, and what the workflow's patterns leave out. A
+        /// it as: the index's paths and objects, less what is gone - but a link where one lies along a path git finds gone -
+        /// the changed and untracked ones with the blobs git gives their working files - less what no implementation is ever
+        /// given, and what the workflow's patterns leave out. A
         /// name that is not UTF-8 names no file this tool opens, and is said as unreadable. A path whose file git does not look
         /// at - kept out of the checkout, as a sparse checkout or skip-worktree keeps it, or marked assume-unchanged - is in the
         /// graph where its file is there, hashed and read as it stands, and nowhere else; a repository inside the tree that git
@@ -1610,9 +1614,19 @@ public sealed class CodebaseGraphService(
             }
 
             var present = working.Where(file => !file.Gone).Select(file => file.Name.Text).ToHashSet(StringComparer.Ordinal);
+            var linkedAlong = new Dictionary<string, bool>(StringComparer.Ordinal);
 
+            // git takes a file below a symbolic link to a directory for gone, where it walks into a junction and lists what
+            // is there: either way a link lies along the path, which leads to no file git names, and the file is a link -
+            // never gone, and never read through.
             foreach (var deleted in working.Where(file => file.Gone && !present.Contains(file.Name.Text)))
             {
+                if (files.ContainsKey(deleted.Name.Text) && DirectoryLinked(deleted.Name.Text, linkedAlong))
+                {
+                    files[deleted.Name.Text] = new Listed(null, Link: true, Submodule: false);
+                    continue;
+                }
+
                 files.Remove(deleted.Name.Text);
             }
 
@@ -1781,6 +1795,30 @@ public sealed class CodebaseGraphService(
         /// a file git holds by such a name on a machine that allows it is said, never written into a record that would not read back.
         /// </summary>
         private static bool Unnameable(string path) => OrchestrationRules.RelativePathProblem(path, "a file's path") is not null;
+
+        /// <summary>
+        /// Whether a link lies along the directory <paramref name="path"/> lies in (<see cref="ThroughLink"/>), asked once a
+        /// directory and kept in <paramref name="linked"/>: the tree's root never is one.
+        /// </summary>
+        private bool DirectoryLinked(string path, Dictionary<string, bool> linked)
+        {
+            var slash = path.LastIndexOf('/');
+
+            if (slash < 0)
+            {
+                return false;
+            }
+
+            var directory = path[..slash];
+
+            if (!linked.TryGetValue(directory, out var along))
+            {
+                along = ThroughLink(directory);
+                linked[directory] = along;
+            }
+
+            return along;
+        }
 
         /// <summary>
         /// Whether the directory <paramref name="path"/> lies in stands, asked of the file system once a directory and kept in
