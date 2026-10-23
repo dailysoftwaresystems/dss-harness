@@ -2137,8 +2137,8 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
-    /// A file the tree could not read is read again by the next check that names it, though its blob did not move: the
-    /// check counts it moved, as every sync reads such a file again.
+    /// A file the tree could not read is read again by the next check that names it, though its blob did not move, as every
+    /// sync reads such a file again: the tree takes it, and is no dirtier for it - git finds the file as HEAD holds it.
     /// </summary>
     [Fact]
     public async Task AFileThatCouldNotBeRead_IsReadAgainByACheck()
@@ -2163,8 +2163,170 @@ public sealed class CodebaseGraphServiceTests
         var check = await graph.CheckAsync(null, null, "a.toy");
 
         Assert.Equal((1, 1, 1, 0), (check.Checked, check.Hashed, check.Extracted, check.Removed));
-        Assert.Equal(CodeFileStates.Parsed, graph.Manifest().Files["a.toy"].State);
+        Assert.Equal((CodeFileStates.Parsed, false), (graph.Manifest().Files["a.toy"].State, graph.Manifest().Dirty));
         Assert.Equal(["toy:A"], check.Read.Extract("a.toy")!.Nodes.Select(node => node.Id));
+    }
+
+    /// <summary>
+    /// A file a check reads again that still cannot be read, its blob as it was, changes nothing and writes nothing: no
+    /// manifest, no line of the sync log, no event - and the tree is not made dirty.
+    /// </summary>
+    [Fact]
+    public async Task AFileACheckStillCannotRead_ChangesNothing_AndWritesNothing()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\nboom\n");
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+        var written = File.ReadAllText(graph.Run.GraphManifestFile);
+        var lines = graph.SyncLines().Count;
+        var events = graph.Events.Count;
+        var reads = graph.Toy.Reads;
+
+        var check = await graph.CheckAsync(null, null, "a.toy");
+
+        Assert.Equal((1, 1, 0, 0), (check.Checked, check.Hashed, check.Extracted, check.Removed));
+        Assert.Equal(reads + 1, graph.Toy.Reads);
+        Assert.Equal(written, File.ReadAllText(graph.Run.GraphManifestFile));
+        Assert.Equal((lines, events), (graph.SyncLines().Count, graph.Events.Count));
+        Assert.Equal((CodeFileStates.Unreadable, false), (graph.Manifest().Files["a.toy"].State, graph.Manifest().Dirty));
+    }
+
+    /// <summary>
+    /// A file truncated and written again whole while it was read, the same as before, keeps nothing: git finds it clean
+    /// again and lists the blob it was read under, but what was read of it - the truncated file, which stood still while
+    /// it was read - is none of it, and the file stands otherwise after the listing than its read saw.
+    /// </summary>
+    [Fact]
+    public async Task AFileTruncatedAndWrittenAgainAsItWas_WhileItWasRead_KeepsNothing()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("x.toy", "class X\n");
+        await graph.CommitAsync();
+        var path = Path.Combine(graph.Tree, "x.toy");
+        var (files, watch) = Watched.Over(graph.Harness.FileSystem);
+        var real = graph.Harness.GitClient;
+        var git = Forwarding(real);
+        var truncated = 1;
+        var written = 1;
+
+        // Truncated, and its first bytes written, as its read begins; written whole again, the same, before git is asked of
+        // it once more.
+        watch.Before = (method, arguments) =>
+        {
+            if (method == nameof(IFileSystem.StandingOf) && arguments?[0] as string == path && Interlocked.Exchange(ref truncated, 0) == 1)
+            {
+                File.WriteAllText(path, "cla");
+            }
+        };
+        git.ListIndexAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            if (Interlocked.Exchange(ref written, 0) == 1)
+            {
+                File.WriteAllText(path, "class X\n");
+            }
+
+            return real.ListIndexAsync(call.ArgAt<string>(0), call.ArgAt<IReadOnlyList<string>>(1), call.ArgAt<CancellationToken>(2));
+        });
+
+        var synced = await graph.WithFiles(files).WithGit(git).SyncAsync();
+
+        Assert.Equal([("x.toy", "it changed while it was read")], synced.Unreadable.Select(file => (file.Path, file.Why)));
+        Assert.DoesNotContain(graph.Extracts(), name => name.Contains("toy-1", StringComparison.Ordinal));
+
+        var again = await graph.SyncAsync();
+
+        Assert.Equal(CodeFileStates.Parsed, graph.Manifest().Files["x.toy"].State);
+        Assert.Contains(graph.Symbols().Nodes, node => node.Id == "toy:X");
+        Assert.Equal(1, again.Extracted);
+    }
+
+    /// <summary>
+    /// A file grown past maxFileBytes as it was looked at, and back as it was, is not kept too large under the blob git
+    /// lists of it: it stands otherwise once the reads are done than when it was looked at.
+    /// </summary>
+    [Fact]
+    public async Task AFileGrownPastTheLimitAndBack_WhileItWasLookedAt_IsNotKeptTooLarge()
+    {
+        using var graph = await Graph.CreateAsync(shape: CodebaseGraphShape.Default with { MaxFileBytes = 100 });
+        graph.Write("x.toy", "class X\n");
+        await graph.CommitAsync();
+        var path = Path.Combine(graph.Tree, "x.toy");
+        var (files, watch) = Watched.Over(graph.Harness.FileSystem);
+        var looks = 0;
+
+        // Grown just as it is looked at, and back just after.
+        watch.Before = (method, arguments) =>
+        {
+            if (method == nameof(IFileSystem.StandingOf) && arguments?[0] as string == path && Interlocked.Increment(ref looks) == 1)
+            {
+                File.WriteAllText(path, new string('x', 200));
+            }
+        };
+        watch.After = (method, arguments) =>
+        {
+            if (method == nameof(IFileSystem.StandingOf) && arguments?[0] as string == path && Volatile.Read(ref looks) == 1)
+            {
+                File.WriteAllText(path, "class X\n");
+            }
+        };
+
+        var synced = await graph.WithFiles(files).SyncAsync();
+
+        Assert.Equal([("x.toy", "it changed while it was read")], synced.Unreadable.Select(file => (file.Path, file.Why)));
+        Assert.Equal(CodeFileStates.Unreadable, graph.Manifest().Files["x.toy"].State);
+    }
+
+    /// <summary>
+    /// Many files read are listed again by one listing of the whole tree, never by their paths a command line's worth at a
+    /// time - each of which has git read the whole index - and the listing after the reads asks no HEAD.
+    /// </summary>
+    [Fact]
+    public async Task ManyFilesRead_AreListedAgainByOneListingOfTheTree()
+    {
+        using var graph = await Graph.CreateAsync();
+
+        for (var at = 0; at < 450; at++)
+        {
+            graph.Write($"f/{at:D3}.toy", $"class F{at}\n");
+        }
+
+        await graph.CommitAsync();
+        var real = graph.Harness.GitClient;
+        var git = Forwarding(real);
+
+        var synced = await graph.WithGit(git).SyncAsync();
+
+        Assert.Equal(451, synced.Extracted);
+        Assert.Equal(2, git.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(IGitClient.ListIndexAsync) && call.GetArguments().Length == 2));
+        Assert.DoesNotContain(git.ReceivedCalls(), call => call.GetMethodInfo().Name is nameof(IGitClient.ListIndexAsync) or nameof(IGitClient.ListWorkingFilesAsync) && call.GetArguments().Length == 3);
+        Assert.Equal(1, git.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(IGitClient.ResolveCommitAsync)));
+    }
+
+    /// <summary>
+    /// A view whose record does not read while the process holds it, when the base moves, is let go: no later check of it
+    /// stands on a base the process no longer holds - the check syncs it whole first, from its worktree.
+    /// </summary>
+    [Fact]
+    public async Task AViewWhoseRecordDoesNotRead_WhenTheBaseMoves_IsLetGo_AndItsNextCheckMakesItAgain()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        await graph.CommitAsync();
+        var worktree = await graph.WorktreeAsync("w");
+        Graph.WriteIn(worktree, "b.toy", "class B\n");
+        await graph.SyncViewAsync("w", worktree);
+        var record = graph.Run.GraphViewFile("w");
+        File.WriteAllText(record, File.ReadAllText(record).Replace("\"schema\":1,", "\"schema\":99,", StringComparison.Ordinal));
+        Assert.Contains("\"schema\":99,", File.ReadAllText(record), StringComparison.Ordinal);
+        graph.Write("a.toy", "class A\nclass Moved\n");
+        await graph.SyncAsync();
+        Graph.WriteIn(worktree, "b.toy", "class B\nclass Bee\n");
+
+        var check = await graph.CheckAsync("w", worktree, "b.toy");
+
+        Assert.Equal(graph.Manifest().Digest, graph.View("w").Base);
+        Assert.Contains(check.Read.Extract("b.toy")!.Nodes, node => node.Id == "toy:Bee");
     }
 
     /// <summary>
@@ -2199,8 +2361,9 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
-    /// The paths a sparse checkout leaves out are looked at no further than their directory, once a directory: no link is
-    /// looked for along a path whose directory is not there - none can be left in it - and one whose directory stands is.
+    /// The paths a sparse checkout leaves out are looked at no further than their directory, once a directory: neither
+    /// their file nor a link is looked for where their directory is not there - none can be in it - and both are where it
+    /// stands.
     /// </summary>
     [Fact]
     public async Task APathASparseCheckoutLeftOut_IsLookedAtNoFurtherThanItsDirectory()
@@ -2221,6 +2384,7 @@ public sealed class CodebaseGraphServiceTests
         var (files, watch) = Watched.Over(graph.Harness.FileSystem);
         var resolved = new ConcurrentQueue<string>();
         var stood = new ConcurrentQueue<string>();
+        var looked = new ConcurrentQueue<string>();
         watch.Before = (method, arguments) =>
         {
             if (arguments?[0] is not string path || !path.StartsWith(graph.Tree, StringComparison.Ordinal) || path.Length == graph.Tree.Length)
@@ -2229,14 +2393,22 @@ public sealed class CodebaseGraphServiceTests
             }
 
             var relative = Path.GetRelativePath(graph.Tree, path).Replace('\\', '/');
-            (method == nameof(IFileSystem.ResolveLinks) ? resolved : method == nameof(IFileSystem.DirectoryExists) ? stood : null)?.Enqueue(relative);
+            (method switch
+            {
+                nameof(IFileSystem.ResolveLinks) => resolved,
+                nameof(IFileSystem.DirectoryExists) => stood,
+                nameof(IFileSystem.FileExists) => looked,
+                _ => null,
+            })?.Enqueue(relative);
         };
 
         await graph.WithFiles(files).SyncAsync();
 
         Assert.Equal(["README.md", "kept/five.toy"], graph.Manifest().Files.Keys);
         Assert.DoesNotContain(resolved, path => path.StartsWith("gone", StringComparison.Ordinal));
+        Assert.DoesNotContain(looked, path => path.StartsWith("gone", StringComparison.Ordinal));
         Assert.Contains("kept/four.toy", resolved);
+        Assert.Contains("kept/four.toy", looked);
         Assert.Equal(["gone", "gone/deep", "kept"], stood.Where(path => path.StartsWith("gone", StringComparison.Ordinal) || path.StartsWith("kept", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
     }
 

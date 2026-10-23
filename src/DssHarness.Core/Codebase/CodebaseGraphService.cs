@@ -54,7 +54,7 @@ public interface ICodebaseGraphService
     /// tree's graph recorded - trusted only where that time is older than the tree's last whole sync, as git trusts an
     /// entry older than its index - a file either of them moved, whose time is not older, or that could not be read listed
     /// again by its path, as a sync by paths lists it, and one whose blob moved or that could not be read read again, its
-    /// view updated and linked again, on the spot - so what the answer is made from is each file
+    /// view updated and linked again, on the spot, where any changed - so what the answer is made from is each file
     /// as it is, and each extract it names is read before the check returns. A tree with no graph yet, or one this process
     /// holds neither a link nor a link result of, is synced whole first; a link or a submodule stands as it was listed.
     /// </summary>
@@ -554,8 +554,11 @@ public sealed class CodebaseGraphService(
 
                 var view = ViewOrNull(run, agent);
 
+                // A view with no record that reads stands on no base this rebase keeps: what this process held of it is
+                // let go, and its next sync makes it again whole, as its record would have it.
                 if (view is null)
                 {
+                    graph.Views.TryRemove(agent, out _);
                     continue;
                 }
 
@@ -1188,9 +1191,10 @@ public sealed class CodebaseGraphService(
         /// <summary>
         /// The check of <paramref name="paths"/>: each one the tree keeps looked at, and a file whose size or time moved - or
         /// was never recorded, is not older than the tree's last whole sync (<see cref="Tree.Written"/>), or could not be read
-        /// - listed again as a sync by its path lists it; one whose blob moved, or that could not be read, read again, one that
-        /// is a link now kept as one, and one gone taken out, and the tree linked again and written where any moved; then each
-        /// extract the files name read, before any sync can take it out.
+        /// - listed again as a sync by its path lists it; one whose blob moved read again, one that is a link now kept as one,
+        /// one gone taken out, and one that could not be read read again, taken where it reads now and changing nothing where
+        /// it still does not; the tree linked again and written where any changed, as dirty as git says those files are; then
+        /// each extract the files name read, before any sync can take it out.
         /// </summary>
         public async Task<(Tree Tree, CodebaseGraphChecked Checked)> CheckAsync(Tree current, IReadOnlyList<string> paths)
         {
@@ -1239,7 +1243,8 @@ public sealed class CodebaseGraphService(
             // The one question every listing asks, asked of these paths alone: the index's blob where git finds a file clean -
             // which is no hash of what it holds where git would clean it otherwise - the one git gives its working file where
             // it changed, a link where one lies along it, and none where it went.
-            var (listed, _, _) = await ListAsync([.. toList.Select(file => file.Path)]).ConfigureAwait(false);
+            var (listed, _, dirty) = await ListAsync([.. toList.Select(file => file.Path)], withHead: false).ConfigureAwait(false);
+            var unread = new List<(string Path, string Blob)>();
 
             foreach (var (path, standing) in toList)
             {
@@ -1249,21 +1254,31 @@ public sealed class CodebaseGraphService(
                 {
                     moved[path] = null;
                 }
-                else if (file is { Link: false, Submodule: false } && file.Blob == entry.Blob && entry.State != CodeFileStates.Unreadable)
-                {
-                    standings[path] = (standing.Length, standing.Written, file.Blob);
-                }
-                else
+                else if (file is not { Link: false, Submodule: false } || file.Blob != entry.Blob)
                 {
                     moved[path] = file;
                 }
+                else if (entry.State == CodeFileStates.Unreadable)
+                {
+                    unread.Add((path, file.Blob!));
+                }
+                else
+                {
+                    standings[path] = (standing.Length, standing.Written, file.Blob);
+                }
             }
 
+            // A file the tree could not read, its blob as it was, is read again: the tree takes what reads now, and one that
+            // still does not changes nothing and writes nothing.
+            var reread = (await ReadAsync(unread).ConfigureAwait(false))
+                .Where(file => file.Entry.State != CodeFileStates.Unreadable)
+                .ToDictionary(file => file.Path, file => file.Entry, StringComparer.Ordinal);
             var tree = current;
 
-            if (moved.Count > 0)
+            // The tree is as dirty as git says the files it was asked of are: a file read again, its blob as it was, is no change of it.
+            if (moved.Count > 0 || reread.Count > 0)
             {
-                tree = await ApplyAsync(current, moved, current.Head, dirty: true, moved.Count).ConfigureAwait(false);
+                tree = await ApplyAsync(current, moved, current.Head, dirty, moved.Count + reread.Count, reread).ConfigureAwait(false);
             }
 
             // The extracts the answer is made from are read while this check is a sync under way, which no sweep comes
@@ -1284,9 +1299,10 @@ public sealed class CodebaseGraphService(
 
         /// <summary>
         /// The tree's graph with each of <paramref name="asked"/> made what git says of it - kept where its blob and reading
-        /// did not change, read again where they did, taken out where git holds none - linked again and written.
+        /// did not change, read again where they did, taken out where git holds none - and each of <paramref name="read"/>
+        /// taken as it was read already, linked again and written.
         /// </summary>
-        private async Task<Tree> ApplyAsync(Tree current, IReadOnlyDictionary<string, Listed?> asked, string? head, bool dirty, int listed)
+        private async Task<Tree> ApplyAsync(Tree current, IReadOnlyDictionary<string, Listed?> asked, string? head, bool dirty, int listed, IReadOnlyDictionary<string, CodeGraphFileEntry>? read = null)
         {
             var entries = new SortedDictionary<string, CodeGraphFileEntry>(current.Entries.ToDictionary(file => file.Key, file => file.Value, StringComparer.Ordinal), StringComparer.Ordinal);
             var here = current.Here.ToHashSet(StringComparer.Ordinal);
@@ -1315,7 +1331,9 @@ public sealed class CodebaseGraphService(
                 }
             }
 
-            foreach (var (path, entry) in await ReadAsync(toRead).ConfigureAwait(false))
+            var made = await ReadAsync(toRead).ConfigureAwait(false);
+
+            foreach (var (path, entry) in made.Concat(read?.Select(file => (file.Key, file.Value)) ?? []))
             {
                 entries[path] = entry;
                 here.Add(path);
@@ -1471,9 +1489,11 @@ public sealed class CodebaseGraphService(
         /// lists whole as untracked is not entered, as a submodule is not. What it could not name is said by this sync, and
         /// what it hashed counted.
         /// </summary>
-        private async Task<(SortedDictionary<string, Listed> Files, string? Head, bool Dirty)> ListAsync(IReadOnlyList<string>? paths)
+        /// <param name="paths">The paths to list; null for the whole tree.</param>
+        /// <param name="withHead">Whether the tree's HEAD is asked too: a check of files has no use for it.</param>
+        private async Task<(SortedDictionary<string, Listed> Files, string? Head, bool Dirty)> ListAsync(IReadOnlyList<string>? paths, bool withHead = true)
         {
-            var listing = await ListingOf(paths).ConfigureAwait(false);
+            var listing = await ListingOf(paths, withHead).ConfigureAwait(false);
 
             foreach (var (name, skipped) in listing.Unnamed)
             {
@@ -1487,7 +1507,9 @@ public sealed class CodebaseGraphService(
         /// <summary>
         /// The listing <see cref="ListAsync"/> takes, and nothing said or counted of it: what a check after a read asks again.
         /// </summary>
-        private async Task<Listing> ListingOf(IReadOnlyList<string>? paths)
+        /// <param name="paths">The paths to list; null for the whole tree.</param>
+        /// <param name="withHead">Whether the tree's HEAD is asked too: the listing's head is null where it is not.</param>
+        private async Task<Listing> ListingOf(IReadOnlyList<string>? paths, bool withHead)
         {
             IReadOnlyList<GitIndexEntry> indexed;
             IReadOnlyList<GitWorkingFile> working;
@@ -1505,7 +1527,7 @@ public sealed class CodebaseGraphService(
                 var git = _service._gitClient;
                 indexed = paths is null ? await git.ListIndexAsync(_tree, _cancellationToken).ConfigureAwait(false) : await git.ListIndexAsync(_tree, paths, _cancellationToken).ConfigureAwait(false);
                 working = paths is null ? await git.ListWorkingFilesAsync(_tree, _cancellationToken).ConfigureAwait(false) : await git.ListWorkingFilesAsync(_tree, paths, _cancellationToken).ConfigureAwait(false);
-                head = await git.ResolveCommitAsync(_tree, "HEAD", _cancellationToken).ConfigureAwait(false);
+                head = withHead ? await git.ResolveCommitAsync(_tree, "HEAD", _cancellationToken).ConfigureAwait(false) : null;
             }
             catch (Exception ex) when (ex is HarnessException or ProgramStartException)
             {
@@ -1515,12 +1537,12 @@ public sealed class CodebaseGraphService(
             var files = new SortedDictionary<string, Listed>(StringComparer.Ordinal);
             var toHash = new List<string>();
 
-            // A conflicted path is listed once for each of its stages, and taken once; by its bytes, since two names that
-            // are no UTF-8 can decode to one text.
             // Whether each directory a path git does not look at lies in stands, asked once a directory: a sparse checkout
             // leaves out whole directories, and their paths are looked at no further.
             var standing = new Dictionary<string, bool>(StringComparer.Ordinal);
 
+            // A conflicted path is listed once for each of its stages, and taken once; by its bytes, since two names that
+            // are no UTF-8 can decode to one text.
             foreach (var file in indexed.DistinctBy(entry => entry.Name.Quoted, StringComparer.Ordinal))
             {
                 if (!Kept(file.Name, unnamed))
@@ -1529,11 +1551,12 @@ public sealed class CodebaseGraphService(
                 }
 
                 // git does not look at the file of a path marked skip-worktree or assume-unchanged, so its index object says
-                // nothing of what is there: an edit of it is in no listing. One whose file is not there is in the graph only
-                // as a link left there, leading nowhere - which only a directory that stands can hold.
+                // nothing of what is there: an edit of it is in no listing. Where its directory does not stand, no file is
+                // there, nor any link left there, and nothing more is asked of it; where it does, its file is, or a link
+                // left there leading nowhere.
                 if ((file.IsSkipWorktree || file.IsAssumedUnchanged) && !file.IsSubmodule && !file.IsLink)
                 {
-                    if (_service._fileSystem.FileExists(Absolute(file.Name.Text)) || (DirectoryStands(file.Name.Text, standing) && ThroughLink(file.Name.Text)))
+                    if (DirectoryStands(file.Name.Text, standing) && (_service._fileSystem.FileExists(Absolute(file.Name.Text)) || ThroughLink(file.Name.Text)))
                     {
                         files[file.Name.Text] = new Listed(null, Link: false, Submodule: false);
                         toHash.Add(file.Name.Text);
@@ -1643,6 +1666,28 @@ public sealed class CodebaseGraphService(
 
         /// <summary>Why a file written while it was read keeps nothing.</summary>
         private const string ChangedWhileRead = "it changed while it was read";
+
+        /// <summary>
+        /// How many files read past which the listing after the reads lists the tree whole: by their paths, each command
+        /// line's worth of them has git read the whole index, so past two of them one listing of the tree costs less.
+        /// </summary>
+        private const int ListedWholePast = 2 * GitClient.CommandLineBatchSize;
+
+        /// <summary>
+        /// Whether the file at <paramref name="path"/> stands now as <paramref name="seen"/> says it stood when it was read:
+        /// there, its size and its time as they were. One that cannot be looked at stands as nothing it was.
+        /// </summary>
+        private bool StandsAsSeen(string path, FileStanding seen)
+        {
+            try
+            {
+                return _service._fileSystem.StandingOf(Absolute(path)) is { } now && now.Length == seen.Length && now.Written == seen.Written;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
 
         /// <summary>Why a file whose name its records cannot hold is not in the graph.</summary>
         private const string NoRecordedName = "its name is no path relative to the tree that every machine reads alike - a drive, a leading "
@@ -1828,26 +1873,29 @@ public sealed class CodebaseGraphService(
         /// <summary>
         /// Reads each of <paramref name="files"/> and gives it to its implementation, in parallel on one of every
         /// <see cref="ReadShare"/> of the machine's processors; then lists every file whose bytes decided its entry once more,
-        /// as a sync by its path would, and keeps what was made of each only where the listing still gives it the blob it was
-        /// read under - an extract is never stored under a blob its bytes were not. A file whose size or time moved while it
-        /// was read, or whose blob moved or that went by the listing after, is listed unreadable, which the next sync reads again.
+        /// as a sync would, and keeps what was made of each only where the listing still gives it the blob it was read under,
+        /// and the file, after that listing, still stands as its read saw it - an extract is never stored under a blob its
+        /// bytes were not. A file whose size or time moved while it was read or after, or whose blob moved or that went by the
+        /// listing after, is listed unreadable, which the next sync reads again.
         /// </summary>
         /// <remarks>
         /// The listing, not a hash of the file, is asked again because the blob a file is read under is the listing's: the
         /// index's where git finds the file clean - which, for one git would clean otherwise than the index holds it, is no hash
         /// of what it holds - and the one git gives its working file where it changed. Asking the one question twice compares
-        /// like with like, and runs no clean filter over a file git found clean. A file too large is not read, and an
-        /// unreadable one keeps nothing: neither is asked again.
+        /// like with like, and runs no clean filter over a file git found clean. A file truncated and written again whole, or
+        /// grown past maxFileBytes and back, reads clean to git again though what was read of it was none of what git lists:
+        /// its size or time after the listing is what tells. A file too large is not read, so not listed again, and is held to
+        /// its size and time alone; an unreadable one keeps nothing.
         /// </remarks>
         private async Task<IReadOnlyList<(string Path, CodeGraphFileEntry Entry)>> ReadAsync(IReadOnlyList<(string Path, string Blob)> files)
         {
-            var read = new ConcurrentBag<(string Path, string Blob, CodeGraphFileEntry Entry, CodeGraphStoredExtract? Stored)>();
+            var read = new ConcurrentBag<(string Path, string Blob, CodeGraphFileEntry Entry, CodeGraphStoredExtract? Stored, FileStanding? Seen)>();
             var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / ReadShare), CancellationToken = _cancellationToken };
 
             await Parallel.ForEachAsync(files, options, async (file, token) =>
             {
-                var (entry, stored) = await ReadOneAsync(file.Path, file.Blob, token).ConfigureAwait(false);
-                read.Add((file.Path, file.Blob, entry, stored));
+                var (entry, stored, seen) = await ReadOneAsync(file.Path, file.Blob, token).ConfigureAwait(false);
+                read.Add((file.Path, file.Blob, entry, stored, seen));
             }).ConfigureAwait(false);
 
             var looked = read.Where(file => file.Entry.State is not (CodeFileStates.Unreadable or CodeFileStates.TooLarge)).ToList();
@@ -1855,9 +1903,13 @@ public sealed class CodebaseGraphService(
 
             if (looked.Count > 0)
             {
-                var again = (await ListingOf([.. looked.Select(file => file.Path)]).ConfigureAwait(false)).Files;
+                // By their paths, every command line's worth of them has git read the whole index once: past a few, the tree
+                // is listed once, whole, and each looked up in it.
+                var again = (await ListingOf(looked.Count > ListedWholePast ? null : [.. looked.Select(file => file.Path)], withHead: false).ConfigureAwait(false)).Files;
                 moved.UnionWith(looked.Where(file => !again.TryGetValue(file.Path, out var now) || now.Link || now.Submodule || now.Blob != file.Blob).Select(file => file.Path));
             }
+
+            moved.UnionWith(read.Where(file => file.Seen is { } seen && !moved.Contains(file.Path) && !StandsAsSeen(file.Path, seen)).Select(file => file.Path));
 
             var entries = new List<(string Path, CodeGraphFileEntry Entry)>(read.Count);
 
@@ -1887,9 +1939,10 @@ public sealed class CodebaseGraphService(
         /// <summary>
         /// One file read, by the core's rules first - its size, then its bytes, binary or undecodable, gone since it was
         /// listed - and then by the implementation that claims it, whose extract is completed with every node's digest: its
-        /// entry, and the extract to store once its blob is confirmed.
+        /// entry, the extract to store once its blob is confirmed, and how the file stood when it was read, where its size
+        /// or its bytes decided its entry.
         /// </summary>
-        private async Task<(CodeGraphFileEntry Entry, CodeGraphStoredExtract? Stored)> ReadOneAsync(string path, string blob, CancellationToken token)
+        private async Task<(CodeGraphFileEntry Entry, CodeGraphStoredExtract? Stored, FileStanding? Seen)> ReadOneAsync(string path, string blob, CancellationToken token)
         {
             var absolute = Absolute(path);
             FileStanding? standing;
@@ -1901,37 +1954,37 @@ public sealed class CodebaseGraphService(
 
                 if (standing is null)
                 {
-                    return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = "it was gone when it was read" }, null);
+                    return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = "it was gone when it was read" }, null, null);
                 }
 
                 if (standing.Length > _shape.MaxFileBytes)
                 {
-                    return (new CodeGraphFileEntry(blob, CodeFileStates.TooLarge, standing.Length) { Why = string.Create(CultureInfo.InvariantCulture, $"{standing.Length:N0} bytes, over maxFileBytes ({_shape.MaxFileBytes:N0})"), Mtime = standing.Written }, null);
+                    return (new CodeGraphFileEntry(blob, CodeFileStates.TooLarge, standing.Length) { Why = string.Create(CultureInfo.InvariantCulture, $"{standing.Length:N0} bytes, over maxFileBytes ({_shape.MaxFileBytes:N0})"), Mtime = standing.Written }, null, standing);
                 }
 
                 bytes = await _service._fileSystem.ReadAllBytesAsync(absolute, token).ConfigureAwait(false);
-
-                // A write while it was read leaves bytes of no one content, though it may leave the file's blob as it was:
-                // its size or time moved, or it read to another length than it stood at.
-                if (_service._fileSystem.StandingOf(absolute) is not { } after || after.Length != standing.Length || after.Written != standing.Written || bytes.Length != standing.Length)
-                {
-                    return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = ChangedWhileRead }, null);
-                }
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
-                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = "it was gone when it was read" }, null);
+                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = "it was gone when it was read" }, null, null);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = $"it could not be read: {ex.Message.TrimEnd('.')}" }, null);
+                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = $"it could not be read: {ex.Message.TrimEnd('.')}" }, null, null);
+            }
+
+            // A write while it was read leaves bytes of no one content, though it may leave the file's blob as it was: its
+            // size or time moved, or it read to another length than it stood at. Nothing is made of such bytes.
+            if (bytes.Length != standing.Length || !StandsAsSeen(path, standing))
+            {
+                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = ChangedWhileRead }, null, null);
             }
 
             var decoded = CodeFileText.Decode(bytes);
 
             if (!decoded.IsRead)
             {
-                return (new CodeGraphFileEntry(blob, decoded.State, bytes.Length) { Why = decoded.Why, Mtime = standing.Written }, null);
+                return (new CodeGraphFileEntry(blob, decoded.State, bytes.Length) { Why = decoded.Why, Mtime = standing.Written }, null, standing);
             }
 
             var text = decoded.Text;
@@ -1939,12 +1992,12 @@ public sealed class CodebaseGraphService(
 
             if (route.Failed is { } failed)
             {
-                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = failed, Mtime = standing.Written }, null);
+                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = failed, Mtime = standing.Written }, null, null);
             }
 
             if (route.Extractor is not { } claimant)
             {
-                return (new CodeGraphFileEntry(blob, CodeFileStates.Ambiguous, bytes.Length) { Why = route.Ambiguous, Mtime = standing.Written }, null);
+                return (new CodeGraphFileEntry(blob, CodeFileStates.Ambiguous, bytes.Length) { Why = route.Ambiguous, Mtime = standing.Written }, null, standing);
             }
 
             var extractor = _shape.Uses(claimant.Language) ? claimant : _service._extractors.Fallback;
@@ -1960,14 +2013,14 @@ public sealed class CodebaseGraphService(
             {
                 // The contract's kit holds every implementation to answering for any text; one that throws is a defect of
                 // it, said for the one file and never the end of the sync.
-                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = $"its implementation '{extractor.Language}' failed on it: {ex.Message.TrimEnd('.')}", Mtime = standing.Written }, null);
+                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = $"its implementation '{extractor.Language}' failed on it: {ex.Message.TrimEnd('.')}", Mtime = standing.Written }, null, null);
             }
 
             var stored = new CodeGraphStoredExtract(CodeGraphManifest.CurrentSchema, extractor.Language, extractor.Version, blob, path, lines.Count, extract);
 
             if (stored.Problem() is { } wrong)
             {
-                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = $"its implementation '{extractor.Language}' answered what is no extract: {wrong}", Mtime = standing.Written }, null);
+                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = $"its implementation '{extractor.Language}' answered what is no extract: {wrong}", Mtime = standing.Written }, null, null);
             }
 
             // A file read keeps why it is generated, where its implementation said, in its why: the mark a later sync keeps.
@@ -1980,7 +2033,7 @@ public sealed class CodebaseGraphService(
                 Extract = CodeGraphIds.ExtractName(blob, path, extractor.Language, extractor.Version),
             };
 
-            return (entry, stored);
+            return (entry, stored, standing);
         }
 
         /// <summary>The state a file read by <paramref name="extractor"/> is in.</summary>

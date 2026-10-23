@@ -220,7 +220,8 @@ public sealed class GitClientListingTests
 
     /// <summary>
     /// A file not there when git hashed its batch answers null and fails nothing else: the batch git stopped in is asked
-    /// again a file at a time, every other file's blob given in order; a batch whose files are all there is asked once.
+    /// again once without the files found gone, every other file's blob given in order; a batch whose files are all there
+    /// is asked once.
     /// </summary>
     [Fact]
     public async Task AFileNotThereWhenGitHashedIt_AnswersNull_AndEveryOtherIsHashed()
@@ -243,7 +244,53 @@ public sealed class GitClientListingTests
         var stored = (await harness.GitClient.ListIndexAsync(temp.Path, Token)).ToDictionary(entry => entry.Path, entry => entry.ObjectId);
         Assert.Equal(paths.Select(path => stored.GetValueOrDefault(path)), blobs);
         Assert.Null(blobs[1]);
-        Assert.Equal([200, .. Enumerable.Repeat(1, 200), 3], processes.Started.Where(request => request.Arguments.Contains("hash-object")).Select(PathsGiven));
+        Assert.Equal([200, 199, 3], processes.Started.Where(request => request.Arguments.Contains("hash-object")).Select(PathsGiven));
+    }
+
+    /// <summary>
+    /// A batch asked again without the files found gone, that git cannot hash either - another went meanwhile - is asked a
+    /// file at a time: each file gone answers null, every other its blob.
+    /// </summary>
+    [Fact]
+    public async Task ABatchThatLosesAnotherFileWhenAskedAgain_IsAskedAFileAtATime()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(temp.Path, Token);
+        var paths = Enumerable.Range(0, 5).Select(at => $"f/{at}.txt").ToList();
+
+        foreach (var path in paths.Where(path => path != "f/1.txt"))
+        {
+            temp.WriteFile(path, $"text {path}\n");
+        }
+
+        var processes = new CountingProcesses(new GoneAtTheSecondHash(harness.ProcessRunner, Path.Combine(temp.Path, "f", "3.txt")));
+
+        var blobs = await Git(harness, processes).HashWorkingFilesAsync(temp.Path, paths, Token);
+
+        await harness.RunGitAsync(temp.Path, ["add", "-A"], Token);
+        var stored = (await harness.GitClient.ListIndexAsync(temp.Path, Token)).ToDictionary(entry => entry.Path, entry => entry.ObjectId);
+        Assert.Equal(paths.Select(path => stored.GetValueOrDefault(path)), blobs);
+        Assert.Equal([1, 3], Enumerable.Range(0, blobs.Count).Where(at => blobs[at] is null));
+        Assert.Equal([5, 4, 1, 1, 1, 1], processes.Started.Where(request => request.Arguments.Contains("hash-object")).Select(PathsGiven));
+    }
+
+    /// <summary>Runs every program through <paramref name="inner"/>, and deletes <paramref name="file"/> as the second <c>hash-object</c> starts.</summary>
+    private sealed class GoneAtTheSecondHash(DssHarness.Core.Processes.IProcessRunner inner, string file) : DssHarness.Core.Processes.IProcessRunner
+    {
+        private int _hashes;
+
+        public Task<DssHarness.Core.Processes.ProcessResult> RunAsync(DssHarness.Core.Processes.ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            if (request.Arguments.Contains("hash-object") && Interlocked.Increment(ref _hashes) == 2)
+            {
+                File.Delete(file);
+            }
+
+            return inner.RunAsync(request, cancellationToken);
+        }
+
+        public string? FindExecutable(string command) => inner.FindExecutable(command);
     }
 
     /// <summary>Two names that are no UTF-8, alike once decoded, are each listed: told apart by their bytes.</summary>

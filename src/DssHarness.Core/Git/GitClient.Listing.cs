@@ -135,28 +135,50 @@ public sealed partial class GitClient
         const string What = "hash the working tree's files";
         var ids = new List<string?>(paths.Count);
 
+        bool There(string path) => _fileSystem.FileExists(Path.Combine(directory, path));
+
         foreach (var batch in paths.Chunk(HashBatch))
         {
             try
             {
                 ids.AddRange(await HashAsync(directory, batch, how, What, cancellationToken).ConfigureAwait(false));
+                continue;
             }
-            catch (HarnessException) when (batch.Any(path => !_fileSystem.FileExists(Path.Combine(directory, path))))
+            catch (HarnessException) when (!batch.All(There))
             {
-                // git stops at the first file it cannot open, and says nothing of the rest: each is asked on its own, and
-                // one whose file is not there answers null where git cannot hash it.
-                foreach (var path in batch)
+                // git stops at the first file it cannot open, and says nothing of the rest.
+            }
+
+            // The batch is asked again without the files found gone, which answer null; only where that fails too - another
+            // went meanwhile - is each asked on its own, one whose file is not there answering null where git cannot hash it.
+            var there = batch.Where(There).ToList();
+            var found = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+            try
+            {
+                var blobs = there.Count == 0 ? [] : await HashAsync(directory, there, how, What, cancellationToken).ConfigureAwait(false);
+
+                for (var at = 0; at < there.Count; at++)
+                {
+                    found[there[at]] = blobs[at];
+                }
+            }
+            catch (HarnessException) when (!there.All(There))
+            {
+                foreach (var path in there)
                 {
                     try
                     {
-                        ids.Add((await HashAsync(directory, [path], how, What, cancellationToken).ConfigureAwait(false))[0]);
+                        found[path] = (await HashAsync(directory, [path], how, What, cancellationToken).ConfigureAwait(false))[0];
                     }
-                    catch (HarnessException) when (!_fileSystem.FileExists(Path.Combine(directory, path)))
+                    catch (HarnessException) when (!There(path))
                     {
-                        ids.Add(null);
+                        found[path] = null;
                     }
                 }
             }
+
+            ids.AddRange(batch.Select(path => found.GetValueOrDefault(path)));
         }
 
         return ids;
