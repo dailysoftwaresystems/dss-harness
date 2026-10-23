@@ -629,8 +629,9 @@ public interface IGitClient
     /// <summary>
     /// The blob id git would store each of <paramref name="paths"/>' working files as, its filters applied, in the same
     /// order - nothing written, no lock taken, the paths given on standard input <see cref="GitClient.HashBatch"/> at a time
-    /// - and null for each whose file was not there when git looked: a batch git could not hash is asked again a file at a
-    /// time, so a file that went while it was hashed fails nothing but its own answer.
+    /// - and null for each whose file was not there when git looked: a batch git could not hash is asked again without the
+    /// files found gone, and a file at a time only where that fails too, so a file that went while it was hashed fails
+    /// nothing but its own answer.
     /// </summary>
     /// <param name="directory">The top of the tree, which the paths are relative to.</param>
     /// <param name="paths">The files.</param>

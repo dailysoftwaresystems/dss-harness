@@ -1920,8 +1920,9 @@ read again.
 A sync (`ICodebaseGraphService.SyncAsync`) lists the main checkout by three calls of `IGitClient` that take no lock -
 `ListIndexAsync` (`ls-files --stage -v -z`, the one reading of the index the whole tool shares), `ListWorkingFilesAsync`
 (`status --porcelain=v2 -z --untracked-files=all --no-renames`) and `HashWorkingFilesAsync` (`hash-object`, its paths on
-standard input 200 at a time, a batch git stopped in asked again a file at a time so a file gone while git hashed it
-answers null and is said gone, failing nothing else); a listing of given paths names them as arguments, in batches no
+standard input 200 at a time, a batch git stopped in asked again without the files found gone, and a file at a time
+only where that fails too, so a file gone while git hashed it answers null and is said gone, failing nothing else); a
+listing of given paths names them as arguments, in batches no
 command line outgrows (`CommandLineBatches`: 200 paths and 8,000 characters at most) - leaves out the credential slots
 and the tool's state paths under the run's worktrees root before anything reads, says unreadable a name that is not
 UTF-8 or that the records cannot hold (`OrchestrationRules.RelativePathProblem`: a drive, a leading slash or backslash, a
@@ -1933,18 +1934,22 @@ file declared `text=auto` alone, as git does -
 or a Git LFS pointer is binary, UTF-8 or UTF-16 by its mark is read,
 anything else is unreadable) before its implementation does. A path whose file git does not look at - marked
 skip-worktree, as a sparse checkout marks it, or assume-unchanged - is hashed and read where its file is there and left
-out where it is not, looked at no further than its directory where that is not there (asked once a directory), since
-no link can be left in it; a repository inside the tree that git lists whole as untracked is not entered; a file about
-to be hashed - changed, untracked or not looked at by git - that is a link, or that a link lies along
-(`LinkPaths.LeadsElsewhere`, a directory junction git walks into among them), is listed a link and neither hashed nor
-read, by the one look every listing takes. A file whose size or time moved while it was read keeps nothing, and each
-file whose bytes decided its entry is listed once more when the reads are done, as a sync by its path lists it
-(`ListingOf`, nothing said or counted): one the listing no longer gives the blob it was read under, or that went, is
-unreadable and keeps nothing, so an extract is never stored under a blob its bytes were not. The listing is asked
+out where it is not, looked at no further than its directory where that is not there (asked once a directory, before
+its file), since neither its file nor a link can be in it; a repository inside the tree that git lists whole as
+untracked is not entered; a file about to be hashed - changed, untracked or not looked at by git - that is a link, or
+that a link lies along (`LinkPaths.LeadsElsewhere`, a directory junction git walks into among them), is listed a link
+and neither hashed nor read, by the one look every listing takes. Each file whose bytes decided its entry is listed
+once more when the reads are done, as a sync lists it (`ListingOf`, nothing said or counted, no HEAD asked; by its
+path, or - past two command lines' worth of files, `ListedWholePast`, since each has git read the whole index - by one
+listing of the tree): one the listing no longer gives the blob it was read under, or that went, is unreadable and
+keeps nothing. Every file whose size or bytes decided its entry, one too large among them, is then held to how its read
+saw it stand: one whose size or time moved while it was read, or by the time that listing is done - truncated and
+written again whole, grown past `maxFileBytes` and back, so git lists it clean again under the blob it was read under
+- keeps nothing either; so an extract is never stored under a blob its bytes were not. The listing is asked
 again, not a hash, because the blob a file is read under is the listing's - the index's where git finds the file
 clean, which for one git would clean otherwise than the index holds it is no hash of what it holds - so a file that
 needs renormalizing is never taken for one that changed, and no clean filter runs over a file git found clean, a
-smudged Git LFS file among them; a file too large was not read and is not asked again. It reads a file again only
+smudged Git LFS file among them; a file too large was not read and is not listed again. It reads a file again only
 where its blob, its claimant, its claimant's version, or what `maxFileBytes` or `languages` decide of it changed, or
 where its extract is gone, and tries a file it could not read again at every sync; a run with no graph starts from the
 newest earlier run's manifest
@@ -1980,7 +1985,8 @@ again under its gate with no file read, from the earlier manifest it stood on, u
 all, so no view is put back on an older base; a view that could not be held - its record not read or not written, or
 the views not listed - is said, a line of `sync.jsonl` and a warning, and made again by its next whole sync: the base's
 sync stands, the process lets go of nothing but what it held of that view, and while the base any view stands on is
-not known no earlier manifest is let go. A view's first sync makes the run's first base
+not known no earlier manifest is let go; a view whose record does not read, or is gone, is let go too, so nothing
+this process holds of it stands on a manifest let go. A view's first sync makes the run's first base
 before it takes its own gate, and a sync that waited for the base's gate for that makes none where another made it
 meanwhile: no gate is held while another view's is waited for, so no two syncs wait on each other. `SyncPathsAsync`
 brings a tree up to date by the paths given alone, git asked of those paths (`--literal-pathspecs`), with no listing of
@@ -1989,8 +1995,10 @@ answers from the graph yet - a `stat` against what the view recorded, or against
 whose time alone moved, trusted only where that time is older than the tree's last whole sync's record (`Tree.Written`),
 as git trusts an index entry older than its index; a file either moved, whose time is not older, or that could not be
 read listed again by its path, as a sync by paths lists it - so it is held to the blob a listing gives it, never to a
-hash git's listing would not give - and one whose blob moved, or that could not be read, read again, one that is a link
-now kept as one, its tree linked again and written, and each extract the answer names read, before the
+hash git's listing would not give - and one whose blob moved read again, one that is a link now kept as one, and one
+that could not be read read again, taken where it reads now and changing nothing where it still does not; its tree,
+where any of them changed, linked again and written - as dirty as git says those files are - and each extract the
+answer names read, before the
 answer is made - no sweep comes between - and a tree this process holds neither a link nor a link result of synced
 first, so the answer is its own link's; `DropViewAsync` takes a view out. What a process linked of each tree is held in memory,
 with the base's link result, and the next sync links again from it (`Relink`) - or keeps it, unread and unwritten,
