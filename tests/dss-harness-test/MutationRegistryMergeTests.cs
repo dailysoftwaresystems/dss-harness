@@ -1451,6 +1451,259 @@ public sealed class MutationRegistryMergeTests
     }
 
     /// <summary>
+    /// A heading the agent added is the one the main tree added of the same lines only where the two stand at one place
+    /// among the rows both texts hold - each above a new first arm of its own, or the agent's above the first row both hold
+    /// after the main tree's new arm - and then it stands once; each of the main tree's takes back one of the agent's at
+    /// most. Anywhere else it stands where the agent stood it: after a row both hold, under a heading both held or the
+    /// agent's own, though the main tree added one alike nearby (texts in the notation <see cref="Notated"/> reads: arms
+    /// by id, a heading in brackets above the next arm, <c>z</c> first under the arms' own header).
+    /// </summary>
+    [Theory]
+    [InlineData("z [H] a1 a2", "z [H] a1 a2 [H] m", "z [H] a1 a2 [H] g", "z [H] a1 a2 [H] m g")]
+    [InlineData(null, "z [H] a1 a2 [H] m", "z [H] a1 a2 [H] g", "z [H] a1 a2 [H] m g")]
+    [InlineData("z [H] a1 a2 a3", "z [H] a1 a2 [H] m a3", "z [H] a1 a2 [H] g a3", "z [H] a1 a2 [H] m g a3")]
+    [InlineData("z [H] a1 [K] a3", "z [H] a1 [H] m a3", "z [H] a1 [H] g a3", "z [H] a1 [H] m g a3")]
+    [InlineData("z [one] a1 a2", "z [R] a1 a2 [R] m", "z [R] a1 a2 [R] g", "z [R] a1 a2 [R] m g")]
+    [InlineData("z [H] a1 a2", "z [H] a1 [H] m a2", "z [H] a1 [H] a2", "z [H] a1 [H] m a2")]
+    [InlineData("z a1 a2", "z a1 [H] m a2", "z a1 [H] g a2 [H] g2", "z a1 [H] m g a2 [H] g2")]
+    [InlineData("z a1", "z [H] m a1", "z [H] g1 [H] g2 a1", "z [H] m g1 [H] g2 a1")]
+    [InlineData("z [one] a1 [K] a2", "z [R] a1 a2", "z [R] a1 [K] a2 [R] a3", "z [R] a1 a2 [R] a3")]
+    [InlineData("z [R] a1 [K] a2", "z [R] a1 a2", "z [R] a1 [K] a2 [R] a3", "z [R] a1 a2 [R] a3")]
+    [InlineData("z [H] a1 [K] a2", "z [H] m a1 a2", "z [H] a1 [K] a2 [H] a3", "z [H] m a1 a2 [H] a3")]
+    [InlineData("z a1 r q", "z a1 [H] m r q", "z a1 r [H] q", "z a1 [H] m r [H] q")]
+    [InlineData("z a1 a2", "z [H] a1 a2", "z a1 [H] g a2", "z [H] a1 [H] g a2")]
+    public void AHeadingBothAddedAlike_StandsOnce_OnlyWhereBothStandAtOnePlaceAmongTheRowsBothHold(string? held, string main, string agent, string merged)
+    {
+        var merge = Assert.IsType<RegistryMerge.Merged>(Merge(held is null ? null : Notated(held), Notated(main), Notated(agent)));
+
+        Assert.Equal(merged, Notation(merge.Text));
+    }
+
+    /// <summary>
+    /// Over small registries whose sides add, remove, rename and move headings, add arms under them and remove arms from
+    /// them: a merge in which the main tree changed nothing is the agent's text, and one in which the agent changed nothing
+    /// is the main tree's, byte for byte; a merge offered gives itself again with its result on either side; and each
+    /// heading the merged text takes from either side stands over its row exactly once - above it, or, the agent's, as the
+    /// heading the main tree added of the same lines at the same place among the rows both hold
+    /// (<see cref="AHeadingBothAddedAlike_StandsOnce_OnlyWhereBothStandAtOnePlaceAmongTheRowsBothHold"/>) - and no other
+    /// heading stands.
+    /// </summary>
+    [Fact]
+    public void WhateverHeadingsTheSidesAddRemoveRenameOrMove_EachTakenStandsOverItsRowOnce()
+    {
+        var random = new Random(20261023);
+        var merged = 0;
+        var joined = 0;
+
+        for (var round = 0; round < 2000; round++)
+        {
+            var held = Sections.Held(random);
+            var main = held.Changed('m', random);
+            var agent = held.Changed('g', random);
+            var (heldText, mainText, agentText) = (held.Text, main.Text, agent.Text);
+            var said = $"\nof what both held: {held}\nthe main tree:     {main}\nthe agent:         {agent}";
+
+            Assert.Equal(agentText, Assert.IsType<RegistryMerge.Merged>(Merge(heldText, heldText, agentText)).Text);
+            Assert.Equal(mainText, Assert.IsType<RegistryMerge.Merged>(Merge(heldText, mainText, heldText)).Text);
+
+            foreach (var both in new[] { held, null })
+            {
+                if (Merge(both?.Text, mainText, agentText) is not RegistryMerge.Merged merge)
+                {
+                    continue;
+                }
+
+                merged++;
+
+                var again = (Merge(both?.Text, merge.Text, agentText), Merge(both?.Text, mainText, merge.Text));
+
+                Assert.True(
+                    again is (RegistryMerge.Merged { Text: var first }, RegistryMerge.Merged { Text: var second }) && first == merge.Text && second == merge.Text,
+                    $"merged as {Notation(merge.Text)}, it did not give itself again{said}");
+
+                joined += Sections.Read(merge.Text).Joined(both, main, agent, out var wrong);
+
+                Assert.True(wrong is null, $"merged as {Notation(merge.Text)}: {wrong}{said}{(both is null ? "\nwith no text both held" : string.Empty)}");
+            }
+        }
+
+        Assert.True(merged > 3000 && joined > 100, $"Only {merged} merges were offered, and {joined} headings joined.");
+    }
+
+    /// <summary>
+    /// A registry of arms with one row of each kind, a section heading above some: the arms in order, each with the
+    /// heading above it or none, <c>z</c> first under the arms' own header - read from, and written as, its notation.
+    /// </summary>
+    private sealed record Sections(IReadOnlyList<(string Arm, string? Heading)> Arms)
+    {
+        private static readonly string?[] Names = ["H", "K", "R"];
+
+        public string Text => Notated(ToString());
+
+        public override string ToString() => string.Join(" ", Arms.Select(arm => arm.Heading is null ? arm.Arm : $"[{arm.Heading}] {arm.Arm}"));
+
+        /// <summary>What both held: <c>z</c>, then two to five arms, a heading of two names above some.</summary>
+        public static Sections Held(Random random)
+            => new([("z", null), .. Enumerable.Range(1, random.Next(2, 6)).Select(index => ($"a{index}", random.Next(3) == 0 ? Names[random.Next(2)] : null))]);
+
+        /// <summary>The arms of a merged text, as its notation spells them.</summary>
+        public static Sections Read(string text)
+        {
+            var arms = new List<(string, string?)>();
+            string? heading = null;
+
+            foreach (var word in Notation(text).Split(' '))
+            {
+                if (word.StartsWith('['))
+                {
+                    heading = word[1..^1];
+                    continue;
+                }
+
+                arms.Add((word, heading));
+                heading = null;
+            }
+
+            return new(arms);
+        }
+
+        /// <summary>
+        /// These arms as one side changes them, one to three times: an arm added, with a heading or none, or added as a
+        /// section's new first arm, taking its heading; a heading added, removed or renamed; an arm removed, its heading going
+        /// with it or passing to the arm below. New arms are named for <paramref name="side"/>; no arm moves.
+        /// </summary>
+        public Sections Changed(char side, Random random)
+        {
+            var arms = Arms.ToList();
+            var added = 0;
+
+            for (var change = random.Next(1, 4); change > 0; change--)
+            {
+                var at = random.Next(1, arms.Count);
+
+                switch (random.Next(6))
+                {
+                    case 0:
+                        arms.Insert(random.Next(1, arms.Count + 1), ($"{side}{++added}", random.Next(2) == 0 ? Names[random.Next(3)] : null));
+                        break;
+
+                    case 1 when arms[at].Heading is { } heading:
+                        arms.Insert(at, ($"{side}{++added}", heading));
+                        arms[at + 1] = (arms[at + 1].Arm, null);
+                        break;
+
+                    case 2 when arms[at].Heading is null:
+                        arms[at] = (arms[at].Arm, Names[random.Next(3)]);
+                        break;
+
+                    case 3 when arms[at].Heading is { } heading:
+                        arms[at] = (arms[at].Arm, random.Next(2) == 0 ? null : Names.First(name => name != heading));
+                        break;
+
+                    case 4 when arms.Count > 2:
+                        var gone = arms[at];
+                        arms.RemoveAt(at);
+
+                        if (gone.Heading is not null && at < arms.Count && arms[at].Heading is null && random.Next(2) == 0)
+                        {
+                            arms[at] = (arms[at].Arm, gone.Heading);
+                        }
+
+                        break;
+                }
+            }
+
+            return new(arms);
+        }
+
+        /// <summary>
+        /// How many of the agent's headings these merged arms took back as the main tree's; <paramref name="wrong"/> says
+        /// how they stand otherwise than each heading taken from either side over its row exactly once - above it, or
+        /// taken back as the heading the main tree added of the same lines nearest above, at the same place among the
+        /// rows both hold - with no other heading.
+        /// </summary>
+        public int Joined(Sections? held, Sections main, Sections agent, out string? wrong)
+        {
+            wrong = null;
+
+            var joined = 0;
+            var over = -1;
+            var taken = false;
+
+            string? Of(Sections? text, string arm) => text?.Arms.FirstOrDefault(each => each.Arm == arm).Heading;
+
+            bool Holds(Sections text, string arm) => text.Arms.Any(each => each.Arm == arm);
+
+
+            for (var at = 0; at < Arms.Count; at++)
+            {
+                var (arm, stands) = Arms[at];
+                var (before, theirs, ours) = (Of(held, arm), Of(main, arm), Of(agent, arm));
+                var wanted = theirs == ours ? theirs : before == theirs ? ours : before == ours ? theirs : "a conflict";
+                var joins = wanted is not null && theirs is null && ours == wanted
+                    && over >= 0 && !taken
+                    && Arms[over].Heading == wanted && !Holds(agent, Arms[over].Arm) && Of(main, Arms[over].Arm) == wanted
+                    && Arms.Skip(over + 1).Take(at - over - 1).All(between => !Holds(agent, between.Arm));
+
+                if (stands is null && wanted is not null && joins)
+                {
+                    joined++;
+                    taken = true;
+                }
+                else if (stands != wanted || (stands is not null && joins))
+                {
+                    wrong = $"arm {arm} stands under {stands ?? "no heading"}, wanted {wanted ?? "none"}{(joins ? ", taken back as the main tree's above it" : string.Empty)}";
+                    return joined;
+                }
+                else if (stands is not null)
+                {
+                    over = at;
+                    taken = false;
+                }
+            }
+
+            return joined;
+        }
+    }
+
+    /// <summary>
+    /// The registry text a notation spells: its arms by id, each a row of each kind and parted from the one above by a
+    /// blank line, a heading in brackets - <c>[H]</c> - written above the next arm as <c># H</c> and a blank line, and the
+    /// first under the arms' own header, <c># the arms</c>.
+    /// </summary>
+    private static string Notated(string notation)
+    {
+        var lines = new List<string> { "# the arms" };
+        string? heading = null;
+
+        foreach (var word in notation.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (word.StartsWith('['))
+            {
+                heading = word[1..^1];
+                continue;
+            }
+
+            lines.Add(string.Empty);
+
+            if (heading is not null)
+            {
+                lines.AddRange([$"# {heading}", string.Empty]);
+                heading = null;
+            }
+
+            lines.AddRange([A(word), C(word)]);
+        }
+
+        return Text([.. lines]);
+    }
+
+    /// <summary>The notation (<see cref="Notated"/>) of a text written in it: its arms by id, each heading in brackets.</summary>
+    private static string Notation(string text)
+        => string.Join(" ", text.Split('\n').Skip(1).Where(line => line.StartsWith("# ", StringComparison.Ordinal) || line.StartsWith("A | ", StringComparison.Ordinal))
+            .Select(line => line.StartsWith('#') ? $"[{line[2..]}]" : line.Split(" | ")[1]));
+
+    /// <summary>
     /// Where new arms take the header from an old first arm on one side, that arm is not changed by the taking: an arm
     /// whose rows both sides reworded alike is no conflict, and the header the new arms took stands once (the same
     /// defect's second face: a false conflict on an arm whose lines were byte-equal on both sides) - above the new arm, as
