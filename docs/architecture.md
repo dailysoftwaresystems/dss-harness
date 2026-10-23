@@ -197,7 +197,11 @@ whole life - whichever operation's runner starts it, though each operation is gi
 own - which ends every member when its last handle closes; so the harness ending in any way, a hard
 kill among them, ends
 the child and all it started at once. Its own end and a stop are as any other child's: nothing is
-terminated as it ends, and what it leaves running lives on until the harness ends. Every phase of
+terminated as it ends, and what it leaves running lives on until the harness ends - so, on every
+system, its output is read for five seconds more at most once it has ended, as a contained child's
+is once its container has: what still holds the output then is one of those leftovers, a server its
+phase started in the background, whose end the run would otherwise wait on for as long as it lived,
+the phase's time limit and a stop reaching nothing once the child had gone. Every phase of
 a leg a dispatcher runs on its own machine - a build, a test, a runner's step, a mutation arm's
 run, a set-up's down line - is bound, and so is its `keepAwake` command: a dispatcher killed where
 it stood once left its legs' test runners running for minutes, each holding a heavy leg's room. A
@@ -4749,10 +4753,11 @@ where none is, below the blank lines the main tree parts it from what stands abo
 them where a heading stood there. An arm taken from the agent in place of the main tree's lies over
 the main tree's segments of it, one for one, in their places: where the agent has more, the rest
 follow the last, and where it has fewer, the main tree's remaining places go. A heading only the
-agent added, whose lines are a heading both held that the merged text already holds above a segment
-of the main tree's, is that one heading - the agent wrote it above a new first arm of its section -
-written once, and an arm only the agent has that stands under it joins that section after the arm
-the heading stands above. A heading taken for a place no segment of the merged text stands in - its
+agent added, whose lines the merged text already holds as a heading above a segment of the main
+tree's - one both held, or one both renamed or added alike - is that one heading - the agent wrote it
+above a new first arm of its section - written once, and an arm only the agent has that stands under
+it joins that section after the arm the heading stands above. A heading taken for a place no
+segment of the merged text stands in - its
 row dropped by one side, the heading kept or changed by the other - would be read back as part of
 what stands below it, and is a conflict of its own (`ArmConflictKind.HeadsNoArm`). A segment of an
 arm only the agent has stands after

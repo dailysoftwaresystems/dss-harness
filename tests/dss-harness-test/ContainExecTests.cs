@@ -212,6 +212,66 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
+    /// What a bound child leaves running that holds its output holds the run no longer than the bound, on every system,
+    /// and lives on: it outlives the child by design - a server its build started, kept for the next phase - and the run,
+    /// reading to the end the leftover held off, waited for as long as it lived, the run's time limit and its caller's stop
+    /// reaching nothing once the child had gone.
+    /// </summary>
+    [Fact]
+    public async Task ABoundChildsLeftoverHoldingItsOutput_HoldsTheRunNoLongerThanTheBound()
+    {
+        var holder = LearnedProcess.None;
+
+        try
+        {
+            var result = await ContainingRunner().RunAsync(
+                Child("spawn-holder", "exit", "0", "sleep", "300000") with
+                {
+                    Bound = true,
+                    OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
+                },
+                TestContext.Current.CancellationToken).WaitAsync(ProcessRunner.DrainBound + TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
+
+            Assert.Equal((0, false), (result.ExitCode, result.TimedOut));
+            Assert.Equal($"holder={holder}\n", result.StandardOutput);
+            Assert.True(holder.Running, $"the leftover {holder} was ended by its bound parent's end");
+        }
+        finally
+        {
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// A bound child stopped is not held by what it left outside its tree holding its output: the stop ends its tree, the
+    /// leftover lives on, and the run ends within the bound once the child has gone - never once the leftover has.
+    /// </summary>
+    [Fact]
+    public async Task ABoundChildStopped_IsNotHeldByALeftoverOutsideItsTreeHoldingItsOutput()
+    {
+        var holder = LearnedProcess.None;
+
+        try
+        {
+            var (raised, since) = await RunAndStopOn(
+                Child("spawn-orphan-holder", "300000") with
+                {
+                    Bound = true,
+                    OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
+                },
+                line => string.Equals(line, "orphaned", StringComparison.Ordinal));
+
+            Assert.IsType<ProcessStoppedException>(raised);
+            Assert.True(since < ProcessRunner.DrainBound + TimeSpan.FromMinutes(1), $"the stopped run waited {since} for the leftover's end");
+            Assert.True(holder.Running, $"the leftover {holder} outside the stopped child's tree was ended by the stop");
+        }
+        finally
+        {
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
     /// On Linux and macOS a bound child starts as any other, in the group and session of the one that started it: nothing
     /// there ends a child with the process that started it, and an interrupt typed at the terminal still reaches it.
     /// </summary>

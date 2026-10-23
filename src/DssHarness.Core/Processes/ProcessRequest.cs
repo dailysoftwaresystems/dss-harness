@@ -133,12 +133,14 @@ public sealed record ProcessRequest
     /// member when its last handle closes. So this process ending in any way, a hard
     /// kill among them, ends the child and all it started at once, as a host ends a dispatched leg whose dispatcher has
     /// gone. Its own end and a stop are as any other child's: what it leaves running at its normal end lives on until this
-    /// process ends. On Linux and macOS the child starts as any other: an interrupt or a termination signal this process
-    /// is given ends it with this process's stop, its terminal's hang-up reaches it as it reaches this process, and a kill
-    /// of this process alone does not reach it - save under an operation's <see cref="ProcessScope"/>, a run's machine
-    /// step's, which starts it apart from the terminal and records its group while anything is in it, for the next run of
-    /// the tool over the run to end once this process has gone. A <see cref="Contained"/> child is bound already, by its
-    /// own job.
+    /// process ends. On every system its output is read for no longer than <see cref="ProcessRunner.DrainBound"/> once it
+    /// has ended, as a contained child's is once its container has: what still holds the output then is something it left
+    /// running, which the run would otherwise wait on for as long as it lived. On Linux and macOS the child starts as any
+    /// other: an interrupt or a termination signal this process is given ends it with this process's stop, its terminal's
+    /// hang-up reaches it as it reaches this process, and a kill of this process alone does not reach it - save under an
+    /// operation's <see cref="ProcessScope"/>, a run's machine step's, which starts it apart from the terminal and records
+    /// its group while anything is in it, for the next run of the tool over the run to end once this process has gone. A
+    /// <see cref="Contained"/> child is bound already, by its own job.
     /// </summary>
     public bool Bound { get; init; }
 

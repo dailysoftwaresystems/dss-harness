@@ -1331,6 +1331,36 @@ public sealed class MutationRegistryMergeTests
     }
 
     /// <summary>
+    /// A section header both sides renamed alike, each above a new first arm of its own, stands once, renamed, with both
+    /// sides' arms inside the one section - and so does one both sides added alike, with or without a text both held:
+    /// the same lines both hold as a heading are one heading, whether or not both held it before (the header stood
+    /// twice, once above each side's new first arm, where both had renamed it).
+    /// </summary>
+    [Fact]
+    public void ASectionHeaderBothSidesRenamedAlike_StandsOnce_ThoughEachAddedAFirstArmUnderIt()
+    {
+        string[] zero = ["# the arms", "", "# zero", "", A("z"), C("z")];
+        string[] first = [A("a-first"), C("a-first")];
+        string[] mains = [A("a-new-first-main"), C("a-new-first-main")];
+        string[] agents = [A("a-new-first-agent"), C("a-new-first-agent")];
+        var held = Text([.. zero, "", "# one", "", .. first]);
+        var main = Text([.. zero, "", "# one, renamed", "", .. mains, "", .. first]);
+        var agent = Text([.. zero, "", "# one, renamed", "", .. agents, "", .. first]);
+        var once = Text([.. zero, "", "# one, renamed", "", .. mains, "", .. agents, "", .. first]);
+
+        var renamed = Assert.IsType<RegistryMerge.Merged>(Merge(held, main, agent));
+        var added = Assert.IsType<RegistryMerge.Merged>(Merge(Text([.. zero, "", .. first]), main, agent));
+        var unheld = Assert.IsType<RegistryMerge.Merged>(Merge(null, main, agent));
+
+        Assert.Equal(once, renamed.Text);
+        Assert.Equal((new MergeCounts(1, 0, 0), new MergeCounts(1, 0, 0), 0, 4), (renamed.Main, renamed.Agent, renamed.Same, renamed.Arms));
+        Assert.Equal(once, added.Text);
+        Assert.Equal(once, unheld.Text);
+        Assert.Equal(renamed.Bytes, Assert.IsType<RegistryMerge.Merged>(MutationRegistryMerge.Merge(Bytes(held), renamed.Bytes, Bytes(agent))).Bytes);
+        Assert.Equal(renamed.Bytes, Assert.IsType<RegistryMerge.Merged>(MutationRegistryMerge.Merge(Bytes(held), Bytes(main), renamed.Bytes)).Bytes);
+    }
+
+    /// <summary>
     /// Where new arms take the header from an old first arm on one side, that arm is not changed by the taking: an arm
     /// whose rows both sides reworded alike is no conflict, and the header the new arms took stands once (the same
     /// defect's second face: a false conflict on an arm whose lines were byte-equal on both sides) - above the new arm, as

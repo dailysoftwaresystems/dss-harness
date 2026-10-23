@@ -19,8 +19,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     internal static readonly TimeSpan SessionGrace = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// How long a contained child's output is read for once its container has been ended: what was in it has gone, and
-    /// a process still holding the output is one that left the container, which nothing waits for.
+    /// How long a contained child's output is read for once its container has been ended, and a bound child's once it has
+    /// ended: what was in the container has gone, and what the bound child left running lives on past it by design, so a
+    /// process still holding the output is one that left the container or one of those leftovers, which nothing waits for.
     /// </summary>
     internal static readonly TimeSpan DrainBound = TimeSpan.FromSeconds(5);
 
@@ -458,10 +459,15 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // The process has exited, but what it wrote just before exiting can still be in the
         // pipes. Reading both streams to their end is what guarantees none of it is lost - for a
         // contained child, within a bound, since all its container held has gone with it and what
-        // still holds a pipe is a process that left the container and is no part of this run.
+        // still holds a pipe is a process that left the container and is no part of this run; and
+        // for a bound child within the same bound, on every system, since what it leaves running
+        // lives on past its end by design, and what still holds a pipe is one of those leftovers - a
+        // server started in the background, kept for the next phase - whose end the run would
+        // otherwise wait on for as long as it lived, no time limit or stop reaching a wait that
+        // begins once the child has gone.
         var drained = Task.WhenAll(standardOutput.Reading, standardError.Reading);
 
-        if (!request.Contained || await Task.WhenAny(drained, Task.Delay(DrainBound, CancellationToken.None)).ConfigureAwait(false) == drained)
+        if (!(request.Contained || request.Bound) || await Task.WhenAny(drained, Task.Delay(DrainBound, CancellationToken.None)).ConfigureAwait(false) == drained)
         {
             await drained.ConfigureAwait(false);
         }
@@ -1201,8 +1207,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// </para>
     /// <para>
     /// What was read is taken when the caller takes it - once the stream has ended, or once the caller has stopped
-    /// waiting for an end a process outside the child's container holds off. From then on nothing more is kept or handed
-    /// on: the run that asked has returned, and a line arriving after it would be news to nobody.
+    /// waiting for an end a process outside the child's container, or one a bound child left running, holds off
+    /// (<see cref="DrainBound"/>). From then on nothing more is kept or handed on: the run that asked has returned, and a
+    /// line arriving after it would be news to nobody.
     /// </para>
     /// </remarks>
     private sealed class StreamCapture
