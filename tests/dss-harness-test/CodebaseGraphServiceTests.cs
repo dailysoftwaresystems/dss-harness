@@ -2193,6 +2193,53 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
+    /// A file a check finds changed by a commit made since the view's sync leaves the view dirty, under the head that sync
+    /// recorded: the check asks no head, and git finds the file clean against the new one, yet the view now holds what the
+    /// head it records does not.
+    /// </summary>
+    [Fact]
+    public async Task AFileACheckFindsCommittedSince_LeavesTheViewDirty_UnderTheHeadItsSyncRecorded()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        await graph.CommitAsync();
+        var worktree = await graph.WorktreeAsync("w");
+        await graph.SyncViewAsync("w", worktree);
+        var head = graph.View("w").Head;
+        Assert.False(graph.View("w").Dirty);
+        Graph.WriteIn(worktree, "a.toy", "class A\nclass Aye\n");
+        await graph.Harness.CommitAllAsync(worktree, "change", TestContext.Current.CancellationToken);
+
+        var check = await graph.CheckAsync("w", worktree, "a.toy");
+
+        Assert.Equal(1, check.Extracted);
+        Assert.Contains(check.Read.Symbols.Nodes, node => node.Id == "toy:Aye");
+        Assert.Equal((head, true), (graph.View("w").Head, graph.View("w").Dirty));
+    }
+
+    /// <summary>
+    /// A tracked file a check finds gone leaves the tree dirty: it lacks a file its HEAD holds, though no other file was
+    /// listed to say so.
+    /// </summary>
+    [Fact]
+    public async Task ATrackedFileACheckFindsGone_LeavesTheTreeDirty()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        graph.Write("b.toy", "class B\n");
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+        Assert.False(graph.Manifest().Dirty);
+        File.Delete(Path.Combine(graph.Tree, "b.toy"));
+
+        var check = await graph.CheckAsync(null, null, "b.toy");
+
+        Assert.Equal(1, check.Removed);
+        Assert.DoesNotContain("b.toy", graph.Manifest().Files.Keys);
+        Assert.True(graph.Manifest().Dirty);
+    }
+
+    /// <summary>
     /// A file truncated and written again whole while it was read, the same as before, keeps nothing: git finds it clean
     /// again and lists the blob it was read under, but what was read of it - the truncated file, which stood still while
     /// it was read - is none of it, and the file stands otherwise after the listing than its read saw.
@@ -2301,6 +2348,44 @@ public sealed class CodebaseGraphServiceTests
         Assert.Equal(2, git.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(IGitClient.ListIndexAsync) && call.GetArguments().Length == 2));
         Assert.DoesNotContain(git.ReceivedCalls(), call => call.GetMethodInfo().Name is nameof(IGitClient.ListIndexAsync) or nameof(IGitClient.ListWorkingFilesAsync) && call.GetArguments().Length == 3);
         Assert.Equal(1, git.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(IGitClient.ResolveCommitAsync)));
+    }
+
+    /// <summary>
+    /// Many files read by a sync by paths are listed again by their paths, never by a listing of the tree: a file it was not
+    /// given, which git could not hash, fails nothing.
+    /// </summary>
+    [Fact]
+    public async Task ManyFilesReadByASyncByPaths_AreListedAgainByTheirPaths_AndNoFileItWasNotGivenFailsIt()
+    {
+        using var graph = await Graph.CreateAsync();
+        var paths = Enumerable.Range(0, 450).Select(at => $"f/{at:D3}.toy").ToArray();
+
+        foreach (var path in paths)
+        {
+            graph.Write(path, "class F\n");
+        }
+
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+
+        foreach (var path in paths)
+        {
+            graph.Write(path, "class F\nclass G\n");
+        }
+
+        graph.Write("locked.toy", "class L\n");
+        var real = graph.Harness.GitClient;
+        var git = Forwarding(real);
+        git.HashWorkingFilesAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns(call =>
+            call.ArgAt<IReadOnlyList<string>>(1).Contains("locked.toy")
+                ? Task.FromException<IReadOnlyList<string?>>(new HarnessException(HarnessExit.CommandFailed, "error: unable to open 'locked.toy': Permission denied"))
+                : real.HashWorkingFilesAsync(call.ArgAt<string>(0), call.ArgAt<IReadOnlyList<string>>(1), call.ArgAt<CancellationToken>(2)));
+
+        var synced = (await graph.WithGit(git).SyncPathsAsync(paths))!;
+
+        Assert.Equal((450, 450), (synced.Listed, synced.Extracted));
+        Assert.DoesNotContain(git.ReceivedCalls(), call => call.GetMethodInfo().Name is nameof(IGitClient.ListIndexAsync) or nameof(IGitClient.ListWorkingFilesAsync) && call.GetArguments().Length == 2);
+        Assert.DoesNotContain("locked.toy", graph.Manifest().Files.Keys);
     }
 
     /// <summary>
