@@ -16,11 +16,14 @@ namespace DssHarness.Core.Codebase;
 /// <param name="Tool">The version of the tool that wrote it.</param>
 /// <param name="Extractors">Each implementation of the registry, with its version, by name.</param>
 /// <param name="Tree">The tree it lists, absolute.</param>
-/// <param name="Head">The commit the tree's HEAD named at its last sync, which a check does not ask; <see langword="null"/> where it named none yet.</param>
+/// <param name="Head">
+/// The commit the tree's HEAD named at its last sync - a sync by paths takes every path changed between the one before and
+/// it - which a check does not ask; <see langword="null"/> where it named none yet.
+/// </param>
 /// <param name="Dirty">
 /// Whether the tree held anything its HEAD does not: as git listed it at its last whole sync, and set by any later sync by
-/// paths or check that changed a file, which cannot tell a change committed since from one not - so set, it stays until the
-/// next whole sync.
+/// paths that changed a file, committed since or not, or check that did, which cannot tell the two apart - so set, it stays
+/// until the next whole sync.
 /// </param>
 /// <param name="SyncedAt">When it was synced.</param>
 /// <param name="Files">Every file it keeps, by its path relative to the tree with forward separators, in ordinal order.</param>
@@ -368,11 +371,14 @@ public sealed record CodeGraphSymbolEntry(string Id, string Handle, string Kind,
 /// <param name="Agent">The agent whose worktree it is.</param>
 /// <param name="Tree">The worktree it lists, absolute.</param>
 /// <param name="Base">The digest of the base's manifest it holds its overlay against.</param>
-/// <param name="Head">The commit the worktree's HEAD named at its last sync, which a check does not ask; <see langword="null"/> where it named none yet.</param>
+/// <param name="Head">
+/// The commit the worktree's HEAD named at its last sync - a sync by paths takes every path changed between the one before
+/// and it - which a check does not ask; <see langword="null"/> where it named none yet.
+/// </param>
 /// <param name="Dirty">
 /// Whether the worktree held anything its HEAD does not: as git listed it at its last whole sync, and set by any later sync
-/// by paths or check that changed a file, which cannot tell a change committed since from one not - so set, it stays until
-/// the next whole sync.
+/// by paths that changed a file, committed since or not, or check that did, which cannot tell the two apart - so set, it
+/// stays until the next whole sync.
 /// </param>
 /// <param name="SyncedAt">When it was synced.</param>
 /// <param name="Files">Each path the worktree holds otherwise than the base, with its entry, in ordinal order.</param>

@@ -36,8 +36,11 @@ public interface ICodebaseGraphService
     /// <summary>
     /// Brings the graph of one tree up to date by <paramref name="paths"/> alone, with no listing of the rest, after its
     /// reads either: git is asked what it holds of those paths, as a listing would say it, and each is kept, read again or
-    /// taken out - the paths a fold wrote and deleted, as its verb reports them. <see langword="null"/> where that tree has
-    /// no graph yet: there is nothing to bring up to date.
+    /// taken out - the paths a fold wrote and deleted, as its verb reports them. Where the tree's HEAD moved since its last
+    /// sync, every path git names changed between the commit that sync recorded and the one HEAD names now is taken too,
+    /// so a commit made meanwhile that touched no path given leaves nothing as the older commit held it; where git cannot
+    /// name them - that commit no longer held, or either naming none - the tree is synced whole.
+    /// <see langword="null"/> where that tree has no graph yet: there is nothing to bring up to date.
     /// </summary>
     /// <param name="request">What to sync, how the workflow shapes it, and why; never a rebuild.</param>
     /// <param name="paths">The paths, relative to the tree with forward separators.</param>
@@ -120,7 +123,7 @@ public sealed record CodebaseGraphWorktree
 /// <param name="Commit">The commit the tree's HEAD named, as its view records it (<see cref="CodeGraphManifest.Head"/>); <see langword="null"/> where it named none yet.</param>
 /// <param name="Dirty">Whether the tree held anything its HEAD does not, as its view records it (<see cref="CodeGraphManifest.Dirty"/>).</param>
 /// <param name="Files">How many files the view keeps.</param>
-/// <param name="Listed">How many files the tree listed that the view keeps, every one looked at; a sync by paths, how many it was given.</param>
+/// <param name="Listed">How many files the tree listed that the view keeps, every one looked at; a sync by paths, how many it was given and found changed by what moved HEAD since the tree's last sync.</param>
 /// <param name="Hashed">How many files git was asked the blob of to know what changed; the listing of each file read, once the reads are done, is not counted.</param>
 /// <param name="Extracted">How many files an implementation read.</param>
 /// <param name="Reused">How many files kept an extract already made, or a state already found.</param>
@@ -1171,11 +1174,16 @@ public sealed class CodebaseGraphService(
         }
 
         /// <summary>
-        /// A sync of <paramref name="paths"/> alone: git asked what it holds of them, as a listing would say it, and each kept,
-        /// read again or taken out of the tree's graph; then linked again and its records written.
+        /// A sync of <paramref name="paths"/> alone - and, where the tree's HEAD moved since its last sync, of every path git
+        /// names changed between the commit that sync recorded and the one HEAD names now: git asked what it holds of them, as
+        /// a listing would say it, and each kept, read again or taken out of the tree's graph; then linked again and its
+        /// records written. Where git cannot name them - that commit no longer held, or either naming none - the tree is
+        /// synced whole.
         /// </summary>
         public async Task<Tree> PathsAsync(Tree current, IReadOnlyList<string> paths)
         {
+            // HEAD is asked before anything is listed, so the head recorded is never newer than what was taken.
+            var head = await HeadAsync().ConfigureAwait(false);
             var asked = new List<string>();
 
             foreach (var path in paths.Distinct(StringComparer.Ordinal))
@@ -1190,7 +1198,27 @@ public sealed class CodebaseGraphService(
                 asked.Add(path);
             }
 
-            var (listed, head, _) = await ListAsync(asked).ConfigureAwait(false);
+            // What moved HEAD may have changed files no path given names - a commit made in the tree meanwhile - and the
+            // graph holds each as the commit it recorded does: each is taken too.
+            if (!string.Equals(head, current.Head, StringComparison.Ordinal))
+            {
+                if (await CommittedBetweenAsync(current.Head, head).ConfigureAwait(false) is not { } committed)
+                {
+                    return await WholeAsync().ConfigureAwait(false);
+                }
+
+                var given = asked.ToHashSet(StringComparer.Ordinal);
+
+                foreach (var name in committed)
+                {
+                    if (Kept(name, _unnamed) && given.Add(name.Text))
+                    {
+                        asked.Add(name.Text);
+                    }
+                }
+            }
+
+            var (listed, _, _) = await ListAsync(asked, withHead: false).ConfigureAwait(false);
             var changed = asked.Count(path => listed.TryGetValue(path, out var file) ? current.Entries.GetValueOrDefault(path)?.Blob != file.Blob : current.Entries.ContainsKey(path));
 
             return await ApplyAsync(current, asked.ToDictionary(path => path, path => listed.GetValueOrDefault(path), StringComparer.Ordinal), head, changed > 0, asked.Count).ConfigureAwait(false);
@@ -1524,7 +1552,6 @@ public sealed class CodebaseGraphService(
         {
             IReadOnlyList<GitIndexEntry> indexed;
             IReadOnlyList<GitWorkingFile> working;
-            string? head;
             var unnamed = new SortedDictionary<string, CodebaseGraphSkipped>(StringComparer.Ordinal);
 
             // No path is no listing: an empty list of paths names the whole tree to git.
@@ -1538,12 +1565,13 @@ public sealed class CodebaseGraphService(
                 var git = _service._gitClient;
                 indexed = paths is null ? await git.ListIndexAsync(_tree, _cancellationToken).ConfigureAwait(false) : await git.ListIndexAsync(_tree, paths, _cancellationToken).ConfigureAwait(false);
                 working = paths is null ? await git.ListWorkingFilesAsync(_tree, _cancellationToken).ConfigureAwait(false) : await git.ListWorkingFilesAsync(_tree, paths, _cancellationToken).ConfigureAwait(false);
-                head = withHead ? await git.ResolveCommitAsync(_tree, "HEAD", _cancellationToken).ConfigureAwait(false) : null;
             }
             catch (Exception ex) when (ex is HarnessException or ProgramStartException)
             {
                 throw Unlisted(ex);
             }
+
+            var head = withHead ? await HeadAsync().ConfigureAwait(false) : null;
 
             var files = new SortedDictionary<string, Listed>(StringComparer.Ordinal);
             var toHash = new List<string>();
@@ -1634,6 +1662,45 @@ public sealed class CodebaseGraphService(
 
             // The tool's own state and the credential slots are no change of the tree, though git lists them where they are not ignored.
             return new Listing(files, head, working.Any(file => !Never(file.Name.Text)), unnamed, blobs.Count(blob => blob is not null));
+        }
+
+        /// <summary>The commit the tree's HEAD names; null where it names none yet.</summary>
+        private async Task<string?> HeadAsync()
+        {
+            try
+            {
+                return await _service._gitClient.ResolveCommitAsync(_tree, "HEAD", _cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is HarnessException or ProgramStartException)
+            {
+                throw Unlisted(ex);
+            }
+        }
+
+        /// <summary>
+        /// The name of every path whose entry differs between <paramref name="from"/>, the commit the tree's last sync
+        /// recorded, and <paramref name="to"/>, the one its HEAD names now; null where git cannot say: either names none, or
+        /// the first is no longer held - let go by a clone, or amended and pruned.
+        /// </summary>
+        private async Task<IReadOnlyList<GitName>?> CommittedBetweenAsync(string? from, string? to)
+        {
+            if (from is null || to is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                var git = _service._gitClient;
+
+                return await git.ResolveCommitAsync(_tree, from, _cancellationToken).ConfigureAwait(false) is null
+                    ? null
+                    : await git.ListNamesChangedBetweenAsync(_tree, from, to, _cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is HarnessException or ProgramStartException)
+            {
+                throw Unlisted(ex);
+            }
         }
 
         /// <summary>The blob git gives each of <paramref name="paths"/>' working files; null for each that was gone when git looked.</summary>

@@ -690,7 +690,7 @@ Markdown's headings; every other file by its name and size), and the edges betwe
 graph from the newest earlier run's - or, with `in`, the view of that agent's worktree, held against the main checkout's
 graph as an overlay of what the worktree holds otherwise, so no file is read whose extract either made; the engine syncs
 on its own too, under the claim its step holds - a reason step's view where it starts, the main checkout's by every path
-the run's folds changed that it has not taken yet, a worktree's after a refresh or a rebase moved it, and a view dropped
+the run's folds changed that it has not taken yet and every path a commit changed since its last sync, a worktree's after a refresh or a rebase moved it, and a view dropped
 once its agent is no longer live - and a sync of its own that fails is said, owed until one goes through, and never
 fails the step (`dssharness help codebase-graph`; the workflow's `codebaseGraph` shapes it);
 `validate-plan`, the machine's check of a plan's
