@@ -1748,8 +1748,9 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine("Every call of gh, whoever makes it, is started so that it cannot ask anything");
         builder.AppendLine("(GH_PROMPT_DISABLED, GCM_INTERACTIVE, GIT_TERMINAL_PROMPT) and is ended where it has");
-        builder.AppendLine($"not answered within {GhProcess.DefaultLimit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, a workflow step's timeoutMinutes where it says one: a");
-        builder.AppendLine($"read that did not answer in time is not done ({HarnessExit.Incomplete}), and asked again it may answer.");
+        builder.AppendLine($"not answered within {GhProcess.DefaultLimit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, or with the workflow step that made it, where that");
+        builder.AppendLine("step passes its timeoutMinutes first: a read that did not answer in time is not done");
+        builder.AppendLine($"({HarnessExit.Incomplete}), and asked again it may answer.");
         builder.AppendLine();
         builder.AppendLine("""  "ci": {""");
         builder.AppendLine("""    "workflows": [".github/workflows/ci.yml"],""");
@@ -2811,6 +2812,7 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphSymbolsFileName}", "the graph's link result: every node and edge, with the digest of the manifest it was made from"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphExtractsDirectoryName}/<ab>/<name>", "one file's extract, written once, named by its blob, its path, its implementation and version"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphSyncFileName}", "one line for each sync of the graph"),
+                ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphViewsDirectoryName}/<agent>{OrchestratorLayout.GraphExtractExtension}", "an agent's view of the graph: what its worktree holds that the base does not"),
                 ($"  {OrchestratorLayout.PreExistingIssuesFileName}", "each pre-existing issue the run listed, proven"),
                 ($"  {OrchestratorLayout.EventsFileName}", "the run's history, one event to a line, written after the state it tells of"),
                 ($"  {OrchestratorLayout.ReportFileName}, {OrchestratorLayout.ReportJsonFileName}", "the report of the run's last session"),
@@ -2875,7 +2877,8 @@ public static class HelpTopics
             + "A run starts from the main checkout's HEAD on a branch of its own, and records that commit and branch: it is refused "
             + $"({HarnessExit.Refused}), having made nothing, where HEAD is detached, where the checkout is on the branch the run's pull "
             + "request is opened against - the pull-request step's base, filled from the run's inputs and its name, else the "
-            + "remote's default branch - where a merge is under way, and where changes are staged. "
+            + "remote's default branch - where a merge is under way, and where changes are staged. Where the repository has a "
+            + "remote and neither base can be told, the start says so, its branch held to none. "
             + "Only one run of a repository is unfinished with work in the tree at once: a start, or a session of another run, is "
             + $"refused ({HarnessExit.Refused}) while one is, and so it is where an agent's record of another run cannot be read. Each "
             + $"session drives the run until nothing more can run: done ({HarnessExit.Success}), failed ({HarnessExit.CommandFailed}, or "
@@ -3421,8 +3424,9 @@ public static class HelpTopics
             + "waits on a question. Past it the step is stopped as a stop stops one and ends incomplete "
             + $"({HarnessExit.Incomplete}), saying it passed its timeoutMinutes: a reasoning step goes to what handles its failure, any "
             + $"other runs again as an incomplete step does; one whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s "
-            + "of that stop fails all the same, goes to what handles its failure and is not retried. A reasoning step's handoff turn at a "
-            + "pause is bounded by handoffSeconds, not by this. A ci-wait's is always more than its waitMinutes (absent, "
+            + "of that stop fails all the same, goes to what handles its failure and is not retried - a step of others fails the target "
+            + "whose turn it was and goes on with the next - and what it claimed stays held until that runner ends. A reasoning step's "
+            + "handoff turn at a pause is bounded by handoffSeconds, not by this. A ci-wait's is always more than its waitMinutes (absent, "
             + $"{WorkflowStep.DefaultWaitMinutes}); a group and a pause step take none, running nothing of their own; a type whose step "
             + "has a limit of its own where it says none says so beside its name below.");
         builder.AppendLine();
@@ -3578,8 +3582,9 @@ public static class HelpTopics
             + "checks as they are, its passed true only where they are green. A check that finds red is red: under failOn red - every check's default but "
             + "ci-read's, never - it fails with its check's code "
             + $"(an anchor finding {AnchorExit.Findings}, a red CI leg {CiExit.LegRed} and no matrix run {CiExit.MatrixDidNotRun}, a red "
-            + $"check {CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given the step's "
-            + $"timeoutMinutes, else {GhProcess.DefaultLimit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, and one past "
+            + $"check {CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given "
+            + $"{GhProcess.DefaultLimit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - the step's timeoutMinutes bounds "
+            + "its attempt, and a read in flight ends with it - and one past "
             + $"it ends the step incomplete ({HarnessExit.Incomplete}), which runs it again; a ci-wait reads again at its next poll where "
             + $"a read failed or passed it, and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running "
             + "or its wait is spent.");
@@ -3587,7 +3592,7 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             "fold, delete-agent, refresh and rebase make their verb's dry run first and read what it stood, typed, never its "
-            + "code: sound, they apply with exactly what it named; a run holding the tree the apply takes is waited out, as a held "
+            + "code: sound, they apply; a run holding the tree the apply takes is waited out, as a held "
             + $"lock is ({HarnessExit.Refused} after the retries), and one holding only a copy a deletion removes is run again, as an "
             + $"incomplete step is ({HarnessExit.Incomplete} after them); a consent it lacks asks the question of its kind - "
             + "foldNewRows, foldLostRows, foldOverCells, foldTwoChanges - one at a time, a person's first, with the rows, the cells "
@@ -3597,13 +3602,16 @@ public static class HelpTopics
             + "nor a path it hands the agent - and one outside them asks foldOutside with the paths. Answered allow or merge, the "
             + "dry run is made again and the consent given by name only where it names exactly what the question showed - "
             + "otherwise the question is asked again with what it names now, and a consent given before the trees moved is never "
-            + "passed; answered retry, the step runs again, a new attempt. Its apply is held to what its dry run named: measured "
-            + "again under its hold and found to write anything else - the trees moved between the two - it writes nothing and "
-            + $"is weighed again, {FoldFamilyStepRunner.MostPasses} times at most. A fold, and a deletion that folds, write each "
+            + "passed; answered retry, the step runs again, a new attempt. A fold's apply, and a deletion's, is held to exactly "
+            + "what its dry run named: measured again under its hold and found to write anything else - the trees moved between "
+            + "the two - it writes nothing; an apply of any of the four refused under its hold so is weighed again, "
+            + $"{FoldFamilyStepRunner.MostPasses} times at most. A fold, and a deletion that folds, write each "
             + $"path they mean to write, with what the main tree holds there, to the run's ledger ({OrchestratorLayout.FoldsFileName}) "
             + "before the verb is called, and what they left after - an intent a crash cut off is settled from the tree by the "
-            + "next attempt - and answer written, deleted, registries and rows; a run stopped with a fold in its ledger no commit "
-            + "took is unfinished, as one with an agent open is. A refresh refused for conflicting merges alone hands every "
+            + "next attempt - and answer written, deleted, registries and rows; a run stopped with a fold in its ledger whose "
+            + "change no commit took yet - a path it changed that the main tree still holds otherwise than its HEAD, whoever "
+            + "commits it - is unfinished, as one with an agent open is. A deletion run again once its agent is deleted - its "
+            + "ending cut off before it was recorded - is done, with what its directory kept of its apply. A refresh refused for conflicting merges alone hands every "
             + "other path first, then asks foldConflicts of those it left; its paths expression yielding none, it is done, having "
             + "weighed nothing. A rebase moves the base whole or not at all. A refresh or a rebase of others works on every "
             + "other open agent of the run, in the order of their names - a2 before a10 - one at a time, each admitted on its own "

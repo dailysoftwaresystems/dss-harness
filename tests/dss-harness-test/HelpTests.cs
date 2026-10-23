@@ -2460,7 +2460,7 @@ public sealed partial class HelpTests
         Assert.Contains(
             "Every call of gh, whoever makes it, is started so that it cannot ask anything (GH_PROMPT_DISABLED, GCM_INTERACTIVE, "
                 + $"GIT_TERMINAL_PROMPT) and is ended where it has not answered within {GhProcess.DefaultLimit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, "
-                + $"a workflow step's timeoutMinutes where it says one: a read that did not answer in time is not done ({HarnessExit.Incomplete}), "
+                + $"or with the workflow step that made it, where that step passes its timeoutMinutes first: a read that did not answer in time is not done ({HarnessExit.Incomplete}), "
                 + "and asked again it may answer.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
@@ -2816,7 +2816,7 @@ public sealed partial class HelpTests
         var orchestrators = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
 
         Assert.Contains(
-            "A run starts from the main checkout's HEAD on a branch of its own, and records that commit and branch: it is refused (13), having made nothing, where HEAD is detached, where the checkout is on the branch the run's pull request is opened against - the pull-request step's base, filled from the run's inputs and its name, else the remote's default branch - where a merge is under way, and where changes are staged.",
+            "A run starts from the main checkout's HEAD on a branch of its own, and records that commit and branch: it is refused (13), having made nothing, where HEAD is detached, where the checkout is on the branch the run's pull request is opened against - the pull-request step's base, filled from the run's inputs and its name, else the remote's default branch - where a merge is under way, and where changes are staged. Where the repository has a remote and neither base can be told, the start says so, its branch held to none.",
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -3194,15 +3194,30 @@ public sealed partial class HelpTests
 
         Assert.Contains(
             "fold, delete-agent, refresh and rebase make their verb's dry run first and read what it stood, typed, never its "
-                + "code: sound, they apply with exactly what it named; a run holding the tree the apply takes is waited out, as a held "
+                + "code: sound, they apply; a run holding the tree the apply takes is waited out, as a held "
                 + $"lock is ({HarnessExit.Refused} after the retries), and one holding only a copy a deletion removes is run again, as an "
                 + $"incomplete step is ({HarnessExit.Incomplete} after them);",
             workflows,
             StringComparison.Ordinal);
+
+        // Only a fold and a deletion hand their verb what the dry run named: a refresh's and a rebase's requests take none.
         Assert.Contains(
-            $"is weighed again, {FoldFamilyStepRunner.MostPasses} times at most. A fold, and a deletion that folds, write each path "
-                + $"they mean to write, with what the main tree holds there, to the run's ledger ({OrchestratorLayout.FoldsFileName}) "
+            "A fold's apply, and a deletion's, is held to exactly what its dry run named: measured again under its hold and found "
+                + "to write anything else - the trees moved between the two - it writes nothing; an apply of any of the four refused "
+                + $"under its hold so is weighed again, {FoldFamilyStepRunner.MostPasses} times at most. A fold, and a deletion that "
+                + $"folds, write each path they mean to write, with what the main tree holds there, to the run's ledger ({OrchestratorLayout.FoldsFileName}) "
                 + "before the verb is called, and what they left after",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Null(typeof(RefreshAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
+        Assert.Null(typeof(RebaseAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
+        Assert.NotNull(typeof(DeleteAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
+
+        // Whether a fold is committed is the main tree's to say, whoever committed it.
+        Assert.Contains(
+            "a run stopped with a fold in its ledger whose change no commit took yet - a path it changed that the main tree still "
+                + "holds otherwise than its HEAD, whoever commits it - is unfinished, as one with an agent open is. A deletion run again "
+                + "once its agent is deleted - its ending cut off before it was recorded - is done, with what its directory kept of its apply.",
             workflows,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -3333,8 +3348,9 @@ public sealed partial class HelpTests
                 + "A check that finds red is "
                 + "red: under failOn red - every check's default but ci-read's, never - it fails with its check's code "
                 + $"(an anchor finding {AnchorExit.Findings}, a red CI leg {CiExit.LegRed} and no matrix run {CiExit.MatrixDidNotRun}, a red check "
-                + $"{CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given the step's timeoutMinutes, else "
-                + $"{GhProcess.DefaultLimit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, and one past it ends the step incomplete "
+                + $"{CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given "
+                + $"{GhProcess.DefaultLimit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - the step's timeoutMinutes bounds its "
+                + "attempt, and a read in flight ends with it - and one past it ends the step incomplete "
                 + $"({HarnessExit.Incomplete}), which runs it again; a ci-wait reads again at its next poll where a read failed or passed it, "
                 + $"and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running or its wait is spent.",
             prose,
@@ -3390,8 +3406,9 @@ public sealed partial class HelpTests
                 + "never while it waits on a question. Past it the step is stopped as a stop stops one and ends incomplete "
                 + $"({HarnessExit.Incomplete}), saying it passed its timeoutMinutes: a reasoning step goes to what handles its failure, any other "
                 + $"runs again as an incomplete step does; one whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s "
-                + "of that stop fails all the same, goes to what handles its failure and is not retried. A reasoning step's handoff turn at a "
-                + "pause is bounded by handoffSeconds, not by this. A ci-wait's is always more than its waitMinutes (absent, "
+                + "of that stop fails all the same, goes to what handles its failure and is not retried - a step of others fails the target "
+                + "whose turn it was and goes on with the next - and what it claimed stays held until that runner ends. A reasoning step's "
+                + "handoff turn at a pause is bounded by handoffSeconds, not by this. A ci-wait's is always more than its waitMinutes (absent, "
                 + $"{WorkflowStep.DefaultWaitMinutes}); a group and a pause step take none, running nothing of their own; a type whose step "
                 + "has a limit of its own where it says none says so beside its name below.",
             prose,

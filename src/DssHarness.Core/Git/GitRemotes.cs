@@ -35,17 +35,27 @@ public static class GitRemotes
             : throw new HarnessException(HarnessExit.CommandFailed, $"git could not list the repository's remotes: {listed.StandardError.Trim()}");
     }
 
-    /// <summary>The remote <paramref name="branch"/> tracks, or <see langword="null"/> where it tracks none.</summary>
+    /// <summary>
+    /// The remote <paramref name="branch"/> tracks, or <see langword="null"/> where it tracks none - where git says the
+    /// key is not set (its code 1), and only there: a configuration git could not read is never read as tracking none.
+    /// </summary>
     /// <param name="gitClient">Git.</param>
     /// <param name="directory">A directory inside the repository.</param>
     /// <param name="branch">The local branch.</param>
     /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">Git could not read the configuration (<see cref="HarnessExit.CommandFailed"/>).</exception>
     public static async Task<string?> TrackedRemoteAsync(this IGitClient gitClient, string directory, string branch, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(gitClient);
         ArgumentException.ThrowIfNullOrWhiteSpace(branch);
 
         var tracked = await gitClient.RunAsync(directory, ["config", "--get", $"branch.{branch}.remote"], cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (!tracked.Succeeded && (tracked.TimedOut || tracked.ExitCode != 1))
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, $"git could not read the remote branch '{branch}' tracks: {tracked.StandardError.Trim()}");
+        }
+
         var remote = tracked.Succeeded ? tracked.StandardOutput.Trim() : string.Empty;
 
         return remote.Length > 0 ? remote : null;

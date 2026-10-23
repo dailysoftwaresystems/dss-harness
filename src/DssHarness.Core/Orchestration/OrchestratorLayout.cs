@@ -22,11 +22,30 @@ namespace DssHarness.Core.Orchestration;
 /// agents/&lt;agent&gt;/sessions/&lt;id&gt;/   API clients only: one conversation with the provider, in the provider's own form
 /// agents/&lt;agent&gt;/steps/&lt;instance&gt;/   one step the agent runs, or that runs in or for its worktree, everything of the step in it
 /// steps/&lt;instance&gt;/          one step of the run that no agent owns, the create-agent that makes an agent included
+/// &lt;step&gt;/step.json            in either kind of step's directory: the step's own record
+/// &lt;step&gt;/output.json          the step's output, validated
+/// &lt;step&gt;/handoff.md           the handoff a stop cut the step off with, until its next attempt is given it
+/// &lt;step&gt;/ledger.json          a leg step: its legs' ledger, as --json gives it
+/// &lt;step&gt;/logs/                a leg step in an agent's worktree: each red leg's phase log that did not pass; a ci-wait: each red job's log
+/// &lt;step&gt;/fold.json            a fold family step: what its dry run named and stood, its question, each consent given, how its apply ended
+/// &lt;step&gt;/targets/&lt;agent&gt;/     a refresh or a rebase of others: one target's fold.json
+/// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it
+/// flow.json                   a run's state, whole: the truth a resume goes on from
+/// workflow.json               a run's status, for a person and a client to read
+/// definition.json             the workflow's definition, frozen as the run began with it
+/// questions.json              every question the run raised and every answer it was given
+/// folds.json                  the run's write-ahead ledger of its folds
+/// pre-existing-issues.json    each pre-existing issue the run listed
+/// events.jsonl                the run's events, one JSON object to a line
+/// report.md, report.json      the report of the run's last session
+/// inbox.json, stop.json       an answer, and a pause or a stop, handed to the engine running the run, until it takes them
+/// asks/                       the planned ask-orchestrator's calls; nothing writes it yet
 /// graph/graph.json            the run's codebase graph: the base's manifest, every file it keeps with its blob, state and extract
 /// graph/symbols.jsonl         the base's link result, as lines: every node and edge, with the digest of the manifest it was made from
 /// graph/extracts/&lt;ab&gt;/&lt;name&gt;   one file's extract, written once, named by its blob, its path, its implementation and version
 /// graph/sync.jsonl            one line for each sync of the graph
-/// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it
+/// graph/views/&lt;agent&gt;.json    an agent's view of the graph: what its worktree holds that the base does not
+/// ../&lt;run&gt;.owner.json        beside the run's directory: the process whose engine holds the run
 /// </code>
 /// The orchestrator's name and each agent's are the directories they are kept in, and an agent is never named as its
 /// orchestrator, since the two would share a log and a plans directory.

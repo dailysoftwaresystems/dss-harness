@@ -618,6 +618,28 @@ public sealed class FlowRecordsTests
         Assert.NotEqual(FlowRunContext.DigestOf(here), FlowRunContext.DigestOf(changed));
     }
 
+    /// <summary>
+    /// A run's codebase graph is frozen - and digested - as the file says it, never with the shape this build's defaults
+    /// make of it: a key the file leaves out stays out, so a build whose defaults moved reads the same definition.
+    /// </summary>
+    [Fact]
+    public void AFrozenCodebaseGraph_HoldsWhatTheFileSays_NeverThisBuildsDefaults()
+    {
+        var definition = Parse("""
+            name: flow
+            codebaseGraph:
+              include: ['src/**']
+            steps:
+              - name: one
+                type: orient
+            """);
+
+        var frozen = JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(definition with { Path = string.Empty }, JsonStateFile.Options))!;
+
+        Assert.Equal("""{"include":["src/**"]}""", frozen["codebaseGraph"]!.ToJsonString());
+        Assert.Equal(DssHarness.Core.Codebase.CodebaseGraphShape.DefaultMaxFileBytes, definition.CodebaseGraph!.Shape.MaxFileBytes);
+    }
+
     /// <summary>A runner that answers each step as its test scripted it, holding open the steps the test wants to time and recording the handoffs its attempts are given.</summary>
     private sealed class Runner : IFlowStepRunner
     {

@@ -34,10 +34,6 @@ internal static class CheckResults
             Error = passed ? null : red,
             Output = output,
         };
-
-    /// <summary>The longest each read of the forge a step makes may take: its <c>timeoutMinutes</c>, else <see cref="GhProcess.DefaultLimit"/>.</summary>
-    /// <param name="step">The step.</param>
-    public static TimeSpan? ReadLimitOf(WorkflowStep step) => WorkflowStepTypes.TimeLimitOf(step) is { } minutes ? TimeSpan.FromMinutes(minutes) : null;
 }
 
 /// <summary>
@@ -130,9 +126,11 @@ public sealed class CiReadStepRunner(IHarnessContextLoader contextLoader, IHostP
         var (place, _) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
         var tree = place.Repository;
 
+        // Each read of the forge is bounded by gh's own limit, and the attempt's by the step's time limit, which ends a read
+        // in flight with it.
         var report = await legs.CheckAsync(
             tree,
-            new CiLegsRequest(run.Step.Branch, run.Step.Limit ?? CiLegsRequest.DefaultLimit, []) { ReadLimit = CheckResults.ReadLimitOf(run.Step) },
+            new CiLegsRequest(run.Step.Branch, run.Step.Limit ?? CiLegsRequest.DefaultLimit, []),
             cancellationToken).ConfigureAwait(false);
         var passed = !report.MatrixNeverRan && report.Red.Count == 0;
 
@@ -192,6 +190,8 @@ public sealed class CiWaitStepRunner(
         // the checks are read once more, waiting for none, and the step is done with what they are now, its passed true
         // only where they are green; a red one is red all the same.
         var accepted = run.Answers.Count > 0 && run.Answers[^1].Answer == "accept";
+        // Each read of the forge is bounded by gh's own limit, never by the step's time limit: a read that stalls is ended
+        // and read again at the next poll, while the wait goes on, and the attempt's own limit ends a read in flight with it.
         var step = run.Step;
         var request = new CiChecksRequest(commit)
         {
@@ -200,7 +200,6 @@ public sealed class CiWaitStepRunner(
             Wait = TimeSpan.FromMinutes(step.WaitMinutes ?? CiChecksRequest.DefaultWaitMinutes),
             Poll = TimeSpan.FromSeconds(step.PollSeconds ?? CiChecksRequest.DefaultPollSeconds),
             Ignore = step.Ignore,
-            ReadLimit = CheckResults.ReadLimitOf(step),
         };
         var reading = await checks.WaitAsync(tree, request, cancellationToken).ConfigureAwait(false);
 

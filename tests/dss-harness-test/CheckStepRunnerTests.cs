@@ -112,7 +112,8 @@ public sealed class CheckStepRunnerTests : IDisposable
     }
 
     /// <summary>
-    /// A CI read reads its branch's newest runs as check-ci-legs does, each read given the step's time limit, and answers
+    /// A CI read reads its branch's newest runs as check-ci-legs does, each read given gh's own limit - never the step's time
+    /// limit, which bounds the attempt - and answers
     /// each leg as check-ci-legs --json gives it: red where a leg is red (1) or the matrix never ran (2), passed where
     /// every leg is green.
     /// </summary>
@@ -137,7 +138,7 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         await legs.Received(3).CheckAsync(
             repository.Path,
-            Arg.Is<CiLegsRequest>(request => request.Branch == "release" && request.Limit == 3 && request.Runs.Count == 0 && request.ReadLimit == TimeSpan.FromMinutes(7)),
+            Arg.Is<CiLegsRequest>(request => request.Branch == "release" && request.Limit == 3 && request.Runs.Count == 0 && request.ReadLimit == null),
             Arg.Any<CancellationToken>());
         Assert.Equal((true, CiExit.LegRed), (redLeg.Red, redLeg.Exit));
         Assert.Equal(["linux"], redLeg.Output!["red"]!.AsArray().Select(leg => leg!["leg"]!.GetValue<string>()));
@@ -149,7 +150,8 @@ public sealed class CheckStepRunnerTests : IDisposable
 
     /// <summary>
     /// A wait for checks waits for its commit - the one the run last pushed where it names none - with the step's keys,
-    /// each read given its time limit; one that names no commit in a run that pushed none is refused (13) and reads
+    /// each read given gh's own limit, never the step's time limit, so a read that stalls is ended and read again at the
+    /// next poll while the wait goes on; one that names no commit in a run that pushed none is refused (13) and reads
     /// nothing. None found, some still running, or one unsettled asks; all green passes; and accepted, it reads once more,
     /// waiting for nothing, and is done with the checks as they are - none, some still running, all green by then - its
     /// passed true only where they are green.
@@ -195,7 +197,7 @@ public sealed class CheckStepRunnerTests : IDisposable
                 && request.Wait == TimeSpan.FromMinutes(20)
                 && request.Poll == TimeSpan.FromSeconds(15)
                 && request.Ignore.SequenceEqual(new[] { "lint" })
-                && request.ReadLimit == TimeSpan.FromMinutes(30)
+                && request.ReadLimit == null
                 && !request.Once),
             Arg.Any<CancellationToken>());
         Assert.Equal(

@@ -3,6 +3,7 @@ using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Mutations;
 using DssHarness.Core.Platform;
@@ -24,7 +25,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// will not do, since it is a section for one orchestrator's record, and two runs - two orchestrators - would take two
 /// different ones and both pass. A session is refused (13) while any other run of the repository is unfinished and has
 /// work in the tree: a live owner, or - paused, stopped or failed - an agent with a worktree still open or a fold in
-/// its ledger not yet committed. Two would fold into one main tree, and that is as true of a run waiting on an answer
+/// its ledger not yet committed - an intent nobody settled, or a path it changed that the main tree still holds
+/// otherwise than its HEAD (<see cref="FoldLedger.Uncommitted"/>), so a commit made by hand ends it as the run's own
+/// does. Two would fold into one main tree, and that is as true of a run waiting on an answer
 /// as of one that is running. What cannot be told of another run - an agent whose record does not read - refuses as
 /// work in the tree does, by a sentence that says so: it is never read as nothing.
 /// </para>
@@ -38,12 +41,14 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="store">Reads and writes the records, strictly.</param>
 /// <param name="fileSystem">Reads the runs' directories.</param>
 /// <param name="identity">This process, and how another's liveness is told.</param>
+/// <param name="git">Reads what the main tree holds otherwise than its HEAD, which says whether a run's folds are committed.</param>
 /// <param name="clock">When the run's record, its first status and its owner are written.</param>
-public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSystem, IProcessIdentity identity, TimeProvider? clock = null)
+public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSystem, IProcessIdentity identity, IGitClient git, TimeProvider? clock = null)
 {
     private readonly OrchestrationStore _store = store ?? throw new ArgumentNullException(nameof(store));
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     private readonly IProcessIdentity _identity = identity ?? throw new ArgumentNullException(nameof(identity));
+    private readonly IGitClient _git = git ?? throw new ArgumentNullException(nameof(git));
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
     /// <summary>
@@ -79,23 +84,27 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// What the run's name chosen is still held to before anything of it is written - the checkout it starts from, its
     /// pull request's base and its path budget - as a refusal's sentence; null where nothing refuses it.
     /// </param>
+    /// <param name="cancellationToken">Stops the read of the main tree, before anything is written.</param>
     /// <returns>The run's layout and what the run is, as its records name it.</returns>
     /// <exception cref="HarnessException">Another run of the repository is unfinished, the name is taken, or <paramref name="refusal"/> refuses it (<see cref="HarnessExit.Refused"/>).</exception>
-    public (OrchestratorLayout Run, FlowRunContext Context) Create(
+    public async Task<(OrchestratorLayout Run, FlowRunContext Context)> CreateAsync(
         HarnessLayout layout,
         WorkflowDefinition definition,
         string? wantedName = null,
         IReadOnlyDictionary<string, string>? inputs = null,
         string? startCommit = null,
         string? branch = null,
-        Func<string, string?>? refusal = null)
+        Func<string, string?>? refusal = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(definition);
 
+        var differing = await DifferingAsync(layout, leavingOut: null, cancellationToken).ConfigureAwait(false);
+
         return AcrossRuns(layout, () =>
         {
-            RefuseAnotherUnfinished(layout, leavingOut: null);
+            RefuseAnotherUnfinished(layout, leavingOut: null, differing);
 
             var name = wantedName is { } given ? New(layout, given) : NextName(layout);
 
@@ -147,12 +156,15 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="run">The run the session is for.</param>
+    /// <param name="cancellationToken">Stops the read of the main tree, before anything is written.</param>
     /// <returns>What is said of a dead owner reclaimed; null where none was recorded.</returns>
     /// <exception cref="HarnessException">The run is gone, another run of the repository is unfinished, or a live engine owns the run (<see cref="HarnessExit.Refused"/>).</exception>
-    public string? Claim(HarnessLayout layout, OrchestratorLayout run)
+    public async Task<string?> ClaimAsync(HarnessLayout layout, OrchestratorLayout run, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(run);
+
+        var differing = await DifferingAsync(layout, run.Name, cancellationToken).ConfigureAwait(false);
 
         return AcrossRuns(layout, () =>
         {
@@ -161,7 +173,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
                 throw new HarnessException(HarnessExit.Refused, OrchestrationReports.NoOrchestrator(run.Name));
             }
 
-            RefuseAnotherUnfinished(layout, run.Name);
+            RefuseAnotherUnfinished(layout, run.Name, differing);
 
             var reclaimed = new FlowRunOwner(_store, _identity, _clock).Claim(run);
 
@@ -194,8 +206,45 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
         return given;
     }
 
-    /// <summary>Refuses where any run but <paramref name="leavingOut"/> is unfinished and has work in the tree, or where what it holds cannot be told.</summary>
-    private void RefuseAnotherUnfinished(HarnessLayout layout, string? leavingOut)
+    /// <summary>
+    /// What the main tree holds otherwise than its HEAD (<see cref="FoldLedger.DifferingAsync"/>), read before the
+    /// repository's section, which is synchronous - and read only where a run but <paramref name="leavingOut"/> has a
+    /// ledger holding a path a fold changed, the one question it answers; null where none does, or where a ledger cannot
+    /// be read, which the section says. A commit made between the read and the section only counts a fold uncommitted
+    /// that is committed by then, never the other way round: a run that folds meanwhile has a live owner, which the
+    /// section refuses.
+    /// </summary>
+    private async Task<IReadOnlySet<string>?> DifferingAsync(HarnessLayout layout, string? leavingOut, CancellationToken cancellationToken)
+    {
+        foreach (var other in _store.Orchestrators(layout).Where(other => !string.Equals(other.Name, leavingOut, StringComparison.Ordinal)))
+        {
+            FlowFoldLedgerFile? ledger;
+
+            try
+            {
+                ledger = _store.ReadFolds(other);
+            }
+            catch (HarnessException)
+            {
+                // The section reads it again, and says it cannot be read.
+                continue;
+            }
+
+            if (FoldLedger.ChangedAny(ledger))
+            {
+                return await FoldLedger.DifferingAsync(_git, layout.MainCheckoutRoot, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Refuses where any run but <paramref name="leavingOut"/> is unfinished and has work in the tree, or where what it
+    /// holds cannot be told; <paramref name="differing"/> is what the main tree holds otherwise than its HEAD, null where
+    /// it was not read.
+    /// </summary>
+    private void RefuseAnotherUnfinished(HarnessLayout layout, string? leavingOut, IReadOnlySet<string>? differing)
     {
         foreach (var other in _store.Orchestrators(layout))
         {
@@ -204,7 +253,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
                 continue;
             }
 
-            if (Unfinished(other) is { } why)
+            if (Unfinished(other, differing) is { } why)
             {
                 throw new HarnessException(
                     HarnessExit.Refused,
@@ -214,7 +263,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     }
 
     /// <summary>Why <paramref name="other"/> is unfinished and holds work in the tree, or cannot be told not to; null where it is not the run this test refuses.</summary>
-    private string? Unfinished(OrchestratorLayout other)
+    private string? Unfinished(OrchestratorLayout other, IReadOnlySet<string>? differing)
     {
         if (new FlowRunOwner(_store, _identity, _clock).Live(other) is not null)
         {
@@ -241,7 +290,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
         try
         {
-            uncommitted = FoldLedger.Uncommitted(_store.ReadFolds(other)).Count;
+            uncommitted = FoldLedger.Uncommitted(_store.ReadFolds(other), differing).Count;
         }
         catch (HarnessException ex)
         {

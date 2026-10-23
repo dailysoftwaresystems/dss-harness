@@ -472,7 +472,10 @@ public sealed class AgentService(
 
             var ledger = Ledger(layout, agent, new SeedRecord { SeededAt = _clock.GetUtcNow(), Empty = empty, Paths = [] });
             var (handed, stopped) = await _fold.HandAsync(context.Layout.MainCheckoutRoot, created.Path, handable, ledger, held: null, CancellationToken.None).ConfigureAwait(false);
-            var (seed, notes) = WriteSeed(layout, agent, ledger);
+
+            // A hand-over that stopped is recorded as one, so the agent is never taken as whole with part of what it was to
+            // be handed: every command that meets it says its making did not finish, until a seed finishes it.
+            var (seed, notes) = WriteSeed(layout, agent, ledger, handOverStopped: stopped is not null);
 
             if (stopped is not null)
             {
@@ -670,11 +673,13 @@ public sealed class AgentService(
 
         await using (hold.Handles)
         {
-            // What it was handed before stays recorded until it is handed again; handed nothing more, it keeps all of it.
+            // What it was handed before stays recorded until it is handed again; handed nothing more, it keeps all of it. A
+            // seed that finishes finishes a making's hand-over that stopped; one that stops again leaves it unfinished.
             var start = (previous ?? unseeded) with
             {
                 SeededAt = _clock.GetUtcNow(),
                 Empty = empty && previous?.Weighed.Any() != true,
+                HandOverStopped = null,
             };
             int handed;
             string? stopped;
@@ -684,7 +689,7 @@ public sealed class AgentService(
             {
                 var ledger = Ledger(layout, record.Name, start);
                 (handed, stopped) = await _fold.HandAsync(main, path, handable, ledger, holding, CancellationToken.None).ConfigureAwait(false);
-                (_, notes) = WriteSeed(layout, record.Name, ledger);
+                (_, notes) = WriteSeed(layout, record.Name, ledger, handOverStopped: stopped is not null && previous?.HandOverStopped is true);
             }
             catch (Exception ex) when (Unfinished(ex))
             {
@@ -794,9 +799,11 @@ public sealed class AgentService(
         CommandOutcome RefusedInDry(CommandOutcome refused)
             => !apply ? Dry(json, context.Layout, RefreshCommand, refused, RequestStanding.Refused, new Typed([], [], planned), main, path) : refused;
 
-        if (_store.ReadSeed(layout, record.Name) is not { } seed)
+        var seed = _store.ReadSeed(layout, record.Name);
+
+        if (seed is null || MakingUnfinished(record, seed) is not null)
         {
-            return RefusedInDry(CommandOutcome.Refused($"{Agent(record)} is not whole - making it stopped part way: {MakingUnfinished(record, seed: null)}."));
+            return RefusedInDry(CommandOutcome.Refused($"{Agent(record)} is not whole - making it stopped part way: {MakingUnfinished(record, seed)}."));
         }
 
         // What it is handed is weighed against its base: never while a move of that base stands part way, or with its HEAD
@@ -1143,9 +1150,11 @@ public sealed class AgentService(
         CommandOutcome RefusedInDry(CommandOutcome refused)
             => !apply ? Dry(json, context.Layout, RebaseCommand, refused, RequestStanding.Refused, path) : refused;
 
-        if (_store.ReadSeed(layout, record.Name) is not { } seed)
+        var seed = _store.ReadSeed(layout, record.Name);
+
+        if (seed is null || MakingUnfinished(record, seed) is not null)
         {
-            return RefusedInDry(CommandOutcome.Refused($"{Agent(record)} is not whole - making it stopped part way: {MakingUnfinished(record, seed: null)}."));
+            return RefusedInDry(CommandOutcome.Refused($"{Agent(record)} is not whole - making it stopped part way: {MakingUnfinished(record, seed)}."));
         }
 
         if (await _gitClient.ResolveCommitAsync(main, "HEAD", cancellationToken).ConfigureAwait(false) is not { } head)
@@ -3161,6 +3170,9 @@ public sealed class AgentService(
             : seed is null
                 ? "it was never seeded, and its seed is what tells its work from what it was handed; "
                     + $"{OrchestrationReports.Line(SeedCommand, record.Orchestrator, record.Name)} seeds it, with --empty where it is to be handed nothing"
+            : seed.HandOverStopped is true
+                ? "handing it the main tree's uncommitted state stopped part way, and its seed names only what it was handed; "
+                    + $"{OrchestrationReports.Line(SeedCommand, record.Orchestrator, record.Name, "--force")} hands it the rest"
                 : null;
 
     /// <summary>The directories the anchor registries are kept in, relative to the tree: what an agent is refreshed with where no path is named.</summary>
@@ -3716,13 +3728,20 @@ public sealed class AgentService(
     /// seed names: the last two of a command's writes, after the trees and the kept copies, so that, stopped anywhere, the
     /// seed never names a path the trees do not hold as recorded. Every command that writes a seed writes it here.
     /// </summary>
+    /// <param name="layout">The agent's orchestrator.</param>
+    /// <param name="agent">The agent.</param>
+    /// <param name="ledger">What the command recorded.</param>
+    /// <param name="handOverStopped">
+    /// Whether the seed says its hand-over stopped part way as the agent was made (<see cref="SeedRecord.HandOverStopped"/>);
+    /// false keeps what the seed the ledger started from says.
+    /// </param>
     /// <returns>
     /// The seed written, and what is said of the kept copies: each path whose bytes could not be kept, and each copy the
     /// seed no longer names that could not be removed.
     /// </returns>
-    private (SeedRecord Seed, IReadOnlyList<string> Notes) WriteSeed(OrchestratorLayout layout, string agent, SharedLedger ledger)
+    private (SeedRecord Seed, IReadOnlyList<string> Notes) WriteSeed(OrchestratorLayout layout, string agent, SharedLedger ledger, bool handOverStopped = false)
     {
-        var seed = ledger.Build();
+        var seed = handOverStopped ? ledger.Build() with { HandOverStopped = true } : ledger.Build();
         _store.WriteSeed(layout, agent, seed);
 
         return (seed, [.. ledger.NotKept, .. ledger.Kept.Prune(seed)]);

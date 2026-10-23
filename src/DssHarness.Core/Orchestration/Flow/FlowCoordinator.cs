@@ -53,6 +53,13 @@ public enum FlowNotRunCause
 
     /// <summary>The run ended before it: a failure whose <c>onFailure</c> is <c>stop</c> ended the run, and nothing more was started.</summary>
     RunEnded,
+
+    /// <summary>
+    /// The agent it works in or acts on was never made: the create-agent step its <c>in</c> or <c>of</c> names ended
+    /// otherwise than done, where what depends on it starts all the same - skipped, passed over, handled, or for an
+    /// <c>always</c> step failed or never run.
+    /// </summary>
+    AgentNotMade,
 }
 
 /// <summary>
@@ -191,6 +198,15 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>The model the agent of <see cref="Made"/> is made for; null where <see cref="Made"/> is, and where none resolved.</summary>
     public string? MadeModel { get; internal set; }
 
+    /// <summary>
+    /// The agent this step works in or acts on - the one its <c>in</c> or <c>of</c> names, as that step's create-agent made
+    /// it, or the one the step it goes on with works in - stored where the step is drawn, or else where it first starts, as
+    /// <see cref="Made"/> is: a later visit of that create-agent making another agent never changes which agent this one
+    /// works on, so its record, its directory and the agents the run holds open name the same agent from first to last.
+    /// Null for a step that names none, and until its agent is made.
+    /// </summary>
+    public string? WorksIn { get; internal set; }
+
     /// <summary>Cancels what this instance's runner runs: a safe pause that stops machine steps and a hard stop cancel it.</summary>
     internal CancellationTokenSource? Stoppable;
 
@@ -201,8 +217,9 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     internal bool Draining;
 
     /// <summary>
-    /// The timer of the step's time limit (<see cref="WorkflowStep.TimeoutMinutes"/>) for the run in flight, from its start
-    /// until its runner answers; null where the step says none, and while it waits on a question.
+    /// The timer of the step's time limit (<see cref="WorkflowStepTypes.TimeLimitOf"/>: its own <c>timeoutMinutes</c>, else
+    /// its type's) for the run in flight, from its start until its runner answers; null where neither the step nor its type
+    /// says one, and while it waits on a question.
     /// </summary>
     internal CancellationTokenSource? TimeLimit;
 
@@ -268,6 +285,14 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     internal (int Exit, string? Error, string Member)? Failing;
     internal int ExtraIterations;
     internal readonly List<FlowClaim> HeldClaims = [];
+
+    /// <summary>
+    /// What an attempt that ended while its runner still ran - its drain's bound passed - claimed, with that attempt: held
+    /// until its runner answers, so nothing that conflicts with what the runner may still write is admitted meanwhile, a
+    /// later attempt of the step itself among it. Null where no runner outlived its attempt.
+    /// </summary>
+    internal (int Attempt, IReadOnlyList<FlowClaim> Claims)? Lingering;
+
     internal readonly HashSet<string> LegsInCopies = [];
     internal readonly HashSet<string> LegsInTree = [];
     internal readonly HashSet<string> CopiesMade = [];
@@ -907,6 +932,14 @@ public sealed class FlowCoordinator
                     continue;
                 }
 
+                // A step that waits on a claim a runner that outlived its attempt still holds waits for that runner's
+                // answer, which gives it back: it is never failed as stalled over a claim that will be freed.
+                if (_created.Any(instance => instance.Lingering is not null) && AdmissionWalk().Any(decision => decision.WaitsOn.Contains("claim")))
+                {
+                    await WaitNextAsync(cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
                 // An answer offered from outside the session may sit unread while nothing runs: it is taken before
                 // the session ends over a question an answer has settled, for the loop alone applies it.
                 if (_messages.Reader.TryPeek(out _))
@@ -1204,7 +1237,9 @@ public sealed class FlowCoordinator
                     }
                 }, null, TimeSpan.FromSeconds(seconds), TimeSpan.FromMilliseconds(-1));
 
-                var run = new FlowStepRun(instance.Step, instance.Id, instance.Attempt, instance.Item, instance.Index, instance.Iteration, [.. instance._answers], new RunEvents(this, instance, instance.Attempt), Issue: instance.Issue, Visit: instance.Visit);
+                // The turn is asked of the attempt the pause stopped, with every fact that attempt was asked with: a reason
+                // step reads nothing where it starts, and fills no template key.
+                var run = RunOf(instance, instance.Step, instance.Attempt, new Dictionary<string, FlowValue>(StringComparer.Ordinal), handoff: null);
 
                 try
                 {
@@ -1917,14 +1952,14 @@ public sealed class FlowCoordinator
 
             if (instance.Step.When is { } when && instance.DeclaredScope is { } declared)
             {
-                var read = Evaluate(when, declared, out var problem, reader: instance);
+                var holds = Holds(when, declared, out var problem, reader: instance);
 
                 if (problem is not null)
                 {
                     End(instance, FlowInstanceState.Failed, HarnessExit.ConfigInvalid, Unreadable("when", instance.Id, problem));
                     HandleFailure(instance);
                 }
-                else if (!read.AsBoolean(when))
+                else if (!holds)
                 {
                     instance.SkippedBecause = "its when read false";
                     End(instance, FlowInstanceState.Skipped, null, null);
@@ -2246,7 +2281,7 @@ public sealed class FlowCoordinator
             {
                 // A handler's or a recovery's steps read the source that raised them, in a when as anywhere else: the
                 // block's own instance carries it.
-                var read = Evaluate(when, scope, out var problem, drawing: scope.Visits.GetValueOrDefault(declaration.Name) + 1);
+                var holds = Holds(when, scope, out var problem, drawing: scope.Visits.GetValueOrDefault(declaration.Name) + 1);
 
                 if (problem is not null)
                 {
@@ -2260,7 +2295,7 @@ public sealed class FlowCoordinator
                     continue;
                 }
 
-                if (!read.AsBoolean(when))
+                if (!holds)
                 {
                     var skipped = Create(scope, declaration, FlowInstanceState.Skipped, made: skipped => skipped.SkippedBecause = "its when read false");
                     HandlersFollow(skipped, FlowInstanceState.Skipped);
@@ -2470,7 +2505,7 @@ public sealed class FlowCoordinator
             End(ended, FlowInstanceState.Done, null, null);
         }
 
-        var until = Evaluate(instance.Step.Repeat!.Until, instance.Children[^1], out var problem);
+        var until = Holds(instance.Step.Repeat!.Until, instance.Children[^1], out var problem);
 
         if (problem is not null)
         {
@@ -2478,7 +2513,7 @@ public sealed class FlowCoordinator
             return true;
         }
 
-        if (until.AsBoolean(instance.Step.Repeat.Until))
+        if (until)
         {
             End(instance, FlowInstanceState.Done, null, null);
             return true;
@@ -2488,7 +2523,7 @@ public sealed class FlowCoordinator
         {
             // Past the rounds another iteration is created only while blocking holds: whether what is left has to be
             // dealt with before the loop may end, worked out by the engine from what the body's steps answered.
-            var blocking = Evaluate(instance.Step.Repeat.Blocking!, instance.Children[^1], out var unreadable);
+            var blocking = Holds(instance.Step.Repeat.Blocking!, instance.Children[^1], out var unreadable);
 
             if (unreadable is not null)
             {
@@ -2496,7 +2531,7 @@ public sealed class FlowCoordinator
                 return true;
             }
 
-            if (!blocking.AsBoolean(instance.Step.Repeat.Blocking!))
+            if (!blocking)
             {
                 // Where it is false the repeat ends as it stands, with no question, and what it left is said.
                 EndRepeat(instance);
@@ -2615,7 +2650,9 @@ public sealed class FlowCoordinator
 
         // What runs is a leaf: a group stands open while its members work, and is no step that runs.
         var running = _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup).ToList();
-        var held = running.SelectMany(instance => instance.HeldClaims).ToList();
+
+        // What runs holds its claims, and so does a runner that outlived its attempt until it answers.
+        var held = running.SelectMany(instance => instance.HeldClaims).Concat(_created.SelectMany(instance => instance.Lingering?.Claims ?? [])).ToList();
         var reserved = new List<FlowClaim>();
         var decisions = new List<Admission>();
 
@@ -2757,6 +2794,18 @@ public sealed class FlowCoordinator
             return false;
         }
 
+        if (AgentNeverMade(instance) is { } never)
+        {
+            // What it depends on let it start, and the agent it works in was never made: it can never run, and is NotRun
+            // - the dependency semantics are the engine's, and no runner is asked to run in an agent that is not there.
+            NotRun(instance, FlowNotRunCause.AgentNotMade, never);
+            _answeredAtOnce = true;
+            return false;
+        }
+
+        // The agent it works in is the one made by now, and stays its own whatever a later visit of its create-agent makes.
+        instance.WorksIn ??= NamedAgentOf(instance);
+
         var was = instance.State;
 
         // The handoff goes to the attempt and stays the step's until the runner says the prompt that holds it is
@@ -2834,8 +2883,10 @@ public sealed class FlowCoordinator
                 // What the step reads where it starts, as when is read where it is admitted (ReadAtStart): a test
                 // step's filterWhen - false gives the runner no filter and fills no template, so every test of the
                 // step's legs runs - a validate-plan's items and scope, the pull request's base orient says, an anchor
-                // check's rows or paths, and the commit the run last pushed for a ci-wait that names none. One that
-                // cannot be read fails the step as an unreadable when does.
+                // check's rows or paths, a fold family step's lists of names - a fold's and a deletion's within,
+                // allow.new and allow.merge, a refresh's paths, except, stale and merge, a rebase's merge - and the
+                // commit the run last pushed for a ci-wait that names none. One that cannot be read - a filterWhen that
+                // is neither true nor false among them - fails the step 12, as an unreadable when does.
                 var step = instance.Step;
                 var read = new Dictionary<string, FlowValue>(StringComparer.Ordinal);
 
@@ -2860,25 +2911,7 @@ public sealed class FlowCoordinator
 
                 step = filled;
 
-                var result = await _runner.RunAsync(
-                    new FlowStepRun(
-                        step,
-                        instance.Id,
-                        attempt,
-                        instance.Item,
-                        instance.Index,
-                        instance.Iteration,
-                        [.. instance._answers],
-                        new RunEvents(this, instance, attempt),
-                        handoff?.Text,
-                        instance.Issue,
-                        instance.Visit,
-                        _place,
-                        read,
-                        instance.Made is { } made ? new FlowMadeAgent(made, instance.MadeModel) : null,
-                        WorksInOf(instance),
-                        instance.Step.Others is null ? null : CurrentTarget(instance)?.Agent),
-                    token).ConfigureAwait(false);
+                var result = await _runner.RunAsync(RunOf(instance, step, attempt, read, handoff?.Text), token).ConfigureAwait(false);
 
                 _ = _messages.Writer.TryWrite(new Message(instance, result, null, Attempt: attempt));
             }
@@ -2974,6 +3007,14 @@ public sealed class FlowCoordinator
         }
 
         var (passed, exit, error, cause) = Ends(instance.Step, result);
+
+        // A step that did not pass never ends with the code of success, which every record of it - a target's among them -
+        // reads as done: a runner that answers so is the engine's own fault, and the step ends 70 saying what it answered.
+        if (!passed && exit == HarnessExit.Success)
+        {
+            (exit, error, cause) = (HarnessExit.InternalError, $"'{instance.Id}' answered that it did not pass, with {HarnessExit.Success}, the code of success{(error is null ? string.Empty : $": {error}")}", OutcomeCause.None);
+        }
+
         instance.Legs = result.Legs;
         instance.RedLegs = FlowLegVerdicts.OfClass(result.Legs, FlowLegClass.Red);
         instance.Output = result.Output;
@@ -3618,7 +3659,7 @@ public sealed class FlowCoordinator
 
             if (handler.When is { } when)
             {
-                var read = Evaluate(when, scope, out var problem, instance, drawing: scope.Visits.GetValueOrDefault(handler.Name) + 1);
+                var holds = Holds(when, scope, out var problem, instance, drawing: scope.Visits.GetValueOrDefault(handler.Name) + 1);
 
                 if (problem is not null)
                 {
@@ -3635,7 +3676,7 @@ public sealed class FlowCoordinator
                     continue;
                 }
 
-                if (!read.AsBoolean(when))
+                if (!holds)
                 {
                     PassBy(handler, instance, scope, $"not raised: '{instance.Step.Name}' ended, and '{handler.Name}' reads false of it");
                     continue;
@@ -4525,14 +4566,17 @@ public sealed class FlowCoordinator
             _agentsOpen[instance.Id] = instance;
         }
 
-        // Only a deletion releases an open agent's slot: a fold carries its work and leaves it open. The create-agent
-        // step the deletion names is found where its declaration is, in the deletion's scope or one around it.
+        // Only a deletion releases an open agent's slot: a fold carries its work and leaves it open. The slot released is
+        // the one of the agent the deletion worked on, as it stored it - never the agent a later visit of its create-agent
+        // step made.
         if (instance.Step.Type == "delete-agent"
-            && instance.Step.Of is { } made
             && state == FlowInstanceState.Done
-            && CreateStepOf(instance, made) is { } createStep)
+            && WorksInOf(instance) is { } deleted)
         {
-            _ = _agentsOpen.Remove(createStep.Id);
+            foreach (var holder in _agentsOpen.Where(open => string.Equals(open.Value.Made, deleted, StringComparison.Ordinal)).Select(open => open.Key).ToList())
+            {
+                _ = _agentsOpen.Remove(holder);
+            }
         }
 
         if (instance.DeclaredScope is null)
@@ -4675,6 +4719,34 @@ public sealed class FlowCoordinator
     private void Release(FlowInstance instance)
     {
         instance.HeldClaims.Clear();
+    }
+
+    /// <summary>
+    /// Keeps what <paramref name="instance"/>'s attempt claimed held beyond the attempt's end, until its runner - which did
+    /// not end within the drain's bound of its stop - answers (<see cref="FlowInstance.Lingering"/>).
+    /// </summary>
+    private static void Linger(FlowInstance instance)
+    {
+        if (instance.HeldClaims.Count > 0)
+        {
+            instance.Lingering = (instance.Attempt, [.. instance.HeldClaims, .. instance.Lingering?.Claims ?? []]);
+            instance.HeldClaims.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Gives back what an attempt kept held past its end, where <paramref name="message"/> is its runner's answer: the
+    /// runner has ended, and writes nothing more. Whether it was such an answer.
+    /// </summary>
+    private static bool Outlived(Message message)
+    {
+        if (message is not { Result: not null, Instance.Lingering: { } lingering } || lingering.Attempt != message.Attempt)
+        {
+            return false;
+        }
+
+        message.Instance.Lingering = null;
+        return true;
     }
 
     /// <summary>
@@ -4915,11 +4987,25 @@ public sealed class FlowCoordinator
 
             if (earliest.Drain)
             {
+                // Its runner did not end within the drain's bound, and may still write: what the attempt claimed stays
+                // held until the runner answers, so nothing that would conflict with it starts meanwhile.
+                Linger(earliest.Instance);
+
                 if (earliest.Instance.PastTimeLimit && !earliest.Instance.Draining)
                 {
+                    var error = $"{PastTimeLimitError(earliest.Instance)}, and {RunnerNotEnded}";
+
+                    if (earliest.Instance.Step.Others is not null)
+                    {
+                        // A step of others: the target whose turn it was fails, never run again beside a runner still
+                        // going, and the step goes on with the next - each target is ended on its own.
+                        EndTarget(earliest.Instance, passed: false, HarnessExit.Incomplete, error);
+                        return;
+                    }
+
                     // A step stopped for its time limit whose runner did not end within the drain's bound: it fails
                     // all the same, saying so, and is not retried beside a runner still going.
-                    End(earliest.Instance, FlowInstanceState.Failed, HarnessExit.Incomplete, $"{PastTimeLimitError(earliest.Instance)}, and {RunnerNotEnded}");
+                    End(earliest.Instance, FlowInstanceState.Failed, HarnessExit.Incomplete, error);
                     AfterFailure(earliest.Instance);
                     return;
                 }
@@ -4960,8 +5046,9 @@ public sealed class FlowCoordinator
     /// <summary>
     /// What reached the loop after its last read, as its session ends however it ends: an answer offered is handed back
     /// cancelled - never refused, for it was never weighed, and it stays in the inbox for whoever takes it next - and
-    /// what a reason step spent is counted, for it was spent. What else was left speaks of an attempt that is over. An
-    /// answer offered after this is the next session's, taken at its start.
+    /// what a reason step spent is counted, for it was spent. What else was left speaks of an attempt that is over, save
+    /// that the answer of a runner that outlived its attempt gives back what that attempt kept held. An answer offered
+    /// after this is the next session's, taken at its start.
     /// </summary>
     private void HandBackWhatIsLeft()
     {
@@ -4974,6 +5061,11 @@ public sealed class FlowCoordinator
             else if (message.Usage is not null)
             {
                 TakeMessage(message);
+            }
+            else
+            {
+                // A runner that outlived its attempt has ended: what it held is given back, for the next session.
+                _ = Outlived(message);
             }
         });
     }
@@ -5000,6 +5092,10 @@ public sealed class FlowCoordinator
             _spent.Tokens += usage.Tokens;
             return;
         }
+
+        // The answer of a runner that outlived its attempt gives back what that attempt kept held, whatever attempt the run
+        // is on now.
+        _ = Outlived(message);
 
         if (message.Instance is null || message.Attempt != message.Instance.Attempt)
         {
@@ -5142,6 +5238,13 @@ public sealed class FlowCoordinator
         else
         {
             scope.GroupInstance = instance;
+        }
+
+        if (member && memberId is null)
+        {
+            // The agent it works in, where its create-agent has made one: stored before its first record, so its record and
+            // its directory never move to another agent a later visit of that create-agent makes. A resume reads it back.
+            instance.WorksIn = NamedAgentOf(instance);
         }
 
         made?.Invoke(instance);
@@ -5655,6 +5758,42 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
+    /// Reads a boolean expression of <paramref name="scope"/> - a <c>when</c>, a repeat's <c>until</c> and
+    /// <c>blocking</c> - as true or false: one that cannot be read, or that yields anything but true or false, says why in
+    /// <paramref name="problem"/>, and reads false. The one way the engine asks an expression whether something holds.
+    /// </summary>
+    /// <param name="expression">The expression, as the definition wrote it.</param>
+    /// <param name="scope">The scope the expression is read in.</param>
+    /// <param name="problem">Why the expression could not be read as true or false, where it could not.</param>
+    /// <param name="source">The ending a handler's when reads as <c>source</c>; null for what raised the reader or the group around it.</param>
+    /// <param name="reader">The instance the expression is read for, where one is.</param>
+    /// <param name="drawing">The visit a declaration being drawn will be, where its when is read as it is drawn.</param>
+    private bool Holds(string expression, Scope scope, out string? problem, FlowInstance? source = null, FlowInstance? reader = null, int? drawing = null)
+    {
+        var value = Evaluate(expression, scope, out problem, source, reader, drawing);
+
+        return problem is null && TruthOf(value, expression, out problem);
+    }
+
+    /// <summary>
+    /// <paramref name="value"/>, which <paramref name="expression"/> yielded, as true or false: anything else says why in
+    /// <paramref name="problem"/>, and reads false.
+    /// </summary>
+    private static bool TruthOf(FlowValue value, string expression, out string? problem)
+    {
+        try
+        {
+            problem = null;
+            return value.AsBoolean(expression);
+        }
+        catch (UnresolvedReadException unreadable)
+        {
+            problem = unreadable.Message;
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Evaluates a list-yielding expression of <paramref name="scope"/>: a <c>forEach</c>'s work items, or why it
     /// could not be read - one whose reading throws, or one that reads nothing at all.
     /// </summary>
@@ -5680,47 +5819,63 @@ public sealed class FlowCoordinator
         }
     }
 
+    /// <summary>What an expression a step reads where it starts yields, as its runner is handed it.</summary>
+    private enum StartRead
+    {
+        /// <summary>The value as it reads.</summary>
+        Value,
+
+        /// <summary>A list of names: none where it read nothing or null, and anything else cannot be read.</summary>
+        Names,
+
+        /// <summary>True or false, and anything else cannot be read.</summary>
+        Truth,
+    }
+
     /// <summary>
     /// What <paramref name="instance"/>'s step reads where it starts, into <paramref name="read"/> by key: a test step's
-    /// <c>filterWhen</c>; a <c>validate-plan</c> step's <c>items</c> and <c>scope</c>, each where it gives it - a scope
-    /// that reads nothing is no update, and is handed on as read; an anchor balance's <c>rows</c> and an anchor
-    /// citations check's <c>paths</c>, where each gives an expression - one that reads nothing, or null, is an empty list,
-    /// naming nothing, and one that yields anything but a list of names cannot be read; an <c>orient</c> step's
-    /// <c>base</c>, the flow's pull request's base filled as the run's start fills it, where a pull-request step names one;
-    /// and a <c>ci-wait</c> step's <c>commit</c> where it names none, the commit the run last pushed - the output of the
-    /// push step that ended done last - where it pushed one. Why one could not be read, as the step's record keeps it;
-    /// null where each was.
+    /// <c>filterWhen</c>, true or false - anything else cannot be read; a <c>validate-plan</c> step's <c>items</c> and
+    /// <c>scope</c>, each where it gives it - a scope that reads nothing is no update, and is handed on as read; an anchor
+    /// balance's <c>rows</c> and an anchor citations check's <c>paths</c>, a fold's and a deletion's <c>within</c>,
+    /// <c>allow.new</c> and <c>allow.merge</c>, a refresh's <c>paths</c>, <c>except</c>, <c>stale</c> and <c>merge</c> and
+    /// a rebase's <c>merge</c>, each where it gives an expression, as the list of names its expression yields - one that
+    /// may read nothing reads none where it does, or reads null, and one that yields anything but a list of names cannot
+    /// be read; an <c>orient</c> step's <c>base</c>, the flow's pull request's base filled as the run's start fills it,
+    /// where a pull-request step names one; and a <c>ci-wait</c> step's <c>commit</c> where it names none, the commit the
+    /// run last pushed - the output of the push step that ended done last - where it pushed one. Why one could not be
+    /// read, as the step's record keeps it; null where each was.
     /// </summary>
     private string? ReadAtStart(FlowInstance instance, Dictionary<string, FlowValue> read)
     {
         var step = instance.Step;
 
         // Each expression the step reads where it starts, under the key its runner reads it by: whether it may read nothing
-        // (which reads as none), and whether it yields a list of names, read as one here so the runner is handed names.
-        IEnumerable<(string Key, string? Expression, bool MayReadNothing, bool Names)> expressions = step.Type switch
+        // (which reads as none), and what it yields - a list of names or a truth is read as one here, so the runner is
+        // handed names, or true or false.
+        IEnumerable<(string Key, string? Expression, bool MayReadNothing, StartRead Yields)> expressions = step.Type switch
         {
-            "test" => [("filterWhen", step.FilterWhen, false, false)],
-            "validate-plan" => [("items", step.Items, false, false), ("scope", step.Scope, true, false)],
-            "anchor-balance" => [("rows", step.Rows?.Expression, true, true)],
-            "anchor-citations" => [("paths", step.AnchorPaths?.Expression, true, true)],
+            "test" => [("filterWhen", step.FilterWhen, false, StartRead.Truth)],
+            "validate-plan" => [("items", step.Items, false, StartRead.Value), ("scope", step.Scope, true, StartRead.Value)],
+            "anchor-balance" => [("rows", step.Rows?.Expression, true, StartRead.Names)],
+            "anchor-citations" => [("paths", step.AnchorPaths?.Expression, true, StartRead.Names)],
             "fold" or "delete-agent" =>
             [
-                ("within", step.Within?.Expression, false, true),
-                ("allow.new", step.Allow?.New?.Expression, true, true),
-                ("allow.merge", step.Allow?.Merge?.Expression, true, true),
+                ("within", step.Within?.Expression, false, StartRead.Names),
+                ("allow.new", step.Allow?.New?.Expression, true, StartRead.Names),
+                ("allow.merge", step.Allow?.Merge?.Expression, true, StartRead.Names),
             ],
             "refresh" =>
             [
-                ("paths", step.Paths?.Expression, false, true),
-                ("except", step.Except?.Expression, false, true),
-                ("stale", step.Stale?.Expression, false, true),
-                ("merge", step.Merge?.Expression, true, true),
+                ("paths", step.Paths?.Expression, false, StartRead.Names),
+                ("except", step.Except?.Expression, false, StartRead.Names),
+                ("stale", step.Stale?.Expression, false, StartRead.Names),
+                ("merge", step.Merge?.Expression, true, StartRead.Names),
             ],
-            "rebase" => [("merge", step.Merge?.Expression, true, true)],
+            "rebase" => [("merge", step.Merge?.Expression, true, StartRead.Names)],
             _ => [],
         };
 
-        foreach (var (key, expression, mayReadNothing, isNames) in expressions)
+        foreach (var (key, expression, mayReadNothing, yields) in expressions)
         {
             if (expression is null)
             {
@@ -5734,7 +5889,19 @@ public sealed class FlowCoordinator
                 return Unreadable(key, instance.Id, problem);
             }
 
-            if (isNames)
+            if (yields == StartRead.Truth)
+            {
+                var truth = TruthOf(value, expression, out var untrue);
+
+                if (untrue is not null)
+                {
+                    return Unreadable(key, instance.Id, untrue);
+                }
+
+                value = FlowValue.Of(truth);
+            }
+
+            if (yields == StartRead.Names)
             {
                 if (Names(value, expression, out var names) is { } unnamed)
                 {
@@ -6026,22 +6193,80 @@ public sealed class FlowCoordinator
             instance.Targets);
 
     /// <summary>
-    /// The agent this step works in: the one its <c>in</c> or <c>of</c> names, once its create-agent has made it - the
-    /// name it was given beforehand names no agent yet - or, for a reason step that goes on with another's work, the one
-    /// that step works in; null for the create-agent itself and every step that names none.
+    /// The agent this step works in: the one stored on it (<see cref="FlowInstance.WorksIn"/>), or - before it was stored -
+    /// the one its <c>in</c> or <c>of</c> names now (<see cref="NamedAgentOf"/>).
     /// </summary>
-    private static string? WorksInOf(FlowInstance instance)
+    private static string? WorksInOf(FlowInstance instance) => instance.WorksIn ?? NamedAgentOf(instance);
+
+    /// <summary>
+    /// The agent this step's <c>in</c> or <c>of</c> names as the run stands now: the one its create-agent's newest visit
+    /// made, once that visit is done - the name it was given beforehand names no agent yet - or, for a reason step that
+    /// goes on with another's work, the one that step's names; null for the create-agent itself and every step that
+    /// names none. What is stored on a step where it is drawn or starts, and read again of no step that has it.
+    /// </summary>
+    private static string? NamedAgentOf(FlowInstance instance)
     {
         var working = WorkingOf(instance);
 
-        if (working.Step.Type == "create-agent"
-            || working.Step.In is null && working.Step.Of is null)
+        if (CreateStepNamedBy(working) is not { } create)
         {
             return null;
         }
 
-        return CreateStepOf(working, working.Step.In ?? working.Step.Of!) is { State: FlowInstanceState.Done, Made: { } made } ? made : null;
+        return create is { State: FlowInstanceState.Done, Made: { } made } ? made : null;
     }
+
+    /// <summary>
+    /// The create-agent step <paramref name="working"/>'s <c>in</c> or <c>of</c> names, its newest visit, found in its own
+    /// scope or one around it; null for a create-agent step, a step that names none, and one whose create-agent is not
+    /// drawn.
+    /// </summary>
+    private static FlowInstance? CreateStepNamedBy(FlowInstance working)
+        => working.Step.Type == "create-agent" || (working.Step.In ?? working.Step.Of) is not { } named ? null : CreateStepOf(working, named);
+
+    /// <summary>
+    /// Why <paramref name="instance"/> - a step that works in or acts on an agent - can never run: the create-agent step its
+    /// <c>in</c> or <c>of</c> names ended otherwise than done - skipped, or failed and passed over or handled, which
+    /// satisfy what depends on them, or failed or never run where an always step starts over it - so the agent it works
+    /// in was never made. Null where its agent is made, where it names none, and where its create-agent step has not
+    /// ended - a step the definition's check would refuse for not waiting starts beside it, naming no agent yet.
+    /// </summary>
+    private static string? AgentNeverMade(FlowInstance instance)
+    {
+        if (WorksInOf(instance) is not null || CreateStepNamedBy(WorkingOf(instance)) is not { } create)
+        {
+            return null;
+        }
+
+        return create.State is FlowInstanceState.Skipped or FlowInstanceState.Failed or FlowInstanceState.NotRun
+            ? $"the agent it works in was never made: '{create.Id}' is {create.State}"
+            : null;
+    }
+
+    /// <summary>
+    /// What <paramref name="instance"/>'s runner is asked with for <paramref name="attempt"/>: the step as it is to run, what
+    /// the engine read for it where it started and the handoff it is given, beside every fact of the instance - its scope,
+    /// its answers, where the run works, the agent it makes, the agent it works in and, of <c>others</c>, the target whose
+    /// turn it is. The one builder of it, for an attempt and for the handoff turn a pause gives one alike.
+    /// </summary>
+    private FlowStepRun RunOf(FlowInstance instance, WorkflowStep step, int attempt, IReadOnlyDictionary<string, FlowValue> read, string? handoff)
+        => new(
+            step,
+            instance.Id,
+            attempt,
+            instance.Item,
+            instance.Index,
+            instance.Iteration,
+            [.. instance._answers],
+            new RunEvents(this, instance, attempt),
+            handoff,
+            instance.Issue,
+            instance.Visit,
+            _place,
+            read,
+            instance.Made is { } made ? new FlowMadeAgent(made, instance.MadeModel) : null,
+            WorksInOf(instance),
+            instance.Step.Others is null ? null : CurrentTarget(instance)?.Agent);
 
     /// <summary>What one instance waits on, where it waits: the question it asked, the resume, or what admission says keeps it - a dependency, the quiet an alone step waits for, a claim, a counter, a redirect, the resume.</summary>
     private static IReadOnlyList<string> WaitsOnOf(FlowInstance instance, IReadOnlyDictionary<FlowInstance, Admission> walk)
@@ -6181,12 +6406,11 @@ public sealed class FlowCoordinator
             }
 
             // The agents the run holds open, as its records say: each agent a create-agent step made, held by its newest
-            // visit - a visit again while it is live takes its slot - that no delete-agent step deleted. A deletion names
-            // the agent it deleted as the one it worked in.
+            // visit - a visit again while it is live takes its slot - that no delete-agent step deleted. A deletion's
+            // record names the agent it deleted as the one it worked on, stored where it started (FlowInstance.WorksIn).
             var deleted = new HashSet<string>(
                 _created.Where(created => created.Step.Type == "delete-agent" && created.State == FlowInstanceState.Done)
-                    .Select(deletion => resume.File.Steps.First(record => record.Instance == deletion.Id).Agent
-                        ?? (deletion.Step.Of is { } of ? CreateStepOf(deletion, of)?.Id : null))
+                    .Select(deletion => deletion.WorksIn)
                     .OfType<string>(),
                 StringComparer.Ordinal);
 
@@ -6414,6 +6638,7 @@ public sealed class FlowCoordinator
             instance.FinishedAt = record.FinishedAt;
             instance.Made = record.Made;
             instance.MadeModel = record.Model;
+            instance.WorksIn = record.Agent;
             instance.WaitingQuestion = record.Question;
             instance.HandledBy = record.HandledBy;
             instance.Leftover = record.Leftover?.DeepClone();

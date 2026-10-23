@@ -1954,6 +1954,85 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// An alternative to the step that builds a work item runs in its place, with its dependencies: where the two are
+    /// groups, a step inside the alternative waits for the agent the builder waits for, as one inside the builder does.
+    /// </summary>
+    [Fact]
+    public void AStepInsideAnAlternativeGroup_WaitsForTheAgentTheBuilderWaitsFor()
+    {
+        const string grouped = """
+            name: default
+            inputs:
+              - name: request
+            steps:
+              - name: planning
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: planner
+                    prompt: prompts/plan.md
+                    outputs: schemas/plan.json
+                  - name: check
+                    type: validate-plan
+                    dependsOn: [plan]
+                    items: 'plan.latest.items'
+                  - name: plan-update
+                    type: reason
+                    resume: plan
+                    prompt: prompts/plan-update.md
+                    outputs: schemas/plan.json
+              - name: item-check
+                type: validate-plan
+                dependsOn: [planning]
+                items: 'planning.plan.latest.items'
+              - name: items
+                dependsOn: [item-check]
+                forEach: 'item-check.items'
+                steps:
+                  - name: item-agent
+                    type: create-agent
+                    agent: implementer
+                  - name: build
+                    dependsOn: [item-agent]
+                    steps:
+                      - name: implement
+                        type: reason
+                        agent: implementer
+                        access: write
+                        in: item-agent
+                        prompt: prompts/implement.md
+                        outputs: schemas/implement.json
+                  - name: rework
+                    steps:
+                      - name: redo
+                        type: reason
+                        agent: implementer
+                        access: write
+                        in: item-agent
+                        prompt: prompts/redo.md
+                        outputs: schemas/implement.json
+            amend:
+              input: request
+              step: planning.plan-update
+              then: check
+              scope: 'plan.latest.scope'
+              whenAddScope: items.build
+              whenChangeScope: items.rework
+              whenRemoveScope: items.build
+            """;
+
+        Assert.Empty(Problems(grouped));
+
+        // The builder that waits for nothing leaves its alternative's steps waiting for nothing either.
+        Assert.Equal(
+            [
+                "step 'items.build.implement' works in the agent 'items.item-agent' makes, and does not wait for it: name 'item-agent', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made",
+                "step 'items.rework.redo' works in the agent 'items.item-agent' makes, and does not wait for it: name 'item-agent', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made",
+            ],
+            Problems(grouped.Replace("      - name: build\n        dependsOn: [item-agent]\n", "      - name: build\n", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
     /// The model each create-agent step makes its agent for: the first reason step that works in it, as that step - or the
     /// step whose work it goes on with - resolves it; else the default tier's first. One no model resolves for is refused.
     /// </summary>

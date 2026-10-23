@@ -56,6 +56,24 @@ public sealed record FlowCheckout(
                         ? $"the main checkout has staged changes ({ReportText.Counted(Staged.Count, "path")}: {string.Join(", ", Staged.Take(5))}{(Staged.Count > 5 ? ", ..." : string.Empty)}), and a run's commit stages what it folded alone: commit them, or unstage them"
                         : null;
 
+    /// <summary>
+    /// What a run's start says where the branch its pull request is opened against (<see cref="BaseBranch"/>) cannot be
+    /// told although the repository has a remote - no pull-request step names a base, and the remote the run's branch
+    /// goes to names no default branch here, or no remote is that one: the checkout's branch was held to none of it, and
+    /// a run never starts so unsaid. Null where the base is told, where HEAD is detached, which refuses the start, and
+    /// where the repository has no remote, which no pull request is opened on.
+    /// </summary>
+    /// <param name="pullRequestBase">The pull-request step's base, filled (<see cref="FlowTemplate.PullRequestBase"/>); null where none is named.</param>
+    public string? BaseUnknown(string? pullRequestBase)
+        => BaseBranch(pullRequestBase) is not null || Branch is null || !HasRemote
+            ? null
+            : "the branch the run's pull request is opened against cannot be told here - no pull-request step names a base, and "
+                + (Remote is null
+                    ? $"no remote is the one the run's branch goes to (the push step names none, the branch tracks none, and none is {GitRemotes.ConventionalRemote})"
+                    : $"remote '{Remote}' names no default branch here")
+                + $" - so the main checkout's branch '{Branch}' was held to none: name the base on the pull-request step"
+                + (Remote is null ? ", or the remote on the push step" : $", or read the remote's own with git remote set-head {Remote} --auto");
+
     /// <summary>Reads the checkout at <paramref name="root"/>, its remote chosen as <paramref name="definition"/>'s push step names it.</summary>
     /// <param name="gitClient">Git.</param>
     /// <param name="root">The main checkout's root.</param>

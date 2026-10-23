@@ -149,7 +149,8 @@ public sealed record FlowEvent(
 /// <param name="NotRunCause">
 /// Which kind of reason the step is NotRun for, one of <see cref="FlowNotRunCause"/>'s names exactly: a resume runs one
 /// NotRun because the run ended before it (<c>RunEnded</c>), and one whose failed dependency runs again, and leaves one a
-/// standing failure or its group's failure blocks; null for every other state.
+/// standing failure or its group's failure blocks, and one whose agent was never made (<c>AgentNotMade</c>); null for
+/// every other state.
 /// </param>
 /// <param name="Issue">The pre-existing issue this instance was raised to triage, whole, as the reporting step reported it; null for every step the schedule starts.</param>
 /// <param name="IssuesOwed">

@@ -81,7 +81,7 @@ public sealed class FlowServiceTests
             files,
             store,
             engines,
-            new FlowSessions(store, files, engines),
+            new FlowSessions(store, files, engines, harness.GitClient),
             new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform), DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
             runner,
             harness.OrchestrationLog,
@@ -136,6 +136,96 @@ public sealed class FlowServiceTests
                 $"log {run.LogFile("r1")}",
             ],
             outcome.Details);
+    }
+
+    /// <summary>
+    /// A run of a workflow is driven with what the repository's configuration says: its create-agent step asked for the
+    /// model the configuration resolves for it, and a run step whose runner writes the tree holds that tree whole - a step
+    /// that reads it starts once the run step has ended, never beside it.
+    /// </summary>
+    [Fact]
+    public async Task ARunOfAWorkflow_MakesItsAgentForTheConfiguredModel_AndAWritingRunnerHoldsWrite()
+    {
+        var (repository, runner) = await RepositoryAsync(
+            """
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: worker
+              - name: tidy
+                type: run
+                runner: format
+                in: make
+                dependsOn: [make]
+              - name: map
+                type: graphify-codebase
+                in: make
+                dependsOn: [make]
+            """,
+            new HarnessConfig
+            {
+                Workflows = [Workflow],
+                Defaults = new HarnessDefaults { AgentTier = "balanced" },
+                Providers =
+                [
+                    new()
+                    {
+                        Name = "zai", Type = "zai", Api = "https://api.z.ai", ApiKeyNames = ["ZAI_API_KEY"], Client = "glm",
+                        Currency = "USD", ReadOn = "2026-10-12",
+                        Models = [new() { Code = "glm-5.3", Name = "GLM 5.3", Tiers = ["balanced"], Efforts = ["low", "high", "max"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072 }],
+                    },
+                ],
+                TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["balanced"] = ["glm-5.3"] },
+                PredefinedRunners = { ["format"] = new RunnerConfig { WritesTree = true, Phases = [new RunnerPhase { Name = "tidy", Command = ["dotnet", "--version"] }] } },
+            });
+        using var disposed = repository;
+        repository.Tree.WriteFile($".harness-config/workflows/{Workflow}/agents/worker.md", "You tidy.\n");
+        var service = Service(repository.Harness, runner);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mappedWhileHeld = false;
+        runner.Holds("tidy", release.Task);
+        runner.OnStart("map", () => mappedWhileHeld = !release.Task.IsCompleted);
+
+        var session = service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token);
+        var tidying = runner.WaitStartedAsync("tidy");
+
+        if (await Task.WhenAny(tidying, session) == session)
+        {
+            var ended = await session;
+            Assert.Fail($"the run ended before its run step started: {ended.Message} {string.Join(" | ", ended.Details ?? [])}");
+        }
+
+        release.SetResult();
+        var outcome = await session.WaitAsync(Bound, Token);
+
+        Assert.True(outcome.ExitCode == HarnessExit.Success, outcome.Message);
+        Assert.Equal(new FlowMadeAgent("a1", "glm-5.3"), runner.Asked.Single(run => run.Instance == "make").Made);
+        Assert.Equal(["make", "tidy", "map"], runner.Started);
+        Assert.False(mappedWhileHeld, "the step that reads the agent's tree started while the writing run held it");
+    }
+
+    /// <summary>
+    /// A start whose pull request's base cannot be told - the repository has a remote, and it names no default branch here
+    /// - says so, the checkout's branch held to none of it.
+    /// </summary>
+    [Fact]
+    public async Task AStartWhoseBaseCannotBeTold_SaysSo()
+    {
+        var (repository, service, runner) = await ServiceAsync();
+        using var disposed = repository;
+        await repository.Harness.RunGitAsync(repository.Path, ["remote", "add", "origin", Path.Combine(repository.Path, "nowhere")], Token);
+        await repository.Harness.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "feature"], Token);
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+
+        var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(
+            "the branch the run's pull request is opened against cannot be told here - no pull-request step names a base, and remote "
+                + "'origin' names no default branch here - so the main checkout's branch 'feature' was held to none: name the base on the "
+                + "pull-request step, or read the remote's own with git remote set-head origin --auto",
+            outcome.Details![0]);
     }
 
     /// <summary>A run records the commit and the branch it started from, as the probe its orient step reads them.</summary>
@@ -2472,8 +2562,8 @@ public sealed class FlowServiceTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
-        var (run, context) = sessions.Create(layout, definition);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var (run, context) = await sessions.CreateAsync(layout, definition, cancellationToken: Token);
 
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, run, context))
         {
@@ -2594,11 +2684,11 @@ public sealed class FlowServiceTests
 
         var run = RunOf(repository);
         var deleted = await repository.Harness.OrchestratorService.DeleteAsync(repository.Path, "r1", deleteEvidence: true, Token);
-        var sessions = new FlowSessions(repository.Harness.OrchestrationStore, repository.Harness.FileSystem, repository.Harness.Identity);
+        var sessions = new FlowSessions(repository.Harness.OrchestrationStore, repository.Harness.FileSystem, repository.Harness.Identity, repository.Harness.GitClient);
 
         Assert.Equal(HarnessExit.Success, deleted.ExitCode);
 
-        var refused = Assert.Throws<HarnessException>(() => sessions.Claim(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), run));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => sessions.ClaimAsync(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), run, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(OrchestrationReports.NoOrchestrator("r1"), refused.Message);
@@ -2888,10 +2978,14 @@ public sealed class FlowServiceTests
         private readonly ConcurrentDictionary<string, Action> _onStart = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, bool> _deaf = new(StringComparer.Ordinal);
         private readonly ConcurrentQueue<string> _order = new();
+        private readonly ConcurrentQueue<FlowStepRun> _asked = new();
         private volatile FlowStepResult? _every;
 
         /// <summary>Every instance asked, in the order the coordinator started it.</summary>
         public IReadOnlyList<string> Started => [.. _order];
+
+        /// <summary>Every run asked, whole, in the order the coordinator started it.</summary>
+        public IReadOnlyList<FlowStepRun> Asked => [.. _asked];
 
         /// <summary>Answers <paramref name="step"/> with one result, every time it is asked.</summary>
         public void On(string step, FlowStepResult result) => _results[step] = result;
@@ -2919,6 +3013,7 @@ public sealed class FlowServiceTests
         public async Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
         {
             _order.Enqueue(run.Step.Name);
+            _asked.Enqueue(run);
 
             if (_onStart.TryGetValue(run.Step.Name, out var what))
             {

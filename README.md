@@ -666,14 +666,15 @@ the legs `check-ci-legs` reads; and `ci-wait`, which waits for every check the f
 last pushed where it names none - ends at the first red one with its job's failing step and whole log, and asks where
 none appeared, some are still running, or one ended neither green nor red; and the fold family - `fold`, `delete-agent`,
 `refresh` and `rebase` - which make their verb's dry run first, read what it stood, typed, and ask what it lacks - a
-consent, a path outside a fold's `within`, conflicting merges - with what it is about, apply only what it named, write
-each path a fold means to write to the run's ledger of its folds (`folds.json`) before the verb and what it left after,
-and, of `others`, work on each other open agent of the run in turn. A check that finds red fails its step under
-`failOn: red`, every check's default but `ci-read`'s. Every text a step hands on is filled where it starts, and one that
-reads nothing fails the step (12). Every call of `gh` is started so it cannot ask, and ended after five minutes or the
-step's `timeoutMinutes` (21). A step of any other type fails, saying no runner serves its type; the rest are the next
-thing the tool grows. A step that works in
-or on an agent waits for the create-agent step that makes it. Run `dssharness help workflows` for the whole of it.
+consent, a path outside a fold's `within`, conflicting merges - with what it is about, a fold and a deletion applying
+only what it named, write each path a fold means to write to the run's ledger of its folds (`folds.json`) before the
+verb and what it left after, and, of `others`, work on each other open agent of the run in turn. A check that finds red
+fails its step under `failOn: red`, every check's default but `ci-read`'s. Every text a step hands on is filled where it
+starts, and one that reads nothing fails the step (12). Every call of `gh` is started so it cannot ask, and ended after
+five minutes, or with its step where the step passes its `timeoutMinutes` first (21). A step of any other type fails,
+saying no runner serves its type; the rest are the next thing the tool grows. A step that works in or on an agent
+waits for the create-agent step that makes it, and is not run where that step did not make it. Run
+`dssharness help workflows` for the whole of it.
 
 ## Anchors
 

@@ -42,14 +42,14 @@ public sealed class FlowSessionsTests
     /// definition NotStarted, the run Running - and its owner: this process, claimed before the section is left.
     /// </summary>
     [Fact]
-    public void ARunStartsWithTheNextName_ItsRecordItsFirstStatusAndItsOwner()
+    public async Task ARunStartsWithTheNextName_ItsRecordItsFirstStatusAndItsOwner()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
 
-        var (run, context) = sessions.Create(layout, Definition());
+        var (run, context) = await sessions.CreateAsync(layout, Definition(), cancellationToken: Token);
 
         Assert.Equal("r1", run.Name);
         Assert.Equal("r1", context.Run);
@@ -73,22 +73,22 @@ public sealed class FlowSessionsTests
         Directory.CreateDirectory(Path.Combine(layout.OrchestratorsDirectory, "r7"));
         Directory.Delete(run.Directory, recursive: true);
 
-        Assert.Equal("r8", sessions.Create(layout, Definition()).Run.Name);
+        Assert.Equal("r8", (await sessions.CreateAsync(layout, Definition(), cancellationToken: Token)).Run.Name);
     }
 
     /// <summary>A <c>--run</c> name that is taken is refused, naming its record and the way on with that one, by the one sentence create-orchestrator says it with.</summary>
     [Fact]
-    public void ARunNameThatIsTakenIsRefused_NamingItsRecordAndTheWayOn()
+    public async Task ARunNameThatIsTakenIsRefused_NamingItsRecordAndTheWayOn()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
 
-        var (mine, _) = sessions.Create(layout, Definition(), wantedName: "mine");
+        var (mine, _) = await sessions.CreateAsync(layout, Definition(), wantedName: "mine", cancellationToken: Token);
         Released(harness, mine);
 
-        var raised = Assert.Throws<HarnessException>(() => sessions.Create(layout, Definition(), wantedName: "mine"));
+        var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, Definition(), wantedName: "mine", cancellationToken: Token));
 
         Assert.Equal(HarnessExit.Refused, raised.ExitCode);
         Assert.Equal(OrchestrationReports.RunExists(mine), raised.Message);
@@ -97,18 +97,18 @@ public sealed class FlowSessionsTests
 
     /// <summary>A <c>--run</c> name whose directory is there holding no run's record is refused: a run is never made over what something else left there.</summary>
     [Fact]
-    public void ARunNameWhoseDirectoryHoldsNoRecordIsRefused()
+    public async Task ARunNameWhoseDirectoryHoldsNoRecordIsRefused()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
         var left = OrchestratorLayout.Of(layout, "left");
 
         Directory.CreateDirectory(left.Directory);
         File.WriteAllText(left.DefinitionFile, "{}");
 
-        var raised = Assert.Throws<HarnessException>(() => sessions.Create(layout, Definition(), wantedName: "left"));
+        var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, Definition(), wantedName: "left", cancellationToken: Token));
 
         Assert.Equal(HarnessExit.Refused, raised.ExitCode);
         Assert.Equal(
@@ -120,14 +120,14 @@ public sealed class FlowSessionsTests
 
     /// <summary>A start that its refusal check refuses - its path budget - writes nothing: the name is chosen, and nothing of a run is made by it.</summary>
     [Fact]
-    public void AStartItsCheckRefuses_WritesNothing()
+    public async Task AStartItsCheckRefuses_WritesNothing()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
 
-        var raised = Assert.Throws<HarnessException>(() => sessions.Create(layout, Definition(), refusal: name => $"run '{name}' is too deep"));
+        var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, Definition(), refusal: name => $"run '{name}' is too deep", cancellationToken: Token));
 
         Assert.Equal("run 'r1' is too deep", raised.Message);
         Assert.False(Directory.Exists(OrchestratorLayout.Of(layout, "r1").Directory));
@@ -136,17 +136,17 @@ public sealed class FlowSessionsTests
 
     /// <summary>A session is refused while another run of the repository is unfinished over a live owner, and the refusal names the run and the ways on with it.</summary>
     [Fact]
-    public void ASessionIsRefusedWhileAnotherRuns_OverALiveOwner()
+    public async Task ASessionIsRefusedWhileAnotherRuns_OverALiveOwner()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
 
         // The run's engine holds it: its owner was claimed with it.
-        _ = sessions.Create(layout, Definition());
+        _ = await sessions.CreateAsync(layout, Definition(), cancellationToken: Token);
 
-        var raised = Assert.Throws<HarnessException>(() => sessions.Create(layout, Definition(), wantedName: "second"));
+        var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, Definition(), wantedName: "second", cancellationToken: Token));
 
         Assert.Equal(HarnessExit.Refused, raised.ExitCode);
         Assert.Contains("run 'r1' of this repository is unfinished (running; owned by a live engine)", raised.Message, StringComparison.Ordinal);
@@ -160,10 +160,10 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
         var definition = Definition();
 
-        var (other, context) = sessions.Create(layout, definition);
+        var (other, context) = await sessions.CreateAsync(layout, definition, cancellationToken: Token);
 
         // Its session has ended: nothing holds it but its records.
         Released(harness, other);
@@ -195,7 +195,7 @@ public sealed class FlowSessionsTests
         var flow = harness.OrchestrationStore.ReadFlow(other)!;
         harness.OrchestrationStore.WriteFlow(other, flow with { Status = "Paused" });
 
-        var held = Assert.Throws<HarnessException>(() => sessions.Create(layout, definition, wantedName: "second"));
+        var held = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, definition, wantedName: "second", cancellationToken: Token));
 
         Assert.Contains("paused; 1 agent with worktree still open", held.Message, StringComparison.Ordinal);
 
@@ -203,7 +203,7 @@ public sealed class FlowSessionsTests
         var agent = harness.OrchestrationStore.ReadAgent(other, "a1")!;
         harness.OrchestrationStore.WriteAgent(other, agent with { Access = AgentRecord.AccessRead, Worktree = null, WorktreesRoot = null });
 
-        var second = sessions.Create(layout, definition, wantedName: "second");
+        var second = await sessions.CreateAsync(layout, definition, wantedName: "second", cancellationToken: Token);
 
         Assert.Equal("second", second.Run.Name);
     }
@@ -214,22 +214,22 @@ public sealed class FlowSessionsTests
     /// took it is taken back, so it reaches no later session.
     /// </summary>
     [Fact]
-    public void TheTestIsMadeAtTheStartOfEverySession_LeavingOutTheRunItself()
+    public async Task TheTestIsMadeAtTheStartOfEverySession_LeavingOutTheRunItself()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
 
-        var (first, _) = sessions.Create(layout, Definition());
+        var (first, _) = await sessions.CreateAsync(layout, Definition(), cancellationToken: Token);
         Released(harness, first);
-        var (second, _) = sessions.Create(layout, Definition());
+        var (second, _) = await sessions.CreateAsync(layout, Definition(), cancellationToken: Token);
         Released(harness, second);
 
         // While the first runs, a session of the second is refused.
         _ = new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Claim(first);
 
-        var raised = Assert.Throws<HarnessException>(() => sessions.Claim(layout, second));
+        var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.ClaimAsync(layout, second, Token));
 
         Assert.Contains($"run '{first.Name}' of this repository is unfinished", raised.Message, StringComparison.Ordinal);
         Assert.Null(harness.OrchestrationStore.ReadOwner(second));
@@ -239,7 +239,7 @@ public sealed class FlowSessionsTests
         Released(harness, first);
         harness.OrchestrationStore.WriteStopFile(first, new FlowStopFile(1, Stop: new FlowStopStop(DateTimeOffset.UtcNow)));
 
-        Assert.Null(sessions.Claim(layout, first));
+        Assert.Null(await sessions.ClaimAsync(layout, first, Token));
         Assert.Equal(Environment.ProcessId, harness.OrchestrationStore.ReadOwner(first)!.ProcessId);
         Assert.Null(harness.OrchestrationStore.ReadStopFile(first));
     }
@@ -254,10 +254,10 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
         var definition = Definition();
 
-        var (other, context) = sessions.Create(layout, definition);
+        var (other, context) = await sessions.CreateAsync(layout, definition, cancellationToken: Token);
         Released(harness, other);
 
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, other, context))
@@ -269,7 +269,7 @@ public sealed class FlowSessionsTests
         Directory.CreateDirectory(other.AgentDirectory("a1"));
         File.WriteAllText(other.AgentRecordFile("a1"), "not a record");
 
-        var raised = Assert.Throws<HarnessException>(() => sessions.Create(layout, definition, wantedName: "second"));
+        var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, definition, wantedName: "second", cancellationToken: Token));
 
         Assert.StartsWith("run 'r1' of this repository is unfinished (paused, and whether its agent 'a1' holds a worktree cannot be told: ", raised.Message, StringComparison.Ordinal);
     }
@@ -284,10 +284,10 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
         var results = AtOnce(
-            () => sessions.Create(layout, Definition(), wantedName: "left").Run.Name,
-            () => sessions.Create(layout, Definition(), wantedName: "right").Run.Name);
+            async () => (await sessions.CreateAsync(layout, Definition(), wantedName: "left", cancellationToken: Token)).Run.Name,
+            async () => (await sessions.CreateAsync(layout, Definition(), wantedName: "right", cancellationToken: Token)).Run.Name);
 
         var made = Assert.Single(results, result => result.Made is not null).Made!;
         var refused = Assert.Single(results, result => result.Refused is not null).Refused!;
@@ -298,25 +298,30 @@ public sealed class FlowSessionsTests
 
     /// <summary>Two sessions of one run at once, on two threads, claim it once: the other is refused by the live owner the first wrote.</summary>
     [Fact]
-    public void TwoResumesAtOnce_OnlyOneClaimsTheRun()
+    public async Task TwoResumesAtOnce_OnlyOneClaimsTheRun()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
-        var (run, _) = sessions.Create(layout, Definition());
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var (run, _) = await sessions.CreateAsync(layout, Definition(), cancellationToken: Token);
         Released(harness, run);
 
         var results = AtOnce(
-            () => sessions.Claim(layout, run) ?? "claimed",
-            () => sessions.Claim(layout, run) ?? "claimed");
+            async () => await sessions.ClaimAsync(layout, run, Token) ?? "claimed",
+            async () => await sessions.ClaimAsync(layout, run, Token) ?? "claimed");
 
         Assert.Single(results, result => result.Made == "claimed");
         Assert.StartsWith("run 'r1' is owned by a live engine (process ", Assert.Single(results, result => result.Refused is not null).Refused!.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>Runs two pieces of work on two threads of their own, let go at one moment, and says what each made or why it was refused.</summary>
-    private static IReadOnlyList<(string? Made, HarnessException? Refused)> AtOnce(Func<string> left, Func<string> right)
+    private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    /// <summary>
+    /// Runs two pieces of work on two threads of their own, let go at one moment, and says what each made or why it was
+    /// refused: each thread waits on its own work, so neither ever runs on the other's.
+    /// </summary>
+    private static IReadOnlyList<(string? Made, HarnessException? Refused)> AtOnce(Func<Task<string>> left, Func<Task<string>> right)
     {
         using var barrier = new Barrier(2);
         var results = new (string? Made, HarnessException? Refused)[2];
@@ -327,7 +332,7 @@ public sealed class FlowSessionsTests
 
             try
             {
-                results[at] = (works[at](), null);
+                results[at] = (works[at]().GetAwaiter().GetResult(), null);
             }
             catch (HarnessException ex)
             {

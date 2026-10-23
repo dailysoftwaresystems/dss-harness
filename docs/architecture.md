@@ -918,7 +918,10 @@ handed is measured with the rest (`AgentFold.HoldingAsync`) - the file whole, it
 and the hand-over writes over or removes only that (`AgentFold.HandAsync`, asked before each path): a file the agent's
 session wrote since - or made runnable, where the platform keeps such a bit - stops it there, exit 21, naming
 it, with what it handed recorded, for a run again to weigh anew - seed-agent's forced hand-over included; create-agent's,
-into a worktree just made, asks nothing. Neither hands anything while a move of the
+into a worktree just made, asks nothing. A making whose hand-over stopped, for this or anything else, says so in its seed
+(`SeedRecord.HandOverStopped`): the agent is not whole (`AgentService.MakingUnfinished`) - create-agent run again says
+so, never that it is already as asked, and fold-agent, refresh-agent and rebase-agent refuse it - until a seed-agent
+hands it the rest, which the engine's create-agent step run again does, forced. Neither hands anything while a move of the
 agent's base stands stopped part way, or its HEAD is off its base. Both say when the agent's base is not the main
 tree's HEAD, seed-agent --empty too. A path named otherwise than in UTF-8, committed or not, refuses any hand-over,
 named as git's quoting writes it: no file opens here by such a name.
@@ -1320,20 +1323,25 @@ folds and reviews its fix as a round's work items are.
 
 Every step that runs - every typed step but a `pause` step, which only asks (`StepType.Asks`) - may
 say `timeoutMinutes` (`WorkflowStepTypes.Running`): the longest one attempt of it may take, in whole
-minutes from 1 to 1,440 (`WorkflowStep.MostTimeoutMinutes`); a group, which runs nothing of its own,
+minutes from 1 to 1,440 (`WorkflowStep.MostTimeoutMinutes`) - absent, its type's own limit where the
+type says one (`WorkflowStepTypes.TimeLimitOf`), else none; a group, which runs nothing of its own,
 and a `pause` step are refused the key where the file is read, and a `ci-wait`'s is always more than
 its `waitMinutes` (absent, `WorkflowStep.DefaultWaitMinutes`). The coordinator counts it with the
 engine's clock from each start of the step - an attempt, or its run after a question of its own was
 answered (a timer armed at `Start`, disarmed as its runner answers) - and never while the step waits
-on a question; a reason step's handoff turn at a pause is bounded by the pause's `handoffSeconds`,
-not by it, and its run at the resume counts anew, while a machine step a pause leaves running keeps
-its count. Past it
+on a question; a reason step's handoff turn at a pause is bounded by the workflow's top-level
+`handoffSeconds`, not by it, and its run at the resume counts anew, while a machine step a pause
+leaves running keeps its count. Past it
 the step is stopped as a stop stops one - its runner cancelled, a reason step's minutes counted -
 and, once its runner has answered, ends `Failed` with 21 whatever it answered, its error saying
 `passed its timeoutMinutes (<n>)`: a machine or leg step runs again by the retry table's row for
 21, a reasoning step goes to its handlers and its `onFailure`. A runner that does not end within
 `PointOfNoReturn.SafePauseDrain` of that stop fails the step all the same, saying so; it goes to
-its handlers and its `onFailure` and is not retried. Both stops share one body (`StopWork`). A pause
+its handlers and its `onFailure` and is not retried - of a step of `others`, the target whose turn
+it was fails so, and the step goes on with the next. What that attempt claimed stays held until its
+runner answers (`FlowInstance.Lingering`), a stop's drained step's too, so nothing that conflicts with
+what the runner may still write starts meanwhile, a later attempt of the step itself among it. Both
+stops share one body (`StopWork`). A pause
 leaves a step its limit stopped to end as that stop ends it, with no handoff turn - a failure it
 owes while the run is paused waits for the next session - and a stop of the run records it stopped,
 as it records every step in flight.
@@ -1514,8 +1522,11 @@ run's directory and syncs the run's one codebase graph through `ICodebaseGraphSe
 (`OrchestrationRules.NextAgentName` over the run's agent directories, read under the orchestrator's lock by
 `IFlowRecords.NameAgent`, and every name its steps hold) for the model `WorkflowValidator.AgentModels` resolved, both
 written to `step.json` before `IAgentService.CreateAsync` is called; run again it reads the agent first and finishes or
-drops a making cut part way, and finishes the removal of one found closed (`FlowStepResult.NameSpent`), and `MakeAsync(noWorktree: true)` makes a read-only reason
-step's agent the same way. Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
+drops a making cut part way - one whose hand-over of the main tree's uncommitted state stopped part way
+(`SeedRecord.HandOverStopped`) seeded again with the rest - and finishes the removal of one found closed
+(`FlowStepResult.NameSpent`); a refusal it meets keeps its cause (`FlowStepResult.Failed`), so a main tree another run
+holds is waited out as a held lock is; and `IAgentService.CreateAsync(new AgentCreateRequest(..., NoWorktree: true))`
+makes a read-only reason step's agent the same way. Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`
 - a `ci-wait`'s commit where it names none - the one the run last pushed), the agent it works in (`FlowStepRun.WorksIn`)
@@ -1538,16 +1549,26 @@ checks print (`AnchorReports.BalanceFindings`, `AnchorCitationReports.Line`); `C
 statuses through `ICiJobSource` until one is red - classified by `ICiLegsService.ClassifyRunAsync`, its job's log read
 whole - every one has ended, none appeared, or its time is spent, with `CiConclusions` the one place that says what a
 conclusion came to. Every call of `gh` goes through `GhProcess`: the repository it answers for, never asking, ended at its
-limit (21). The fold family - `FoldStepRunner`, `DeleteAgentStepRunner`, `RefreshStepRunner` and `RebaseStepRunner`, over
+limit (21) - a step's read at `GhProcess.DefaultLimit`, never at the step's time limit, which bounds the attempt and ends
+a read in flight with it, so a `ci-wait` whose read stalls reads again at its next poll. The fold family - `FoldStepRunner`, `DeleteAgentStepRunner`, `RefreshStepRunner` and `RebaseStepRunner`, over
 `FoldFamilyStepRunner` - calls the verbs' typed use cases and reads their `AgentVerbFacts`, never an exit code:
 `FoldStandings.Read` says whether a dry run ends the step, asks or applies; `FlowQuestions.FoldQuestionOf` is the one rule
 of the question it raises - `foldConflicts` for conflicting merges alone, `foldOutside` for paths `FoldWithin` finds
 outside a fold's `within`, then each consent it lacks, a person's first - with what it is about (`FlowDryRun.Of`, over
 `AgentPlanned`), which the runner keeps in the step's `fold.json` (`FlowFoldRecord`) with where its answer will stand; a
 consent is given by name only where the dry run made again names exactly that, and one that no longer does is never
-passed. A fold's apply is held to what its dry run named (`FoldAgentRequest.Expected`, measured again under its hold and
-compared by `AgentPlanned.DifferenceFrom`), and `FoldLedger` writes its intent to `folds.json` before the verb is called
-and what it left after (`FlowFoldLedgerFile`), an intent a crash cut off settled from the tree by the next attempt. A
+passed. A fold's apply, and a deletion's, is held to what its dry run named (`FoldAgentRequest.Expected`,
+`DeleteAgentRequest.Expected`, measured again under its hold and compared by `AgentPlanned.DifferenceFrom`) - a
+refresh's and a rebase's request carry none - and which steps fold is one rule, `WorkflowStepTypes.Folds`, the
+definition's check and the runner alike. `FoldLedger` writes a fold's intent to `folds.json` before the verb is called
+and what it left after (`FlowFoldLedgerFile`) - applied, stopped, failed with what the tree holds read, or refused
+having read nothing - an intent a crash cut off settled from the tree by the next attempt; the step's `fold.json` takes
+what the apply answered before the ledger's settle, and an apply that threw goes on with its own exception, its intent
+left for the next attempt where reading the tree fails too. Whether a fold is committed is never written: it is read
+from the main tree (`FoldLedger.Uncommitted`, over git's status, read before the repository's section where another
+run's ledger changed a path), so a commit made by hand ends a stopped run's hold as the run's own does. A deletion run
+again whose agent its record says deleted - its ending cut off by a stop's drain, a time limit or a crash - is done
+(`FoldFamilyStepRunner.DoneAlreadyAsync`), its output what `fold.json` kept of the apply. A
 refresh or a rebase of `others` is one turn for each target (`FlowInstance.Targets`, `FlowTargetRecord`), in
 `OrchestrationRules.AgentNameOrder`, each claimed on its own tree (`FlowClaims.Of`), retried by its own count and ended
 on its own. The other step runners - the agents, the rest of the steps over the services the tool already has - are
@@ -1567,7 +1588,11 @@ it; `whenAddScope` names a step declared directly in a `forEach` group - the wor
 no wiring of their own and which no other step names; and the work-item group expands from the
 `items` of a `validate-plan` step it waits for. A step that names a create-agent step with `in` or
 `of` waits for it - through its own `dependsOn`, a group's around it, a handler's source or the step
-it is an alternative to (`FlowGraph.Waits`) - since it starts once the agent is made. A template is
+it is an alternative to, a step inside an alternative group among them (`FlowGraph.Waits`) - since it starts once the
+agent is made; where that step ended otherwise than done - skipped, passed over, failed under `always` or handled - the
+coordinator does not run it (`FlowNotRunCause.AgentNotMade`), saying the agent it works in was never made, and the agent
+it works on is kept on its instance (`FlowInstance.WorksIn`) from its start, so a deletion's record names the agent it
+deleted after its create-agent made another. A template is
 read by the configuration's one brace grammar (`FlowTemplate.Pieces`): `{{` and `}}` are braces,
 `${...}` is left as written, and a placeholder that names nothing is refused. `piece` is read only in the work-item group, and what only a
 prompt reads - `recommendations`, `question`, `status`, `update`, a skill - by no step's own key.

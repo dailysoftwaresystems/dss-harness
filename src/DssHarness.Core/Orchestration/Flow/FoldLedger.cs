@@ -1,4 +1,5 @@
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -65,8 +66,10 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
 
     /// <summary>
     /// Records what became of the fold <paramref name="id"/> once its verb answered <paramref name="exitCode"/>: applied
-    /// (0) or stopped part way (21), with what the main tree holds at each path now; refused, having written nothing, for
-    /// every other answer. Never cancelled: what was written is recorded whatever stops the step.
+    /// (0), stopped part way (21), or failed otherwise - after it may have written part of it - each with what the main
+    /// tree holds at each path now; refused, having written nothing, only for a refusal's code
+    /// (<see cref="HarnessExit.RefusesTheRun"/>), which no verb answers after writing. Never cancelled: what was written is
+    /// recorded whatever stops the step.
     /// </summary>
     /// <param name="layout">The run's orchestrator.</param>
     /// <param name="main">The main tree's root.</param>
@@ -81,7 +84,8 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
         {
             HarnessExit.Success => "applied",
             HarnessExit.Incomplete => "stopped",
-            _ => FlowFoldEntry.Refused,
+            _ when HarnessExit.RefusesTheRun(exitCode) => FlowFoldEntry.Refused,
+            _ => FlowFoldEntry.Failed,
         };
 
         var entry = store.ReadFolds(layout)?.Of(id) ?? throw new HarnessException(HarnessExit.InternalError, $"the run's ledger of its folds holds no fold '{id}' to settle");
@@ -147,12 +151,42 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
     }
 
     /// <summary>
-    /// The folds of <paramref name="ledger"/> that hold what no commit has taken yet (<see cref="FlowFoldEntry.Uncommitted"/>),
-    /// in the order intended: what makes a run that stopped unfinished, and what a <c>commit</c> step commits.
+    /// The folds of <paramref name="ledger"/> that hold what no commit has taken yet, in the order intended: what makes a
+    /// run that stopped unfinished. An intent nobody settled is one - what it wrote cannot be told - and so is a fold a
+    /// path of which it changed the main tree still holds otherwise than its HEAD does, as <paramref name="differing"/>
+    /// says; a path committed since, by a step of the run or by hand, or put back as HEAD holds it, holds nothing a commit
+    /// would take. Where the main tree was not read, every path a fold changed is counted, for what cannot be told is
+    /// never read as committed.
     /// </summary>
     /// <param name="ledger">The run's ledger; null where it holds none.</param>
-    public static IReadOnlyList<FlowFoldEntry> Uncommitted(FlowFoldLedgerFile? ledger)
-        => [.. (ledger?.Folds ?? []).Where(entry => entry.Uncommitted)];
+    /// <param name="differing">
+    /// Every path the main tree holds otherwise than its HEAD - modified, staged, deleted or untracked
+    /// (<see cref="DifferingAsync"/>); null where it was not read.
+    /// </param>
+    public static IReadOnlyList<FlowFoldEntry> Uncommitted(FlowFoldLedgerFile? ledger, IReadOnlySet<string>? differing)
+        => [.. (ledger?.Folds ?? []).Where(entry => entry.State == FlowFoldEntry.Intended
+            || entry.Paths.Any(path => path.Changed == true && (differing is null || differing.Contains(path.Path))))];
+
+    /// <summary>Whether <paramref name="ledger"/> holds a path a fold changed, whose commit only the main tree can say.</summary>
+    /// <param name="ledger">The run's ledger; null where it holds none.</param>
+    public static bool ChangedAny(FlowFoldLedgerFile? ledger)
+        => (ledger?.Folds ?? []).Any(entry => entry.Paths.Any(path => path.Changed == true));
+
+    /// <summary>
+    /// Every path the main tree at <paramref name="main"/> holds otherwise than its HEAD does, as git's status names it -
+    /// modified, staged, deleted, and each file of an untracked directory - for <see cref="Uncommitted"/> to hold a
+    /// fold's changed paths to. Nothing is written.
+    /// </summary>
+    /// <param name="git">Reads the main tree's status.</param>
+    /// <param name="main">The main tree's root.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    /// <exception cref="HarnessException">git could not read the status.</exception>
+    public static async Task<IReadOnlySet<string>> DifferingAsync(IGitClient git, string main, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(git);
+
+        return GitName.PathsOf((await git.ReadStatusAsync(main, cancellationToken).ConfigureAwait(false)).SelectMany(entry => entry.Paths));
+    }
 
     /// <summary>
     /// Every path a fold's plan writes in the main tree, with what it does to each: written, merged - the arm registry
