@@ -1264,23 +1264,29 @@ public sealed class ClaudeCodeClient(
 
         /// <summary>
         /// Waits for the launch to have ended, and says what its container could not reach at that end, where it could not
-        /// reach all it held: what the launch started may still run, which the step's stream and its result say.
+        /// reach all it held - however it ended, stopped among the ways: what the launch started may still run, which the
+        /// step's stream and its result say.
         /// </summary>
         private async Task EndedAsync(Task<ProcessResult> process)
         {
-            ProcessResult ended;
+            string? unreached;
 
             try
             {
-                ended = await process.ConfigureAwait(false);
+                unreached = (await process.ConfigureAwait(false)).Uncontained;
+            }
+            catch (ProcessStoppedException stopped)
+            {
+                unreached = stopped.Uncontained;
             }
             catch (Exception ex) when (ex is OperationCanceledException or ProgramStartException or IOException)
             {
-                // A stop, or a launch that never started: how it ended was seen to where it mattered.
+                // A launch that never started, or a stop that says nothing of its container: how it ended was seen to
+                // where it mattered.
                 return;
             }
 
-            if (ended.Uncontained is { } unreached)
+            if (unreached is not null)
             {
                 var said = Masked($"Claude Code's launch ended, and {unreached}");
                 totals.Uncontained.Add(said);

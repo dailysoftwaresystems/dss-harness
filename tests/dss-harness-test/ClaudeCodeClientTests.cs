@@ -2061,6 +2061,31 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal(Said, Assert.Single(sink.Of<Notice>()).Text);
     }
 
+    /// <summary>
+    /// What a stopped launch's container could not reach is said too: the stop leaves what the launch started as running
+    /// as an end does.
+    /// </summary>
+    [Fact]
+    public async Task WhatAStoppedLaunchsContainerCouldNotReach_IsSaid()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["hang"] = true, ["ignoreEof"] = true }]);
+        const string Unreached = "the process table could not be read to end its session (no table here): its group was ended, and what it started outside the group was not reached";
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnStarted)
+            {
+                _ = stop.CancelAsync();
+            }
+        });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => kit.Client(new StoppedUnreaching(kit.Runner, Unreached)).RunAsync(kit.Run(), sink, stop.Token).WaitAsync(TimeSpan.FromSeconds(60), Token));
+
+        Assert.Equal($"Claude Code's launch ended, and {Unreached}", Assert.Single(sink.Of<Notice>()).Text);
+    }
+
     /// <summary>The files under <paramref name="directory"/> that hold <paramref name="text"/>, read beside any writer.</summary>
     private static List<string> Holding(string directory, string text)
         => [.. Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).Where(file =>
@@ -2143,6 +2168,27 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
             return result;
         }
+    }
+
+    /// <summary>
+    /// The kit's process runner, but for a launch stopped while its container could not reach all it held: the stop says
+    /// so, and what, as the process runner's own stop does.
+    /// </summary>
+    private sealed class StoppedUnreaching(IProcessRunner inner, string unreached) : IProcessRunner
+    {
+        public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                return await inner.RunAsync(request, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new ProcessStoppedException(unreached, cancellationToken);
+            }
+        }
+
+        public string? FindExecutable(string command) => inner.FindExecutable(command);
     }
 
     /// <summary>
