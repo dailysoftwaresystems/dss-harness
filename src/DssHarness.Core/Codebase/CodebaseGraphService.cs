@@ -34,10 +34,10 @@ public interface ICodebaseGraphService
     Task<CodebaseGraphSynced> SyncAsync(CodebaseGraphSync request, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Brings the graph of one tree up to date by <paramref name="paths"/> alone, with no listing of the rest: git is asked
-    /// what it holds of those paths, as a listing would say it, and each is kept, read again or taken out - the paths a
-    /// fold wrote and deleted, as its verb reports them. <see langword="null"/> where that tree has no graph yet: there is
-    /// nothing to bring up to date.
+    /// Brings the graph of one tree up to date by <paramref name="paths"/> alone, with no listing of the rest, after its
+    /// reads either: git is asked what it holds of those paths, as a listing would say it, and each is kept, read again or
+    /// taken out - the paths a fold wrote and deleted, as its verb reports them. <see langword="null"/> where that tree has
+    /// no graph yet: there is nothing to bring up to date.
     /// </summary>
     /// <param name="request">What to sync, how the workflow shapes it, and why; never a rebuild.</param>
     /// <param name="paths">The paths, relative to the tree with forward separators.</param>
@@ -54,9 +54,11 @@ public interface ICodebaseGraphService
     /// tree's graph recorded - trusted only where that time is older than the tree's last whole sync, as git trusts an
     /// entry older than its index - a file either of them moved, whose time is not older, or that could not be read listed
     /// again by its path, as a sync by paths lists it, and one whose blob moved or that could not be read read again, its
-    /// view updated and linked again, on the spot, where any changed - so what the answer is made from is each file
-    /// as it is, and each extract it names is read before the check returns. A tree with no graph yet, or one this process
-    /// holds neither a link nor a link result of, is synced whole first; a link or a submodule stands as it was listed.
+    /// view updated and linked again, on the spot, where any changed - its head as its last sync recorded it, and dirty
+    /// where a file moved or went, since a check cannot tell a change committed since from one not - so what the answer is
+    /// made from is each file as it is, and each extract it names is read before the check returns. A tree with no graph
+    /// yet, or one this process holds neither a link nor a link result of, is synced whole first; a link or a submodule
+    /// stands as it was listed.
     /// </summary>
     /// <param name="request">The tree, how the workflow shapes it, and why; never a rebuild.</param>
     /// <param name="paths">The files the answer names, relative to the tree with forward separators.</param>
@@ -115,8 +117,8 @@ public sealed record CodebaseGraphWorktree
 /// <summary>What one sync of a graph did and left.</summary>
 /// <param name="Graph">The graph's directory.</param>
 /// <param name="View">The view synced: <c>base</c>, or the agent's name.</param>
-/// <param name="Commit">The commit the tree's HEAD named; <see langword="null"/> where it named none yet.</param>
-/// <param name="Dirty">Whether the tree held anything its HEAD does not.</param>
+/// <param name="Commit">The commit the tree's HEAD named, as its view records it (<see cref="CodeGraphManifest.Head"/>); <see langword="null"/> where it named none yet.</param>
+/// <param name="Dirty">Whether the tree held anything its HEAD does not, as its view records it (<see cref="CodeGraphManifest.Dirty"/>).</param>
 /// <param name="Files">How many files the view keeps.</param>
 /// <param name="Listed">How many files the tree listed that the view keeps, every one looked at; a sync by paths, how many it was given.</param>
 /// <param name="Hashed">How many files git was asked the blob of to know what changed; the listing of each file read, once the reads are done, is not counted.</param>
@@ -912,6 +914,12 @@ public sealed class CodebaseGraphService(
         private int _reused;
         private int _hashed;
 
+        /// <summary>
+        /// Whether this sync listed the tree whole: only then may the listing after its reads list the tree whole, so a sync
+        /// by paths, or a check, never has git hash a file it was not given.
+        /// </summary>
+        private bool _listedWhole;
+
         /// <summary>Where the tree's root itself leads, once a path was asked whether a link lies along it.</summary>
         private string? _reached;
 
@@ -1193,8 +1201,8 @@ public sealed class CodebaseGraphService(
         /// was never recorded, is not older than the tree's last whole sync (<see cref="Tree.Written"/>), or could not be read
         /// - listed again as a sync by its path lists it; one whose blob moved read again, one that is a link now kept as one,
         /// one gone taken out, and one that could not be read read again, taken where it reads now and changing nothing where
-        /// it still does not; the tree linked again and written where any changed, as dirty as git says those files are; then
-        /// each extract the files name read, before any sync can take it out.
+        /// it still does not; the tree linked again and written where any changed - its head as its last sync recorded it, and
+        /// dirty where a file moved or went; then each extract the files name read, before any sync can take it out.
         /// </summary>
         public async Task<(Tree Tree, CodebaseGraphChecked Checked)> CheckAsync(Tree current, IReadOnlyList<string> paths)
         {
@@ -1243,7 +1251,7 @@ public sealed class CodebaseGraphService(
             // The one question every listing asks, asked of these paths alone: the index's blob where git finds a file clean -
             // which is no hash of what it holds where git would clean it otherwise - the one git gives its working file where
             // it changed, a link where one lies along it, and none where it went.
-            var (listed, _, dirty) = await ListAsync([.. toList.Select(file => file.Path)], withHead: false).ConfigureAwait(false);
+            var (listed, _, _) = await ListAsync([.. toList.Select(file => file.Path)], withHead: false).ConfigureAwait(false);
             var unread = new List<(string Path, string Blob)>();
 
             foreach (var (path, standing) in toList)
@@ -1275,10 +1283,12 @@ public sealed class CodebaseGraphService(
                 .ToDictionary(file => file.Path, file => file.Entry, StringComparer.Ordinal);
             var tree = current;
 
-            // The tree is as dirty as git says the files it was asked of are: a file read again, its blob as it was, is no change of it.
+            // The tree keeps the head its last sync recorded, which a check does not ask: a file that moved or went may hold
+            // what that head does not - committed since or not, the check cannot tell - so the tree is recorded dirty, as a
+            // sync by paths records it. A file read again, its blob as it was, is no change of it.
             if (moved.Count > 0 || reread.Count > 0)
             {
-                tree = await ApplyAsync(current, moved, current.Head, dirty, moved.Count + reread.Count, reread).ConfigureAwait(false);
+                tree = await ApplyAsync(current, moved, current.Head, dirty: moved.Count > 0, moved.Count + reread.Count, reread).ConfigureAwait(false);
             }
 
             // The extracts the answer is made from are read while this check is a sync under way, which no sweep comes
@@ -1501,6 +1511,7 @@ public sealed class CodebaseGraphService(
             }
 
             _hashed += listing.Hashed;
+            _listedWhole |= paths is null;
             return (listing.Files, listing.Head, listing.Dirty);
         }
 
@@ -1668,8 +1679,11 @@ public sealed class CodebaseGraphService(
         private const string ChangedWhileRead = "it changed while it was read";
 
         /// <summary>
-        /// How many files read past which the listing after the reads lists the tree whole: by their paths, each command
-        /// line's worth of them has git read the whole index, so past two of them one listing of the tree costs less.
+        /// How many files read past which the listing after the reads lists the tree whole, where the sync listed it whole:
+        /// by their paths, git reads the whole index once for each command line of them - one holds at most
+        /// <see cref="GitClient.CommandLineBatchSize"/> paths, fewer where they are long - so past this many it reads it at
+        /// least three times, and one listing of the tree costs less. A sync that listed the tree whole had git hash every file
+        /// that listing hashes already; one that did not lists its reads by their paths, however many.
         /// </summary>
         private const int ListedWholePast = 2 * GitClient.CommandLineBatchSize;
 
@@ -1873,7 +1887,8 @@ public sealed class CodebaseGraphService(
         /// <summary>
         /// Reads each of <paramref name="files"/> and gives it to its implementation, in parallel on one of every
         /// <see cref="ReadShare"/> of the machine's processors; then lists every file whose bytes decided its entry once more,
-        /// as a sync would, and keeps what was made of each only where the listing still gives it the blob it was read under,
+        /// as a sync would - by their paths, or past <see cref="ListedWholePast"/> of them the tree whole where this sync listed
+        /// it whole - and keeps what was made of each only where the listing still gives it the blob it was read under,
         /// and the file, after that listing, still stands as its read saw it - an extract is never stored under a blob its
         /// bytes were not. A file whose size or time moved while it was read or after, or whose blob moved or that went by the
         /// listing after, is listed unreadable, which the next sync reads again.
@@ -1903,9 +1918,9 @@ public sealed class CodebaseGraphService(
 
             if (looked.Count > 0)
             {
-                // By their paths, every command line's worth of them has git read the whole index once: past a few, the tree
-                // is listed once, whole, and each looked up in it.
-                var again = (await ListingOf(looked.Count > ListedWholePast ? null : [.. looked.Select(file => file.Path)], withHead: false).ConfigureAwait(false)).Files;
+                // By their paths, every command line of them has git read the whole index once: past a few, a sync that listed
+                // the tree whole lists it once more, whole, and looks each up in it; any other asks git of nothing it was not given.
+                var again = (await ListingOf(_listedWhole && looked.Count > ListedWholePast ? null : [.. looked.Select(file => file.Path)], withHead: false).ConfigureAwait(false)).Files;
                 moved.UnionWith(looked.Where(file => !again.TryGetValue(file.Path, out var now) || now.Link || now.Submodule || now.Blob != file.Blob).Select(file => file.Path));
             }
 

@@ -1940,9 +1940,10 @@ untracked is not entered; a file about to be hashed - changed, untracked or not 
 that a link lies along (`LinkPaths.LeadsElsewhere`, a directory junction git walks into among them), is listed a link
 and neither hashed nor read, by the one look every listing takes. Each file whose bytes decided its entry is listed
 once more when the reads are done, as a sync lists it (`ListingOf`, nothing said or counted, no HEAD asked; by its
-path, or - past two command lines' worth of files, `ListedWholePast`, since each has git read the whole index - by one
-listing of the tree): one the listing no longer gives the blob it was read under, or that went, is unreadable and
-keeps nothing. Every file whose size or bytes decided its entry, one too large among them, is then held to how its read
+path, or - where the sync listed the tree whole and read more than `ListedWholePast` files, which by their paths take at
+least three command lines, each having git read the whole index - by one listing of the tree, so a sync by paths or a
+check never has git hash a file it was not given): one the listing no longer gives the blob it was read under, or that
+went, is unreadable and keeps nothing. Every file whose size or bytes decided its entry, one too large among them, is then held to how its read
 saw it stand: one whose size or time moved while it was read, or by the time that listing is done - truncated and
 written again whole, grown past `maxFileBytes` and back, so git lists it clean again under the blob it was read under
 - keeps nothing either; so an extract is never stored under a blob its bytes were not. The listing is asked
@@ -1990,15 +1991,16 @@ this process holds of it stands on a manifest let go. A view's first sync makes 
 before it takes its own gate, and a sync that waited for the base's gate for that makes none where another made it
 meanwhile: no gate is held while another view's is waited for, so no two syncs wait on each other. `SyncPathsAsync`
 brings a tree up to date by the paths given alone, git asked of those paths (`--literal-pathspecs`), with no listing of
-the rest; `CheckAsync` is the check an answer of the graph makes of the files it names before it is given - no command
+the rest, after its reads either; `CheckAsync` is the check an answer of the graph makes of the files it names before it is given - no command
 answers from the graph yet - a `stat` against what the view recorded, or against what an earlier check found of a file
 whose time alone moved, trusted only where that time is older than the tree's last whole sync's record (`Tree.Written`),
 as git trusts an index entry older than its index; a file either moved, whose time is not older, or that could not be
 read listed again by its path, as a sync by paths lists it - so it is held to the blob a listing gives it, never to a
 hash git's listing would not give - and one whose blob moved read again, one that is a link now kept as one, and one
 that could not be read read again, taken where it reads now and changing nothing where it still does not; its tree,
-where any of them changed, linked again and written - as dirty as git says those files are - and each extract the
-answer names read, before the
+where any of them changed, linked again and written - its head as its last sync recorded it, since a check does not ask
+it, and dirty where a file moved or went, since a check cannot tell a change committed since from one not, as a sync by
+paths records it; a whole sync alone records the tree clean again - and each extract the answer names read, before the
 answer is made - no sweep comes between - and a tree this process holds neither a link nor a link result of synced
 first, so the answer is its own link's; `DropViewAsync` takes a view out. What a process linked of each tree is held in memory,
 with the base's link result, and the next sync links again from it (`Relink`) - or keeps it, unread and unwritten,
