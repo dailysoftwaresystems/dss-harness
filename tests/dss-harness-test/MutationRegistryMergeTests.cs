@@ -1391,6 +1391,32 @@ public sealed class MutationRegistryMergeTests
     }
 
     /// <summary>
+    /// A heading the agent added above two rows of arms both hold stands above each, where the main tree wrote no heading
+    /// of those lines over them - none at all, or one both held there and it left as it was: a heading the agent itself
+    /// wrote, or one the main tree did not change, is no heading the main tree's joins. So a merge in which the main tree
+    /// changed nothing is the agent's text, byte for byte (the second was dropped without a word, the first taken for the
+    /// main tree's, being in a place of the main tree's).
+    /// </summary>
+    [Fact]
+    public void AHeadingTheAgentAddedAboveTwoRows_StandsAboveEach_WhereTheMainTreeWroteNoneOfItsLinesOverThem()
+    {
+        string[] one = [A("arm1"), C("arm1")];
+        string[] three = [A("arm3"), C("arm3")];
+        var bare = Text([.. one, "", A("arm2"), C("arm2"), "", .. three, "", A("arm4"), C("arm4")]);
+        var flaky = Text([.. one, "", "# flaky", "", A("arm2"), C("arm2"), "", .. three, "", "# flaky", "", A("arm4"), C("arm4")]);
+        var held = Text([.. one, "", "# flaky", "", A("arm2"), C("arm2"), "", .. three, "", A("arm4"), C("arm4")]);
+        var heldReworded = Text([.. one, "", "# flaky", "", A("arm2", "reworded"), C("arm2"), "", .. three, "", A("arm4"), C("arm4")]);
+
+        var fromNone = Assert.IsType<RegistryMerge.Merged>(Merge(bare, bare, flaky));
+        var fromOneHeld = Assert.IsType<RegistryMerge.Merged>(Merge(held, held, flaky));
+        var fromOneHeldChanged = Assert.IsType<RegistryMerge.Merged>(Merge(held, heldReworded, flaky));
+
+        Assert.Equal(Bytes(flaky), fromNone.Bytes);
+        Assert.Equal(Bytes(flaky), fromOneHeld.Bytes);
+        Assert.Equal(flaky.Replace(A("arm2"), A("arm2", "reworded"), StringComparison.Ordinal), fromOneHeldChanged.Text);
+    }
+
+    /// <summary>
     /// Where new arms take the header from an old first arm on one side, that arm is not changed by the taking: an arm
     /// whose rows both sides reworded alike is no conflict, and the header the new arms took stands once (the same
     /// defect's second face: a false conflict on an arm whose lines were byte-equal on both sides) - above the new arm, as

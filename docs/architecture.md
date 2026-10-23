@@ -4766,10 +4766,13 @@ them where a heading stood there. An arm taken from the agent in place of the ma
 the main tree's segments of it, one for one, in their places: where the agent has more, the rest
 follow the last, and where it has fewer, the main tree's remaining places go. A heading only the
 agent added above a row the merged text already stands under a heading of the same lines - the
-nearest written above it, with only rows between, in a place of the main tree's - is that one
-heading, written once, whether both held it before or both renamed or added it alike, each above a
-new first arm of its own; one above a row the merged text stands anywhere else stands where the
-agent stood it, though the main tree added one of the same lines elsewhere. A heading taken for a
+nearest written above it, with only rows between, one the main tree wrote where it stands, never
+one both held there - is that one heading, written once, whether both held it elsewhere before or
+both renamed or added it alike, each above a new first arm of its own. Any other stands where the
+agent stood it: above a row the merged text stands anywhere else, though the main tree added one of
+the same lines elsewhere, and under a heading of the same lines the agent wrote or both held, which
+the agent's text then holds twice - so a merge in which the main tree changed nothing still gives
+the agent's headings as it wrote them. A heading taken for a
 place no segment of the merged text stands in - its
 row dropped by one side, the heading kept or changed by the other - would be read back as part of
 what stands below it, and is a conflict of its own (`ArmConflictKind.HeadsNoArm`). A segment of an

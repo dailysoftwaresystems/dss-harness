@@ -407,11 +407,13 @@ public abstract record RegistryMerge
 /// it has fewer, the main tree's remaining places go. An arm only the agent has stands after the nearest segment above it
 /// in the agent's text that the result holds, and after what the main tree alone holds there - so two sides adding at one
 /// place come out as the main tree's addition, then the agent's. A heading only the agent added above a row that the
-/// result already stands under a heading of the same lines - the nearest written above it, with only rows between, in a
-/// place of the main tree's - is that heading, whether both held it before or both renamed or added it alike, each above
-/// a new first arm of its own: it is not written again. One above a row the result stands anywhere else stands where the
-/// agent stood it, though the main tree added one of the same lines elsewhere. A heading taken for a place no segment of
-/// the result stands in is a conflict of its own (<see cref="ArmConflictKind.HeadsNoArm"/>). The segment that comes to
+/// result already stands under a heading of the same lines - the nearest written above it, with only rows between, one
+/// the main tree wrote where it stands, never one both held there - is that heading, whether both held it elsewhere
+/// before or both renamed or added it alike, each above a new first arm of its own: it is not written again. Any other
+/// stands where the agent stood it: above a row the result stands anywhere else, though the main tree added one of the
+/// same lines elsewhere, and under a heading of the same lines the agent wrote or both held, which the agent's text then
+/// holds twice. A heading taken for a place no segment of the result stands in is a conflict of its own
+/// (<see cref="ArmConflictKind.HeadsNoArm"/>). The segment that comes to
 /// stand first is written without the blank lines that open it. Each of the main tree's lines is written as the main tree
 /// holds it, each of the agent's with the ending of the main tree's first line, behind a byte order mark where the main
 /// tree's text has one and ending with a line ending where it does.
@@ -533,7 +535,7 @@ public static class MutationRegistryMerge
             return new RegistryMerge.Conflicted(conflicts, mainCounts, agentCounts);
         }
 
-        var placing = new Placing(mains, agents, arms, headings);
+        var placing = new Placing(held, mains, agents, arms, headings);
         var placed = placing.Placed();
 
         if (placing.Unheaded() is { } unheaded)
@@ -777,11 +779,12 @@ public static class MutationRegistryMerge
     /// the heading taken for its place, or what parts it from what stands above it where none is, and the first of them
     /// all without the blank lines that open it.
     /// </summary>
+    /// <param name="held">What both held, or <see langword="null"/> where neither held a registry.</param>
     /// <param name="mains">The main tree's text.</param>
     /// <param name="agents">The agent's text.</param>
     /// <param name="arms">Which side each arm is taken from.</param>
     /// <param name="headings">Which side the heading of each place is taken from.</param>
-    private sealed class Placing(Reading mains, Reading agents, Dictionary<string, Taken> arms, Dictionary<string, Taken> headings)
+    private sealed class Placing(Reading? held, Reading mains, Reading agents, Dictionary<string, Taken> arms, Dictionary<string, Taken> headings)
     {
         /// <summary>
         /// The segments placed, in order, each by the segment whose own lines it writes, the segment whose place it is written
@@ -875,11 +878,13 @@ public static class MutationRegistryMerge
         /// <summary>
         /// Takes back each heading only the agent added - at a place where the main tree holds none - that the result
         /// already holds over the row under it: where the nearest heading written above that row, with only rows between, is
-        /// one written in a place of the main tree's, of the same lines. The two sides headed one section, each above a new
-        /// first arm of its own, and the one heading is written once, where the main tree stands it. Whether both held it
-        /// before is no part of it: one both renamed or added alike is as much one heading as one both held. A heading the
-        /// agent added above a row the result stands anywhere else - under another heading or none, though the main tree
-        /// added one of the same lines elsewhere - stands where the agent stood it, as any heading added at a place does.
+        /// the main tree's own, of the same lines, which the main tree wrote where it stands - a heading both held there is
+        /// none of the main tree's writing. The two sides headed one section, each above a new first arm of its own, and the
+        /// one heading is written once, where the main tree stands it; whether both held it elsewhere before is no part of
+        /// it, and one both renamed or added alike is as much one heading as one both held. Any other stands where the
+        /// agent stood it, as any heading added at a place does: above a row the result stands under another heading or
+        /// none, though the main tree added one of the same lines elsewhere; and where the nearest heading above is one
+        /// the agent wrote, or one both held there, it is the agent's text that holds the heading twice.
         /// </summary>
         private void Join()
         {
@@ -897,8 +902,11 @@ public static class MutationRegistryMerge
 
                 if (headings[place] == Taken.Agent
                     && mains.HeadedAt(place) is null
-                    && over is { Side: MergeSide.Main } held
-                    && Same(Heading(Place(held)), Heading(place)))
+                    && over is { } above
+                    && headings[Place(above)] == Taken.Main
+                    && mains.HeadedAt(Place(above)) is { } theirs
+                    && !Same(held?.HeadedAt(Place(above))?.Heading, theirs.Heading)
+                    && Same(theirs.Heading, Heading(place)))
                 {
                     _written.Remove(place);
                     _joined.Add(place);
