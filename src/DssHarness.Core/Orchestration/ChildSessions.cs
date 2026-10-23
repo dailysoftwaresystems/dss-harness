@@ -32,7 +32,10 @@ public sealed record ChildSessionRecord
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Group { get; init; }
 
-    /// <summary>What tells the child from a later process given its id (<see cref="IProcessIdentity.StampOf"/>).</summary>
+    /// <summary>
+    /// What tells the child from a later process given its id (<see cref="IProcessIdentity.StampOf"/>): as the step that
+    /// placed it read its own start, which the program it became keeps.
+    /// </summary>
     public required string Started { get; init; }
 
     /// <summary>The program the child runs, by its resolved path.</summary>
@@ -203,25 +206,40 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
             $"{step} left {LeftSessions.Noun(session.Group)} {session.Session} ('{session.Program}') running, and the process that started it (pid {session.Owner}) has gone; it was ended{(session.Unreached is { } unreached ? $", and {unreached}" : string.Empty)}");
     }
 
-    /// <summary>Writes the record of a session or a group placed in the step at <paramref name="stepDirectory"/>, whole.</summary>
-    /// <returns>The record's path; null where the leader's start cannot be read, since it has then ended and no record of it could ever be matched.</returns>
-    private string? Write(string stepDirectory, int leader, string program, bool group)
+    /// <summary>
+    /// Writes the record of a session or a group placed in the step at <paramref name="stepDirectory"/>, whole: under the
+    /// start the step that placed its leader said, or where it said none, the leader's own as it is read now.
+    /// </summary>
+    /// <returns>The record's path.</returns>
+    /// <exception cref="IOException">
+    /// It could not be written - the leader's start among what could not be read, since a record that cannot tell its
+    /// leader from a later process given its id could never be acted on, and a group left with no record is never swept.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">The record would not read back: a defect of what wrote it.</exception>
+    private string Write(string stepDirectory, int leader, string? started, string program, bool group)
     {
-        if (_identity.StampOf(leader) is not { Length: > 0 } started)
+        var stamp = started is { Length: > 0 } said ? said : _identity.StampOf(leader);
+        var file = OrchestratorLayout.ChildFile(stepDirectory, leader);
+
+        if (stamp is not { Length: > 0 })
         {
-            return null;
+            throw new IOException(
+                string.Create(CultureInfo.InvariantCulture, $"the start of process {leader}, which leads it, could not be read, so nothing could tell it from a later process given its id"));
         }
 
         var record = new ChildSessionRecord
         {
             Session = leader,
             Group = group,
-            Started = started,
+            Started = stamp,
             Program = program,
             Owner = new ChildSessionOwner(_identity.CurrentMachine, _identity.CurrentId, _identity.Current),
         };
 
-        var file = OrchestratorLayout.ChildFile(stepDirectory, leader);
+        if (record.Problem() is { } problem)
+        {
+            throw new InvalidOperationException($"Refusing to write '{file}', which would not read back: {problem}.");
+        }
 
         _fileSystem.CreateDirectory(OrchestratorLayout.ChildrenDirectory(stepDirectory));
         JsonStateFile.Write(_fileSystem, file, record);
@@ -324,10 +342,10 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
     {
         private string? _file;
 
-        public void Placed(int leader, string program, bool group)
+        public void Placed(int leader, string? started, string program, bool group)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(program);
-            _file = sessions.Write(stepDirectory, leader, program, group);
+            _file = sessions.Write(stepDirectory, leader, started, program, group);
         }
 
         public void Ended()

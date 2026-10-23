@@ -84,14 +84,13 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// </summary>
     private readonly Func<string, SafeWaitHandle> _makeJob = Containment.CreateJob;
 
-    /// <summary>What makes <see cref="_lifetime"/> once, whichever bound children start together.</summary>
-    private readonly Lock _lifetimeGate = new();
-
     /// <summary>
-    /// The job this runner's bound children are held in on Windows, by its name and its one handle, once the first of them
-    /// has started: kept for as long as the runner, and closed by nothing else.
+    /// The job this runner's bound children are held in on Windows: the process's own, held for its whole life whichever
+    /// runner made it - every operation is given a runner of its own, and a job held by each would be one more job and one
+    /// more handle for every operation, closed, ending what its children left running, whenever that runner was
+    /// collected - or one of a test's runner's own, made by its maker.
     /// </summary>
-    private (string Name, SafeWaitHandle Job)? _lifetime;
+    private readonly LifetimeJob _lifetime = LifetimeJob.Process;
 
     /// <summary>The variable that names where the compiler's program-database server listens.</summary>
     internal const string ProgramDatabaseEndpoint = "_MSPDBSRV_ENDPOINT_";
@@ -109,7 +108,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// <param name="filePermissions">How the system says a file may be run.</param>
     /// <param name="containThrough">The tool that starts a contained child, as the public constructor takes it.</param>
     /// <param name="processTable">The table a contained child's session is read from; <see langword="null"/> for the machine's own.</param>
-    /// <param name="makeJob">What makes a contained child's job on Windows, by its name; <see langword="null"/> for the system's own.</param>
+    /// <param name="makeJob">
+    /// What makes a contained child's job on Windows, by its name, and the job this runner's bound children are held in -
+    /// the runner's own, then, never the process's; <see langword="null"/> for the system's own, and the process's job.
+    /// </param>
     internal ProcessRunner(
         IHostPlatform platform,
         IFilePermissions filePermissions,
@@ -120,6 +122,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     {
         _processTable = processTable;
         _makeJob = makeJob ?? Containment.CreateJob;
+        _lifetime = makeJob is null ? LifetimeJob.Process : new LifetimeJob();
     }
 
     /// <summary>
@@ -248,9 +251,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         var jobName = request.Contained && windows ? JobName() : null;
         using var job = jobName is null ? null : MadeJob(jobName, request.FileName, resolved);
 
-        // The job a bound child joins: the runner's own, made at its first bound child and held for as long as the
-        // runner lives, never terminated and never closed by a child's end.
-        var joined = jobName ?? (bound ? LifetimeJob(request.FileName, resolved) : null);
+        // The job a bound child joins: the process's own, made at its first bound child and held for as long as the
+        // process lives, never terminated and never closed by a child's end.
+        var joined = jobName ?? (bound ? _lifetime.Name(name => MadeJob(name, request.FileName, resolved)) : null);
 
         if (joined is not null)
         {
@@ -352,6 +355,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         var stopped = false;
         var placed = false;
+        string? started = null;
         string? uncontained = null;
 
         if (status is not null)
@@ -366,6 +370,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 }
 
                 placed = true;
+                started = heard.Started;
             }
             catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
             {
@@ -385,7 +390,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         }
 
         var recorded = placed && !windows
-            ? await RecordedAsync(request, request.SessionRecord ?? (request.Bound ? scoped?.Record() : null), grouped, resolved, job, process).ConfigureAwait(false)
+            ? await RecordedAsync(request, request.SessionRecord ?? (request.Bound ? scoped?.Record() : null), grouped, resolved, started, job, process).ConfigureAwait(false)
             : null;
 
         if (placed)
@@ -479,11 +484,11 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         if (stopped && cancellationToken.IsCancellationRequested)
         {
-            // What the stop could not reach is said where the stop is: a caller that gave up is
-            // handed no result to read it from.
+            // What the stop could not reach is carried by the stop: a caller that gave up is handed
+            // no result to read it from.
             throw uncontained is null
-                ? new OperationCanceledException(cancellationToken)
-                : new OperationCanceledException($"The run was stopped, and {uncontained}.", cancellationToken);
+                ? new ProcessStoppedException(cancellationToken)
+                : new ProcessStoppedException(uncontained, cancellationToken);
         }
 
         return new ProcessResult(
@@ -567,11 +572,19 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// <param name="record">Its record: its request's, or its operation's scope's; <see langword="null"/> where it has none.</param>
     /// <param name="grouped">Whether the child leads a group of its own, apart from the terminal.</param>
     /// <param name="resolved">The program the child runs.</param>
+    /// <param name="started">The child's start, as the step that placed it said it; <see langword="null"/> where it said none.</param>
     /// <param name="job">The job holding the child, or <see langword="null"/>.</param>
     /// <param name="process">The child, which leads its session or its group under its own id.</param>
     /// <returns>The record written, to be taken back once the child has ended; <see langword="null"/> where none was.</returns>
     /// <exception cref="ProgramStartException">The record could not be written: the child was ended, and never said to have started.</exception>
-    private async Task<IContainedSessionRecord?> RecordedAsync(ProcessRequest request, IContainedSessionRecord? record, bool grouped, string resolved, SafeWaitHandle? job, Process process)
+    private async Task<IContainedSessionRecord?> RecordedAsync(
+        ProcessRequest request,
+        IContainedSessionRecord? record,
+        bool grouped,
+        string resolved,
+        string? started,
+        SafeWaitHandle? job,
+        Process process)
     {
         if (!(request.Contained || grouped) || record is null)
         {
@@ -580,20 +593,25 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         try
         {
-            record.Placed(process.Id, resolved, group: grouped);
+            record.Placed(process.Id, started, resolved, group: grouped);
             return record;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
             // A child no record names is one a killed tool would leave running unseen: it is not run, stopped as a stop
-            // stops it.
+            // stops it, whatever kept the record from being written.
             await StopAsync(request, grouped, job, process).ConfigureAwait(false);
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
 
-            throw new ProgramStartException(
-                request.FileName,
-                $"'{resolved}' could not be started: its {LeftSessions.Noun(grouped)} could not be recorded: {ex.Message}",
-                ex);
+            if (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new ProgramStartException(
+                    request.FileName,
+                    $"'{resolved}' could not be started: its {LeftSessions.Noun(grouped)} could not be recorded: {ex.Message}",
+                    ex);
+            }
+
+            throw;
         }
     }
 
@@ -851,38 +869,23 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             ? (given, [])
             : DetachedProcessLauncher.Self();
 
+    /// <summary>What every job object this tool makes is named with, before what makes the name its own.</summary>
+    internal const string JobPrefix = "dssharness-contain-";
+
     /// <summary>A job object's name, unique to this contained child of this process.</summary>
     private static string JobName()
-        => $"dssharness-contain-{Guid.NewGuid():N}";
-
-    /// <summary>
-    /// The name of the job this runner's bound children are held in on Windows, made at the first of them: held by this
-    /// runner, never terminated and never closed but by the runner's own end - the process's, for the one the container
-    /// builds - so its members end then, whatever ends it. A job that could not be made is the start's failure, and the
-    /// next bound child asks for it again.
-    /// </summary>
-    private string LifetimeJob(string requested, string resolved)
-    {
-        lock (_lifetimeGate)
-        {
-            if (_lifetime is { } held)
-            {
-                return held.Name;
-            }
-
-            var name = JobName();
-            _lifetime = (name, MadeJob(name, requested, resolved));
-
-            return name;
-        }
-    }
+        => $"{JobPrefix}{Guid.NewGuid():N}";
 
     /// <summary>
     /// Gives a child held in a job on Windows build servers of its own, where its environment names none: the compiler's
     /// program-database server listens at an endpoint named for the job, and the build engine keeps no node for a later
     /// build. A server a member starts is the job's, and ends with it; shared with another process's builds - the
     /// compiler's server is one for all of a user's builds unless told otherwise, and the build engine's nodes wait to be
-    /// reused by whichever build comes next - it would be taken from them mid-build as this job ended.
+    /// reused by whichever build comes next - it would be taken from them mid-build as this job ended. An endpoint named
+    /// for a job of this tool's own is not the user's: it is one this tool, started by a bound phase of another run of it,
+    /// inherited from that run's job, and a server started there under this child's job would end with this job while
+    /// that run's builds still used it - so the child is given its own in its place. Any other endpoint, as anything else
+    /// its environment names, is kept as the user set it.
     /// </summary>
     /// <param name="environment">The child's environment, as its request left it.</param>
     /// <param name="job">The job the child is held in.</param>
@@ -890,9 +893,49 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     {
         foreach (var (name, value) in new[] { (ProgramDatabaseEndpoint, job), (NodeReuseOff, "1") })
         {
-            if (!environment.Keys.Any(existing => string.Equals(existing, name, StringComparison.OrdinalIgnoreCase)))
+            var named = environment.Keys.FirstOrDefault(existing => string.Equals(existing, name, StringComparison.OrdinalIgnoreCase));
+
+            if (named is null)
             {
                 environment[name] = value;
+            }
+            else if (name == ProgramDatabaseEndpoint && environment[named] is { } inherited && inherited.StartsWith(JobPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                environment[named] = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The job bound children are held in on Windows, made at the first of them, by its name and its one handle: never
+    /// terminated and never closed but by the end of what holds it - the process's own, which <see cref="Process"/> holds
+    /// for the process's whole life, so its members end then, whatever ends it. A job that could not be made is the
+    /// start's failure, and the next bound child asks for it again.
+    /// </summary>
+    private sealed class LifetimeJob
+    {
+        private readonly Lock _gate = new();
+
+        private (string Name, SafeWaitHandle Job)? _held;
+
+        /// <summary>The process's own: every runner the container builds, for whichever operation, holds its bound children in it.</summary>
+        public static LifetimeJob Process { get; } = new();
+
+        /// <summary>The job's name, made first by <paramref name="make"/> where none has been.</summary>
+        /// <param name="make">Makes the job by the name given it, raising as a start's failure where it cannot.</param>
+        public string Name(Func<string, SafeWaitHandle> make)
+        {
+            lock (_gate)
+            {
+                if (_held is { } held)
+                {
+                    return held.Name;
+                }
+
+                var name = JobName();
+                _held = (name, make(name));
+
+                return name;
             }
         }
     }

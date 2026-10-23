@@ -193,7 +193,7 @@ public sealed class CiWaitStepRunner(
         // only where they are green; a red one is red all the same.
         var accepted = run.Answers.Count > 0 && run.Answers[^1].Answer == "accept";
         var step = run.Step;
-        var request = new CiChecksRequest(commit)
+        var request = new CiChecksRequest(commit, Type)
         {
             Once = accepted,
             Appear = TimeSpan.FromSeconds(step.AppearSeconds ?? CiChecksRequest.DefaultAppearSeconds),

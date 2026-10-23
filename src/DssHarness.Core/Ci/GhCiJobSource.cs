@@ -8,7 +8,7 @@ namespace DssHarness.Core.Ci;
 
 /// <summary>Reads CI run and job metadata, and the checks of a commit, for the repository a command is standing in.</summary>
 /// <remarks>
-/// Every read is given <c>limit</c>, the longest it may take: <see cref="GhProcess.DefaultLimit"/> where null, and a
+/// Every read is given <c>readLimit</c>, the longest it may take: <see cref="GhProcess.DefaultLimit"/> where null, and a
 /// read past it is not done (21), which a caller may ask again.
 /// </remarks>
 public interface ICiJobSource

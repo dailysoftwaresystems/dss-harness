@@ -623,7 +623,7 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     /// Renames <paramref name="source"/> over <paramref name="destination"/> once: on Windows as POSIX does, so a file a
     /// reader holds open is replaced all the same and the reader goes on reading the old one, as on every other system -
     /// a record is streamed while it is read, and a writer may replace it meanwhile - and Windows' own way where the volume
-    /// cannot (<see cref="Win32Files.TryReplace"/>).
+    /// cannot (<see cref="Win32Files.TryReplace(string, string)"/>).
     /// </summary>
     private static void Replace(string source, string destination)
     {

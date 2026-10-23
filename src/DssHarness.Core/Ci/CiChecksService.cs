@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
+using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 
@@ -6,7 +8,8 @@ namespace DssHarness.Core.Ci;
 
 /// <summary>What a wait for the checks of a commit is asked.</summary>
 /// <param name="Commit">The commit whose checks it reads.</param>
-public sealed record CiChecksRequest(string Commit)
+/// <param name="Command">The command or step waiting, which the lines the wait says name.</param>
+public sealed record CiChecksRequest(string Commit, string Command)
 {
     /// <summary>How long a wait waits for the first check to appear where it is told not: three minutes.</summary>
     public const int DefaultAppearSeconds = 180;
@@ -38,7 +41,7 @@ public sealed record CiChecksRequest(string Commit)
     /// <summary>
     /// Whether it reads the checks once, waiting for none to appear or end - what was reached taken as it stands, as a
     /// person's <c>accept</c> asks - and answers what they are then, each settled on that read alone. A read that fails is
-    /// read again at the next poll as in any wait, up to <see cref="CiChecksService.FailedReadsInARow"/> running.
+    /// said and read again at the next poll as in any wait, up to <see cref="CiChecksService.FailedReadsInARow"/> running.
     /// </summary>
     public bool Once { get; init; }
 
@@ -153,11 +156,13 @@ public interface ICiChecksService
 /// <param name="contextLoader">Finds the repository.</param>
 /// <param name="jobSource">Reads the forge.</param>
 /// <param name="legs">Classifies the legs of the run a red check is a job of, as <c>check-ci-legs</c> does.</param>
+/// <param name="output">Says each read that failed and is read again.</param>
 /// <param name="clock">Times the wait.</param>
 public sealed class CiChecksService(
     IHarnessContextLoader contextLoader,
     ICiJobSource jobSource,
     ICiLegsService legs,
+    IHarnessOutput output,
     TimeProvider clock) : ICiChecksService
 {
     /// <summary>How many reads running may fail before the wait ends with the last one's failure: three.</summary>
@@ -188,7 +193,8 @@ public sealed class CiChecksService(
             {
                 // A read the forge failed - a server error, a rate limit, a network that dropped - says nothing of the
                 // checks, and the next may answer: an hour's wait is never ended by one, nor a person's accept. It ends
-                // with the failure only where reads failed so many times running, or the time of a wait is spent.
+                // with the failure only where reads failed so many times running, or the time of a wait is spent; each
+                // one read again is said, as it is met.
                 var elapsed = clock.GetElapsedTime(started);
 
                 if (++failed >= FailedReadsInARow || !request.Once && elapsed >= request.Wait)
@@ -196,7 +202,15 @@ public sealed class CiChecksService(
                     throw;
                 }
 
-                await Task.Delay(Next(request, elapsed), clock, cancellationToken).ConfigureAwait(false);
+                var next = Next(request, elapsed);
+
+                output.Warn(
+                    request.Command,
+                    string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"a read of the checks of {request.Commit} failed, {failed} running of the {FailedReadsInARow} that end the wait: {ex.Message.TrimEnd('.')}. They are read again in {next.TotalSeconds} s."));
+
+                await Task.Delay(next, clock, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 

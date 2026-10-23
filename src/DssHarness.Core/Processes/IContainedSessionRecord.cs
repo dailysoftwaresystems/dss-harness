@@ -16,11 +16,19 @@ public interface IContainedSessionRecord
 {
     /// <summary>Records the session or the group <paramref name="leader"/> leads, running <paramref name="program"/>, written whole.</summary>
     /// <param name="leader">The child's process id, which is its session's or its group's.</param>
+    /// <param name="started">
+    /// What tells the leader from a later process given its id, as the step that placed it read its own start while it
+    /// stood - the program it became is the same process - or <see langword="null"/> where the step said none, and the
+    /// record reads it of the leader itself.
+    /// </param>
     /// <param name="program">The program the child runs, by its resolved path.</param>
     /// <param name="group">Whether the child leads a process group within its starter's session, rather than a session of its own.</param>
-    /// <exception cref="IOException">The record could not be written: the child is ended, and is a start that failed.</exception>
+    /// <exception cref="IOException">
+    /// The record could not be written - its leader's start among what could not be read, since a record that cannot tell
+    /// its leader from a later process could never be acted on: the child is ended, and is a start that failed.
+    /// </exception>
     /// <exception cref="UnauthorizedAccessException">The record could not be written, for the same end.</exception>
-    void Placed(int leader, string program, bool group);
+    void Placed(int leader, string? started, string program, bool group);
 
     /// <summary>Takes the record back, once the child has ended and nothing is left in its session or its group.</summary>
     void Ended();

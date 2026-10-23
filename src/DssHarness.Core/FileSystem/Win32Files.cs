@@ -10,7 +10,7 @@ namespace DssHarness.Core.FileSystem;
 /// <summary>
 /// Opening a file or directory as Windows itself sees it, for the questions the runtime has no call for: whether
 /// another program holds an entry (<see cref="WindowsHolds"/>), and what kind of link one is
-/// (<see cref="WindowsJunctions"/>) - and replacing a file as POSIX does (<see cref="TryReplace"/>). One definition of
+/// (<see cref="WindowsJunctions"/>) - and replacing a file as POSIX does (<see cref="TryReplace(string, string)"/>). One definition of
 /// how an entry is opened, so none of them can open it differently.
 /// </summary>
 [SupportedOSPlatform("windows")]
@@ -108,8 +108,17 @@ internal static class Win32Files
     /// <returns>False where the volume or this Windows cannot rename so - a FAT volume, a share - for the caller to replace it Windows' own way.</returns>
     /// <exception cref="UnauthorizedAccessException">Windows refused the rename, as a file held without its deletion shared is.</exception>
     /// <exception cref="IOException">It failed for any other reason.</exception>
-    internal static bool TryReplace(string source, string destination)
+    internal static bool TryReplace(string source, string destination) => TryReplace(source, destination, Rename);
+
+    /// <summary>
+    /// <see cref="TryReplace(string, string)"/>, renaming through <paramref name="rename"/> - which sets the rename's
+    /// information on the source's handle and answers the error Windows gave, or 0 where it was done - a test's where it
+    /// stands in for Windows' own.
+    /// </summary>
+    internal static bool TryReplace(string source, string destination, Func<SafeFileHandle, byte[], int> rename)
     {
+        ArgumentNullException.ThrowIfNull(rename);
+
         using var handle = Open(source, RenameAccess, 0);
 
         if (handle.IsInvalid)
@@ -126,15 +135,19 @@ internal static class Win32Files
         BinaryPrimitives.WriteInt32LittleEndian(info.AsSpan(named), name.Length);
         name.CopyTo(info, named + sizeof(uint));
 
-        if (SetFileInformationByHandle(handle, FileRenameInfoEx, info, (uint)info.Length))
+        var error = rename(handle, info);
+
+        if (error == 0)
         {
             return true;
         }
 
-        var error = Marshal.GetLastPInvokeError();
-
         return Unsupported.Contains(error) ? false : throw Failed(error, destination);
     }
+
+    /// <summary>Windows' own rename through <paramref name="handle"/>: the error it gave, or 0 where it was done.</summary>
+    private static int Rename(SafeFileHandle handle, byte[] info)
+        => SetFileInformationByHandle(handle, FileRenameInfoEx, info, (uint)info.Length) ? 0 : Marshal.GetLastPInvokeError();
 
     /// <summary>What a failed Windows call on <paramref name="path"/> raises, as the runtime's own file calls raise it.</summary>
     private static Exception Failed(int error, string path)

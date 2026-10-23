@@ -4,8 +4,10 @@ namespace DssHarness.Core.FileSystem;
 
 /// <summary>
 /// A whole file read or written through the file system's two streams, <see cref="IFileSystem.OpenRead"/> and
-/// <see cref="IFileSystem.WriteAtomic"/>: one way a file is read and one way it is written, so a double that changes how a
-/// file reads or writes changes it for every caller, whatever form the caller takes it in.
+/// <see cref="IFileSystem.WriteAtomic"/>: one way a file is read and one way what is made as it is written is written, so
+/// a double that changes how a file reads or writes changes it for every caller, whatever form the caller takes it in.
+/// Bytes already in hand are written the file system's other way, <see cref="IFileSystem.WriteAllBytesAtomicAsync"/>,
+/// which a double changes apart.
 /// </summary>
 public static class WholeFiles
 {
