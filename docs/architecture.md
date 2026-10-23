@@ -1340,7 +1340,9 @@ and, once its runner has answered, ends `Failed` with 21 whatever it answered, i
 its handlers and its `onFailure` and is not retried - of a step of `others`, the target whose turn
 it was fails so, and the step goes on with the next. What that attempt claimed stays held until its
 runner answers (`FlowInstance.Lingering`), a stop's drained step's too, so nothing that conflicts with
-what the runner may still write starts meanwhile, a later attempt of the step itself among it. Both
+what the runner may still write starts meanwhile, a later attempt of the step itself among it - each
+attempt's claims kept apart, so of two targets whose runners both outlive their turns, each one's
+answer gives back its own tree alone. Both
 stops share one body (`StopWork`). A pause
 leaves a step its limit stopped to end as that stop ends it, with no handoff turn - a failure it
 owes while the run is paused waits for the next session - and a stop of the run records it stopped,

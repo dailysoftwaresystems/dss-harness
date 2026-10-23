@@ -1410,6 +1410,103 @@ public sealed class FlowCoordinatorTests
     }
 
     /// <summary>
+    /// Two targets of a step of others whose runners both outlive the drain each keep their own tree held until their own
+    /// runner answers, whichever answers first: a step that works in the first target's tree waits until that target's
+    /// runner has answered - never freed by the other's answer - and once both have, nothing is left held.
+    /// </summary>
+    [Theory]
+    [InlineData("a3")]
+    [InlineData("a2")]
+    public async Task TwoTargetsWhoseRunnersOutliveTheDrain_EachHoldsItsOwnTree_UntilItsOwnRunnerAnswers(string answersFirst)
+    {
+        var definition = Parse("""
+            name: flow
+            maxOpenAgents: 4
+            steps:
+              - name: one
+                type: create-agent
+                agent: worker.md
+              - name: two
+                type: create-agent
+                agent: worker.md
+                dependsOn: [one]
+              - name: three
+                type: create-agent
+                agent: worker.md
+                dependsOn: [two]
+              - name: rebase
+                type: rebase
+                others: one
+                dependsOn: [three]
+                timeoutMinutes: 1
+                retries: 0
+                onFailure: continue
+              - name: after
+                type: build
+                in: two
+                dependsOn: [three]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+
+        // Gates made without asynchronous continuations: a runner's answer is posted before its gate's completion returns.
+        var gates = new Dictionary<string, TaskCompletionSource<FlowStepResult>>(StringComparer.Ordinal)
+        {
+            ["a2"] = new(),
+            ["a3"] = new(),
+        };
+        var runner = new FakeRunner().OnAsync("rebase", run => gates[run.Target!].Task);
+        var clock = new TimerClock();
+        var records = new Snapshots();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+        var ended = records.SeenAsync(snapshot => snapshot.Steps.Any(step => step.Instance == "rebase" && step.State == FlowInstanceState.Failed));
+
+        var session = coordinator.RunAsync(cancel);
+
+        // Each target's turn passes its minute, and its runner the drain's bound of the stop that made.
+        foreach (var _ in gates)
+        {
+            await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            clock.Advance(TimeSpan.FromMinutes(1));
+            await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            clock.Advance(TimeSpan.FromSeconds(90));
+        }
+
+        _ = await ended.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+        var rebase = coordinator.Instances["rebase"];
+
+        Assert.Equal([FlowTargetRecord.Failed, FlowTargetRecord.Failed], rebase.Targets!.Select(target => target.State));
+        Assert.DoesNotContain("after", runner.Started.ToArray());
+
+        // One runner answers: what its own turn claimed is given back, and the other's stays held.
+        gates[answersFirst].SetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        if (answersFirst == "a2")
+        {
+            // The first target's tree is free: the step in it runs, and the session ends with a3's runner still going.
+            var freed = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, freed.Status);
+            Assert.Equal(FlowInstanceState.Done, coordinator.Instances["after"].State);
+            Assert.Equal(["a3"], rebase.Lingering.SelectMany(lingering => lingering.Claims).Select(claim => claim.Tree));
+            gates["a3"].SetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+            return;
+        }
+
+        await coordinator.SettledAsync(cancel);
+
+        Assert.DoesNotContain("after", runner.Started.ToArray());
+        Assert.Equal(["a2"], rebase.Lingering.SelectMany(lingering => lingering.Claims).Select(claim => claim.Tree));
+
+        gates["a2"].SetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["after"].State);
+        Assert.Empty(rebase.Lingering);
+    }
+
+    /// <summary>
     /// A step failed past its drain's bound keeps what it claimed until its runner ends, for that runner may still be at
     /// work in the tree: a step that claims the same tree waits on the claim, and runs once the runner has answered.
     /// </summary>
@@ -1477,7 +1574,8 @@ public sealed class FlowCoordinatorTests
                 + "step all the same, saying so; it goes to its handlers and its `onFailure` and is not retried - of a step of `others`, the "
                 + "target whose turn it was fails so, and the step goes on with the next. What that attempt claimed stays held until its runner "
                 + $"answers (`{nameof(FlowInstance)}.{nameof(FlowInstance.Lingering)}`), a stop's drained step's too, so nothing that conflicts with what "
-                + "the runner may still write starts meanwhile, a later attempt of the step itself among it. Both stops share one body "
+                + "the runner may still write starts meanwhile, a later attempt of the step itself among it - each attempt's claims kept apart, "
+                + "so of two targets whose runners both outlive their turns, each one's answer gives back its own tree alone. Both stops share one body "
                 + "(`StopWork`). A pause leaves a step its limit stopped to end as that stop ends it, with no handoff turn - a failure it owes "
                 + "while the run is paused waits for the next session - and a stop of the run records it stopped, as it records every step in "
                 + "flight.",

@@ -57,6 +57,15 @@ public sealed class FlowRecordsTests
         var itemWithoutIndex = step with { Instance = "one", Item = JsonNode.Parse("""{"a": 1}""") };
         Assert.Contains("an item without its index", itemWithoutIndex.Problem(), StringComparison.Ordinal);
 
+        // The agent a step works in and the one it makes each name a directory of the run: held to the one name rule.
+        Assert.Null((step with { Instance = "one", Agent = "a1", Made = "a2" }).Problem());
+
+        foreach (var name in new[] { "../a1", "a/b", "a b", " " })
+        {
+            Assert.Equal($"its agent: {OrchestrationRules.NameProblem(name)}", (step with { Instance = "one", Agent = name }).Problem());
+            Assert.Equal($"the agent it makes: {OrchestrationRules.NameProblem(name)}", (step with { Instance = "one", Made = name }).Problem());
+        }
+
         var owner = new RunOwner(string.Empty, 0, DateTimeOffset.UtcNow);
         Assert.NotNull(owner.Problem());
 
