@@ -190,15 +190,17 @@ public sealed class AgentRule
     }
 
     /// <summary>
-    /// Whether the command <paramref name="words"/> is refused by this <see cref="AgentRuleVerb.Run"/>
-    /// rule: each word of the pattern matches the command's word in turn - the program by its name,
-    /// so <c>/usr/bin/gh</c> and <c>gh.exe</c> are the <c>gh</c> a rule names - and a trailing
-    /// <c>*</c> the rest of the command, the empty rest included.
+    /// How the command <paramref name="words"/> meets this <see cref="AgentRuleVerb.Run"/> rule:
+    /// each word of the pattern matches the command's word in turn - the program by its name, so
+    /// <c>/usr/bin/gh</c> and <c>gh.exe</c> are the <c>gh</c> a rule names - and a trailing
+    /// <c>*</c> the rest of the command, the empty rest included. Where a word the pattern reads is
+    /// one the shell expands (<c>git $X</c>, <c>gh $(cat cmd)</c>), each word from it on may be any
+    /// words at all: the rule may be what the command is, and that is said, not decided.
     /// </summary>
     /// <param name="words">The command's words, as <see cref="CommandAnalysis"/> flattened them.</param>
     /// <param name="comparison">How a word of the pattern and a word of the command compare: names compare as this platform compares paths.</param>
     /// <exception cref="InvalidOperationException">The rule is not a <see cref="AgentRuleVerb.Run"/> rule.</exception>
-    public bool Matches(IReadOnlyList<string> words, StringComparison comparison)
+    public AgentRuleMatch Match(IReadOnlyList<string> words, StringComparison comparison)
     {
         if (Verb is not AgentRuleVerb.Run)
         {
@@ -209,32 +211,40 @@ public sealed class AgentRule
 
         var patternWords = Pattern.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var tail = patternWords[^1] == "*";
-
-        if (!tail && words.Count != patternWords.Length)
-        {
-            return false;
-        }
-
         var taken = tail ? patternWords.Length - 1 : patternWords.Length;
-
-        if (words.Count < taken)
-        {
-            return false;
-        }
 
         for (var at = 0; at < taken; at++)
         {
+            if (at >= words.Count)
+            {
+                return AgentRuleMatch.No;
+            }
+
+            // A word the shell expands may be one word, many or none: from here the command may be
+            // anything the rule names. The program itself is never one here - the reader refuses a
+            // program an expansion names - so an expansion where a program would stand is an argument.
+            if (CommandAnalysis.Expansion(words[at]) is not null)
+            {
+                return at == 0 ? AgentRuleMatch.No : AgentRuleMatch.Expanded;
+            }
+
             var matched = at == 0
                 ? string.Equals(CommandAnalysis.Name(patternWords[at]), CommandAnalysis.Name(words[at]), comparison)
                 : string.Equals(patternWords[at], words[at], comparison);
 
             if (!matched)
             {
-                return false;
+                return AgentRuleMatch.No;
             }
         }
 
-        return true;
+        if (tail || words.Count == taken)
+        {
+            return AgentRuleMatch.Yes;
+        }
+
+        // An exact rule meets a command with words past its own only where one of them may expand to none.
+        return words.Skip(taken).Any(word => CommandAnalysis.Expansion(word) is not null) ? AgentRuleMatch.Expanded : AgentRuleMatch.No;
     }
 
     /// <summary>
@@ -276,4 +286,17 @@ public sealed class AgentRule
 
         return _pattern.Matches(relativePath, comparison);
     }
+}
+
+/// <summary>How a command meets a <see cref="AgentRuleVerb.Run"/> rule.</summary>
+public enum AgentRuleMatch
+{
+    /// <summary>The command is not what the rule names.</summary>
+    No,
+
+    /// <summary>The command is what the rule names.</summary>
+    Yes,
+
+    /// <summary>A word the rule reads is one the shell expands: the command may be what the rule names, which cannot be told.</summary>
+    Expanded,
 }

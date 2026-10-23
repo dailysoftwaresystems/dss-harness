@@ -1479,23 +1479,45 @@ launch passes, records such a step `NotStarted` (`AgentNotStartedBecause.Elevate
 resolved, its device prefix dropped and its home expanded, and a refusal's places compare in any
 case on every system, each Windows short name read as its long one (as `Path.GetFullPath` spells it); what a
 refusal allows - a writable root, the step's `writes` - compares as the platform does. A command is
-read whole before it is matched, `Agents\Policy\CommandAnalysis`: a shell string split on `;`, `&&`,
-`||`, `|`, `&`, line ends and a closing parenthesis nothing opened, its command substitutions,
-subshells and loop and branch bodies read as commands of their own, a continued line joined and
-`$'...'` decoded, the `NAME=value` words before a program kept as its environment and carried to
-what it runs, wrappers (`env`, `nohup`, `time`, `timeout`, `nice`, `xargs`, `command`, `builtin`,
-`exec`, `eval`, `Invoke-Expression`) stripped with their own options, and it goes into `sh -c` (the
-words after its script read as scripts too), `cmd /c` and `powershell -Command` and a decoded
-`-EncodedCommand` - by any prefix PowerShell takes - each by its own shell's quoting, to four
-levels, and into a shell another program runs with its script among its words. What it cannot read
-whole it refuses, and the policy denies: a script nested past four levels, parentheses past 32, a
-shell that reads its script from its input, an `xargs` handing a shell its script, and a program
-named by a variable, a substitution, a pattern or a brace. Every word of a command is tried as the
-program of the words after it, a program matched by its name (`CommandAnalysis.Name`), so a command
-another program runs meets the rules on its own program; git's own options are dropped before its
-subcommand, and a git configured where it runs - a `-c` or `--config-env` that names an alias or a
-key naming a program git runs, `--exec-path`, the `GIT_CONFIG` and program names of its environment
-- is the `git config` it is; and a command that runs a program which fetches from the network
+read whole before it is matched, `Agents\Policy\CommandAnalysis`: a shell string read once, front to
+back, by a recursive-descent reader as the shell's own parser reads it (`CommandAnalysis.Shell.cs`,
+its depth bounded at 32) - split on `;`, `&&`, `||`, `|`, `&` and line ends; a comment and a
+here-document's lines never commands, a here-document's or here-string's text kept as the input
+it gives; the bodies of command, backtick and process substitutions, subshells, functions, loops and
+branches read as commands of their own, each substitution's commands before the command it stands
+in, whose word keeps the substitution's text, so the word is the expansion it is; a `for`'s or a
+`select`'s head kept as a command its reserved word leads, so the paths it hands its body are read,
+and a `case`'s patterns never; inside `[[ ]]` its parentheses and operators words of the test; a
+redirect kept apart from the words, after them, its operator normalized and before the file it
+names, wherever it stood; reserved words read only where a command begins, unquoted; a continued
+line joined and `$'...'` decoded. The `NAME=value` words before a program are kept as its
+environment and carried to what it runs, and a value that is a program git or another tool runs
+(`CommandAnalysis.ProgramValued`: `GIT_SSH_COMMAND`, `GIT_PAGER`, `EDITOR` and their kind) is read as
+that program's command line, an `export`'s or a declaration's too; wrappers (`env`, `nohup`, `time`,
+`timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`, `eval`, `busybox`, `Invoke-Expression`)
+are stripped with their own options, at most 32 deep, what `xargs` reads standing among the words
+it runs as an expansion; and it goes into `sh -c` and every other shell's (the words after its
+script read as scripts too), a here-string or here-document a shell reads, `cmd /c` and
+`powershell -Command` and a decoded `-EncodedCommand` - by any prefix PowerShell takes, behind its
+valued options - and the command lines `trap`, `watch`, `script` and `flock` run, each by its own
+shell's quoting, to four levels, and into a shell another program runs with its script among its
+words. What it cannot read whole it refuses, and the policy denies as `undecided`: a script nested
+past four levels, parentheses past 32, a shell that reads its script from its input or from a file
+an expansion names (`bash <(curl ...)`), an `xargs` handing a shell its script, a program named by a
+variable, a substitution, a pattern or a brace, a brace that spells more than 64 words, a word where
+none can stand, and an option of git's or gh's own before its command that this does not know.
+Every word of a command is tried as the program of the words after it, a program matched by its
+name (`CommandAnalysis.Name`, `.exe`, `.cmd` and `.dll` among the ends folded away), so a command
+another program runs meets the rules on its own program; a rule matches through
+`AgentRule.Match`, whose `Expanded` - a word the rule reads is one the shell expands - the policy
+denies as what the rule may be; git's own options, valued ones with their values, are dropped
+before its subcommand, gh's flags before its command's path (`gh pr -R o/r merge` is
+`gh pr merge`), and a git configured where it runs - a `-c` or `--config-env` of any key but the
+ones that only shape what git prints, `--exec-path`, the `GIT_CONFIG` names, `GIT_EXEC_PATH` and
+`GIT_TEMPLATE_DIR` of its environment - is the `git config` it is. A word that names a path is read
+as each candidate it may be - the word, a redirect's file, an option's value, the words a script in
+it names, each word its braces spell and the path a `file://` address names - and a pattern the
+shell expands is refused where it may reach a credential slot or a Claude Code directory; and a command that runs a program which fetches from the network
 (`curl`, `wget`, `Invoke-WebRequest` and `Invoke-RestMethod` with `iwr` and `irm`, `http`, `https`,
 `gh api`) is decided as a web request too, by each address it names and each host it reaches (a
 proxy, curl's `--connect-to` and `--resolve` targets, the proxy of its environment), under the

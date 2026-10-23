@@ -285,23 +285,24 @@ public sealed partial class HelpTests
         Assert.Contains("every read and write of a credential slot or a Claude Code directory of the run's and every search over one", prose, StringComparison.Ordinal);
         Assert.Contains("a refusal's places compare in any case on every system, a Windows short name read as its long one", prose, StringComparison.Ordinal);
         Assert.Contains("No agent starts while this tool itself runs elevated: its step is recorded never started, saying so, before any client is taken.", prose, StringComparison.Ordinal);
+        Assert.Contains("a comment and a here-document's lines never read as commands", prose, StringComparison.Ordinal);
         Assert.Contains(
-            "wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, Invoke-Expression) stripped, and it goes into "
-                + "sh -c, cmd /c, powershell -Command and a decoded -EncodedCommand, by each shell's own quoting, to four levels",
+            "wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, busybox, Invoke-Expression) stripped, what "
+                + "xargs reads an expansion among the words it runs; and it goes into sh -c and every other shell's",
             prose,
             StringComparison.Ordinal);
+        Assert.Contains("a variable whose value is a program git or another tool runs (GIT_SSH_COMMAND, GIT_PAGER,", prose, StringComparison.Ordinal);
+        Assert.Contains("refused as such ('git $VERB' under Run(git push *))", prose, StringComparison.Ordinal);
+        Assert.Contains("a file:// address is read as the path it names", prose, StringComparison.Ordinal);
         Assert.Contains(
             "What it cannot read whole it denies, said here, not guessed at: a script nested past four levels, a shell that reads its "
-                + "script from its input (curl ... | sh), and a program named by a variable, a substitution, a pattern or a brace",
+                + "script from its input (curl ... | sh) or from a process substitution, and a program named by a variable, a substitution, "
+                + "a pattern or a brace, a brace that spells more than 64 words, and an option of git's or gh's own",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("the inside of a script file a command runs", prose, StringComparison.Ordinal);
         Assert.Contains("The worktree rules (agentPolicy.worktreeRules, true where nothing is said)", prose, StringComparison.Ordinal);
-        Assert.Contains(
-            "git's state-writing verbs (commit, stash, reset, clean, checkout, switch, restore, rebase, merge, "
-                + "cherry-pick, revert, pull, push, am, worktree, branch, tag, update-ref, config, gc) are refused",
-            prose,
-            StringComparison.Ordinal);
+        Assert.Contains($"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) are refused", prose, StringComparison.Ordinal);
         Assert.Contains("gh pr merge, gh workflow run and gh run rerun, the gh api endpoints and GraphQL mutations that merge or start CI, and gh alias set, for never merges,", prose, StringComparison.Ordinal);
         Assert.Contains("whatever protectedPaths says", prose, StringComparison.Ordinal);
         Assert.Contains("an agent does not edit its own policy or what the next launch loads", prose, StringComparison.Ordinal);

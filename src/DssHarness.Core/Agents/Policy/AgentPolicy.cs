@@ -50,11 +50,13 @@ public sealed partial class AgentPolicy
 
     /// <summary>
     /// Git's state-writing verbs, refused as commands by the worktree rules: a fold refuses an
-    /// agent whose HEAD left its base, and these are the verbs that move it. Reading git - status,
-    /// diff, log, show, blame, grep - stays allowed.
+    /// agent whose HEAD left its base, and these are the verbs that move it or write what the
+    /// repository holds beside it - its refs, objects, configuration, remotes and worktrees.
+    /// Reading git - status, diff, log, show, blame, grep - stays allowed.
     /// </summary>
     public static IReadOnlyList<string> GitStateVerbs { get; } =
-        ["commit", "stash", "reset", "clean", "checkout", "switch", "restore", "rebase", "merge", "cherry-pick", "revert", "pull", "push", "am", "worktree", "branch", "tag", "update-ref", "config", "gc"];
+        ["commit", "stash", "reset", "clean", "checkout", "switch", "restore", "rebase", "merge", "cherry-pick", "revert", "pull", "push", "am", "worktree", "branch", "tag", "update-ref", "config", "gc",
+         "bisect", "symbolic-ref", "filter-branch", "fast-import", "replace", "notes", "reflog", "remote", "submodule", "sparse-checkout", "read-tree", "prune", "repack", "pack-refs", "maintenance"];
 
     /// <summary>
     /// The <c>gh</c> commands that merge or start CI, refused by the worktree rules: never merges,
@@ -673,9 +675,12 @@ public sealed partial class AgentPolicy
 
         foreach (var (rule, declared) in _rules.Where(pair => pair.Rule.Verb is AgentRuleVerb.Run))
         {
-            if (rule.Matches(forRules, comparison))
+            switch (rule.Match(forRules, comparison))
             {
-                return DeniedBy(declared, whole);
+                case AgentRuleMatch.Yes:
+                    return DeniedBy(declared, whole);
+                case AgentRuleMatch.Expanded:
+                    return MayBe(rule.Text, declared.Source, whole);
             }
         }
 
@@ -685,12 +690,15 @@ public sealed partial class AgentPolicy
         {
             foreach (var rule in _worktreeRunRules)
             {
-                if (rule.Matches(forRules, comparison))
+                switch (rule.Match(forRules, comparison))
                 {
-                    return new AgentPolicyAnswer.Denied(
-                        rule.Text,
-                        AgentPolicySource.Builtin,
-                        $"'{whole}' is denied by {rule.Text}, a worktree rule of this tool");
+                    case AgentRuleMatch.Yes:
+                        return new AgentPolicyAnswer.Denied(
+                            rule.Text,
+                            AgentPolicySource.Builtin,
+                            $"'{whole}' is denied by {rule.Text}, a worktree rule of this tool");
+                    case AgentRuleMatch.Expanded:
+                        return MayBe(rule.Text, AgentPolicySource.Builtin, whole);
                 }
             }
 
@@ -726,6 +734,78 @@ public sealed partial class AgentPolicy
 
         return AgentPolicyAnswer.Allow;
     }
+
+    /// <summary>
+    /// Whether a path the shell would expand from <paramref name="pattern"/> - its <c>*</c>, its
+    /// <c>?</c>, its <c>[...]</c> and a <c>**</c> of many directories, a dot matched as any
+    /// character - may be <paramref name="place"/> or lie beneath it, compared in any case. A
+    /// pattern that ends above the place names its parents only, which no refusal reaches.
+    /// </summary>
+    private static bool GlobReaches(string pattern, string place)
+    {
+        var patterned = pattern.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+        var placed = place.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+        var segments = patterned.Select(segment => segment == "**" ? null : SegmentPattern(segment)).ToList();
+
+        // Each pattern segment against each place segment, from the ends back: whether the pattern
+        // from p on reaches the place from q on.
+        var reaches = new bool[patterned.Length + 1, placed.Length + 1];
+
+        for (var p = patterned.Length; p >= 0; p--)
+        {
+            for (var q = placed.Length; q >= 0; q--)
+            {
+                reaches[p, q] = q == placed.Length
+                    || (p < patterned.Length && (segments[p] is not { } segment
+                        ? reaches[p + 1, q] || reaches[p, q + 1]
+                        : segment.IsMatch(placed[q]) && reaches[p + 1, q + 1]));
+            }
+        }
+
+        return reaches[0, 0];
+    }
+
+    /// <summary>One segment of a shell pattern as the expression it matches a whole name by, in any case.</summary>
+    private static System.Text.RegularExpressions.Regex SegmentPattern(string segment)
+    {
+        var expression = new System.Text.StringBuilder("^");
+
+        for (var at = 0; at < segment.Length; at++)
+        {
+            var character = segment[at];
+
+            if (character == '*')
+            {
+                expression.Append(".*");
+            }
+            else if (character == '?')
+            {
+                expression.Append('.');
+            }
+            else if (character == '[' && segment.IndexOf(']', at + 2) is var closing and > 0)
+            {
+                var set = segment[(at + 1)..closing];
+                expression.Append('[').Append(set.StartsWith('!') ? "^" + System.Text.RegularExpressions.Regex.Escape(set[1..]) : System.Text.RegularExpressions.Regex.Escape(set)).Append(']');
+                at = closing;
+            }
+            else
+            {
+                expression.Append(System.Text.RegularExpressions.Regex.Escape(character.ToString()));
+            }
+        }
+
+        return new System.Text.RegularExpressions.Regex(
+            expression.Append('$').ToString(),
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant,
+            TimeSpan.FromSeconds(1));
+    }
+
+    /// <summary>
+    /// The denial of a command a rule may be what it is: a word the rule reads is one the shell
+    /// expands, so what it runs cannot be told, and a call this cannot decide never runs.
+    /// </summary>
+    private static AgentPolicyAnswer.Denied MayBe(string rule, AgentPolicySource source, string whole)
+        => new(rule, source, $"'{whole}' may be what {rule} denies: a word the rule reads is one the shell expands, which this does not read");
 
     /// <summary>
     /// What a <c>gh</c> command reaches that merges or starts CI, as the worktree rules refuse it:
@@ -764,10 +844,27 @@ public sealed partial class AgentPolicy
             }
         }
 
-        if (words.Any(word => word.Equals("graphql", StringComparison.OrdinalIgnoreCase))
-            && words.Any(word => word == "--input" || word.Contains("=@", StringComparison.Ordinal)))
+        // An endpoint the shell expands may be any endpoint, a merge's among them.
+        var arguments = words.Skip(1).ToList();
+
+        if (CommandAnalysis.GhApiEndpoint(arguments) is { } endpoint && CommandAnalysis.Expansion(endpoint) is { } expansion)
         {
-            return "a GraphQL query read from a file, which this does not read";
+            return $"an endpoint named by {expansion} ('{endpoint}'), which this does not read";
+        }
+
+        // A GraphQL query this does not read may be any mutation: one read from a file, or one the
+        // shell expands.
+        if (words.Any(word => word.Equals("graphql", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (words.Any(word => word == "--input" || word.StartsWith("--input=", StringComparison.Ordinal) || word.Contains("=@", StringComparison.Ordinal)))
+            {
+                return "a GraphQL query read from a file, which this does not read";
+            }
+
+            if (CommandAnalysis.GhApiFields(arguments).FirstOrDefault(field => field.StartsWith("query=", StringComparison.OrdinalIgnoreCase) && CommandAnalysis.Expansion(field) is not null) is { } query)
+            {
+                return $"a GraphQL query the shell expands ('{query}'), which this does not read";
+            }
         }
 
         return null;
@@ -946,7 +1043,18 @@ public sealed partial class AgentPolicy
             candidates.AddRange(word.Split([' ', '\t', '\n', '\r', ';', '|', '&', '(', ')', '`', '\'', '"'], StringSplitOptions.RemoveEmptyEntries));
         }
 
-        foreach (var (candidate, place) in candidates.Where(candidate => candidate.Length > 0).SelectMany(candidate => places.Distinct().Select(place => (candidate, place))))
+        // Each word its braces spell, and the path a file URL names: curl and its kind read a file so.
+        if (word.Contains('{', StringComparison.Ordinal))
+        {
+            candidates.AddRange(CommandAnalysis.BraceExpansions(word));
+        }
+
+        candidates.AddRange([.. candidates
+            .Where(candidate => candidate.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            .Select(candidate => Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && uri.IsFile ? uri.LocalPath : null)
+            .OfType<string>()]);
+
+        foreach (var (candidate, place) in candidates.Where(candidate => candidate.Length > 0).Distinct().SelectMany(candidate => places.Distinct().Select(place => (candidate, place))))
         {
             string asked;
 
@@ -958,6 +1066,27 @@ public sealed partial class AgentPolicy
             {
                 // A word that is no path at all ('--porcelain') is every command's ordinary argument.
                 continue;
+            }
+
+            // A pattern the shell expands names every path it may match: refused where one of them
+            // may be a slot or a Claude Code directory, or lie beneath one.
+            if (asked.IndexOfAny(['*', '?', '[']) >= 0)
+            {
+                if (_slots.FirstOrDefault(slot => GlobReaches(asked, slot)) is not null)
+                {
+                    return new AgentPolicyAnswer.Denied(
+                        "the credential slots",
+                        AgentPolicySource.Builtin,
+                        $"'{word}' may name a credential slot of this tool by its pattern: no command of an agent touches one");
+                }
+
+                if (_claudeDirectories.FirstOrDefault(directory => GlobReaches(asked, directory)) is not null)
+                {
+                    return new AgentPolicyAnswer.Denied(
+                        "the Claude Code directories",
+                        AgentPolicySource.Builtin,
+                        $"'{word}' may name a Claude Code directory this run reads by its pattern: no command of an agent touches one");
+                }
             }
 
             foreach (var form in new[] { asked, _fileSystem.ResolveLinks(asked) })

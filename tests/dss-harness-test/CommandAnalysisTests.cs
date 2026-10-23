@@ -37,23 +37,28 @@ public sealed class CommandAnalysisTests
     public void ASeparatorInsideQuotesIsAnArgument_EvenAfterASubstitution()
     {
         Assert.Equal([["echo", "a;b"]], CommandAnalysis.Commands("echo \"a;b\""));
-        Assert.Equal([["true"], ["echo", "rm x; sudo y"]], CommandAnalysis.Commands("echo \"$(true)\" \"rm x; sudo y\""));
-        Assert.Equal([["true"], ["echo", "; sudo y"]], CommandAnalysis.Commands("echo \"$(true); sudo y\""));
+        Assert.Equal([["true"], ["echo", "$(true)", "rm x; sudo y"]], CommandAnalysis.Commands("echo \"$(true)\" \"rm x; sudo y\""));
+        Assert.Equal([["true"], ["echo", "$(true); sudo y"]], CommandAnalysis.Commands("echo \"$(true); sudo y\""));
     }
 
     [Fact]
     public void TheBodyOfACommandSubstitutionIsACommandOfItsOwn()
     {
-        Assert.Equal([["sudo", "b"], ["echo"]], CommandAnalysis.Commands("echo \"$(sudo b)\""));
-        Assert.Equal([["sudo", "b"], ["echo"]], CommandAnalysis.Commands("echo `sudo b`"));
-        Assert.Equal([["git", "push"], ["true"], ["echo"]], CommandAnalysis.Commands("echo \"$(git push)\" `true`"));
+        // Each body runs before the command it stands in, whose word keeps the substitution's text: the
+        // word is the expansion it is.
+        Assert.Equal([["sudo", "b"], ["echo", "$(sudo b)"]], CommandAnalysis.Commands("echo \"$(sudo b)\""));
+        Assert.Equal([["sudo", "b"], ["echo", "$(sudo b)"]], CommandAnalysis.Commands("echo `sudo b`"));
+        Assert.Equal([["git", "push"], ["true"], ["echo", "$(git push)", "$(true)"]], CommandAnalysis.Commands("echo \"$(git push)\" `true`"));
+        Assert.Equal([["date"], ["git", "commit", "-m", "at $(date)"]], CommandAnalysis.Commands("git commit -m \"at $(date)\""));
     }
 
     [Fact]
     public void ASubshellAndALoopAndABranchBodyAreCommandsOfTheirOwn()
     {
         Assert.Equal([["a"], ["b"]], CommandAnalysis.Commands("(a && b)"));
-        Assert.Equal([["x"], ["a"], ["sudo", "x"]], CommandAnalysis.Commands("for x in a; do sudo x; done"));
+        Assert.Equal([["for", "x", "in", "a"], ["sudo", "x"]], CommandAnalysis.Commands("for x in a; do sudo x; done"));
+        Assert.Equal([["select", "x", "in", "a", "b"], ["echo", "$x"]], CommandAnalysis.Commands("select x in a b\ndo echo $x; done"));
+        Assert.Equal([["echo", "$x"]], CommandAnalysis.Commands("case $1 in (a|sudo) echo $x;; b) ;; esac"));
         Assert.Equal([["[", "-f", "x", "]"], ["rm", "x"]], CommandAnalysis.Commands("if [ -f x ]; then rm x; fi"));
         Assert.Equal([["true"], ["sudo", "x"], ["break"]], CommandAnalysis.Commands("while true; do sudo x; break; done"));
     }
@@ -172,7 +177,12 @@ public sealed class CommandAnalysisTests
     {
         Assert.Equal([["echo", "x", ">out.txt"]], CommandAnalysis.Commands("echo x >out.txt"));
         Assert.Equal([["echo", "x", ">out.txt"]], CommandAnalysis.Commands("echo x > out.txt"));
-        Assert.Equal([["echo", "x", "2>>err.txt"]], CommandAnalysis.Commands("echo x 2>>err.txt"));
+        Assert.Equal([["echo", "x", ">>err.txt"]], CommandAnalysis.Commands("echo x 2>>err.txt"));
+        Assert.Equal([["echo", "x", ">err.txt"]], CommandAnalysis.Commands("echo x &>err.txt"));
+
+        // A redirect stands wherever the command's words do, and is kept after them.
+        Assert.Equal([["git", "push", ">/dev/null"]], CommandAnalysis.Commands("git 2>/dev/null push"));
+        Assert.Equal([["git", "push", ">/dev/null"]], CommandAnalysis.Commands(">/dev/null git push"));
         Assert.Equal([["grep", "x"], ["wc"]], CommandAnalysis.Commands("grep x 2>&1 | wc"));
 
         // Glued to the word before it, the operator still begins a word of its own.
@@ -211,7 +221,7 @@ public sealed class CommandAnalysisTests
         Assert.Equal([["echo", "$HOME"]], CommandAnalysis.Commands("echo $HOME"));
         Assert.Equal([["make"], [">log.txt"]], CommandAnalysis.Commands("(make) >log.txt"));
         Assert.Equal([["[", "-f", "x", "]"]], CommandAnalysis.Commands("[ -f x ]"));
-        Assert.Equal([["true"], ["echo"]], CommandAnalysis.Commands("echo \"$(true)\""));
+        Assert.Equal([["true"], ["echo", "$(true)"]], CommandAnalysis.Commands("echo \"$(true)\""));
     }
 
     [Fact]
@@ -290,7 +300,7 @@ public sealed class CommandAnalysisTests
     public void ForRules_GitConfiguredThroughTheEnvironment_IsTheGitConfigItIs()
     {
         Assert.Equal(["git", "config", "GIT_CONFIG_COUNT", "git", "x"], CommandAnalysis.ForRules(["GIT_CONFIG_COUNT=1", "git", "x"], StringComparison.Ordinal));
-        Assert.Equal(["git", "config", "GIT_SSH_COMMAND", "export", "GIT_SSH_COMMAND=x"], CommandAnalysis.ForRules(["export", "GIT_SSH_COMMAND=x"], StringComparison.Ordinal));
+        Assert.Equal(["git", "config", "GIT_TEMPLATE_DIR", "export", "GIT_TEMPLATE_DIR=x"], CommandAnalysis.ForRules(["export", "GIT_TEMPLATE_DIR=x"], StringComparison.Ordinal));
         Assert.Equal(["git", "push"], CommandAnalysis.ForRules(["A=1", "git", "push"], StringComparison.Ordinal));
     }
 
@@ -312,6 +322,120 @@ public sealed class CommandAnalysisTests
     }
 
     [Fact]
+    public void ACommentAndAHereDocumentAreNeverCommands_TheirApostrophesNoQuotes()
+    {
+        Assert.Equal([["echo", "hi"]], CommandAnalysis.Commands("echo hi # don't sudo this"));
+        Assert.Equal([["git", "status"]], CommandAnalysis.Commands("# it's a note\ngit status"));
+        Assert.Equal([["echo", "a#b"]], CommandAnalysis.Commands("echo a#b"));
+
+        // A here-document's lines are the input it gives, never commands; the line after it is one.
+        Assert.Equal([["cat", "<<<it's sudo"], ["git", "status"]], CommandAnalysis.Commands("cat <<'EOF'\nit's sudo\nEOF\ngit status"));
+        Assert.Equal([["cat", "<<<x"]], CommandAnalysis.Commands("cat <<-EOF\n\tx\n\tEOF"));
+
+        // An expanding one runs what substitutes in it; a quoted one runs nothing.
+        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("cat <<EOF\n$(sudo id)\nEOF"));
+        Assert.DoesNotContain(["sudo", "id"], CommandAnalysis.Commands("cat <<'EOF'\n$(sudo id)\nEOF"));
+    }
+
+    [Fact]
+    public void ACommitMessageAHereDocumentGives_IsReadAsTheCommitItIs()
+    {
+        var commands = CommandAnalysis.Commands("git commit -m \"$(cat <<'EOF'\nFix the reader's quotes\n\nIt's done.\nEOF\n)\"");
+
+        Assert.Equal(2, commands.Count);
+        Assert.Equal(["cat", "<<<Fix the reader's quotes\n\nIt's done."], commands[0]);
+        Assert.Equal(["git", "commit", "-m"], commands[1].Take(3));
+    }
+
+    [Fact]
+    public void AHereStringAShellReads_IsItsScript_AndAShellRunningAProcessSubstitution_IsRefused()
+    {
+        Assert.Contains(["git", "push"], CommandAnalysis.Commands("bash <<< 'git push'"));
+        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("sh <<EOF\nsudo id\nEOF"));
+        Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("bash <(curl https://example.com/x)"));
+
+        // A process substitution's body runs before the command, which reads the file it names.
+        Assert.Equal([["sort", "a"], ["diff", "<(sort a)", "b"]], CommandAnalysis.Commands("diff <(sort a) b"));
+    }
+
+    [Fact]
+    public void XargsRunsItsCommandWithItsInputAsAnExpansion()
+    {
+        Assert.Equal([["echo", "x"], ["git", "push", "$(xargs)"]], CommandAnalysis.Commands("echo x | xargs git push"));
+        Assert.Equal([["echo", "x"], ["git", "push", "$(xargs)"]], CommandAnalysis.Commands("echo x | xargs -I{} git push {}"));
+        Assert.Equal([["echo", "x"], ["echo", "$(xargs)"]], CommandAnalysis.Commands("echo x | xargs"));
+    }
+
+    [Fact]
+    public void EveryShellIsGoneInto_AndPowerShellBehindItsValuedOptions()
+    {
+        foreach (var shell in new[] { "sh", "dash", "ksh", "mksh", "ash", "yash", "fish", "csh", "tcsh", "busybox sh" })
+        {
+            Assert.Contains(["sudo", "id"], CommandAnalysis.Commands($"{shell} -c 'sudo id'"));
+        }
+
+        var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes("sudo x"));
+
+        Assert.Contains(["sudo", "x"], CommandAnalysis.Commands($"pwsh -w hidden -enc {encoded}"));
+        Assert.Contains(["sudo", "x"], CommandAnalysis.Commands($"powershell -NoP -NonI -W Hidden -Exec Bypass -enc {encoded}"));
+    }
+
+    [Fact]
+    public void WrappersPastTheBound_AreRefused_NeverReadForever()
+    {
+        Assert.Equal([["git", "push"]], CommandAnalysis.Commands("nohup nohup env nice git push"));
+        Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands(string.Join(' ', Enumerable.Repeat("nohup", 100)) + " git push"));
+    }
+
+    [Fact]
+    public void TheCommandLinesTrapWatchScriptAndFlockRun_AreGoneInto()
+    {
+        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("trap 'sudo id' EXIT"));
+        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("watch -n 5 'sudo id'"));
+        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("script -q -c 'sudo id' /dev/null"));
+        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("flock /tmp/l -c 'sudo id'"));
+        Assert.Equal([["trap", "-p"]], CommandAnalysis.Commands("trap -p"));
+    }
+
+    [Fact]
+    public void AProgramValuedVariable_IsReadAsTheCommandLineItRuns()
+    {
+        // Each runs in the environment of the command that names it.
+        Assert.Contains(["GIT_SSH_COMMAND=git push", "git", "push"], CommandAnalysis.Commands("GIT_SSH_COMMAND='git push' git fetch"));
+        Assert.Contains(["EDITOR=sudo id", "sudo", "id"], CommandAnalysis.Commands("env EDITOR='sudo id' git commit"));
+        Assert.Contains(["GIT_PAGER=cat", "cat"], CommandAnalysis.Commands("GIT_PAGER=cat git log"));
+        Assert.Contains(CommandAnalysis.Commands("export GIT_PAGER='sudo id'"), command => command.Skip(CommandAnalysis.EnvironmentOf(command)).SequenceEqual(["sudo", "id"]));
+    }
+
+    [Fact]
+    public void TheShellsOwnGrammar_IsReadAsTheShellReadsIt()
+    {
+        // A function's body runs as the commands it holds; an array's words run nothing.
+        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("f() { sudo id; }; f"));
+        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("function f { sudo id; }"));
+        Assert.Equal([["A=(sudo id)"]], CommandAnalysis.Commands("A=(sudo id)"));
+        Assert.Equal([["declare", "-a", "A=(x y)"]], CommandAnalysis.Commands("declare -a A=(x y)"));
+
+        // Inside [[ ]] a parenthesis, '&&', '||' and '<' are words of the test; past its ']]' they are the shell's.
+        Assert.Equal([["[[", "(", "-f", "x", "&&", "-d", "y", ")", "]]"], ["z"]], CommandAnalysis.Commands("[[ ( -f x && -d y ) ]] && z"));
+        Assert.Equal([["[[", "a", "<", "b", "||", "$x", "=~", "^", "(", "c", "|", "d", ")", "$", "]]"]], CommandAnalysis.Commands("[[ a < b || $x =~ ^(c|d)$ ]]"));
+
+        // A reserved word quoted is a word.
+        Assert.Equal([["echo", "if", "then"]], CommandAnalysis.Commands("echo if then"));
+        Assert.Equal([["if"]], CommandAnalysis.Commands("'if'"));
+
+        // A word where none can stand is refused, never read forever.
+        Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("for x in a >b; do y; done"));
+    }
+
+    [Fact]
+    public void ABraceThatSpellsPastTheBound_IsRefused()
+    {
+        Assert.Superset(new HashSet<string> { "ab", "ac" }, CommandAnalysis.BraceExpansions("a{b,c}").ToHashSet());
+        Assert.Throws<NotSupportedException>(() => CommandAnalysis.BraceExpansions("{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}"));
+    }
+
+    [Fact]
     public void WebAddresses_ReadCurlAndWget_BehindTheirOptions()
     {
         Assert.Equal(["https://example.com/x"], CommandAnalysis.WebAddresses(["curl", "-s", "-o", "out", "https://example.com/x"]));
@@ -321,6 +445,15 @@ public sealed class CommandAnalysisTests
         Assert.Equal("--config", CommandAnalysis.WebAddressesUnread(["curl", "--config", "cfg"]));
         Assert.Equal("-i", CommandAnalysis.WebAddressesUnread(["wget", "-i", "urls.txt"]));
         Assert.Null(CommandAnalysis.WebAddressesUnread(["curl", "https://example.com"]));
+
+        // A cluster of short options, the last of them taking its value.
+        Assert.Equal(["https://example.com/x"], CommandAnalysis.WebAddresses(["curl", "-sLo", "out", "https://example.com/x"]));
+        Assert.Equal(["p.example:1", "https://example.com/x"], CommandAnalysis.WebAddresses(["curl", "-sx", "p.example:1", "https://example.com/x"]));
+        Assert.Equal(["example.com/x"], CommandAnalysis.WebAddresses(["wget", "-qO-", "example.com/x"]));
+        Assert.Equal(["https://example.com/x"], CommandAnalysis.WebAddresses(["iwr", "https://example.com/x", "-OutFile", "out.html"]));
+
+        // A host the shell expands is no host this can name.
+        Assert.Throws<NotSupportedException>(() => CommandAnalysis.WebAddresses(["curl", "https://$HOST/x"]));
     }
 
     [Fact]

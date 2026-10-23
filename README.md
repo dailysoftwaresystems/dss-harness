@@ -545,20 +545,32 @@ a Claude Code directory of the run's and every search over one, any command nami
 starts while this tool itself runs elevated: its step is recorded never started, saying so, before
 any client is taken. A path is decided as asked and as resolved, and a refusal's places compare in
 any case on every system, a Windows short name read as its long one. A
-shell command is read whole before it is matched - split on `;`, `&&`, `||`, `|`, `&` and line
-ends, its `$(...)`, backticks, subshells and loop and branch bodies read as commands of their own,
-the `NAME=value` words before a program kept as its environment, wrappers (`env`, `nohup`, `time`,
-`timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`, `eval`, `Invoke-Expression`) stripped,
-and it goes into `sh -c`, `cmd /c`, `powershell -Command` and a decoded `-EncodedCommand`, by each
-shell's own quoting, to four levels, and into a shell another program runs with its script
+shell command is read whole before it is matched, as the shell's own parser reads it - split on
+`;`, `&&`, `||`, `|`, `&` and line ends, a comment and a here-document's lines never commands, the
+bodies of `$(...)`, backticks, `<(...)`, subshells, functions, loops and branches read as commands
+of their own, each substitution's word kept as the expansion it is, a `for`'s word list read for
+the paths it hands its body, a redirect kept apart wherever it stands, the `NAME=value` words
+before a program kept as its environment and a variable naming a program git or another tool runs
+(`GIT_SSH_COMMAND`, `GIT_PAGER`, `EDITOR` and their kind) read as that program's command line,
+wrappers (`env`, `nohup`, `time`, `timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`,
+`eval`, `busybox`, `Invoke-Expression`) stripped, and it goes into `sh -c` and every other
+shell's, a here-string or here-document a shell reads, `cmd /c`, `powershell -Command` and a
+decoded `-EncodedCommand`, and what `trap`, `watch`, `script` and `flock` run, by each shell's own
+quoting, to four levels, and into a shell another program runs with its script
 (`find -exec sh -c`) - so `git -C x push` is `git push`, and `env A=1 git push` and
 `A=1 /usr/bin/git push` are too; every word of a command is tried as the program of the words
-after it, a program read by its name. What it cannot read whole it denies, said in help, not guessed at: a script
-nested past four levels, a shell that reads its script from its input (`curl ... | sh`), and a
-program named by a variable, a substitution, a pattern or a brace; what it does not see is the
-inside of a script file a command runs. The worktree rules (`agentPolicy.worktreeRules`, on unless
-turned off) keep an agent's worktree a thing the engine can measure: git's state-writing verbs - a
-git configured where it runs, by `-c`, `--config-env` or its environment, the `git config` it is -
+after it, a program read by its name. A word the shell expands where a rule reads a literal one
+makes the command one the rule may be, refused as such (`git $VERB` under `Run(git push *)`), and
+a pattern, a brace or a `file://` address that may name a credential slot or a Claude Code
+directory is refused as naming it. What it cannot read whole it denies, said in help, not guessed
+at: a script nested past four levels, a shell that reads its script from its input
+(`curl ... | sh`) or a process substitution, a program named by a variable, a substitution, a
+pattern or a brace, and an option of git's or gh's own before its command that it does not know;
+what it does not see is the inside of a script file a command runs. The worktree rules
+(`agentPolicy.worktreeRules`, on unless turned off) keep an agent's worktree a thing the engine
+can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
+`help agent-clients`) - a git configured where it runs, by `-c` or `--config-env` of any key but
+the ones that only shape what git prints, or by its environment, the `git config` it is -
 and `gh pr merge`, `gh workflow run`, `gh run rerun`, the `gh api` endpoints and GraphQL mutations
 that merge or start CI and `gh alias set` are refused (reading git stays allowed), git's own files
 are not written by a tool whatever `protectedPaths` says, and an agent does not edit its own policy

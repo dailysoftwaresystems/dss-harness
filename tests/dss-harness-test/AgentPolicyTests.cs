@@ -2,6 +2,7 @@ using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Platform;
@@ -663,12 +664,123 @@ public sealed class AgentPolicyTests
             "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0=commit git x",
             "env GIT_CONFIG_PARAMETERS=\"'alias.x=commit'\" git x",
             "git --config-env=alias.x=X x",
-            "export GIT_SSH_COMMAND=evil",
+            "export GIT_TEMPLATE_DIR=/tmp/evil",
             "git --exec-path=/tmp/x push",
+            "git -c core.pager=less log",
         })
         {
             Assert.Equal("Run(git config *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command)).Rule);
         }
+
+        // A key that only shapes what git prints is no configuration.
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git -c color.ui=always -c core.quotepath=off log"));
+    }
+
+    [Fact]
+    public void AProgramAVariableNames_MeetsTheRulesAsTheCommandItRuns()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy([new("Run(git push *)", AgentPolicySource.Config)], worktreeRules: false);
+
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("GIT_SSH_COMMAND='git push' git fetch")).Rule);
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("export GIT_EDITOR='git push'")).Rule);
+        Assert.Equal("the root actions", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("GIT_PAGER='sudo id' git log")).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("GIT_PAGER=cat git log"));
+    }
+
+    [Fact]
+    public void ACommandARuleMayBeByAnExpansion_IsRefusedAsWhatItMayBe()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy([new("Run(git push *)", AgentPolicySource.Config)], worktreeRules: false);
+
+        foreach (var command in new[] { "git $VERB", "git ${VERB}", "git \"$(echo push)\"", "echo push | xargs git", "git p{u,a}sh" })
+        {
+            var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
+
+            Assert.Equal("Run(git push *)", denied.Rule);
+            Assert.Contains("may be what Run(git push *) denies: a word the rule reads is one the shell expands", denied.Reason, StringComparison.Ordinal);
+        }
+
+        // An expansion past the words the rule reads leaves the command what it is either way.
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git commit -m \"$(cat msg.txt)\""));
+        Assert.Contains("is denied by Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git push $REMOTE")).Reason, StringComparison.Ordinal);
+
+        // A program named by an expansion is no program this can name.
+        Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("$GIT push")).Rule);
+    }
+
+    [Fact]
+    public void GitsOwnOptionsWithTheirValues_AreDroppedBeforeItsVerb_AndOneUnknownIsUndecided()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy([new("Run(git push *)", AgentPolicySource.Config)], worktreeRules: false);
+
+        foreach (var command in new[] { "git --attr-source HEAD push", "git --namespace do push", "git --git-dir .git --work-tree . push", "git 2>/dev/null push" })
+        {
+            Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command)).Rule);
+        }
+
+        Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git --unknown-option x push")).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git --no-pager log"));
+    }
+
+    [Fact]
+    public void GhsCommandIsReadPastItsOwnFlags_AndItsApiEndpointsByTheirWords()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy();
+
+        Assert.Equal("Run(gh pr merge *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("gh pr -R o/r merge 5")).Rule);
+        Assert.Equal("Run(gh pr merge *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("gh --repo=o/r pr merge 5")).Rule);
+        Assert.Contains("may be what", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("gh pr $ACTION 5")).Reason, StringComparison.Ordinal);
+
+        foreach (var command in new[] { "gh api $ENDPOINT", "gh api graphql --input q.json", "gh api graphql -F query=@q.graphql", "gh api graphql -f query=\"$Q\"" })
+        {
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
+        }
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("gh pr -R o/r view 5"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("gh api repos/o/r/pulls/5"));
+    }
+
+    [Fact]
+    public void ThisToolRunByItsAssembly_IsStillThisTool()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy();
+
+        Assert.Equal("the orchestrator and agent verbs", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"dotnet ./tools/{ToolPackage.Command}.dll {AgentService.FoldCommand} a1")).Rule);
+    }
+
+    [Fact]
+    public void AFileUrlOrAPattern_ThatMayNameASlotOrAClaudeDirectory_IsRefused()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy();
+        var claude =ground.ClaudeDirectory.Replace('\\', '/');
+        var parent = Path.GetDirectoryName(ground.Slot)!.Replace('\\', '/');
+
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"curl {new Uri(Path.Combine(ground.Slot, "keys.env")).AbsoluteUri}")).Rule);
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cat {parent}/.e*/keys.env")).Rule);
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cat {parent}/**")).Rule);
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cat {parent}/{{x,.env}}/keys.env")).Rule);
+        Assert.Equal("the Claude Code directories", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cat {claude[..^1]}?/settings.json")).Rule);
+
+        // A pattern that cannot reach either is every command's ordinary argument.
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run($"cat {parent}/*.txt"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("ls src/*.cs"));
+    }
+
+    [Fact]
+    public void ALoopsWords_AreReadForThePathsTheyHandItsBody()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy();
+        var slot = ground.Slot.Replace('\\', '/');
+
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"for f in {slot}/keys.env; do cat \"$f\"; done")).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("for f in a b; do echo \"$f\"; done"));
     }
 
     [Theory]

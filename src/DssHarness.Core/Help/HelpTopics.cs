@@ -2495,37 +2495,8 @@ public static class HelpTopics
         builder.AppendLine("No agent starts while this tool itself runs elevated: its step is recorded never started,");
         builder.AppendLine("saying so, before any client is taken. A path is decided as asked and as resolved, and a");
         builder.AppendLine("refusal's places compare in any case on every system, a Windows short name read as its long");
-        builder.AppendLine("one. A shell command is read whole before it is matched: split on ;, &&,");
-        builder.AppendLine("||, |, & and line ends, its $(...) and backticks, subshells, loop and branch bodies read");
-        builder.AppendLine("as commands of their own, the NAME=value words before a program kept as its environment,");
-        builder.AppendLine("wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval,");
-        builder.AppendLine("Invoke-Expression) stripped, and it goes into sh -c, cmd /c, powershell -Command and a");
-        builder.AppendLine("decoded -EncodedCommand, by each shell's own quoting, to four levels, and into a shell");
-        builder.AppendLine("another program runs with its script (find -exec sh -c) - so 'git -C x push' is git push,");
-        builder.AppendLine("and 'env A=1 git push' and 'A=1 /usr/bin/git push' are too. Every word of a command is");
-        builder.AppendLine("tried as the program of the words after it, a program read by its name, its directories");
-        builder.AppendLine("and a Windows end (.exe, .cmd) folded away. What it cannot read whole it denies, said");
-        builder.AppendLine("here, not guessed at: a script nested past four levels, a shell that reads its script from");
-        builder.AppendLine("its input (curl ... | sh), and a program named by a variable, a substitution, a pattern or");
-        builder.AppendLine("a brace; what it does not see is the inside of a script file a command runs, and a program");
-        builder.AppendLine("another runs from words that do not name it. The worktree rules");
-        builder.AppendLine("(agentPolicy.worktreeRules, true where nothing is said) keep an agent's worktree a thing");
-        builder.AppendLine("the engine can measure: git's state-writing verbs (commit, stash, reset, clean, checkout,");
-        builder.AppendLine("switch, restore, rebase, merge, cherry-pick, revert, pull, push, am, worktree, branch,");
-        builder.AppendLine("tag, update-ref, config, gc) are refused - reading git (status, diff, log, show, blame,");
-        builder.AppendLine("grep) stays allowed, and a git configured where it runs (a -c or --config-env naming an");
-        builder.AppendLine("alias or a program git runs, --exec-path, GIT_CONFIG and the program names of its");
-        builder.AppendLine("environment) is the git config it is - and so are gh pr merge, gh workflow run and gh run");
-        builder.AppendLine("rerun, the gh api endpoints and GraphQL mutations that merge or start CI, and gh alias");
-        builder.AppendLine("set, for never merges, never starts CI binds the agents too; git's own files (Write(.git),");
-        builder.AppendLine("Write(.git/**)) are not written by a tool, whatever protectedPaths says; and an agent does");
-        builder.AppendLine("not edit its own policy or what the next launch loads: .harness-config/config.json,");
-        builder.AppendLine(".harness-config/orchestrators/**, .harness-config/skills/** (but for a step whose writes");
-        builder.AppendLine("names one skill's own directory by name, .harness-config/skills/<name>/..., which opens");
-        builder.AppendLine("that skill alone), .harness-config/runner/**, .claude/settings*.json and .mcp.json are not");
-        builder.AppendLine("written. Whatever any switch says, the tool's own state, in any root, is written by its");
-        builder.AppendLine("verbs alone - a place of the agent's own within it, as its work directory is, the one");
-        builder.AppendLine("exception.");
+        builder.AppendLine("one.");
+        AppendWrapped(builder, ShellReadingProse());
         builder.AppendLine("The protected paths (agentPolicy.protectedPaths, true where nothing is said) are the");
         builder.AppendLine("writes Claude Code guards, refused on every client so a role is not stopped on one where");
         builder.AppendLine("it passes on another; the list is Claude Code's own for the oldest version this tool");
@@ -2565,6 +2536,49 @@ public static class HelpTopics
     /// What the claude-code client does with a launch, its tools from the one table that gives them, the names it sets
     /// from the one list of them, and its bounds from the types that hold them.
     /// </summary>
+    /// <summary>
+    /// How the agents' policy reads a shell command, what it refuses as undecided, and the worktree rules - git's
+    /// verbs named from <see cref="Agents.Policy.AgentPolicy.GitStateVerbs"/>, so the list said is the list refused.
+    /// </summary>
+    private static string ShellReadingProse()
+        => "A shell command is read whole before it is matched, as the shell's own parser reads it: split on ;, &&, ||, "
+            + "|, & and line ends; a comment and a here-document's lines never read as commands; the bodies of $(...), "
+            + "backticks, <(...), subshells, functions, loops and branches read as commands of their own, each "
+            + "substitution before the command it stands in, whose word keeps it as the expansion it is; a for's word list "
+            + "read for the paths it hands its body; a redirect kept apart from the words, wherever it stands; the "
+            + "NAME=value words before a program kept as its environment, and a variable whose value is a program git or "
+            + "another tool runs (GIT_SSH_COMMAND, GIT_PAGER, GIT_EDITOR, EDITOR, PAGER and their kind) read as that "
+            + "program's command line; wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, "
+            + "busybox, Invoke-Expression) stripped, what xargs reads an expansion among the words it runs; and it goes "
+            + "into sh -c and every other shell's, a here-string or here-document a shell reads, cmd /c, "
+            + "powershell -Command and a decoded -EncodedCommand, and the command lines trap, watch, script and flock run, "
+            + "by each shell's own quoting, to four levels, and into a shell another program runs with its script "
+            + "(find -exec sh -c) - so 'git -C x push' is git push, and 'env A=1 git push' and 'A=1 /usr/bin/git push' "
+            + "are too. Every word of a command is tried as the program of the words after it, a program read by its "
+            + "name, its directories and a Windows end (.exe, .cmd, .dll) folded away. A word the shell expands where a "
+            + "rule reads a literal one makes the command one the rule may be, refused as such ('git $VERB' under "
+            + "Run(git push *)); a pattern or a brace that may name a credential slot or a Claude Code directory is "
+            + "refused as naming it, and a file:// address is read as the path it names. What it cannot read whole it "
+            + "denies, said here, not guessed at: a script nested past four levels, a shell that reads its script from "
+            + "its input (curl ... | sh) or from a process substitution, and a program named by a variable, a "
+            + "substitution, a pattern or a brace, a brace that spells more than 64 words, and an option of git's or "
+            + "gh's own before its command that this does not know; what it does not see is the inside of a script file "
+            + "a command runs, and a program another runs from words that do not name it. The worktree rules "
+            + "(agentPolicy.worktreeRules, true where nothing is said) keep an agent's worktree a thing the engine can "
+            + $"measure: git's state-writing verbs ({string.Join(", ", Agents.Policy.AgentPolicy.GitStateVerbs)}) are "
+            + "refused - reading git (status, diff, log, show, blame, grep) stays allowed, and a git configured where it "
+            + "runs (a -c or --config-env of any key but the ones that only shape what git prints, --exec-path, "
+            + "GIT_CONFIG and the names through which git finds its programs and hooks) is the git config it is - and so "
+            + "are gh pr merge, gh workflow run and gh run rerun, the gh api endpoints and GraphQL mutations that merge "
+            + "or start CI, and gh alias set, for never merges, never starts CI binds the agents too; git's own files "
+            + "(Write(.git), Write(.git/**)) are not written by a tool, whatever protectedPaths says; and an agent does "
+            + "not edit its own policy or what the next launch loads: .harness-config/config.json, "
+            + ".harness-config/orchestrators/**, .harness-config/skills/** (but for a step whose writes names one "
+            + "skill's own directory by name, .harness-config/skills/<name>/..., which opens that skill alone), "
+            + ".harness-config/runner/**, .claude/settings*.json and .mcp.json are not written. Whatever any switch says, "
+            + "the tool's own state, in any root, is written by its verbs alone - a place of the agent's own within it, "
+            + "as its work directory is, the one exception.";
+
     private static string ClaudeCodeClientProse()
     {
         var tools = string.Join(
