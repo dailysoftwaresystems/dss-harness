@@ -15,7 +15,8 @@ namespace DssHarness.Core.Runs;
 /// The run is found by its id in the tree it ran in - its records are that tree's own - and its dispatcher by the owner
 /// file it keeps beside them while it runs. A run is said to have stopped only where its dispatcher took the stop
 /// (<see cref="RunStops.TakenBack"/>) or was ended: one that ended on its own first is nothing this command stopped. Every
-/// exit names the request where one was written, in its text and in its document (<see cref="RunStopReports"/>).
+/// exit names the stop record that stands, in its text and in its document (<see cref="RunStopReports"/>): the request
+/// while it is asked, the run's record of it once taken, and never a request the command took back.
 /// </remarks>
 /// <param name="contextLoader">Finds the tree the run ran in, and its layout.</param>
 /// <param name="logOwnership">The run's owner, and an abandoned one released.</param>
@@ -97,12 +98,24 @@ public sealed class RunStopService(
     /// nothing to stop: its claim released here, as the next run in its tree would release it, with any stop asked of it.
     /// </summary>
     private CommandOutcome Abandoned(RunStopReport report, bool json)
-        => RunStopReports.Render(
+    {
+        var released = ReleaseClaim(report.RunDirectory);
+        var left = StillAsked(report);
+
+        return RunStopReports.Render(
             CommandOutcome.Refused(
-                $"run {report.Run}'s dispatcher ({report.Dispatcher}) has ended without giving up its records, so there is nothing to stop; {ReleaseClaim(report.RunDirectory)}",
-                report.Record is { } record ? [$"stop: {record}"] : []),
-            report,
+                $"run {report.Run}'s dispatcher ({report.Dispatcher}) has ended without giving up its records, so there is nothing to stop; {released}",
+                left.Record is { } record ? [$"stop: {record}"] : []),
+            left,
             json);
+    }
+
+    /// <summary>
+    /// The report once the stop it asked was taken back: the request is named only where it could not be removed, and
+    /// stays, as said where that was met - never a file the command has removed.
+    /// </summary>
+    private RunStopReport StillAsked(RunStopReport report)
+        => report.Record is { } file && _fileSystem.KindOf(file) != PathKind.None ? report : report with { Record = null };
 
     /// <summary>
     /// Releases the claim of a run whose dispatcher ended without giving it up, with any stop asked of it
@@ -158,19 +171,25 @@ public sealed class RunStopService(
                 // say. A request it never took is taken back, for nothing will take it now.
                 var taken = RunStops.TakenFileOf(runDirectory);
 
-                return _stops.TakenBack(runDirectory, CommandName)
-                    ? RunStopReports.Render(
+                if (_stops.TakenBack(runDirectory, CommandName))
+                {
+                    return RunStopReports.Render(
                         CommandOutcome.Ok(
                             $"run {report.Run} stopped: its dispatcher ({report.Dispatcher}) took the stop and gave up its records",
                             [$"logs: {runDirectory}", $"stop: {taken}"]),
                         report with { Stopped = true, Record = taken },
-                        json)
-                    : RunStopReports.Render(
-                        CommandOutcome.Refused(
-                            $"run {report.Run} ended before its dispatcher ({report.Dispatcher}) took the stop, so nothing was stopped; the stop was taken back",
-                            [$"logs: {runDirectory}", $"stop: {file}"]),
-                        report,
                         json);
+                }
+
+                var left = StillAsked(report);
+
+                return RunStopReports.Render(
+                    CommandOutcome.Refused(
+                        $"run {report.Run} ended before its dispatcher ({report.Dispatcher}) took the stop, so nothing was stopped; "
+                            + (left.Record is null ? "the stop was taken back" : "the stop could not be taken back, as said above"),
+                        left.Record is { } request ? [$"logs: {runDirectory}", $"stop: {request}"] : [$"logs: {runDirectory}"]),
+                    left,
+                    json);
             }
 
             try
@@ -181,7 +200,7 @@ public sealed class RunStopService(
             {
                 // Said as it stands: taken, the run is stopping, and the run's record says so; not yet, the stop stays
                 // asked for the dispatcher's next look.
-                return _stops.IsTaken(runDirectory)
+                return _stops.IsTaken(runDirectory, CommandName)
                     ? RunStopReports.Render(
                         CommandOutcome.Failed(
                             HarnessExit.Cancelled,
@@ -203,7 +222,7 @@ public sealed class RunStopService(
 
         // Taken, the dispatcher is still stopping - a set-up's down line among what it waits for - and --now would end it
         // part way through; not yet taken, it has not looked, and the stop stays asked.
-        return _stops.IsTaken(runDirectory)
+        return _stops.IsTaken(runDirectory, CommandName)
             ? RunStopReports.Render(
                 CommandOutcome.Refused(
                     $"run {report.Run}'s dispatcher ({report.Dispatcher}) took the stop and is still stopping after {waited} s",

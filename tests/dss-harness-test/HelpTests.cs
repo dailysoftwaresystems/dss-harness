@@ -2920,10 +2920,12 @@ public sealed partial class HelpTests
             text,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The arm registry (mutations.registry) both trees changed is merged by arm, unasked - each arm from the side that alone added, removed or "
+            "The arm registry (mutations.registry) both trees changed is merged by arm, unasked - each arm, and each section's heading (the comments a "
+            + "blank line parts from the row below them), from the side that alone added, removed or "
             + "changed it, each version as its tree holds it, from nothing where neither held a registry before - and taken only where the merged text "
-            + "reads as a registry of the tree as the command leaves it, as check-mutations reads one ('help mutations'); an arm the two changed "
-            + "differently, a version that cannot be read as a registry, or a merged text that does not read as one refuses the path, each shown, and so "
+            + "reads as a registry of the tree as the command leaves it, as check-mutations reads one ('help mutations'); an arm or a heading the two "
+            + "changed differently, a heading no row of the merge would stand under, a version that cannot be read as a registry, or a merged text that "
+            + "does not read as one refuses the path, each shown, and so "
             + "do shared bytes that cannot be found, since an arm one side removed would come back.",
             text,
             StringComparison.Ordinal);
@@ -3360,7 +3362,7 @@ public sealed partial class HelpTests
                 + $"{GhProcess.Limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - the step's timeoutMinutes bounds its "
                 + "attempt, and a read in flight ends with it - and one past it ends the step incomplete "
                 + $"({HarnessExit.Incomplete}), which runs it again; a ci-wait reads again at its next poll where a read failed or passed it, "
-                + $"and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running or its wait is spent.",
+                + $"saying each, and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running or its wait is spent.",
             prose,
             StringComparison.Ordinal);
 

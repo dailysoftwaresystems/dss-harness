@@ -129,8 +129,8 @@ public sealed record ProcessRequest
 
     /// <summary>
     /// Whether the child is bound to this process's life: on Windows it is placed, before it runs a line of its own, in the
-    /// one job object its runner holds for as long as the runner lives - the life of the process, for the runner the
-    /// container builds - which ends every member when its last handle closes. So this process ending in any way, a hard
+    /// one job object this process holds for its whole life, whichever operation's runner starts it, which ends every
+    /// member when its last handle closes. So this process ending in any way, a hard
     /// kill among them, ends the child and all it started at once, as a host ends a dispatched leg whose dispatcher has
     /// gone. Its own end and a stop are as any other child's: what it leaves running at its normal end lives on until this
     /// process ends. On Linux and macOS the child starts as any other: an interrupt or a termination signal this process

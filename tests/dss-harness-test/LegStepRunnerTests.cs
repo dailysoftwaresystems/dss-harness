@@ -188,7 +188,7 @@ public sealed class LegStepRunnerTests : IDisposable
         var record = Assert.IsType<ProcessScope>(legs.Scope).Record();
         var file = OrchestratorLayout.ChildFile(layout.InstanceDirectory("checks", inAnAgent ? "a1" : null), Environment.ProcessId);
 
-        record.Placed(Environment.ProcessId, TestHost.AssemblyProgram, group: true);
+        record.Placed(Environment.ProcessId, started: null, TestHost.AssemblyProgram, group: true);
 
         Assert.True(File.Exists(file), $"the scope's record is not at '{file}'");
         Assert.True(JsonNode.DeepEquals(JsonValue.Create(true), JsonNode.Parse(File.ReadAllText(file))!["group"]), File.ReadAllText(file));

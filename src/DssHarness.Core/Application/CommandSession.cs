@@ -243,13 +243,13 @@ public sealed class CommandSession : IAsyncDisposable
     /// <summary>
     /// Refuses what a session would otherwise ignore or cannot honour, before any service is built for it: a step's end
     /// handed to no operation, a document with no stopped form to answer a stop with, a stopped form for an operation
-    /// that answers with no document, and the options and parts of a front end not honoured yet, which
-    /// this build would otherwise run without a word.
+    /// that answers with no document, and a front end's own output or prompt, which this build does not honour yet and
+    /// would otherwise run without a word.
     /// </summary>
     /// <param name="options">What the operation is asked and how it runs.</param>
     /// <param name="frontEnd">What the front end supplies.</param>
     /// <exception cref="InvalidOperationException">The options contradict themselves or the front end.</exception>
-    /// <exception cref="NotSupportedException">An option or a part of the front end this build does not honour yet.</exception>
+    /// <exception cref="NotSupportedException">The front end supplies an output or a prompt of its own, which this build does not honour yet.</exception>
     internal static void RequireHonoured(SessionOptions options, SessionFrontEnd? frontEnd)
     {
         ArgumentNullException.ThrowIfNull(options);

@@ -193,7 +193,7 @@ public sealed class CiWaitStepRunner(
         // Each read of the forge is bounded by gh's own limit, never by the step's time limit: a read that stalls is ended
         // and read again at the next poll, while the wait goes on, and the attempt's own limit ends a read in flight with it.
         var step = run.Step;
-        var request = new CiChecksRequest(commit)
+        var request = new CiChecksRequest(commit, Type)
         {
             Once = accepted,
             Appear = TimeSpan.FromSeconds(step.AppearSeconds ?? CiChecksRequest.DefaultAppearSeconds),

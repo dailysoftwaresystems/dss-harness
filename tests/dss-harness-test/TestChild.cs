@@ -43,6 +43,7 @@ internal static class TestChild
             "spawn-holder" => SpawnHolder(standardOutput, arguments),
             "spawn-orphan-holder" => SpawnOrphanHolder(standardOutput, arguments),
             "own-group-and-sleep" => OwnGroupAndSleep(arguments),
+            "own-group-note-term-and-sleep" => OwnGroupNoteTermAndSleep(arguments),
             "own-session-and-sleep" => OwnSessionAndSleep(arguments),
             "ignore-term-and-sleep" => IgnoreTermAndSleep(arguments),
             "ignore-hup-and-sleep" => IgnoreHupAndSleep(arguments),
@@ -517,7 +518,7 @@ internal static class TestChild
         // its id acts on a process that stands apart.
         var apart = Until(() => arguments[2] switch
         {
-            "own-group-and-sleep" => getpgid(holder.Id) == holder.Id,
+            "own-group-and-sleep" or "own-group-note-term-and-sleep" => getpgid(holder.Id) == holder.Id,
             "own-session-and-sleep" => getsid(holder.Id) == holder.Id,
             _ => true,
         });
@@ -567,6 +568,27 @@ internal static class TestChild
         }
 
         Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));
+        return 0;
+    }
+
+    /// <summary>
+    /// Moves to a process group of its own, as <c>timeout</c> does, writes <c>asked</c> into the file <c>arguments[0]</c>
+    /// names when it is asked to end - and then ends as asked - and sleeps for the milliseconds <c>arguments[1]</c> gives:
+    /// what ended it says whether it was asked first or killed where it stood.
+    /// </summary>
+    private static int OwnGroupNoteTermAndSleep(string[] arguments)
+    {
+        if (OperatingSystem.IsWindows() || setpgid(0, 0) != 0)
+        {
+            return 98;
+        }
+
+        using var noting = System.Runtime.InteropServices.PosixSignalRegistration.Create(
+            System.Runtime.InteropServices.PosixSignal.SIGTERM,
+            _ => File.WriteAllText(arguments[0], "asked"));
+
+        Thread.Sleep(int.Parse(arguments[1], CultureInfo.InvariantCulture));
+
         return 0;
     }
 

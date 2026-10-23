@@ -421,6 +421,36 @@ public sealed class PhysicalFileSystemTests
         Assert.Equal(expected, Win32Files.Extended(path));
     }
 
+    /// <summary>
+    /// On Windows, a volume or a Windows that cannot rename as POSIX does - each error it answers so with - is handed back
+    /// to Windows' own rename, nothing renamed meanwhile; and a rename Windows refuses is raised as the runtime's own file
+    /// calls raise it, naming where the file was to go.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public void TryReplace_HandsAVolumeThatCannotRenameAsPosixBackToWindowsOwnRename()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows renames through a handle's information.");
+
+        using var temp = new TempDirectory();
+        var source = temp.Combine("new.json");
+        var destination = temp.Combine("record.json");
+        File.WriteAllText(source, "new");
+        File.WriteAllText(destination, "old");
+
+        foreach (var unsupported in new[] { 1, 50, 87 })
+        {
+            Assert.False(Win32Files.TryReplace(source, destination, (_, _) => unsupported), $"error {unsupported} was not handed back to Windows' own rename");
+        }
+
+        Assert.Equal(("new", "old"), (File.ReadAllText(source), File.ReadAllText(destination)));
+
+        var refused = Assert.Throws<UnauthorizedAccessException>(() => Win32Files.TryReplace(source, destination, (_, _) => 5));
+
+        Assert.Equal($"{new Win32Exception(5).Message} : '{destination}'", refused.Message);
+        Assert.Equal(32, Assert.Throws<IOException>(() => Win32Files.TryReplace(source, destination, (_, _) => 32)).HResult);
+    }
+
     /// <summary>On Windows, an interruption stops the looking between one entry and the next, rather than after the walk.</summary>
     [Fact]
     public void FindHeld_StopsForAnInterruption()

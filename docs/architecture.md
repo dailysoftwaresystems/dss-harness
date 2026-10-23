@@ -156,18 +156,23 @@ that made a session of its own away from the child's tree is not reached, and no
 what it holds. A process table that cannot be read - macOS's is read through `ps`, which a session
 that has used up every process it may start leaves unable to start - takes nothing from the stop:
 the group is still asked and then killed by its id, which needs no table, the tree is still ended,
-and what went unreached is said in the result (`ProcessResult.Uncontained`), or in the
-cancellation where the caller gave up. A process killed there - a crash, `kill -9` - ends nothing
+and what went unreached is said in the result (`ProcessResult.Uncontained`), or, where the caller
+gave up, carried by the cancellation it is thrown (`ProcessStoppedException.Uncontained`) and said
+in its message. A process killed there - a crash, `kill -9` - ends nothing
 of the sessions it started, so each one a step of an orchestrator starts is recorded while it runs,
 by the runner through the tool's own records: once the child is placed in its session and before
 it is said to have started, `<step>/children/<session>.json` in the step's own directory - its
-session (the child's process id), the child's start stamp, its program, and the process that
+session (the child's process id), the child's start stamp - said by `contain-exec` of its own start
+on the channel, just before it becomes the program, which keeps it, so a child that ends at once
+is recorded all the same - its program, and the process that
 started it with that process's machine and stamp (`ChildSessions`, the request's
 `SessionRecord`) - and taken back once the runner has ended the session. The same record, with
 `group: true`, names the process group a run's machine step's legs' work leads (below: a bound child
 under a `ProcessScope`), taken back once the child has ended and nothing is left in its group. A
 record that cannot be
-written is a start that failed: the child is ended, and never said to have started. Every command
+written - one whose child's start nothing can read among them - is a start that failed: the child
+is ended, and never said to have started; a defect that keeps one from being written, a record that
+would not read back among them, ends the child too, and is raised as it is. Every command
 over an orchestrator - `create-`, `list-` and `delete-orchestrator`, each agent verb, and each run
 verb over a run already made - first
 sweeps its records, before it reads anything else of it: a session or group whose starter still stands is
@@ -187,9 +192,10 @@ record that does not read as one is said and left, and a starter on another mach
 to have gone. Windows records nothing: its job already ends a killed starter's children.
 
 A request can ask instead for a child **bound** to the harness's life (`ProcessRequest.Bound`):
-on Windows it is placed through `contain-exec` too, in the one job object the runner holds for as
-long as it lives - the process's life, for the runner the container builds - which ends every
-member when its last handle closes; so the harness ending in any way, a hard kill among them, ends
+on Windows it is placed through `contain-exec` too, in the one job object the process holds for its
+whole life - whichever operation's runner starts it, though each operation is given services of its
+own - which ends every member when its last handle closes; so the harness ending in any way, a hard
+kill among them, ends
 the child and all it started at once. Its own end and a stop are as any other child's: nothing is
 terminated as it ends, and what it leaves running lives on until the harness ends. Every phase of
 a leg a dispatcher runs on its own machine - a build, a test, a runner's step, a mutation arm's
@@ -200,8 +206,11 @@ line. A child held in a job - contained or bound - is given build servers of its
 environment names none: the compiler's program-database server listens at an endpoint named for
 the job (`_MSPDBSRV_ENDPOINT_`), and the build engine leaves no node for a later build
 (`MSBUILDDISABLENODEREUSE=1`) - a server a member starts ends with the job, and one shared with
-another dispatcher's builds would be taken from them mid-build. So is the ssh or wsl.exe that
-carries a leg to a host (`HostCommand.Bound`): the host's leg ends when its input does. On Linux
+another dispatcher's builds would be taken from them mid-build. An endpoint named for a job of the
+harness's own is replaced too: a harness a bound phase of another started inherits that one's, and
+a server its own children started there would end with its job while the outer builds still used
+it; an endpoint the user named is kept. The ssh or wsl.exe that carries a leg to a host is bound
+too (`HostCommand.Bound`): the host's leg ends when its input does. On Linux
 and macOS a bound child starts as any other: an interrupt or a termination signal given to the
 harness ends it with the harness's stop, a hang-up of its terminal reaches it as it reaches the
 harness, and a kill of the harness alone does not reach it - `stop-run --now` ends the harness with
@@ -3714,13 +3723,19 @@ trees contend over is the lock above, which stays in the main checkout.
 A run is stopped from another terminal by `stop-run <run id>`, typed in the tree that ran it: it
 writes `<run id>.stop.json` beside the run's directory, as its owner file is (`<run id>.owner.json`),
 which the run's dispatcher looks for every `StopCadence.PollEvery` while it owns the directory, takes -
-recorded taken among the run's own records (`stopped.json`, `RunStops.TakenFileOf`) and the request
-removed - and stops on as an interrupt stops it: every leg stopped where it stands, its ledger
-written with what was reached, exit 130, a line naming who asked. `stop-run` waits 60 s for the
+recorded taken among the run's own records (`stopped.json`, `RunStopTaken`, `RunStops.TakenFileOf`)
+and only then the request removed - and stops on as an interrupt stops it: every leg stopped where it
+stands, its ledger written with what was reached, exit 130, a line naming who asked. A stop is taken
+only where its taking is recorded: one whose record cannot be written, or whose request cannot be
+read just then, is said once in the run's terminal and stays asked for the next look, so a run never
+stops while whoever asked would hear that nothing was stopped. Each file is read as its own shape: a
+request that does not read as one is said and removed, and stops nothing; a record that does not read
+as one is said, and is no stop taken. `stop-run` waits 60 s for the
 dispatcher to give its directory up, and reads the run's record: there, the run stopped (0), naming
 it; not there, the run ended on its own before its dispatcher took a stop, so nothing was stopped
-(13). The record is the run's, not an asker's, so two terminals asking at once, or one asking again
-while the run stops, all hear the same. The dispatcher's watch ends before its directory is given
+(13). Every exit names the stop record that stands - the request while it is asked, the run's record
+once taken - and never a request the command took back. The record is the run's, not an asker's,
+so two terminals asking at once, or one asking again while the run stops, all hear the same. The dispatcher's watch ends before its directory is given
 up, and gives it up however it ends (`RunStopWatch.EndThenAsync`), taking back a request it never
 took, so no stop is ever taken by a run that has ended. Not
 stopped in time, the request stays asked (13), and `--now` ends the dispatcher's process where it
@@ -4648,27 +4663,42 @@ see *Seeding and folding*): a function of three texts' bytes - what both sides l
 they held one, the main tree's and an agent's - that reads no file, no clock and no configuration.
 Each text is read, through the one reader, as the lines above its first row down to their last blank
 line, its segments - each one row with the comment and blank lines directly above it - and the
-lines below its last row. An arm is the segments naming it, wherever they stand, ids compared
-ignoring case, and two versions of an arm are the same where each line's text is, the blank lines
-that open each segment left out: they only part it from what stands above it, so an arm removed or
-added beside another changes nothing of that one. How a line ends is no part of it either, so a
-checkout with other line endings changes nothing. Each arm is taken from the
+lines below its last row. The comments a blank line parts from the row below them are a heading - a
+section's header - and never that row's arm's, while the comments abutting a row are its arm's own.
+An arm is the segments naming it, wherever they stand, ids compared ignoring case, and two versions
+of an arm are the same where each of its own lines' text is, the blank lines and the heading that
+open each segment left out: they only part it from what stands above it, so an arm removed or added
+beside another, or before a section's first arm, changes nothing of that one. How a line ends is no
+part of it either, so a checkout with other line endings changes nothing. Each arm is taken from the
 side that alone added, removed or changed it, and one both changed alike is one. An arm each changed
 its own way, one a side removed and the other changed, or one both added differently - under ids
 that differ only in case, among them - is a conflict (`ArmConflict`), said with each side's lines
 that the versions do not all hold and each line's number, the three texts called what the caller
 calls them (`MergeSides`). With no text both held, an arm one side has is kept: its removal by the
-other could not be told from its addition. The lines above the first row, and those below the last,
-are each weighed the same way, as one. A text that is not UTF-8, holds a row naming no arm, or holds
+other could not be told from its addition. The lines above the first row, those below the last, and
+each heading are each weighed the same way, as one - a heading as the one above an arm's segment in
+its place among the arm's segments, where a merge lays one side's segments of an arm over the
+other's: a heading one side alone renamed or removed is that side's, one a side moved to another
+arm's row is removed above the one and added above the other, and one both changed differently is a
+conflict over the heading, named for the arm whose row it stands above
+(`ArmConflict.OverTheHeading`). A text that is not UTF-8, holds a row naming no arm, or holds
 a line that opens with a byte order mark - which the one reader refuses, since standing first it
 would be read as the text's own - is not merged at all, and the result says which of the three and
 why.
 
 The merged text is the main tree's, line for line, changed only where the agent contributed. The
-main tree's segments stay where they stand. An arm taken from the agent in place of the main tree's
-lies over the main tree's segments of it, one for one, each below the blank lines the main tree parts
-it from what stands above it with: where the agent has more, the rest follow the last, and where it
-has fewer, the main tree's remaining places go. A segment of an arm only the agent has stands after
+main tree's segments stay where they stand, each written under the heading taken for its place - or,
+where none is, below the blank lines the main tree parts it from what stands above it with, one of
+them where a heading stood there. An arm taken from the agent in place of the main tree's lies over
+the main tree's segments of it, one for one, in their places: where the agent has more, the rest
+follow the last, and where it has fewer, the main tree's remaining places go. A heading only the
+agent added, whose lines are a heading both held that the merged text already holds above a segment
+of the main tree's, is that one heading - the agent wrote it above a new first arm of its section -
+written once, and an arm only the agent has that stands under it joins that section after the arm
+the heading stands above. A heading taken for a place no segment of the merged text stands in - its
+row dropped by one side, the heading kept or changed by the other - would be read back as part of
+what stands below it, and is a conflict of its own (`ArmConflictKind.HeadsNoArm`). A segment of an
+arm only the agent has stands after
 the nearest segment above it in the agent's text that the merged text holds - a segment of an arm
 kept from the main tree stands as the main tree's like it, or as the arm's last where no later
 segment of the arm is held; where the main tree's version holds none like it, it stands as the main
@@ -4689,7 +4719,8 @@ tree's text, each byte for byte; one in which the main tree changed nothing hold
 the main tree's order, with its line endings and its byte order mark. A merge run again with its own
 result on either side gives that result, byte for byte - what a command needs that wrote the result
 to one tree and was stopped before the other. That holds because a merge is offered only where its
-text reads back as it was merged. Where the lines
+text reads back as it was merged, and each heading of the result stands in the place the side it is
+taken from stood it, so the merge of the result knows it as that side's. Where the lines
 above the first row end is a matter of where a blank line stands, so a segment that keeps a blank
 line above its row and would come to stand first is a conflict of its own
 (`ArmConflictKind.WouldOpenTheText`), as lines with a blank one among them are where no row would be

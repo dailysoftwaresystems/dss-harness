@@ -14,6 +14,9 @@ public sealed class CiChecksServiceTests : IDisposable
 {
     private const string Commit = "0123456789abcdef0123456789abcdef01234567";
 
+    /// <summary>The step waiting, as the lines the wait says name it.</summary>
+    private const string Waiting = "ci-wait";
+
     private readonly TempDirectory _repository = new();
     private HarnessFactory? _harness;
 
@@ -39,7 +42,7 @@ public sealed class CiChecksServiceTests : IDisposable
         };
         var (service, clock) = await ServiceAsync(source);
 
-        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit), Token);
+        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token);
 
         Assert.Equal(CiChecksFound.Green, reading.Found);
         Assert.Equal(["build", "lint", "docs", "deploy"], reading.Checks.Select(check => check.Name));
@@ -66,8 +69,8 @@ public sealed class CiChecksServiceTests : IDisposable
         };
         var atTheEnd = new StubCiJobSource([]) { Readings = [([Check("build")], [])] };
 
-        var red = await (await ServiceAsync(late)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit), Token);
-        var taken = await (await ServiceAsync(atTheEnd)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit) { Appear = TimeSpan.Zero, Wait = TimeSpan.Zero }, Token);
+        var red = await (await ServiceAsync(late)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token);
+        var taken = await (await ServiceAsync(atTheEnd)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting) { Appear = TimeSpan.Zero, Wait = TimeSpan.Zero }, Token);
 
         Assert.Equal((CiChecksFound.Red, 2), (red.Found, late.ChecksRead));
         Assert.Equal("build", Assert.Single(red.Red).Check.Name);
@@ -93,7 +96,7 @@ public sealed class CiChecksServiceTests : IDisposable
                 [1] = new HarnessException(HarnessExit.Incomplete, "no answer"),
             },
         };
-        var once = new CiChecksRequest(Commit) { Once = true };
+        var once = new CiChecksRequest(Commit, Waiting) { Once = true };
         var onceOfAShortWait = once with { Wait = TimeSpan.FromMinutes(1), Poll = TimeSpan.FromMinutes(2) };
 
         var nothing = await (await ServiceAsync(none)).Service.WaitAsync(_repository.Path, once, Token);
@@ -123,7 +126,7 @@ public sealed class CiChecksServiceTests : IDisposable
             FailedReadings = new Dictionary<int, Exception> { [1] = new HarnessException(HarnessExit.CommandFailed, "HTTP 502") },
         };
         var (afterAFailure, failedClock) = await ServiceAsync(failed);
-        var request = new CiChecksRequest(Commit) { Wait = TimeSpan.FromMinutes(1), Poll = TimeSpan.FromSeconds(45) };
+        var request = new CiChecksRequest(Commit, Waiting) { Wait = TimeSpan.FromMinutes(1), Poll = TimeSpan.FromSeconds(45) };
 
         var reading = await service.WaitAsync(_repository.Path, request, Token);
         var readAgain = await afterAFailure.WaitAsync(_repository.Path, request, Token);
@@ -147,11 +150,11 @@ public sealed class CiChecksServiceTests : IDisposable
 
         var green = await (await ServiceAsync(slow)).Service.WaitAsync(
             _repository.Path,
-            new CiChecksRequest(Commit) { Appear = TimeSpan.FromSeconds(60), Wait = TimeSpan.FromMinutes(10), Poll = TimeSpan.FromSeconds(30) },
+            new CiChecksRequest(Commit, Waiting) { Appear = TimeSpan.FromSeconds(60), Wait = TimeSpan.FromMinutes(10), Poll = TimeSpan.FromSeconds(30) },
             Token);
         var none = await (await ServiceAsync(never)).Service.WaitAsync(
             _repository.Path,
-            new CiChecksRequest(Commit) { Appear = TimeSpan.FromSeconds(180), Wait = TimeSpan.FromMinutes(1), Poll = TimeSpan.FromSeconds(30) },
+            new CiChecksRequest(Commit, Waiting) { Appear = TimeSpan.FromSeconds(180), Wait = TimeSpan.FromMinutes(1), Poll = TimeSpan.FromSeconds(30) },
             Token);
 
         Assert.Equal((CiChecksFound.Green, 5), (green.Found, slow.ChecksRead));
@@ -159,9 +162,9 @@ public sealed class CiChecksServiceTests : IDisposable
     }
 
     /// <summary>
-    /// A read the forge failed - 20 - or that passed its limit - 21 - is read again at the next poll; the wait ends with the
-    /// failure only where three reads running failed - a read that answered between starts the count again - or one did as
-    /// its time was spent; and one refused - 13 - ends it at once.
+    /// A read the forge failed - 20 - or that passed its limit - 21 - is said and read again at the next poll; the wait ends
+    /// with the failure only where three reads running failed - a read that answered between starts the count again - or
+    /// one did as its time was spent; and one refused - 13 - ends it at once.
     /// </summary>
     [Fact]
     public async Task AReadThatFailed_IsReadAgain_UntilThreeRunningOrTheWaitsEnd()
@@ -207,16 +210,23 @@ public sealed class CiChecksServiceTests : IDisposable
         };
         var (service, clock) = await ServiceAsync(mended);
 
-        var green = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit), Token);
-        var third = await Assert.ThrowsAsync<HarnessException>(async () => await (await ServiceAsync(broken)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit), Token));
+        var green = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token);
+        var said = _harness!.StandardError.ToString();
+        var third = await Assert.ThrowsAsync<HarnessException>(async () => await (await ServiceAsync(broken)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token));
         var spent = await Assert.ThrowsAsync<HarnessException>(async () => await (await ServiceAsync(late)).Service.WaitAsync(
             _repository.Path,
-            new CiChecksRequest(Commit) { Wait = TimeSpan.FromMinutes(1), Poll = TimeSpan.FromSeconds(30) },
+            new CiChecksRequest(Commit, Waiting) { Wait = TimeSpan.FromMinutes(1), Poll = TimeSpan.FromSeconds(30) },
             Token));
-        var first = await Assert.ThrowsAsync<HarnessException>(async () => await (await ServiceAsync(refused)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit), Token));
-        var counted = await (await ServiceAsync(between)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit), Token);
+        var first = await Assert.ThrowsAsync<HarnessException>(async () => await (await ServiceAsync(refused)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token));
+        var counted = await (await ServiceAsync(between)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token);
 
         Assert.Equal((CiChecksFound.Green, 4), (green.Found, mended.ChecksRead));
+        Assert.Equal(
+            [
+                $"ci-wait: WARN - a read of the checks of {Commit} failed, 1 running of the 3 that end the wait: HTTP 502. They are read again in 30 s.",
+                $"ci-wait: WARN - a read of the checks of {Commit} failed, 2 running of the 3 that end the wait: no answer. They are read again in 30 s.",
+            ],
+            said.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Contains("WARN", StringComparison.Ordinal)));
         Assert.Equal(3, clock.Waits.Count);
         Assert.Equal((HarnessExit.CommandFailed, "HTTP 503", 3), (third.ExitCode, third.Message, broken.ChecksRead));
         Assert.Equal((HarnessExit.CommandFailed, "HTTP 500", 3), (spent.ExitCode, spent.Message, late.ChecksRead));
@@ -242,7 +252,7 @@ public sealed class CiChecksServiceTests : IDisposable
             .Returns(Task.FromException<CiRunReport>(new HarnessException(HarnessExit.CommandFailed, "run 7 not read")));
         var (service, _) = await ServiceAsync(source, legs);
 
-        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit), Token);
+        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token);
 
         Assert.Equal(CiChecksFound.Red, reading.Found);
         Assert.Equal(
@@ -281,7 +291,7 @@ public sealed class CiChecksServiceTests : IDisposable
         legs.ClassifyRunAsync(Arg.Any<string>(), 7, Arg.Any<CancellationToken>()).Returns(new CiRunReport(run, "pipeline", false, [], []));
         var (service, _) = await ServiceAsync(source, legs);
 
-        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit), Token);
+        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token);
 
         Assert.Equal([("pipeline", "Test"), ("pipeline", "Lint")], reading.Red.Select(red => (red.Workflow, red.Step)));
     }
@@ -304,7 +314,7 @@ public sealed class CiChecksServiceTests : IDisposable
         };
         var (service, _) = await ServiceAsync(source);
 
-        _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.WaitAsync(_repository.Path, new CiChecksRequest(Commit), stop.Token));
+        _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), stop.Token));
 
         Assert.Equal(3, source.ChecksRead);
     }
@@ -316,7 +326,7 @@ public sealed class CiChecksServiceTests : IDisposable
         var source = new StubCiJobSource([]) { Readings = [([Check("build", "in_progress", null)], [])] };
         var (service, _) = await ServiceAsync(source, clockOf: ticks => new SetForwardAfterItsFirstReading(ticks));
 
-        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit) { Wait = TimeSpan.FromMinutes(1), Poll = TimeSpan.FromSeconds(20) }, Token);
+        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting) { Wait = TimeSpan.FromMinutes(1), Poll = TimeSpan.FromSeconds(20) }, Token);
 
         Assert.Equal((CiChecksFound.Pending, 4), (reading.Found, source.ChecksRead));
     }
@@ -359,7 +369,7 @@ public sealed class CiChecksServiceTests : IDisposable
             .Returns(new CiRunReport(run, "pipeline", true, [], [new CiLegOutcome("linux", "test (linux)", false, ["failed"], true, false, [], 50, 45, "job name")]));
         var (service, clock) = await ServiceAsync(source, legs);
 
-        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit), Token);
+        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token);
 
         Assert.Equal(CiChecksFound.Red, reading.Found);
         Assert.Empty(clock.Waits);
@@ -382,7 +392,7 @@ public sealed class CiChecksServiceTests : IDisposable
         var source = new StubCiJobSource([]) { Readings = [([], [])] };
         var (service, clock) = await ServiceAsync(source);
 
-        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit) { Appear = TimeSpan.FromSeconds(60), Poll = TimeSpan.FromSeconds(30) }, Token);
+        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting) { Appear = TimeSpan.FromSeconds(60), Poll = TimeSpan.FromSeconds(30) }, Token);
 
         Assert.Equal(CiChecksFound.None, reading.Found);
         Assert.Empty(reading.Checks);
@@ -397,7 +407,7 @@ public sealed class CiChecksServiceTests : IDisposable
         var source = new StubCiJobSource([]) { Readings = [([Check("build")], [new CiCommitStatus("deploy", "pending", "", null)])] };
         var (service, _) = await ServiceAsync(source);
 
-        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit) { Wait = TimeSpan.FromMinutes(1), Poll = TimeSpan.FromSeconds(20) }, Token);
+        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting) { Wait = TimeSpan.FromMinutes(1), Poll = TimeSpan.FromSeconds(20) }, Token);
 
         Assert.Equal(CiChecksFound.Pending, reading.Found);
         Assert.Equal(["deploy"], reading.Pending.Select(check => check.Name));
@@ -415,7 +425,7 @@ public sealed class CiChecksServiceTests : IDisposable
         var source = new StubCiJobSource([]) { Readings = [([Check("build"), Check("e2e", conclusion: conclusion)], [])] };
         var (service, _) = await ServiceAsync(source);
 
-        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit), Token);
+        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token);
 
         Assert.Equal(CiChecksFound.Unsettled, reading.Found);
         Assert.Equal(["e2e"], reading.Unsettled.Select(check => check.Name));
@@ -431,7 +441,7 @@ public sealed class CiChecksServiceTests : IDisposable
         };
         var (service, _) = await ServiceAsync(source);
 
-        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit) { Ignore = ["flaky*", "lint", "Lint"] }, Token);
+        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting) { Ignore = ["flaky*", "lint", "Lint"] }, Token);
 
         Assert.Equal(CiChecksFound.Green, reading.Found);
         Assert.Equal(["build"], reading.Checks.Select(check => check.Name));
@@ -448,7 +458,7 @@ public sealed class CiChecksServiceTests : IDisposable
     [InlineData("*(macos)", "test (macos) again", false)]
     [InlineData("a.c*", "abc", false)]
     public void AnIgnore_LeavesOutTheNamesItWritesOrMatches(string pattern, string name, bool ignored)
-        => Assert.Equal(ignored, new CiChecksRequest(Commit) { Ignore = [pattern] }.Ignores(name));
+        => Assert.Equal(ignored, new CiChecksRequest(Commit, Waiting) { Ignore = [pattern] }.Ignores(name));
 
     /// <summary>What a check came to, by its conclusion or its status's state, said in one place.</summary>
     [Theory]
@@ -490,7 +500,7 @@ public sealed class CiChecksServiceTests : IDisposable
             await _harness.InitializeHarnessAsync(_repository.Path, Token, new HarnessConfig());
         }
 
-        return (new CiChecksService(_harness.ContextLoader, source, legs ?? Substitute.For<ICiLegsService>(), clockOf?.Invoke(clock) ?? clock), clock);
+        return (new CiChecksService(_harness.ContextLoader, source, legs ?? Substitute.For<ICiLegsService>(), _harness.Output, clockOf?.Invoke(clock) ?? clock), clock);
     }
 
     /// <summary>A clock whose ticks are <paramref name="ticks"/>', and whose time of day is set a day forward once it has been read once.</summary>

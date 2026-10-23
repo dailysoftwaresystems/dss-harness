@@ -277,8 +277,10 @@ internal static class Containment
         }
 
         // Said before the program is become, which closes the channel: a channel closed after this
-        // line and nothing more is a program that is running.
-        status.Placed();
+        // line and nothing more is a program that is running. The start said with it is this process's,
+        // which the program it becomes keeps: read here, while it stands, it is what a record of the
+        // child tells it from a later process by, however soon the program ends.
+        status.Placed(new ProcessIdentity(new HostPlatform()).Current);
 
         try
         {

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
@@ -9,15 +10,14 @@ namespace DssHarness.Core.Runs;
 /// <summary>
 /// A stop asked of a running leg run by another process (<c>stop-run</c>): asked in <c>&lt;runs&gt;/&lt;run&gt;.stop.json</c>,
 /// beside the run's directory and its owner file, and once its dispatcher takes it, recorded taken in the run's own
-/// directory (<see cref="RunStops.TakenFileOf"/>).
+/// directory (<see cref="RunStopTaken"/>).
 /// </summary>
 /// <param name="Schema">The record's version: 1.</param>
 /// <param name="AskedUtc">When the stop was asked.</param>
 /// <param name="Machine">The machine the process that asked runs on.</param>
 /// <param name="ProcessId">The process that asked.</param>
 /// <param name="ProcessStamp">What tells the process that asked from a later one given its id, where its platform says; left out where it says none.</param>
-/// <param name="TakenUtc">When the run's dispatcher took the stop: said by the run's record of it alone, never by a request.</param>
-public sealed record RunStopRequest(int Schema, DateTimeOffset AskedUtc, string Machine, int ProcessId, string? ProcessStamp = null, DateTimeOffset? TakenUtc = null)
+public sealed record RunStopRequest(int Schema, DateTimeOffset AskedUtc, string Machine, int ProcessId, string? ProcessStamp = null)
 {
     /// <summary>The version this build writes and reads.</summary>
     public const int Version = 1;
@@ -30,8 +30,28 @@ public sealed record RunStopRequest(int Schema, DateTimeOffset AskedUtc, string 
 }
 
 /// <summary>
+/// The run's record that its dispatcher took a stop asked of it: <c>stopped.json</c> among the run's own records
+/// (<see cref="RunStops.TakenFileOf"/>), the request it took and when - what every process that asked reads, and the one
+/// thing that says a run was stopped.
+/// </summary>
+/// <param name="Schema">The record's version: 1.</param>
+/// <param name="TakenUtc">When the run's dispatcher took the stop.</param>
+/// <param name="Asked">The request it took, as it was asked.</param>
+public sealed record RunStopTaken(int Schema, DateTimeOffset TakenUtc, RunStopRequest Asked)
+{
+    /// <summary>The version this build writes and reads.</summary>
+    public const int Version = 1;
+
+    /// <summary>What is wrong with this record; null when nothing is.</summary>
+    public string? Problem()
+        => Schema != Version ? string.Create(CultureInfo.InvariantCulture, $"its schema is {Schema}, and this build reads {Version}")
+            : Asked.Problem() is { } asked ? $"the request it took does not read as one: {asked}"
+            : null;
+}
+
+/// <summary>
 /// The stop another process asks of a running leg run - a build, a test, a run or a mutation sweep - and the run's watch
-/// for it: the one writer and the one reader of <see cref="RunStopRequest"/>.
+/// for it: the one writer and the one reader of <see cref="RunStopRequest"/> and <see cref="RunStopTaken"/>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -40,8 +60,10 @@ public sealed record RunStopRequest(int Schema, DateTimeOffset AskedUtc, string 
 /// removed - and stops as an interrupt stops it: each leg stopped where it stands, the ledger written with what was
 /// reached, and the run ending interrupted. The record is the run's, not an asker's: every process that asked reads it
 /// once the run's owner has gone (<see cref="TakenBack"/>), however many asked and whenever, and a run that ended on its
-/// own before its next look is never said to have been stopped. The run's id is its own, so a request is never one for a
-/// later run.
+/// own before its next look is never said to have been stopped. A stop is taken only where its taking is recorded: one
+/// whose record cannot be written, or whose request cannot be read just then, is said once and stays asked for the next
+/// look, so a run never stops while every process that asked would hear that nothing was stopped. The run's id is its
+/// own, so a request is never one for a later run.
 /// </para>
 /// <para>
 /// No request is left behind the run: one its dispatcher never took - asked too late, or again once it had taken one -
@@ -50,11 +72,12 @@ public sealed record RunStopRequest(int Schema, DateTimeOffset AskedUtc, string 
 /// <see cref="ReleaseAbandonedBeside"/>): an abandoned run's claim and its stop go together.
 /// </para>
 /// <para>
-/// A request is read strictly, and one that does not read as one is said and removed, and stops nothing: a run is never
-/// stopped on a record nobody can say who wrote.
+/// A request and the run's record of the stop it took are each read strictly, as the shape of their own file: a request
+/// that does not read as one is said and removed, and stops nothing, and a record that does not read as one is said and
+/// is no stop taken - a run is never stopped, or said stopped, on a record nobody can say who wrote.
 /// </para>
 /// </remarks>
-/// <param name="fileSystem">Reads, writes and removes the requests.</param>
+/// <param name="fileSystem">Reads, writes and removes the requests, and writes and reads the runs' records of those taken.</param>
 /// <param name="identity">This process, the one that asks, and how another is described and told.</param>
 /// <param name="output">Says a request that could not be read, recorded taken or removed, and the one a run takes.</param>
 /// <param name="ownership">The runs' claims on their directories, which an abandoned run's stop goes with.</param>
@@ -69,6 +92,9 @@ public sealed class RunStops(IFileSystem fileSystem, IProcessIdentity identity, 
 
     /// <summary>What a request is, as a line names it.</summary>
     public const string RecordKind = "the stop asked of a run";
+
+    /// <summary>What the run's record of the stop it took is, as a line names it.</summary>
+    public const string TakenKind = "the run's record of the stop it took";
 
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
 
@@ -94,21 +120,26 @@ public sealed class RunStops(IFileSystem fileSystem, IProcessIdentity identity, 
     /// <exception cref="HarnessException">It could not be written: refused, naming the file.</exception>
     public RunStopRequest Ask(string runDirectory)
     {
-        var request = new RunStopRequest(RunStopRequest.Version, _clock.GetUtcNow(), _identity.CurrentMachine, _identity.CurrentId, _identity.Current, TakenUtc: null);
+        var request = new RunStopRequest(RunStopRequest.Version, _clock.GetUtcNow(), _identity.CurrentMachine, _identity.CurrentId, _identity.Current);
 
-        Write(FileOf(runDirectory), request, "Until it can be, the run cannot be asked to stop.");
+        Write($"The stop request '{FileOf(runDirectory)}'", FileOf(runDirectory), request, request.Problem(), "Until it can be, the run cannot be asked to stop.");
 
         return request;
     }
 
     /// <summary>
     /// Takes the request for the run kept at <paramref name="runDirectory"/>: recorded taken among the run's records, for
-    /// every process that asked to read, and the request removed. <see langword="null"/> where none is there, and where one
-    /// does not read as a request, which is said, removed and stops nothing.
+    /// every process that asked to read, and only then the request removed. <see langword="null"/> where none is there, and
+    /// where one does not read as a request, which is said, removed and stops nothing.
     /// </summary>
     /// <param name="runDirectory">The run's directory of records.</param>
     /// <param name="command">The command taking it, which its lines name.</param>
-    public RunStopRequest? Take(string runDirectory, string command)
+    /// <returns>The run's record of the stop it took.</returns>
+    /// <exception cref="HarnessException">
+    /// The request could not be read just then, or its taking could not be recorded: nothing is taken, and the request
+    /// stays asked for the next look.
+    /// </exception>
+    public RunStopTaken? Take(string runDirectory, string command)
     {
         var file = FileOf(runDirectory);
 
@@ -117,16 +148,15 @@ public sealed class RunStops(IFileSystem fileSystem, IProcessIdentity identity, 
             return null;
         }
 
-        var taken = request with { TakenUtc = _clock.GetUtcNow() };
+        var taken = new RunStopTaken(RunStopTaken.Version, _clock.GetUtcNow(), request);
+        var record = TakenFileOf(runDirectory);
 
-        try
-        {
-            Write(TakenFileOf(runDirectory), taken, "The run stops all the same, and a process that asked hears that nothing was stopped.");
-        }
-        catch (HarnessException unrecorded)
-        {
-            _output.Warn(command, unrecorded.Message);
-        }
+        Write(
+            $"'{record}', {TakenKind},",
+            record,
+            taken,
+            taken.Problem(),
+            "The stop stays asked, untaken, and is taken at a later look once it can be: a run is said stopped only where its record says so.");
 
         Remove(file, command);
         _output.Warn(command, $"{Asker(request)} asked this run to stop ({RunStopService.CommandName}): its legs are stopped where they stand, as an interrupt stops them.");
@@ -136,8 +166,8 @@ public sealed class RunStops(IFileSystem fileSystem, IProcessIdentity identity, 
 
     /// <summary>
     /// What a process that asked the run kept at <paramref name="runDirectory"/> to stop reads once the run's owner has
-    /// gone: whether its dispatcher took a stop, as the run's records say. A request nothing took is taken back, so none
-    /// stays behind the run; the record stays, the run's own.
+    /// gone: whether its dispatcher took a stop, as the run's records say (<see cref="IsTaken"/>). A request nothing took
+    /// is taken back, so none stays behind the run; the record stays, the run's own.
     /// </summary>
     /// <param name="runDirectory">The run's directory of records.</param>
     /// <param name="command">The command taking it back, which its lines name.</param>
@@ -145,12 +175,35 @@ public sealed class RunStops(IFileSystem fileSystem, IProcessIdentity identity, 
     {
         Forget(runDirectory, command);
 
-        return IsTaken(runDirectory);
+        return IsTaken(runDirectory, command);
     }
 
-    /// <summary>Whether the run kept at <paramref name="runDirectory"/> took a stop, as its records say: read only, nothing taken back.</summary>
+    /// <summary>
+    /// Whether the run kept at <paramref name="runDirectory"/> took a stop, as its records say: read only, nothing taken
+    /// back. A record there that cannot be read as the run's record of a stop taken is said, and is no stop taken.
+    /// </summary>
     /// <param name="runDirectory">The run's directory of records.</param>
-    public bool IsTaken(string runDirectory) => _fileSystem.KindOf(TakenFileOf(runDirectory)) == PathKind.File;
+    /// <param name="command">The command reading it, which its lines name.</param>
+    public bool IsTaken(string runDirectory, string command)
+    {
+        var file = TakenFileOf(runDirectory);
+
+        if (!MachineWideFile.TryRead<RunStopTaken>(_fileSystem, file, out var taken, out var unread))
+        {
+            _output.Warn(command, $"'{file}' is {TakenKind}, and could not be read as one: {unread.Message.TrimEnd('.')}. It is no stop taken.");
+
+            return false;
+        }
+
+        if (taken?.Problem() is { } problem)
+        {
+            _output.Warn(command, $"'{file}' is {TakenKind}, and does not read as one: {problem}. It is no stop taken.");
+
+            return false;
+        }
+
+        return taken is not null;
+    }
 
     /// <summary>
     /// Takes back a request for the run kept at <paramref name="runDirectory"/> that nothing will take any more - its
@@ -217,7 +270,7 @@ public sealed class RunStops(IFileSystem fileSystem, IProcessIdentity identity, 
         ArgumentException.ThrowIfNullOrWhiteSpace(runDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
 
-        return RunStopWatch.Start(this, runDirectory, command, (wait, token) => Task.Delay(wait, _clock, token), cancellationToken);
+        return RunStopWatch.Start(this, runDirectory, command, (wait, token) => Task.Delay(wait, _clock, token), message => _output.Warn(command, message), cancellationToken);
     }
 
     /// <summary>The process that asked <paramref name="request"/>, as a line names it, never naming another machine.</summary>
@@ -233,10 +286,21 @@ public sealed class RunStops(IFileSystem fileSystem, IProcessIdentity identity, 
     /// The request in <paramref name="file"/>; <see langword="null"/> where none is there, and where one does not read as a
     /// request, which is said and removed.
     /// </summary>
+    /// <exception cref="HarnessException">The file could not be read just then: it stays, for the next look.</exception>
     private RunStopRequest? Read(string file, string command)
     {
         if (!MachineWideFile.TryRead<RunStopRequest>(_fileSystem, file, out var request, out var unread))
         {
+            // A file this process could not open or read just then - another holding it, a fault of the disk that can pass
+            // - is no request that does not read as one, and is never removed for it.
+            if (unread is not JsonException)
+            {
+                throw new HarnessException(
+                    HarnessExit.Refused,
+                    $"'{file}', {RecordKind}, could not be read: {unread.Message.TrimEnd('.')}. It stays asked, untaken, and is read again at a later look.",
+                    unread);
+            }
+
             _output.Warn(command, $"'{file}' is {RecordKind}, and does not read as one: {unread.Message.TrimEnd('.')}. It was removed, and stops nothing.");
             Remove(file, command);
 
@@ -254,12 +318,19 @@ public sealed class RunStops(IFileSystem fileSystem, IProcessIdentity identity, 
         return request;
     }
 
-    /// <summary>Writes <paramref name="request"/> whole to <paramref name="file"/>; refused, naming it, where it cannot be.</summary>
-    private void Write(string file, RunStopRequest request, string until)
-        => MachineWideFile.Written(
-            $"The stop request '{file}'",
-            until,
-            () => JsonStateFile.Write(_fileSystem, file, request));
+    /// <summary>
+    /// Writes <paramref name="record"/> whole to <paramref name="file"/>; refused, naming it as <paramref name="named"/>
+    /// says, where it cannot be, and never written where it would not read back.
+    /// </summary>
+    private void Write<T>(string named, string file, T record, string? problem, string until)
+    {
+        if (problem is not null)
+        {
+            throw new InvalidOperationException($"Refusing to write '{file}', which would not read back: {problem}.");
+        }
+
+        MachineWideFile.Written(named, until, () => JsonStateFile.Write(_fileSystem, file, record));
+    }
 
     /// <summary>Removes a request, where one is there; one that cannot be removed is said, and left for the next to find it.</summary>
     private void Remove(string file, string command)
@@ -278,6 +349,8 @@ public sealed class RunStops(IFileSystem fileSystem, IProcessIdentity identity, 
 /// <summary>
 /// A running dispatcher's watch for the stop another process asks of its run (<see cref="RunStops"/>): looks every
 /// <see cref="StopCadence.PollEvery"/>, and once a request is taken cancels <see cref="Stopping"/>, which the run is stopped by.
+/// What a look meets that can pass - a request it cannot read just then, a taking it cannot record - is said once, and
+/// looked at again at the next.
 /// </summary>
 public sealed class RunStopWatch
 {
@@ -287,15 +360,18 @@ public sealed class RunStopWatch
     private readonly RunStops _stops;
     private readonly string _runDirectory;
     private readonly string _command;
+    private readonly Action<string> _say;
+    private readonly HashSet<string> _said = new(StringComparer.Ordinal);
     private Task _watching = Task.CompletedTask;
-    private RunStopRequest? _taken;
+    private RunStopTaken? _taken;
     private bool _ended;
 
-    private RunStopWatch(RunStops stops, string runDirectory, string command, CancellationToken cancellationToken)
+    private RunStopWatch(RunStops stops, string runDirectory, string command, Action<string> say, CancellationToken cancellationToken)
     {
         _stops = stops;
         _runDirectory = runDirectory;
         _command = command;
+        _say = say;
         _done = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Stopping = _stopping.Token;
     }
@@ -303,8 +379,8 @@ public sealed class RunStopWatch
     /// <summary>Cancelled once a request is taken; <see cref="Taken"/> then says whose.</summary>
     public CancellationToken Stopping { get; }
 
-    /// <summary>The request the run was stopped by; <see langword="null"/> while none was taken.</summary>
-    public RunStopRequest? Taken
+    /// <summary>The run's record of the stop it was stopped by; <see langword="null"/> while none was taken.</summary>
+    public RunStopTaken? Taken
     {
         get
         {
@@ -316,9 +392,15 @@ public sealed class RunStopWatch
     }
 
     /// <summary>Starts the watch, having looked once already.</summary>
-    internal static RunStopWatch Start(RunStops stops, string runDirectory, string command, Func<TimeSpan, CancellationToken, Task> wait, CancellationToken cancellationToken)
+    internal static RunStopWatch Start(
+        RunStops stops,
+        string runDirectory,
+        string command,
+        Func<TimeSpan, CancellationToken, Task> wait,
+        Action<string> say,
+        CancellationToken cancellationToken)
     {
-        var watch = new RunStopWatch(stops, runDirectory, command, cancellationToken);
+        var watch = new RunStopWatch(stops, runDirectory, command, say, cancellationToken);
 
         if (!watch.Look())
         {
@@ -400,12 +482,29 @@ public sealed class RunStopWatch
                 return false;
             }
 
-            if (_stops.Take(_runDirectory, _command) is not { } request)
+            RunStopTaken? taken;
+
+            try
+            {
+                taken = _stops.Take(_runDirectory, _command);
+            }
+            catch (HarnessException passing)
+            {
+                // Nothing was taken, and the request stays asked: said once, however many looks meet it.
+                if (_said.Add(passing.Message))
+                {
+                    _say(passing.Message);
+                }
+
+                return false;
+            }
+
+            if (taken is null)
             {
                 return false;
             }
 
-            _taken = request;
+            _taken = taken;
         }
 
         _stopping.Cancel();

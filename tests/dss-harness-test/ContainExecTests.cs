@@ -202,7 +202,7 @@ public sealed class ContainExecTests
                 Child("spawn-orphan-and-sleep", "300000", "300000") with { Bound = true },
                 line => (orphan = LearnedProcess.In(line, "orphan=") ?? orphan).Id != 0);
 
-            Assert.IsType<OperationCanceledException>(raised);
+            Assert.IsType<ProcessStoppedException>(raised);
             Assert.True(orphan.Running, $"the sleeper {orphan} was ended by its bound parent's stop");
         }
         finally
@@ -218,7 +218,7 @@ public sealed class ContainExecTests
     [Fact]
     public async Task ABoundChild_OnLinuxAndMacOS_StartsAsAnyOther()
     {
-        Assert.SkipWhen(OperatingSystem.IsWindows(), "on Windows a bound child joins the runner's job, which ABoundChild_OnWindows_EndsWithTheProcessThatStartedIt_KilledWhereItStood holds.");
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "on Windows a bound child joins the job the process holds, which ABoundChild_OnWindows_EndsWithTheProcessThatStartedIt_KilledWhereItStood holds.");
 
         var result = await ContainingRunner().RunAsync(
             Child("print-ids") with { Bound = true },
@@ -273,10 +273,85 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
-    /// On Windows the bound children of one runner share the one job it makes at the first of them, whichever start
-    /// together - each given the compiler's server named for that job and no build node kept - while a contained child is
-    /// given a job of its own; and the job is held by the runner, not by any child's start, so a collection ends none of
-    /// them.
+    /// What the step says of a start is read as it said it: placed - with the start of the process that becomes the
+    /// program, where it said one - and what failed after, the start kept; a line that is neither says nothing.
+    /// </summary>
+    [Fact]
+    public void WhatTheStepSays_IsReadWithTheStartItSaid()
+    {
+        Assert.Equal(new ContainExec.StartHeard(true, null, 0, "boot-1:42"), ContainExec.Heard("placed boot-1:42\n"));
+        Assert.Equal(new ContainExec.StartHeard(true, null, 0), ContainExec.Heard("placed\n"));
+        Assert.Equal(new ContainExec.StartHeard(true, ContainExec.Stage.Start, 2, "boot-1:42"), ContainExec.Heard("placed boot-1:42\nfailed start 2\n"));
+        Assert.Equal(new ContainExec.StartHeard(false, null, 0), ContainExec.Heard("placed two words\n"));
+    }
+
+    /// <summary>
+    /// A run its caller stops once its child has started is thrown as the runner's own stop, contained or not - a
+    /// cancellation every catch of one still takes, carrying what the container could not reach as data: nothing, where
+    /// it reached all it holds or there was none, said as any cancellation is.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AStoppedRun_IsThrownAsAStop_CarryingWhatItsContainerCouldNotReach(bool contained)
+    {
+        var (raised, _) = await RunAndStopOn(
+            Child("say-pid-and-sleep", "300000") with { Contained = contained },
+            line => LearnedProcess.In(line, "pid=") is not null);
+
+        var stopped = Assert.IsType<ProcessStoppedException>(raised);
+
+        Assert.Equal((null, new OperationCanceledException().Message), (stopped.Uncontained, stopped.Message));
+        Assert.True(stopped.CancellationToken.IsCancellationRequested);
+    }
+
+    /// <summary>
+    /// An endpoint named for a job of this tool's own - inherited by a harness a bound phase of another started - is
+    /// replaced by the child's own job's, in whatever case it is named: a server started there under the inner job would
+    /// end with that job while the outer run's builds still used it. The build engine's switch it inherits stands.
+    /// </summary>
+    [Fact]
+    public void AnEndpointOfAnotherJobOfThisTool_IsReplacedByTheChildsOwnJobs()
+    {
+        var inherited = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["_mspdbsrv_endpoint_"] = $"{ProcessRunner.JobPrefix}outer",
+            ["MSBUILDDISABLENODEREUSE"] = "1",
+        };
+
+        ProcessRunner.OwnServers(inherited, $"{ProcessRunner.JobPrefix}inner");
+
+        Assert.Equal(
+            ["MSBUILDDISABLENODEREUSE=1", $"_mspdbsrv_endpoint_={ProcessRunner.JobPrefix}inner"],
+            inherited.Select(pair => $"{pair.Key}={pair.Value}").Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// On Windows the job a bound child is held in is the process's, never the runner's that started it: each operation is
+    /// given a runner of its own, and the bound children of every runner the container builds share the one job the
+    /// process holds for its whole life - one job and one handle, however many operations ran, and never one closed with
+    /// an operation's runner, ending what its children left for the next.
+    /// </summary>
+    [Fact]
+    public async Task BoundChildrenOfEveryOperationsRunner_OnWindows_ShareTheOneJobTheProcessHolds()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "the job a bound child joins is Windows' own; on Linux and macOS a bound child starts as any other.");
+
+        var token = TestContext.Current.CancellationToken;
+        var endpoints = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => ContainingRunner().RunAsync(Child("print-env", ProcessRunner.ProgramDatabaseEndpoint) with { Bound = true }, token)))
+            .WaitAsync(LongBound, token);
+        var scanned = await ContainingRunner(new QuietProcessTable()).RunAsync(Child("print-env", ProcessRunner.ProgramDatabaseEndpoint) with { Bound = true }, token)
+            .WaitAsync(LongBound, token);
+
+        Assert.StartsWith(ProcessRunner.JobPrefix, endpoints[0].StandardOutput, StringComparison.Ordinal);
+        Assert.Equal([endpoints[0].StandardOutput, endpoints[0].StandardOutput], [endpoints[1].StandardOutput, scanned.StandardOutput]);
+    }
+
+    /// <summary>
+    /// On Windows the bound children of a runner given a job maker of its own share the one job it makes at the first of
+    /// them, whichever start together - each given the compiler's server named for that job and no build node kept - while
+    /// a contained child is given a job of its own; and the job is held apart from any child's start, so a collection ends
+    /// none of them.
     /// </summary>
     [Fact]
     public async Task BoundChildren_OnWindows_ShareTheOneJobTheirRunnerMakes_AndHoldsAcrossACollection()
@@ -332,7 +407,7 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
-    /// On Windows a bound child whose runner's job cannot be made never runs, saying why as any start's failure does, and
+    /// On Windows a bound child whose job cannot be made never runs, saying why as any start's failure does, and
     /// the next bound child asks for the job again: a job that could not be made is never kept as one.
     /// </summary>
     [Fact]
@@ -553,7 +628,7 @@ public sealed class ContainExecTests
                 },
                 line => string.Equals(line, "orphaned", StringComparison.Ordinal));
 
-            Assert.IsType<OperationCanceledException>(raised);
+            Assert.IsType<ProcessStoppedException>(raised);
             Assert.NotEqual(0, holder.Id);
             Assert.True(holder.AwaitGone(), $"the holder {holder} outlived the stopped child's container");
             Assert.True(since < ProcessRunner.DrainBound, $"the stopped run waited {since} for the holder's end");
@@ -582,7 +657,7 @@ public sealed class ContainExecTests
                 Child("spawn-orphan-and-sleep", "300000", "300000") with { Contained = true },
                 line => (orphan = LearnedProcess.In(line, "orphan=") ?? orphan).Id != 0);
 
-            Assert.IsType<OperationCanceledException>(raised);
+            Assert.IsType<ProcessStoppedException>(raised);
             Assert.True(orphan.AwaitGone(), $"the sleeper {orphan} outlived the session that held it");
         }
         finally
@@ -611,7 +686,7 @@ public sealed class ContainExecTests
                 Child("spawn-holder", "sleep", "300000", "own-group-and-sleep", "300000") with { Contained = true },
                 line => (holder = LearnedProcess.In(line, "holder=") ?? holder).Id != 0);
 
-            Assert.IsType<OperationCanceledException>(raised);
+            Assert.IsType<ProcessStoppedException>(raised);
             Assert.True(holder.AwaitGone(), $"the descendant {holder} in a group of its own outlived the stop");
             Assert.True(since < ProcessRunner.DrainBound, $"the stopped run waited {since} for the descendant's end");
         }
@@ -637,7 +712,7 @@ public sealed class ContainExecTests
             Child("note-term-and-sleep", noted, "300000") with { Contained = true },
             line => string.Equals(line, "ready", StringComparison.Ordinal));
 
-        Assert.IsType<OperationCanceledException>(raised);
+        Assert.IsType<ProcessStoppedException>(raised);
         Assert.Equal("asked", File.ReadAllText(noted));
     }
 
@@ -670,7 +745,7 @@ public sealed class ContainExecTests
             Assert.True(Until(() => orphan.Id != 0 && File.Exists(ready)), "the leftover never said it refuses to be asked");
             await stop.CancelAsync();
 
-            Assert.IsType<OperationCanceledException>(await Record.ExceptionAsync(() => run.WaitAsync(LongBound, TestContext.Current.CancellationToken)));
+            Assert.IsType<ProcessStoppedException>(await Record.ExceptionAsync(() => run.WaitAsync(LongBound, TestContext.Current.CancellationToken)));
             Assert.True(orphan.AwaitGone(), $"the leftover {orphan}, refusing to be asked, outlived the grace");
         }
         finally
@@ -708,7 +783,7 @@ public sealed class ContainExecTests
             var since = Stopwatch.StartNew();
             await stop.CancelAsync();
 
-            Assert.IsType<OperationCanceledException>(await Record.ExceptionAsync(() => run.WaitAsync(LongBound, TestContext.Current.CancellationToken)));
+            Assert.IsType<ProcessStoppedException>(await Record.ExceptionAsync(() => run.WaitAsync(LongBound, TestContext.Current.CancellationToken)));
             Assert.True(since.Elapsed < ProcessRunner.SessionGrace, $"stopping a child apart from the terminal took {since.Elapsed}");
             Assert.True(child.AwaitGone(), $"the child {child} outlived its stop");
         }
@@ -809,7 +884,7 @@ public sealed class ContainExecTests
     /// <summary>
     /// A contained child stopped on Linux or macOS where the process table cannot be read is stopped
     /// all the same: its group - an orphan in it among them - is asked to end and then made to, and
-    /// the stop says what was not reached instead of failing with the table.
+    /// the stop carries what was not reached, and says it, instead of failing with the table.
     /// </summary>
     [Fact]
     public async Task AContainedChild_StoppedWhereTheTableCannotBeRead_IsStoppedWithItsGroup_AndTheStopSaysWhatWasNotReached()
@@ -825,7 +900,11 @@ public sealed class ContainExecTests
                 line => (orphan = LearnedProcess.In(line, "orphan=") ?? orphan).Id != 0,
                 ContainingRunner(UnreadableTable.Raising));
 
-            Assert.Equal($"The run was stopped, and {UnreadableTable.Unreached("its group was ended")}.", Assert.IsType<OperationCanceledException>(raised).Message);
+            var stopped = Assert.IsType<ProcessStoppedException>(raised);
+
+            Assert.Equal(
+                (UnreadableTable.Unreached("its group was ended"), $"The run was stopped, and {UnreadableTable.Unreached("its group was ended")}."),
+                (stopped.Uncontained, stopped.Message));
             Assert.True(orphan.AwaitGone(), $"the orphan {orphan} in the stopped child's group outlived the stop");
         }
         finally
@@ -1244,7 +1323,6 @@ public sealed class ContainExecTests
         => table is null
             ? new(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram)
             : new(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram, table);
-
     /// <summary>
     /// Starts <paramref name="program"/> directly and then through the step, contained or apart from the terminal, and
     /// holds the second to the first: a program that never ran either way, for the same reason the system gave, said as

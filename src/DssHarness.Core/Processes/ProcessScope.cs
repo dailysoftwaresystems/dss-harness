@@ -15,7 +15,7 @@ namespace DssHarness.Core.Processes;
 /// <see cref="ProcessRequest.ApartFromTerminal"/> starts one, and a bound one recorded through <see cref="Record"/> once it
 /// is placed, as a contained child's session is - nothing there ends either with the process that started it - the record
 /// kept while anything is left in its group. On Windows a child starts as it always does, with a console of its own, and
-/// a bound one is held in the job its runner keeps for its whole life, which ends it with that process; nothing is
+/// a bound one is held in the job the process holds for its whole life, which ends it with the process; nothing is
 /// recorded.
 /// </para>
 /// <para>

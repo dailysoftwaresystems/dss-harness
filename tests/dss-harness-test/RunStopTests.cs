@@ -175,7 +175,8 @@ public sealed class RunStopTests
 
     /// <summary>
     /// A run that ends on its own before its dispatcher takes the stop is never said to have been stopped: its dispatcher's
-    /// end takes back the request it never took, and the command, finding it untaken, says nothing was stopped (13).
+    /// end takes back the request it never took, and the command, finding it untaken, says nothing was stopped (13) -
+    /// naming no request, for none stands.
     /// </summary>
     [Fact]
     public async Task ARunThatEndsBeforeItTakesTheStop_IsNotSaidStopped()
@@ -213,8 +214,8 @@ public sealed class RunStopTests
         Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
         Assert.StartsWith($"run {Run} ended before its dispatcher (pid {Environment.ProcessId}, run {Run}, since ", outcome.Message, StringComparison.Ordinal);
         Assert.EndsWith(") took the stop, so nothing was stopped; the stop was taken back", outcome.Message, StringComparison.Ordinal);
-        Assert.Equal([$"logs: {directory}", $"stop: {RunStops.FileOf(directory)}"], outcome.Details);
-        Assert.Equal(RunStops.FileOf(directory), document.RootElement.GetProperty("records").GetProperty("stop").GetString());
+        Assert.Equal([$"logs: {directory}"], outcome.Details);
+        Assert.Empty(document.RootElement.GetProperty("records").EnumerateObject());
         Assert.False(document.RootElement.GetProperty("stopped").GetBoolean());
         Assert.False(watch.Stopping.IsCancellationRequested, "the run that ended was stopped");
         Assert.False(File.Exists(RunStops.FileOf(directory)));
@@ -239,8 +240,7 @@ public sealed class RunStopTests
 
         if (tookTheStop)
         {
-            // What its dispatcher wrote as it took the stop: the run's record of it.
-            File.WriteAllText(RunStops.TakenFileOf(directory), "{}");
+            TookTheStop(directory);
         }
 
         var outcome = await service.StopAsync(temp.Path, Run, now: false, json: true, TestContext.Current.CancellationToken);
@@ -275,7 +275,7 @@ public sealed class RunStopTests
 
         if (tookTheStop)
         {
-            File.WriteAllText(RunStops.TakenFileOf(directory), "{}");
+            TookTheStop(directory);
         }
 
         interrupt.CancelAfter(TimeSpan.FromMilliseconds(500));
@@ -458,6 +458,29 @@ public sealed class RunStopTests
         }
     }
 
+    /// <summary>
+    /// A live process whose start is not the one recorded took the recorded id after the process recorded had gone: --now
+    /// takes the one recorded as gone, and never ends the one that took its id.
+    /// </summary>
+    [Fact]
+    public async Task EndingWhereItStands_NeverEndsAProcessThatTookTheRecordedId()
+    {
+        var identity = new ProcessIdentity(new Core.Platform.HostPlatform());
+        using var other = Sleeper();
+
+        try
+        {
+            var ending = await identity.EndWhereItStandsAsync(Environment.MachineName, other.Id, "not-its-own", TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(ProcessEnded.AlreadyGone, ending.How);
+            Assert.False(other.WaitForExit(TimeSpan.FromMilliseconds(500)), "the process that took the recorded id was ended");
+        }
+        finally
+        {
+            Ended(other);
+        }
+    }
+
     /// <summary>What every stop's --now answers where ending the process left it nothing more to do, worded once for each.</summary>
     [Fact]
     public void WhatAStopsNowAnswers_WhereThereIsNothingMoreToDo_IsWordedOnce()
@@ -512,8 +535,8 @@ public sealed class RunStopTests
             await stopped.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         }
 
-        Assert.Equal(Environment.ProcessId, watch.Taken!.ProcessId);
-        Assert.NotNull(watch.Taken.TakenUtc);
+        Assert.Equal(Environment.ProcessId, watch.Taken!.Asked.ProcessId);
+        Assert.Equal(watch.Taken, JsonSerializer.Deserialize<RunStopTaken>(File.ReadAllText(RunStops.TakenFileOf(directory)), Core.FileSystem.JsonStateFile.Options));
         Assert.Contains($"test: WARN - pid {Environment.ProcessId} asked this run to stop (stop-run)", harness.StandardError.ToString(), StringComparison.Ordinal);
         Assert.False(File.Exists(RunStops.FileOf(directory)), "the request a run took stayed asked");
 
@@ -528,29 +551,159 @@ public sealed class RunStopTests
     }
 
     /// <summary>
-    /// A stop whose taking cannot be recorded among the run's records is said, and the run stops all the same: its token
-    /// is cancelled, and the request is still removed, for the run has taken it.
+    /// A stop whose taking cannot be recorded among the run's records is not taken: said once however many looks meet it,
+    /// the run not stopped and the request left asked - so no process that asked hears that nothing was stopped of a run
+    /// that stopped - and taken at the first look once the record can be written.
     /// </summary>
     [Fact]
-    public void AStopWhoseTakingCannotBeRecorded_IsSaid_AndTheRunStopsAllTheSame()
+    public async Task AStopWhoseTakingCannotBeRecorded_StaysAsked_UntilItCanBe()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var stops = new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity), new TimerClock());
+        var clock = new TimerClock();
+        var stops = new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity), clock);
         var directory = temp.Combine("runs", Run);
+        var record = RunStops.TakenFileOf(directory);
 
         // Something that is no file stands where the record goes.
-        Directory.CreateDirectory(RunStops.TakenFileOf(directory));
-        File.WriteAllText(Path.Combine(RunStops.TakenFileOf(directory), "in-the-way"), "x");
+        Directory.CreateDirectory(record);
+        File.WriteAllText(Path.Combine(record, "in-the-way"), "x");
         stops.Ask(directory);
 
-        var taken = stops.Take(directory, "test");
+        var watch = stops.Watch(directory, "test", TestContext.Current.CancellationToken);
+        await LookedAgainAsync(clock);
 
-        Assert.NotNull(taken);
-        Assert.False(File.Exists(RunStops.FileOf(directory)));
-        Assert.Contains($"'{RunStops.TakenFileOf(directory)}'", harness.StandardError.ToString(), StringComparison.Ordinal);
-        Assert.Contains("The run stops all the same, and a process that asked hears that nothing was stopped.", harness.StandardError.ToString(), StringComparison.Ordinal);
+        var said = harness.StandardError.ToString();
+
+        Assert.False(watch.Stopping.IsCancellationRequested, "a stop whose taking was not recorded stopped the run");
+        Assert.Null(watch.Taken);
+        Assert.True(File.Exists(RunStops.FileOf(directory)), "a stop whose taking was not recorded was removed");
+        Assert.Equal(1, Occurrences(said, $"test: WARN - '{record}', the run's record of the stop it took, could not be written: "));
+        Assert.Contains("The stop stays asked, untaken, and is taken at a later look once it can be: a run is said stopped only where its record says so.", said, StringComparison.Ordinal);
+        Assert.DoesNotContain("asked this run to stop", said, StringComparison.Ordinal);
+
+        Directory.Delete(record, recursive: true);
+        await TakenAtTheNextLookAsync(clock, watch);
+
+        Assert.Equal(Environment.ProcessId, watch.Taken!.Asked.ProcessId);
+        Assert.False(File.Exists(RunStops.FileOf(directory)), "the request a run took stayed asked");
+        Assert.True(stops.IsTaken(directory, "test"));
+
+        await watch.EndThenAsync(() => Task.CompletedTask);
+    }
+
+    /// <summary>
+    /// A request the watch cannot read just then - another process holding it - is no request that does not read as one:
+    /// said once however many looks meet it, never removed, and taken at the first look that can read it.
+    /// </summary>
+    [Fact]
+    public async Task ARequestThatCannotBeReadJustThen_StaysAsked_UntilItCanBe()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var clock = new TimerClock();
+        var directory = temp.Combine("runs", Run);
+        var files = new FailingReads(harness.FileSystem) { Failing = RunStops.FileOf(directory) };
+        var stops = new RunStops(files, harness.Identity, harness.Output, new LogOwnership(files, harness.Output, harness.Identity), clock);
+
+        Directory.CreateDirectory(directory);
+        stops.Ask(directory);
+
+        var watch = stops.Watch(directory, "test", TestContext.Current.CancellationToken);
+        await LookedAgainAsync(clock);
+
+        var said = harness.StandardError.ToString();
+
+        Assert.False(watch.Stopping.IsCancellationRequested);
+        Assert.True(File.Exists(RunStops.FileOf(directory)), "a request that could not be read just then was removed");
+        Assert.Equal(
+            1,
+            Occurrences(said, $"test: WARN - '{RunStops.FileOf(directory)}', the stop asked of a run, could not be read: it is in use. It stays asked, untaken, and is read again at a later look."));
+        Assert.DoesNotContain("It was removed, and stops nothing.", said, StringComparison.Ordinal);
+
+        files.Failing = null;
+        await TakenAtTheNextLookAsync(clock, watch);
+
+        Assert.Equal(Environment.ProcessId, watch.Taken!.Asked.ProcessId);
+
+        await watch.EndThenAsync(() => Task.CompletedTask);
+    }
+
+    /// <summary>
+    /// The run's record of a stop taken is read as the shape of its own file: one that is not a record of a stop taken - an
+    /// empty object, a request, a schema this build does not read, a request in it that names no process - is said, is no
+    /// stop taken, and stays, the run's own.
+    /// </summary>
+    [Theory]
+    [InlineData("{}", "could not be read as one")]
+    [InlineData("{ \"schema\": 1, \"askedUtc\": \"2026-10-22T03:59:35+00:00\", \"machine\": \"m\", \"processId\": 7, \"processStamp\": null }", "could not be read as one")]
+    [InlineData(
+        "{ \"schema\": 2, \"takenUtc\": \"2026-10-22T04:00:00+00:00\", \"asked\": { \"schema\": 1, \"askedUtc\": \"2026-10-22T03:59:35+00:00\", \"machine\": \"m\", \"processId\": 7, \"processStamp\": null } }",
+        "does not read as one: its schema is 2, and this build reads 1")]
+    [InlineData(
+        "{ \"schema\": 1, \"takenUtc\": \"2026-10-22T04:00:00+00:00\", \"asked\": { \"schema\": 1, \"askedUtc\": \"2026-10-22T03:59:35+00:00\", \"machine\": \"m\", \"processId\": 0, \"processStamp\": null } }",
+        "does not read as one: the request it took does not read as one: it names no process as the one that asked")]
+    public void ARecordOfAStopTakenThatIsNotOne_IsSaid_AndIsNoStopTaken(string text, string said)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var stops = new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity));
+        var directory = temp.Combine("runs", Run);
+
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(RunStops.TakenFileOf(directory), text);
+
+        Assert.False(stops.IsTaken(directory, "test"));
         Assert.False(stops.TakenBack(directory, "test"));
+        Assert.Contains($"test: WARN - '{RunStops.TakenFileOf(directory)}' is the run's record of the stop it took, and {said}", harness.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.Contains("It is no stop taken.", harness.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.True(File.Exists(RunStops.TakenFileOf(directory)), "the run's own record was removed");
+    }
+
+    /// <summary>
+    /// A request the command could not take back once the run ended - its file in use - is named as it stands, the command
+    /// saying it could not be taken back, beside the line that says why.
+    /// </summary>
+    [Fact]
+    public async Task ARequestThatCouldNotBeTakenBack_IsNamedAsItStands()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var files = new FailingDeletes(harness.FileSystem);
+        var claims = new LogOwnership(files, harness.Output, harness.Identity);
+        var stops = new RunStops(files, harness.Identity, harness.Output, claims);
+        var layout = new Core.Repository.HarnessLayout(temp.Path, temp.Path);
+        var service = new RunStopService(HostDoubles.Loader(new HarnessConfig(), temp.Path), claims, stops, harness.Identity, files);
+        var directory = layout.RunDirectory(Run);
+
+        Assert.True((await claims.ClaimAsync(directory, RunId.Parse(Run), cancellationToken: token)).Taken);
+        files.Failing = (RunStops.FileOf(directory), () => new IOException("it is in use"));
+
+        // The run ends on its own once the stop is asked, never having looked.
+        var dispatcher = Task.Run(
+            async () =>
+            {
+                while (!File.Exists(RunStops.FileOf(directory)))
+                {
+                    await Task.Delay(20, token);
+                }
+
+                await claims.ReleaseAsync(directory, RunId.Parse(Run), token);
+            },
+            token);
+
+        var outcome = await service.StopAsync(temp.Path, Run, now: false, json: true, token);
+        await dispatcher;
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+        Assert.EndsWith(") took the stop, so nothing was stopped; the stop could not be taken back, as said above", outcome.Message, StringComparison.Ordinal);
+        Assert.Equal([$"logs: {directory}", $"stop: {RunStops.FileOf(directory)}"], outcome.Details);
+        Assert.Equal(RunStops.FileOf(directory), document.RootElement.GetProperty("records").GetProperty("stop").GetString());
+        Assert.Contains($"'{RunStops.FileOf(directory)}', the stop asked of a run, could not be removed: it is in use.", harness.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.True(File.Exists(RunStops.FileOf(directory)));
     }
 
     /// <summary>
@@ -587,9 +740,10 @@ public sealed class RunStopTests
     /// <summary>A request that does not read as one is said, removed, and stops nothing: no run is stopped on a record nobody can say who wrote.</summary>
     [Theory]
     [InlineData("{ \"schema\": 1 }", "")]
-    [InlineData("{ \"schema\": 2, \"askedUtc\": \"2026-10-22T03:59:35+00:00\", \"machine\": \"m\", \"processId\": 7, \"processStamp\": null, \"takenUtc\": null }", "its schema is 2, and this build reads 1")]
-    [InlineData("{ \"schema\": 1, \"askedUtc\": \"2026-10-22T03:59:35+00:00\", \"machine\": \" \", \"processId\": 7, \"processStamp\": null, \"takenUtc\": null }", "it names no process as the one that asked")]
-    [InlineData("{ \"schema\": 1, \"askedUtc\": \"2026-10-22T03:59:35+00:00\", \"machine\": \"m\", \"processId\": 0, \"processStamp\": null, \"takenUtc\": null }", "it names no process as the one that asked")]
+    [InlineData("{ \"schema\": 1, \"askedUtc\": \"2026-10-22T03:59:35+00:00\", \"machine\": \"m\", \"processId\": 7, \"processStamp\": null, \"takenUtc\": \"2026-10-22T04:00:00+00:00\" }", "")]
+    [InlineData("{ \"schema\": 2, \"askedUtc\": \"2026-10-22T03:59:35+00:00\", \"machine\": \"m\", \"processId\": 7, \"processStamp\": null }", "its schema is 2, and this build reads 1")]
+    [InlineData("{ \"schema\": 1, \"askedUtc\": \"2026-10-22T03:59:35+00:00\", \"machine\": \" \", \"processId\": 7, \"processStamp\": null }", "it names no process as the one that asked")]
+    [InlineData("{ \"schema\": 1, \"askedUtc\": \"2026-10-22T03:59:35+00:00\", \"machine\": \"m\", \"processId\": 0, \"processStamp\": null }", "it names no process as the one that asked")]
     public void ARequestThatDoesNotReadAsOne_IsSaidAndRemoved_AndStopsNothing(string text, string problem)
     {
         using var temp = new TempDirectory();
@@ -609,7 +763,8 @@ public sealed class RunStopTests
     /// <summary>
     /// A dispatcher that ends without giving its records up while the stop is waited for - killed - has its claim released
     /// there, as the next run in its tree would release it: stopped (0) where it took the stop first, saying it ended
-    /// without giving its records up; nothing to stop (13) where it never took it, its untaken request taken back.
+    /// without giving its records up; nothing to stop (13) where it never took it, its untaken request taken back and
+    /// named no more.
     /// </summary>
     [Theory]
     [InlineData(true)]
@@ -653,8 +808,8 @@ public sealed class RunStopTests
         {
             Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
             Assert.EndsWith(") has ended without giving up its records, so there is nothing to stop; its claim was released", outcome.Message, StringComparison.Ordinal);
-            Assert.Equal([$"stop: {RunStops.FileOf(directory)}"], outcome.Details);
-            Assert.Equal(RunStops.FileOf(directory), document.RootElement.GetProperty("records").GetProperty("stop").GetString());
+            Assert.Empty(outcome.Details!);
+            Assert.Empty(document.RootElement.GetProperty("records").EnumerateObject());
             Assert.False(document.RootElement.GetProperty("stopped").GetBoolean());
         }
 
@@ -782,6 +937,41 @@ public sealed class RunStopTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ending);
     }
 
+    /// <summary>Moves the clock past the watch's wait, once it waits, and returns once it waits again: it has looked again.</summary>
+    private static async Task LookedAgainAsync(TimerClock clock)
+    {
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        clock.Advance(StopCadence.PollEvery);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>Moves the clock past the watch's wait and returns once the look that follows has stopped the run.</summary>
+    private static async Task TakenAtTheNextLookAsync(TimerClock clock, RunStopWatch watch)
+    {
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using (watch.Stopping.Register(() => stopped.TrySetResult()))
+        {
+            await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            clock.Advance(StopCadence.PollEvery);
+            await stopped.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
+    }
+
+    /// <summary>How many times <paramref name="part"/> stands in <paramref name="text"/>.</summary>
+    private static int Occurrences(string text, string part) => text.Split(part).Length - 1;
+
+    /// <summary>Writes the run's record that its dispatcher took a stop, as its dispatcher writes it.</summary>
+    private static void TookTheStop(string directory)
+        => File.WriteAllText(
+            RunStops.TakenFileOf(directory),
+            JsonSerializer.Serialize(
+                new RunStopTaken(
+                    RunStopTaken.Version,
+                    new DateTimeOffset(2026, 10, 22, 4, 0, 0, TimeSpan.Zero),
+                    new RunStopRequest(RunStopRequest.Version, new DateTimeOffset(2026, 10, 22, 3, 59, 59, TimeSpan.Zero), Environment.MachineName, 7)),
+                Core.FileSystem.JsonStateFile.Options));
+
     /// <summary>The process id a test records as a dispatcher of this machine that no process has.</summary>
     private const int Recorded = int.MaxValue - 2;
 
@@ -860,6 +1050,15 @@ public sealed class RunStopTests
 
             base.DeleteFile(path);
         }
+    }
+
+    /// <summary>The file system, but that opening the path <see cref="Failing"/> names, while it names one, fails as a file another process holds.</summary>
+    private sealed class FailingReads(Core.FileSystem.IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public volatile string? Failing;
+
+        public override Stream OpenRead(string path)
+            => path == Failing ? throw new IOException("it is in use") : base.OpenRead(path);
     }
 
     /// <summary>

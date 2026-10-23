@@ -1691,7 +1691,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var children = OrchestratorLayout.ChildrenDirectory(kit.StepDirectory);
         var record = request.SessionRecord!;
-        record.Placed(Environment.ProcessId, TestHost.AssemblyProgram, group: false);
+        record.Placed(Environment.ProcessId, started: null, TestHost.AssemblyProgram, group: false);
 
         Assert.Equal([OrchestratorLayout.ChildFile(kit.StepDirectory, Environment.ProcessId)], Directory.GetFiles(children));
 
