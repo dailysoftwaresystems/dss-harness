@@ -667,7 +667,7 @@ public sealed class AgentPolicyTests
         {
             "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0=commit git x",
             "env GIT_CONFIG_PARAMETERS=\"'alias.x=commit'\" git x",
-            "git --config-env=alias.x=X x",
+            "X=commit git --config-env=alias.x=X x",
             "export GIT_TEMPLATE_DIR=/tmp/evil",
             "git --exec-path=/tmp/x push",
             "git -c core.pager=less log",
@@ -708,6 +708,33 @@ public sealed class AgentPolicyTests
 
         // A key that only shapes what git prints holds no program, whatever its value spells.
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git -c user.name=\"O'Brien\" -c color.ui=always log"));
+    }
+
+    [Fact]
+    public void GitsSettings_AreReadAsCommandsOnlyWhereGitRunsThem()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy([new("Run(git push *)", AgentPolicySource.Config)], worktreeRules: false);
+
+        // A value git reads as data is no command, whatever it spells.
+        foreach (var command in new[]
+        {
+            "git -c safe.directory='*' status",
+            "git -c 'remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*' fetch",
+            "git -c format.pretty=%h log",
+            "git -c http.proxy=$HTTPS_PROXY fetch",
+        })
+        {
+            Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused");
+        }
+
+        // An alias is the git command it names, or with '!' the command line it runs.
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git -c alias.p=push p origin main")).Rule);
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git -c diff.x.textconv='git push' log")).Rule);
+
+        // A --config-env whose variable the command does not set runs what this cannot read.
+        Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("export P='!sudo id'; git --config-env=alias.x=P x")).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git --config-env=user.name=NAME log"));
     }
 
     [Fact]

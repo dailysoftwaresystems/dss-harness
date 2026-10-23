@@ -243,6 +243,43 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
+    /// A bound child's own last line, with no line break after it, is handed on as every line is - to the phase's log and
+    /// its witnesses - though a leftover holding its output is why the stream never ended.
+    /// </summary>
+    [Fact]
+    public async Task ABoundChildsLastLineWithNoBreak_IsHandedOn_ThoughALeftoverHoldsItsOutput()
+    {
+        var lines = new List<string>();
+        var holder = LearnedProcess.None;
+
+        try
+        {
+            var result = await ContainingRunner().RunAsync(
+                Child("spawn-holder", "exit-unended", "0", "sleep", "300000") with
+                {
+                    Bound = true,
+                    OnOutputLine = line =>
+                    {
+                        lock (lines)
+                        {
+                            lines.Add(line);
+                        }
+                    },
+                },
+                TestContext.Current.CancellationToken).WaitAsync(ProcessRunner.DrainBound + TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
+
+            holder = LearnedProcess.In(result.StandardOutput, "holder=") ?? holder;
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal([$"holder={holder}"], lines);
+        }
+        finally
+        {
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
     /// A bound child stopped is not held by what it left outside its tree holding its output: the stop ends its tree, the
     /// leftover lives on, and the run ends within the bound once the child has gone - never once the leftover has.
     /// </summary>

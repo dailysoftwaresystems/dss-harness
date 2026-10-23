@@ -135,7 +135,8 @@ public sealed record ProcessRequest
     /// gone. Its own end and a stop are as any other child's: what it leaves running at its normal end lives on until this
     /// process ends. On every system its output is read for no longer than <see cref="ProcessRunner.DrainBound"/> once it
     /// has ended, as a contained child's is once its container has: what still holds the output then is something it left
-    /// running, which the run would otherwise wait on for as long as it lived. On Linux and macOS the child starts as any
+    /// running, which the run would otherwise wait on for as long as it lived. What that leftover writes after it goes
+    /// unread, and once the run has let go of the output, it writes to a pipe nobody reads. On Linux and macOS the child starts as any
     /// other: an interrupt or a termination signal this process is given ends it with this process's stop, its terminal's
     /// hang-up reaches it as it reaches this process, and a kill of this process alone does not reach it - save under an
     /// operation's <see cref="ProcessScope"/>, a run's machine step's, which starts it apart from the terminal and records

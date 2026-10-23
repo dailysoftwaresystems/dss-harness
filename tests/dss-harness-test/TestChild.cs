@@ -528,7 +528,8 @@ internal static class TestChild
             return 96;
         }
 
-        output.Write($"holder={holder.Id}\n");
+        // 'exit-unended' leaves its line with no break after it, for the reader to hand on at the output's end.
+        output.Write(string.Equals(arguments[0], "exit-unended", StringComparison.Ordinal) ? $"holder={holder.Id}" : $"holder={holder.Id}\n");
 
         if (string.Equals(arguments[0], "sleep", StringComparison.Ordinal))
         {

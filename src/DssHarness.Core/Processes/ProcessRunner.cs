@@ -1221,6 +1221,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         private readonly LineSplitter? _lines;
         private ExceptionDispatchInfo? _failed;
         private bool _taken;
+        private bool _linesEnded;
 
         /// <summary>Starts reading <paramref name="reader"/>.</summary>
         /// <param name="reader">The stream.</param>
@@ -1242,12 +1243,20 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         /// <summary>Ends when the stream does.</summary>
         public Task Reading { get; }
 
-        /// <summary>What has been read, and what the handler raised; nothing is kept or handed on after this.</summary>
+        /// <summary>
+        /// What has been read, and what the handler raised; nothing is kept or handed on after this. A last line with no
+        /// line break after it is handed on first, as the stream's end would hand it.
+        /// </summary>
         public Captured Taken()
         {
             lock (_gate)
             {
-                _taken = true;
+                if (!_taken)
+                {
+                    EndLines();
+                    _taken = true;
+                }
+
                 return new Captured(_whole?.ToString() ?? _end!.ToString(), _failed);
             }
         }
@@ -1279,8 +1288,18 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 // A last line with no line break after it is still a line.
                 if (!_taken)
                 {
-                    _lines?.End();
+                    EndLines();
                 }
+            }
+        }
+
+        /// <summary>Hands on the last line, once, whichever of the stream's end and the taking comes first.</summary>
+        private void EndLines()
+        {
+            if (!_linesEnded)
+            {
+                _linesEnded = true;
+                _lines?.End();
             }
         }
 

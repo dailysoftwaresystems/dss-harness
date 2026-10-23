@@ -412,12 +412,13 @@ public sealed class LegRunService(
 
             // The legs have ended: the watch ends before the report is made, so a stop asked while it is made is taken
             // back, never taken by a run whose work is done, nor said to have stopped it. One the watch took as the legs
-            // ended - after the executor saw its token for the last time - is recorded taken, so the run reports it so.
+            // ended - after the executor saw its token for the last time - stopped nothing: its record is taken back,
+            // so the run reports what its legs reached and whoever asked hears that nothing was stopped.
             await stop.EndAsync().ConfigureAwait(false);
 
-            if (stop.Taken is not null && !execution.Cancelled)
+            if (!execution.Cancelled)
             {
-                execution = execution with { Cancelled = true };
+                stop.TakeBackUnseen();
             }
 
             return Report(commandName, context, ledger, execution, runId, runDirectory, placed, request.MutationRecord);

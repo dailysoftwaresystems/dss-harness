@@ -201,7 +201,8 @@ terminated as it ends, and what it leaves running lives on until the harness end
 system, its output is read for five seconds more at most once it has ended, as a contained child's
 is once its container has: what still holds the output then is one of those leftovers, a server its
 phase started in the background, whose end the run would otherwise wait on for as long as it lived,
-the phase's time limit and a stop reaching nothing once the child had gone. Every phase of
+the phase's time limit and a stop reaching nothing once the child had gone; the child's own last
+line is handed on, and what the leftover writes after it goes unread. Every phase of
 a leg a dispatcher runs on its own machine - a build, a test, a runner's step, a mutation arm's
 run, a set-up's down line - is bound, and so is its `keepAwake` command: a dispatcher killed where
 it stood once left its legs' test runners running for minutes, each holding a heavy leg's room. A
@@ -1507,9 +1508,10 @@ line joined and `$'...'` decoded. The `NAME=value` words before a program are ke
 environment and carried to what it runs, and a value that is a program git or another tool runs
 (`CommandAnalysis.ProgramValued`: `GIT_SSH_COMMAND`, `GIT_PAGER`, `EDITOR` and their kind) is read as
 that program's command line, an `export`'s or a declaration's too, and so is the value of git's own
-setting of any key but the ones that only shape what it prints - a `-c`, a `--config-env`'s variable,
-`GIT_CONFIG_VALUE_n`, `GIT_CONFIG_PARAMETERS` (`CommandAnalysis.GitSettingScripts`), an alias's `!`
-taken off; wrappers (`env`, `nohup`, `time`,
+setting of a key git runs as a command line (`CommandAnalysis.RunsProgram`: its pager, editors, ssh,
+drivers, filters, helpers, an alias) - a `-c`, a `--config-env`'s variable (refused where the
+command does not set it), `GIT_CONFIG_VALUE_n`, `GIT_CONFIG_PARAMETERS` - an alias's `!` taken off,
+any other alias the git command it names; wrappers (`env`, `nohup`, `time`,
 `timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`, `eval`, `busybox`, `Invoke-Expression`)
 are stripped with their own options, at most 32 deep, what `xargs` reads standing among the words
 it runs as an expansion; and it goes into `sh -c` and every other shell's (the words after its
@@ -1530,7 +1532,8 @@ denies as what the rule may be; git's own options, valued ones with their values
 before its subcommand, gh's flags before its command's path (`gh pr -R o/r merge` is
 `gh pr merge`), and a git configured where it runs - a `-c` or `--config-env` of any key but the
 ones that only shape what git prints, `--exec-path`, the `GIT_CONFIG` names, `GIT_EXEC_PATH` and
-`GIT_TEMPLATE_DIR` of its environment - is the `git config` it is. A word that names a path is read
+`GIT_TEMPLATE_DIR` of its environment - is the `git config` it is, and still the command it runs,
+each reading met by the rules. A word that names a path is read
 as each candidate it may be - the word, a redirect's file, an option's value, the words a script in
 it names, each word its braces spell and the path a `file://` address names - and a pattern the
 shell expands is refused where it may reach a credential slot or a Claude Code directory; and a command that runs a program which fetches from the network
@@ -3795,10 +3798,11 @@ it; not there, the run ended on its own before its dispatcher took a stop, so no
 (13). Every exit names the stop record that stands - the request while it is asked, the run's record
 once taken - and never a request the command took back. The record is the run's, not an asker's,
 so two terminals asking at once, or one asking again while the run stops, all hear the same. The dispatcher's watch ends as its legs end, before its
-report is made (`RunStopWatch.EndAsync`), taking back a request it never took - one it took as the
-legs ended is reported as the stop it is - and before its directory is given up it takes back what
-was asked since, giving the directory up however it ends (`RunStopWatch.EndThenAsync`), so no stop
-is ever taken by a run whose work is done. Not
+report is made (`RunStopWatch.EndAsync`), taking back a request it never took - and the record of
+one it took as the legs ended, which no leg saw (`RunStopWatch.TakeBackUnseen`): nothing was
+stopped, and whoever asked hears so - and before its directory is given up it takes back what was
+asked since, giving the directory up however it ends (`RunStopWatch.EndThenAsync`), so no stop is
+ever said to have stopped a run whose work was done. Not
 stopped in time, the request stays asked (13), and `--now` ends the dispatcher's process where it
 stands with its whole tree - only one of this machine, and only the process its owner file names by
 its start - and releases its claim; its ledger is never written. A run that has ended, or whose

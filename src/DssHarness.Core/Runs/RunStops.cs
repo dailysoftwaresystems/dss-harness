@@ -165,6 +165,18 @@ public sealed class RunStops(IFileSystem fileSystem, IProcessIdentity identity, 
     }
 
     /// <summary>
+    /// Takes back the run's record of a stop its legs never saw - each had ended as it was taken - so nothing was
+    /// stopped, and every process that asked reads so: said, and a record that cannot be removed said too.
+    /// </summary>
+    /// <param name="runDirectory">The run's directory of records.</param>
+    /// <param name="command">The command taking it back, which its lines name.</param>
+    public void TakeBackUnseen(string runDirectory, string command)
+    {
+        _output.Warn(command, "Every leg had ended as the stop was taken: nothing was stopped, and the run's record of the stop is taken back.");
+        Remove(TakenFileOf(runDirectory), command);
+    }
+
+    /// <summary>
     /// What a process that asked the run kept at <paramref name="runDirectory"/> to stop reads once the run's owner has
     /// gone: whether its dispatcher took a stop, as the run's records say (<see cref="IsTaken"/>). A request nothing took
     /// is taken back, so none stays behind the run; the record stays, the run's own.
@@ -434,6 +446,26 @@ public sealed class RunStopWatch
             // The directory is given up however the watch ended: a run never keeps its records claimed past its end.
             await giveUp().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Takes back a stop the watch took that the run's legs never saw (<see cref="RunStops.TakeBackUnseen"/>): each had
+    /// ended as it was taken, so the run reports what they reached and whoever asked hears nothing was stopped. Asked
+    /// once the watch has ended (<see cref="EndAsync"/>), so nothing is taken after; nothing is done where none was taken.
+    /// </summary>
+    public void TakeBackUnseen()
+    {
+        lock (_gate)
+        {
+            if (_taken is null)
+            {
+                return;
+            }
+
+            _taken = null;
+        }
+
+        _stops.TakeBackUnseen(_runDirectory, _command);
     }
 
     /// <summary>

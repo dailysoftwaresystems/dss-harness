@@ -773,6 +773,41 @@ public sealed class RunStopTests
         Assert.False(watch.Stopping.IsCancellationRequested);
     }
 
+    /// <summary>
+    /// A stop the watch took that no leg saw - each had ended as it was taken - is taken back: the run's record of it
+    /// goes, said, so whoever asked hears that nothing was stopped; one never taken is nothing to take back.
+    /// </summary>
+    [Fact]
+    public async Task AStopNoLegSaw_IsTakenBack_AndWhoeverAskedHearsNothingWasStopped()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var stops = new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity), new TimerClock());
+        var directory = temp.Combine("runs", Run);
+        Directory.CreateDirectory(directory);
+
+        stops.Ask(directory);
+        var watch = stops.Watch(directory, "test", TestContext.Current.CancellationToken);
+
+        Assert.NotNull(watch.Taken);
+
+        await watch.EndAsync();
+        watch.TakeBackUnseen();
+
+        Assert.Null(watch.Taken);
+        Assert.False(File.Exists(RunStops.TakenFileOf(directory)));
+        Assert.False(stops.TakenBack(directory, "test"), "a stop no leg saw was still said taken");
+        Assert.Contains("test: WARN - Every leg had ended as the stop was taken: nothing was stopped, and the run's record of the stop is taken back.", harness.StandardError.ToString(), StringComparison.Ordinal);
+
+        var untaken = stops.Watch(directory, "test", TestContext.Current.CancellationToken);
+        await untaken.EndAsync();
+        untaken.TakeBackUnseen();
+        await untaken.EndThenAsync(() => Task.CompletedTask);
+
+        Assert.Single(harness.StandardError.ToString().Split("Every leg had ended", StringSplitOptions.None).Skip(1));
+        await watch.EndThenAsync(() => Task.CompletedTask);
+    }
+
     /// <summary>A request that does not read as one is said, removed, and stops nothing: no run is stopped on a record nobody can say who wrote.</summary>
     [Theory]
     [InlineData("{ \"schema\": 1 }", "")]

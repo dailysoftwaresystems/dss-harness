@@ -558,7 +558,7 @@ of their own, each substitution's word kept as the expansion it is, a `for`'s wo
 the paths it hands its body, a redirect kept apart wherever it stands, the `NAME=value` words
 before a program kept as its environment and a variable naming a program git or another tool runs
 (`GIT_SSH_COMMAND`, `GIT_PAGER`, `EDITOR` and their kind) read as that program's command line, as
-is the value of git's own setting (`-c`, `--config-env`, `GIT_CONFIG_*`) of a key that may name one,
+is the value of git's own setting (`-c`, `--config-env`, `GIT_CONFIG_*`) of a key git runs as one,
 wrappers (`env`, `nohup`, `time`, `timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`,
 `eval`, `busybox`, `Invoke-Expression`) stripped, and it goes into `sh -c` and every other
 shell's, a here-string or here-document a shell reads, `cmd /c`, `powershell -Command` and a
@@ -577,7 +577,8 @@ what it does not see is the inside of a script file a command runs. The worktree
 (`agentPolicy.worktreeRules`, on unless turned off) keep an agent's worktree a thing the engine
 can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
 `help agent-clients`) - a git configured where it runs, by `-c` or `--config-env` of any key but
-the ones that only shape what git prints, or by its environment, the `git config` it is -
+the ones that only shape what git prints, or by its environment, the `git config` it is and
+still the command it runs -
 and `gh pr merge`, `gh workflow run`, `gh run rerun`, the `gh api` endpoints and GraphQL mutations
 that merge or start CI and `gh alias set` are refused (reading git stays allowed), git's own
 files - a `.git`, file or directory, at any depth beneath a root and in any case, a nested

@@ -646,7 +646,8 @@ public static partial class CommandAnalysis
     /// <summary>
     /// The commands the program-valued names among <paramref name="assignments"/> run, each value read as a script - and
     /// what git's configuration through the environment sets, which git may run so too: each <c>GIT_CONFIG_VALUE_n</c>
-    /// of a key but the ones that only shape what git prints, and each such setting <c>GIT_CONFIG_PARAMETERS</c> holds.
+    /// of a key git runs as a command line (<see cref="RunsProgram"/>) or of none named, and each such setting
+    /// <c>GIT_CONFIG_PARAMETERS</c> holds.
     /// </summary>
     private static IEnumerable<IReadOnlyList<string>> ProgramsNamed(IReadOnlyList<string> assignments, int depth, IReadOnlyList<string> environment)
     {
@@ -663,7 +664,7 @@ public static partial class CommandAnalysis
             {
                 var key = pairs.LastOrDefault(other => other[0].Equals("GIT_CONFIG_KEY_" + pair[0]["GIT_CONFIG_VALUE_".Length..], StringComparison.OrdinalIgnoreCase));
 
-                if (key is null || Configures(key[1]))
+                if (key is null || RunsProgram(key[1]))
                 {
                     values.Add(SettingScript(key?[1] ?? string.Empty, pair[1]));
                 }
@@ -672,7 +673,7 @@ public static partial class CommandAnalysis
             {
                 values.AddRange(Script(pair[1], 0)
                     .SelectMany(command => command)
-                    .Where(setting => setting.Contains('=', StringComparison.Ordinal) && Configures(setting))
+                    .Where(setting => setting.Contains('=', StringComparison.Ordinal) && RunsProgram(setting.Split('=', 2)[0]))
                     .Select(setting => SettingScript(setting.Split('=', 2)[0], setting.Split('=', 2)[1])));
             }
         }
@@ -681,12 +682,14 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>
-    /// The scripts a git command's own settings may run: the value of each <c>-c</c> before its subcommand of a key but
-    /// the ones that only shape what git prints (<see cref="Configures"/>) - <c>core.pager</c>, <c>core.sshCommand</c>,
-    /// an alias's <c>!</c> line among them - and of each <c>--config-env</c> whose variable the command's environment
-    /// sets. A value that is no command line (<c>core.hooksPath=.githooks</c>) is read as a command that runs nothing
-    /// this refuses.
+    /// The scripts a git command's own settings run: the value of each <c>-c</c> before its subcommand, and of each
+    /// <c>--config-env</c>'s variable, of a key git runs as a command line (<see cref="RunsProgram"/>) - every other
+    /// value is data git reads, never a command.
     /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// A <c>--config-env</c> of such a key names a variable the command does not set: what it runs is a value set
+    /// elsewhere - an export before it - which this does not read.
+    /// </exception>
     private static List<string> GitSettingScripts(IReadOnlyList<string> words, IReadOnlyList<string> environment)
     {
         var scripts = new List<string>();
@@ -714,7 +717,7 @@ public static partial class CommandAnalysis
                 at++;
             }
 
-            if (setting is null || !setting.Contains('=', StringComparison.Ordinal) || !Configures(setting))
+            if (setting is null || !setting.Contains('=', StringComparison.Ordinal) || !RunsProgram(setting.Split('=', 2)[0]))
             {
                 continue;
             }
@@ -729,14 +732,54 @@ public static partial class CommandAnalysis
             {
                 scripts.Add(SettingScript(key, named[1]));
             }
+            else
+            {
+                throw new NotSupportedException($"'{option}' runs what the variable {value} holds, which the command does not set, and this does not read");
+            }
         }
 
         return scripts;
     }
 
-    /// <summary>The command line a git setting's value is: an alias's <c>!</c> taken off, for git runs what follows it through the shell.</summary>
+    /// <summary>
+    /// The command line a git setting's value is: an alias's <c>!</c> line without it, for git runs it through the shell,
+    /// and any other alias the git command it names.
+    /// </summary>
     private static string SettingScript(string key, string value)
-        => key.StartsWith("alias.", StringComparison.OrdinalIgnoreCase) && value.StartsWith('!') ? value[1..] : value;
+        => !key.StartsWith("alias.", StringComparison.OrdinalIgnoreCase) ? value
+            : value.StartsWith('!') ? value[1..]
+            : "git " + value;
+
+    /// <summary>
+    /// Whether git runs the value of <paramref name="key"/> as a command line: its pager, editors, ssh, askpass, monitor,
+    /// proxy and credential helpers, an external diff and a diff driver's, a merge driver, a filter's clean, smudge and
+    /// process, a tool's or a browser's command, a signing program, a remote's upload and receive packs, and an alias -
+    /// keys compared in any case, as git compares them.
+    /// </summary>
+    private static bool RunsProgram(string key)
+    {
+        var named = key.ToLowerInvariant();
+
+        return ProgramKeys.Contains(named)
+            || named.StartsWith("pager.", StringComparison.Ordinal)
+            || named.StartsWith("alias.", StringComparison.Ordinal)
+            || (named.Count(character => character == '.') >= 2 && ProgramKeyEnds.Any(end => named.EndsWith(end, StringComparison.Ordinal)));
+    }
+
+    /// <summary>The keys of git's configuration, in its lower case, whose value it runs as a command line.</summary>
+    private static readonly HashSet<string> ProgramKeys =
+    [
+        "core.pager", "core.editor", "core.sshcommand", "core.askpass", "core.fsmonitor", "core.gitproxy",
+        "core.alternaterefscommand", "sequence.editor", "credential.helper", "diff.external", "gpg.program",
+        "interactive.difffilter", "uploadpack.packobjectshook", "sendemail.sendmailcmd",
+    ];
+
+    /// <summary>
+    /// The ends of git's keys of a section and a subsection (<c>diff.&lt;driver&gt;.textconv</c>) whose value it runs as a
+    /// command line.
+    /// </summary>
+    private static readonly string[] ProgramKeyEnds =
+        [".textconv", ".command", ".driver", ".clean", ".smudge", ".process", ".cmd", ".helper", ".program", ".uploadpack", ".receivepack"];
 
     /// <summary>
     /// PowerShell's setting of a variable of the environment - <c>$env:NAME=value</c> or
