@@ -795,9 +795,9 @@ public sealed class AgentRebaseTests
         var git = new InterceptingGitClient(kit.Harness.GitClient)
         {
             // Each measuring starts by asking what the two commits hold differently: the second is the one under the hold.
-            BeforeListNames = arguments =>
+            BeforeListChangedBetween = (_, _) =>
             {
-                if (arguments[0] == "diff" && ++measured == 2)
+                if (++measured == 2)
                 {
                     OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit meanwhile\n");
                 }

@@ -1199,8 +1199,8 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     /// </summary>
     public string? CheckOutStopsAt { get; init; }
 
-    /// <summary>Runs before each listing of names, with the arguments it asks git with.</summary>
-    public Action<IReadOnlyList<string>>? BeforeListNames { get; init; }
+    /// <summary>Runs before each listing of the names two commits hold differently, with the two commits.</summary>
+    public Action<string, string>? BeforeListChangedBetween { get; init; }
 
     /// <summary>Whether resolving a reference, given the directory and the reference, fails as a git that cannot look would.</summary>
     public Func<string, string, bool>? ResolveCommitFails { get; init; }
@@ -1271,6 +1271,13 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
 
     public Task<IReadOnlyList<GitName>> ListNamesChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default)
         => Call(() => inner.ListNamesChangedSinceAsync(directory, commit, Token(cancellationToken)));
+
+    public Task<IReadOnlyList<GitName>> ListNamesChangedBetweenAsync(string directory, string from, string to, CancellationToken cancellationToken = default)
+        => Call(() =>
+        {
+            BeforeListChangedBetween?.Invoke(from, to);
+            return inner.ListNamesChangedBetweenAsync(directory, from, to, Token(cancellationToken));
+        });
 
     public Task<IReadOnlyDictionary<string, GitHeld>> HeldAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
         => Call(() => inner.HeldAtAsync(directory, commit, paths, Token(cancellationToken)));
@@ -1457,11 +1464,7 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         string directory,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken = default)
-        => Call(() =>
-        {
-            BeforeListNames?.Invoke(arguments);
-            return inner.ListNamesAsync(directory, arguments, Token(cancellationToken));
-        });
+        => Call(() => inner.ListNamesAsync(directory, arguments, Token(cancellationToken)));
 
     public Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.ListWorkingFilesAsync(directory, Token(cancellationToken)));

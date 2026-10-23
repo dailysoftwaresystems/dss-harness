@@ -2006,7 +2006,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         var named = new List<string>();
 
-        foreach (var name in await _gitClient.ListNamesAsync(worktree, ["diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", from, to, "--"], cancellationToken).ConfigureAwait(false))
+        foreach (var name in await _gitClient.ListNamesChangedBetweenAsync(worktree, from, to, cancellationToken).ConfigureAwait(false))
         {
             if (!name.IsUtf8)
             {

@@ -84,6 +84,14 @@ public interface IGitClient
     Task<IReadOnlyList<GitName>> ListNamesChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Every path whose entry differs between the commits <paramref name="from"/> and <paramref name="to"/> - its content,
+    /// its mode, its addition or its deletion, a submodule's commit among them - each name as git holds it: a rename is its
+    /// two names. Neither the work tree nor the index is read. Nothing is written.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not compare the two commits: one this repository does not hold, for one.</exception>
+    Task<IReadOnlyList<GitName>> ListNamesChangedBetweenAsync(string directory, string from, string to, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// What <paramref name="commit"/> holds at each of <paramref name="paths"/>: a file and its blob, a directory, a
     /// submodule's entry and the commit it names - whether or not this repository holds that commit, on every version of
     /// git - or nothing. One git process for them all, and one listing of the commit where git could not read one of them

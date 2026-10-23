@@ -1991,7 +1991,11 @@ this process holds of it stands on a manifest let go. A view's first sync makes 
 before it takes its own gate, and a sync that waited for the base's gate for that makes none where another made it
 meanwhile: no gate is held while another view's is waited for, so no two syncs wait on each other. `SyncPathsAsync`
 brings a tree up to date by the paths given alone, git asked of those paths (`--literal-pathspecs`), with no listing of
-the rest, after its reads either; `CheckAsync` is the check an answer of the graph makes of the files it names before it is given - no command
+the rest, after its reads either - and, where the tree's HEAD moved since its last sync, by every path git names changed
+between the commit that sync recorded and the one HEAD names now (`IGitClient.ListNamesChangedBetweenAsync`), HEAD asked
+before anything is listed, so a commit made in the tree meanwhile that touched no path given leaves no file as the older
+commit held it under the newer head; where git cannot name them - that commit no longer held, or either naming none - the
+tree is synced whole; `CheckAsync` is the check an answer of the graph makes of the files it names before it is given - no command
 answers from the graph yet - a `stat` against what the view recorded, or against what an earlier check found of a file
 whose time alone moved, trusted only where that time is older than the tree's last whole sync's record (`Tree.Written`),
 as git trusts an index entry older than its index; a file either moved, whose time is not older, or that could not be

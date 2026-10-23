@@ -220,12 +220,30 @@ public sealed partial class GitClient(
         // and otherwise the file through the clean filters and the line-ending rules that read the index, so a file only
         // checked out with other line endings is no change; and its mode, where core.filemode trusts one. Without git's
         // optional locks, the index it refreshes to answer is never written. Untracked files are not listed.
+        return await ChangedNamesAsync(directory, [commit], $"read what the work tree changes since {commit}", cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<GitName>> ListNamesChangedBetweenAsync(string directory, string from, string to, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(from);
+        ArgumentException.ThrowIfNullOrWhiteSpace(to);
+
+        return await ChangedNamesAsync(directory, [from, to], $"read what changed between {from} and {to}", cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The names <c>git diff --name-only</c> gives against <paramref name="commits"/> - the work tree against one, or two
+    /// commits against each other - each as git holds it: a rename as its two names, as configuration may otherwise pair
+    /// them, and a submodule whose commit moved whatever configuration hides.
+    /// </summary>
+    private async Task<IReadOnlyList<GitName>> ChangedNamesAsync(string directory, IReadOnlyList<string> commits, string doing, CancellationToken cancellationToken)
+    {
         var result = await RunForBytesAsync(
             directory,
-            ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", commit, "--"],
+            ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", .. commits, "--"],
             cancellationToken).ConfigureAwait(false);
 
-        Ensure(result, $"read what the work tree changes since {commit}");
+        Ensure(result, doing);
 
         return [.. Records(result.StandardOutput).Select(GitName.FromBytes)];
     }

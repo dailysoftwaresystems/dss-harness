@@ -2389,6 +2389,60 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
+    /// A sync by paths of a tree whose HEAD moved since its last sync takes every path the commits between changed too: a
+    /// commit made in the tree meanwhile that touched no path given leaves no file as the older commit held it under the
+    /// newer head.
+    /// </summary>
+    [Fact]
+    public async Task ASyncByPaths_TakesEveryPathACommitMadeSinceItsLastSyncChanged()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        graph.Write("b.toy", "class B\n");
+        graph.Write("c.toy", "class C\n");
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+        graph.Write("b.toy", "class B\nclass Bee\n");
+        File.Delete(Path.Combine(graph.Tree, "c.toy"));
+        await graph.CommitAsync();
+        graph.Write("a.toy", "class A\nclass Aye\n");
+
+        var synced = (await graph.SyncPathsAsync("a.toy"))!;
+
+        Assert.Equal((3, 2, 1), (synced.Listed, synced.Extracted, synced.Removed));
+        Assert.Equal(await graph.HeadAsync(), graph.Manifest().Head);
+        Assert.Equal(["README.md", "a.toy", "b.toy"], graph.Manifest().Files.Keys.Order(StringComparer.Ordinal));
+        Assert.Contains(graph.Symbols().Nodes, node => node.Id == "toy:Bee");
+        Assert.DoesNotContain(graph.Symbols().Nodes, node => node.Id == "toy:C");
+    }
+
+    /// <summary>
+    /// A sync by paths of a tree whose last sync recorded a commit the repository no longer holds - amended, and pruned -
+    /// cannot be told what changed since: the tree is synced whole.
+    /// </summary>
+    [Fact]
+    public async Task ASyncByPaths_WhoseRecordedCommitIsNoLongerHeld_SyncsTheTreeWhole()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        graph.Write("b.toy", "class B\n");
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+        var recorded = graph.Manifest().Head!;
+        graph.Write("b.toy", "class B\nclass Bee\n");
+        await graph.RunGitAsync("commit", "--quiet", "--all", "--amend", "--no-edit");
+        await graph.RunGitAsync("reflog", "expire", "--expire=now", "--all");
+        await graph.RunGitAsync("gc", "--quiet", "--prune=now");
+        Assert.Null(await graph.Harness.GitClient.ResolveCommitAsync(graph.Tree, recorded, TestContext.Current.CancellationToken));
+
+        var synced = (await graph.SyncPathsAsync("a.toy"))!;
+
+        Assert.Equal((3, 1), (synced.Listed, synced.Extracted));
+        Assert.Equal(await graph.HeadAsync(), graph.Manifest().Head);
+        Assert.Contains(graph.Symbols().Nodes, node => node.Id == "toy:Bee");
+    }
+
+    /// <summary>
     /// A view whose record does not read while the process holds it, when the base moves, is let go: no later check of it
     /// stands on a base the process no longer holds - the check syncs it whole first, from its worktree.
     /// </summary>
@@ -2523,6 +2577,7 @@ public sealed class CodebaseGraphServiceTests
         git.ListWorkingFilesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => real.ListWorkingFilesAsync(call.ArgAt<string>(0), call.ArgAt<CancellationToken>(1)));
         git.ListWorkingFilesAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns(call => real.ListWorkingFilesAsync(call.ArgAt<string>(0), call.ArgAt<IReadOnlyList<string>>(1), call.ArgAt<CancellationToken>(2)));
         git.ResolveCommitAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => real.ResolveCommitAsync(call.ArgAt<string>(0), call.ArgAt<string>(1), call.ArgAt<CancellationToken>(2)));
+        git.ListNamesChangedBetweenAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => real.ListNamesChangedBetweenAsync(call.ArgAt<string>(0), call.ArgAt<string>(1), call.ArgAt<string>(2), call.ArgAt<CancellationToken>(3)));
         git.HashWorkingFilesAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns(call => real.HashWorkingFilesAsync(call.ArgAt<string>(0), call.ArgAt<IReadOnlyList<string>>(1), call.ArgAt<CancellationToken>(2)));
         return git;
     }
