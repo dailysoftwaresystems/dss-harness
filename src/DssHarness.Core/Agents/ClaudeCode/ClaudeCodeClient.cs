@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -137,7 +136,7 @@ public sealed class ClaudeCodeClient(
 
         if (settings.Refusal is { } refusal)
         {
-            return NotStarted(AgentNotStartedBecause.ProgramMissing, refusal, run);
+            return NotStarted(AgentNotStartedBecause.ConfigurationWrong, refusal, run);
         }
 
         var totals = new Totals();
@@ -188,6 +187,7 @@ public sealed class ClaudeCodeClient(
             Served = [.. totals.Served],
             KeysRefused = [.. totals.Refused],
             SessionFilesRemoved = [.. totals.Removed],
+            Uncontained = [.. totals.Uncontained],
         };
 
     /// <summary>Claude Code's directory and transcripts as a launch of <paramref name="run"/> reads them: its credential's directory, else the tool's own.</summary>
@@ -237,6 +237,8 @@ public sealed class ClaudeCodeClient(
         public List<string> Refused { get; } = [];
 
         public List<string> Removed { get; } = [];
+
+        public List<string> Uncontained { get; } = [];
     }
 
     /// <summary>
@@ -408,16 +410,30 @@ public sealed class ClaudeCodeClient(
                     await ending.CancelAsync().ConfigureAwait(false);
                 }
 
-                await EndAsync(process, ending).ConfigureAwait(false);
-                await RemoveSessionFileAsync().ConfigureAwait(false);
+                await EndAsync(process).ConfigureAwait(false);
 
                 return outcome;
             }
             finally
             {
+                // A launch still running is ended whole here, however the loop ended: past the bound its input's close
+                // gave it where the loop came to its outcome, at once where a fault or the hard stop ended the loop.
                 _input.Writer.TryComplete();
                 await ending.CancelAsync().ConfigureAwait(false);
-                await Task.WhenAll(Quietly(process), Quietly(posting)).ConfigureAwait(false);
+                await Quietly(posting).ConfigureAwait(false);
+
+                try
+                {
+                    // However the launch ended - its outcome, a fault of the loop's, the hard stop - what its end left is
+                    // said once it has gone: what its container could not reach, and a session file it kept all the same.
+                    await EndedAsync(process).ConfigureAwait(false);
+                    await RemoveSessionFileAsync().ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // The run stopped with no room left in its record: what is left to say reaches nothing, and how the
+                    // launch ended stands as it is.
+                }
             }
         }
 
@@ -440,7 +456,7 @@ public sealed class ClaudeCodeClient(
                     Arrival.Bound bound => Bounded(bound),
                     Arrival.Uninitialized => _initialized
                         ? null
-                        : NotHost($"{Claude} did not answer the host's initialize request: this tool runs Claude Code only as its host"),
+                        : NotHost($"{Claude} did not answer the host's initialize request within {InitializeBound.TotalSeconds:0} s: this tool runs Claude Code only as its host"),
                     Arrival.Untaken untaken => untaken.Taken == _taken && _pending.Count > 0 && !_inTurn
                         ? Ends(Failed(AgentRunStatus.Stalled, $"Claude Code did not take the engine's message within {run.Limits.StallSeconds} s ({Claude})"), killNow: true)
                         : null,
@@ -456,7 +472,21 @@ public sealed class ClaudeCodeClient(
 
         private async Task<LaunchOutcome?> OnLineAsync(string text)
         {
-            switch (ClaudeLine.Read(text))
+            var line = ClaudeLine.Read(text);
+
+            // What the launch runs as is said by its init before it does anything: one that works before its init has
+            // given nothing its tools and its credential could be held to, and nothing it does is taken as its work.
+            if (!_started && line is ClaudeLine.User or ClaudeLine.Piece or ClaudeLine.Assistant or ClaudeLine.ControlRequest or ClaudeLine.Refusal or ClaudeLine.Result)
+            {
+                if (line is ClaudeLine.ControlRequest early)
+                {
+                    Record(early.Node);
+                }
+
+                return NotHost($"{Claude} began its work before its init said what it runs as, so its tools and its credential were never held to this launch's: this tool runs Claude Code only as its host");
+            }
+
+            switch (line)
             {
                 case ClaudeLine.Init init:
                     return await OnInitAsync(init).ConfigureAwait(false);
@@ -540,7 +570,7 @@ public sealed class ClaudeCodeClient(
                 await Emit(new SessionStarted(
                     ClientName,
                     named,
-                    Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(run.SystemPrompt))),
+                    FileContentHash.Of(Encoding.UTF8.GetBytes(run.SystemPrompt)),
                     init.Tools,
                     [.. run.Skills.Select(skill => skill.Name)],
                     HandedConversation: false,
@@ -734,19 +764,7 @@ public sealed class ClaudeCodeClient(
             }
 
             var tool = asked.Tool ?? string.Empty;
-            AgentPolicyAnswer answer;
-
-            try
-            {
-                answer = Decide(tool, asked.Input);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // A fault of the engine's own while deciding: the call fails, and nothing runs that was not decided.
-                Asked(asked.CallId, allowed: false);
-                Control(Error(asked.RequestId, $"the engine could not decide this call: {Masked(ex.Message)}"));
-                return;
-            }
+            var answer = Decide(tool, asked.Input);
 
             Asked(asked.CallId, answer is AgentPolicyAnswer.Allowed);
 
@@ -771,11 +789,27 @@ public sealed class ClaudeCodeClient(
             Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = asked.Input?.DeepClone() ?? new JsonObject() }));
         }
 
-        /// <summary>The engine's answer to a call of <paramref name="tool"/>: its policy's, or, in the handoff turn, that turn's refusal.</summary>
+        /// <summary>
+        /// The engine's answer to a call of <paramref name="tool"/>: its policy's, or, in the handoff turn, that turn's
+        /// refusal. A fault of the engine's own while deciding is a denial too, by <see cref="AgentPolicy.UndecidedRule"/> - recorded as
+        /// every denial is, and never a failure that escapes - for nothing runs that was not decided.
+        /// </summary>
         private AgentPolicyAnswer Decide(string tool, JsonNode? input)
-            => _handing == Handing.No
-                ? ClaudeToolDecider.Decide(policy, tools, tool, input, run.Workspace.WorkingDirectory)
-                : new AgentPolicyAnswer.Denied(AgentHandoffSignal.TurnRule, AgentPolicySource.Builtin, AgentHandoffSignal.ToolRefusal);
+        {
+            if (_handing != Handing.No)
+            {
+                return new AgentPolicyAnswer.Denied(AgentHandoffSignal.TurnRule, AgentPolicySource.Builtin, AgentHandoffSignal.ToolRefusal);
+            }
+
+            try
+            {
+                return ClaudeToolDecider.Decide(policy, tools, tool, input, run.Workspace.WorkingDirectory);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, $"the engine could not decide this call ({ex.Message.TrimEnd('.')}): it denies what it cannot decide");
+            }
+        }
 
         /// <summary>Notes that the engine was asked about the call <paramref name="callId"/>, and whether it allowed it; the last answer stands.</summary>
         private void Asked(string? callId, bool allowed)
@@ -801,19 +835,8 @@ public sealed class ClaudeCodeClient(
                 return null;
             }
 
-            AgentPolicyAnswer answer;
-
-            try
-            {
-                answer = Decide(call.Tool, call.Asked);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // What the engine cannot decide it would not have allowed.
-                return null;
-            }
-
-            return answer is AgentPolicyAnswer.Allowed
+            // What the engine cannot decide it would not have allowed: such a call is a denial, as its refusal said.
+            return Decide(call.Tool, call.Asked) is AgentPolicyAnswer.Allowed
                 ? NotHost($"Claude Code refused '{call.Tool}' without asking the engine, which allows it ({Claude}): {refusal.Message}; this tool runs Claude Code only as its host")
                 : null;
         }
@@ -1230,23 +1253,56 @@ public sealed class ClaudeCodeClient(
             }
         }
 
-        /// <summary>Closes the launch's input and waits for it to end; one that does not within the bound is ended whole.</summary>
-        private async Task EndAsync(Task<ProcessResult> process, CancellationTokenSource ending)
+        /// <summary>
+        /// Closes the launch's input and gives it the bound to end in by itself: one still running once the bound has
+        /// passed is ended whole as the launch's run ends.
+        /// </summary>
+        private async Task EndAsync(Task<ProcessResult> process)
         {
             _input.Writer.TryComplete();
-
-            if (await Task.WhenAny(process, Task.Delay(EndBound, client._clock)).ConfigureAwait(false) != process)
-            {
-                await ending.CancelAsync().ConfigureAwait(false);
-            }
-
-            await Quietly(process).ConfigureAwait(false);
+            await Task.WhenAny(process, Task.Delay(EndBound, client._clock)).ConfigureAwait(false);
         }
 
-        /// <summary>Removes the session file the launch left all the same, told to keep none - its own, by its id, and nothing else.</summary>
+        /// <summary>
+        /// Waits for the launch to have ended, and says what its container could not reach at that end, where it could not
+        /// reach all it held: what the launch started may still run, which the step's stream and its result say.
+        /// </summary>
+        private async Task EndedAsync(Task<ProcessResult> process)
+        {
+            ProcessResult ended;
+
+            try
+            {
+                ended = await process.ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or ProgramStartException or IOException)
+            {
+                // A stop, or a launch that never started: how it ended was seen to where it mattered.
+                return;
+            }
+
+            if (ended.Uncontained is { } unreached)
+            {
+                var said = Masked($"Claude Code's launch ended, and {unreached}");
+                totals.Uncontained.Add(said);
+                await Emit(new Notice(said)).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Removes the session file the launch left all the same, told to keep none - its own, by its id, and nothing else -
+        /// and says each directory a file could not be looked for in.
+        /// </summary>
         private async Task RemoveSessionFileAsync()
         {
-            foreach (var file in client.Transcripts(run).Find(_session).Files.Where(file => Path.GetFileName(file) == _session + ".jsonl"))
+            var found = client.Transcripts(run).Find(_session);
+
+            foreach (var unread in found.Unread)
+            {
+                await Emit(new Notice($"A session file Claude Code may have kept though told to keep none could not be looked for in {Masked(unread)}")).ConfigureAwait(false);
+            }
+
+            foreach (var file in found.Files.Where(file => Path.GetFileName(file) == _session + ".jsonl"))
             {
                 try
                 {

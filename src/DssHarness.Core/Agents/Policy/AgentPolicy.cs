@@ -1088,6 +1088,9 @@ public sealed partial class AgentPolicy
         return path;
     }
 
+    /// <summary>The rule a call is denied by where it cannot be decided: by this policy, or by the engine whose deciding of it failed.</summary>
+    public const string UndecidedRule = "undecided";
+
     /// <summary>Whether <paramref name="exception"/> is one a decision this cannot make throws: the path or the command is one it cannot read, or the file system would not answer.</summary>
     private static bool Undecidable(Exception exception)
         => exception is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException or System.Security.SecurityException;
@@ -1098,7 +1101,7 @@ public sealed partial class AgentPolicy
     /// </summary>
     private static AgentPolicyAnswer Undecided(string subject, Exception exception)
         => new AgentPolicyAnswer.Denied(
-            "undecided",
+            UndecidedRule,
             AgentPolicySource.Builtin,
             $"this tool could not decide '{subject}' ({exception.Message}): it denies what it cannot decide");
 

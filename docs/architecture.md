@@ -1456,7 +1456,9 @@ names one), writes outside an agent's writable roots, every read and write of a 
 Claude Code directory of the run's and every search over one (`AgentPolicy.Search`), and any command
 naming one - by `~` or `$HOME`, as a redirect's file or an option's value, against every directory a
 `cd` of it reached; no agent starts while the tool itself runs elevated
-(`IHostPlatform.IsPrivilegedProcess`, the runtime's own answer). A path is decided as asked and as
+(`IHostPlatform.IsPrivilegedProcess`, the runtime's own answer): `AgentRunner`, which every client's
+launch passes, records such a step `NotStarted` (`AgentNotStartedBecause.Elevated`, in the words of
+`AgentPolicy.RefusedWhileElevated`) before it takes a client. A path is decided as asked and as
 resolved, its device prefix dropped and its home expanded, and a refusal's places compare in any
 case on every system, each Windows short name read as its long one (as `Path.GetFullPath` spells it); what a
 refusal allows - a writable root, the step's `writes` - compares as the platform does. A command is
@@ -1514,12 +1516,16 @@ the one table `ClaudeCodeTools` holds; an answer held to a schema checked by `St
 and sent back while it does not read; a message to an agent at work, a handoff's interrupt and its
 turn (its prompt and its refusal `AgentHandoffSignal`'s, every client's; the agent asked once every
 message the engine wrote was taken or dropped - each with an id of its own, by which the
-interrupt's receipt names those it dropped), the model each message names, a key reported invalid moved past with a new launch, and a session file
-a launch leaves removed, all in one launch's loop that the stored stream (`AgentRunner`) records as
-it runs. The client holds each launch to the protocol in the same loop: the user's settings read
-first by `ClaudeUserSettings` (a credential they would give refuses the run; the file and its
-digest named in the launch's start, the hooks off), the `initialize` answer bounded, the init's
-tools and credential source (`ClaudeLaunch.ApiKeySources`) held to the launch's, and every call
+interrupt's receipt names those it dropped), the model each message names, and a key reported
+invalid moved past with a new launch, all in one launch's loop that the stored stream
+(`AgentRunner`) records as it runs. Once a launch has ended, however it ended, a session file it
+left is removed, and what its container could not reach where the runner hands its end back
+(`ProcessResult.Uncontained`) is said and kept in the result's `uncontained`; a call the engine's
+own deciding fails on is a denial like any other, by the rule `undecided`. The client holds each
+launch to the protocol in the same loop: the user's settings read first by `ClaudeUserSettings` (a
+credential they would give refuses the run, as a configuration that is wrong; the file and its
+digest named in the launch's start, the hooks off), the `initialize` answer bounded, an init said
+before any work and its tools and credential source (`ClaudeLaunch.ApiKeySources`) held to the launch's, and every call
 that ran (`ClaudeLine.CallResult.Ran`) one the engine was asked about and allowed; a decline is
 `Refused` and an account at its limit (`ClaudeLine.RateLimit`, or the turn's error) `RateLimited`
 with an `AgentAccountLimit`. The API clients are the next thing the tool grows. This build checks workflow definitions and

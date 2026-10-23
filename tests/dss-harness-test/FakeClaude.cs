@@ -18,7 +18,10 @@ namespace DssHarness.Tests;
 /// It can also be a launch the engine is not the host of, or one that breaks the protocol, as the client's checks are
 /// held to: the first turn's <c>noInitialize</c> leaves the <c>initialize</c> request unanswered and plays nothing, its
 /// <c>initializeError</c> refuses it, and its <c>initializeAfterMs</c> answers it that long after reading it; a turn's
-/// <c>initTools</c> and <c>apiKeySource</c> are what its init says; a message the next turn's <c>untaken</c> names is
+/// <c>initTools</c> and <c>apiKeySource</c> are what its init says, and its <c>noInit</c> writes none, as a launch that
+/// works before it says what it runs as; a turn's <c>refuseInterrupt</c> answers the interrupt with an error and goes on,
+/// its <c>stderr</c> is a line it writes on its standard error as it begins, and its <c>exitAfter</c> ends the process by
+/// that code once its answer's text is written, before the turn's result; a message the next turn's <c>untaken</c> names is
 /// never taken, one its <c>takenLate</c> names was taken for its turn as the interrupt came - the receipt names it in
 /// neither list, and its turn starts once the receipt is written, cut at once, as Claude Code 2.1.296 was seen to do -
 /// and one its <c>takeAfterMs</c> names is taken that long after it is read. The interrupt's receipt names each waiting
@@ -314,6 +317,13 @@ internal static class FakeClaude
             var text = Text(entry["text"]) ?? "done";
             Assistant(entry, [new JsonObject { ["type"] = "text", ["text"] = text }]);
 
+            if (entry["exitAfter"] is JsonValue after)
+            {
+                // It ends the process once its answer is written, before the turn's result.
+                exit = after.GetValue<int>();
+                return;
+            }
+
             if (Text(entry["subtype"]) is { } subtype)
             {
                 Result(entry, null, null, error: true, subtype, Text(entry["terminal"]) ?? "completed", [Text(entry["errorText"]) ?? subtype]);
@@ -382,17 +392,27 @@ internal static class FakeClaude
             callAt = 0;
             tookIn = false;
 
-            Say(new JsonObject
+            if (!Flag(playing, "noInit"))
             {
-                ["type"] = "system",
-                ["subtype"] = "init",
-                ["session_id"] = session,
-                ["model"] = Text(playing["initModel"]) ?? model,
-                ["tools"] = playing["initTools"]?.DeepClone() ?? new JsonArray([.. tools.Concat(schema ? ["StructuredOutput"] : []).Select(tool => (JsonNode)tool)]),
-                ["apiKeySource"] = Text(playing["apiKeySource"]) ?? (Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") is { Length: > 0 } ? "ANTHROPIC_API_KEY" : "none"),
-                ["claude_code_version"] = "fake",
-            });
+                Say(new JsonObject
+                {
+                    ["type"] = "system",
+                    ["subtype"] = "init",
+                    ["session_id"] = session,
+                    ["model"] = Text(playing["initModel"]) ?? model,
+                    ["tools"] = playing["initTools"]?.DeepClone() ?? new JsonArray([.. tools.Concat(schema ? ["StructuredOutput"] : []).Select(tool => (JsonNode)tool)]),
+                    ["apiKeySource"] = Text(playing["apiKeySource"]) ?? (Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") is { Length: > 0 } ? "ANTHROPIC_API_KEY" : "none"),
+                    ["claude_code_version"] = "fake",
+                });
+            }
+
             Echo(message, messageId);
+
+            if (Text(playing["stderr"]) is { } said)
+            {
+                Console.Error.WriteLine(said);
+                Console.Error.Flush();
+            }
 
             if (cutNext)
             {
@@ -472,6 +492,13 @@ internal static class FakeClaude
             {
                 if ((playing ?? first)?["ignoreInterrupt"] is JsonValue ignore && ignore.GetValue<bool>())
                 {
+                    continue;
+                }
+
+                if ((playing ?? first) is { } refusing && Flag(refusing, "refuseInterrupt"))
+                {
+                    // It refuses the interrupt, and the turn it would have cut goes on.
+                    Say(new JsonObject { ["type"] = "control_response", ["response"] = new JsonObject { ["subtype"] = "error", ["request_id"] = Text(node["request_id"]), ["error"] = "no interrupt is taken here" } });
                     continue;
                 }
 

@@ -284,7 +284,7 @@ public sealed partial class HelpTests
         Assert.Contains("this tool's own verbs and run-side-task, run by any program or from a response file, whatever any switch says: an agent", prose, StringComparison.Ordinal);
         Assert.Contains("every read and write of a credential slot or a Claude Code directory of the run's and every search over one", prose, StringComparison.Ordinal);
         Assert.Contains("a refusal's places compare in any case on every system, a Windows short name read as its long one", prose, StringComparison.Ordinal);
-        Assert.Contains("No agent starts while this tool itself runs elevated.", prose, StringComparison.Ordinal);
+        Assert.Contains("No agent starts while this tool itself runs elevated: its step is recorded never started, saying so, before any client is taken.", prose, StringComparison.Ordinal);
         Assert.Contains(
             "wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, Invoke-Expression) stripped, and it goes into "
                 + "sh -c, cmd /c, powershell -Command and a decoded -EncodedCommand, by each shell's own quoting, to four levels",
@@ -329,7 +329,8 @@ public sealed partial class HelpTests
 
         Assert.Contains(
             "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed and never continued, "
-                + "keeping no session file (one a launch leaves all the same is removed, and said), streamed both ways - the step's prompt is "
+                + "keeping no session file (one a launch leaves all the same is removed once it has ended, however it ended, and said), "
+                + "streamed both ways - the step's prompt is "
                 + "the first message on its input, never an argument -",
             prose,
             StringComparison.Ordinal);
@@ -372,8 +373,8 @@ public sealed partial class HelpTests
             "(ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_BASE_URL in its env, in any case, or apiKeyHelper) refuses the run before any launch",
             prose,
             StringComparison.Ordinal);
-        Assert.Contains("give the client a directory of its own (agentClients.claude-code.configDir)", prose, StringComparison.Ordinal);
-        Assert.Contains("a launch that does not answer the host's initialize request within 30 s", prose, StringComparison.Ordinal);
+        Assert.Contains("give the client a directory of its own in the slot: CLAUDE_CONFIG_DIR, or the name agentClients.claude-code.configDir gives.", prose, StringComparison.Ordinal);
+        Assert.Contains("a launch that does not answer the host's initialize request within 30 s, that works before its init says what it runs as,", prose, StringComparison.Ordinal);
         Assert.Contains("a call it ran that the engine was never asked about, or refused, fails the step by the tool's name", prose, StringComparison.Ordinal);
         Assert.Contains("within the step's stall bound - counted from when the launch answered its initialize request, and from the turn's end for one written while a turn ran - ends it Stalled", prose, StringComparison.Ordinal);
         Assert.Contains("A request the model declines ends the step Refused", prose, StringComparison.Ordinal);

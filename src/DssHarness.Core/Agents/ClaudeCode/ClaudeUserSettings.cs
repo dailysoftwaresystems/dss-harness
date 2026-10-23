@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.FileSystem;
@@ -60,7 +59,7 @@ public static class ClaudeUserSettings
             return new Reading(file, null, $"'{file}', the user's Claude Code settings this launch reads, could not be read ({ex.Message}); the engine reads it before a launch for a credential it would give");
         }
 
-        var digest = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        var digest = FileContentHash.Of(bytes);
         JsonNode? settings;
 
         try
@@ -89,6 +88,6 @@ public static class ClaudeUserSettings
             : new Reading(
                 file,
                 digest,
-                $"'{file}', the user's Claude Code settings this launch reads, sets {given}, and this client signs in with {AgentAuth.Described(auth)}; a credential is read from the slot alone. Take it out of that file, or give the client a directory of its own (agentClients.{ClaudeCodeClient.ClientName}.{AgentClientSetting.ConfigDirKey})");
+                $"'{file}', the user's Claude Code settings this launch reads, sets {given}, and this client signs in with {AgentAuth.Described(auth)}; a credential is read from the slot alone. Take it out of that file, or give the client a directory of its own in the slot: {Orchestration.ClaudeTranscripts.ConfigDirectoryVariable}, or the name agentClients.{ClaudeCodeClient.ClientName}.{AgentClientSetting.ConfigDirKey} gives");
     }
 }

@@ -2491,9 +2491,10 @@ public static class HelpTopics
         builder.AppendLine("command naming one - by ~ or $HOME, as a redirect's file or an option's value too - and");
         builder.AppendLine("this tool's own verbs and run-side-task, run by any program or from a response file,");
         builder.AppendLine("whatever any switch says: an agent does not move its own run, nor leave its step's limits.");
-        builder.AppendLine("No agent starts while this tool itself runs elevated. A path is decided as asked and as");
-        builder.AppendLine("resolved, and a refusal's places compare in any case on every system, a Windows short name");
-        builder.AppendLine("read as its long one. A shell command is read whole before it is matched: split on ;, &&,");
+        builder.AppendLine("No agent starts while this tool itself runs elevated: its step is recorded never started,");
+        builder.AppendLine("saying so, before any client is taken. A path is decided as asked and as resolved, and a");
+        builder.AppendLine("refusal's places compare in any case on every system, a Windows short name read as its long");
+        builder.AppendLine("one. A shell command is read whole before it is matched: split on ;, &&,");
         builder.AppendLine("||, |, & and line ends, its $(...) and backticks, subshells, loop and branch bodies read");
         builder.AppendLine("as commands of their own, the NAME=value words before a program kept as its environment,");
         builder.AppendLine("wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval,");
@@ -2573,7 +2574,8 @@ public static class HelpTopics
         var output = new Agents.AgentOutput("o", "{}");
 
         return "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed "
-            + "and never continued, keeping no session file (one a launch leaves all the same is removed, and said), streamed "
+            + "and never continued, keeping no session file (one a launch leaves all the same is removed once it has ended, "
+            + "however it ended, and said), streamed "
             + "both ways - the step's prompt is the first message on its input, never an argument - in the agent's working "
             + "directory, with every other root it reaches added. It is given its model and no fallback, the step's effort, "
             + "turns and budget, and the tools of the agent's capabilities and no other - "
@@ -2599,9 +2601,11 @@ public static class HelpTopics
             + "disableAllHooks - and each launch's start names that settings file and its SHA-256 and says the hooks are off. A "
             + $"settings file that would give a launch a credential ({string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.IdentityNames)} in its env, in any "
             + $"case, or {Agents.ClaudeCode.ClaudeUserSettings.KeyHelper}) refuses the run before any launch, naming the file: a credential is read from the "
-            + $"slot alone - take it out of that file, or give the client a directory of its own (agentClients.claude-code.{Agents.AgentClientSetting.ConfigDirKey}). "
+            + $"slot alone - take it out of that file, or give the client a directory of its own in the slot: {Orchestration.ClaudeTranscripts.ConfigDirectoryVariable}, "
+            + $"or the name agentClients.claude-code.{Agents.AgentClientSetting.ConfigDirKey} gives. "
             + "The client holds every launch to the protocol itself, so a version on which it does not hold names itself: a "
-            + $"launch that does not answer the host's initialize request within {Agents.ClaudeCode.ClaudeCodeClient.InitializeBound.TotalSeconds:0} s, whose init offers a tool it was not "
+            + $"launch that does not answer the host's initialize request within {Agents.ClaudeCode.ClaudeCodeClient.InitializeBound.TotalSeconds:0} s, that works before its init says "
+            + "what it runs as, whose init offers a tool it was not "
             + "given or names a credential its auth did not give, or that refuses by itself a call the engine allows - as one "
             + "started without --permission-prompt-tool stdio does - never started; a call it ran that the engine was never asked "
             + "about, or refused, fails the step by the tool's name (before Claude Code 2.1.303 a call that ran unasked and failed "
