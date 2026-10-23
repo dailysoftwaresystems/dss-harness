@@ -27,7 +27,8 @@ public interface ICodeGraphExtractor
 
     /// <summary>
     /// A positive integer, raised whenever what the implementation answers for some file changes: part of every extract's
-    /// name, so raising it extracts again the files it reads and nothing else.
+    /// name, so raising it extracts again the files it reads - and reads again every file a content test decides, and every
+    /// one its claimants left ambiguous, since a new version may decide them otherwise - and no other.
     /// </summary>
     int Version { get; }
 
@@ -79,7 +80,7 @@ public sealed record CodeGraphClaims(IReadOnlyList<CodeGraphClaim> Names, IReadO
 /// <summary>One file name or extension an implementation claims.</summary>
 /// <param name="Value">The exact file name, or the extension with its dot; compared without regard to case.</param>
 /// <param name="ContentTest">
-/// A pure test of the file's first <see cref="CodeFileText.ProbeBytes"/> bytes as text, which says whether it is this
+/// A pure test of the file's first <see cref="CodeFileText.ProbeCharacters"/> characters, decoded, which says whether it is this
 /// implementation's; <see langword="null"/> where the claim needs none. Where two implementations claim one name or one
 /// extension, each must give one, and the registry refuses them otherwise.
 /// </param>

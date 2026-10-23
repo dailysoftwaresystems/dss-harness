@@ -3,30 +3,33 @@ using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Git;
 
-/// <summary>The listing of a tree as it stands, for what reads every file of it: three calls, none of which takes a lock.</summary>
+/// <summary>
+/// The listing of a tree as it stands - its index, what of its working files is not the index's, and the blobs of those
+/// files - none of which takes a lock.
+/// </summary>
 public sealed partial class GitClient
 {
-    /// <summary>How many paths one <c>hash-object</c> is given at a time.</summary>
+    /// <summary>How many paths one <c>hash-object</c> is given at a time, on its standard input, which no command line bounds.</summary>
     internal const int HashBatch = 200;
 
     /// <summary>The option that keeps git from taking the index's lock to refresh it on its own, which a person's git or a fold may need.</summary>
     private const string NoOptionalLocks = "--no-optional-locks";
 
-    public Task<IReadOnlyList<GitListedFile>> ListIndexedFilesAsync(string directory, CancellationToken cancellationToken = default)
-        => ListIndexedAsync(directory, null, cancellationToken);
+    public Task<IReadOnlyList<GitIndexEntry>> ListIndexAsync(string directory, CancellationToken cancellationToken = default)
+        => ReadIndexAsync(directory, null, cancellationToken);
 
-    public async Task<IReadOnlyList<GitListedFile>> ListIndexedFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<GitIndexEntry>> ListIndexAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
 
-        var listed = new List<GitListedFile>();
+        var entries = new List<GitIndexEntry>();
 
-        foreach (var batch in paths.Chunk(HashBatch))
+        foreach (var batch in CommandLineBatches(paths))
         {
-            listed.AddRange(await ListIndexedAsync(directory, batch, cancellationToken).ConfigureAwait(false));
+            entries.AddRange(await ReadIndexAsync(directory, batch, cancellationToken).ConfigureAwait(false));
         }
 
-        return listed;
+        return entries;
     }
 
     public Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, CancellationToken cancellationToken = default)
@@ -38,7 +41,7 @@ public sealed partial class GitClient
 
         var working = new List<GitWorkingFile>();
 
-        foreach (var batch in paths.Chunk(HashBatch))
+        foreach (var batch in CommandLineBatches(paths))
         {
             working.AddRange(await ListWorkingAsync(directory, batch, cancellationToken).ConfigureAwait(false));
         }
@@ -50,37 +53,32 @@ public sealed partial class GitClient
     private static string[] Listing(string[] command, IReadOnlyList<string>? paths)
         => paths is null ? [NoOptionalLocks, .. command] : ["--literal-pathspecs", NoOptionalLocks, .. command, "--", .. paths];
 
-    private async Task<IReadOnlyList<GitListedFile>> ListIndexedAsync(string directory, IReadOnlyList<string>? paths, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<GitIndexEntry>> ReadIndexAsync(string directory, IReadOnlyList<string>? paths, CancellationToken cancellationToken)
     {
-        var result = await RunForBytesAsync(directory, Listing(["ls-files", "-s", "-t", "-z"], paths), cancellationToken).ConfigureAwait(false);
+        // -v is what shows the marks that hide an edit from status, and -z keeps every path intact; read as bytes, so a
+        // name that is not UTF-8 is told apart from another that decodes alike.
+        var result = await RunForBytesAsync(directory, Listing(["ls-files", "--stage", "-v", "-z"], paths), cancellationToken).ConfigureAwait(false);
 
-        Ensure(result, "list the index");
+        Ensure(result, "read the index");
 
-        var listed = new List<GitListedFile>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var entries = new List<GitIndexEntry>();
 
         foreach (var record in Records(result.StandardOutput))
         {
-            // The status tag - S where git keeps the path out of the checkout - then the mode, object and stage, separated
-            // by spaces, a tab and the path; a conflicted path is listed once for each of its stages, and named here once.
+            // The tag, mode, object and stage, separated by spaces, then a tab and the path; a conflicted path is listed
+            // once for each of its stages.
             var tab = record.IndexOf('\t', StringComparison.Ordinal);
             string[] fields = tab < 0 ? [] : record[..tab].Split(' ');
 
-            if (fields.Length != 4 || fields[0].Length != 1 || !int.TryParse(fields[3], NumberStyles.None, CultureInfo.InvariantCulture, out _))
+            if (fields.Length != 4 || fields[0].Length != 1 || !int.TryParse(fields[3], NumberStyles.None, CultureInfo.InvariantCulture, out var stage))
             {
                 throw new HarnessException(HarnessExit.CommandFailed, $"git listed an index entry in a form this build cannot read: '{GitName.FromBytes(record).Quoted}'");
             }
 
-            var name = GitName.FromBytes(record[(tab + 1)..]);
-
-            // By its bytes: two names that are no UTF-8 can decode to one text.
-            if (seen.Add(name.Quoted))
-            {
-                listed.Add(new GitListedFile(name, fields[1], fields[2]) { SkipWorktree = fields[0] == "S" });
-            }
+            entries.Add(new GitIndexEntry(fields[0][0], fields[1], fields[2], stage, GitName.FromBytes(record[(tab + 1)..])));
         }
 
-        return listed;
+        return entries;
     }
 
     private async Task<IReadOnlyList<GitWorkingFile>> ListWorkingAsync(string directory, IReadOnlyList<string>? paths, CancellationToken cancellationToken)
@@ -96,8 +94,8 @@ public sealed partial class GitClient
 
         foreach (var record in Records(result.StandardOutput))
         {
-            // An ordinary change names eight fields before its path, an unmerged one ten, an untracked one none; the
-            // working tree's mode is the sixth or the seventh, all zeros where the file is not there.
+            // An ordinary change names eight fields before its path, an unmerged one ten, an untracked one only its tag;
+            // the working tree's mode is the sixth or the seventh, all zeros where the file is not there.
             var (fields, worktreeMode) = record[0] switch
             {
                 '1' => (8, 5),
@@ -144,29 +142,19 @@ public sealed partial class GitClient
     }
 }
 
-/// <summary>One path the index lists.</summary>
-/// <param name="Name">The path, from the repository's root.</param>
-/// <param name="Mode">Its octal mode: <c>120000</c> for a link, <c>160000</c> for a submodule.</param>
-/// <param name="ObjectId">The object the index holds for it: a blob, or a submodule's commit.</param>
-public sealed record GitListedFile(GitName Name, string Mode, string ObjectId)
-{
-    /// <summary>Whether git records it as a link.</summary>
-    public bool IsLink => Mode == "120000";
-
-    /// <summary>Whether it is a submodule's commit.</summary>
-    public bool IsSubmodule => Mode == "160000";
-
-    /// <summary>Whether git keeps it out of the checkout - a sparse checkout's path, or one marked skip-worktree - and so never looks at its file.</summary>
-    public bool SkipWorktree { get; init; }
-}
-
-/// <summary>One path whose working file is not what the index holds, or that the index does not hold.</summary>
+/// <summary>
+/// One path whose working file is not what the index holds - changed, gone, conflicted, or changed in the index alone - or
+/// that the index does not hold.
+/// </summary>
 /// <param name="Name">The path, from the repository's root.</param>
 /// <param name="Gone">Whether its working file is not there.</param>
 /// <param name="Untracked">Whether the index does not hold it, and git does not ignore it.</param>
 /// <param name="Mode">Its working file's octal mode, where git says it; <see langword="null"/> for an untracked file.</param>
 public sealed record GitWorkingFile(GitName Name, bool Gone, bool Untracked, string? Mode)
 {
-    /// <summary>Whether its working file differs from what the index holds - an untracked or conflicted file always does - so its object is to be asked of git.</summary>
+    /// <summary>
+    /// Whether its working file differs from what the index holds - an untracked or conflicted file always does; a change
+    /// staged and nothing more does not - so its object is to be asked of git.
+    /// </summary>
     public bool Differs { get; init; } = true;
 }

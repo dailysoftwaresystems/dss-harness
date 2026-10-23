@@ -8,11 +8,15 @@ namespace DssHarness.Core.Git;
 /// <param name="Mode">The octal mode, such as 100644 for a file or 160000 for a submodule.</param>
 /// <param name="ObjectId">The object the index holds for the path.</param>
 /// <param name="Stage">0 for a merged entry; 1 to 3 for the sides of an unresolved conflict.</param>
-/// <param name="Path">
-/// The path, relative to the directory git ran in; git lists only the entries below that directory.
+/// <param name="Name">
+/// The path, relative to the directory git ran in, as git holds it; git lists only the entries below
+/// that directory.
 /// </param>
-public sealed record GitIndexEntry(char Tag, string Mode, string ObjectId, int Stage, string Path)
+public sealed record GitIndexEntry(char Tag, string Mode, string ObjectId, int Stage, GitName Name)
 {
+    /// <summary>The path as text (<see cref="GitName.Text"/>): exactly the path, where it is UTF-8.</summary>
+    public string Path => Name.Text;
+
     /// <summary>Whether status skips the file, because it is marked assume-unchanged.</summary>
     public bool IsAssumedUnchanged => char.IsLower(Tag);
 
@@ -22,6 +26,9 @@ public sealed record GitIndexEntry(char Tag, string Mode, string ObjectId, int S
     /// <summary>Whether the entry records a submodule's commit rather than a file.</summary>
     public bool IsSubmodule => Mode == "160000";
 
+    /// <summary>Whether git records the entry as a link.</summary>
+    public bool IsLink => Mode == GitEntry.LinkMode;
+
     /// <summary>Whether the entry is an ordinary file, executable or not.</summary>
-    public bool IsRegularFile => Mode is "100644" or "100755";
+    public bool IsRegularFile => Mode is "100644" or GitEntry.ExecutableMode;
 }

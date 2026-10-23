@@ -230,10 +230,22 @@ public interface IGitClient
 
     /// <summary>
     /// The index entries below <paramref name="directory"/>, with paths relative to it, and the flags
-    /// that can hide an edit from status.
+    /// that can hide an edit from status, as <c>ls-files --stage -v -z</c> lists them - a conflicted path once
+    /// for each of its stages - without taking the index's lock.
     /// </summary>
-    /// <exception cref="HarnessException">git could not read the index.</exception>
+    /// <exception cref="HarnessException">git could not read the index, or listed what this build cannot read.</exception>
     Task<IReadOnlyList<GitIndexEntry>> ListIndexAsync(string directory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// What the index lists of <paramref name="paths"/> alone, as <see cref="ListIndexAsync(string, CancellationToken)"/>
+    /// lists every entry: each path named as it is spelt, never read as a pattern, and given in batches no command line
+    /// outgrows.
+    /// </summary>
+    /// <param name="directory">The directory git runs in, which the paths are relative to.</param>
+    /// <param name="paths">The paths, with forward separators.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not read the index, or listed what this build cannot read.</exception>
+    Task<IReadOnlyList<GitIndexEntry>> ListIndexAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Makes the index of the repository at <paramref name="directory"/> hold exactly <paramref name="paths"/>:
@@ -592,28 +604,11 @@ public interface IGitClient
     Task<GitHeadMoved> TakeHistoryAsync(string directory, GitHistoryTaken taken, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Every path the index of the repository at <paramref name="directory"/> lists, once each, with its mode and the object
-    /// its index holds, as <c>ls-files -s -z</c> lists them - without taking the index's lock.
-    /// </summary>
-    /// <param name="directory">The top of the tree.</param>
-    /// <param name="cancellationToken">Cancels the git process.</param>
-    /// <exception cref="HarnessException">git failed, or listed what this build cannot read.</exception>
-    Task<IReadOnlyList<GitListedFile>> ListIndexedFilesAsync(string directory, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// What the index lists of <paramref name="paths"/> alone, as <see cref="ListIndexedFilesAsync(string, CancellationToken)"/>
-    /// lists every path: each path named as it is spelt, never read as a pattern, and given in batches of a few hundred.
-    /// </summary>
-    /// <param name="directory">The top of the tree.</param>
-    /// <param name="paths">The paths, relative to the tree's top with forward separators.</param>
-    /// <param name="cancellationToken">Cancels the git processes.</param>
-    /// <exception cref="HarnessException">git failed, or listed what this build cannot read.</exception>
-    Task<IReadOnlyList<GitListedFile>> ListIndexedFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Every path of the tree at <paramref name="directory"/> whose working file is not what the index holds - changed,
-    /// gone, conflicted - and every untracked one git does not ignore, as <c>status --porcelain=v2 -z
-    /// --untracked-files=all --no-renames</c> lists them, without taking the index's lock.
+    /// gone, conflicted - every path changed in the index alone, its working file the index's
+    /// (<see cref="GitWorkingFile.Differs"/> false), and every untracked one git does not ignore, as <c>status --porcelain=v2
+    /// -z --untracked-files=all --no-renames</c> lists them, without taking the index's lock. A path marked assume-unchanged
+    /// or skip-worktree is not among them: status does not look at its file.
     /// </summary>
     /// <param name="directory">The top of the tree.</param>
     /// <param name="cancellationToken">Cancels the git process.</param>
@@ -623,7 +618,7 @@ public interface IGitClient
     /// <summary>
     /// What the working tree's status says of <paramref name="paths"/> alone, as
     /// <see cref="ListWorkingFilesAsync(string, CancellationToken)"/> says it of every path: each path named as it is spelt,
-    /// never read as a pattern, and given in batches of a few hundred.
+    /// never read as a pattern, and given in batches no command line outgrows.
     /// </summary>
     /// <param name="directory">The top of the tree.</param>
     /// <param name="paths">The paths, relative to the tree's top with forward separators.</param>
@@ -633,7 +628,7 @@ public interface IGitClient
 
     /// <summary>
     /// The blob id git would store each of <paramref name="paths"/>' working files as, its filters applied, in the same
-    /// order - nothing written, no lock taken, the paths given in batches of a few hundred.
+    /// order - nothing written, no lock taken, the paths given on standard input <see cref="GitClient.HashBatch"/> at a time.
     /// </summary>
     /// <param name="directory">The top of the tree, which the paths are relative to.</param>
     /// <param name="paths">The files, each there.</param>

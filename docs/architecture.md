@@ -1781,7 +1781,8 @@ language-neutral `FileExtract`: nodes - a value's type (`ValueType`) and the typ
 among what they say - the scopes they are put in (open to
 other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address or path ending, with their prefixes and filters,
 address roots, references by name with their qualifiers, and four marks - a prototype, a test, generated code with
-why, and each line it saw something it cannot bind (`dynamic`). An implementation is registered by being written:
+why, and each line it saw something it cannot bind or stopped reading at (`dynamic`) - of which the linker reads the
+first two. An implementation is registered by being written:
 `CodeGraphExtractors.Implementations` is the one scan of the core, which `AddDssHarness` registers each type of, and the
 registry built from them refuses two of one name, two claims of one exact name or extension of which either gives no
 content test, no fallback or two, a fallback that claims a name or an extension, a claimed name no file can bear or
@@ -1793,8 +1794,9 @@ anything under `Codebase\Languages\`. Every span counts lines as `CodeFileText.L
 alone, as an editor and git count - and an implementation that reads a parser's positions turns each into a line by
 `CodeFileText.LineIndex`, since a parser may also break lines at NEL and the Unicode separators. An extract is sound by `FileExtract.Problem` - every span inside the file, every
 parent present, holding its child and no cycle, ids unique and of its implementation, text whole UTF-16 - and every
-node's digest is the core's to set (`WithDigests`), whatever the implementation set. An `Extract` or a content test that
-throws lists its one file `unreadable` with why, never the end of a sync. Each implementation's tests derive
+node's digest is the core's to set (`WithDigests`), whatever the implementation set. An `Extract` that throws or answers
+no sound extract, or a content test that throws, lists its one file `unreadable` with why - a defect `failOn: incomplete`
+fails on as it does on any file not read - never the end of a sync. Each implementation's tests derive
 from one kit, `CodeGraphExtractorContractTests<T>`, whose checks (`CodeGraphContract`, each shown red on an
 implementation that breaks it) hold it to fixtures for each claim, determinism whatever the line endings, answers alike
 from many threads, a sound model, tolerance of any cut of a fixture, pure content tests that never both say yes with
@@ -1835,18 +1837,26 @@ which every link result names: a graph linked by another revision is linked agai
 read again.
 
 A sync (`ICodebaseGraphService.SyncAsync`) lists the main checkout by three calls of `IGitClient` that take no lock -
-`ListIndexedFilesAsync` (`ls-files -s -t -z`), `ListWorkingFilesAsync` (`status --porcelain=v2 -z --untracked-files=all
---no-renames`) and `HashWorkingFilesAsync` (`hash-object`, in batches of 200) - leaves out the credential slots and the
+`ListIndexAsync` (`ls-files --stage -v -z`, the one reading of the index the whole tool shares), `ListWorkingFilesAsync`
+(`status --porcelain=v2 -z --untracked-files=all --no-renames`) and `HashWorkingFilesAsync` (`hash-object`, its paths on
+standard input 200 at a time); a listing of given paths names them as arguments, in batches no command line outgrows
+(`CommandLineBatches`: 200 paths and 8,000 characters at most) - leaves out the credential slots and the
 tool's state paths under the run's worktrees root before anything reads, and holds every file to the core's rules
 (`CodeFileText`: a NUL among the first 8,000 bytes - `BinaryContent.Holds`, git's reading rule and its window, which
 the citation scan asks too, where the line-ending rewrite asks git's conversion rule, `BinaryContent.ForConversion`, of a
 file declared `text=auto` alone, as git does -
 or a Git LFS pointer is binary, UTF-8 or UTF-16 by its mark is read,
-anything else is unreadable) before its implementation does. A path marked skip-worktree, as a sparse checkout marks
-it, is hashed and read where its file is there and left out where it is not; a repository inside the tree that git
-lists whole as untracked is not entered. It reads a file again only where its blob, its claimant, its claimant's
-version, or what `maxFileBytes` or `languages` decide of it changed, or where its extract is gone, and tries a file it
-could not read again at every sync; a run with no graph starts from the newest earlier run's manifest
+anything else is unreadable) before its implementation does. A path whose file git does not look at - marked
+skip-worktree, as a sparse checkout marks it, or assume-unchanged - is hashed and read where its file is there and left
+out where it is not; a repository inside the tree that git lists whole as untracked is not entered; a file about to be
+hashed - changed, untracked or not looked at by git at a listing, moved at a check - that is a link, or that a link lies
+along (`LinkPaths.LeadsElsewhere`, a directory junction git walks into among them), is listed a link and neither hashed
+nor read, by the one look both take. Each file read is
+hashed once more, in one batch, once the reads are done: one whose blob moved, or that went, while it was read is listed
+unreadable and keeps nothing, so an extract is never stored under a blob its bytes were not. It reads a file again only
+where its blob, its claimant, its claimant's version, or what `maxFileBytes` or `languages` decide of it changed, or
+where its extract is gone, and tries a file it could not read again at every sync; a run with no graph starts from the
+newest earlier run's manifest
 that reads, its extracts copied as they are reused and a file whose extract that run lacks read again. Its records go
 through `OrchestrationStore`, each strict with its `Problem()` and placed by `OrchestratorLayout`: `graph.json`, the
 manifest with its digest; `symbols.jsonl`, the link result naming the manifest's digest and the linker's revision, made
@@ -1854,7 +1864,8 @@ again where either does not match - as lines, its head counting what follows and
 of its own, since it grows with the repository and a list read or written whole is held whole while it is
 (`JsonLineWriter`, `JsonLineReader`); `extracts/<ab>/<blob>-<path>.<language>-<version>.json`, written once, before the manifest that names them;
 `views/<agent>.json`, an agent's view (`CodeGraphView`); and `sync.jsonl`, one line for each sync - what it listed,
-hashed, read, reused and removed, the references it found and, for one that failed, why (`Failed`); the store's appends
+hashed, read, reused and removed, the references it found, how many files it could not read (`Unreadable`) and, for one
+that failed or a view a moved base could not be held against, why (`Failed`); the store's appends
 to it take turns within the process. An extract is named by its path too: an implementation's answer may read the path - its generated
 names, its test directories, a file's own names - so a renamed file is read again. The last sync to end with none under
 way removes each extract neither the manifest nor a view names, where one may have been left: at a process's first
@@ -1862,7 +1873,9 @@ sync, after a record was written that no longer names an extract the one it repl
 sync did not hold, a view's first, a seeded base, a rebuild - after a sync that did not end, and after a view was
 dropped - a sync that changed nothing does not look. A sync that failed, not one stopped, also leaves the process
 holding no tree of the graph, so the next sync takes each tree as its records say (`CheckAsync` syncs it first, as it
-does a tree this process has not linked). Extraction runs on one of every
+does a tree this process holds neither a link nor a link result of). A record that does not read is refused, its reason
+kept: a whole sync builds it again, saying why, and a sync by paths takes nothing and says why; one that could not be read
+at all fails the sync. Extraction runs on one of every
 `CodebaseGraphService.ReadShare` (2) of the processors.
 
 An agent's view is its worktree listed the same way and held against the base - the main checkout's manifest, synced
@@ -1872,13 +1885,19 @@ is not read. A `graphify-codebase` step with `in` syncs that agent's view, or th
 tree has its gate: syncs of one wait for each other, syncs of different trees run side by side, and a view takes the base
 as one snapshot, which a view reads without the base's gate and never puts back older than a sync left it
 (`Graph.Adopt`). When the base moves, every view - one whose first sync is under way among them - is held against it
-again under its gate with no file read, from the earlier manifest it stood on. `SyncPathsAsync` brings a tree up to date
-by the paths given alone, git asked of those paths (`--literal-pathspecs`), with no listing of the rest; `CheckAsync` is
-the check an answer of the graph makes of the files it names before it is given - no command answers from the graph
-yet - a `stat` against what the view recorded, or against what an earlier
-check found of a file whose time alone moved, a hash only of a file either moved, and a file whose blob moved read again,
-its tree linked again and written, before the answer is made, and a tree this process has not linked synced first, so
-the answer is its own link's; `DropViewAsync` takes a view out. What a process linked of each tree is held in memory,
+again under its gate with no file read, from the earlier manifest it stood on, until a newer sync of the base holds them
+all, so no view is put back on an older base; a view that could not be held is said - a line of `sync.jsonl` and a
+warning - and made again by its next whole sync, the base's sync standing. A view's first sync makes the run's first base
+before it takes its own gate, and a sync that waited for the base's gate for that makes none where another made it
+meanwhile: no gate is held while another view's is waited for, so no two syncs wait on each other. `SyncPathsAsync`
+brings a tree up to date by the paths given alone, git asked of those paths (`--literal-pathspecs`), with no listing of
+the rest; `CheckAsync` is the check an answer of the graph makes of the files it names before it is given - no command
+answers from the graph yet - a `stat` against what the view recorded, or against what an earlier check found of a file
+whose time alone moved, trusted only where that time is older than the tree's last whole sync's record (`Tree.Written`),
+as git trusts an index entry older than its index; a hash only of a file either moved or whose time is not older, and a
+file whose blob moved read again, its tree linked again and written, and each extract the answer names read, before the
+answer is made - no sweep comes between - and a tree this process holds neither a link nor a link result of synced
+first, so the answer is its own link's; `DropViewAsync` takes a view out. What a process linked of each tree is held in memory,
 with the base's link result, and the next sync links again from it (`Relink`) - or keeps it, unread and unwritten,
 where nothing changed; a process begun again links its first sync whole, from the extracts.
 
@@ -1888,7 +1907,7 @@ works in (`FlowCoordinator.WorkingOf`, which its claims are read through too), t
 `delete-agent` sync the base by every path the run's folds changed that the graph has not taken yet
 (`FoldLedger.Ungraphed`, `FoldLedger.Changed`) - before each attempt does anything and after its apply - and record each
 fold it took (`graphed` in `folds.json`), so a sync that failed, was stopped or was cut off by a crash is owed until one
-goes through - a graph whose manifest does not read takes none of them, which is said, and they stay owed until a
+goes through - a graph whose manifest does not read takes none of them, which is said with why, and they stay owed until a
 whole sync builds it again; `refresh` and `rebase` sync their target's view where it has one; every one of these first drops the view
 of each agent that is no longer live, `delete-agent`'s own after its deletion among them, so a drop that failed is tried
 again. A sync of these that fails, for any cause but a stop, is said - a line of `sync.jsonl` that says why, where it

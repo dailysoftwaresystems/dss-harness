@@ -7,7 +7,8 @@ namespace DssHarness.Core.Codebase;
 /// <summary>
 /// What an implementation of <see cref="ICodeGraphExtractor"/> makes of one file: language-neutral, the model of the graph
 /// and nothing of any language - its declarations, the scopes they are put in, what the file imports, what an address
-/// means, the references it makes by name, unresolved, and four marks the linker reads without knowing why they were set.
+/// means, the references it makes by name, unresolved, and four marks - a prototype, a test, generated code and what it
+/// cannot bind - of which the linker reads the first two, without knowing why they were set.
 /// </summary>
 /// <remarks>
 /// The linker resolves every reference by the same steps for every language - the qualifier's scope, the enclosing
@@ -23,7 +24,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     /// <summary>The longest a node's summary may be, in characters.</summary>
     public const int MostSummary = 200;
 
-    /// <summary>An extract that holds nothing: what a file no implementation reads past its first bytes gives.</summary>
+    /// <summary>An extract that holds nothing: what the fallback gives every file it lists, whose declarations nothing reads.</summary>
     public static FileExtract Empty { get; } = new([]);
 
     /// <summary>The named containers its declarations are put in, each by its qualified name.</summary>
@@ -40,12 +41,15 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 
     /// <summary>
     /// Why the file is generated code, where the implementation knows a generator wrote it; <see langword="null"/> where
-    /// it is not. Its declarations are then marked and ranked after every other, or left out under
+    /// it is not. Its declarations are then kept, its file's entry naming why it is generated, or left out under
     /// <c>codebaseGraph.generated: exclude</c>.
     /// </summary>
     public string? Generated { get; init; }
 
-    /// <summary>Each place the implementation saw something it cannot bind - a call a macro writes, a member named by a string - with why.</summary>
+    /// <summary>
+    /// Each place the implementation saw something it cannot bind - a call a macro writes, a member named by a string, the
+    /// point a file stops parsing, past which nothing is read - with why.
+    /// </summary>
     public IReadOnlyList<ExtractDynamic> Dynamic { get; init; } = [];
 
     /// <summary>
@@ -421,7 +425,7 @@ public static class CodeQualifierKinds
     public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value];
 }
 
-/// <summary>A place an implementation saw something it cannot bind.</summary>
+/// <summary>A place an implementation saw something it cannot bind, or stopped reading.</summary>
 /// <param name="Line">The line.</param>
-/// <param name="Why">What it saw: a call a macro writes, a member named by a string to reflection, a call through a pointer.</param>
+/// <param name="Why">What it saw: a call a macro writes, a member named by a string to reflection, a call through a pointer, a file that stops parsing there.</param>
 public sealed record ExtractDynamic(int Line, string Why);

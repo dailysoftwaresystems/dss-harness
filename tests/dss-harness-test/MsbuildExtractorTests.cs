@@ -120,12 +120,19 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
             </Project>
             """;
 
-        Assert.Equal(["One.csproj"], Extractor.Extract(new CodeFileInput("Entity.csproj", Text)).References.Select(reference => reference.Name));
+        var extract = Extractor.Extract(new CodeFileInput("Entity.csproj", Text));
+
+        Assert.Equal(["One.csproj"], extract.References.Select(reference => reference.Name));
+        Assert.Equal([6], extract.Dynamic.Select(mark => mark.Line));
     }
 
-    /// <summary>A file that stops parsing is read up to its fault: the references before it are kept, and the project is a node.</summary>
+    /// <summary>
+    /// A file that stops parsing is read up to its fault, and marks it: the references before it are kept, the project is
+    /// a node, and the line it stops at is dynamic, saying so - so a reference missing after it is never taken for one the
+    /// project does not make. One that reads whole marks nothing.
+    /// </summary>
     [Fact]
-    public void AFileThatStopsParsing_IsReadUpToItsFault()
+    public void AFileThatStopsParsing_IsReadUpToItsFault_AndMarksIt()
     {
         const string Text = """
             <Project>
@@ -140,5 +147,7 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
 
         Assert.Equal(["One.csproj"], extract.References.Select(reference => reference.Name));
         Assert.Equal(("Broken.csproj", 1, 6), (Assert.Single(extract.Nodes).Name, extract.Nodes[0].Start, extract.Nodes[0].End));
+        Assert.Equal([new ExtractDynamic(4, "the file stops reading as XML here, and nothing after it is read")], extract.Dynamic);
+        Assert.Empty(Extractor.Extract(new CodeFileInput("src/Shapes/Shapes.csproj", Shapes)).Dynamic);
     }
 }

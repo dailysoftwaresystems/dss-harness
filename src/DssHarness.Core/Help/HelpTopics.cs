@@ -3274,12 +3274,14 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             "What it reads. The main checkout as it stands - its HEAD and whatever is uncommitted in it - listed by three calls of "
-            + "git that take no lock: ls-files, status and hash-object, so a file git ignores is not in it; a path git keeps out of "
-            + "the checkout - a sparse checkout's, or one marked skip-worktree - is in it where its file is there, read as it stands, "
-            + "and a repository inside the tree that git lists whole is not entered. Each file is read by "
+            + "git that take no lock: ls-files, status and hash-object, so a file git ignores is not in it; a path whose file git "
+            + "does not look at - kept out of the checkout, as a sparse checkout or skip-worktree keeps it, or marked "
+            + "assume-unchanged - is in it where its file is there, hashed and read as it stands, and a repository inside the tree "
+            + "that git lists whole is not entered. Each file is read by "
             + "the one implementation that claims it: by its exact name, else by its extension, else by the fallback, which lists "
-            + "it; where two claim one file their tests of its first bytes decide, and a file both or neither says is theirs is "
-            + "listed ambiguous. A sync reads a file again only where its blob, the implementation that claims it, that "
+            + "it; where two claim one file their tests of its first characters decide, and a file both or neither says is theirs is "
+            + "listed ambiguous. Each file read is hashed once more when its read is done, and what was made of it is kept only "
+            + "where its blob is still the one listed. A sync reads a file again only where its blob, the implementation that claims it, that "
             + "implementation's version, or what maxFileBytes or languages decide of it changed, or where its extract is gone; a "
             + "file it could not read is tried again at every sync, and every other file keeps its extract. A run with no graph "
             + "yet starts from the newest earlier run's. Every graphify-codebase step of a run syncs the one graph, wherever the "
@@ -3301,7 +3303,8 @@ public static class HelpTopics
             + "and a line of the sync log that says why where it names the view - and its step goes on, since the graph is a "
             + "map. Syncs "
             + "of one view wait for each other and syncs of different views run side by side, each on one snapshot of the base; "
-            + "when the base moves, each view is held against it again and no file is read. Linking again finds again only the "
+            + "when the base moves, each view is held against it again and no file is read - one that could not be is said, and "
+            + "made again by its next whole sync. Linking again finds again only the "
             + "references of the files that changed and those that read what a change altered - a name, a scope, a base, an "
             + "import, a path - and every other reference keeps what it found.");
         builder.AppendLine();
@@ -3309,9 +3312,11 @@ public static class HelpTopics
             builder,
             "What it does not see. The credential slots and the tool's own state are never listed, so never served. A file "
             + $"with a NUL among its first {BinaryContent.Window.ToString("N0", CultureInfo.InvariantCulture)} bytes - git's own window - or a Git LFS pointer, is {CodeFileStates.Binary}; one over "
-            + $"codebaseGraph.maxFileBytes is {CodeFileStates.TooLarge}; one that is neither UTF-8 nor UTF-16 by its mark is "
-            + $"{CodeFileStates.Unreadable}, with why; a link is listed and not followed; a submodule is listed and not entered. "
-            + "Generated code is kept, marked and ranked after everything else, or - under generated: exclude - listed with its "
+            + $"codebaseGraph.maxFileBytes is {CodeFileStates.TooLarge}; one that is neither UTF-8 nor UTF-16 by its mark, is named "
+            + "in no UTF-8, went or changed while it was read, could not be read, or that a content test or its implementation "
+            + $"failed on is {CodeFileStates.Unreadable}, with why - an implementation's defect among them; a link, or a path one lies "
+            + "along - a directory junction among them - is listed and not followed; a submodule is listed and not entered. "
+            + "Generated code is kept, its file's entry naming why it is generated, or - under generated: exclude - listed with its "
             + "declarations left out. What a program cannot bind by reading the code - reflection, a call a macro writes, a call "
             + "through a pointer, what dependency injection hands in - is no edge; an interface's call reaches each implementation "
             + "through a dispatches edge.");
@@ -3323,7 +3328,7 @@ public static class HelpTopics
         {
             var claims = extractor.Claims.Fallback
                 ? "every file no other claims"
-                : string.Join(", ", extractor.Claims.Names.Concat(extractor.Claims.Extensions).Select(claim => claim.Value + (claim.ContentTest is null ? string.Empty : " (by a test of its first bytes)")));
+                : string.Join(", ", extractor.Claims.Names.Concat(extractor.Claims.Extensions).Select(claim => claim.Value + (claim.ContentTest is null ? string.Empty : " (by a test of its first characters)")));
 
             builder.AppendLine($"  {extractor.Language} (version {extractor.Version.ToString(CultureInfo.InvariantCulture)}; {claims})");
             AppendWrapped(builder, $"    reads {extractor.Help.Reads}.");
@@ -3353,7 +3358,7 @@ public static class HelpTopics
             + "one file's extract, written once and named by its blob, its path, its implementation and version; and "
             + $"{OrchestratorLayout.GraphViewsDirectoryName}/<agent>.json, an agent's view - the base it is held against, the "
             + "worktree's HEAD, each file it holds otherwise and each it does not hold; and "
-            + $"{OrchestratorLayout.GraphSyncFileName}, one line for each sync. Each is written whole, an extract before the manifest "
+            + $"{OrchestratorLayout.GraphSyncFileName}, one line for each sync, counting the files it could not read. Each is written whole, an extract before the manifest "
             + "or view that names it, so a sync that stops part way leaves the last whole manifest, and the last sync to end with "
             + "none under way removes each extract neither the manifest nor a view names; a manifest that does not read is built again whole, and never guessed at, and a link result "
             + "linked by another build's linker is linked again, no file read again. delete-orchestrator removes the graph with its run, and never counts it among what "
@@ -3365,8 +3370,9 @@ public static class HelpTopics
             builder,
             $"A graphify-codebase step answers {string.Join(", ", answers)}: languages gives each implementation's files and nodes, "
             + "and skipped every file the graph holds no declaration of, with its state and why. A graph is a map, never red: a file it could not read leaves the step done, listing it, "
-            + $"unless the step says failOn: {WorkflowStepTypes.GraphIncomplete}, which fails it ({HarnessExit.CommandFailed}) naming each. git not "
-            + $"answering fails it ({HarnessExit.ToolMissing}), and so does a time limit passed ({HarnessExit.Incomplete}; "
+            + $"unless the step says failOn: {WorkflowStepTypes.GraphIncomplete}, which fails it ({HarnessExit.CommandFailed}) naming each. git that "
+            + $"could not be started fails it ({HarnessExit.ToolMissing}), git that failed to list the tree fails it "
+            + $"({HarnessExit.CommandFailed}), saying what git said, and so does a time limit passed ({HarnessExit.Incomplete}; "
             + $"{WorkflowStepTypes.Find("graphify-codebase")!.DefaultTimeoutMinutes} minutes where it says no timeoutMinutes). Its extraction "
             + $"runs in the engine's process on one of every {CodebaseGraphService.ReadShare} of the machine's processors, so a build beside it is not starved; it "
             + "runs no leg and counts against no limit; with in, its view is that agent's - the base for one that only reads - "

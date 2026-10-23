@@ -3,19 +3,20 @@ using DssHarness.Core.Git;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The three calls that list a tree as it stands for the codebase graph, against real git: none takes the index's lock,
-/// each reads what git says of every kind of path, and the blobs of many files are asked a batch at a time.
+/// The three calls that list a tree as it stands, against real git: none takes the index's lock, each reads what git says
+/// of every kind of path, the paths a listing is given are named as they are spelt and batched as no command line
+/// outgrows, and the blobs of many files are asked a batch at a time.
 /// </summary>
 public sealed class GitClientListingTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
-    /// The index lists each path once with its mode and object - a file, an executable, a link, a submodule's commit - and
-    /// a conflicted path once, whatever its stages; asked without the index's lock.
+    /// The index lists each entry with its mode, object and stage - a file, an executable, a link, a submodule's commit -
+    /// and a conflicted path once for each of its stages; asked without the index's lock.
     /// </summary>
     [Fact]
-    public async Task TheIndex_ListsEachPathOnce_WithItsModeAndObject()
+    public async Task TheIndex_ListsEachEntry_WithItsModeObjectAndStage()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -31,33 +32,116 @@ public sealed class GitClientListingTests
         await ConflictAsync(harness, temp, "both.txt");
         var processes = new CountingProcesses(harness.ProcessRunner);
 
-        var listed = (await Git(harness, processes).ListIndexedFilesAsync(temp.Path, Token)).ToDictionary(file => file.Name.Text);
+        var entries = await Git(harness, processes).ListIndexAsync(temp.Path, Token);
+        var listed = entries.Where(entry => entry.Stage == 0).ToDictionary(entry => entry.Path);
 
-        Assert.Equal(["README.md", "both.txt", "linked", "run.sh", "vendor/sub"], listed.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["README.md", "linked", "run.sh", "vendor/sub"], listed.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal([1, 2, 3], entries.Where(entry => entry.Path == "both.txt").Select(entry => entry.Stage));
         Assert.Equal(("100755", false, false), (listed["run.sh"].Mode, listed["run.sh"].IsLink, listed["run.sh"].IsSubmodule));
         Assert.True(listed["linked"].IsLink);
         Assert.Equal((true, head), (listed["vendor/sub"].IsSubmodule, listed["vendor/sub"].ObjectId));
-        Assert.All(listed.Values, file => Assert.False(file.SkipWorktree));
-        Assert.Equal(["--no-optional-locks", "ls-files", "-s", "-t", "-z"], Assert.Single(processes.Started).Arguments.TakeLast(5));
+        Assert.All(entries, entry => Assert.False(entry.IsSkipWorktree || entry.IsAssumedUnchanged));
+        Assert.Equal(["--no-optional-locks", "ls-files", "--stage", "-v", "-z"], Assert.Single(processes.Started).Arguments.TakeLast(5));
     }
 
-    /// <summary>A path git keeps out of the checkout - marked skip-worktree, as a sparse checkout marks it - is listed so, and no other.</summary>
+    /// <summary>
+    /// A path whose file git does not look at - marked skip-worktree, as a sparse checkout marks it, or assume-unchanged -
+    /// is listed so, each by its own mark, and no other.
+    /// </summary>
     [Fact]
-    public async Task APathKeptOutOfTheCheckout_IsListedSo()
+    public async Task APathWhoseFileGitDoesNotLookAt_IsListedSo()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         await harness.InitializeGitRepositoryAsync(temp.Path, Token);
         temp.WriteFile("kept.txt", "kept\n");
         temp.WriteFile("out.txt", "out\n");
+        temp.WriteFile("assumed.txt", "assumed\n");
         await harness.CommitAllAsync(temp.Path, "files", Token);
         await harness.RunGitAsync(temp.Path, ["update-index", "--skip-worktree", "out.txt"], Token);
+        await harness.RunGitAsync(temp.Path, ["update-index", "--assume-unchanged", "assumed.txt"], Token);
 
-        var listed = (await Git(harness, new CountingProcesses(harness.ProcessRunner)).ListIndexedFilesAsync(temp.Path, Token)).ToDictionary(file => file.Name.Text);
+        var listed = (await Git(harness, new CountingProcesses(harness.ProcessRunner)).ListIndexAsync(temp.Path, Token)).ToDictionary(entry => entry.Path);
 
-        Assert.True(listed["out.txt"].SkipWorktree);
-        Assert.False(listed["kept.txt"].SkipWorktree);
-        Assert.False(listed["README.md"].SkipWorktree);
+        Assert.Equal((true, false), (listed["out.txt"].IsSkipWorktree, listed["out.txt"].IsAssumedUnchanged));
+        Assert.Equal((false, true), (listed["assumed.txt"].IsSkipWorktree, listed["assumed.txt"].IsAssumedUnchanged));
+        Assert.All(new[] { "kept.txt", "README.md" }, path => Assert.False(listed[path].IsSkipWorktree || listed[path].IsAssumedUnchanged));
+    }
+
+    /// <summary>
+    /// Paths given to a listing are each named as it is spelt, never read as a pattern: a name with brackets lists itself
+    /// and not the name its brackets would match, and one that begins with a colon is a name and no pathspec magic.
+    /// </summary>
+    [Fact]
+    public async Task PathsGivenToAListing_AreNamedAsTheyAreSpelt_NeverReadAsPatterns()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(temp.Path, Token);
+        temp.WriteFile("[a].cs", "bracketed\n");
+        temp.WriteFile("a.cs", "plain\n");
+
+        // A name that begins with a colon is made where the file system lets it be: Windows takes a colon for a stream.
+        var colon = !OperatingSystem.IsWindows();
+
+        if (colon)
+        {
+            temp.WriteFile(":x", "colon\n");
+        }
+
+        await harness.CommitAllAsync(temp.Path, "names", Token);
+        temp.WriteFile("[a].cs", "bracketed again\n");
+        temp.WriteFile("a.cs", "plain again\n");
+
+        if (colon)
+        {
+            temp.WriteFile(":x", "colon again\n");
+        }
+
+        var git = Git(harness, new CountingProcesses(harness.ProcessRunner));
+        string[] asked = colon ? ["[a].cs", ":x"] : ["[a].cs"];
+
+        Assert.Equal(asked.Order(StringComparer.Ordinal), (await git.ListIndexAsync(temp.Path, asked, Token)).Select(entry => entry.Path).Order(StringComparer.Ordinal));
+        Assert.Equal(asked.Order(StringComparer.Ordinal), (await git.ListWorkingFilesAsync(temp.Path, asked, Token)).Select(file => file.Name.Text).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// Paths given to a listing travel as its arguments in batches no command line outgrows - as many as 8,000 characters
+    /// of path make, not a count that assumes short names - and every path asked is listed, whichever batch held it.
+    /// </summary>
+    [Fact]
+    public async Task PathsGivenToAListing_AreBatchedByWhatTheyCost_AndEachIsListed()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(temp.Path, Token);
+
+        // 150 paths of 100 characters: 15,000 characters of path, which no count of 200 would cut.
+        var paths = Enumerable.Range(0, 150).Select(at => $"d/{at:D3}-{new string('p', 94)}").ToList();
+
+        foreach (var path in paths)
+        {
+            temp.WriteFile(path, "one\n");
+        }
+
+        await harness.CommitAllAsync(temp.Path, "long names", Token);
+
+        foreach (var path in paths)
+        {
+            temp.WriteFile(path, "two\n");
+        }
+
+        var processes = new CountingProcesses(harness.ProcessRunner);
+        var git = Git(harness, processes);
+
+        var indexed = await git.ListIndexAsync(temp.Path, paths, Token);
+        var working = await git.ListWorkingFilesAsync(temp.Path, paths, Token);
+
+        Assert.Equal(paths, indexed.Select(entry => entry.Path).Order(StringComparer.Ordinal));
+        Assert.Equal(paths, working.Select(file => file.Name.Text).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            [("ls-files", 79), ("ls-files", 71), ("status", 79), ("status", 71)],
+            processes.Started.Select(request => (request.Arguments[2], request.Arguments.Count - request.Arguments.ToList().IndexOf("--") - 1)));
     }
 
     /// <summary>
@@ -121,7 +205,7 @@ public sealed class GitClientListingTests
         var blobs = await Git(harness, processes).HashWorkingFilesAsync(temp.Path, paths, Token);
 
         await harness.RunGitAsync(temp.Path, ["add", "-A"], Token);
-        var stored = (await harness.GitClient.ListIndexedFilesAsync(temp.Path, Token)).ToDictionary(file => file.Name.Text, file => file.ObjectId);
+        var stored = (await harness.GitClient.ListIndexAsync(temp.Path, Token)).ToDictionary(entry => entry.Path, entry => entry.ObjectId);
         Assert.Equal(paths.Select(path => stored[path]), blobs);
 
         var hashed = processes.Started.Where(request => request.Arguments.Contains("hash-object")).ToList();
@@ -152,10 +236,10 @@ public sealed class GitClientListingTests
 
         await harness.CommitAllAsync(temp.Path, "names", Token);
 
-        var listed = await Git(harness, new CountingProcesses(harness.ProcessRunner)).ListIndexedFilesAsync(temp.Path, Token);
+        var listed = await Git(harness, new CountingProcesses(harness.ProcessRunner)).ListIndexAsync(temp.Path, Token);
 
-        Assert.Equal(2, listed.Count(file => !file.Name.IsUtf8));
-        Assert.Equal(2, listed.Where(file => !file.Name.IsUtf8).Select(file => file.Name.Quoted).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(2, listed.Count(entry => !entry.Name.IsUtf8));
+        Assert.Equal(2, listed.Where(entry => !entry.Name.IsUtf8).Select(entry => entry.Name.Quoted).Distinct(StringComparer.Ordinal).Count());
     }
 
     private static GitClient Git(HarnessFactory harness, CountingProcesses processes) => new(processes, harness.Output, localVariables: harness.LocalVariables);
