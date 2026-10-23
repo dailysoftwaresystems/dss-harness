@@ -406,14 +406,15 @@ public abstract record RegistryMerge
 /// tree's segments of it, one for one: where the agent has more, the rest follow the last of the main tree's, and where
 /// it has fewer, the main tree's remaining places go. An arm only the agent has stands after the nearest segment above it
 /// in the agent's text that the result holds, and after what the main tree alone holds there - so two sides adding at one
-/// place come out as the main tree's addition, then the agent's. A heading only the agent added, whose lines the result
-/// already holds as a heading above a segment of the main tree's - one both held, or one both renamed or added alike - is
-/// that heading: it is not written again, and an arm only the agent has that stands under it joins that heading's
-/// section, after the arm the heading stands above. A heading taken for a place no segment of the result stands in is a
-/// conflict of its own (<see cref="ArmConflictKind.HeadsNoArm"/>). The segment that comes to stand first is written
-/// without the blank lines that open it. Each of the main tree's lines is written as the main tree holds it, each of the
-/// agent's with the ending of the main tree's first line, behind a byte order mark where the main tree's text has one and
-/// ending with a line ending where it does.
+/// place come out as the main tree's addition, then the agent's. A heading only the agent added above a row that the
+/// result already stands under a heading of the same lines - the nearest written above it, with only rows between, in a
+/// place of the main tree's - is that heading, whether both held it before or both renamed or added it alike, each above
+/// a new first arm of its own: it is not written again. One above a row the result stands anywhere else stands where the
+/// agent stood it, though the main tree added one of the same lines elsewhere. A heading taken for a place no segment of
+/// the result stands in is a conflict of its own (<see cref="ArmConflictKind.HeadsNoArm"/>). The segment that comes to
+/// stand first is written without the blank lines that open it. Each of the main tree's lines is written as the main tree
+/// holds it, each of the agent's with the ending of the main tree's first line, behind a byte order mark where the main
+/// tree's text has one and ending with a line ending where it does.
 /// </para>
 /// <para>
 /// So a text merged with itself is itself, and a merge in which the agent changed nothing is the main tree's text,
@@ -782,23 +783,21 @@ public static class MutationRegistryMerge
     /// <param name="headings">Which side the heading of each place is taken from.</param>
     private sealed class Placing(Reading mains, Reading agents, Dictionary<string, Taken> arms, Dictionary<string, Taken> headings)
     {
-        /// <summary>The segments placed, in order, each by the segment whose own lines it writes, with what it is written under.</summary>
-        private readonly List<(Segment Source, IReadOnlyList<Line> Above)> _placed = [];
+        /// <summary>
+        /// The segments placed, in order, each by the segment whose own lines it writes, the segment whose place it is written
+        /// in, and what it is written under.
+        /// </summary>
+        private readonly List<(Segment Source, Segment Slot, IReadOnlyList<Line> Above)> _placed = [];
 
         /// <summary>The places whose heading taken was written above the segment that stands there.</summary>
         private readonly HashSet<string> _written = new(StringComparer.OrdinalIgnoreCase);
 
-        /// <summary>
-        /// The places of the headings only the agent added that the result already holds: each by the main tree's segment
-        /// the one heading stands above.
-        /// </summary>
-        private readonly Dictionary<string, Segment> _joined = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>The places of the headings only the agent added that the result already holds over the row under each (<see cref="Join"/>).</summary>
+        private readonly HashSet<string> _joined = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>The merged text's segments, in order.</summary>
         public List<Segment> Placed()
         {
-            Join();
-
             foreach (var segment in mains.Segments)
             {
                 switch (arms[segment.Arm])
@@ -836,6 +835,8 @@ public static class MutationRegistryMerge
                 _placed.Insert(Where(segment), Written(segment, segment));
             }
 
+            Join();
+
             var laid = _placed.Select(placed => new Segment(placed.Source.Side, [.. placed.Above, .. placed.Source.Own], placed.Source.At) { Within = placed.Source.Within }).ToList();
 
             // The blank lines that open a segment part it from what stands above it, and nothing stands above the first but
@@ -857,7 +858,7 @@ public static class MutationRegistryMerge
         {
             foreach (var (place, taken) in headings)
             {
-                if (taken == Taken.Gone || _written.Contains(place) || _joined.ContainsKey(place))
+                if (taken == Taken.Gone || _written.Contains(place) || _joined.Contains(place))
                 {
                     continue;
                 }
@@ -872,20 +873,40 @@ public static class MutationRegistryMerge
         }
 
         /// <summary>
-        /// Finds the headings only the agent added whose lines the result holds already above a segment of the main tree's:
-        /// one heading, which the agent wrote above another arm - a new first arm of its section - and which is written
-        /// once, where the main tree stands it. Whether both held it before is no part of it: a heading both renamed alike,
-        /// or both added alike, each above a new first arm of its own, is as much one heading as one both held, and would
-        /// otherwise stand twice, once above each side's new arm.
+        /// Takes back each heading only the agent added - at a place where the main tree holds none - that the result
+        /// already holds over the row under it: where the nearest heading written above that row, with only rows between, is
+        /// one written in a place of the main tree's, of the same lines. The two sides headed one section, each above a new
+        /// first arm of its own, and the one heading is written once, where the main tree stands it. Whether both held it
+        /// before is no part of it: one both renamed or added alike is as much one heading as one both held. A heading the
+        /// agent added above a row the result stands anywhere else - under another heading or none, though the main tree
+        /// added one of the same lines elsewhere - stands where the agent stood it, as any heading added at a place does.
         /// </summary>
         private void Join()
         {
-            foreach (var ours in agents.Headed.Where(ours => headings.GetValueOrDefault(Place(ours), Taken.Gone) == Taken.Agent && mains.HeadedAt(Place(ours)) is null))
+            Segment? over = null;
+
+            for (var index = 0; index < _placed.Count; index++)
             {
-                if (mains.Headed.FirstOrDefault(theirs => Same(Heading(Place(theirs)), ours.Heading)) is { } stands)
+                var (source, slot, _) = _placed[index];
+                var place = Place(slot);
+
+                if (!_written.Contains(place))
                 {
-                    _joined[Place(ours)] = stands;
+                    continue;
                 }
+
+                if (headings[place] == Taken.Agent
+                    && mains.HeadedAt(place) is null
+                    && over is { Side: MergeSide.Main } held
+                    && Same(Heading(Place(held)), Heading(place)))
+                {
+                    _written.Remove(place);
+                    _joined.Add(place);
+                    _placed[index] = (source, slot, slot.Parting);
+                    continue;
+                }
+
+                over = slot;
             }
         }
 
@@ -904,19 +925,20 @@ public static class MutationRegistryMerge
         /// <summary>
         /// <paramref name="source"/>'s own lines as they are written in <paramref name="slot"/>'s place: under the heading
         /// taken for that place, with the blank lines it stands among where the side it is taken from holds it; and where
-        /// none is taken, or the one heading stands elsewhere, under what parts the slot from what stands above it.
+        /// none is taken, under what parts the slot from what stands above it - as a heading <see cref="Join"/> takes back
+        /// is written, once every segment is placed.
         /// </summary>
-        private (Segment Source, IReadOnlyList<Line> Above) Written(Segment source, Segment slot)
+        private (Segment Source, Segment Slot, IReadOnlyList<Line> Above) Written(Segment source, Segment slot)
         {
             var place = Place(slot);
-            var heading = _joined.ContainsKey(place) ? Taken.Gone : headings.GetValueOrDefault(place, Taken.Gone);
+            var heading = headings.GetValueOrDefault(place, Taken.Gone);
 
             if (heading != Taken.Gone)
             {
                 _written.Add(place);
             }
 
-            return (source, heading switch
+            return (source, slot, heading switch
             {
                 Taken.Main => mains.HeadedAt(place)!.Above,
                 Taken.Agent => agents.HeadedAt(place)!.Above,
@@ -972,37 +994,29 @@ public static class MutationRegistryMerge
         }
 
         /// <summary>
-        /// Where the segment of an arm only the agent has goes: under the one heading it joins, after the arm that heading
-        /// stands above; otherwise after the nearest segment above it in the agent's text that the result holds - the
-        /// agent's own, as it stands there, or the main tree's like it - past what the main tree alone holds there; the
-        /// agent's first segment first, past that; one above which the result holds nothing after the last; and never above
-        /// an earlier segment of its own arm, so the rows of one arm keep their order.
+        /// Where the segment of an arm only the agent has goes: after the nearest segment above it in the agent's text that
+        /// the result holds - the agent's own, as it stands there, or the main tree's like it - past what the main tree
+        /// alone holds there; the agent's first segment first, past that; one above which the result holds nothing after
+        /// the last; and never above an earlier segment of its own arm, so the rows of one arm keep their order.
         /// </summary>
         private int Where(Segment segment)
         {
             var at = segment.At == 0 ? Past(0) : _placed.Count;
 
-            if (_joined.GetValueOrDefault(Place(segment)) is { } under)
+            for (var above = segment.At - 1; above >= 0; above--)
             {
-                at = Past(_placed.FindLastIndex(placed => string.Equals(placed.Source.Arm, under.Arm, StringComparison.OrdinalIgnoreCase)) + 1);
-            }
-            else
-            {
-                for (var above = segment.At - 1; above >= 0; above--)
+                var follows = agents.Segments[above];
+                var anchor = arms[follows.Arm] switch
                 {
-                    var follows = agents.Segments[above];
-                    var anchor = arms[follows.Arm] switch
-                    {
-                        Taken.Agent => follows,
-                        Taken.Main => KeptAs(follows),
-                        _ => null,
-                    };
+                    Taken.Agent => follows,
+                    Taken.Main => KeptAs(follows),
+                    _ => null,
+                };
 
-                    if (anchor is not null && IndexOf(anchor) is >= 0 and var found)
-                    {
-                        at = Past(found + 1);
-                        break;
-                    }
+                if (anchor is not null && IndexOf(anchor) is >= 0 and var found)
+                {
+                    at = Past(found + 1);
+                    break;
                 }
             }
 

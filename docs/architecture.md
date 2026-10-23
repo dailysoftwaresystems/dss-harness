@@ -4757,11 +4757,12 @@ where none is, below the blank lines the main tree parts it from what stands abo
 them where a heading stood there. An arm taken from the agent in place of the main tree's lies over
 the main tree's segments of it, one for one, in their places: where the agent has more, the rest
 follow the last, and where it has fewer, the main tree's remaining places go. A heading only the
-agent added, whose lines the merged text already holds as a heading above a segment of the main
-tree's - one both held, or one both renamed or added alike - is that one heading - the agent wrote it
-above a new first arm of its section - written once, and an arm only the agent has that stands under
-it joins that section after the arm the heading stands above. A heading taken for a place no
-segment of the merged text stands in - its
+agent added above a row the merged text already stands under a heading of the same lines - the
+nearest written above it, with only rows between, in a place of the main tree's - is that one
+heading, written once, whether both held it before or both renamed or added it alike, each above a
+new first arm of its own; one above a row the merged text stands anywhere else stands where the
+agent stood it, though the main tree added one of the same lines elsewhere. A heading taken for a
+place no segment of the merged text stands in - its
 row dropped by one side, the heading kept or changed by the other - would be read back as part of
 what stands below it, and is a conflict of its own (`ArmConflictKind.HeadsNoArm`). A segment of an
 arm only the agent has stands after

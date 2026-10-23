@@ -1333,8 +1333,8 @@ public sealed class MutationRegistryMergeTests
     /// <summary>
     /// A section header both sides renamed alike, each above a new first arm of its own, stands once, renamed, with both
     /// sides' arms inside the one section - and so does one both sides added alike, with or without a text both held:
-    /// the same lines both hold as a heading are one heading, whether or not both held it before (the header stood
-    /// twice, once above each side's new first arm, where both had renamed it).
+    /// the same lines both hold as the heading over one section's arms are one heading, whether or not both held it before
+    /// (the header stood twice, once above each side's new first arm, where both had renamed it).
     /// </summary>
     [Fact]
     public void ASectionHeaderBothSidesRenamedAlike_StandsOnce_ThoughEachAddedAFirstArmUnderIt()
@@ -1358,6 +1358,36 @@ public sealed class MutationRegistryMergeTests
         Assert.Equal(once, unheld.Text);
         Assert.Equal(renamed.Bytes, Assert.IsType<RegistryMerge.Merged>(MutationRegistryMerge.Merge(Bytes(held), renamed.Bytes, Bytes(agent))).Bytes);
         Assert.Equal(renamed.Bytes, Assert.IsType<RegistryMerge.Merged>(MutationRegistryMerge.Merge(Bytes(held), Bytes(main), renamed.Bytes)).Bytes);
+    }
+
+    /// <summary>
+    /// A heading the agent added above a row the merge does not place under the main tree's heading of the same lines -
+    /// a row of an arm the main tree holds too, or one more row of an arm taken from the agent - is no heading the main
+    /// tree's joins: each stands where its side stood it, and neither is dropped (the agent's was, silently, wherever the
+    /// main tree had added a heading of the same lines anywhere).
+    /// </summary>
+    [Fact]
+    public void AHeadingTheAgentAddedAboveARowOfItsOwnPlace_StandsThere_ThoughTheMainTreeAddedOneAlikeElsewhere()
+    {
+        string[] zero = ["# the arms", "", A("z"), C("z")];
+        string[] main = [A("m"), C("m")];
+        var held = Text([.. zero, "", A("y"), C("y")]);
+        var mains = Text([.. zero, "", A("y"), C("y"), "", "# H", "", .. main]);
+
+        var aboveAnArmBothHold = Text([.. zero, "", "# H", "", A("y"), C("y")]);
+        var aboveAnotherRow = Text([.. zero, "", A("y"), C("y"), "", "# H", "", C("y", "Another")]);
+
+        var both = Assert.IsType<RegistryMerge.Merged>(Merge(held, mains, aboveAnArmBothHold));
+        var another = Assert.IsType<RegistryMerge.Merged>(Merge(held, mains, aboveAnotherRow));
+
+        Assert.Equal(Text([.. zero, "", "# H", "", A("y"), C("y"), "", "# H", "", .. main]), both.Text);
+        Assert.Equal(Text([.. zero, "", A("y"), C("y"), "", "# H", "", C("y", "Another"), "", "# H", "", .. main]), another.Text);
+
+        foreach (var (merged, agent) in new[] { (both, aboveAnArmBothHold), (another, aboveAnotherRow) })
+        {
+            Assert.Equal(merged.Bytes, Assert.IsType<RegistryMerge.Merged>(MutationRegistryMerge.Merge(Bytes(held), merged.Bytes, Bytes(agent))).Bytes);
+            Assert.Equal(merged.Bytes, Assert.IsType<RegistryMerge.Merged>(MutationRegistryMerge.Merge(Bytes(held), Bytes(mains), merged.Bytes)).Bytes);
+        }
     }
 
     /// <summary>
