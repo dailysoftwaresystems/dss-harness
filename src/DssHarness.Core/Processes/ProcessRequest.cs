@@ -73,10 +73,12 @@ public sealed record ProcessRequest
     public Action? OnStarted { get; init; }
 
     /// <summary>
-    /// Where a <see cref="Contained"/> child's session is recorded while it runs, so a later run of the tool ends it where
-    /// this process was killed and left it running; <see langword="null"/> where it is recorded nowhere. Written on Linux
-    /// and macOS alone, where a session outlives the process that started it: on Windows the job that holds the child ends
-    /// it with this process, and nothing is recorded. A record that cannot be written is a start that failed.
+    /// Where a <see cref="Contained"/> child's session, or the group of a child <see cref="ApartFromTerminal"/>, is recorded
+    /// while it runs - and a group, while anything it left is still in it - so a later run of the tool ends it where this
+    /// process was killed and left it running; <see langword="null"/> where it is recorded nowhere - save a bound child's,
+    /// which the operation's <see cref="ProcessScope"/> records where it runs under one. Written on Linux and macOS alone,
+    /// where a session and a group outlive the process that started them: on Windows the job that holds the child ends it
+    /// with this process, and nothing is recorded. A record that cannot be written is a start that failed.
     /// </summary>
     public IContainedSessionRecord? SessionRecord { get; init; }
 
@@ -126,12 +128,32 @@ public sealed record ProcessRequest
     public bool Contained { get; init; }
 
     /// <summary>
+    /// Whether the child is bound to this process's life: on Windows it is placed, before it runs a line of its own, in the
+    /// one job object this process holds for its whole life, whichever operation's runner starts it, which ends every
+    /// member when its last handle closes. So this process ending in any way, a hard
+    /// kill among them, ends the child and all it started at once, as a host ends a dispatched leg whose dispatcher has
+    /// gone. Its own end and a stop are as any other child's: what it leaves running at its normal end lives on until this
+    /// process ends. On every system its output is read for no longer than <see cref="ProcessRunner.DrainBound"/> once it
+    /// has ended, as a contained child's is once its container has: what still holds the output then is something it left
+    /// running, which the run would otherwise wait on for as long as it lived. What that leftover writes after it goes
+    /// unread, and once the run has let go of the output, it writes to a pipe nobody reads. On Linux and macOS the child starts as any
+    /// other: an interrupt or a termination signal this process is given ends it with this process's stop, its terminal's
+    /// hang-up reaches it as it reaches this process, and a kill of this process alone does not reach it - save under an
+    /// operation's <see cref="ProcessScope"/>, a run's machine step's, which starts it apart from the terminal and records
+    /// its group while anything is in it, for the next run of the tool over the run to end once this process has gone. A
+    /// <see cref="Contained"/> child is bound already, by its own job.
+    /// </summary>
+    public bool Bound { get; init; }
+
+    /// <summary>
     /// Whether the child starts in a process group of its own on Linux and macOS, apart from the
     /// terminal: an interruption typed where this process runs is sent to a group, and that group is
     /// not this child's. On Windows the child starts as any other, whose console of its own already
     /// keeps an interruption typed at this one's from it. Either way it is stopped as any other child
-    /// is, by its tree, and what it leaves at its own end is left; the session, and a container that
-    /// ends what outlives it, are <see cref="Contained"/>'s to give.
+    /// is, by its tree - and on Linux and macOS by its group as well, at once, which reaches what its
+    /// tree handed on - and what it leaves at its own end is left; the session, and a container that
+    /// ends what outlives it, are <see cref="Contained"/>'s to give. What an operation under a
+    /// <see cref="ProcessScope"/> starts is apart from the terminal whatever this says.
     /// </summary>
     public bool ApartFromTerminal { get; init; }
 }

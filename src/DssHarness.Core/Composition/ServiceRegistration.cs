@@ -151,8 +151,8 @@ public static class ServiceRegistration
         services.AddSingleton<OrchestrationStore>();
         services.AddSingleton<OrchestrationLog>();
 
-        // The sessions a killed tool left its contained children running in, recorded where their steps are and ended by
-        // the next command over the orchestrator.
+        // The sessions and groups a killed tool left its contained children and its legs' work running in, recorded where
+        // their steps are and ended by the next command over the orchestrator.
         services.AddSingleton<LeftSessions>();
         services.AddSingleton<EndedChildSessions>();
         services.AddSingleton<IDocumentFacts>(provider => provider.GetRequiredService<EndedChildSessions>());
@@ -161,16 +161,51 @@ public static class ServiceRegistration
         services.AddSingleton<IOrchestratorService, OrchestratorService>();
         services.AddSingleton<IAgentService, AgentService>();
 
-        // The commands of a run: one unfinished run at a time (15b) and the session driver over it (15c). The step
-        // runner a run's steps are given is the refusing one until the machine step runners and the agent clients
-        // land (slices 19 and 20): a run that says what it cannot do, never one that passes everything over.
+        // The commands of a run: one unfinished run at a time (15b) and the session driver over it (15c). Each step is
+        // given to the runner of its type, registered here as its slice lands; a step of a type none serves yet is
+        // refused, saying so: a run that says what it cannot do, never one that passes a step over.
         services.AddSingleton<FlowSessions>();
         services.AddSingleton<IFlowService, FlowService>();
-        services.AddSingleton<IFlowStepRunner, NoStepRunner>();
-        services.AddSingleton<IFlowRunnerFacts, NoRunnerFacts>();
+        services.AddSingleton<PlanValidator>();
+        services.AddSingleton<CreateAgentRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, OrientRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, GraphifyCodebaseRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, PlanCheckRunner>();
+        services.AddSingleton<IFlowStepTypeRunner>(provider => provider.GetRequiredService<CreateAgentRunner>());
+        services.AddSingleton<IFlowStepTypeRunner, BuildStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, TestStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, RunStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, SweepStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, AnchorBalanceStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, AnchorCitationsStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, CiReadStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, CiWaitStepRunner>();
+        services.AddSingleton<FoldLedger>();
+        services.AddSingleton<FlowGraphSyncs>();
+        services.AddSingleton<IFlowStepTypeRunner, FoldStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, DeleteAgentStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, RefreshStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, RebaseStepRunner>();
+        services.AddSingleton<IFlowStepRunner, FlowStepRunners>();
 
-        // The one way an agent's step is worked, whatever the client is. No client is built in yet: the clients
-        // register themselves when their slices land, and a test registers its fake the same way.
+        // The codebase graph: every implementation of its contract the core holds, found by the one scan, so a new language
+        // is registered by being written; the registry built from them refuses two that would claim one file by order.
+        foreach (var extractor in Codebase.CodeGraphExtractors.Implementations)
+        {
+            services.AddSingleton(typeof(Codebase.ICodeGraphExtractor), extractor);
+        }
+
+        services.AddSingleton<Codebase.CodeGraphExtractors>();
+        services.AddSingleton<Codebase.ICodebaseGraphService, Codebase.CodebaseGraphService>();
+
+        // The one way an agent's step is worked, whatever the client is: each client built in is registered here as its
+        // slice lands - claude-code first - and a test registers its fake the same way.
+        services.AddSingleton<IAgentClient>(provider => new Agents.ClaudeCode.ClaudeCodeClient(
+            provider.GetRequiredService<IProcessRunner>(),
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<IHostPlatform>(),
+            provider.GetRequiredService<ChildSessions>(),
+            provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<IAgentRunner, AgentRunner>();
         services.AddSingleton<IWorkflowValidationService, WorkflowValidationService>();
         services.AddSingleton<IWorkflowExportService, WorkflowExportService>();
@@ -266,6 +301,8 @@ public static class ServiceRegistration
             provider.GetRequiredService<HeavyLegSlots>(),
             provider.GetRequiredService<IMemoryGauge>()));
         services.AddSingleton<IWslPageCache, WslPageCache>();
+        services.AddSingleton<RunStops>();
+        services.AddSingleton<RunStopService>();
         services.AddSingleton<LegRunService>();
         services.AddSingleton<CleanService>();
 
@@ -323,8 +360,10 @@ public static class ServiceRegistration
         services.AddSingleton<LegSetUps>();
         services.AddSingleton<IAnchorCitationService, AnchorCitationService>();
         services.AddSingleton<ILineEndingService, LineEndingService>();
+        services.AddSingleton<GhProcess>();
         services.AddSingleton<ICiJobSource, GhCiJobSource>();
         services.AddSingleton<ICiLegsService, CiLegsService>();
+        services.AddSingleton<ICiChecksService, CiChecksService>();
 
         services.AddSingleton<VerifyGitService>();
         services.AddSingleton<InitService>();

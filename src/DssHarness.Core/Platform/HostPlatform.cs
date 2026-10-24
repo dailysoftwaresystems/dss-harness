@@ -27,6 +27,9 @@ public sealed class HostPlatform : IHostPlatform
 
     public string HomeDirectory => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
+    /// <inheritdoc />
+    public bool IsPrivilegedProcess => Environment.IsPrivilegedProcess;
+
     public StringComparison PathComparison => Current == PlatformId.Windows
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;

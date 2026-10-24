@@ -82,6 +82,20 @@ public sealed class HostCommandRunnerTests
         }
     }
 
+    /// <summary>
+    /// A command bound to this process's life binds the process that carries it, to whichever host - ssh, wsl.exe, or the
+    /// program on this machine - and one that is not binds none.
+    /// </summary>
+    [Fact]
+    public void ABoundCommand_BindsTheProcessThatCarriesIt_OnEveryKindOfHost()
+    {
+        foreach (var connection in new[] { new HostConnection { Host = HostId.Local }, new HostConnection { Host = HostId.Wsl("wsl-a"), Distribution = "Example-Linux" }, Ssh() })
+        {
+            Assert.True(HostCommandRunner.BuildRequest(connection, ListSdks with { Bound = true }).Bound);
+            Assert.False(HostCommandRunner.BuildRequest(connection, ListSdks).Bound);
+        }
+    }
+
     [Fact]
     public void Wsl_StartsTheProgramWithoutAShell_InTheHomeDirectory()
     {

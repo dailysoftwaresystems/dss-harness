@@ -100,6 +100,7 @@ public static class WorkflowFileParser
         var outputs = new List<WorkflowOutput>();
         List<WorkflowStep>? steps = null;
         FlowRecover? recover = null;
+        FlowCodebaseGraph? codebaseGraph = null;
 
         foreach (var (key, value) in keys)
         {
@@ -198,6 +199,10 @@ public static class WorkflowFileParser
                     recover = ReadRecover(value, problems);
                     break;
 
+                case "codebaseGraph":
+                    codebaseGraph = ReadCodebaseGraph(value, problems);
+                    break;
+
                 default:
                     throw Unread(key);
             }
@@ -238,8 +243,66 @@ public static class WorkflowFileParser
             {
                 Recover = recover,
                 BackoffSeconds = backoffSeconds,
+                CodebaseGraph = codebaseGraph,
             }
             : throw Refuse(path, problems);
+    }
+
+    /// <summary>
+    /// Reads the <c>codebaseGraph</c> section: each list as written - one given empty kept empty, for the check to refuse
+    /// (V52) - and each value as the file holds it.
+    /// </summary>
+    private static FlowCodebaseGraph? ReadCodebaseGraph(YamlNode node, List<string> problems)
+    {
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(YamlReading.At(node, "'codebaseGraph' is not a mapping of keys."));
+            return null;
+        }
+
+        var keys = CollectKeys(mapping, "codebaseGraph", KeyDescription.Names(WorkflowKeys.CodebaseGraph), problems);
+
+        IReadOnlyList<string>? include = null;
+        IReadOnlyList<string>? exclude = null;
+        IReadOnlyList<string>? languages = null;
+        int? maxFileBytes = null;
+        string? generated = null;
+        int? mapTokens = null;
+
+        foreach (var (key, value) in keys)
+        {
+            switch (key)
+            {
+                case "include":
+                    include = RequireStringList(value, "codebaseGraph.include", problems);
+                    break;
+
+                case "exclude":
+                    exclude = RequireStringList(value, "codebaseGraph.exclude", problems);
+                    break;
+
+                case "languages":
+                    languages = RequireStringList(value, "codebaseGraph.languages", problems);
+                    break;
+
+                case "maxFileBytes":
+                    maxFileBytes = RequireInt(value, "codebaseGraph.maxFileBytes", problems);
+                    break;
+
+                case "generated":
+                    generated = YamlReading.RequireScalar(value, "codebaseGraph.generated", problems);
+                    break;
+
+                case "mapTokens":
+                    mapTokens = RequireInt(value, "codebaseGraph.mapTokens", problems);
+                    break;
+
+                default:
+                    throw Unread(key);
+            }
+        }
+
+        return new FlowCodebaseGraph(include, exclude, languages, maxFileBytes, generated, mapTokens);
     }
 
     private static FlowRecover? ReadRecover(YamlNode node, List<string> problems)
@@ -807,7 +870,9 @@ public static class WorkflowFileParser
             {
                 var owner = typed is null ? "a group" : $"a {typed.Type} step";
                 var taken = WorkflowStepTypes.All.FirstOrDefault(other => other != typed && WorkflowStepTypes.KeysOf(other).Contains(key, StringComparer.Ordinal));
-                var takenBy = taken is not null
+                var takenBy = KeyDescription.Names(WorkflowStepTypes.Running).Contains(key, StringComparer.Ordinal)
+                    ? $"; it is one of every step that runs, and {(typed is null ? "a group runs nothing of its own" : $"a {typed.Type} step only asks")}"
+                    : taken is not null
                     ? $"; it is one of a {taken.Type} step"
                     : typed is not null && KeyDescription.Names(WorkflowStepTypes.Group).Contains(key, StringComparer.Ordinal) ? "; it is one of a group, which names no type" : "";
 
@@ -1009,13 +1074,14 @@ public static class WorkflowFileParser
     /// <summary>Reads the keys that belong to a step's type alone.</summary>
     private static WorkflowStep ReadTypedKeys(WorkflowStep step, WorkflowStepTypes.StepType type, List<(string Key, YamlNode Value)> keys, string where, List<string> problems)
     {
-        var failOn = EnumIn(keys, $"{where}.failOn", problems, ["red", "never"]);
+        var failOn = EnumIn(keys, $"{where}.failOn", problems, type.FailOnValues);
 
         step = step with
         {
             FailOn = failOn,
             Legs = StringListIn(keys, $"{where}.legs", problems) ?? [],
             In = ScalarIn(keys, $"{where}.in", problems),
+            TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
         };
 
         switch (type.Type)
@@ -1140,14 +1206,18 @@ public static class WorkflowFileParser
                     Base = ScalarIn(keys, $"{where}.base", problems),
                     Rows = FlowListIn(keys, $"{where}.rows", problems),
                 };
+
+                RefuseGivenEmpty(keys, $"{where}.rows", "name the rows it is held to", "the whole tree judged", problems);
                 break;
 
             case "anchor-citations":
                 step = step with
                 {
-                    Subject = EnumIn(keys, $"{where}.subject", problems, ["currentTree", "currentCommit", "currentPullRequest"]),
+                    Subject = EnumIn(keys, $"{where}.subject", problems, Anchors.AnchorCitationSubjects.Names),
                     AnchorPaths = FlowListIn(keys, $"{where}.paths", problems),
                 };
+
+                RefuseGivenEmpty(keys, $"{where}.paths", "name the files it is held to", "the whole tree judged", problems);
                 break;
 
             case "ci-read":
@@ -1155,7 +1225,6 @@ public static class WorkflowFileParser
                 {
                     Branch = ScalarIn(keys, $"{where}.branch", problems),
                     Limit = IntIn(keys, $"{where}.limit", problems),
-                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
                 };
                 break;
 
@@ -1167,7 +1236,6 @@ public static class WorkflowFileParser
                     WaitMinutes = IntIn(keys, $"{where}.waitMinutes", problems),
                     PollSeconds = IntIn(keys, $"{where}.pollSeconds", problems),
                     Ignore = StringListIn(keys, $"{where}.ignore", problems) ?? [],
-                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
                 };
 
                 RefuseGivenEmpty(keys, $"{where}.ignore", "name the checks it does not count", "every check counted", problems);
@@ -1178,7 +1246,6 @@ public static class WorkflowFileParser
                 {
                     Message = ScalarIn(keys, $"{where}.message", problems),
                     Variables = StringMapIn(keys, $"{where}.variables", problems),
-                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
                 };
                 break;
 
@@ -1187,7 +1254,6 @@ public static class WorkflowFileParser
                 {
                     Remote = ScalarIn(keys, $"{where}.remote", problems),
                     Checkpoint = BooleanIn(keys, $"{where}.checkpoint", problems),
-                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
                 };
                 break;
 
@@ -1198,7 +1264,6 @@ public static class WorkflowFileParser
                     Body = ScalarIn(keys, $"{where}.body", problems),
                     Base = ScalarIn(keys, $"{where}.base", problems),
                     Draft = BooleanIn(keys, $"{where}.draft", problems),
-                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
                 };
                 break;
 
@@ -1215,6 +1280,10 @@ public static class WorkflowFileParser
                 break;
 
             case "orient":
+                break;
+
+            case "graphify-codebase":
+                step = step with { Rebuild = BooleanIn(keys, $"{where}.rebuild", problems) };
                 break;
 
             default:

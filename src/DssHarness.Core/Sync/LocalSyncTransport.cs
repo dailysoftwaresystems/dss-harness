@@ -105,19 +105,19 @@ public sealed class LocalSyncTransport(
 
         try
         {
-            _fileSystem.WriteAllTextAtomic(
+            JsonStateFile.Write(
+                _fileSystem,
                 MarkerPath(root),
-                JsonSerializer.Serialize(
-                    new SyncedCopyMarker(
-                        before?.CreatedUtc ?? DateTimeOffset.UtcNow.ToString("O"),
-                        before?.CreatedBy ?? Environment.MachineName,
-                        Adopted: mark == CopyMark.AdoptionStopped || before is { Adopted: true },
-                        Completed: mark != CopyMark.AdoptionStopped,
-                        Unfinished: mark == CopyMark.Unfinished,
-                        ReadBy: reading?.ReadBy,
-                        Commit: reading?.Commit,
-                        UncommittedChanges: reading?.UncommittedChanges),
-                    MarkerOptions));
+                new SyncedCopyMarker(
+                    before?.CreatedUtc ?? DateTimeOffset.UtcNow.ToString("O"),
+                    before?.CreatedBy ?? Environment.MachineName,
+                    Adopted: mark == CopyMark.AdoptionStopped || before is { Adopted: true },
+                    Completed: mark != CopyMark.AdoptionStopped,
+                    Unfinished: mark == CopyMark.Unfinished,
+                    ReadBy: reading?.ReadBy,
+                    Commit: reading?.Commit,
+                    UncommittedChanges: reading?.UncommittedChanges),
+                MarkerOptions);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -1307,7 +1307,7 @@ public sealed class LocalSyncTransport(
 
         try
         {
-            marker = JsonSerializer.Deserialize<SyncedCopyMarker>(_fileSystem.ReadAllText(path), MarkerOptions);
+            marker = JsonStateFile.Read<SyncedCopyMarker>(_fileSystem, path, MarkerOptions);
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {

@@ -29,7 +29,9 @@ namespace DssHarness.Core.Processes;
 /// Whether the program started is said on a channel of the process runner's own, never on the
 /// program's streams or in an exit code a program could end with too: the step connects to it,
 /// says what failed where anything did, and says the program is placed just before it is become or
-/// once it is started. The channel closes with the step's own end - or, on Linux and macOS, as the
+/// once it is started - on Linux and macOS with its own start, which the program it becomes keeps, so the process
+/// runner records what tells the child from a later process however soon the program ends. The channel closes with the
+/// step's own end - or, on Linux and macOS, as the
 /// program is become, the connection being one no program inherits - so a channel that said the
 /// program was placed and closed with nothing more is a program that runs.
 /// </para>
@@ -175,26 +177,28 @@ public static class ContainExec
         ArgumentNullException.ThrowIfNull(text);
 
         var placed = false;
+        string? started = null;
 
         foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            if (string.Equals(line, PlacedLine, StringComparison.Ordinal))
+            var words = line.Split(' ');
+
+            if (words is [PlacedLine] or [PlacedLine, _])
             {
                 placed = true;
+                started = words is [_, var stamp] ? stamp : null;
                 continue;
             }
-
-            var words = line.Split(' ');
 
             if (words is [FailedWord, var stage, var code]
                 && Enum.TryParse<Stage>(stage, ignoreCase: true, out var failed)
                 && int.TryParse(code, CultureInfo.InvariantCulture, out var number))
             {
-                return new StartHeard(placed, failed, number);
+                return new StartHeard(placed, failed, number, started);
             }
         }
 
-        return new StartHeard(placed, null, 0);
+        return new StartHeard(placed, null, 0, started);
     }
 
     /// <summary>What the step was doing at <paramref name="stage"/>, as a sentence that says it could not names it.</summary>
@@ -210,7 +214,8 @@ public static class ContainExec
     /// <param name="Placed">Whether the step said the program was placed.</param>
     /// <param name="Failure">What the step was doing when it failed, or <see langword="null"/> where it said no failure.</param>
     /// <param name="Code">The failure's number, as the system gave it to the step: an error number on Linux and macOS, a system error code on Windows.</param>
-    internal sealed record StartHeard(bool Placed, Stage? Failure, int Code)
+    /// <param name="Started">The leader's start, as the step that placed it read its own; <see langword="null"/> where it said none.</param>
+    internal sealed record StartHeard(bool Placed, Stage? Failure, int Code, string? Started = null)
     {
         /// <summary>The failure as the system words its number, where there was one.</summary>
         public string Reason => new Win32Exception(Code).Message;
@@ -248,8 +253,13 @@ public static class ContainExec
             }
         }
 
-        /// <summary>Says the program is placed: about to be become, or started.</summary>
-        public void Placed() => Say(PlacedLine);
+        /// <summary>
+        /// Says the program is placed: about to be become, or started - with <paramref name="started"/>, the start of the
+        /// process that becomes it, where it is read.
+        /// </summary>
+        /// <param name="started">This process's start, as a stamp holds it, or <see langword="null"/> where none is said.</param>
+        public void Placed(string? started = null)
+            => Say(started is { Length: > 0 } stamp && !stamp.Any(char.IsWhiteSpace) ? $"{PlacedLine} {stamp}" : PlacedLine);
 
         /// <summary>Says what failed, by the stage and the number the system gave.</summary>
         public void Failed(Stage stage, int code)

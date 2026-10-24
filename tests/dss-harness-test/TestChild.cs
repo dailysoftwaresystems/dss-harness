@@ -43,15 +43,19 @@ internal static class TestChild
             "spawn-holder" => SpawnHolder(standardOutput, arguments),
             "spawn-orphan-holder" => SpawnOrphanHolder(standardOutput, arguments),
             "own-group-and-sleep" => OwnGroupAndSleep(arguments),
+            "own-group-note-term-and-sleep" => OwnGroupNoteTermAndSleep(arguments),
             "own-session-and-sleep" => OwnSessionAndSleep(arguments),
             "ignore-term-and-sleep" => IgnoreTermAndSleep(arguments),
+            "ignore-hup-and-sleep" => IgnoreHupAndSleep(arguments),
             "note-term-and-sleep" => NoteTermAndSleep(standardOutput, arguments),
             "say-and-exit" => SayAndExit(standardOutput, standardError, arguments),
             "step-reaching-nothing" => StepReachingNothing(standardError),
             "say-pid-and-sleep" => SayPidAndSleep(standardOutput, arguments),
             "say-pid-then" => SayPidThen(standardOutput, arguments),
             "contain-and-wait" => ContainAndWait(standardOutput, arguments),
-            "contain-recorded-and-wait" => ContainRecordedAndWait(standardOutput, arguments),
+            "contain-recorded-and-wait" => RecordedAndWait(standardOutput, arguments, scoped: false),
+            "scoped-recorded-and-wait" => RecordedAndWait(standardOutput, arguments, scoped: true),
+            "bind-and-wait" => BindAndWait(standardOutput, arguments),
             "interrupt-own-console" => InterruptOwnConsole(standardOutput),
             "print-code-page" => PrintCodePage(standardOutput),
             "print-parent" => PrintParent(standardOutput),
@@ -473,6 +477,12 @@ internal static class TestChild
         return 0;
     }
 
+    /// <summary>The session <paramref name="process"/> is in - 0 for this one - on Linux and macOS; -1 where it is not there.</summary>
+    internal static int SessionOf(int process) => getsid(process);
+
+    /// <summary>The process group <paramref name="process"/> is in - 0 for this one - on Linux and macOS; -1 where it is not there.</summary>
+    internal static int GroupOf(int process) => getpgid(process);
+
     [System.Runtime.InteropServices.DllImport("libc")]
     private static extern int getpid();
 
@@ -508,7 +518,7 @@ internal static class TestChild
         // its id acts on a process that stands apart.
         var apart = Until(() => arguments[2] switch
         {
-            "own-group-and-sleep" => getpgid(holder.Id) == holder.Id,
+            "own-group-and-sleep" or "own-group-note-term-and-sleep" => getpgid(holder.Id) == holder.Id,
             "own-session-and-sleep" => getsid(holder.Id) == holder.Id,
             _ => true,
         });
@@ -518,7 +528,8 @@ internal static class TestChild
             return 96;
         }
 
-        output.Write($"holder={holder.Id}\n");
+        // 'exit-unended' leaves its line with no break after it, for the reader to hand on at the output's end.
+        output.Write(string.Equals(arguments[0], "exit-unended", StringComparison.Ordinal) ? $"holder={holder.Id}" : $"holder={holder.Id}\n");
 
         if (string.Equals(arguments[0], "sleep", StringComparison.Ordinal))
         {
@@ -561,6 +572,27 @@ internal static class TestChild
         return 0;
     }
 
+    /// <summary>
+    /// Moves to a process group of its own, as <c>timeout</c> does, writes <c>asked</c> into the file <c>arguments[0]</c>
+    /// names when it is asked to end - and then ends as asked - and sleeps for the milliseconds <c>arguments[1]</c> gives:
+    /// what ended it says whether it was asked first or killed where it stood.
+    /// </summary>
+    private static int OwnGroupNoteTermAndSleep(string[] arguments)
+    {
+        if (OperatingSystem.IsWindows() || setpgid(0, 0) != 0)
+        {
+            return 98;
+        }
+
+        using var noting = System.Runtime.InteropServices.PosixSignalRegistration.Create(
+            System.Runtime.InteropServices.PosixSignal.SIGTERM,
+            _ => File.WriteAllText(arguments[0], "asked"));
+
+        Thread.Sleep(int.Parse(arguments[1], CultureInfo.InvariantCulture));
+
+        return 0;
+    }
+
     /// <summary>Makes a session of its own, as a daemon does, and sleeps; the session call is the C library's.</summary>
     private static int OwnSessionAndSleep(string[] arguments)
     {
@@ -578,11 +610,20 @@ internal static class TestChild
     /// does, and sleeps for the milliseconds <c>arguments[0]</c> gives: only the signal that cannot
     /// be refused ends it, and the file says when a test may send the other.
     /// </summary>
-    private static int IgnoreTermAndSleep(string[] arguments)
+    private static int IgnoreTermAndSleep(string[] arguments) => RefuseAndSleep(System.Runtime.InteropServices.PosixSignal.SIGTERM, arguments);
+
+    /// <summary>
+    /// Refuses a hangup, writes the file <c>arguments[1]</c> names once it does, and sleeps for the milliseconds
+    /// <c>arguments[0]</c> gives: a leftover that outlives the end of the process that started its group, as one a build
+    /// left behind does - the system hangs up a group orphaned while a member of it is stopped, and a tree's end stops
+    /// each process before it kills it.
+    /// </summary>
+    private static int IgnoreHupAndSleep(string[] arguments) => RefuseAndSleep(System.Runtime.InteropServices.PosixSignal.SIGHUP, arguments);
+
+    /// <summary>Refuses <paramref name="signal"/>, writes the file <c>arguments[1]</c> names once it does, and sleeps for the milliseconds <c>arguments[0]</c> gives.</summary>
+    private static int RefuseAndSleep(System.Runtime.InteropServices.PosixSignal signal, string[] arguments)
     {
-        using var refusing = System.Runtime.InteropServices.PosixSignalRegistration.Create(
-            System.Runtime.InteropServices.PosixSignal.SIGTERM,
-            context => context.Cancel = true);
+        using var refusing = System.Runtime.InteropServices.PosixSignalRegistration.Create(signal, context => context.Cancel = true);
 
         File.WriteAllText(arguments[1], "ready");
         Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));
@@ -682,12 +723,52 @@ internal static class TestChild
     }
 
     /// <summary>
-    /// Starts a sleeper for <c>arguments[2]</c> milliseconds contained, through a process runner of its own that starts
-    /// contained children through the tool <c>arguments[0]</c> names, its session recorded in the step directory
-    /// <c>arguments[1]</c> as an orchestrator's step records it; writes its own id and the sleeper's on one line once the
-    /// record is written, and waits for it: the process a test kills, so the record names a session whose owner has gone.
+    /// Starts two sleepers for <c>arguments[1]</c> milliseconds through a process runner of its own, which places bound
+    /// children through the tool <c>arguments[0]</c> names - one bound to this process's life, one as children always
+    /// were - writes its own id and both of theirs on one line, and waits for them: the process a test kills where it
+    /// stands, so the one bound is seen to end with it and the other to outlive it.
     /// </summary>
-    private static int ContainRecordedAndWait(TextWriter output, string[] arguments)
+    private static int BindAndWait(TextWriter output, string[] arguments)
+    {
+        var runner = new Core.Processes.ProcessRunner(new Core.Platform.HostPlatform(), Core.Platform.FilePermissionsFactory.Create(), arguments[0]);
+        var boundId = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ordinaryId = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bound = runner.RunAsync(Saying(boundId) with { Bound = true });
+        var ordinary = runner.RunAsync(Saying(ordinaryId));
+
+        if (Task.WhenAny(Task.WhenAll(boundId.Task, ordinaryId.Task), bound, ordinary).GetAwaiter().GetResult() is not Task<string[]>)
+        {
+            return 95;
+        }
+
+        output.Write($"parent={Environment.ProcessId} bound={boundId.Task.Result} ordinary={ordinaryId.Task.Result}\n");
+        Task.WaitAll(bound, ordinary);
+
+        return 0;
+
+        Core.Processes.ProcessRequest Saying(TaskCompletionSource<string> id) => TestHost.ChildRequest("say-pid-and-sleep", arguments[1]) with
+        {
+            OnOutputLine = line =>
+            {
+                if (line.StartsWith("pid=", StringComparison.Ordinal))
+                {
+                    id.TrySetResult(line["pid=".Length..]);
+                }
+            },
+        };
+    }
+
+    /// <summary>
+    /// Starts a child through a process runner of its own that starts its contained and apart children through the tool
+    /// <c>arguments[0]</c> names, recorded in the step directory <c>arguments[1]</c> as an orchestrator's step records one:
+    /// a sleeper for <c>arguments[2]</c> milliseconds, contained, writing its own id and the sleeper's as <c>child</c> -
+    /// or, where <paramref name="scoped"/>, the behaviour <c>arguments[2]</c> names, given every argument after it, bound
+    /// under a process scope as a machine step's leg phase starts, writing its own id and the first line naming an id the
+    /// child wrote. Writes them on one line once the child has said, and waits for it to end: the process a test kills,
+    /// so the record names a session or a group whose owner has gone, or the job that bound the child ends it - or lets
+    /// end, leaving what its child left.
+    /// </summary>
+    private static int RecordedAndWait(TextWriter output, string[] arguments, bool scoped)
     {
         var platform = new Core.Platform.HostPlatform();
         var permissions = Core.Platform.FilePermissionsFactory.Create();
@@ -699,31 +780,43 @@ internal static class TestChild
             new Core.Output.ConsoleHarnessOutput(TextWriter.Null, TextWriter.Null, verbose: false, home: null),
             new Core.Orchestration.EndedChildSessions());
         var said = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        string[] childArguments = scoped ? arguments[3..] : [arguments[2]];
 
         // Its lines are read only once it is said to have started, and it is said to have started only once its record
         // is written: its id heard, the record names it.
-        var contained = runner.RunAsync(TestHost.ChildRequest("say-pid-and-sleep", arguments[2]) with
+        var request = TestHost.ChildRequest(scoped ? arguments[2] : "say-pid-and-sleep", childArguments) with
         {
             FileName = TestHost.AssemblyProgram,
-            Arguments = [arguments[2]],
-            Contained = true,
-            SessionRecord = sessions.For(arguments[1]),
+            Arguments = childArguments,
             OnOutputLine = line =>
             {
-                if (line.StartsWith("pid=", StringComparison.Ordinal))
+                if (line.Contains('=', StringComparison.Ordinal))
                 {
-                    said.TrySetResult(line["pid=".Length..]);
+                    said.TrySetResult(line.Trim());
                 }
             },
-        });
+        };
+        Task<Core.Processes.ProcessResult> child;
 
-        if (Task.WhenAny(said.Task, contained).GetAwaiter().GetResult() != said.Task)
+        if (scoped)
+        {
+            using (Core.Processes.ProcessScope.Enter(new Core.Processes.ProcessScope(() => sessions.For(arguments[1]))))
+            {
+                child = runner.RunAsync(request with { Bound = true });
+            }
+        }
+        else
+        {
+            child = runner.RunAsync(request with { Contained = true, SessionRecord = sessions.For(arguments[1]) });
+        }
+
+        if (Task.WhenAny(said.Task, child).GetAwaiter().GetResult() != said.Task)
         {
             return 95;
         }
 
-        output.Write($"owner={Environment.ProcessId} contained={said.Task.Result}\n");
-        contained.GetAwaiter().GetResult();
+        output.Write($"owner={Environment.ProcessId} {(scoped ? said.Task.Result : $"child={said.Task.Result["pid=".Length..]}")}\n");
+        child.GetAwaiter().GetResult();
 
         return 0;
     }
@@ -1050,6 +1143,11 @@ internal static class TestChild
     /// </remarks>
     private static int ClaudeCode(TextWriter output, string[] arguments)
     {
+        if (Environment.GetEnvironmentVariable(FakeClaude.ScriptVariable) is { Length: > 0 } script)
+        {
+            return FakeClaude.Run(output, arguments, script);
+        }
+
         using var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom);
 
         string? Line() => input.ReadLine();

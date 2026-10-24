@@ -32,7 +32,7 @@ public sealed class StoppedDocumentTests
     {
         ["list-worktree"] = ["exitCode", "summary", "worktrees", "elsewhere", "gone"],
         ["list-orchestrator"] = ["exitCode", "summary", "orchestrators"],
-        ["list-agent-providers"] = ["exitCode", "summary", "slot", "files", "providers", "balanceKeyUsage", "tiers", "clients", "unappointed"],
+        ["list-agent-providers"] = ["exitCode", "summary", "slot", "files", "providers", "balanceKeyUsage", "tiers", "clients", "settings", "unappointed"],
         ["run-orchestrator"] = FlowDocument,
         ["resume-orchestrator"] = FlowDocument,
         ["answer-orchestrator"] = FlowDocument,
@@ -60,6 +60,7 @@ public sealed class StoppedDocumentTests
         ["test"] = Ledger,
         ["run"] = Ledger,
         ["check-mutations"] = Ledger,
+        ["stop-run"] = ["exitCode", "summary", "run", "runDirectory", "dispatcher", "stopped", "records"],
         ["clean"] = ["exitCode", "summary", "passed", "cancelled", "unfinished", "complete", "legs"],
         ["up"] = ["exitCode", "summary", "direction"],
         ["down"] = ["exitCode", "summary", "direction"],
@@ -448,7 +449,7 @@ public sealed class StoppedDocumentTests
             "Every other command asked for `--json` that stops before it has anything of its own to say answers in its own document's "
                 + "shape, never the ledger's: the agent verbs with the agent document, empty; `list-orchestrator`, `list-worktree`, `legs`, "
                 + "`install-missing-tools`, `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, "
-                + "`export-workflow`, `up` and `down` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs "
+                + "`export-workflow`, `up`, `down` and `stop-run` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs "
                 + "(`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`, "
                 + "`stop-orchestrator`) with the flow document - the session they would have run, empty "
                 + "(`OrchestrationReports.FlowStopped`); `check-mutations --list` with "

@@ -164,6 +164,14 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
     public IReadOnlyList<LogOwner> ReleaseAbandoned(string logDirectory) => _claims.ReleaseAbandonedBeside(logDirectory);
 
     /// <summary>
+    /// Releases <paramref name="logDirectory"/>'s own claim where a run on this machine made it and its process has ended,
+    /// and says so, as <see cref="ReleaseAbandoned"/> does each beside it; <see langword="null"/>, and nothing done, where no
+    /// such run holds it.
+    /// </summary>
+    /// <param name="logDirectory">The directory a run wrote its logs to.</param>
+    public LogOwner? ReleaseAbandonedRun(string logDirectory) => _claims.ReleaseAbandoned(logDirectory);
+
+    /// <summary>
     /// The run that owns <paramref name="logDirectory"/>, or <see langword="null"/> when none does.
     /// </summary>
     /// <param name="logDirectory">The directory a run writes its logs to.</param>

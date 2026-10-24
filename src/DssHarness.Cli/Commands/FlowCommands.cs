@@ -222,7 +222,7 @@ internal static class StopOrchestratorCommand
 
     internal static readonly Option<bool> NowOption = new("--now")
     {
-        Description = "End the engine's process and all it started, without asking it - only an engine of this machine, and only the process its owner names by its start: for an engine that no longer answers. What its steps' contained children left is ended with it.",
+        Description = "End the engine's process and all it started, without asking it - only an engine of this machine, and only the process its owner names by its start: for an engine that no longer answers. What its steps left running - a contained child's session, the process group of what its legs started - is ended with it.",
     };
 
     internal static Command Create()

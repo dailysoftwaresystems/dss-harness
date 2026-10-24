@@ -8,6 +8,8 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
@@ -66,7 +68,8 @@ public sealed class FlowServiceTests
         FlowTimings? timings = null,
         IHarnessOutput? output = null,
         IFileSystem? fileSystem = null,
-        IProcessIdentity? identity = null)
+        IProcessIdentity? identity = null,
+        ChildSessions? children = null)
     {
         var files = fileSystem ?? harness.FileSystem;
         var store = fileSystem is null ? harness.OrchestrationStore : new OrchestrationStore(files, harness.Output);
@@ -78,14 +81,14 @@ public sealed class FlowServiceTests
             files,
             store,
             engines,
-            new FlowSessions(store, files, engines),
-            new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform)),
+            new FlowSessions(store, files, engines, harness.GitClient),
+            new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform), DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
             runner,
-            new WritesNothing(),
             harness.OrchestrationLog,
-            harness.ChildSessions,
+            children ?? harness.ChildSessions,
             harness.PathBudget,
             output ?? harness.Output,
+            harness.GitClient,
             clock,
             timings ?? Quick);
     }
@@ -129,9 +132,269 @@ public sealed class FlowServiceTests
                 $"events: {run.EventsFile}",
                 $"report: {run.ReportFile}",
                 $"reportJson: {run.ReportJsonFile}",
+                $"folds: {run.FoldsFile}",
                 $"log {run.LogFile("r1")}",
             ],
             outcome.Details);
+    }
+
+    /// <summary>
+    /// A run of a workflow is driven with what the repository's configuration says: its create-agent step asked for the
+    /// model the configuration resolves for it, and a run step whose runner writes the tree holds that tree whole - a step
+    /// that reads it starts once the run step has ended, never beside it.
+    /// </summary>
+    [Fact]
+    public async Task ARunOfAWorkflow_MakesItsAgentForTheConfiguredModel_AndAWritingRunnerHoldsWrite()
+    {
+        var (repository, runner) = await RepositoryAsync(
+            """
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: worker
+              - name: tidy
+                type: run
+                runner: format
+                in: make
+                dependsOn: [make]
+              - name: map
+                type: graphify-codebase
+                in: make
+                dependsOn: [make]
+            """,
+            new HarnessConfig
+            {
+                Workflows = [Workflow],
+                Defaults = new HarnessDefaults { AgentTier = "balanced" },
+                Providers =
+                [
+                    new()
+                    {
+                        Name = "zai", Type = "zai", Api = "https://api.z.ai", ApiKeyNames = ["ZAI_API_KEY"], Client = "glm",
+                        Currency = "USD", ReadOn = "2026-10-12",
+                        Models = [new() { Code = "glm-5.3", Name = "GLM 5.3", Tiers = ["balanced"], Efforts = ["low", "high", "max"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072 }],
+                    },
+                ],
+                TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["balanced"] = ["glm-5.3"] },
+                PredefinedRunners = { ["format"] = new RunnerConfig { WritesTree = true, Phases = [new RunnerPhase { Name = "tidy", Command = ["dotnet", "--version"] }] } },
+            });
+        using var disposed = repository;
+        repository.Tree.WriteFile($".harness-config/workflows/{Workflow}/agents/worker.md", "You tidy.\n");
+        var service = Service(repository.Harness, runner);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mappedWhileHeld = false;
+        runner.Holds("tidy", release.Task);
+        runner.OnStart("map", () => mappedWhileHeld = !release.Task.IsCompleted);
+
+        var session = service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token);
+        var tidying = runner.WaitStartedAsync("tidy");
+
+        if (await Task.WhenAny(tidying, session) == session)
+        {
+            var ended = await session;
+            Assert.Fail($"the run ended before its run step started: {ended.Message} {string.Join(" | ", ended.Details ?? [])}");
+        }
+
+        release.SetResult();
+        var outcome = await session.WaitAsync(Bound, Token);
+
+        Assert.True(outcome.ExitCode == HarnessExit.Success, outcome.Message);
+        Assert.Equal(new FlowMadeAgent("a1", "glm-5.3"), runner.Asked.Single(run => run.Instance == "make").Made);
+        Assert.Equal(["make", "tidy", "map"], runner.Started);
+        Assert.False(mappedWhileHeld, "the step that reads the agent's tree started while the writing run held it");
+    }
+
+    /// <summary>
+    /// A start whose pull request's base cannot be told - the repository has a remote, and it names no default branch here
+    /// - says so, the checkout's branch held to none of it.
+    /// </summary>
+    [Fact]
+    public async Task AStartWhoseBaseCannotBeTold_SaysSo()
+    {
+        var (repository, service, runner) = await ServiceAsync();
+        using var disposed = repository;
+        await repository.Harness.RunGitAsync(repository.Path, ["remote", "add", "origin", Path.Combine(repository.Path, "nowhere")], Token);
+        await repository.Harness.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "feature"], Token);
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+
+        var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(
+            "the branch the run's pull request is opened against cannot be told here - no pull-request step names a base, and remote "
+                + "'origin' names no default branch here - so the main checkout's branch 'feature' was held to none: name the base on the "
+                + "pull-request step, or read the remote's own with git remote set-head origin --auto",
+            outcome.Details![0]);
+    }
+
+    /// <summary>A run records the commit and the branch it started from, as the probe its orient step reads them.</summary>
+    [Fact]
+    public async Task ARun_RecordsTheCommitAndTheBranchItStartedFrom()
+    {
+        var (repository, service, runner) = await ServiceAsync();
+        using var disposed = repository;
+        var git = repository.Harness;
+        await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "feature"], Token);
+        var head = (await git.RunGitAsync(repository.Path, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
+
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+
+        var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        var flow = repository.Harness.OrchestrationStore.ReadFlow(RunOf(repository))!;
+        Assert.Equal(head, flow.StartCommit);
+        Assert.Equal("feature", flow.Branch);
+    }
+
+    /// <summary>
+    /// The branch a run's start holds the checkout to is its pull request's base, filled from the run's inputs, where its
+    /// pull-request step names one: refused on it, started off it.
+    /// </summary>
+    [Fact]
+    public async Task ARunsStart_HoldsTheCheckoutToItsPullRequestsBase()
+    {
+        var (repository, service, runner) = await ServiceAsync("""
+            name: flow
+            inputs:
+              - name: target
+                default: work
+            steps:
+              - name: one
+                type: orient
+              - name: pr
+                type: pull-request
+                dependsOn: [one]
+                title: the work
+                body: body.md
+                base: '{input.target}'
+            """);
+        using var disposed = repository;
+        repository.Tree.WriteFile($".harness-config/workflows/{Workflow}/body.md", "the work\n");
+        await repository.Harness.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "work"], Token);
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+
+        var refused = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal("run 'r1' of 'flow' cannot start: the main checkout is on 'work', the branch the run's pull request is opened against, and a run commits its work on a branch of its own: create one for it and check it out. Nothing was made.", refused.Message);
+        Assert.False(Directory.Exists(RunOf(repository).Directory));
+
+        var started = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["target=release"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, started.ExitCode);
+    }
+
+    /// <summary>
+    /// With no pull-request base, the branch a run's start holds the checkout to is the default of the remote its push step
+    /// names, not origin's; and a merge under way refuses a start too.
+    /// </summary>
+    [Fact]
+    public async Task ARunsStart_ReadsThePushRemotesDefault_AndIsRefusedWhileAMergeIsUnderWay()
+    {
+        var (repository, service, _) = await ServiceAsync("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+              - name: send
+                type: push
+                remote: upstream
+                dependsOn: [one]
+            """);
+        using var disposed = repository;
+        using var origin = new TempDirectory();
+        using var upstream = new TempDirectory();
+        var git = repository.Harness;
+        var branch = (await git.RunGitAsync(repository.Path, ["symbolic-ref", "--short", "HEAD"], Token)).StandardOutput.Trim();
+
+        foreach (var (name, remote, head) in new[] { ("origin", origin, branch), ("upstream", upstream, "trunk") })
+        {
+            await git.RunGitAsync(remote.Path, ["init", "--quiet", "--bare", "."], Token);
+            await git.RunGitAsync(repository.Path, ["remote", "add", name, remote.Path], Token);
+            await git.RunGitAsync(repository.Path, ["push", "--quiet", name, $"{branch}:{head}"], Token);
+            await git.RunGitAsync(repository.Path, ["remote", "set-head", name, head], Token);
+        }
+
+        async Task<string> RefusedAsync()
+        {
+            var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.False(Directory.Exists(RunOf(repository).Directory));
+            return outcome.Message;
+        }
+
+        await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "trunk"], Token);
+        Assert.Equal("run 'r1' of 'flow' cannot start: the main checkout is on 'trunk', the branch the run's pull request is opened against, and a run commits its work on a branch of its own: create one for it and check it out. Nothing was made.", await RefusedAsync());
+
+        await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "side"], Token);
+        repository.Tree.WriteFile("file.txt", "side\n");
+        await git.CommitAllAsync(repository.Path, "side", Token);
+        await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "feature", "trunk"], Token);
+        repository.Tree.WriteFile("file.txt", "feature\n");
+        await git.CommitAllAsync(repository.Path, "feature", Token);
+        Assert.False((await git.GitClient.RunAsync(repository.Path, ["merge", "--quiet", "side"], cancellationToken: Token)).Succeeded);
+        Assert.Equal("run 'r1' of 'flow' cannot start: a merge is under way in the main checkout, and a run folds its work into the tree the merge is writing: finish the merge, or abort it. Nothing was made.", await RefusedAsync());
+    }
+
+    /// <summary>A start whose pull request's base cannot be filled is refused, saying why, before the checkout is weighed - here a detached HEAD.</summary>
+    [Fact]
+    public void AStartWhosePullRequestsBaseCannotBeFilled_IsRefused()
+    {
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", """
+            name: flow
+            steps:
+              - name: pr
+                type: pull-request
+                title: t
+                body: body.md
+                base: '{input.target}'
+            """);
+        var detached = new FlowCheckout(null, "abc", false, [], [], [], null, null);
+
+        Assert.Equal(
+            "run 'r1' of 'flow' cannot start: its pull request's base cannot be filled: '{input.target}' reads nothing. Nothing was made.",
+            FlowService.StartRefusal(detached, definition, new Dictionary<string, string>(), "r1"));
+        Assert.Null(FlowService.StartRefusal(detached with { Branch = "work" }, definition, new Dictionary<string, string> { ["target"] = "main" }, "r1"));
+    }
+
+    /// <summary>
+    /// A run is refused, having made nothing, where the checkout is no place a run starts from: HEAD detached, the branch
+    /// its pull request goes to checked out - here the remote's default - and changes staged.
+    /// </summary>
+    [Fact]
+    public async Task ARunIsRefused_WhereTheCheckoutIsNoPlaceARunStartsFrom()
+    {
+        var (repository, service, _) = await ServiceAsync();
+        using var disposed = repository;
+        using var remote = new TempDirectory();
+        var git = repository.Harness;
+        var branch = (await git.RunGitAsync(repository.Path, ["symbolic-ref", "--short", "HEAD"], Token)).StandardOutput.Trim();
+
+        async Task<CommandOutcome> StartAsync()
+            => await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        void Refused(CommandOutcome outcome, string why)
+        {
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.Equal($"run 'r1' of 'flow' cannot start: {why}. Nothing was made.", outcome.Message);
+            Assert.False(Directory.Exists(RunOf(repository).Directory));
+        }
+
+        await git.RunGitAsync(remote.Path, ["init", "--quiet", "--bare", "."], Token);
+        await git.RunGitAsync(repository.Path, ["remote", "add", "origin", remote.Path], Token);
+        await git.RunGitAsync(repository.Path, ["push", "--quiet", "origin", branch], Token);
+        await git.RunGitAsync(repository.Path, ["remote", "set-head", "origin", branch], Token);
+        Refused(await StartAsync(), $"the main checkout is on '{branch}', the branch the run's pull request is opened against, and a run commits its work on a branch of its own: create one for it and check it out");
+
+        await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "--detach"], Token);
+        Refused(await StartAsync(), "the main checkout's HEAD is detached, and a run commits its work on a branch: check out a branch of its own for it");
+
+        await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "feature"], Token);
+        repository.Tree.WriteFile("staged.txt", "staged\n");
+        await git.RunGitAsync(repository.Path, ["add", "staged.txt"], Token);
+        Refused(await StartAsync(), "the main checkout has staged changes (1 path(s): staged.txt), and a run's commit stages what it folded alone: commit them, or unstage them");
     }
 
     /// <summary>A session's --json is the run's document: its code and line, the run, its status, what it spent and every record it wrote by its path - never the empty stopped document.</summary>
@@ -155,7 +418,7 @@ public sealed class FlowServiceTests
         Assert.Equal("Done", document["status"]!.GetValue<string>());
         Assert.Equal(0d, document["spent"]!["usd"]!.GetValue<double>());
         Assert.Equal(
-            ["run", "state", "status", "questions", "issues", "definition", "events", "report", "reportJson", "log"],
+            ["run", "state", "status", "questions", "issues", "definition", "events", "report", "reportJson", "folds", "log"],
             document["records"]!.AsObject().Select(member => member.Key));
         Assert.Equal(run.FlowFile, document["records"]!["state"]!.GetValue<string>());
         Assert.Equal(run.LogFile("r1"), document["records"]!["log"]!.GetValue<string>());
@@ -194,7 +457,7 @@ public sealed class FlowServiceTests
             _ => await service.QuestionsAsync(repository.Path, "r1", json: false, Token).WaitAsync(Bound, Token),
         };
 
-        var warning = $"{command}: WARN - '{record}' is the record of a contained child's session, and does not read as one: "
+        var warning = $"{command}: WARN - '{record}' is the record of a step's child's session or process group, and does not read as one: "
             + "its session is 0, and a session is a process's id. It was left as it is, and nothing it names was ended.";
 
         Assert.Equal(warning, repository.Harness.StandardError.ToString().Split('\n').Select(line => line.TrimEnd('\r')).FirstOrDefault(line => line.StartsWith($"{command}: ", StringComparison.Ordinal)));
@@ -837,7 +1100,7 @@ public sealed class FlowServiceTests
 
         Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
         Assert.Equal(
-            $"run 'r1' is owned by an engine on another machine (process {Environment.ProcessId.ToString(CultureInfo.InvariantCulture)} on another machine); --now ends only a process of this machine. "
+            $"the engine of run 'r1' runs on another machine (process {Environment.ProcessId.ToString(CultureInfo.InvariantCulture)} on another machine); --now ends only a process of this machine. "
             + "stop-orchestrator r1 without --now asks it to stop, or end it on its own machine. Nothing was changed.",
             outcome.Message);
         Assert.Equal(elsewhere with { StartedAt = repository.Harness.OrchestrationStore.ReadOwner(run)!.StartedAt }, repository.Harness.OrchestrationStore.ReadOwner(run));
@@ -871,6 +1134,178 @@ public sealed class FlowServiceTests
         finally
         {
             Ending(engine);
+        }
+    }
+
+    /// <summary>
+    /// <c>--now</c> ends what the engine's steps left running once it has ended the engine where it stood - the engine's
+    /// whole tree, its leg's phase among it: here what the phase handed on, no one's child and still in the phase's group -
+    /// refusing a hangup, as a build's leftover that outlives its engine does: a tree is ended by stopping each process
+    /// before killing it, and the system hangs up a group orphaned while a member of it is stopped - ended by the sweep
+    /// that follows though the phase that led the group is gone, and a contained child's session the
+    /// engine recorded; said in the answer by kind, their records removed. An engine found gone already - a crash, which
+    /// ends nothing it started - is nothing to stop, and the sweep every verb over the run starts with has ended what it
+    /// left all the same, its phase still leading its group, said in its lines.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StopNow_EndsTheProcessGroupsTheEnginesStepsLeftRunning(bool goneAlready)
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a leg's phase there is bound by the engine's job, which ends it with the engine, and nothing is recorded.");
+
+        var (repository, service, runner) = await ServiceAsync();
+        using var disposed = repository;
+
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var identity = repository.Harness.Identity;
+        var step = run.StepDirectory("one");
+        var said = new TaskCompletionSource<(LearnedProcess Engine, LearnedProcess HandedOn)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        (LearnedProcess Engine, LearnedProcess HandedOn) ids = default;
+        using var contained = Process.Start(TestHost.StartOf(TestHost.ChildRequest("own-session-and-sleep", "300000")))!;
+        using var signals = new TempDirectory();
+        var ready = signals.Combine("ready");
+
+        // The engine starts its leg's phase as a machine step does - bound, under a process scope that records its group
+        // in the step's directory - and the phase hands on a process of its own, no one's child, still in its group.
+        var engineRun = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram).RunAsync(
+            TestHost.ChildRequest("scoped-recorded-and-wait", CliRunner.CliProgram, step, "spawn-orphan-and-sleep", "300000", "300000", "ignore-hup-and-sleep", ready) with
+            {
+                Timeout = Bound,
+                OnOutputLine = line =>
+                {
+                    var words = line.Split(' ').Select(word => word.Split('=')).ToDictionary(pair => pair[0], pair => int.Parse(pair[1], CultureInfo.InvariantCulture));
+                    said.TrySetResult((LearnedProcess.Of(words["owner"]), LearnedProcess.Of(words["orphan"])));
+                },
+            },
+            Token);
+
+        try
+        {
+            ids = await said.Task.WaitAsync(Bound, Token);
+            Assert.True(SpinWait.SpinUntil(() => File.Exists(ready), Bound), $"what the phase handed on, {ids.HandedOn}, never came to refuse a hangup");
+
+            var groupRecord = Assert.Single(Directory.GetFiles(OrchestratorLayout.ChildrenDirectory(step)));
+            var phase = LearnedProcess.Of(JsonNode.Parse(File.ReadAllText(groupRecord))!["session"]!.GetValue<int>());
+            var session = OrchestratorLayout.ChildFile(step, contained.Id);
+
+            Assert.True(SpinWait.SpinUntil(() => TestChild.SessionOf(contained.Id) == contained.Id, Bound), $"the child {contained.Id} never led a session of its own");
+
+            File.WriteAllText(session, new JsonObject
+            {
+                ["session"] = contained.Id,
+                ["started"] = identity.StampOf(contained.Id),
+                ["program"] = "dotnet",
+                ["owner"] = new JsonObject { ["machine"] = identity.CurrentMachine, ["processId"] = ids.Engine.Id, ["stamp"] = ids.Engine.Stamp },
+            }.ToJsonString() + "\n");
+
+            if (goneAlready)
+            {
+                // Killed alone, as a crash ends it: its phase still leads its group.
+                using (var killed = Process.GetProcessById(ids.Engine.Id))
+                {
+                    killed.Kill(entireProcessTree: false);
+                }
+
+                await Record.ExceptionAsync(() => engineRun.WaitAsync(Bound, Token));
+            }
+
+            repository.Harness.OrchestrationStore.WriteOwner(run, new RunOwner(identity.CurrentMachine, ids.Engine.Id, DateTimeOffset.UtcNow, ids.Engine.Stamp));
+
+            var outcome = await service.StopAsync(repository.Path, "r1", now: true, json: false, Token).WaitAsync(Bound, Token);
+
+            Assert.True(ids.HandedOn.AwaitGone(), $"what the phase handed on, {ids.HandedOn}, outlived the stop of the engine that left it");
+            Assert.True(phase.AwaitGone(), $"the phase {phase} outlived the stop of the engine that left it");
+            Assert.True(contained.WaitForExit(Bound), $"the contained child {contained.Id} outlived the stop of the engine that left it");
+            Assert.False(File.Exists(groupRecord), $"the record of the ended group is still at '{groupRecord}'");
+            Assert.False(File.Exists(session), $"the record of the ended session is still at '{session}'");
+
+            var groupLine = $"{FlowService.StopCommand}: step 'one' of 'r1' left process group {phase.Id} ('{TestHost.AssemblyProgram}') running, "
+                + $"and the process that started it (pid {ids.Engine.Id}) has gone; it was ended";
+            Assert.Contains(groupLine, repository.Harness.StandardOutput.ToString().Split('\n').Select(line => line.TrimEnd('\r')));
+
+            if (goneAlready)
+            {
+                Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+                Assert.Equal("run 'r1' is not being run by an engine: there is nothing to stop", outcome.Message);
+                return;
+            }
+
+            Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+            Assert.Equal($"ended the engine of run 'r1' (process {ids.Engine.Id}) where it stood", outcome.Message);
+            Assert.Equal(
+                ["what its steps left running was ended with it: 1 session(s), 1 process group(s)", $"what it left is what a crash leaves; {FlowService.ResumeCommand} goes on from the records"],
+                outcome.Details!.Take(2));
+        }
+        finally
+        {
+            ids.HandedOn.TryEnding();
+            ids.Engine.TryEnding();
+            Ending(contained);
+            await Record.ExceptionAsync(() => engineRun.WaitAsync(Bound, Token));
+        }
+    }
+
+    /// <summary>
+    /// <c>--now</c> over an engine that ended in the moment it was stopped - standing when the stop read its owner, gone
+    /// when it came to end it - removes its owner, and ends what its steps left running all the same, said in the answer.
+    /// </summary>
+    [Fact]
+    public async Task StopNow_OverAnEngineThatEndedAsItWasStopped_EndsWhatItsStepsLeftAllTheSame()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a leg's phase there is bound by the engine's job, which ends it with the engine, and nothing is recorded.");
+
+        var (repository, finished, runner) = await ServiceAsync();
+        using var disposed = repository;
+
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        _ = await finished.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var engines = new Engines(repository.Harness.Identity) { GoesWhenEnded = true };
+        var harness = repository.Harness;
+        var service = Service(
+            harness,
+            runner,
+            identity: engines,
+            children: new ChildSessions(harness.FileSystem, engines, new LeftSessions(harness.Platform, harness.ProcessTable), harness.Output, new EndedChildSessions()));
+        var step = run.StepDirectory("one");
+        using var phase = Process.Start(TestHost.StartOf(TestHost.ChildRequest("own-group-and-sleep", "300000")))!;
+
+        try
+        {
+            Assert.True(SpinWait.SpinUntil(() => TestChild.GroupOf(phase.Id) == phase.Id, Bound), $"the phase {phase.Id} never led a group of its own");
+
+            var record = OrchestratorLayout.ChildFile(step, phase.Id);
+
+            Directory.CreateDirectory(OrchestratorLayout.ChildrenDirectory(step));
+            File.WriteAllText(record, new JsonObject
+            {
+                ["session"] = phase.Id,
+                ["group"] = true,
+                ["started"] = engines.StampOf(phase.Id),
+                ["program"] = "dotnet",
+                ["owner"] = new JsonObject { ["machine"] = engines.CurrentMachine, ["processId"] = Engines.Engine, ["stamp"] = "its start" },
+            }.ToJsonString() + "\n");
+            repository.Harness.OrchestrationStore.WriteOwner(run, new RunOwner(engines.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
+
+            var outcome = await service.StopAsync(repository.Path, "r1", now: true, json: false, Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+            Assert.Equal($"the engine of run 'r1' (process {Engines.Engine}) had already ended; its owner was removed", outcome.Message);
+            Assert.Equal(
+                ["what its steps left running was ended with it: 1 process group(s)", $"{FlowService.ResumeCommand} goes on from the records"],
+                outcome.Details!.Take(2));
+            Assert.True(phase.WaitForExit(Bound), $"the phase {phase.Id} outlived the stop of the engine that left it");
+            Assert.False(File.Exists(record), $"the record of the ended group is still at '{record}'");
+            Assert.Null(repository.Harness.OrchestrationStore.ReadOwner(run));
+        }
+        finally
+        {
+            Ending(phase);
         }
     }
 
@@ -1117,6 +1552,7 @@ public sealed class FlowServiceTests
                 $"events: {run.EventsFile}",
                 $"report: {run.ReportFile}",
                 $"reportJson: {run.ReportJsonFile}",
+                $"folds: {run.FoldsFile}",
                 $"log {run.LogFile("r1")}",
             ],
             outcome.Details);
@@ -1128,7 +1564,7 @@ public sealed class FlowServiceTests
         Assert.Equal("r1", document["run"]!.GetValue<string>());
         Assert.Equal("Running", document["status"]!.GetValue<string>());
         Assert.Equal(
-            ["run", "state", "status", "questions", "issues", "definition", "events", "report", "reportJson", "log"],
+            ["run", "state", "status", "questions", "issues", "definition", "events", "report", "reportJson", "folds", "log"],
             document["records"]!.AsObject().Select(member => member.Key));
 
         var logged = repository.Harness.OrchestrationLog.Read(run.LogFile("r1"))[^1];
@@ -2126,8 +2562,8 @@ public sealed class FlowServiceTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
-        var (run, context) = sessions.Create(layout, definition);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var (run, context) = await sessions.CreateAsync(layout, definition, cancellationToken: Token);
 
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, run, context))
         {
@@ -2248,11 +2684,11 @@ public sealed class FlowServiceTests
 
         var run = RunOf(repository);
         var deleted = await repository.Harness.OrchestratorService.DeleteAsync(repository.Path, "r1", deleteEvidence: true, Token);
-        var sessions = new FlowSessions(repository.Harness.OrchestrationStore, repository.Harness.FileSystem, repository.Harness.Identity);
+        var sessions = new FlowSessions(repository.Harness.OrchestrationStore, repository.Harness.FileSystem, repository.Harness.Identity, repository.Harness.GitClient);
 
         Assert.Equal(HarnessExit.Success, deleted.ExitCode);
 
-        var refused = Assert.Throws<HarnessException>(() => sessions.Claim(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), run));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => sessions.ClaimAsync(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), run, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(OrchestrationReports.NoOrchestrator("r1"), refused.Message);
@@ -2507,17 +2943,7 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>A process of this test's own that sleeps for five minutes, standing for an engine.</summary>
-    private static Process Sleeper()
-    {
-        var start = new ProcessStartInfo(TestHost.DotnetExecutable) { UseShellExecute = false };
-
-        start.ArgumentList.Add("exec");
-        start.ArgumentList.Add(TestHost.AssemblyPath);
-        start.ArgumentList.Add("300000");
-        start.Environment[TestHost.ChildModeVariable] = "sleep";
-
-        return Process.Start(start)!;
-    }
+    private static Process Sleeper() => Process.Start(TestHost.StartOf(TestHost.ChildRequest("sleep", "300000")))!;
 
     /// <summary>Ends a process of this test's own, where it still runs.</summary>
     private static void Ending(Process process)
@@ -2552,10 +2978,14 @@ public sealed class FlowServiceTests
         private readonly ConcurrentDictionary<string, Action> _onStart = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, bool> _deaf = new(StringComparer.Ordinal);
         private readonly ConcurrentQueue<string> _order = new();
+        private readonly ConcurrentQueue<FlowStepRun> _asked = new();
         private volatile FlowStepResult? _every;
 
         /// <summary>Every instance asked, in the order the coordinator started it.</summary>
         public IReadOnlyList<string> Started => [.. _order];
+
+        /// <summary>Every run asked, whole, in the order the coordinator started it.</summary>
+        public IReadOnlyList<FlowStepRun> Asked => [.. _asked];
 
         /// <summary>Answers <paramref name="step"/> with one result, every time it is asked.</summary>
         public void On(string step, FlowStepResult result) => _results[step] = result;
@@ -2583,6 +3013,7 @@ public sealed class FlowServiceTests
         public async Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
         {
             _order.Enqueue(run.Step.Name);
+            _asked.Enqueue(run);
 
             if (_onStart.TryGetValue(run.Step.Name, out var what))
             {
@@ -2645,6 +3076,9 @@ public sealed class FlowServiceTests
             set => _alive = value;
         }
 
+        /// <summary>Whether the engine ends in the moment a stop comes to end it: as it is told apart, before it is ended.</summary>
+        public bool GoesWhenEnded { get; init; }
+
         public int CurrentId => real.CurrentId;
 
         public string CurrentMachine => real.CurrentMachine;
@@ -2655,7 +3089,15 @@ public sealed class FlowServiceTests
 
         public string? StampOf(int processId) => real.StampOf(processId);
 
-        public bool IsSame(int processId, string stamp) => processId != Engine && real.IsSame(processId, stamp);
+        public bool IsSame(int processId, string stamp)
+        {
+            if (processId == Engine && GoesWhenEnded)
+            {
+                _alive = false;
+            }
+
+            return processId != Engine && real.IsSame(processId, stamp);
+        }
     }
 
     /// <summary>A file system that says when a file is written or deleted, and can be made to meet a defect reading one.</summary>
@@ -2696,9 +3138,9 @@ public sealed class FlowServiceTests
         /// <summary>Reads <paramref name="path"/> as it is again.</summary>
         public void Mends(string path) => _broken.TryRemove(Path.GetFullPath(path), out _);
 
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
             _ = Of(_written, path).TrySetResult();
         }
 
@@ -2718,10 +3160,10 @@ public sealed class FlowServiceTests
             _ = Of(_deleted, path).TrySetResult();
         }
 
-        public override string ReadAllText(string path)
+        public override Stream OpenRead(string path)
             => _broken.ContainsKey(Path.GetFullPath(path))
                 ? throw new InvalidOperationException("the disk said something no one expected.")
-                : base.ReadAllText(path);
+                : base.OpenRead(path);
 
         public override PathKind KindOf(string path)
         {
@@ -2842,5 +3284,38 @@ public sealed class FlowServiceTests
 
         /// <inheritdoc/>
         public void Dispose() => Tree.Dispose();
+    }
+
+    /// <summary>
+    /// A run's codebase graph goes with the run when it is deleted, and is never counted among what --delete-evidence
+    /// guards: it is made from the tree, and made again whenever asked.
+    /// </summary>
+    [Fact]
+    public async Task ARunsCodebaseGraph_GoesWithItsRun_WithoutDeleteEvidence()
+    {
+        var (repository, service, runner) = await ServiceAsync();
+        using var disposed = repository;
+
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var harness = repository.Harness;
+        var guarded = await harness.OrchestratorService.DeleteAsync(repository.Path, "r1", deleteEvidence: false, Token);
+        var graph = new DssHarness.Core.Codebase.CodebaseGraphService(harness.GitClient, harness.FileSystem, harness.OrchestrationStore, DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild, harness.Platform, new RunningToolDouble(), harness.Output, TimeProvider.System);
+        _ = await graph.SyncAsync(new DssHarness.Core.Codebase.CodebaseGraphSync(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), run, DssHarness.Core.Codebase.CodebaseGraphShape.Default, "worktrees", Rebuild: false, "test"), Token);
+        Assert.True(File.Exists(run.GraphManifestFile));
+        Assert.NotEmpty(Directory.EnumerateFiles(run.GraphExtractsDirectory, "*", SearchOption.AllDirectories));
+
+        // The run's own records are what --delete-evidence guards, the same with its graph as without it.
+        var refused = await harness.OrchestratorService.DeleteAsync(repository.Path, "r1", deleteEvidence: false, Token);
+
+        Assert.Equal((HarnessExit.Refused, guarded.Message), (refused.ExitCode, refused.Message));
+        Assert.True(File.Exists(run.GraphManifestFile));
+
+        var deleted = await harness.OrchestratorService.DeleteAsync(repository.Path, "r1", deleteEvidence: true, Token);
+
+        Assert.Equal(HarnessExit.Success, deleted.ExitCode);
+        Assert.False(Directory.Exists(run.Directory));
     }
 }

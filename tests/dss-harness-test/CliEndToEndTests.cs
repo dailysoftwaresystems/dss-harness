@@ -1788,12 +1788,8 @@ public sealed partial class CliEndToEndTests
 
         // A shared tool at work in that tree's build of the leg - a test binary there - for as long as the commands run.
         var theirs = Path.Combine(VariantKey.For(config, config.Legs["native"], platform.PlatformKey).DirectoryUnder(worktree), "tests", "suite");
-        var start = new System.Diagnostics.ProcessStartInfo(TestHost.DotnetExecutable) { UseShellExecute = false, CreateNoWindow = true };
-        start.ArgumentList.Add("exec");
-        start.ArgumentList.Add(TestHost.AssemblyPath);
-        start.ArgumentList.Add("120000");
-        start.ArgumentList.Add(theirs);
-        start.Environment[TestHost.ChildModeVariable] = "sleep";
+        var start = TestHost.StartOf(TestHost.ChildRequest("sleep", "120000", theirs));
+        start.CreateNoWindow = true;
         using var tool = System.Diagnostics.Process.Start(start)!;
 
         try
@@ -2437,6 +2433,7 @@ public sealed partial class CliEndToEndTests
         Assert.True(legs.Count == 1, $"exit {result.ExitCode}: {result.StandardError}");
         Assert.Equal("failed", legs[0].GetProperty("verdict").GetString());
         Assert.Contains(legs[0].GetProperty("logTail").EnumerateArray(), line => line.GetString()!.Contains("MSB1003", StringComparison.Ordinal));
+        Assert.Equal("build", legs[0].GetProperty("tailPhase").GetString());
     }
 
     /// <summary>

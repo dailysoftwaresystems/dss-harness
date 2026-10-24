@@ -427,7 +427,7 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
                         _fileSystem.WriteAllTextAtomic(layout.HostCopiesIgnoreFile, HarnessLayout.SelfIgnoreRule);
                     }
 
-                    _fileSystem.WriteAllTextAtomic(path, JsonSerializer.Serialize(new Document(after), Options));
+                    JsonStateFile.Write(_fileSystem, path, new Document(after), Options);
                 });
 
             return 0;

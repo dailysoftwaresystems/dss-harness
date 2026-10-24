@@ -1,4 +1,5 @@
 using System.Text;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Mutations;
 
 namespace DssHarness.Tests;

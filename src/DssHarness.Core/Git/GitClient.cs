@@ -220,12 +220,30 @@ public sealed partial class GitClient(
         // and otherwise the file through the clean filters and the line-ending rules that read the index, so a file only
         // checked out with other line endings is no change; and its mode, where core.filemode trusts one. Without git's
         // optional locks, the index it refreshes to answer is never written. Untracked files are not listed.
+        return await ChangedNamesAsync(directory, [commit], $"read what the work tree changes since {commit}", cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<GitName>> ListNamesChangedBetweenAsync(string directory, string from, string to, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(from);
+        ArgumentException.ThrowIfNullOrWhiteSpace(to);
+
+        return await ChangedNamesAsync(directory, [from, to], $"read what changed between {from} and {to}", cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The names <c>git diff --name-only</c> gives against <paramref name="commits"/> - the work tree against one, or two
+    /// commits against each other - each as git holds it: a rename as its two names, as configuration may otherwise pair
+    /// them, and a submodule whose commit moved whatever configuration hides.
+    /// </summary>
+    private async Task<IReadOnlyList<GitName>> ChangedNamesAsync(string directory, IReadOnlyList<string> commits, string doing, CancellationToken cancellationToken)
+    {
         var result = await RunForBytesAsync(
             directory,
-            ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", commit, "--"],
+            ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", .. commits, "--"],
             cancellationToken).ConfigureAwait(false);
 
-        Ensure(result, $"read what the work tree changes since {commit}");
+        Ensure(result, doing);
 
         return [.. Records(result.StandardOutput).Select(GitName.FromBytes)];
     }
@@ -928,41 +946,6 @@ public sealed partial class GitClient(
                 HarnessExit.CommandFailed,
                 $"'{path}', left by a staging that stopped part way, could not be removed: {ex.Message}");
         }
-    }
-
-    public async Task<IReadOnlyList<GitIndexEntry>> ListIndexAsync(
-        string directory,
-        CancellationToken cancellationToken = default)
-    {
-        // -v is what shows the flags that hide an edit from status, and -z keeps every path intact.
-        var result = await RunAsync(
-            directory,
-            ["ls-files", "--stage", "-v", "-z"],
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        Ensure(result, "read the index");
-
-        var entries = new List<GitIndexEntry>();
-
-        foreach (var field in result.StandardOutput.Split('\0', StringSplitOptions.RemoveEmptyEntries))
-        {
-            // The tag, mode, object and stage, separated by spaces, then a tab and the path.
-            var tab = field.IndexOf('\t');
-            string[] parts = tab < 0 ? [] : field[..tab].Split(' ');
-
-            if (parts.Length != 4
-                || parts[0].Length != 1
-                || !int.TryParse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture, out var stage))
-            {
-                throw new HarnessException(
-                    HarnessExit.CommandFailed,
-                    $"git listed an index entry in a form this build cannot read: '{field}'");
-            }
-
-            entries.Add(new GitIndexEntry(parts[0][0], parts[1], parts[2], stage, field[(tab + 1)..]));
-        }
-
-        return entries;
     }
 
     public Task<string> GetIndexFileAsync(string directory, CancellationToken cancellationToken = default)

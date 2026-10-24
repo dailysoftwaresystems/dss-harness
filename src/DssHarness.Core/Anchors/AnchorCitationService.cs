@@ -25,6 +25,28 @@ public enum AnchorCitationSubject
     CurrentPullRequest,
 }
 
+/// <summary>How a workflow's <c>anchor-citations</c> step names what it judges: each subject by its name in camel case.</summary>
+public static class AnchorCitationSubjects
+{
+    /// <summary>The subject a step judges where it names none: the files as they are on disk.</summary>
+    public const string Default = "currentTree";
+
+    /// <summary>Every name a step may give, in the order help says them.</summary>
+    public static IReadOnlyList<string> Names { get; } = [Default, "currentCommit", "currentPullRequest"];
+
+    /// <summary>The subject <paramref name="name"/> names, or <see cref="Default"/>'s where it is null.</summary>
+    /// <param name="name">One of <see cref="Names"/>, as the definition's check holds it to.</param>
+    /// <exception cref="ArgumentOutOfRangeException">It is none of them.</exception>
+    public static AnchorCitationSubject Of(string? name)
+        => (name ?? Default) switch
+        {
+            Default => AnchorCitationSubject.CurrentTree,
+            "currentCommit" => AnchorCitationSubject.CurrentCommit,
+            "currentPullRequest" => AnchorCitationSubject.CurrentPullRequest,
+            _ => throw new ArgumentOutOfRangeException(nameof(name), name, "a subject no citation check judges"),
+        };
+}
+
 /// <summary>What check-anchor-citations measured.</summary>
 /// <param name="Subject">What was read.</param>
 /// <param name="SubjectDescription">The subject in words, including the commit it resolved to.</param>
@@ -44,6 +66,20 @@ public sealed record AnchorCitationReport(
 {
     /// <summary>Whether every citation resolved.</summary>
     public bool Passed => Unresolved.Count == 0;
+
+    /// <summary>
+    /// The check held to <paramref name="paths"/>: a citation that resolves to no row counts only where it is in one of
+    /// those files, each named relative to the repository as a citation names its file. What it says it read is the whole's.
+    /// </summary>
+    /// <param name="paths">The files it is held to.</param>
+    public AnchorCitationReport HeldTo(IReadOnlyCollection<string> paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var held = paths.Select(AnchorRegistryLocator.Normalize).ToHashSet(StringComparer.Ordinal);
+
+        return this with { Unresolved = [.. Unresolved.Where(citation => held.Contains(citation.Path))] };
+    }
 }
 
 /// <summary>Checks that every anchor id a scanned root cites resolves to a registry row.</summary>
@@ -76,20 +112,26 @@ public sealed class AnchorCitationService(
     IGitClient gitClient,
     IFileSystem fileSystem) : IAnchorCitationService
 {
-    /// <summary>
-    /// Bytes of a file examined for a NUL before it is scanned, the window git's own text detection
-    /// uses. A binary file read as text produces id-shaped noise that resolves nowhere.
-    /// </summary>
-    private const int BinaryProbeLength = 8000;
-
-    /// <summary>References tried, in order, when the repository does not say which branch is default.</summary>
-    private static readonly string[] DefaultBranchCandidates =
-        ["origin/main", "origin/master", "main", "master"];
-
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IAnchorRegistryService _registryService = registryService;
     private readonly IGitClient _gitClient = gitClient;
     private readonly IFileSystem _fileSystem = fileSystem;
+
+    /// <summary>
+    /// The roots <paramref name="anchors"/> declares the check scans, each once, as the check reads them: normalized,
+    /// and a root that names nothing once normalized left out. The one reading of them, so whatever says the repository
+    /// declares citation roots says what the check would scan.
+    /// </summary>
+    /// <param name="anchors">The repository's anchor settings.</param>
+    public static IReadOnlyList<string> RootsOf(Configuration.AnchorSettings anchors)
+    {
+        ArgumentNullException.ThrowIfNull(anchors);
+
+        return [.. anchors.CitationRoots
+            .Select(AnchorRegistryLocator.Normalize)
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal)];
+    }
 
     public async Task<AnchorCitationReport> CheckAsync(
         string startDirectory,
@@ -99,11 +141,7 @@ public sealed class AnchorCitationService(
         var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
         var root = context.Layout.RepositoryRoot;
 
-        var roots = context.Config.Anchors.CitationRoots
-            .Select(AnchorRegistryLocator.Normalize)
-            .Where(value => value.Length > 0)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+        var roots = RootsOf(context.Config.Anchors);
 
         if (roots.Count == 0)
         {
@@ -195,8 +233,8 @@ public sealed class AnchorCitationService(
     private static bool IsInsideARoot(string path, IReadOnlyList<string> roots)
         => Repository.PathPatterns.Matches(roots, path);
 
-    private static bool IsBinary(string text)
-        => text.AsSpan(0, Math.Min(text.Length, BinaryProbeLength)).IndexOf('\0') >= 0;
+    /// <summary>Whether <paramref name="text"/> is binary (<see cref="BinaryContent"/>): read as text it gives id-shaped noise that resolves nowhere.</summary>
+    private static bool IsBinary(string text) => BinaryContent.Holds(text);
 
     private async Task<AnchorCitationSelection> SelectAsync(
         string root,
@@ -283,33 +321,32 @@ public sealed class AnchorCitationService(
     /// </summary>
     private async Task<string> ResolveDefaultBranchAsync(string root, CancellationToken cancellationToken)
     {
-        var declared = await _gitClient
-            .RunAsync(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
+        const string Remote = GitRemotes.ConventionalRemote;
+        var remote = await _gitClient.DefaultBranchAsync(root, Remote, cancellationToken).ConfigureAwait(false);
 
-        var name = declared.Succeeded ? declared.StandardOutput.Trim() : string.Empty;
-
-        if (name.Length > 0 && await _gitClient.ResolveCommitAsync(root, name, cancellationToken).ConfigureAwait(false) is not null)
+        if (remote.Reference is { } found)
         {
-            return name;
+            return found;
         }
 
-        foreach (var candidate in DefaultBranchCandidates)
+        // A repository with no remote, or one never fetched, is compared with its own default branch.
+        foreach (var local in GitRemotes.ConventionalBranches)
         {
-            if (await _gitClient.ResolveCommitAsync(root, candidate, cancellationToken).ConfigureAwait(false) is not null)
+            if (await _gitClient.ResolveCommitAsync(root, local, cancellationToken).ConfigureAwait(false) is not null)
             {
-                return candidate;
+                return local;
             }
         }
 
-        var dangling = name.Length > 0;
+        var dangling = remote.Named is not null;
+        IReadOnlyList<string> tried = [.. GitRemotes.ConventionalBranches.Select(branch => $"{Remote}/{branch}"), .. GitRemotes.ConventionalBranches];
 
         throw new HarnessException(
             HarnessExit.Refused,
             $"No default branch was found to compare with (tried the remote's own HEAD"
-            + (dangling ? $", which names {name}, a branch not here" : string.Empty)
-            + $", then {string.Join(", ", DefaultBranchCandidates)}). Fetch the remote"
-            + (dangling ? ", or run git remote set-head origin --auto" : string.Empty)
+            + (dangling ? $", which names {remote.Named}, a branch not here" : string.Empty)
+            + $", then {string.Join(", ", tried)}). Fetch the remote"
+            + (dangling ? $", or run git remote set-head {Remote} --auto" : string.Empty)
             + ", or use --current-tree or --current-commit.");
     }
 
@@ -327,6 +364,17 @@ public sealed class AnchorCitationService(
 /// </remarks>
 public static class AnchorCitationReports
 {
+    /// <summary>A citation that resolves to no row, as the check prints it: <c>path:line: id</c>, and what was written of a cut one.</summary>
+    /// <param name="citation">The citation.</param>
+    public static string Line(AnchorCitation citation)
+    {
+        ArgumentNullException.ThrowIfNull(citation);
+
+        return citation.Cut
+            ? $"{citation.Path}:{citation.LineNumber}: {citation.Written} (cut at the end of the line)"
+            : $"{citation.Path}:{citation.LineNumber}: {citation.Id}";
+    }
+
     /// <summary>What check-anchor-citations reports.</summary>
     /// <param name="report">What was measured.</param>
     /// <param name="json">Whether to write the findings as JSON instead of as lines.</param>
@@ -336,9 +384,7 @@ public static class AnchorCitationReports
 
         IReadOnlyList<string> data = json
             ? [Document(report).ToJsonString(ReportJson.Options)]
-            : [.. report.Unresolved.Select(citation => citation.Cut
-                ? $"{citation.Path}:{citation.LineNumber}: {citation.Written} (cut at the end of the line)"
-                : $"{citation.Path}:{citation.LineNumber}: {citation.Id}")];
+            : [.. report.Unresolved.Select(Line)];
 
         var looked =
             $"{ReportText.Counted(report.CitationsFound, "citation")} over {ReportText.Counted(report.FilesScanned, "file")} of {report.SubjectDescription}, "

@@ -286,6 +286,27 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
     }
 
     /// <summary>
+    /// The requests <paramref name="command"/> makes to take each of <paramref name="trees"/> whole, on this machine:
+    /// the one spelling of them, asked by every hold that takes a tree whole and by every reading of who holds one, so
+    /// the two can never ask differently - each tree where it leads (<see cref="Key"/>), as git names a tree and as the
+    /// builds before this one recorded an agent's trees, so a run of one of them asking for the tree as it spells it
+    /// meets the hold.
+    /// </summary>
+    /// <param name="command">The command taking them.</param>
+    /// <param name="runId">The run taking them.</param>
+    /// <param name="trees">The trees, on this machine.</param>
+    /// <exception cref="HarnessException">Where one of them leads cannot be told: refused (<see cref="Key"/>).</exception>
+    public IReadOnlyList<LockRequest> LocalTreesWhole(string command, RunId runId, params string[] trees)
+        => [.. trees.Select(tree => new LockRequest
+        {
+            Host = HostId.Local.ToString(),
+            Tree = Key(HostId.Local.ToString(), tree),
+            Scope = LockScope.TreeExclusive,
+            RunId = runId,
+            Command = command,
+        })];
+
+    /// <summary>
     /// The one spelling the lock tells <paramref name="tree"/> on <paramref name="host"/> from another by, whenever it is
     /// read - an entry's tree, kept as its run spelled it, and a request's alike: on this machine, the full path with every
     /// link and junction along it followed, as git spells a tree - so a worktree reached through a worktrees root that is a

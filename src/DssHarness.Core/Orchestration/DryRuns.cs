@@ -10,7 +10,10 @@ public enum RequestStanding
     /// <summary>Nothing: the request is as it should be.</summary>
     Sound,
 
-    /// <summary>A consent nobody gave - a cell of its rows that --accept-lost or --accept-over must name.</summary>
+    /// <summary>
+    /// A consent nobody gave, and nothing else: a new row --new must name, a cell of its rows --accept-lost or --accept-over
+    /// must name, or a path both trees changed whose merge is clean that --merge must name.
+    /// </summary>
     NeedsConsent,
 
     /// <summary>Something of it must be put right: a path, a row or an option is refused.</summary>

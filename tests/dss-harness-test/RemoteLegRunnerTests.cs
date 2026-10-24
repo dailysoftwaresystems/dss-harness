@@ -49,6 +49,10 @@ public sealed class RemoteLegRunnerTests
         Assert.Equal(HostAgentProtocol.BeatSeconds, request.BeatSeconds);
         Assert.Equal(new InputBeat(TimeSpan.FromSeconds(HostAgentProtocol.BeatSeconds), HostAgentProtocol.BeatLine), sent.StandardInputBeat);
 
+        // What reaches the host is bound as a local leg's phase is: on Windows it ends with this process, and under a
+        // run's machine step it is apart from the engine's terminal and recorded while it runs.
+        Assert.True(sent.Bound);
+
         // The command this machine was asked to run, for this leg only, answered as data, and with
         // the host told to run it on itself: a host free to dispatch onward would put the verdict one
         // further hop from the reader, and could not terminate by construction.
@@ -611,8 +615,8 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
-    /// The last lines the phase that failed on a host printed travel on the leg's line, read from the very
-    /// document the host writes: its log stays on that host, and a reader here has nothing else.
+    /// The last lines the phase that failed on a host printed travel on the leg's line, with that phase's name, read from
+    /// the very document the host writes: its log stays on that host, and a reader here has nothing else.
     /// </summary>
     [Fact]
     public async Task TheLastLinesAPhaseThatFailedTherePrinted_AreCarriedOnTheLegsLine()
@@ -620,7 +624,7 @@ public sealed class RemoteLegRunnerTests
         IReadOnlyList<string> tail = ["[ 99%] Linking CXX executable app", "ld: symbol(s) not found for architecture arm64"];
 
         var written = LedgerReport
-            .From([new LegEntry { Leg = "wsl-debug", Verdict = LegVerdict.Failed, Detail = "build exited 2", LogTail = tail }], durationWarningFactor: 0)
+            .From([new LegEntry { Leg = "wsl-debug", Verdict = LegVerdict.Failed, Detail = "build exited 2", LogTail = tail, TailPhase = "build" }], durationWarningFactor: 0)
             .ToJson(cancelled: false, unfinished: []);
 
         var hosts = new ScriptedHostCommands((_, command) =>
@@ -633,6 +637,7 @@ public sealed class RemoteLegRunnerTests
         var entry = await Runner(hosts).RunAsync("build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(tail, entry.LogTail);
+        Assert.Equal("build", entry.TailPhase);
     }
 
     /// <summary>

@@ -939,7 +939,7 @@ public sealed class HostAgentServiceTests
     /// <summary>
     /// The one list of the commands no host is ever asked to run: the host agent's own verb and its hidden helpers, and
     /// the five run verbs - a flow runs where it was typed, and its machine steps reach hosts as legs do, never the
-    /// session that drives them.
+    /// session that drives them - and stop-run, whose dispatcher's stop is what stops its legs on every host.
     /// </summary>
     [Fact]
     public void TheOneListOfTheCommandsNoHostIsEverAskedToRun()
@@ -955,6 +955,7 @@ public sealed class HostAgentServiceTests
                 FlowService.ResumeCommand,
                 FlowService.RunCommand,
                 FlowService.StopCommand,
+                DssHarness.Core.Runs.RunStopService.CommandName,
             }.Order(StringComparer.Ordinal),
             HostAgentProtocol.NotForwardable.Order(StringComparer.Ordinal));
 
@@ -1457,7 +1458,7 @@ public sealed class HostAgentServiceTests
         identity.Current.Returns(new ToolIdentity("1.2.3", "abc123"));
 
         var fileSystem = files ?? new PhysicalFileSystem(FilePermissionsFactory.Create());
-        var processRunner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create());
+        var processRunner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram);
 
         return new HostAgentService(
             platform,

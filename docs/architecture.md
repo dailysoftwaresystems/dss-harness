@@ -16,11 +16,10 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; each step of a run fails until
-the step runners land), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
-`update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `clean`, `up`, `down` and
+`update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `clean`, `up`, `down` and
 `help`.
 
 Every section of this document now describes code that exists. Where a rule is stated in
@@ -57,6 +56,20 @@ session, group, signal and job-object calls containment is made of, and the choi
 that `ContainExec` places a child through), `UserState`,
 `WslDiskImages`, `CMakeToolchainReader`, `ProcessContext` (the process's current directory) and the
 command that holds a host awake.
+
+A file is read through one stream (`IFileSystem.OpenRead`) and written whole by one of two atomic writes, each writing
+a temporary file beside the target and renaming it over the target: `IFileSystem.WriteAtomic`, handed a stream, for
+what is made as it is written - a record, a text - and `WriteAllBytesAtomicAsync` for bytes already in hand, which a
+tree sync, a fold's copy and a mutation write, waiting between its attempts without holding a thread. A whole text or
+a whole file's bytes is read and a text written by a convenience over those (`WholeFiles`), so a double that changes
+how a file reads or writes changes it for every caller, whatever form the caller takes it in. A state file
+(`JsonStateFile.Read`, `JsonStateFile.Write`) is parsed straight off that stream and serialized straight onto it,
+never held as one text: a codebase graph's link result runs to tens of megabytes, and held as text it costs twice its
+size again, in buffers the runtime's shared pool keeps. A file is renamed into place as POSIX renames, on Windows too
+(`Win32Files.TryReplace`): one who holds the old file open - every read here shares its deletion - goes on reading it
+while the new one takes its name, where Windows' own rename is refused while the old file is open at all, so a writer
+could not replace a record another sync was streaming. A volume that cannot rename so - FAT, some shares - is renamed
+Windows' own way.
 
 A platform-specific implementation is created only where behaviour genuinely
 differs. Today that is three families of behaviour.
@@ -143,23 +156,76 @@ that made a session of its own away from the child's tree is not reached, and no
 what it holds. A process table that cannot be read - macOS's is read through `ps`, which a session
 that has used up every process it may start leaves unable to start - takes nothing from the stop:
 the group is still asked and then killed by its id, which needs no table, the tree is still ended,
-and what went unreached is said in the result (`ProcessResult.Uncontained`), or in the
-cancellation where the caller gave up. A process killed there - a crash, `kill -9` - ends nothing
+and what went unreached is said in the result (`ProcessResult.Uncontained`), or, where the caller
+gave up, carried by the cancellation it is thrown (`ProcessStoppedException.Uncontained`) and said
+in its message. A process killed there - a crash, `kill -9` - ends nothing
 of the sessions it started, so each one a step of an orchestrator starts is recorded while it runs,
 by the runner through the tool's own records: once the child is placed in its session and before
 it is said to have started, `<step>/children/<session>.json` in the step's own directory - its
-session (the child's process id), the child's start stamp, its program, and the process that
+session (the child's process id), the child's start stamp - said by `contain-exec` of its own start
+on the channel, just before it becomes the program, which keeps it, so a child that ends at once
+is recorded all the same - its program, and the process that
 started it with that process's machine and stamp (`ChildSessions`, the request's
-`SessionRecord`) - and taken back once the runner has ended the session. A record that cannot be
-written is a start that failed: the child is ended, and never said to have started. Every command
-over an orchestrator - `create-`, `list-` and `delete-orchestrator`, and each agent verb - first
-sweeps its records, before it reads anything else of it: a session whose starter still stands is
-its starter's and is left; one whose starter has gone is ended as the runner ends one at a stop,
+`SessionRecord`) - and taken back once the runner has ended the session. The same record, with
+`group: true`, names the process group a run's machine step's legs' work leads (below: a bound child
+under a `ProcessScope`), taken back once the child has ended and nothing is left in its group. A
+record that cannot be
+written - one whose child's start nothing can read among them - is a start that failed: the child
+is ended, and never said to have started; a defect that keeps one from being written, a record that
+would not read back among them, ends the child too, and is raised as it is. Every command
+over an orchestrator - `create-`, `list-` and `delete-orchestrator`, each agent verb, and each run
+verb over a run already made - first
+sweeps its records, before it reads anything else of it: a session or group whose starter still stands is
+its starter's and is left; one whose starter has gone is ended as the runner ends a contained
+child's session at its end - a group by its own members and the tree its leader stands over, never
+the session it shares with its starter (`Containment.EndSessionAsync`, `group`) -
 its record removed and the end said in the command's lines and in its document's `ended` where it
-answers with one - but only where the process carrying the session's id still has the recorded
-start, since a session's id given to a later process ends nothing, and that record simply goes. A
+answers with one, where anything was left in it - but only where the process carrying its id still
+has the recorded start, or no process carries the id at all: none is given an id a session or a
+group still carries, so what a leader killed with the engine's tree handed on is still found by
+it. An id given to a later process ends nothing, and that record simply goes.
+`stop-orchestrator --now` sweeps again once it has ended the engine and its tree, and says what it
+ended: what outlived that end. A tree is ended by stopping each process before killing it, and the
+system hangs up a group that loses its last parent in the session while one of its members is
+stopped, so a leftover may die of that hangup with the engine, and is then not said. A
 record that does not read as one is said and left, and a starter on another machine is never taken
 to have gone. Windows records nothing: its job already ends a killed starter's children.
+
+A request can ask instead for a child **bound** to the harness's life (`ProcessRequest.Bound`):
+on Windows it is placed through `contain-exec` too, in the one job object the process holds for its
+whole life - whichever operation's runner starts it, though each operation is given services of its
+own - which ends every member when its last handle closes; so the harness ending in any way, a hard
+kill among them, ends
+the child and all it started at once. Its own end and a stop are as any other child's: nothing is
+terminated as it ends, and what it leaves running lives on until the harness ends - so, on every
+system, its output is read for five seconds more at most once it has ended, as a contained child's
+is once its container has: what still holds the output then is one of those leftovers, a server its
+phase started in the background, whose end the run would otherwise wait on for as long as it lived,
+the phase's time limit and a stop reaching nothing once the child had gone; the child's own last
+line is handed on, and what the leftover writes after it goes unread. Every phase of
+a leg a dispatcher runs on its own machine - a build, a test, a runner's step, a mutation arm's
+run, a set-up's down line - is bound, and so is its `keepAwake` command: a dispatcher killed where
+it stood once left its legs' test runners running for minutes, each holding a heavy leg's room. A
+set-up's `up` line is not: what it brings up is shared, held across runs, and ended by its `down`
+line. A child held in a job - contained or bound - is given build servers of its own, where its
+environment names none: the compiler's program-database server listens at an endpoint named for
+the job (`_MSPDBSRV_ENDPOINT_`), and the build engine leaves no node for a later build
+(`MSBUILDDISABLENODEREUSE=1`) - a server a member starts ends with the job, and one shared with
+another dispatcher's builds would be taken from them mid-build. An endpoint named for a job of the
+harness's own is replaced too: a harness a bound phase of another started inherits that one's, and
+a server its own children started there would end with its job while the outer builds still used
+it; an endpoint the user named is kept. The ssh or wsl.exe that carries a leg to a host is bound
+too (`HostCommand.Bound`): the host's leg ends when its input does. On Linux
+and macOS a bound child starts as any other: an interrupt or a termination signal given to the
+harness ends it with the harness's stop, a hang-up of its terminal reaches it as it reaches the
+harness, and a kill of the harness alone does not reach it - `stop-run --now` ends the harness with
+its whole tree. Save under a **process scope** (`ProcessScope`), which a run's machine step opens
+around its legs (`LegStepRunner`), flowing with the operation and seen by nothing outside it: there
+every child but a contained one is started apart from the terminal, so the engine's first Ctrl+C -
+a safe pause - leaves the builds running, and a bound child's group is recorded in the step's
+directory as a contained child's session is, while anything is in it, so a killed engine leaves
+none of it unrecorded; a stop ends the group at once with the tree. On Windows a child keeps the
+console of its own it always has, the job binds a bound one, and nothing is recorded.
 
 Whether the program started is said on a channel of the runner's own (`--status`), never in the
 program's streams or an exit code a program could give too: a program that cannot start is
@@ -171,8 +237,9 @@ terminal but within the session, is the lesser level a request asks for by name
 interruption typed at the harness's terminal is sent to a group, and that group is not the child's.
 On Windows such a child starts as any other, since a child started with no window already has a
 console of its own that an interruption typed at the harness's never reaches. A child apart from
-the terminal is stopped by its process tree, as any other, and what it leaves at its own end is
-left. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs as it always has.
+the terminal is stopped by its process tree, as any other, and on Linux and macOS by its group as
+well, at once, which reaches what its tree handed on; what it leaves at its own end is left. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs' phases bound on
+Windows, as above, and as any other child elsewhere.
 
 ### Paths come from git
 
@@ -667,7 +734,8 @@ command weighs that cannot be read - for a live agent's deletion, which git work
 both make) - fails it (20); a path, a row or an option that is refused - or, for a deletion, a record of the copies
 hosts keep that cannot be read, which its `--apply` reads before it writes anything (`AgentService.HostCopiesOf`, the
 lines weighed kept) - 13, save a usage error, 10, which its `--apply` answers before it takes anything; cells of the
-rows that need a consent nobody gave (`--accept-lost`, `--accept-over`), 13 - the same summary and lines, the line 'to
+rows that need a consent nobody gave (`--new`, `--accept-lost`, `--accept-over`), or a path both trees changed whose
+merge is clean and that `--merge` does not name - a refresh's and a move of a base's too - 13 - the same summary and lines, the line 'to
 write them:' (delete-agent's 'to do it:') among them,
 since a plan of rows still shows every such cell (`AnchorBatchMode.Plan`) and the rule is the command's, not the
 anchors' service's; a run holding a tree the `--apply` takes, or a lock file that cannot be read, 13 - save where what
@@ -727,7 +795,7 @@ which a step of an orchestrator run will read typed, so beside those it says `ne
 by kind - `fold-new-rows` (`--new`), `fold-lost-rows` (`--accept-lost`), `fold-over-cells` (`--accept-over`),
 `fold-two-changes` (`--merge`); `refusals`, each reason it stands refused for, `conflict` where a path both trees
 changed has a three-way merge that conflicts and `other` for anything else, so a request refused for conflicting
-merges alone says `conflict` and nothing else; and `folded`, what the `--apply` of a fold and of a deletion, which folds back what is left of the agent, did - gone through or stopped part way after writing some of it (21): the paths written, deleted, merged and handed, each handed with its digest, the arm registry where it was merged by arm, the registries its rows changed, the ids of the rows applied and the cells `--accept-over` took; null for every other answer and where it did nothing at all; and `planned`, what the plan of a refresh or of a move of the base names, its dry run's and its `--apply`'s alike: the paths taken, kept, handed and merged, and the arm registry merged by arm; null for a fold and a deletion. An `--apply`
+merges alone says `conflict` and nothing else; and `folded`, what the `--apply` of a fold and of a deletion, which folds back what is left of the agent, did - gone through or stopped part way after writing some of it (21): the paths written, deleted, merged and handed, each handed with its digest, the arm registry where it was merged by arm, the registries its rows changed, the ids of the rows applied and the cells `--accept-over` took; null for every other answer and where it did nothing at all; and `planned`, what the plan of the verb names, its dry run's and its `--apply`'s alike: the paths taken, kept, handed and merged, the arm registry merged by arm, the paths a fold - a deletion's among them - writes and deletes, the registry files its rows change, as git names them, and the rows it applies, and what each consent it lacks and each conflict it meets is about (`mergeable`, `conflicting`, `newRows`, `lostCells`, `overCells`); null where no plan was measured. An `--apply`
 refused at its hold answers the same document,
 `applied` true, its `request` `sound` and the run it met in `heldNow`, said as a dry run at that moment says it
 (`TreeHolders.Refused`, the one sentence and holder both take, handed up by the hold to the verb's answer), so a
@@ -737,9 +805,10 @@ initialised, another usage error, or a refusal met before then, an agent that is
 the same document, empty (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, no
 `needs`, no `refusals`, and `folded` and `planned` null, its `exitCode` and `summary` the code it exits with and the line it ends on.
 Each of these documents, and list-orchestrator's, also says `ended` where finding the orchestrator ended a session a
-killed process left running (see containment, above): one object per session, its `orchestrator`, `agent` (null for a
-step no agent owns), `step`, `session`, `program`, `owner` (the process id that had gone) and `unreached` (null where
-everything in it was reached); with nothing ended there is no `ended`, and the document is what it always was. No
+killed process left running (see containment, above): one object per session or group, its `orchestrator`, `agent`
+(null for a step no agent owns), `step`, `session` (the leader's id), `group` (whether it was the process group of
+its legs' work), `program`, `owner` (the process id that had gone) and `unreached` (null where everything in it was
+reached); with nothing ended there is no `ended`, and the document is what it always was. No
 command writes it: the operation keeps what its sweeps ended (`EndedChildSessions`, one per operation), and its session
 writes it into whatever document the operation answers with (`IDocumentFacts`) - its own, or the stopped form where it
 answered without one, threw or stopped after the sweep - so a command over an orchestrator added later says it too.
@@ -863,7 +932,10 @@ handed is measured with the rest (`AgentFold.HoldingAsync`) - the file whole, it
 and the hand-over writes over or removes only that (`AgentFold.HandAsync`, asked before each path): a file the agent's
 session wrote since - or made runnable, where the platform keeps such a bit - stops it there, exit 21, naming
 it, with what it handed recorded, for a run again to weigh anew - seed-agent's forced hand-over included; create-agent's,
-into a worktree just made, asks nothing. Neither hands anything while a move of the
+into a worktree just made, asks nothing. A making whose hand-over stopped, for this or anything else, says so in its seed
+(`SeedRecord.HandOverStopped`): the agent is not whole (`AgentService.MakingUnfinished`) - create-agent run again says
+so, never that it is already as asked, and fold-agent, refresh-agent and rebase-agent refuse it - until a seed-agent
+hands it the rest, which the engine's create-agent step run again does, forced. Neither hands anything while a move of the
 agent's base stands stopped part way, or its HEAD is off its base. Both say when the agent's base is not the main
 tree's HEAD, seed-agent --empty too. A path named otherwise than in UTF-8, committed or not, refuses any hand-over,
 named as git's quoting writes it: no file opens here by such a name.
@@ -1263,6 +1335,33 @@ reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on wi
 the visits), asks a person only for what only a person can give (`direction`), and builds, tests,
 folds and reviews its fix as a round's work items are.
 
+Every step that runs - every typed step but a `pause` step, which only asks (`StepType.Asks`) - may
+say `timeoutMinutes` (`WorkflowStepTypes.Running`): the longest one attempt of it may take, in whole
+minutes from 1 to 1,440 (`WorkflowStep.MostTimeoutMinutes`) - absent, its type's own limit where the
+type says one (`WorkflowStepTypes.TimeLimitOf`), else none; a group, which runs nothing of its own,
+and a `pause` step are refused the key where the file is read, and a `ci-wait`'s is always more than
+its `waitMinutes` (absent, `WorkflowStep.DefaultWaitMinutes`). The coordinator counts it with the
+engine's clock from each start of the step - an attempt, or its run after a question of its own was
+answered (a timer armed at `Start`, disarmed as its runner answers) - and never while the step waits
+on a question; a reason step's handoff turn at a pause is bounded by the workflow's top-level
+`handoffSeconds`, not by it, and its run at the resume counts anew, while a machine step a pause
+leaves running keeps its count. Past it
+the step is stopped as a stop stops one - its runner cancelled, a reason step's minutes counted -
+and, once its runner has answered, ends `Failed` with 21 whatever it answered, its error saying
+`passed its timeoutMinutes (<n>)`: a machine or leg step runs again by the retry table's row for
+21, a reasoning step goes to its handlers and its `onFailure`. A runner that does not end within
+`PointOfNoReturn.SafePauseDrain` of that stop fails the step all the same, saying so; it goes to
+its handlers and its `onFailure` and is not retried - of a step of `others`, the target whose turn
+it was fails so, and the step goes on with the next. What that attempt claimed stays held until its
+runner answers (`FlowInstance.Lingering`), a stop's drained step's too, so nothing that conflicts with
+what the runner may still write starts meanwhile, a later attempt of the step itself among it - each
+attempt's claims kept apart, so of two targets whose runners both outlive their turns, each one's
+answer gives back its own tree alone. Both
+stops share one body (`StopWork`). A pause
+leaves a step its limit stopped to end as that stop ends it, with no handoff turn - a failure it
+owes while the run is paused waits for the next session - and a stop of the run records it stopped,
+as it records every step in flight.
+
 A pre-existing issue - one a reasoning step meets that was there before the run - is reported in the
 step's answer (`preExisting`, a member of every shipped reasoning schema but the triage's) and triaged by the step its
 `onPreExisting` names: a reason step of the flow's top level that says `raised: preExisting`, which
@@ -1322,8 +1421,11 @@ no file of the agent clients' slot declares, one beside a key the slot holds amo
 steps that would read it - as a step's first model, or as a later model of its tier. What a model
 reads is decided in one place (`AgentProviders.KeysRead`) by the client that reaches it, the step's
 own or else its provider's: `claude-api` and `glm` sign each request with the provider's key, and
-`claude-code` signs in with the machine's login and reads none, so a step on it is never said to
-need one. Each line is the one sentence a missing key is said in (`AgentKeyStore.Missing`), ending
+`claude-code` signs in by its entry's `auth` (`AgentAuth`, `AgentProviders.AuthOf`): the machine's
+login where nothing is said, reading none, so a step on it is never said to need one; the
+provider's keys under `apiKey`; under `oauthToken` or `authToken` the one token the slot holds by the
+entry's `token` (`AgentProviders.TokenOf`), appointed by the client beside every provider's keys
+and refused where a provider's key is appointed under the same name. Each line is the one sentence a missing key is said in (`AgentKeyStore.Missing`), ending
 with the names the slot holds that nothing appoints. It is a report and not a problem: a machine
 that only checks a configuration needs no key, and no command of this build refuses one - the run
 that will is the engine's, which this build does not yet run. The slot itself
@@ -1338,7 +1440,8 @@ build calls yet), who may reach the file each name came from is asked by the one
 the host items' files are held to (`ItemEnvironment.Unprotected`): never a file others can change,
 and never one others can read while it holds a secret - a name the configuration appoints as a key,
 not a setting such as the program a client starts. `list-agent-providers` says the same configuration without saying one key: each
-provider, client and tier, every appointed name present or missing, exit 0 whatever is missing;
+provider, client and tier, every appointed key and token present or missing and each setting a
+client reads present or absent (`AgentProviders.SettingsRead`), exit 0 whatever is missing;
 `--template` the sections as `init` writes them, answered before any repository is read - outside
 one, and where the configuration it is printed to repair does not load. The Claude Code the clients will drive is npm's own:
 `NpmClient` finds npm (a program, or on Windows what `npm.cmd` would have started - the tool never
@@ -1361,10 +1464,199 @@ by the rule `update-tool` refuses such a wait by, `ProgramUpdate.Unread`), bound
 failed as after one that ran, saying what npm holds since. A program the slot names is never
 moved, and a slot that cannot give it is refused, never passed over for npm's; the client's
 `update` key is read by the service, true where nothing is said. The step runner that asks it
-before a run's first step is the engine's, still to come. This build checks workflow definitions and
-starts and drives a run of one (see "Running a workflow" below); the step runners - the agents, the
-steps over the services the tool already has - are the next thing the tool grows, and until they land
-each step of a run fails, saying no runner serves its type.
+before a run's first step is the engine's, still to come. What an agent of a run may do is one
+policy, `Agents\Policy\AgentPolicy`, the same on every client: everything is allowed except the
+root actions, the places no agent reaches and the restrictions, which only ever refuse, from every
+source at once - `agentPolicy.restrictions` in config.json, a workflow's definitions and its steps -
+and never remove one another's. A restriction is one string (`Run(git push *)`, a command prefix
+whose trailing `*` is any arguments and the bare command too; `Write(.github/**)` and
+`Read(secrets/**)`, path patterns as `GlobPattern` reads them, gitignore's grammar, matched against
+the path as it stands under each of the agent's roots, as asked and as resolved so no path reaches
+through a link past a rule written for where it lands; and `Web(pastebin.com)`, one domain, the
+domain and every name under it, or `Web(*)` the web whole). Built in, not configurable: the root
+actions (`sudo`, `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`,
+PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command
+names one), writes outside an agent's writable roots, every read and write of a credential slot or a
+Claude Code directory of the run's and every search over one (`AgentPolicy.Search`), and any command
+naming one - by `~` or `$HOME`, as a redirect's file or an option's value, against every directory a
+`cd` of it reached; no agent starts while the tool itself runs elevated
+(`IHostPlatform.IsPrivilegedProcess`, the runtime's own answer): `AgentRunner`, which every client's
+launch passes, records such a step `NotStarted` (`AgentNotStartedBecause.Elevated`, in the words of
+`AgentPolicy.RefusedWhileElevated`) before it takes a client. A path is decided as asked and as
+resolved, its home expanded - and on Windows its device prefix (`\\?\`, `\\.\`, `\??\`, in either
+separator) dropped from the text and from what `Path.GetFullPath` makes of it, one naming no drive
+and no share undecided, and a shell's spelling of a drive (`/c/x`, `/cygdrive/c/x`, `/mnt/c/x`)
+read both as the drive and as the directory it names on the current drive, each decided and the
+action allowed only where both are (`AgentPolicy.Spelled`, `AgentPolicy.Plain`); where a link
+resolves, where a `cd` moves to and the ground's own directories are spelled the same way, a `cd`
+from every place the command reached before it, up to `AgentPolicy.MaxPlaces`, past which the
+command is undecided - and a refusal's places compare in any
+case on every system, each Windows short name read as its long one (as `Path.GetFullPath` spells it); what a
+refusal allows - a writable root, the step's `writes` - compares as the platform does. A command is
+read whole before it is matched, `Agents\Policy\CommandAnalysis`: a shell string read once, front to
+back, by a recursive-descent reader as the shell's own parser reads it (`CommandAnalysis.Shell.cs`,
+its depth bounded at 32) - split on `;`, `&&`, `||`, `|`, `&` and line ends; a comment and a
+here-document's lines never commands, a here-document's or here-string's text kept as the input
+it gives; the bodies of command, backtick and process substitutions, subshells, functions, loops and
+branches read as commands of their own, each substitution's commands before the command it stands
+in, whose word keeps the substitution's text, so the word is the expansion it is; a `for`'s or a
+`select`'s head kept as a command its reserved word leads, so the paths it hands its body are read,
+and a `case`'s patterns never; inside `[[ ]]` its parentheses and operators words of the test; a
+redirect kept apart from the words, after them, its operator normalized and before the file it
+names, wherever it stood; reserved words read only where a command begins, unquoted; a continued
+line joined and `$'...'` decoded. The `NAME=value` words before a program are kept as its
+environment and carried to what it runs, and a value that is a program git or another tool runs
+(`CommandAnalysis.ProgramValued`: `GIT_SSH_COMMAND`, `GIT_PAGER`, `EDITOR` and their kind) is read as
+that program's command line, an `export`'s or a declaration's too, and so is the value of git's own
+setting of a key git runs as a command line (`CommandAnalysis.RunsProgram`: its pager, editors, ssh,
+drivers, filters, helpers, an alias) - a `-c`, a `--config-env`'s variable (refused where the
+command does not set it), `GIT_CONFIG_VALUE_n`, `GIT_CONFIG_PARAMETERS` - an alias's `!` taken off,
+any other alias the git command it names; wrappers (`env`, `nohup`, `time`,
+`timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`, `eval`, `busybox`, `Invoke-Expression`)
+are stripped with their own options, at most 32 deep, what `xargs` reads standing among the words
+it runs as an expansion; and it goes into `sh -c` and every other shell's (the words after its
+script read as scripts too), a here-string or here-document a shell reads, `cmd /c` and
+`powershell -Command` and a decoded `-EncodedCommand` - by any prefix PowerShell takes, behind its
+valued options - and the command lines `trap`, `watch`, `script` and `flock` run, each by its own
+shell's quoting, to four levels, and into a shell another program runs with its script among its
+words. What it cannot read whole it refuses, and the policy denies as `undecided`: a script nested
+past four levels, parentheses past 32, a shell that reads its script from its input or from a file
+an expansion names (`bash <(curl ...)`), an `xargs` handing a shell its script, a program named by a
+variable, a substitution, a pattern or a brace, a brace that spells more than 64 words, a word where
+none can stand, and an option of git's or gh's own before its command that this does not know.
+Every word of a command is tried as the program of the words after it, a program matched by its
+name (`CommandAnalysis.Name`, `.exe`, `.cmd` and `.dll` among the ends folded away), so a command
+another program runs meets the rules on its own program; a rule matches through
+`AgentRule.Match`, whose `Expanded` - a word the rule reads is one the shell expands - the policy
+denies as what the rule may be; git's own options, valued ones with their values, are dropped
+before its subcommand, gh's flags before its command's path (`gh pr -R o/r merge` is
+`gh pr merge`), and a git configured where it runs - a `-c` or `--config-env` of any key but the
+ones that only shape what git prints, `--exec-path`, the `GIT_CONFIG` names, `GIT_EXEC_PATH` and
+`GIT_TEMPLATE_DIR` of its environment - is the `git config` it is, and still the command it runs,
+each reading met by the rules. A word that names a path is read
+as each candidate it may be - the word, a redirect's file, an option's value, the words a script in
+it names, each word its braces spell and the path a `file://` address names - and a pattern the
+shell expands is refused where it may reach a credential slot or a Claude Code directory; and a command that runs a program which fetches from the network
+(`curl`, `wget`, `Invoke-WebRequest` and `Invoke-RestMethod` with `iwr` and `irm`, `http`, `https`,
+`gh api`) is decided as a web request too, by each address it names and each host it reaches (a
+proxy, curl's `--connect-to` and `--resolve` targets, the proxy of its environment), under the
+`Web(...)` rules and `agentPolicy.webDomains`, refused where the step has no web, and refused where
+the web is held to any rule when it reads what it reaches from a file. What it does not see is said
+in help: the inside of a script file a command runs. The worktree rules
+(`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs and the merges
+and CI starts of `gh` - `gh pr merge`, `gh workflow run`, `gh run rerun`, the `gh api` endpoints and
+GraphQL mutations of the same (`AgentPolicy.GhApiEndpoints`, `AgentPolicy.GhApiMutations`) and `gh
+alias set` - keep git's own files unwritten whatever `protectedPaths` says (`AgentPolicy.GitsOwnRule`:
+a `.git` segment at any depth beneath a root, in any case, so a nested repository's hooks are as
+safe as the root's), and hold the tool's own
+policy and what the next launch loads unwritten by any agent; its own state
+(`HarnessLayout.StatePaths`, the one owner of where that state is) is held so whatever any switch
+says, a writable root standing inside it - the agent's own work directory - the one exception; the
+tool's own verbs (`AgentPolicy.ToolVerbs`, each the command's own name as its service declares it)
+and `run-side-task` are refused, run by any program or from a response file, whatever the switch
+says. The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
+as rules (`AgentPolicy.ProtectedPathRules`), pinned by a test and printed by `help agent-clients`,
+refused on every client; a step's `writes` is the one source that narrows, and the reporter's reads
+are narrowed to the run's directory alone (`AgentPolicyGround.ReporterRoot`: no command, no write,
+no web). For Claude Code the policy is rendered, never re-decided, into the launch's settings
+(`Agents\Policy\ClaudeSettings`): an ask rule for every tool the launch has, a read of each
+credential slot and Claude Code directory as a deny rule - which Claude Code applies to its searches
+too - and the restriction rules as deny rules, absolute once for each root, but where a rule's
+pattern there would cover a root the launch writes, each path in the POSIX form Claude Code matches
+(`//c/x` for `C:\x`) and a `Write` rule as an `Edit` rule, for Claude Code holds every file tool to
+its `Read` and `Edit` rules alone - a second layer, for the engine is asked about
+every call and answers from the same policy in its own
+process. Where the policy cannot decide a call it denies it, never
+allows - nothing runs while the host that would answer is silent or gone. The first client that
+asks it is `Agents\ClaudeCode\ClaudeCodeClient`, the `IAgentClient` of `claude-code`: each
+launch a new session (`ClaudeLaunch` builds its one argument list and its environment - nothing of
+a Claude Code session the tool was started in, the names `ClaudeSettings.Controlled` sets -
+`CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` among them, so every shell command starts in the
+launch's directory, where the policy reads its relative paths, never where an earlier command's
+`cd` left it - and the one credential an `AgentCredential` gives), streamed both ways and read line by line as
+`ClaudeLine`s (every kind the probe's recordings hold), each `can_use_tool` it asks decided by
+`ClaudeToolDecider` through the policy, the tools it is given - and what a call of each is of - from
+the one table `ClaudeCodeTools` holds; an answer held to a schema checked by `StructuredOutputGate`
+and sent back while it does not read; a message to an agent at work, a handoff's interrupt and its
+turn (its prompt and its refusal `AgentHandoffSignal`'s, every client's; the agent asked once every
+message the engine wrote was taken or dropped - each with an id of its own, by which the
+interrupt's receipt names those it dropped), the model each message names, and a key reported
+invalid moved past with a new launch, all in one launch's loop that the stored stream
+(`AgentRunner`) records as it runs. Once a launch has ended, however it ended, a session file it
+left is removed, and what its container could not reach where the runner hands its end back
+(`ProcessResult.Uncontained`) is said and kept in the result's `uncontained`; a call the engine's
+own deciding fails on is a denial like any other, by the rule `undecided`. The client holds each
+launch to the protocol in the same loop: the user's settings read first by `ClaudeUserSettings` (a
+credential they would give refuses the run, as a configuration that is wrong; the file and its
+digest named in the launch's start, the hooks off), the `initialize` answer bounded, an init said
+before any work and its tools and credential source (`ClaudeLaunch.ApiKeySources`) held to the launch's, and every call
+that ran (`ClaudeLine.CallResult.Ran`) one the engine was asked about and allowed; a decline is
+`Refused` and an account at its limit (`ClaudeLine.RateLimit`, or the turn's error) `RateLimited`
+with an `AgentAccountLimit`. The API clients are the next thing the tool grows. This build checks workflow definitions and
+starts and drives a run of one (see "Running a workflow" below). Each step is given to the runner of its type
+(`FlowStepRunners`, over every `IFlowStepTypeRunner` the root registers - `FlowStepRunners.Served` lists them, and a test
+holds the two to each other); a step of a type none serves yet fails, saying no runner serves its type. Those served
+are machine steps, each a thin adapter over the owner of its rule: `OrientRunner` reads the main checkout by
+`FlowCheckout` - the one probe the run's start reads too, over `IGitClient` and `GitRemotes` - and each fact by its owner
+(`LegSelection`, `TestInvocationResolver`, `AnchorCitationService.RootsOf`, `CiSettings.Unset`, `MutationService.Declares`,
+`OrchestrationRules.OpenAgents`, `TreeHolders`); `GraphifyCodebaseRunner` checks the graph's longest path against the
+run's directory and syncs the run's one codebase graph through `ICodebaseGraphService` (`Core.Codebase`, below);
+`PlanCheckRunner` holds the items its `items` yields to `PlanValidator`, whose path budget is
+`FlowRunPaths`'s with the deepest file an item owns; `CreateAgentRunner` makes the agent the coordinator named
+(`OrchestrationRules.NextAgentName` over the run's agent directories, read under the orchestrator's lock by
+`IFlowRecords.NameAgent`, and every name its steps hold) for the model `WorkflowValidator.AgentModels` resolved, both
+written to `step.json` before `IAgentService.CreateAsync` is called; run again it reads the agent first and finishes or
+drops a making cut part way - one whose hand-over of the main tree's uncommitted state stopped part way
+(`SeedRecord.HandOverStopped`) seeded again with the rest - and finishes the removal of one found closed
+(`FlowStepResult.NameSpent`); a refusal it meets keeps its cause (`FlowStepResult.Failed`), so a main tree another run
+holds is waited out as a held lock is; and `IAgentService.CreateAsync(new AgentCreateRequest(..., NoWorktree: true))`
+makes a read-only reason step's agent the same way. Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
+where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
+orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`
+- a `ci-wait`'s commit where it names none - the one the run last pushed), the agent it works in (`FlowStepRun.WorksIn`)
+or, of `others`, the target whose turn it is (`FlowStepRun.Target`), and its keys' templates filled (`FlowStepTemplates`, the one
+reader of which text each template key holds, the definition's check its other caller). The leg steps - `build`, `test`,
+`run`, `check-mutations` - share `LegStepRunner`: the use case of each command (`IBuildLegs`, `ITestLegs`,
+`IRunnerLegs` - a run that writes the tree in place, by `HarnessConfig.WritingRunners`, the answer the step's claim of
+write reads through `ConfiguredRunnerFacts` - and `IMutationLegs`) run in the agent's worktree or the main checkout, its
+legs told to the engine as `LegRunService` says them through the request's `ILegRunWatch` (each leg placed, in a copy or
+the tree; each copy made, said where the leg takes its tree after the sync; each leg ended, said by `LegLedger` as its
+line is kept), each leg's verdict read on its own and `red` holding the red legs only, with the phase that did not pass
+(`LegEntry.TailPhase`, beside `LogTail`); the ledger (`LegRunResult.ToDocument`) and, in an agent's worktree, each red
+leg's failing phase log are kept in the step's directory. A leg run something other than its legs ended - refused, or
+stopped - ends the step with its own code. The checks that run no legs answer `FlowStepResult.Red` where they found red,
+which the coordinator reads by `failOn` as it reads a red leg: `AnchorBalanceStepRunner` and `AnchorCitationsStepRunner`
+over the anchor services, held to a step's rows or paths by `AnchorBalanceReport.HeldTo` (each `AnchorFinding` carries
+the id of its row, none for a registry as a whole) and `AnchorCitationReport.HeldTo`, their findings the lines the
+checks print (`AnchorReports.BalanceFindings`, `AnchorCitationReports.Line`); `CiReadStepRunner` over
+`ICiLegsService.CheckAsync`; and `CiWaitStepRunner` over `ICiChecksService`, which reads a commit's check runs and
+statuses through `ICiJobSource` until one is red - classified by `ICiLegsService.ClassifyRunAsync`, its job's log read
+whole - every one has ended, none appeared, or its time is spent, with `CiConclusions` the one place that says what a
+conclusion came to. Every call of `gh` goes through `GhProcess`: the repository it answers for, never asking, ended at its
+limit (21) - a step's read at `GhProcess.Limit`, never at the step's time limit, which bounds the attempt and ends
+a read in flight with it, so a `ci-wait` whose read stalls reads again at its next poll. The fold family - `FoldStepRunner`, `DeleteAgentStepRunner`, `RefreshStepRunner` and `RebaseStepRunner`, over
+`FoldFamilyStepRunner` - calls the verbs' typed use cases and reads their `AgentVerbFacts`, never an exit code:
+`FoldStandings.Read` says whether a dry run ends the step, asks or applies; `FlowQuestions.FoldQuestionOf` is the one rule
+of the question it raises - `foldConflicts` for conflicting merges alone, `foldOutside` for paths `FoldWithin` finds
+outside a fold's `within`, then each consent it lacks, a person's first - with what it is about (`FlowDryRun.Of`, over
+`AgentPlanned`), which the runner keeps in the step's `fold.json` (`FlowFoldRecord`) with where its answer will stand; a
+consent is given by name only where the dry run made again names exactly that, and one that no longer does is never
+passed. A fold's apply, and a deletion's, is held to what its dry run named (`FoldAgentRequest.Expected`,
+`DeleteAgentRequest.Expected`, measured again under its hold and compared by `AgentPlanned.DifferenceFrom`) - a
+refresh's and a rebase's request carry none - and which steps fold is one rule, `WorkflowStepTypes.Folds`, the
+definition's check and the runner alike. `FoldLedger` writes a fold's intent to `folds.json` before the verb is called
+and what it left after (`FlowFoldLedgerFile`) - applied, stopped, failed with what the tree holds read, or refused
+having read nothing - an intent a crash cut off settled from the tree by the next attempt; the step's `fold.json` takes
+what the apply answered before the ledger's settle, and an apply that threw goes on with its own exception, its intent
+left for the next attempt where reading the tree fails too. Whether a fold is committed is never written: it is read
+from the main tree (`FoldLedger.Uncommitted`, over git's status, read before the repository's section where another
+run's ledger changed a path), so a commit made by hand ends a stopped run's hold as the run's own does. A deletion run
+again whose agent its record says deleted - its ending cut off by a stop's drain, a time limit or a crash - is done
+(`FoldFamilyStepRunner.DoneAlreadyAsync`), its output what `fold.json` kept of the apply. A
+refresh or a rebase of `others` is one turn for each target (`FlowInstance.Targets`, `FlowTargetRecord`), in
+`OrchestrationRules.AgentNameOrder`, each claimed on its own tree (`FlowClaims.Of`), retried by its own count and ended
+on its own. The other step runners - the agents, the rest of the steps over the services the tool already has - are
+the next thing the tool grows.
 
 A definition is held to the `config.json` it is checked under as well: a `run` step whose runner -
 or a runner its run checks name - says `writesTree` names with `in` the create-agent step whose
@@ -1378,7 +1670,15 @@ requires and none for one it does not declare - or, with no template, a `message
 it; `whenAddScope` names a step declared directly in a `forEach` group - the work-item group - and
 `whenChangeScope` and `whenRemoveScope` that step or alternatives of its type beside it, which say
 no wiring of their own and which no other step names; and the work-item group expands from the
-`items` of a `validate-plan` step it waits for. `piece` is read only in that group, and what only a
+`items` of a `validate-plan` step it waits for. A step that names a create-agent step with `in` or
+`of` waits for it - through its own `dependsOn`, a group's around it, a handler's source or the step
+it is an alternative to, a step inside an alternative group among them (`FlowGraph.Waits`) - since it starts once the
+agent is made; where that step ended otherwise than done - skipped, passed over, failed under `always` or handled - the
+coordinator does not run it (`FlowNotRunCause.AgentNotMade`), saying the agent it works in was never made, and the agent
+it works on is kept on its instance (`FlowInstance.WorksIn`) from its start, so a deletion's record names the agent it
+deleted after its create-agent made another. A template is
+read by the configuration's one brace grammar (`FlowTemplate.Pieces`): `{{` and `}}` are braces,
+`${...}` is left as written, and a placeholder that names nothing is refused. `piece` is read only in the work-item group, and what only a
 prompt reads - `recommendations`, `question`, `status`, `update`, a skill - by no step's own key.
 What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's
 prompt and the advisor's, `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two -
@@ -1434,7 +1734,8 @@ pass; and `delete-orchestrator` decides and removes inside that section too, tak
 orchestrator's own, so no claim comes between its look at the owner and its removal of the run.
 
 The run's records are written in one order at every change - a step's own files (its `handoff.md`
-where it handed off, its `output.json`, then the `step.json` that names them), then `flow.json` (the
+where it handed off, its `output.json`, then the `step.json` that names them - a refresh's or a rebase's of `others`
+with each target and where it stands), then `flow.json` (the
 truth a resume reads), `workflow.json`, `pre-existing-issues.json` where the change listed one, and last the event
 in `events.jsonl` - each read back strictly: a value the engine does not name, a nested record that
 does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one not yet come is
@@ -1546,9 +1847,185 @@ in the run's log. A hang-up keeps the process to pause the run but leaves nobody
 terminal: from it on the terminal says nothing, and a line said while the session runs - an
 interrupt's, the poller's (`FlowTerminal.Warn`) - is dropped where the terminal can no longer be
 written to, never an exception that ends the process part way; the run's records hold what happened. The engine's loop alone applies either,
-and a cancellation of the session's token is the second, never a cut-off. Until the step runners
-land, the runner registered is `NoStepRunner`: each step of a run fails, saying no runner serves its
-type (its code 14).
+and a cancellation of the session's token is the second, never a cut-off. A step of a type no
+runner serves yet is given to `NoStepRunner`, `FlowStepRunners`' fallback: it fails, saying no
+runner serves its type (its code 14).
+
+### The codebase graph
+
+A run's `graphify-codebase` step keeps a map of the repository under the run's `graph/` (`Core.Codebase`): every file the
+tree lists is a node, every declaration an implementation reads is one, and the directed edges between them each say how
+sure they are (`exact`, `unique`, `candidates`). Nothing of it names a language. Everything that reads a file's contents
+is an implementation of one contract, `ICodeGraphExtractor` - its `Language`, its `Version`, its `Claims`, whether it
+`Outlines` its files rather than reading a language's declarations, a pure `Extract` and its `Help` - which answers a
+language-neutral `FileExtract`: nodes - a value's type (`ValueType`) and the type an extension extends (`Extends`)
+among what they say - the scopes they are put in (open to
+other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address or path ending, with their prefixes and filters,
+address roots, references by name with their qualifiers, and four marks - a prototype, a test, generated code with
+why, and each line it saw something it cannot bind or stopped reading at (`dynamic`) - of which the linker reads the
+first two. An implementation is registered by being written:
+`CodeGraphExtractors.Implementations` is the one scan of the core, which `AddDssHarness` registers each type of, and the
+registry built from them refuses two of one name, two claims of one exact name or extension of which either gives no
+content test, no fallback or two, a fallback that claims a name or an extension, a claimed name no file can bear or
+extension no file has, and a version below 1 - so a clash is a red test, never an order. A file goes to the
+claimants of its exact name, else of its extension, else to the fallback (`listed`); their content tests decide among
+several, and none or several saying yes lists it `ambiguous`. Everything else about the graph - `codebaseGraph.languages`,
+V52's names and `help codebase-graph`'s table - is read from the registry. A test keeps the core from mentioning
+anything under `Codebase\Languages\`. Every span counts lines as `CodeFileText.Lines` cuts them - CR LF, LF and CR
+alone, as an editor and git count - and an implementation that reads a parser's positions turns each into a line by
+`CodeFileText.LineIndex`, since a parser may also break lines at NEL and the Unicode separators. An extract is sound by `FileExtract.Problem` - every span inside the file, every
+parent present, holding its child and no cycle, ids unique and of its implementation, text whole UTF-16 - and every
+node's digest is the core's to set (`WithDigests`), whatever the implementation set. An `Extract` that throws or answers
+no sound extract, or a content test that throws, lists its one file `unreadable` with why - a defect `failOn: incomplete`
+fails on as it does on any file not read - never the end of a sync. Each implementation's tests derive
+from one kit, `CodeGraphExtractorContractTests<T>`, whose checks (`CodeGraphContract`, each shown red on an
+implementation that breaks it) hold it to fixtures for each claim, determinism whatever the line endings, answers alike
+from many threads, a sound model, tolerance of any cut of a fixture, pure content tests that never both say yes with
+another's, the extracts stored with the tests for its version (`fixtures/codebase-graph/<language>/v<version>/`,
+written where missing with `DSSHARNESS_STORE_EXTRACTS=1`), and the edges its fixtures name through the linker.
+
+The one linker (`CodeGraphLinker`) resolves every reference by the same steps for every language - the qualifier's
+scope, a type and its bases among it; the enclosing scopes from the inside out; a scope import's prefix (an alias),
+for what that import stands for; the file's imports in order, filters applied; the repository by name and arity - a
+qualifier being read as such a prefix too where no type or scope has it as its whole qualified name, from the file
+that makes the import or, made global, from every file of its language - and derives `dispatches`, `declares` and `tests` from the `implements` edges
+and the marks. A qualified reference is looked for where its qualifier says alone. A `type` qualifier is a type or
+scope found as a name is - nearest first in the scopes it is written in, then the container of its whole qualified
+name, an alias, an import's, the repository's - else every container its name ends; a `named` one is that too, unless
+a value a scope it is written in holds (a base's among them) is nearer. A value - and a `value` qualifier - is
+followed through its member's `ValueType`, each name of a chain, from a value or from a type, through the one before's
+type, a type the repository does not declare holding nothing it declares; a call on a value of no said type goes by
+its name in the repository, never to a type and never to the caller's own scopes. A call a type does not hold goes,
+`unique`, to a member that `Extends` that type or a base of it, as the extension's own file names the type - or a type
+the repository lacks, by its written name - where the call's file reaches it: the scope of the extension's type, or
+the one holding that, is one the call is written in or its file imports, or is the top, or the call's file imports the
+extension's by path; one in a closed scope is reached from its own file alone, and no override is an extension. Extracts keep names, not targets, so a name a changed file adds
+binds callers in files that did not change. Each finding keeps every key it read - a name's declarations, an id's parts,
+a qualified name's containers, a name's run's end, a scope's parent, a type's bases, a file's imports and open scopes,
+a language's global imports, the address roots, a path, a file name - each read through the one accessor of its index,
+which says the key (`Named`, `ScopeNamed`, `ContainersOf`, `ParentOf`, `PartsOf`, `BasesOf`, `ImportsOf`, `IsFile` and
+the rest); `CodeGraphLinker.Relink` takes the link it is made from (`CodeGraphLinked.Memory`, held in memory alone)
+and finds again only the references of the files not given as the very object that link was given, and those whose
+finding read a key whose part - what each changed file holds of it - is not what it was, the bases each pass found moved
+among them; every other reference keeps its finding, and `References` counts what was found. A global import is read from the file that makes it, so a relative one
+names the same file from every file of its language. An interface's member dispatches, for each type that implements it -
+itself or through a base, the interface itself or one extending it - to the member with a body that answers it: the type's
+own, else its nearest base's it inherits or mixes in, never an interface's own, which has none. A dispatch is as sure as
+the least sure edge on its way up, each of several bases that answer alike is one of the candidates (none past
+`CodeConfidences.MostCandidates`), and an edge found more than one way is listed once, as sure as its surest finding.
+A linker that answers otherwise raises `CodeGraphLinker.Revision`,
+which every link result names: a graph linked by another revision is linked again, though no file changed and none is
+read again.
+
+A sync (`ICodebaseGraphService.SyncAsync`) lists the main checkout by three calls of `IGitClient` that take no lock -
+`ListIndexAsync` (`ls-files --stage -v -z`, the one reading of the index the whole tool shares), `ListWorkingFilesAsync`
+(`status --porcelain=v2 -z --untracked-files=all --no-renames`) and `HashWorkingFilesAsync` (`hash-object`, its paths on
+standard input 200 at a time, a batch git stopped in asked again without the files found gone, and a file at a time
+only where that fails too, so a file gone while git hashed it answers null and is said gone, failing nothing else); a
+listing of given paths names them as arguments, in batches no
+command line outgrows (`CommandLineBatches`: 200 paths and 8,000 characters at most) - leaves out the credential slots
+and the tool's state paths under the run's worktrees root before anything reads, says unreadable a name that is not
+UTF-8 or that the records cannot hold (`OrchestrationRules.RelativePathProblem`: a drive, a leading slash or backslash, a
+part empty, `.` or `..`, which a machine may allow in a file's name), never writing it into a record or asking git of
+it by path, and holds every file to the core's rules
+(`CodeFileText`: a NUL among the first 8,000 bytes - `BinaryContent.Holds`, git's reading rule and its window, which
+the citation scan asks too, where the line-ending rewrite asks git's conversion rule, `BinaryContent.ForConversion`, of a
+file declared `text=auto` alone, as git does -
+or a Git LFS pointer is binary, UTF-8 or UTF-16 by its mark is read,
+anything else is unreadable) before its implementation does. A path whose file git does not look at - marked
+skip-worktree, as a sparse checkout marks it, or assume-unchanged - is hashed and read where its file is there and left
+out where it is not, looked at no further than its directory where that is not there (asked once a directory, before
+its file), since neither its file nor a link can be in it; a repository inside the tree that git lists whole as
+untracked is not entered; a file about to be hashed - changed, untracked or not looked at by git - that is a link, or
+that a link lies along (`LinkPaths.LeadsElsewhere`, a directory junction git walks into among them), is listed a link
+and neither hashed nor read, by the one look every listing takes; and a tracked file git finds gone where a link lies
+along its directory - git takes a file below a symbolic link to a directory for gone, where it walks into a junction -
+is listed a link too, never gone (asked once a directory), as a check that finds a file not there asks of it, so a path
+a link lies along is a link on every system, whether or not a file is where the link leads. Each file whose bytes decided its entry is listed
+once more when the reads are done, as a sync lists it (`ListingOf`, nothing said or counted, no HEAD asked; by its
+path, or - where the sync listed the tree whole and read more than `ListedWholePast` files, which by their paths take at
+least three command lines, each having git read the whole index - by one listing of the tree, so a sync by paths or a
+check never has git hash a file it was not given): one the listing no longer gives the blob it was read under, or that
+went, is unreadable and keeps nothing. Every file whose size or bytes decided its entry, one too large among them, is then held to how its read
+saw it stand: one whose size or time moved while it was read, or by the time that listing is done - truncated and
+written again whole, grown past `maxFileBytes` and back, so git lists it clean again under the blob it was read under
+- keeps nothing either; so an extract is never stored under a blob its bytes were not. The listing is asked
+again, not a hash, because the blob a file is read under is the listing's - the index's where git finds the file
+clean, which for one git would clean otherwise than the index holds it is no hash of what it holds - so a file that
+needs renormalizing is never taken for one that changed, and no clean filter runs over a file git found clean, a
+smudged Git LFS file among them; a file too large was not read and is not listed again. It reads a file again only
+where its blob, its claimant, its claimant's version, or what `maxFileBytes` or `languages` decide of it changed, or
+where its extract is gone, and tries a file it could not read again at every sync; a run with no graph starts from the
+newest earlier run's manifest
+that reads, its extracts copied as they are reused and a file whose extract that run lacks read again. Its records go
+through `OrchestrationStore`, each strict with its `Problem()` and placed by `OrchestratorLayout`: `graph.json`, the
+manifest with its digest; `symbols.jsonl`, the link result naming the manifest's digest and the linker's revision, made
+again where either does not match - as lines, its head counting what follows and then each node, edge and count on one
+of its own, since it grows with the repository and a list read or written whole is held whole while it is
+(`JsonLineWriter`, `JsonLineReader`); `extracts/<ab>/<blob>-<path>.<language>-<version>.json`, written once, before the manifest that names them;
+`views/<agent>.json`, an agent's view (`CodeGraphView`); and `sync.jsonl`, one line for each sync - what it listed,
+hashed, read, reused and removed, the references it found, how many files it could not read (`Unreadable`) and, for one
+that failed or a view a moved base could not be held against, why (`Failed`); the store's appends
+to it take turns within the process. An extract is named by its path too: an implementation's answer may read the path - its generated
+names, its test directories, a file's own names - so a renamed file is read again. The last sync to end with none under
+way removes each extract neither the manifest nor a view names, where one may have been left: at a process's first
+sync, after a record was written that no longer names an extract the one it replaced named - or in place of one the
+sync did not hold, a view's first, a seeded base, a rebuild - after a sync that did not end, and after a view was
+dropped - a sync that changed nothing does not look. A sync that failed, not one stopped, also leaves the process
+holding no tree of the graph, so the next sync takes each tree as its records say (`CheckAsync` syncs it first, as it
+does a tree this process holds neither a link nor a link result of). A record that does not read is refused, its reason
+kept: a whole sync builds it again, saying why, and a sync by paths takes nothing and says why; one that could not be read
+at all fails the sync. Extraction runs on one of every
+`CodebaseGraphService.ReadShare` (2) of the processors.
+
+An agent's view is its worktree listed the same way and held against the base - the main checkout's manifest, synced
+first where the run has none - as the overlay of each file the worktree holds otherwise and each of the base's it does
+not hold, the digest of the base it stands on with it: a file whose extract the base or an earlier sync of the view made
+is not read. A `graphify-codebase` step with `in` syncs that agent's view, or the base for an agent that only reads. Each
+tree has its gate: syncs of one wait for each other, syncs of different trees run side by side, and a view takes the base
+as one snapshot, which a view reads without the base's gate and never puts back older than a sync left it
+(`Graph.Adopt`). When the base moves, every view - one whose first sync is under way among them - is held against it
+again under its gate with no file read, from the earlier manifest it stood on, until a newer sync of the base holds them
+all, so no view is put back on an older base; a view that could not be held - its record not read or not written, or
+the views not listed - is said, a line of `sync.jsonl` and a warning, and made again by its next whole sync: the base's
+sync stands, the process lets go of nothing but what it held of that view, and while the base any view stands on is
+not known no earlier manifest is let go; a view whose record does not read, or is gone, is let go too, so nothing
+this process holds of it stands on a manifest let go. A view's first sync makes the run's first base
+before it takes its own gate, and a sync that waited for the base's gate for that makes none where another made it
+meanwhile: no gate is held while another view's is waited for, so no two syncs wait on each other. `SyncPathsAsync`
+brings a tree up to date by the paths given alone, git asked of those paths (`--literal-pathspecs`), with no listing of
+the rest, after its reads either - and, where the tree's HEAD moved since its last sync, by every path git names changed
+between the commit that sync recorded and the one HEAD names now (`IGitClient.ListNamesChangedBetweenAsync`), HEAD asked
+before anything is listed, so a commit made in the tree meanwhile that touched no path given leaves no file as the older
+commit held it under the newer head; where git cannot name them - that commit no longer held, or either naming none - the
+tree is synced whole; `CheckAsync` is the check an answer of the graph makes of the files it names before it is given - no command
+answers from the graph yet - a `stat` against what the view recorded, or against what an earlier check found of a file
+whose time alone moved, trusted only where that time is older than the tree's last whole sync's record (`Tree.Written`),
+as git trusts an index entry older than its index; a file either moved, whose time is not older, or that could not be
+read listed again by its path, as a sync by paths lists it - so it is held to the blob a listing gives it, never to a
+hash git's listing would not give - and one whose blob moved read again, one that is a link now kept as one, and one
+that could not be read read again, taken where it reads now and changing nothing where it still does not; its tree,
+where any of them changed, linked again and written - its head as its last sync recorded it, since a check does not ask
+it, and dirty where a file moved or went, since a check cannot tell a change committed since from one not, as a sync by
+paths records it; a whole sync alone records the tree clean again - and each extract the answer names read, before the
+answer is made - no sweep comes between - and a tree this process holds neither a link nor a link result of synced
+first, so the answer is its own link's; `DropViewAsync` takes a view out. What a process linked of each tree is held in memory,
+with the base's link result, and the next sync links again from it (`Relink`) - or keeps it, unread and unwritten,
+where nothing changed; a process begun again links its first sync whole, from the extracts.
+
+The engine syncs on its own, through `FlowGraphSyncs`, only where the run has a graph and under the claim its step already
+holds: `FlowStepRunners` syncs a reason step's view where it starts - its agent's, the one the step it goes on with
+works in (`FlowCoordinator.WorkingOf`, which its claims are read through too), the base for one that reads; `fold` and
+`delete-agent` sync the base by every path the run's folds changed that the graph has not taken yet
+(`FoldLedger.Ungraphed`, `FoldLedger.Changed`) - before each attempt does anything and after its apply - and record each
+fold it took (`graphed` in `folds.json`), so a sync that failed, was stopped or was cut off by a crash is owed until one
+goes through - a graph whose manifest does not read takes none of them, which is said with why, and they stay owed until a
+whole sync builds it again; `refresh` and `rebase` sync their target's view where it has one; every one of these first drops the view
+of each agent that is no longer live, `delete-agent`'s own after its deletion among them, so a drop that failed is tried
+again. A sync of these that fails, for any cause but a stop, is said - a line of `sync.jsonl` that says why, where it
+names the view, and a warning that says what takes it up again - and never fails its step - nor does a reason step's repository that does not read where
+the hook looks for it, which its runner finds as it does.
+`delete-orchestrator` removes the graph with its run, outside what `--delete-evidence` guards.
 
 ## Anchor registries
 
@@ -2220,7 +2697,7 @@ PowerShell there, which all read a leading `~` as the home.
   the separator after it stays as written: `~\src\app`. PowerShell reads that; cmd.exe,
   OpenSSH's default shell there, reads no `~` at all.
 - **A program's own lines keep the home as it printed it**: a phase's last lines, in `logTail`
-  and beneath a ledger's table, the output a command relays, and what an emulator's witness
+  (with that phase's name in `tailPhase`) and beneath a ledger's table, the output a command relays, and what an emulator's witness
   printed. A command typed on the host itself names its paths in full, as a command typed on any
   machine does. Under `host-exec`, a document other than a ledger - a listing, `legs --json` -
   is written as the host prints it. An address the host's name resolved to is the one thing
@@ -2793,7 +3270,7 @@ tool replaces, where a green result had quietly stopped meaning anything.
 - Every other command asked for `--json` that stops before it has anything of its own to say
   answers in its own document's shape, never the ledger's: the agent verbs with the agent
   document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
-  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up` and `down` with their own document
+  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down` and `stop-run` with their own document
   holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs
   (`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`,
   `stop-orchestrator`) with the flow document - the session they would have run, empty
@@ -3320,6 +3797,41 @@ worktree reads what it judged without leaving it. Kept in the main checkout inst
 once were, a worktree's runs landed beside the main checkout's. Nothing in `runs/` is shared
 between runs: each writes only the directory named by its own id. What two runs from different
 trees contend over is the lock above, which stays in the main checkout.
+
+A run is stopped from another terminal by `stop-run <run id>`, typed in the tree that ran it: it
+writes `<run id>.stop.json` beside the run's directory, as its owner file is (`<run id>.owner.json`),
+which the run's dispatcher looks for every `StopCadence.PollEvery` while it owns the directory, until its
+legs end, takes -
+recorded taken among the run's own records (`stopped.json`, `RunStopTaken`, `RunStops.TakenFileOf`)
+and only then the request removed - and stops on as an interrupt stops it: every leg stopped where it
+stands, its ledger written with what was reached, exit 130, a line naming who asked. A stop is taken
+only where its taking is recorded: one whose record cannot be written, or whose request cannot be
+read just then, is said once in the run's terminal and stays asked for the next look, so a run never
+stops while whoever asked would hear that nothing was stopped. Each file is read as its own shape: a
+request that does not read as one is said and removed, and stops nothing; a record that does not read
+as one is said, and is no stop taken. `stop-run` waits 60 s for the
+dispatcher to give its directory up, and reads the run's record: there, the run stopped (0), naming
+it; not there, the run ended on its own before its dispatcher took a stop, so nothing was stopped
+(13). Every exit names the stop record that stands - the request while it is asked, the run's record
+once taken - and never a request the command took back. The record is the run's, not an asker's,
+so two terminals asking at once, or one asking again while the run stops, all hear the same. The dispatcher's watch ends as its legs end, before its
+report is made (`RunStopWatch.EndAsync`), taking back a request it never took - and the record of
+one it took as the legs ended, which no leg saw (`RunStopWatch.TakeBackUnseen`): nothing was
+stopped, and whoever asked hears so - and before its directory is given up it takes back what was
+asked since, giving the directory up however it ends (`RunStopWatch.EndThenAsync`), so no stop is
+ever said to have stopped a run whose work was done. Not
+stopped in time, the request stays asked (13), and `--now` ends the dispatcher's process where it
+stands with its whole tree - only one of this machine, and only the process its owner file names by
+its start - and releases its claim; its ledger is never written. A run that has ended, or whose
+dispatcher went without giving its directory up, is nothing to stop (13), and an abandoned claim is
+released - one killed while the stop was waited for too, said stopped (0) where it had taken the
+stop first; a request nothing will read any more goes with the claim of the run that left it,
+whoever finds it so (`RunStops.ReleaseAbandoned`, `RunStops.ReleaseAbandonedBeside`). How often a
+dispatcher looks and its asker watches is every such command's one cadence (`StopCadence`), an
+orchestrator's included. What a stop's `--now` answers where ending the process left nothing more to do is
+worded once for it and `stop-orchestrator --now` (`ProcessHolders.NothingMoreToDo`), and an
+interrupt while it waits for the process to go is the caller's, exit 130. `stop-run` is never asked
+of a host - the dispatcher's stop is what stops its legs on every host - and never run by an agent.
 
 The directory ignores itself: the run about to write there first gives it a `.gitignore` of its own,
 holding `*`, so its records never show in git status, whatever the tree's `.gitignore` says. Kept on
@@ -4233,27 +4745,49 @@ see *Seeding and folding*): a function of three texts' bytes - what both sides l
 they held one, the main tree's and an agent's - that reads no file, no clock and no configuration.
 Each text is read, through the one reader, as the lines above its first row down to their last blank
 line, its segments - each one row with the comment and blank lines directly above it - and the
-lines below its last row. An arm is the segments naming it, wherever they stand, ids compared
-ignoring case, and two versions of an arm are the same where each line's text is, the blank lines
-that open each segment left out: they only part it from what stands above it, so an arm removed or
-added beside another changes nothing of that one. How a line ends is no part of it either, so a
-checkout with other line endings changes nothing. Each arm is taken from the
+lines below its last row. The comments a blank line parts from the row below them are a heading - a
+section's header - and never that row's arm's, while the comments abutting a row are its arm's own.
+An arm is the segments naming it, wherever they stand, ids compared ignoring case, and two versions
+of an arm are the same where each of its own lines' text is, the blank lines and the heading that
+open each segment left out: they only part it from what stands above it, so an arm removed or added
+beside another, or before a section's first arm, changes nothing of that one. How a line ends is no
+part of it either, so a checkout with other line endings changes nothing. Each arm is taken from the
 side that alone added, removed or changed it, and one both changed alike is one. An arm each changed
 its own way, one a side removed and the other changed, or one both added differently - under ids
 that differ only in case, among them - is a conflict (`ArmConflict`), said with each side's lines
 that the versions do not all hold and each line's number, the three texts called what the caller
 calls them (`MergeSides`). With no text both held, an arm one side has is kept: its removal by the
-other could not be told from its addition. The lines above the first row, and those below the last,
-are each weighed the same way, as one. A text that is not UTF-8, holds a row naming no arm, or holds
+other could not be told from its addition. The lines above the first row, those below the last, and
+each heading are each weighed the same way, as one - a heading as the one above an arm's segment in
+its place among the arm's segments, where a merge lays one side's segments of an arm over the
+other's: a heading one side alone renamed or removed is that side's, one a side moved to another
+arm's row is removed above the one and added above the other, and one both changed differently is a
+conflict over the heading, named for the arm whose row it stands above
+(`ArmConflict.OverTheHeading`). A text that is not UTF-8, holds a row naming no arm, or holds
 a line that opens with a byte order mark - which the one reader refuses, since standing first it
 would be read as the text's own - is not merged at all, and the result says which of the three and
 why.
 
 The merged text is the main tree's, line for line, changed only where the agent contributed. The
-main tree's segments stay where they stand. An arm taken from the agent in place of the main tree's
-lies over the main tree's segments of it, one for one, each below the blank lines the main tree parts
-it from what stands above it with: where the agent has more, the rest follow the last, and where it
-has fewer, the main tree's remaining places go. A segment of an arm only the agent has stands after
+main tree's segments stay where they stand, each written under the heading taken for its place - or,
+where none is, below the blank lines the main tree parts it from what stands above it with, one of
+them where a heading stood there. An arm taken from the agent in place of the main tree's lies over
+the main tree's segments of it, one for one, in their places: where the agent has more, the rest
+follow the last, and where it has fewer, the main tree's remaining places go. A heading the agent
+added where the main tree holds none is the one the main tree added of the same lines at the same
+place among the rows the agent's text holds too - the nearest written above its row, above a new arm
+only the main tree holds, with only the main tree's other new arms between - and is written once,
+whether both held it elsewhere before or both renamed or added it alike, each above a new first arm
+of its own; each of the main tree's stands for one of the agent's at most. Any other stands where the
+agent stood it, though the main tree added one of the same lines nearby: under a heading the agent
+wrote or both held, or after a row the agent's text holds - so a heading the agent's text holds
+twice stands twice, a merge in which the main tree changed nothing gives the agent's headings as it
+wrote them, and one given its own result in the main tree's place joins the same headings again. A
+heading taken for a
+place no segment of the merged text stands in - its
+row dropped by one side, the heading kept or changed by the other - would be read back as part of
+what stands below it, and is a conflict of its own (`ArmConflictKind.HeadsNoArm`). A segment of an
+arm only the agent has stands after
 the nearest segment above it in the agent's text that the merged text holds - a segment of an arm
 kept from the main tree stands as the main tree's like it, or as the arm's last where no later
 segment of the arm is held; where the main tree's version holds none like it, it stands as the main
@@ -4274,7 +4808,8 @@ tree's text, each byte for byte; one in which the main tree changed nothing hold
 the main tree's order, with its line endings and its byte order mark. A merge run again with its own
 result on either side gives that result, byte for byte - what a command needs that wrote the result
 to one tree and was stopped before the other. That holds because a merge is offered only where its
-text reads back as it was merged. Where the lines
+text reads back as it was merged, and each heading of the result stands in the place the side it is
+taken from stood it, so the merge of the result knows it as that side's. Where the lines
 above the first row end is a matter of where a blank line stands, so a segment that keeps a blank
 line above its row and would come to stand first is a conflict of its own
 (`ArmConflictKind.WouldOpenTheText`), as lines with a blank one among them are where no row would be

@@ -624,6 +624,40 @@ public sealed class RunLockTests
     }
 
     /// <summary>
+    /// The requests a command makes to take trees whole on this machine: one for each tree, in order, each keyed where it
+    /// leads, so one asked through a link meets a hold taken on the tree it leads to - and one on another tree does not.
+    /// </summary>
+    [Fact]
+    public async Task TheRequestsToTakeTreesWhole_AreKeyedWhereEachLeads()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+        var reached = Directory.CreateDirectory(temp.Combine("elsewhere", "o1--ag")).FullName;
+        var other = Directory.CreateDirectory(temp.Combine("other")).FullName;
+        TestLinks.DirectoryLink(temp.Combine("linked"), temp.Combine("elsewhere"));
+        var run = RunId.New();
+
+        var requests = runLock.LocalTreesWhole("fold-agent", run, temp.Combine("linked", "o1--ag"), other);
+
+        Assert.Equal([runLock.Key(HostId.Local.ToString(), reached), runLock.Key(HostId.Local.ToString(), other)], requests.Select(request => request.Tree));
+        Assert.All(requests, request =>
+        {
+            Assert.Equal(HostId.Local.ToString(), request.Host);
+            Assert.Equal(LockScope.TreeExclusive, request.Scope);
+            Assert.Equal(run, request.RunId);
+            Assert.Equal("fold-agent", request.Command);
+        });
+
+        await using (await runLock.AcquireAsync(layout, Whole(reached), TestContext.Current.CancellationToken))
+        {
+            Assert.NotNull(runLock.HeldBy(layout, requests[0]));
+            Assert.Null(runLock.HeldBy(layout, requests[1]));
+        }
+    }
+
+    /// <summary>
     /// A tree on this machine is one key however it is reached: an entry written through a link - as a worktree under a
     /// worktrees root that is a junction to another disk is spelled from the main checkout - and a request spelled as
     /// git spells it, every link followed, meet, whichever writes and whichever asks, and the entry records the tree as

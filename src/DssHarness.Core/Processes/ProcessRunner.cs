@@ -19,8 +19,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     internal static readonly TimeSpan SessionGrace = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// How long a contained child's output is read for once its container has been ended: what was in it has gone, and
-    /// a process still holding the output is one that left the container, which nothing waits for.
+    /// How long a contained child's output is read for once its container has been ended, and a bound child's once it has
+    /// ended: what was in the container has gone, and what the bound child left running lives on past it by design, so a
+    /// process still holding the output is one that left the container or one of those leftovers, which nothing waits for.
     /// </summary>
     internal static readonly TimeSpan DrainBound = TimeSpan.FromSeconds(5);
 
@@ -85,6 +86,20 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     private readonly Func<string, SafeWaitHandle> _makeJob = Containment.CreateJob;
 
     /// <summary>
+    /// The job this runner's bound children are held in on Windows: the process's own, held for its whole life whichever
+    /// runner made it - every operation is given a runner of its own, and a job held by each would be one more job and one
+    /// more handle for every operation, closed, ending what its children left running, whenever that runner was
+    /// collected - or one of a test's runner's own, made by its maker.
+    /// </summary>
+    private readonly LifetimeJob _lifetime = LifetimeJob.Process;
+
+    /// <summary>The variable that names where the compiler's program-database server listens.</summary>
+    internal const string ProgramDatabaseEndpoint = "_MSPDBSRV_ENDPOINT_";
+
+    /// <summary>The variable that keeps the build engine from leaving nodes for a later build to reuse.</summary>
+    internal const string NodeReuseOff = "MSBUILDDISABLENODEREUSE";
+
+    /// <summary>
     /// A runner reading <paramref name="processTable"/> in place of the machine's own table, or making its jobs with
     /// <paramref name="makeJob"/>: a test's. Not the public constructor's, because the container builds this runner from
     /// that one, and the machine's table is itself built over this runner - a table asked of the container there would be
@@ -94,7 +109,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// <param name="filePermissions">How the system says a file may be run.</param>
     /// <param name="containThrough">The tool that starts a contained child, as the public constructor takes it.</param>
     /// <param name="processTable">The table a contained child's session is read from; <see langword="null"/> for the machine's own.</param>
-    /// <param name="makeJob">What makes a contained child's job on Windows, by its name; <see langword="null"/> for the system's own.</param>
+    /// <param name="makeJob">
+    /// What makes a contained child's job on Windows, by its name, and the job this runner's bound children are held in -
+    /// the runner's own, then, never the process's; <see langword="null"/> for the system's own, and the process's job.
+    /// </param>
     internal ProcessRunner(
         IHostPlatform platform,
         IFilePermissions filePermissions,
@@ -105,6 +123,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     {
         _processTable = processTable;
         _makeJob = makeJob ?? Containment.CreateJob;
+        _lifetime = makeJob is null ? LifetimeJob.Process : new LifetimeJob();
     }
 
     /// <summary>
@@ -201,11 +220,23 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         var windows = _platform.Current == PlatformId.Windows;
 
-        // Through this tool's own step where a container is asked for: every contained child, and on
-        // Linux and macOS a child apart from the terminal. On Windows a child apart from the terminal
-        // starts as any other: started with no window, it has a console of its own, which an
-        // interruption typed at this process's console never reaches.
-        var throughStep = request.Contained || (request.ApartFromTerminal && !windows);
+        // What an operation under a process scope starts - a run's machine step's legs - is apart from the terminal, and a
+        // bound child of it recorded while it runs, as the scope says. A contained child has a session of its own already.
+        var scoped = request.Contained ? null : ProcessScope.Current;
+        var apart = request.ApartFromTerminal || scoped is not null;
+
+        // Through this tool's own step where a container is asked for: every contained child, on Windows
+        // a bound one, and on Linux and macOS a child apart from the terminal. On Windows a child apart
+        // from the terminal starts as any other: started with no window, it has a console of its own,
+        // which an interruption typed at this process's console never reaches. On Linux and macOS a
+        // bound child under no scope starts as any other: nothing there ends a child with the process
+        // that started it.
+        var bound = request.Bound && !request.Contained && windows;
+        var throughStep = request.Contained || (apart && !windows) || bound;
+
+        // A child that leads a group of the step's making, on Linux and macOS: stopped by its group as well as its tree,
+        // and its record kept while anything is left in the group.
+        var grouped = apart && !windows && !request.Contained;
 
         if (throughStep && !File.Exists(resolved) && !Directory.Exists(resolved))
         {
@@ -220,6 +251,15 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // end it ends the child with it.
         var jobName = request.Contained && windows ? JobName() : null;
         using var job = jobName is null ? null : MadeJob(jobName, request.FileName, resolved);
+
+        // The job a bound child joins: the process's own, made at its first bound child and held for as long as the
+        // process lives, never terminated and never closed by a child's end.
+        var joined = jobName ?? (bound ? _lifetime.Name(name => MadeJob(name, request.FileName, resolved)) : null);
+
+        if (joined is not null)
+        {
+            OwnServers(startInfo.Environment, joined);
+        }
 
         // The channel the step says whether the program started on, listened on before the step can
         // reach it.
@@ -241,13 +281,13 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
             startInfo.ArgumentList.Add(ContainExec.CommandName);
 
-            if (jobName is not null)
+            if (joined is not null)
             {
                 startInfo.ArgumentList.Add(ContainExec.JobOption);
-                startInfo.ArgumentList.Add(jobName);
+                startInfo.ArgumentList.Add(joined);
             }
 
-            if (!request.Contained)
+            if (!request.Contained && !bound)
             {
                 startInfo.ArgumentList.Add(ContainExec.GroupOption);
             }
@@ -316,6 +356,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         var stopped = false;
         var placed = false;
+        string? started = null;
         string? uncontained = null;
 
         if (status is not null)
@@ -330,11 +371,12 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 }
 
                 placed = true;
+                started = heard.Started;
             }
             catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
             {
                 stopped = true;
-                uncontained = await StopAsync(request, job, process).ConfigureAwait(false);
+                uncontained = await StopAsync(request, grouped, job, process).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -348,7 +390,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             }
         }
 
-        var recorded = placed ? await RecordedAsync(request, resolved, windows, job, process).ConfigureAwait(false) : null;
+        var recorded = placed && !windows
+            ? await RecordedAsync(request, request.SessionRecord ?? (request.Bound ? scoped?.Record() : null), grouped, resolved, started, job, process).ConfigureAwait(false)
+            : null;
 
         if (placed)
         {
@@ -384,7 +428,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 // contained child is ended through its container, which reaches what detached itself
                 // from its parent as surely as what did not.
                 stopped = true;
-                uncontained = await StopAsync(request, job, process).ConfigureAwait(false);
+                uncontained = await StopAsync(request, grouped, job, process).ConfigureAwait(false);
             }
         }
 
@@ -400,8 +444,11 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             uncontained = await EndContainerAsync(job, process).ConfigureAwait(false);
         }
 
-        // The session is ended, at the child's own end or at a stop: its record has nothing left to name.
-        if (recorded is not null)
+        // The child has ended, and a contained child's session with it, at its own end or at a stop: its record has nothing
+        // left to name - save a group that still holds what the child left running at its own end, which lives on as a
+        // bound child's leftovers do until the process that started it ends, and is ended by the sweep that follows. A
+        // stop ended the group.
+        if (recorded is not null && !(grouped && !stopped && Containment.GroupHolds(process.Id)))
         {
             Cleared(recorded);
         }
@@ -412,10 +459,15 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // The process has exited, but what it wrote just before exiting can still be in the
         // pipes. Reading both streams to their end is what guarantees none of it is lost - for a
         // contained child, within a bound, since all its container held has gone with it and what
-        // still holds a pipe is a process that left the container and is no part of this run.
+        // still holds a pipe is a process that left the container and is no part of this run; and
+        // for a bound child within the same bound, on every system, since what it leaves running
+        // lives on past its end by design, and what still holds a pipe is one of those leftovers - a
+        // server started in the background, kept for the next phase - whose end the run would
+        // otherwise wait on for as long as it lived, no time limit or stop reaching a wait that
+        // begins once the child has gone.
         var drained = Task.WhenAll(standardOutput.Reading, standardError.Reading);
 
-        if (!request.Contained || await Task.WhenAny(drained, Task.Delay(DrainBound, CancellationToken.None)).ConfigureAwait(false) == drained)
+        if (!(request.Contained || request.Bound) || await Task.WhenAny(drained, Task.Delay(DrainBound, CancellationToken.None)).ConfigureAwait(false) == drained)
         {
             await drained.ConfigureAwait(false);
         }
@@ -438,11 +490,11 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         if (stopped && cancellationToken.IsCancellationRequested)
         {
-            // What the stop could not reach is said where the stop is: a caller that gave up is
-            // handed no result to read it from.
+            // What the stop could not reach is carried by the stop: a caller that gave up is handed
+            // no result to read it from.
             throw uncontained is null
-                ? new OperationCanceledException(cancellationToken)
-                : new OperationCanceledException($"The run was stopped, and {uncontained}.", cancellationToken);
+                ? new ProcessStoppedException(cancellationToken)
+                : new ProcessStoppedException(uncontained, cancellationToken);
         }
 
         return new ProcessResult(
@@ -459,14 +511,16 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
     /// <summary>
     /// Stops a child as its request says: a contained one through its container - and any other,
-    /// a child apart from the terminal among them, and a contained one whose container was asked
-    /// for in the moment before it was joined, by its tree.
+    /// and a contained one whose container was asked for in the moment before it was joined, by its
+    /// tree; a child that leads a group of its own, apart from the terminal on Linux and macOS, by its
+    /// group as well, at once, which reaches what its tree handed on.
     /// </summary>
     /// <param name="request">The child's request, saying whether it was contained.</param>
+    /// <param name="grouped">Whether the child leads a group of its own on Linux and macOS.</param>
     /// <param name="job">The job holding a contained child on Windows, or <see langword="null"/>.</param>
     /// <param name="process">The child.</param>
     /// <returns>What the container could not reach, or <see langword="null"/> where it reached all it holds.</returns>
-    private async Task<string?> StopAsync(ProcessRequest request, SafeWaitHandle? job, Process process)
+    private async Task<string?> StopAsync(ProcessRequest request, bool grouped, SafeWaitHandle? job, Process process)
     {
         try
         {
@@ -478,6 +532,15 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             // before the child joined its container reaches nothing through the container, and the
             // child itself must still go, or the wait that follows would never end.
             KillTree(process);
+
+            // Then the group, for what the tree handed on: walked first, while the child stands, the
+            // tree still reaches what moved to a group of its own - a test under timeout - which the
+            // child's end would have handed on, out of the tree's reach. No later process takes the
+            // group's id while anything is left in it.
+            if (grouped)
+            {
+                Containment.KillGroup(process.Id);
+            }
         }
     }
 
@@ -499,55 +562,68 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         _processTable ??= ProcessTableFactory.Create(_platform, this);
 
-        return Containment.EndSessionAsync(process.Id, _processTable.ReadAsync, SessionGrace);
+        return UnreachedOf(Containment.EndSessionAsync(process.Id, _processTable.ReadAsync, SessionGrace));
+
+        static async Task<string?> UnreachedOf(Task<HeldEnding> ending) => (await ending.ConfigureAwait(false)).Unreached;
     }
 
     /// <summary>
-    /// Records a placed child's session where its request names a record and the session would outlive this process -
-    /// on Linux and macOS, where nothing ends a session when the process that started it is killed - before the child is
-    /// said to have started, so the next run of the tool over the same records ends what a killed one left. A job ends
-    /// with its last handle, so on Windows nothing is recorded.
+    /// Records a placed child's session or group, on Linux and macOS - where nothing ends either when the process that
+    /// started it is killed - where its request or its operation's scope names a record, before the child is said to have
+    /// started, so the next run of the tool over the same records ends what a killed one left: a contained child's session,
+    /// and the group of a child apart from the terminal. A job ends with its last handle, so on Windows nothing is recorded,
+    /// and this is never asked there.
     /// </summary>
-    /// <param name="request">The child's request, naming its record where it has one.</param>
+    /// <param name="request">The child's request.</param>
+    /// <param name="record">Its record: its request's, or its operation's scope's; <see langword="null"/> where it has none.</param>
+    /// <param name="grouped">Whether the child leads a group of its own, apart from the terminal.</param>
     /// <param name="resolved">The program the child runs.</param>
-    /// <param name="windows">Whether this is Windows, where the job holds the child.</param>
-    /// <param name="job">The job holding the child on Windows, or <see langword="null"/>.</param>
-    /// <param name="process">The child, which leads its session under its own id.</param>
-    /// <returns>The record written, to be taken back once the session is ended; <see langword="null"/> where none was.</returns>
+    /// <param name="started">The child's start, as the step that placed it said it; <see langword="null"/> where it said none.</param>
+    /// <param name="job">The job holding the child, or <see langword="null"/>.</param>
+    /// <param name="process">The child, which leads its session or its group under its own id.</param>
+    /// <returns>The record written, to be taken back once the child has ended; <see langword="null"/> where none was.</returns>
     /// <exception cref="ProgramStartException">The record could not be written: the child was ended, and never said to have started.</exception>
-    private async Task<IContainedSessionRecord?> RecordedAsync(ProcessRequest request, string resolved, bool windows, SafeWaitHandle? job, Process process)
+    private async Task<IContainedSessionRecord?> RecordedAsync(
+        ProcessRequest request,
+        IContainedSessionRecord? record,
+        bool grouped,
+        string resolved,
+        string? started,
+        SafeWaitHandle? job,
+        Process process)
     {
-        if (!request.Contained || windows || request.SessionRecord is not { } record)
+        if (!(request.Contained || grouped) || record is null)
         {
             return null;
         }
 
         try
         {
-            record.Placed(process.Id, resolved);
+            record.Placed(process.Id, started, resolved, group: grouped);
             return record;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
-            // A child no record names is one a killed tool would leave running unseen: it is not run.
-            try
-            {
-                await EndContainerAsync(job, process).ConfigureAwait(false);
-            }
-            finally
-            {
-                KillTree(process);
-            }
-
+            // A child no record names is one a killed tool would leave running unseen: it is not run, stopped as a stop
+            // stops it, whatever kept the record from being written.
+            await StopAsync(request, grouped, job, process).ConfigureAwait(false);
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
 
-            throw new ProgramStartException(request.FileName, $"'{resolved}' could not be started: its session could not be recorded: {ex.Message}", ex);
+            if (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new ProgramStartException(
+                    request.FileName,
+                    $"'{resolved}' could not be started: its {LeftSessions.Noun(grouped)} could not be recorded: {ex.Message}",
+                    ex);
+            }
+
+            throw;
         }
     }
 
     /// <summary>
-    /// Takes back the record of a session this runner ended. One that cannot be taken back names a session that has
-    /// ended, which the next sweep of the records removes without ending anything once this process has gone.
+    /// Takes back the record of a child that has ended. One that cannot be taken back names a child that has ended, which
+    /// the next sweep of the records removes without ending anything once this process has gone.
     /// </summary>
     /// <param name="record">The record written when the child was placed.</param>
     private static void Cleared(IContainedSessionRecord record)
@@ -799,9 +875,76 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             ? (given, [])
             : DetachedProcessLauncher.Self();
 
+    /// <summary>What every job object this tool makes is named with, before what makes the name its own.</summary>
+    internal const string JobPrefix = "dssharness-contain-";
+
     /// <summary>A job object's name, unique to this contained child of this process.</summary>
     private static string JobName()
-        => $"dssharness-contain-{Guid.NewGuid():N}";
+        => $"{JobPrefix}{Guid.NewGuid():N}";
+
+    /// <summary>
+    /// Gives a child held in a job on Windows build servers of its own, where its environment names none: the compiler's
+    /// program-database server listens at an endpoint named for the job, and the build engine keeps no node for a later
+    /// build. A server a member starts is the job's, and ends with it; shared with another process's builds - the
+    /// compiler's server is one for all of a user's builds unless told otherwise, and the build engine's nodes wait to be
+    /// reused by whichever build comes next - it would be taken from them mid-build as this job ended. An endpoint named
+    /// for a job of this tool's own is not the user's: it is one this tool, started by a bound phase of another run of it,
+    /// inherited from that run's job, and a server started there under this child's job would end with this job while
+    /// that run's builds still used it - so the child is given its own in its place. Any other endpoint, as anything else
+    /// its environment names, is kept as the user set it.
+    /// </summary>
+    /// <param name="environment">The child's environment, as its request left it.</param>
+    /// <param name="job">The job the child is held in.</param>
+    internal static void OwnServers(IDictionary<string, string?> environment, string job)
+    {
+        foreach (var (name, value) in new[] { (ProgramDatabaseEndpoint, job), (NodeReuseOff, "1") })
+        {
+            var named = environment.Keys.FirstOrDefault(existing => string.Equals(existing, name, StringComparison.OrdinalIgnoreCase));
+
+            if (named is null)
+            {
+                environment[name] = value;
+            }
+            else if (name == ProgramDatabaseEndpoint && environment[named] is { } inherited && inherited.StartsWith(JobPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                environment[named] = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The job bound children are held in on Windows, made at the first of them, by its name and its one handle: never
+    /// terminated and never closed but by the end of what holds it - the process's own, which <see cref="Process"/> holds
+    /// for the process's whole life, so its members end then, whatever ends it. A job that could not be made is the
+    /// start's failure, and the next bound child asks for it again.
+    /// </summary>
+    private sealed class LifetimeJob
+    {
+        private readonly Lock _gate = new();
+
+        private (string Name, SafeWaitHandle Job)? _held;
+
+        /// <summary>The process's own: every runner the container builds, for whichever operation, holds its bound children in it.</summary>
+        public static LifetimeJob Process { get; } = new();
+
+        /// <summary>The job's name, made first by <paramref name="make"/> where none has been.</summary>
+        /// <param name="make">Makes the job by the name given it, raising as a start's failure where it cannot.</param>
+        public string Name(Func<string, SafeWaitHandle> make)
+        {
+            lock (_gate)
+            {
+                if (_held is { } held)
+                {
+                    return held.Name;
+                }
+
+                var name = JobName();
+                _held = (name, make(name));
+
+                return name;
+            }
+        }
+    }
 
     /// <summary>
     /// Whether <paramref name="program"/> names a file by its path rather than a program to look up by
@@ -1064,8 +1207,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// </para>
     /// <para>
     /// What was read is taken when the caller takes it - once the stream has ended, or once the caller has stopped
-    /// waiting for an end a process outside the child's container holds off. From then on nothing more is kept or handed
-    /// on: the run that asked has returned, and a line arriving after it would be news to nobody.
+    /// waiting for an end a process outside the child's container, or one a bound child left running, holds off
+    /// (<see cref="DrainBound"/>). From then on nothing more is kept or handed on: the run that asked has returned, and a
+    /// line arriving after it would be news to nobody.
     /// </para>
     /// </remarks>
     private sealed class StreamCapture
@@ -1077,6 +1221,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         private readonly LineSplitter? _lines;
         private ExceptionDispatchInfo? _failed;
         private bool _taken;
+        private bool _linesEnded;
 
         /// <summary>Starts reading <paramref name="reader"/>.</summary>
         /// <param name="reader">The stream.</param>
@@ -1098,12 +1243,20 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         /// <summary>Ends when the stream does.</summary>
         public Task Reading { get; }
 
-        /// <summary>What has been read, and what the handler raised; nothing is kept or handed on after this.</summary>
+        /// <summary>
+        /// What has been read, and what the handler raised; nothing is kept or handed on after this. A last line with no
+        /// line break after it is handed on first, as the stream's end would hand it.
+        /// </summary>
         public Captured Taken()
         {
             lock (_gate)
             {
-                _taken = true;
+                if (!_taken)
+                {
+                    EndLines();
+                    _taken = true;
+                }
+
                 return new Captured(_whole?.ToString() ?? _end!.ToString(), _failed);
             }
         }
@@ -1135,8 +1288,18 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 // A last line with no line break after it is still a line.
                 if (!_taken)
                 {
-                    _lines?.End();
+                    EndLines();
                 }
+            }
+        }
+
+        /// <summary>Hands on the last line, once, whichever of the stream's end and the taking comes first.</summary>
+        private void EndLines()
+        {
+            if (!_linesEnded)
+            {
+                _linesEnded = true;
+                _lines?.End();
             }
         }
 
@@ -1216,7 +1379,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         {
             if (input is not null)
             {
-                await Task.Run(() => input.WriteTo(writer.BaseStream)).ConfigureAwait(false);
+                await Task.Run(() => input.WriteTo(writer.BaseStream, exited)).ConfigureAwait(false);
             }
 
             await writer.BaseStream.FlushAsync().ConfigureAwait(false);

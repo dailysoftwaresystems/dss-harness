@@ -1,4 +1,5 @@
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -36,7 +37,7 @@ public static class WorkflowStepTypes
     /// The default of the type's <c>failOn</c> key - <c>red</c> or <c>never</c> - for the types that
     /// check something; <see langword="null"/> for the types that check nothing.
     /// </param>
-    /// <param name="Calls">The service the type calls, as the plan's table names it: the engine's switch reads this and nothing else.</param>
+    /// <param name="Calls">The runner of the type and the services it calls, as the plan's table names them: read by nothing at run time; a test pins each.</param>
     /// <param name="Claims">What a step of the type holds while it runs, as the plan's table names each.</param>
     /// <param name="CountsAgainst">The limit a step of the type counts against, or what its slot does; <see langword="null"/> where it counts against nothing.</param>
     /// <param name="Output">
@@ -44,6 +45,10 @@ public static class WorkflowStepTypes
     /// step of the type is typed by when the definition is loaded; <see langword="null"/> where the type has none - a
     /// reason step's is the schema file it names, and a type the plan lists no output for has none, so a read of one is
     /// refused.
+    /// </param>
+    /// <param name="Asks">
+    /// Whether a step of the type only asks a person and runs nothing: it takes none of <see cref="Running"/>, for there is
+    /// nothing of its own to bound.
     /// </param>
     public sealed record StepType(
         string Type,
@@ -53,7 +58,8 @@ public static class WorkflowStepTypes
         string Calls = "",
         IReadOnlyList<string>? Claims = null,
         string? CountsAgainst = null,
-        string? Output = null)
+        string? Output = null,
+        bool Asks = false)
     {
         /// <summary>Whether the type checks something, so that its verdicts can be red.</summary>
         public bool IsCheck => FailOnDefault is not null;
@@ -63,6 +69,18 @@ public static class WorkflowStepTypes
 
         /// <summary>What a step of the type holds while it runs; empty where it holds nothing.</summary>
         public IReadOnlyList<string> ClaimsOf => Claims ?? [];
+
+        /// <summary>
+        /// What the type's <c>failOn</c> key takes, where it takes one: a check's <c>red</c> or <c>never</c>, unless the type
+        /// says its own - a graph, which is no check, fails on what it could not read.
+        /// </summary>
+        public IReadOnlyList<string> FailOnValues { get; init; } = ["red", "never"];
+
+        /// <summary>
+        /// The time limit of a step of the type that says no <c>timeoutMinutes</c>, in minutes; <see langword="null"/> where
+        /// such a step has none.
+        /// </summary>
+        public int? DefaultTimeoutMinutes { get; init; }
     }
 
     /// <summary>The keys every step takes, group or typed step alike.</summary>
@@ -85,6 +103,17 @@ public static class WorkflowStepTypes
     ];
 
     /// <summary>
+    /// The keys every step that runs takes, beyond the common ones: every typed step but one whose type only asks
+    /// (<see cref="StepType.Asks"/>). A group runs nothing of its own, and takes none of them either.
+    /// </summary>
+    public static IReadOnlyList<KeyDescription> Running =>
+    [
+        new(
+            "timeoutMinutes",
+            $"the longest one attempt of the step may take, in whole minutes from 1 to {WorkflowStep.MostTimeoutMinutes.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}; absent, its type's own where the type says one beside its name, and none otherwise; how it is counted and how a step past it ends is the time limit's paragraph above"),
+    ];
+
+    /// <summary>
     /// The keys a group takes, beyond the common ones: it names no type. Its <c>steps</c> hold its own kind again, and say
     /// so as the configuration's key guard does (<see cref="ConfigKeys.TakesKeysOf"/>): what a step takes is listed once.
     /// </summary>
@@ -99,7 +128,24 @@ public static class WorkflowStepTypes
     /// <summary>Every type, in the order <c>help workflows</c> lists them.</summary>
     public static IReadOnlyList<StepType> All { get; } =
     [
-        new("orient", [], [], null, "IGitClient (ResolveCommitAsync, GetStatusAsync), OrchestrationStore.Agents, LegSelection.Resolve", ["read main"], null, Output: OrientOutput),
+        new("orient", [], [], null, "OrientRunner: FlowCheckout over IGitClient and GitRemotes, LegSelection.Resolve, TestInvocationResolver, AnchorCitationService.RootsOf, CiSettings.Unset, MutationService.Declares, OrchestrationRules.OpenAgents, TreeHolders", ["read main"], null, Output: OrientOutput),
+        new(
+            "graphify-codebase",
+            [
+                new("in", "the create-agent step whose agent's worktree it syncs the view of, held against the base - the base synced first where the run has none; an agent that only reads has the base for its view"),
+                new("rebuild", "extract every file of the tree it syncs again, reusing no extract"),
+                new("failOn", "what a graph with files it could not read does: never (the default), the step ends done and lists them, or incomplete, it fails"),
+            ],
+            [],
+            null,
+            "GraphifyCodebaseRunner: ICodebaseGraphService.SyncAsync over IGitClient, CodeGraphExtractors and CodeGraphLinker, through OrchestrationStore",
+            ["read main", "read the agent's tree where in names one"],
+            null,
+            GraphifyOutput)
+        {
+            FailOnValues = [GraphIncomplete, "never"],
+            DefaultTimeoutMinutes = 30,
+        },
         new(
             "reason",
             [
@@ -112,7 +158,7 @@ public static class WorkflowStepTypes
                 new("resumePrompt", "the prompt file a step that goes on with its own work (resume names itself) is asked with when it runs again, in place of prompt"),
                 new("outputs", "the JSON schema file the step's answer is held to") { Required = true },
                 new("access", "read (the default), or write: in an agent's worktree, with 'in' naming it"),
-                new("in", "the create-agent step whose agent's worktree the step works in; required where access is write"),
+                new("in", "the create-agent step whose agent's worktree the step works in, which it waits for through dependsOn; required where access is write"),
                 new("resume", "the reason step whose work this one goes on with"),
                 new("independent", "never given the author's work to go on with"),
                 new("restrictions", "restrictions the agent works under, beyond the workflow's own"),
@@ -129,15 +175,15 @@ public static class WorkflowStepTypes
             "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)",
             ["read main", "write the agent's tree where its access is write"],
             "maxReasoningAgents"),
-        new("build", LegKeys, [], "red", "IBuildLegs over LegRunService", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
-        new("test", [.. LegKeys, .. TestKeys], ["filter", "exclude", "labels"], "red", "ITestLegs over LegRunService", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
-        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs], ["inputs"], "red", "IRunnerLegs over LegRunService", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("build", LegKeys, [], "red", "BuildStepRunner: IBuildLegs over LegRunService", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("test", [.. LegKeys, .. TestKeys], ["filter", "exclude", "labels"], "red", "TestStepRunner: ITestLegs over LegRunService", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs], ["inputs"], "red", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses", LegsOutput(arms: false)),
         new(
             "check-mutations",
             [.. LegKeys, new("arms", "the arms it runs, by id; absent, every arm"), new("pending", "drive only the arms with no recorded passed that still holds")],
             [],
             "red",
-            "IMutationLegs through MutationService, over LegRunService",
+            "SweepStepRunner: IMutationLegs through MutationService, over LegRunService",
             ["run(tree)"],
             "maxParallelProcesses",
             LegsOutput(arms: true)),
@@ -146,23 +192,23 @@ public static class WorkflowStepTypes
             [new("agent", "the agent definition, as agents/<name>.md in the workflow's directory") { Required = true }, new("empty", "make the agent with nothing handed to it")],
             [],
             null,
-            "IAgentService.CreateAsync",
+            "CreateAgentRunner: IAgentService.CreateAsync, SeedAsync and DeleteAsync",
             ["write main"],
             "an open-agent slot"),
-        new("fold", FoldKeys, [], null, "IAgentService.FoldAsync", ["write main", "write the agent's tree"], null, FoldOutput),
+        new("fold", FoldKeys, [], null, "FoldStepRunner: IAgentService.FoldAsync held to its dry run, FoldLedger, FoldWithin", ["write main", "write the agent's tree"], null, FoldOutput),
         new(
             "delete-agent",
             [.. FoldKeys, new("discardUncommitted", "discard what is not committed rather than folding it; it then folds nothing, and takes no allow and no within")],
             [],
             null,
-            "IAgentService.DeleteAsync",
+            "DeleteAgentStepRunner: IAgentService.DeleteAsync held to its dry run, FoldLedger, FoldWithin",
             ["write main", "write the agent's tree"],
             "releases the open-agent slot",
             FoldOutput),
         new(
             "refresh",
             [
-                new("of", "the create-agent step whose agent the step works on"),
+                new("of", "the create-agent step whose agent the step works on, which it waits for through dependsOn"),
                 new("others", "a create-agent step: the step works on every other live agent of the run that has a worktree, each on its own"),
                 new("paths", "the paths it weighs; absent, what its of and its keys say"),
                 new("all", "weigh every path the main tree moved, in place of paths"),
@@ -172,20 +218,20 @@ public static class WorkflowStepTypes
             ],
             [],
             null,
-            "IAgentService.RefreshAsync",
+            "RefreshStepRunner: IAgentService.RefreshAsync",
             ["write main", "write its target"],
             null),
         new(
             "rebase",
             [
-                new("of", "the create-agent step whose agent the step works on"),
+                new("of", "the create-agent step whose agent the step works on, which it waits for through dependsOn"),
                 new("others", "a create-agent step: the step works on every other live agent of the run that has a worktree, each on its own"),
                 new("settled", "paths reconciled by hand: written out only, a person's answer"),
                 new("merge", "paths both trees changed whose clean three-way merge it takes"),
             ],
             [],
             null,
-            "IAgentService.RebaseAsync",
+            "RebaseStepRunner: IAgentService.RebaseAsync",
             ["write its target"],
             null),
         new(
@@ -193,7 +239,7 @@ public static class WorkflowStepTypes
             [new("items", "an expression yielding the work items to check") { Required = true }, new("scope", "an expression yielding the pieces of a plan update, checked with them")],
             [],
             null,
-            "PlanValidator with IPathBudget.Check and CopyPathBudget.Check",
+            "PlanCheckRunner: PlanValidator with FlowRunPaths over IPathBudget.Check and CopyPathBudget",
             ["read main"],
             null,
             ObjectOf(("ok", Flag), ("problems", ListOf(Text)), ("items", UntypedList))),
@@ -202,7 +248,7 @@ public static class WorkflowStepTypes
             [new("base", "the commit it measures from"), new("rows", "the row ids it is held to; absent, the whole tree"), new("failOn", "what a red finding does: red (the default) or never")],
             ["base"],
             "red",
-            "IAnchorBalanceService.CheckAsync",
+            "AnchorBalanceStepRunner: IAnchorBalanceService.CheckAsync, AnchorBalanceReport.HeldTo, AnchorReports.BalanceFindings",
             ["read main"],
             null,
             AnchorOutput),
@@ -211,16 +257,16 @@ public static class WorkflowStepTypes
             [new("subject", "what it judges: currentTree (the default), currentCommit or currentPullRequest"), new("paths", "the files it is held to; absent, the whole tree"), new("failOn", "what a red finding does: red (the default) or never")],
             [],
             "red",
-            "IAnchorCitationService.CheckAsync",
+            "AnchorCitationsStepRunner: IAnchorCitationService.CheckAsync, AnchorCitationReport.HeldTo, AnchorCitationReports.Line",
             ["read main"],
             null,
             AnchorOutput),
         new(
             "ci-read",
-            [new("branch", "the branch it reads"), new("limit", "how many of the branch's runs it looks at"), new("timeoutMinutes", "minutes the read is given"), new("failOn", "what a red leg does: never (the default) or red")],
+            [new("branch", "the branch it reads"), new("limit", "how many of the branch's runs it looks at"), new("failOn", "what a red leg does: never (the default) or red")],
             ["branch"],
             "never",
-            "ICiLegsService.CheckAsync",
+            "CiReadStepRunner: ICiLegsService.CheckAsync over GhCiJobSource and GhProcess",
             [],
             null,
             ObjectOf(("passed", Flag), ("branch", Text), ("matrixRan", Flag), ("legs", UntypedList), ("red", UntypedList))),
@@ -229,21 +275,20 @@ public static class WorkflowStepTypes
             [
                 new("commit", "the commit whose checks it waits for; absent, the commit this run last pushed"),
                 new("appearSeconds", "how long it waits for the first check to appear"),
-                new("waitMinutes", "how long it waits, from its start, for every check to end"),
+                new("waitMinutes", $"how long it waits, from its start, for every check to end; absent, {WorkflowStep.DefaultWaitMinutes}"),
                 new("pollSeconds", "how often it reads the checks while it waits"),
-                new("ignore", "checks it does not count, by name"),
-                new("timeoutMinutes", "minutes one read is given"),
-                new("failOn", "what a red check does: red (the default) or never"),
+                new("ignore", "checks it does not count, by name: a job's own, as its workflow names it, or a status's context"),
+               new("failOn", "what a red check does: red (the default) or never"),
             ],
             ["commit"],
             "red",
-            "ICiChecksService",
+            "CiWaitStepRunner: ICiChecksService over GhCiJobSource and GhProcess, ICiLegsService.ClassifyRunAsync",
             [],
             null,
             CiWaitOutput),
         new(
             "commit",
-            [new("message", "the commit message it writes; required where the config declares no commit.template, and not used where it declares one"), new("variables", "the values the message template reads"), new("timeoutMinutes", "minutes git is given")],
+            [new("message", "the commit message it writes; required where the config declares no commit.template, and not used where it declares one"), new("variables", "the values the message template reads")],
             ["message", "variables"],
             null,
             "IGitPublisher",
@@ -252,7 +297,7 @@ public static class WorkflowStepTypes
             ObjectOf(("committed", Flag), ("sha", TextOrNull), ("paths", ListOf(Text)))),
         new(
             "push",
-            [new("remote", "the remote it pushes to; absent, the tracked one"), new("checkpoint", "push a checkpoint commit"), new("timeoutMinutes", "minutes git is given")],
+            [new("remote", "the remote it pushes to; absent, the tracked one"), new("checkpoint", "push a checkpoint commit")],
             [],
             null,
             "IGitPublisher",
@@ -266,8 +311,7 @@ public static class WorkflowStepTypes
                 new("body", "the file holding the pull request's body") { Required = true },
                 new("base", "the branch it goes to; absent, the remote's default branch"),
                 new("draft", "open it as a draft"),
-                new("timeoutMinutes", "minutes the forge is given"),
-            ],
+           ],
             ["title", "base"],
             null,
             "IGitPublisher",
@@ -289,7 +333,8 @@ public static class WorkflowStepTypes
             "the engine itself",
             [],
             null,
-            ObjectOf(("answer", Text), ("text", Text))),
+            ObjectOf(("answer", Text), ("text", Text)),
+            Asks: true),
     ];
 
     /// <summary>
@@ -309,6 +354,20 @@ public static class WorkflowStepTypes
     public static IReadOnlyList<string> ListOrExpressionKeys { get; } =
         ["writes", "within", "paths", "except", "stale", "merge", "rows", "allow.new", "allow.merge"];
 
+    /// <summary>The <c>failOn</c> a <c>graphify-codebase</c> step fails under where its graph has files it could not read.</summary>
+    public const string GraphIncomplete = "incomplete";
+
+    /// <summary>
+    /// The time limit of one attempt of <paramref name="step"/>, in minutes: its own <c>timeoutMinutes</c>, else its type's
+    /// (<see cref="StepType.DefaultTimeoutMinutes"/>); <see langword="null"/> where it has none.
+    /// </summary>
+    /// <param name="step">A step of a workflow.</param>
+    public static int? TimeLimitOf(WorkflowStep step)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+        return step.TimeoutMinutes ?? (step.Type is { } type ? Find(type)?.DefaultTimeoutMinutes : null);
+    }
+
     /// <summary>The type <paramref name="type"/> names, or <see langword="null"/> where none does.</summary>
     /// <param name="type">The value of a step's <c>type</c> key.</param>
     /// <remarks>
@@ -317,6 +376,19 @@ public static class WorkflowStepTypes
     /// the same step.
     /// </remarks>
     public static StepType? Find(string type) => All.FirstOrDefault(known => string.Equals(known.Type, type, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Whether <paramref name="step"/> folds an agent's work into the main tree, as written: a <c>fold</c>, and a
+    /// <c>delete-agent</c> that does not discard it. The one rule the definition's check asks a fold's questions of it by
+    /// and its runner folds through the run's ledger by; the runner leaves out, besides, a deletion of an agent whose
+    /// deletion already began, which folds nothing more.
+    /// </summary>
+    /// <param name="step">A step of a workflow.</param>
+    public static bool Folds(WorkflowStep step)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+        return step.Type == "fold" || (step.Type == "delete-agent" && step.DiscardUncommitted is not true);
+    }
 
     /// <summary>
     /// Whether <paramref name="step"/> makes an agent when it runs, which the run names itself
@@ -335,23 +407,26 @@ public static class WorkflowStepTypes
                 && (step.Resume is null || string.Equals(step.Resume, step.Name, StringComparison.Ordinal)));
     }
 
-    /// <summary>The keys <paramref name="type"/>'s steps take, spelled as the file spells them.</summary>
+    /// <summary>
+    /// The keys <paramref name="type"/>'s steps take beyond the common ones, spelled as the file spells them: its own, and
+    /// <see cref="Running"/>'s where it runs.
+    /// </summary>
     /// <param name="type">A step type.</param>
     public static IReadOnlyList<string> KeysOf(StepType type)
     {
         ArgumentNullException.ThrowIfNull(type);
 
-        return KeyDescription.Names(type.Keys);
+        return type.Asks ? KeyDescription.Names(type.Keys) : [.. KeyDescription.Names(type.Keys), .. KeyDescription.Names(Running)];
     }
 
-    /// <summary>Every key any step type takes, flattened: the list a step's unknown keys are refused against.</summary>
-    public static IReadOnlyList<string> AllKeys { get; } = [.. All.SelectMany(KeysOf)];
+    /// <summary>Every key any step type takes, flattened and each once: the list a step's unknown keys are refused against.</summary>
+    public static IReadOnlyList<string> AllKeys { get; } = [.. All.SelectMany(KeysOf).Distinct(StringComparer.Ordinal)];
 
     /// <summary>The keys every leg step takes, shared by <c>build</c>, <c>test</c>, <c>run</c> and <c>check-mutations</c>.</summary>
     private static IReadOnlyList<KeyDescription> LegKeys =>
     [
         new("legs", "the legs or leg sets it runs, by name; absent, every declared leg"),
-        new("in", "the create-agent step whose agent's worktree it works in"),
+        new("in", "the create-agent step whose agent's worktree it works in, which it waits for through dependsOn"),
         new("failOn", "what a red leg does: red (the default) or never"),
     ];
 
@@ -371,9 +446,9 @@ public static class WorkflowStepTypes
     /// <summary>The keys the fold family takes, shared by <c>fold</c> and <c>delete-agent</c>.</summary>
     private static IReadOnlyList<KeyDescription> FoldKeys =>
     [
-        new("of", "the create-agent step whose agent the step works on") { Required = true },
+        new("of", "the create-agent step whose agent the step works on, which it waits for through dependsOn") { Required = true },
         new("allow", "what it may carry, member for member the fold command's options") { Keys = AllowKeys },
-        new("within", "the paths it may write"),
+        new("within", "the paths, as patterns, its fold may write or delete in the main tree; a path outside them asks foldOutside, and the registries its rows change are never held to it"),
     ];
 
     /// <summary>What one <c>on</c> block takes.</summary>
@@ -450,11 +525,31 @@ public static class WorkflowStepTypes
         ("passed", Flag),
         ("exitCode", WholeNumber),
         ("verdicts", ListOf(ObjectOf(("leg", Text), ("verdict", Text)))),
-        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", Text), ("detail", Text), ("tail", ListOf(Text)), .. arms ? [("arm", Text)] : Array.Empty<(string, string)>()]))),
-        ("runDirectory", Text));
+        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), .. arms ? [("arm", TextOrNull)] : Array.Empty<(string, string)>()]))),
+        ("runDirectory", TextOrNull));
 
     /// <summary>What a fold and a deletion answer: the paths written and deleted, the registries changed, and the ids of the rows applied.</summary>
     private static string FoldOutput => ObjectOf(("written", ListOf(Text)), ("deleted", ListOf(Text)), ("registries", ListOf(Text)), ("rows", ListOf(Text)));
+
+    /// <summary>
+    /// What a sync of the codebase graph answers: the graph's directory, the view it synced and the commit and dirtiness
+    /// of its tree, how many files it keeps, read, reused and removed, the nodes and edges, each implementation's part,
+    /// every file it holds no declaration of with its state and why, and how long it took.
+    /// </summary>
+    private static string GraphifyOutput => ObjectOf(
+        ("graph", Text),
+        ("view", Text),
+        ("commit", TextOrNull),
+        ("dirty", Flag),
+        ("files", WholeNumber),
+        ("extracted", WholeNumber),
+        ("reused", WholeNumber),
+        ("removed", WholeNumber),
+        ("nodes", WholeNumber),
+        ("edges", WholeNumber),
+        ("languages", ListOf(ObjectOf(("language", Text), ("files", WholeNumber), ("nodes", WholeNumber)))),
+        ("skipped", ListOf(ObjectOf(("path", Text), ("state", Text), ("why", TextOrNull)))),
+        ("seconds", Number));
 
     /// <summary>What an anchor check answers: whether it passed, and each finding as a line the check prints.</summary>
     private static string AnchorOutput => ObjectOf(("passed", Flag), ("findings", ListOf(Text)));
@@ -464,7 +559,7 @@ public static class WorkflowStepTypes
         ("passed", Flag),
         ("commit", Text),
         ("checks", ListOf(ObjectOf(("name", Text), ("state", Text), ("conclusion", TextOrNull), ("url", Text)))),
-        ("red", ListOf(ObjectOf(("name", Text), ("job", Text), ("workflow", Text), ("step", Text), ("leg", TextOrNull), ("overran", Flag), ("url", Text), ("tail", ListOf(Text)), ("log", Text)))),
+        ("red", ListOf(ObjectOf(("name", Text), ("job", TextOrNull), ("workflow", TextOrNull), ("step", TextOrNull), ("leg", TextOrNull), ("overran", Flag), ("url", Text), ("tail", ListOf(Text)), ("log", TextOrNull), ("conclusion", TextOrNull), ("description", TextOrNull), ("unread", TextOrNull)))),
         ("pending", UntypedList),
         ("unsettled", UntypedList));
 
@@ -479,6 +574,9 @@ public static class WorkflowStepTypes
 
     /// <summary>A schema of a whole number.</summary>
     private static string WholeNumber => """{"type":"integer"}""";
+
+    /// <summary>A schema of a number, whole or not.</summary>
+    private static string Number => """{"type":"number"}""";
 
     /// <summary>A schema of a list whose items nothing types.</summary>
     private static string UntypedList => """{"type":"array"}""";

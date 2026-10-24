@@ -874,6 +874,34 @@ public sealed class ClaudeCodeUpdateServiceTests
         Assert.Equal([$"{named} --version"], kit.Runner.Ran);
     }
 
+    /// <summary>
+    /// A program the slot holds under the name the client's executable gives is the one started, and the refusal of one
+    /// names that name; the slot's CLAUDE_EXECUTABLE, which the client then does not read, is passed by.
+    /// </summary>
+    [Fact]
+    public async Task AProgramTheSlotNames_IsReadUnderTheNameTheClientsExecutableGives()
+    {
+        using var kit = new Kit(package: "2.1.201", program: "2.1.201");
+        var named = kit.Temp.WriteFile("mine.exe", "a program");
+        var ignored = kit.Temp.WriteFile("other.exe", "another program");
+        kit.Temp.WriteFile(".harness-config/workflows/.env/named.env", $"MY_CLAUDE={named}\nCLAUDE_EXECUTABLE={ignored}\n");
+        kit.Runner.Versions[$"{named} --version"] = Says("2.1.296");
+        var client = new AgentClientConfig { Executable = "MY_CLAUDE" };
+        AppointedKey[] appointed = [new("MY_CLAUDE", "agentClients.claude-code", "the program's path", Secret: false)];
+
+        var answer = await kit.Service().ReadyAsync(kit.Layout, appointed, client, steps: string.Empty, Token);
+
+        Assert.True(answer.Ready);
+        Assert.Equal($"claude 2.1.296, named by the slot: '{named}'", answer.Message);
+        Assert.Equal([$"{named} --version"], kit.Runner.Ran);
+
+        kit.Runner.Versions[$"{named} --version"] = Says("2.1.100");
+
+        var older = await kit.Service().ReadyAsync(kit.Layout, appointed, client, steps: string.Empty, Token);
+
+        Assert.EndsWith("Update it by hand, or take MY_CLAUDE out of the slot", older.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task AProgramTheSlotNames_OlderThanNeeded_IsRefusedWithTheTwoWaysOn()
     {

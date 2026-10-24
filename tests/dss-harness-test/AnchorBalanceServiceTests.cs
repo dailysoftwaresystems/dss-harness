@@ -189,6 +189,9 @@ public sealed class AnchorBalanceServiceTests
         Assert.Equal(0, report.NetNew);
         Assert.False(report.Passed);
         Assert.Equal(2, report.Findings.Count(finding => finding.Message.Contains($"'{One}' has 2 rows", StringComparison.Ordinal)));
+
+        // Each is its row's own, by its id: a step held to other rows does not count it.
+        Assert.All(report.Findings.Where(finding => finding.Message.Contains($"'{One}' has 2 rows", StringComparison.Ordinal)), finding => Assert.Equal(One, finding.RowId));
     }
 
     /// <summary>
@@ -239,7 +242,7 @@ public sealed class AnchorBalanceServiceTests
         Assert.False(report.Passed);
 
         var note = Assert.Single(report.Findings);
-        Assert.Equal((AnchorSettings.DefaultDoneAnchorsPath, AnchorFindingSeverity.Note), (note.File, note.Severity));
+        Assert.Equal((AnchorSettings.DefaultDoneAnchorsPath, AnchorFindingSeverity.Note, One), (note.File, note.Severity, note.RowId));
         Assert.Contains($"anchor '{One}' had a closed row already where this change began, beside its open one", note.Message, StringComparison.Ordinal);
         Assert.Contains($"  - {One}   [bookkeeping: not credited]", AnchorReports.Balance(report, json: false).Data);
     }
@@ -271,6 +274,7 @@ public sealed class AnchorBalanceServiceTests
         Assert.Equal(AnchorSettings.DefaultPendingAnchorsPath, finding.File);
         Assert.Equal(AnchorFindingSeverity.Fatal, finding.Severity);
         Assert.Contains($"'{One}' was open where this change began and neither registry holds it now", finding.Message, StringComparison.Ordinal);
+        Assert.Equal(One, finding.RowId);
 
         // Both failures in one run, and the lost anchor listed apart from the closures.
         var receipt = AnchorReports.Balance(report, json: false);
@@ -303,11 +307,12 @@ public sealed class AnchorBalanceServiceTests
 
         var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, TestContext.Current.CancellationToken);
 
-        Assert.Contains(report.Findings, finding => finding.Severity == AnchorFindingSeverity.Warning);
+        Assert.Contains(report.Findings, finding => finding.Severity == AnchorFindingSeverity.Warning && finding.RowId is null);
         Assert.Contains(
             report.Findings,
             finding => finding.Severity == AnchorFindingSeverity.Fatal
-                && finding.Message.Contains($"'{Two}' was open where this change began", StringComparison.Ordinal));
+                && finding.Message.Contains($"'{Two}' was open where this change began", StringComparison.Ordinal)
+                && finding.RowId == Two);
         Assert.Equal([new AnchorLoss(Two, AlreadyClosed: false)], report.Lost);
         Assert.False(report.Passed);
     }
@@ -795,6 +800,50 @@ public sealed class AnchorBalanceServiceTests
     }
 
     /// <summary>
+    /// A balance held to rows counts their anchors alone - opened, closed, disclosed, lost - as the whole is counted: held to
+    /// a row the change opened and none it closed, it fails; held to one it closed, it holds. A finding at a line of a row
+    /// counts for that row alone, matched as anchors are, and one of a registry as a whole for every holding.
+    /// </summary>
+    [Fact]
+    public void ABalanceHeldToRows_CountsTheirAnchorsAlone()
+    {
+        var report = new AnchorBalanceReport(
+            Base: "upstream",
+            BaseCommit: "c0",
+            Commit: "c0",
+            Merging: [],
+            OpenAtBase: 3,
+            OpenNow: 3,
+            Closed: [new AnchorClosing(One, Bookkeeping: false)],
+            Lost: [new AnchorLoss(Two, AlreadyClosed: false)],
+            Opened: [new AnchorOpening("A-THREE", "does x", Disclosed: false), new AnchorOpening("A-FOUR", "does y", Disclosed: true)],
+            MissingAtBase: [],
+            MalformedAtBase: [],
+            Findings:
+            [
+                new AnchorFinding("anchors/pending.md", 4, AnchorFindingSeverity.Fatal, "lost") { RowId = Two },
+                new AnchorFinding("anchors/pending.md", 0, AnchorFindingSeverity.Note, "the registry as a whole"),
+            ]);
+
+        var opened = report.HeldTo(["A-THREE"]);
+        var closedAndOpened = report.HeldTo([One, "A-THREE"]);
+        var disclosed = report.HeldTo(["A-FOUR"]);
+        var lost = report.HeldTo([Two]);
+
+        Assert.Equal((1, false), (opened.NetNew, opened.Passed));
+        Assert.Equal(["A-THREE"], opened.Opened.Select(opening => opening.Id));
+        Assert.Empty(opened.Closed);
+        Assert.Empty(opened.Lost);
+        Assert.Equal((0, true), (closedAndOpened.NetNew, closedAndOpened.Passed));
+        Assert.Equal((0, 1, true), (disclosed.NetNew, disclosed.Disclosed, disclosed.Passed));
+        Assert.Equal([Two], lost.Lost.Select(loss => loss.Id));
+        Assert.False(lost.Passed);
+        Assert.Equal(["the registry as a whole"], opened.Findings.Select(finding => finding.Message));
+        Assert.Equal(["lost", "the registry as a whole"], lost.Findings.Select(finding => finding.Message));
+        Assert.Equal((3, 3), (opened.OpenAtBase, opened.OpenNow));
+    }
+
+    /// <summary>
     /// The receipt says where each count was measured: at the base, or where HEAD left it where the base has moved on,
     /// a registry missing there included.
     /// </summary>
@@ -935,7 +984,7 @@ public sealed class AnchorBalanceServiceTests
 
         Assert.Contains(
             report.Findings,
-            finding => finding.Message.Contains("is not one of", StringComparison.Ordinal));
+            finding => finding.Message.Contains("is not one of", StringComparison.Ordinal) && finding.RowId == One);
 
         // The severity is what decides the verb's answer, and a Warning here would leave this verb
         // saying the balance holds while --lint exits 1 on the same file. That divergence is the

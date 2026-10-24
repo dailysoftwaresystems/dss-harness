@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Ci;
+using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -16,6 +18,7 @@ using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
+using DssHarness.Core.Runs;
 using DssHarness.Core.Sync;
 
 namespace DssHarness.Tests;
@@ -161,8 +164,20 @@ public sealed partial class HelpTests
 
         Assert.Contains(
             "agentClients the clients the tool builds in (claude-code, claude-api, glm), each by its name: update, claude-code's alone, says "
-                + "whether the tool installs and updates Claude Code with npm; a client holds no model, size or price - contextTokens and "
-                + "maxOutputTokens are a model's ('help agent-clients')",
+                + "whether the tool installs and updates Claude Code with npm; auth, claude-code's alone, how it signs in (login, apiKey, "
+                + "oauthToken, authToken, login where nothing is said), and token the variable a token is held under; configDir and "
+                + "executable, claude-code's alone, the variables that hold a specific login's Claude Code directory and the program it "
+                + "starts (CLAUDE_CONFIG_DIR, CLAUDE_EXECUTABLE where none is named); a client holds no "
+                + "model, size or price - contextTokens and maxOutputTokens are a model's ('help agent-clients')",
+            config,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "agentPolicy what an agent may do beyond the rules built into the tool: restrictions, each one rule string, that only ever refuse - "
+                + "Run(git push *), Write(.github/**), Read(secrets/**), Web(pastebin.com) - applied to every agent of every run under this "
+                + "configuration, beside a workflow's definitions and steps; webDomains, the allow list of every web request (left out, any "
+                + "address); worktreeRules (true where nothing is said) and protectedPaths (true too), the switches of the rule sets "
+                + "'help agent-clients' names ('help agent-clients')",
             config,
             StringComparison.Ordinal);
 
@@ -185,8 +200,17 @@ public sealed partial class HelpTests
         var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
 
         Assert.Contains(
-            "A client that signs in with the machine's login - claude-code - reads no key at all. Choosing a key is the engine's, "
-                + "when it runs a run's steps, and no command of this build runs a step: a step is to start on the first key the slot holds,",
+            "claude-code signs in by its entry's auth (agentClients.claude-code.auth, one of login, apiKey, oauthToken, authToken): login, "
+                + "the machine's login, where nothing is said, reading no key at all; apiKey, its provider's keys in their order; oauthToken or "
+                + "authToken, the token the slot holds under the entry's token (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN where it names "
+                + "none) - a name and never a token, appointed once beside every provider's keys. Its configDir and executable name the "
+                + "variables of the slot that hold a specific login's Claude Code directory and a program to start in place of npm's "
+                + "(CLAUDE_CONFIG_DIR and CLAUDE_EXECUTABLE where they name none), appointed once the same way and never a key; a launch is "
+                + "to sign in from that directory where the slot holds it, else from the tool's own CLAUDE_CONFIG_DIR, else from Claude "
+                + "Code's own. A launch is given that credential and no "
+                + "other, whatever the tool's own environment holds; claude-api and glm sign each request with their provider's keys. "
+                + "Choosing a key is the engine's, when it runs a run's steps, and no command of this build runs a step: a step is to start on "
+                + "the first key the slot holds,",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -235,6 +259,224 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The agent-clients topic says the agents' policy whole: one policy on every client, default allow except the
+    /// root actions and the restrictions, each root action named, the slot and the Claude Code directories refused,
+    /// the command read whole (with what it cannot read said), policy-not-sandbox, and the fail-closed rule.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_SaysTheAgentsPolicy()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains("What an agent may do is one policy, the same on every client: everything is allowed except", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "A restriction is one string, Run(git push *), Write(.github/**), Read(secrets/**) or Web(pastebin.com): Run a "
+                + "command prefix, its trailing * any arguments and the bare command too; Write and Read path patterns as "
+                + "gitignore reads them",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("Declared under agentPolicy.restrictions in config.json", prose, StringComparison.Ordinal);
+        Assert.Contains("agentPolicy.webDomains is the allow list beside them", prose, StringComparison.Ordinal);
+        Assert.Contains("curl, wget, Invoke-WebRequest, Invoke-RestMethod, iwr, irm, http, https, gh api - is", prose, StringComparison.Ordinal);
+        Assert.Contains("the root actions (sudo, su, doas, pkexec, run0, gsudo, sudoedit, runas,", prose, StringComparison.Ordinal);
+        Assert.Contains("psexec, PowerShell's -Verb RunAs, wsl -u root, systemd-run, schtasks with /ru, wherever", prose, StringComparison.Ordinal);
+        Assert.Contains("writes outside an agent's writable roots, every read and write of a", prose, StringComparison.Ordinal);
+        Assert.Contains("this tool's own verbs and run-side-task, run by any program or from a response file, whatever any switch says: an agent", prose, StringComparison.Ordinal);
+        Assert.Contains("every read and write of a credential slot or a Claude Code directory of the run's and every search over one", prose, StringComparison.Ordinal);
+        Assert.Contains("a refusal's places compare in any case on every system, a Windows short name read as its long one", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            @"On Windows a device prefix (\\?\, \\.\, \??\) is dropped from a path and from what the runtime makes of it - one naming no "
+                + "drive and no share, a volume by its id or a pipe, is a place it cannot tell, and denied - and a shell's "
+                + @"spelling of a drive (/c/x, /cygdrive/c/x, /mnt/c/x) is read both as the drive (C:\x) and as the directory it names on the "
+                + "current drive, an action allowed only where both are; a cd is followed the same way, from every place the command reached "
+                + "before it, up to 64 places, past which the command is denied.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("No agent starts while this tool itself runs elevated: its step is recorded never started, saying so, before any client is taken.", prose, StringComparison.Ordinal);
+        Assert.Contains("a comment and a here-document's lines never read as commands", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, busybox, Invoke-Expression) stripped, what "
+                + "xargs reads an expansion among the words it runs; and it goes into sh -c and every other shell's",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("a variable whose value is a program git or another tool runs (GIT_SSH_COMMAND, GIT_PAGER,", prose, StringComparison.Ordinal);
+        Assert.Contains("refused as such ('git $VERB' under Run(git push *))", prose, StringComparison.Ordinal);
+        Assert.Contains("a file:// address is read as the path it names", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "What it cannot read whole it denies, said here, not guessed at: a script nested past four levels, a shell that reads its "
+                + "script from its input (curl ... | sh) or from a process substitution, and a program named by a variable, a substitution, "
+                + "a pattern or a brace, a brace that spells more than 64 words, and an option of git's or gh's own",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("the inside of a script file a command runs", prose, StringComparison.Ordinal);
+        Assert.Contains("The worktree rules (agentPolicy.worktreeRules, true where nothing is said)", prose, StringComparison.Ordinal);
+        Assert.Contains($"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) are refused", prose, StringComparison.Ordinal);
+        Assert.Contains("gh pr merge, gh workflow run and gh run rerun, the gh api endpoints and GraphQL mutations that merge or start CI, and gh alias set, for never merges,", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "git's own files - a .git, file or directory, at any depth beneath a root and in any case, a nested repository's and a "
+                + "submodule's too (Write(**/.git/**)) - are not written by a tool, whatever protectedPaths says",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("an agent does not edit its own policy or what the next launch loads", prose, StringComparison.Ordinal);
+        Assert.Contains("The protected paths (agentPolicy.protectedPaths, true where nothing is said)", prose, StringComparison.Ordinal);
+        Assert.Contains("written out once as rules, each said whole: Write(.git/**), Write(.config/git/**),", prose, StringComparison.Ordinal);
+        Assert.Contains("Write(Gemfile.lock), Write(composer.json), Write(composer.lock).", prose, StringComparison.Ordinal);
+        Assert.Contains("Claude Code's own guard stays Claude Code's", prose, StringComparison.Ordinal);
+        Assert.Contains("A step's writes is the one source that narrows", prose, StringComparison.Ordinal);
+        Assert.Contains("the reporter's reads are narrowed to the run's directory alone", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            @"an ask rule for every tool the launch has, and the restriction rules as deny rules, absolute once for each root in the POSIX "
+                + @"form Claude Code matches (//c/x for C:\x), a Write rule as the Edit rule Claude Code holds its file tools' writes to",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("This is policy, not a sandbox", prose, StringComparison.Ordinal);
+        Assert.Contains("Where this tool cannot decide a call it denies it, never allows", prose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The agent-clients topic says what the claude-code client does with a launch - a new session each time, streamed
+    /// both ways, the tools of the one table and the ones never given, every call asked of the engine, the repair, the
+    /// message at work, the handoff, the model held, the environment, a key passed over - its tools and names read from
+    /// the types that hold them.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_SaysWhatTheClaudeCodeClientDoesWithALaunch()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains(
+            "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed and never continued, "
+                + "keeping no session file (one a launch leaves all the same is removed once it has ended, however it ended, and said), "
+                + "streamed both ways - the step's prompt is "
+                + "the first message on its input, never an argument -",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the tools of the agent's capabilities and no other - read: Read, Grep, Glob; write: Write, Edit, NotebookEdit; run: Bash; web: "
+                + "none of Claude Code's - and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("The run's reporter is given Read, Grep, Glob alone.", prose, StringComparison.Ordinal);
+        Assert.Contains("Every call is asked of the engine before it runs and answered from the policy above", prose, StringComparison.Ordinal);
+        Assert.Contains("is sent back, each problem by its path, up to 2 times", prose, StringComparison.Ordinal);
+        Assert.Contains("a handoff asked interrupts the turn and asks the agent for its handoff in the same launch", prose, StringComparison.Ordinal);
+        Assert.Contains("Every message is held to the model asked for, a date after its id the same model", prose, StringComparison.Ordinal);
+        Assert.Contains("(CLAUDECODE and every CLAUDE_CODE_ name but CLAUDE_CODE_GIT_BASH_PATH, which says only where a program is)", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "the names the engine sets: DISABLE_COMPACT=1, DISABLE_AUTOUPDATER=1, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, CLAUDE_CODE_RETRY_WATCHDOG=0, "
+                + "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("A key Claude Code reports invalid is passed over, and while the step has done no work the next key is given a new launch", prose, StringComparison.Ordinal);
+        Assert.Contains("the claude-code client below asks it of every call, the API clients are what it builds next", prose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The agent-clients topic says what the claude-code client holds a launch to: the user's settings and CLAUDE.md read
+    /// and their hooks off, a credential those settings would give refused by the file and the directory key, the checks
+    /// of the protocol that name a version where it does not hold, the stall, a decline and an account at its limit - its
+    /// names and its bound read from the types that hold them.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_SaysWhatTheClaudeCodeClientHoldsALaunchTo()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains(
+            "the user's settings.json in its Claude Code directory and the user's CLAUDE.md reach every agent on this client, but no hook of theirs runs - every launch's settings say disableAllHooks -",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("each launch's start names that settings file and its SHA-256 and says the hooks are off", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "(ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_BASE_URL in its env, in any case, or apiKeyHelper) refuses the run before any launch",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("give the client a directory of its own in the slot: CLAUDE_CONFIG_DIR, or the name agentClients.claude-code.configDir gives.", prose, StringComparison.Ordinal);
+        Assert.Contains("a launch that does not answer the host's initialize request within 30 s, that works before its init says what it runs as,", prose, StringComparison.Ordinal);
+        Assert.Contains("a call it ran that the engine was never asked about, or refused, fails the step by the tool's name", prose, StringComparison.Ordinal);
+        Assert.Contains("within the step's stall bound - counted from when the launch answered its initialize request, and from the turn's end for one written while a turn ran - ends it Stalled", prose, StringComparison.Ordinal);
+        Assert.Contains("A request the model declines ends the step Refused", prose, StringComparison.Ordinal);
+        Assert.Contains("ends it RateLimited, with when the limit lifts where it says", prose, StringComparison.Ordinal);
+        Assert.Contains("CLAUDE_EXECUTABLE, or the name agentClients.claude-code.executable gives", prose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The agent-clients topic's protected-path list is the one the policy holds, word for word: a change in it is a
+    /// change someone made, in both places at once or in neither.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_PinsTheProtectedPaths()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        foreach (var rule in AgentPolicy.ProtectedPathRules)
+        {
+            Assert.Contains($"Write({rule})", prose, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The README and the architecture say the agents' policy as the help does: one policy, default allow except the
+    /// root actions and the restrictions, the command read whole, and the fail-closed rule - and the architecture
+    /// names its owners (<c>AgentPolicy</c>, <c>CommandAnalysis</c>, <c>GlobPattern</c>).
+    /// </summary>
+    [Fact]
+    public async Task TheDocumentsSayTheAgentsPolicy()
+    {
+        Assert.Contains("What an agent may do is one policy, the same on every client", Prose.Document("README.md"), StringComparison.Ordinal);
+        Assert.Contains("A repository declares them under `agentPolicy.restrictions`", Prose.Document("README.md"), StringComparison.Ordinal);
+        Assert.Contains("This is policy, not a sandbox", Prose.Document("README.md"), StringComparison.Ordinal);
+        Assert.Contains("Where this tool cannot decide a call it denies it, never allows", Prose.Document("README.md"), StringComparison.Ordinal);
+
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains("What an agent of a run may do is one policy, `Agents\\Policy\\AgentPolicy`, the same on every client", architecture, StringComparison.Ordinal);
+        Assert.Contains("read whole before it is matched, `Agents\\Policy\\CommandAnalysis`", architecture, StringComparison.Ordinal);
+        Assert.Contains("no agent starts while the tool itself runs elevated (`IHostPlatform.IsPrivilegedProcess`", architecture, StringComparison.Ordinal);
+        Assert.Contains("Where the policy cannot decide a call it denies it, never allows", architecture, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The README and the architecture say the claude-code client and how it signs in as the help does, and the
+    /// architecture names its owners by the types that are them.
+    /// </summary>
+    [Fact]
+    public async Task TheDocumentsSayTheClaudeCodeClient()
+    {
+        var readme = Prose.Document("README.md");
+
+        Assert.Contains("signs in by the client's `auth` (`agentClients.claude-code.auth`): `login`, the machine's login,", readme, StringComparison.Ordinal);
+        Assert.Contains("The `claude-code` client starts Claude Code once for each launch, a new session every time", readme, StringComparison.Ordinal);
+        Assert.Contains("Every call is asked of the engine before it runs and answered from the policy", readme, StringComparison.Ordinal);
+        Assert.Contains("but no hook of theirs runs: every launch's settings say `disableAllHooks`", readme, StringComparison.Ordinal);
+        Assert.Contains("The client holds every launch to the protocol itself", readme, StringComparison.Ordinal);
+        Assert.Contains("Its `configDir` and `executable` name the variables of the slot that hold a specific login's Claude Code directory", readme, StringComparison.Ordinal);
+        Assert.Contains("A program the slot names (`CLAUDE_EXECUTABLE`, or the name the client's `executable` gives)", readme, StringComparison.Ordinal);
+        Assert.Contains("and for each setting a client reads from the slot `present` or `absent` (none is needed)", readme, StringComparison.Ordinal);
+
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains($"The first client that asks it is `Agents\\ClaudeCode\\{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeClient)}`", architecture, StringComparison.Ordinal);
+
+        foreach (var owner in new[]
+        {
+            nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLaunch),
+            nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine),
+            nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeToolDecider),
+            nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools),
+            nameof(DssHarness.Core.Agents.StructuredOutputGate),
+            nameof(DssHarness.Core.Agents.AgentHandoffSignal),
+            nameof(DssHarness.Core.Agents.AgentCredential),
+            nameof(DssHarness.Core.Agents.AgentAuth),
+            nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeUserSettings),
+            nameof(DssHarness.Core.Agents.AgentAccountLimit),
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// The verdicts topic says what becomes of a build stopped from outside, which is stopped rather than failed - but for
     /// one the harness stopped for hanging, or under another build tool - and of a run killed before it finished, which
     /// reaches no verdict and says nothing itself: the next run in its tree on that machine says it was abandoned, and
@@ -269,6 +511,31 @@ public sealed partial class HelpTests
             + "check-mutations in its tree on that machine to own its run directory says it was abandoned - its run id, process "
             + "and start, and where its records are - and releases its claim on them.",
             Prose.Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The verdicts topic says how a run is stopped from another terminal from the code's own names and bounds: how often
+    /// its dispatcher looks for the stop, how long stop-run waits, the codes it ends with, and what a run's legs are bound to
+    /// on Windows.
+    /// </summary>
+    [Fact]
+    public void VerdictsTopic_SaysHowStopRunStopsARun_FromItsOwnBounds()
+    {
+        var prose = Prose.Words(HelpText.Of("verdicts").StandardOutput);
+
+        Assert.Contains(
+            $"A run is stopped with Ctrl+C where it was typed, and from another terminal with '{RunStopService.CommandName} <run id>' typed in the "
+                + $"tree that ran it: its dispatcher looks for the stop every {StopCadence.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s "
+                + $"and stops as an interrupt stops it - each leg stopped where it stands, its ledger written with what was reached, exit {HarnessExit.Cancelled} "
+                + $"- and {RunStopService.CommandName} waits {RunStopService.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s for it, saying "
+                + $"the run stopped only where its dispatcher took the stop: one that ended on its own first is nothing it stopped ({HarnessExit.Refused}). "
+                + "--now ends the dispatcher's process where it stands, with all it started, and its ledger is never written. On Windows every phase a "
+                + "leg runs on its own machine, its keepAwake command, and the ssh or wsl.exe that carries a leg to a host, is bound to its dispatcher - "
+                + "a set-up's up line apart - and ends with it however "
+                + $"it ends, a kill among them. On Linux and macOS a kill of the dispatcher alone does not reach its legs, and {RunStopService.CommandName} "
+                + "--now does.",
+            prose,
             StringComparison.Ordinal);
     }
 
@@ -1291,6 +1558,20 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>stop-orchestrator's --now says it ends what the engine's steps left running with the engine, by kind.</summary>
+    [Fact]
+    public async Task StopOrchestratorsNow_SaysWhatItsStepsLeftRunningIsEndedWithIt()
+    {
+        var result = await CliRunner.RunAsync([FlowService.StopCommand, "--help"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "End the engine's process and all it started, without asking it - only an engine of this machine, and only the process "
+                + "its owner names by its start: for an engine that no longer answers. What its steps left running - a contained "
+                + "child's session, the process group of what its legs started - is ended with it.",
+            Prose.Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
     /// <summary>sync's --dry-run says it exits as the sync would, naming each refusal it would make.</summary>
     [Fact]
     public async Task SyncsDryRun_SaysItExitsAsTheSyncWould()
@@ -1941,6 +2222,11 @@ public sealed partial class HelpTests
         var text = Prose.Words(result.StandardOutput);
 
         Assert.Contains("names each file its steps kept as keptOutputs, relative to the tree", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "A leg that did not pass carries, in --json, the last lines its last failing phase printed as logTail and that phase's "
+                + "name as tailPhase - a host's leg among them, whose log stays there.",
+            text,
+            StringComparison.Ordinal);
         Assert.Contains("sync --pull' takes to bring it back", text, StringComparison.Ordinal);
         Assert.Contains(
             "A path given to --pull that ends with '/' names a directory: every file below it is brought back, each checked as a file named is and "
@@ -2197,6 +2483,14 @@ public sealed partial class HelpTests
         Assert.Contains("It knows no workflow of its own", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("with {leg} standing for the leg's", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("A green leg past 80% of its", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "Every call of gh, whoever makes it, is started so that it cannot ask anything (GH_PROMPT_DISABLED, GCM_INTERACTIVE, "
+                + $"GIT_TERMINAL_PROMPT) and is ended where it has not answered within {GhProcess.Limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, "
+                + $"or with the workflow step that made it, where that step passes its timeoutMinutes first: a read that did not answer in time is not done ({HarnessExit.Incomplete}), "
+                + "and asked again it may answer.",
+            Prose.Words(result.StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Equal(GhProcess.NeverAsks.Keys.Order(StringComparer.Ordinal), ["GCM_INTERACTIVE", "GH_PROMPT_DISABLED", "GIT_TERMINAL_PROMPT"]);
 
         // The example reads what it says it reads: a leg and its budget from a whole job name, and the leg from one
         // the forge cut short, which it would otherwise not read at all.
@@ -2485,7 +2779,8 @@ public sealed partial class HelpTests
                 + "below its directory, nor any directory holding a .git of its own that git records no worktree at - until then it "
                 + $"refuses ({HarnessExit.Refused}), naming each - and the evidence, transcripts, steps and sessions its agents kept, "
                 + "whatever their kind or state, only with --delete-evidence; an agent with no worktree holds nothing but records, "
-                + "and goes with it, deleted or not.",
+                + "and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever asked - "
+                + "goes with it and is never counted among what --delete-evidence guards.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
     }
@@ -2540,8 +2835,24 @@ public sealed partial class HelpTests
         }
     }
 
+    /// <summary>The orchestrators topic says where a run starts from, and which steps are served so far.</summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysWhereARunStartsFrom_AndWhichStepsAreServed()
+    {
+        var orchestrators = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+
+        Assert.Contains(
+            "A run starts from the main checkout's HEAD on a branch of its own, and records that commit and branch: it is refused (13), having made nothing, where HEAD is detached, where the checkout is on the branch the run's pull request is opened against - the pull-request step's base, filled from the run's inputs and its name, else the remote's default branch - where a merge is under way, and where changes are staged. Where the repository has a remote and neither base can be told, the start says so, its branch held to none.",
+            orchestrators,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
+            orchestrators,
+            StringComparison.Ordinal);
+    }
+
     /// <summary>
-    /// The orchestrators and layout topics say where a step's contained child's session is recorded, and that every command
+    /// The orchestrators and layout topics say where a step's contained child's session, and the group of its legs' work, is recorded, and that every command
     /// over an orchestrator first ends what a killed process left of them - and on which systems - from the layout's own names.
     /// </summary>
     [Fact]
@@ -2551,23 +2862,29 @@ public sealed partial class HelpTests
         var layout = Prose.Words(HelpText.Of("layout").StandardOutput);
         var record = $"<step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}";
 
-        Assert.Contains($"{record} in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"{record} in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it", orchestrators, StringComparison.Ordinal);
         Assert.Contains(
-            "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, "
-            + $"which nothing ends when the process that started it is killed, so it is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
-            + "while it runs and the record taken back once that process ends it. Every command over an orchestrator - the three "
+            "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, and "
+            + "what a machine step's legs start a process group of its own, apart from the engine's terminal; nothing ends either "
+            + "when the process that started it is killed, so each session, and the group of each phase - a set-up's up line apart - "
+            + $"keepAwake command and ssh that carries a leg to a host, is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
+            + "while it runs, and the record taken back once nothing is left in it: a group still holding what its child left at its "
+            + "own end keeps it. Every command over an orchestrator - the three "
             + "orchestrator commands, each agent command, and each run verb over a run already made - first ends each recorded "
-            + "session whose starter has gone, as a stop "
-            + "ends one (SIGTERM, then SIGKILL five seconds later), removes its record, and says so in a line, and in the document's "
-            + "ended where it answers with --json. A session whose starter still runs is left; one whose id a later process "
+            + "session or group whose starter has gone, its leader standing or not (SIGTERM, then SIGKILL five seconds later), "
+            + "removes its record, and says so in a line, and in the document's "
+            + "ended where it answers with --json; stop-orchestrator --now does it again once it has ended the engine and its "
+            + "tree, and says what it ended. A session or group whose starter still runs is left; one whose id a later process "
             + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
-            + "machine is never taken to have gone. Windows records nothing: a job ends a contained child with the process that "
-            + "started it.",
+            + "machine is never taken to have gone. Windows records nothing: a job ends a contained or bound child with the process "
+            + "that started it.",
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
             $"{record} ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
-            + "runs, ended by the next command over the orchestrator where its starter was killed",
+            + "runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a "
+            + "leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by "
+            + "stop-orchestrator --now - once its starter has gone",
             layout,
             StringComparison.Ordinal);
     }
@@ -2621,10 +2938,12 @@ public sealed partial class HelpTests
             text,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The arm registry (mutations.registry) both trees changed is merged by arm, unasked - each arm from the side that alone added, removed or "
+            "The arm registry (mutations.registry) both trees changed is merged by arm, unasked - each arm, and each section's heading (the comments a "
+            + "blank line parts from the row below them), from the side that alone added, removed or "
             + "changed it, each version as its tree holds it, from nothing where neither held a registry before - and taken only where the merged text "
-            + "reads as a registry of the tree as the command leaves it, as check-mutations reads one ('help mutations'); an arm the two changed "
-            + "differently, a version that cannot be read as a registry, or a merged text that does not read as one refuses the path, each shown, and so "
+            + "reads as a registry of the tree as the command leaves it, as check-mutations reads one ('help mutations'); an arm or a heading the two "
+            + "changed differently, a heading no row of the merge would stand under, a version that cannot be read as a registry, or a merged text that "
+            + "does not read as one refuses the path, each shown, and so "
             + "do shared bytes that cannot be found, since an arm one side removed would come back.",
             text,
             StringComparison.Ordinal);
@@ -2784,8 +3103,14 @@ public sealed partial class HelpTests
             + "merges alone says 'conflict' and nothing else; folded says what the --apply of a fold and of a deletion did, gone "
             + "through or stopped part way after writing some of it - what it wrote, deleted, merged and handed, the arm registry "
             + "merged by arm, the registries and rows it applied, and the cells --accept-over took - and is null for every other "
-            + "answer and where it did nothing at all; planned says what the plan of a refresh or a rebase takes, keeps, hands and "
-            + "merges, and is null for a fold and a deletion. An --apply refused at its hold answers the same "
+            + "answer and where it did nothing at all; planned says what the plan of the verb names, its dry run's and its "
+            + "--apply's alike - what a rebase takes and keeps, what a refresh or a fold hands, what each merges, what a fold, a "
+            + "deletion's among them, writes and deletes, the registry files its rows change, as git names them, and the rows it "
+            + "applies - and what each consent it lacks and each conflict it meets is about: mergeable, the paths both trees "
+            + "changed whose clean merge nobody asked for; conflicting, those whose merge conflicts; newRows, lostCells and "
+            + "overCells; null where no plan was measured, a deletion that folds nothing among them. A refresh or a rebase over a "
+            + "path both trees changed whose merge is clean lacks --merge as a fold does - needs-consent, its code 13 still - and "
+            + "one over conflicting paths alone is refused for a conflict. An --apply refused at its hold answers the same "
             + "document, applied true: request 'sound', and the run it met in heldNow. Stopped before "
             + "anything is weighed - a command line the parser refuses, a --directory that is not there, a repository not "
             + "initialised, another usage error, or a refusal met before then, an agent that is not there among them - it "
@@ -2885,6 +3210,57 @@ public sealed partial class HelpTests
     private static partial Regex ExamplePattern();
 
     /// <summary>
+    /// The workflows topic says what the fold family's steps do - read their dry run's standing, ask with what it names,
+    /// hold the apply to it and a fold to its ledger and its within, take others in turn - and the orchestrators topic
+    /// names the files they keep, each from the code's own names.
+    /// </summary>
+    [Fact]
+    public void TheHelp_SaysWhatTheFoldFamilysStepsDo_AndTheFilesTheyKeep()
+    {
+        var workflows = Prose.Words(HelpText.Of("workflows").StandardOutput);
+        var orchestrators = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+
+        Assert.Contains(
+            "fold, delete-agent, refresh and rebase make their verb's dry run first and read what it stood, typed, never its "
+                + "code: sound, they apply; a run holding the tree the apply takes is waited out, as a held "
+                + $"lock is ({HarnessExit.Refused} after the retries), and one holding only a copy a deletion removes is run again, as an "
+                + $"incomplete step is ({HarnessExit.Incomplete} after them);",
+            workflows,
+            StringComparison.Ordinal);
+
+        // Only a fold and a deletion hand their verb what the dry run named: a refresh's and a rebase's requests take none.
+        Assert.Contains(
+            "A fold's apply, and a deletion's, is held to exactly what its dry run named: measured again under its hold and found "
+                + "to write anything else - the trees moved between the two - it writes nothing; an apply of any of the four refused "
+                + $"under its hold so is weighed again, {FoldFamilyStepRunner.MostPasses} times at most. A fold, and a deletion that "
+                + $"folds, write each path they mean to write, with what the main tree holds there, to the run's ledger ({OrchestratorLayout.FoldsFileName}) "
+                + "before the verb is called, and what they left after",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Null(typeof(RefreshAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
+        Assert.Null(typeof(RebaseAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
+        Assert.NotNull(typeof(DeleteAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
+
+        // Whether a fold is committed is the main tree's to say, whoever committed it.
+        Assert.Contains(
+            "a run stopped with a fold in its ledger whose change no commit took yet - a path it changed that the main tree still "
+                + "holds otherwise than its HEAD, whoever commits it - is unfinished, as one with an agent open is. A deletion run again "
+                + "once its agent is deleted - its ending cut off before it was recorded - is done, with what its directory kept of its apply.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"recorded in the step's directory ({OrchestratorLayout.StepTargetsDirectoryName}/<agent>/), one closed before its turn "
+                + "passed over; a target that fails ends its own turn, and the step ends done, or failed with the code of the first "
+                + "that failed, once each has had its turn. Each step keeps what its dry run named and how its apply ended in its "
+                + $"directory ({OrchestratorLayout.StepFoldFileName}).",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains($"{OrchestratorLayout.FoldsFileName} the ledger of the run's folds:", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepFoldFileName} a fold, delete-agent, refresh or rebase step:", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/ a refresh or a rebase of others:", orchestrators, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The workflows topic says what a workflow is, where it lives, what this build does with one and what it does not,
     /// and lists every key from the tables the reader itself reads - so what is listed is what is read.
     /// </summary>
@@ -2902,12 +3278,26 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
-                + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). No step runner is built yet, so each step of a run fails, "
-                + "saying no runner serves its type.",
+                + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, graphify-codebase, validate-plan, "
+                + "create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, "
+                + "refresh, rebase, each below; a step of "
+                + "any other type fails, saying no runner serves its type.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
             "every path the yml names is relative to that directory and stays inside it, as an action's files are relative to its own directory",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What the steps served so far do. orient reads the main checkout and the repository once, and answers: the branch (failed, refused, where HEAD is detached), baseBranch - the pull-request step's base, filled from the run's inputs and its name, else the default branch of the remote the run's branch goes to (the push step's remote, else the one the branch tracks, else origin, else the only one), null where there is none - startCommit, the commit the run started from;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "validate-plan checks the work items its items yields and answers ok, problems and the items, never a failure: at least one item and at most 8;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "create-agent makes the agent the engine named for it - a<N>, one past the highest the run's agent directories and step records hold, never given twice - for the model of the first reason step that works in it, or the default tier's first model where none does, both written to the step's record before the agent is made.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("params - its own knobs, defaulted in the file and read as param.<name>", prose, StringComparison.Ordinal);
@@ -2954,7 +3344,64 @@ public sealed partial class HelpTests
                 + $"({string.Join(", ", WorkflowExpressions.RunStatuses.Select(status => $"run.{status}"))}) is read by an always step "
                 + "alone. A placeholder in braces - '{step.member}' - in a template key reads the same names, typed the same way, as one in "
                 + "a prompt does; one in any other key is refused, and a pull request's base reads nothing but the run's inputs and "
-                + "run.name, the same for every pull request.",
+                + "run.name, the same for every pull request. A brace meant literally is written twice, {{ and }} alike, another "
+                + "expander's ${...} is left as written, and a placeholder that names nothing is refused. Every template key of a step "
+                + $"is filled where the step starts, and one that reads nothing fails it ({HarnessExit.ConfigInvalid}) before its runner is asked.",
+            prose,
+            StringComparison.Ordinal);
+
+        // What the checks that run no legs do and answer, and what red does to them: each default and code is its owner's.
+        Assert.Contains(
+            "anchor-balance and anchor-citations run the checks of those names in the main checkout - the balance from its base, the "
+                + $"citations of its subject ({string.Join(", ", AnchorCitationSubjects.Names)}; "
+                + $"{AnchorCitationSubjects.Default} where it names none) - each held to its rows or its paths where it names them: the anchors "
+                + "among those rows the change opened, closed and lost, a problem at a line of one of them and every problem of a registry as a "
+                + "whole, or the citations in those files; a rows or paths expression that reads nothing names nothing. Each answers passed and "
+                + "findings, each a line as the check prints it. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out "
+                + "in the main checkout where it names none - and its newest limit runs, answering passed, branch, matrixRan, legs and red, each leg as "
+                + "check-ci-legs --json gives it. ci-wait waits for every check run and commit status the forge lists for its commit - the "
+                + $"commit the run last pushed where it names none, refused ({HarnessExit.Refused}) where it pushed none - less those its ignore "
+                + "names - a job by its own name, as its workflow names it, a status by its context - written out or with * for any run of "
+                + $"characters, reading them every pollSeconds ({CiChecksRequest.DefaultPollSeconds}): "
+                + "a red one - one that concluded failure, a status of failure or error - ends it at once, answered with its name, url and, of a "
+                + "job of a workflow run, the job, its workflow, the step that failed, its leg as check-ci-legs classifies it, whether it overran "
+                + "its budget, and its whole log kept in the step's directory "
+                + $"({OrchestratorLayout.StepLogsDirectoryName}/<job>.<id>{PhaseLogs.Extension}, the job's id telling two of one name apart) "
+                + "with its last lines in tail, both masked by the repository's runner secrets, and in unread why any of that could not be "
+                + "read; every check ended green - success, neutral or skipped - on two reads running that found the same checks, at its "
+                + "wait's end on the last alone, passes it; and no check within "
+                + $"appearSeconds ({CiChecksRequest.DefaultAppearSeconds}) - or waitMinutes where that is shorter - checks still running at waitMinutes ({CiChecksRequest.DefaultWaitMinutes}) "
+                + "or one ended neither green nor red asks (noChecks, checksPending, checksUnsettled), never failing it; answered accept, it "
+                + "reads once more, waiting for nothing, and is done with the checks as they are, its passed true only where they are green. "
+                + "A check that finds red is "
+                + "red: under failOn red - every check's default but ci-read's, never - it fails with its check's code "
+                + $"(an anchor finding {AnchorExit.Findings}, a red CI leg {CiExit.LegRed} and no matrix run {CiExit.MatrixDidNotRun}, a red check "
+                + $"{CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given "
+                + $"{GhProcess.Limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - the step's timeoutMinutes bounds its "
+                + "attempt, and a read in flight ends with it - and one past it ends the step incomplete "
+                + $"({HarnessExit.Incomplete}), which runs it again; a ci-wait reads again at its next poll where a read failed or passed it, "
+                + $"saying each, and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running or its wait is spent.",
+            prose,
+            StringComparison.Ordinal);
+
+        // What a leg step runs, answers, lets go and keeps: the names of its records are the layout's own.
+        Assert.Contains(
+            "build, test, run and check-mutations run their legs as the commands of those names do, in the worktree of the agent "
+                + "their in names, else the main checkout: test with its filter, exclude and labels and run with its inputs - a filter, "
+                + "an exclusion or a label that fills to nothing is not given - and check-mutations with its arms, every arm the registry "
+                + "declares where it names none, and pending. Each answers passed, true where every leg passed; exitCode, the command's; "
+                + "verdicts, each leg's own; red, the red legs alone - a leg that failed, with the phase that did not pass, the ledger's "
+                + "line and the last lines it printed, and of a sweep each arm that violated, survived or was unattributed, with its arm "
+                + "and its line; and runDirectory, null where the run made none. A leg that works in a copy - its own under .legs, or a "
+                + "host's - lets the step's hold on its tree go once its copy is made, or once it ends without one, and a leg in the tree "
+                + "itself once it ends: the step's record then says copied. A run whose runner, or a runner its run checks name, writes "
+                + "the tree holds write on it, and its legs work in the tree itself. A leg run refused part way, cut off, or ended with a "
+                + "leg it placed left with no line ends the step with the run's own code; one its legs ended - none could run, another "
+                + "run owns its records - is read by their verdicts. The step keeps the ledger in its directory "
+                + $"({OrchestratorLayout.StepLedgerFileName}) and, in an agent's worktree, the log of each red leg's phase that did not "
+                + "pass, whole, where this machine ran the leg "
+                + $"({OrchestratorLayout.StepLogsDirectoryName}/<leg>.<phase>{PhaseLogs.Extension}, the phase named as its log is), "
+                + "each attempt's own.",
             prose,
             StringComparison.Ordinal);
 
@@ -2973,7 +3420,30 @@ public sealed partial class HelpTests
         Assert.All(WorkflowKeys.File, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
         Assert.All(WorkflowStepTypes.Common, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
         Assert.All(WorkflowStepTypes.Group, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.All(WorkflowStepTypes.Running, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
         Assert.All(WorkflowStepTypes.All, type => Assert.Contains($"  {type.Type}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.Contains(
+            "What every step that runs takes, beyond the common keys - every typed step but pause, which only asks:",
+            prose,
+            StringComparison.Ordinal);
+
+        // A step's time limit, from the bounds the validator and the coordinator hold.
+        Assert.Contains(
+            $"A step that runs may bound each of its attempts with timeoutMinutes, from 1 to {WorkflowStep.MostTimeoutMinutes.ToString("N0", CultureInfo.InvariantCulture)}: "
+                + "the engine counts it from each start of the step - an attempt, or its run after a question of its own was answered - and "
+                + "never while it waits on a question. Past it the step is stopped as a stop stops one and ends incomplete "
+                + $"({HarnessExit.Incomplete}), saying it passed its timeoutMinutes: a reasoning step goes to what handles its failure, any other "
+                + $"runs again as an incomplete step does; one whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s "
+                + "of that stop fails all the same, goes to what handles its failure and is not retried - a step of others fails the target "
+                + "whose turn it was and goes on with the next - and what it claimed stays held until that runner ends. A reasoning step's "
+                + "handoff turn at a pause is bounded by handoffSeconds, not by this. A ci-wait's is always more than its waitMinutes (absent, "
+                + $"{WorkflowStep.DefaultWaitMinutes}); a group and a pause step take none, running nothing of their own; a type whose step "
+                + "has a limit of its own where it says none says so beside its name below.",
+            prose,
+            StringComparison.Ordinal);
+
+        // The type that has one says it beside its name, from the table.
+        Assert.Contains("graphify-codebase (timeoutMinutes 30 by default)", result.StandardOutput, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -3012,4 +3482,52 @@ public sealed partial class HelpTests
     /// <summary>A step key shown as it is written, then what it does: '  outputs: [&lt;path&gt;, ...]  what it writes'.</summary>
     [GeneratedRegex(@"^  (?<key>[A-Za-z]+): \S.*?  +(?<meaning>\S.*)$")]
     private static partial Regex SpeltKeyLine();
+
+    /// <summary>
+    /// The codebase-graph topic, under each of its names, says every implementation this build holds - its version, what it
+    /// claims, what it reads and what it does not see - every key of codebaseGraph, the graph's files, the step's output,
+    /// its failOn and its time limit, each read from the code; and the orchestrators topic lists the graph's files.
+    /// </summary>
+    [Fact]
+    public void TheCodebaseGraphTopic_SaysEveryImplementationKeyAndFile_FromTheCode()
+    {
+        var topic = HelpText.Of("codebase-graph").StandardOutput;
+        var prose = Prose.Words(topic);
+
+        Assert.Equal(topic, HelpText.Of("graph").StandardOutput);
+        Assert.Equal(topic, HelpText.Of("graphify-codebase").StandardOutput);
+
+        foreach (var extractor in DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild.All)
+        {
+            Assert.Contains($"{extractor.Language} (version {extractor.Version.ToString(CultureInfo.InvariantCulture)};", topic, StringComparison.Ordinal);
+            Assert.Contains(Prose.Words($"reads {extractor.Help.Reads}."), prose, StringComparison.Ordinal);
+            Assert.All(extractor.Help.DoesNotSee, unseen => Assert.Contains(Prose.Words($"does not see {unseen}."), prose, StringComparison.Ordinal));
+        }
+
+        Assert.Contains("listed (version 1; every file no other claims)", topic, StringComparison.Ordinal);
+        Assert.Contains("markdown (version 1; .md)", topic, StringComparison.Ordinal);
+        Assert.All(WorkflowKeys.CodebaseGraph, key => Assert.Contains(key.Name, topic, StringComparison.Ordinal));
+        Assert.Contains($"failOn: {WorkflowStepTypes.GraphIncomplete}, which fails it ({HarnessExit.CommandFailed.ToString(CultureInfo.InvariantCulture)})", prose, StringComparison.Ordinal);
+        Assert.Contains("30 minutes where it says no timeoutMinutes", prose, StringComparison.Ordinal);
+        Assert.Contains($"{HarnessLayout.OrchestratorsDirectoryName}/<run>/{OrchestratorLayout.GraphDirectoryName}/", prose, StringComparison.Ordinal);
+        Assert.Contains(OrchestratorLayout.GraphManifestFileName, prose, StringComparison.Ordinal);
+        Assert.Contains(OrchestratorLayout.GraphSyncFileName, prose, StringComparison.Ordinal);
+        var answers = System.Text.Json.Nodes.JsonNode.Parse(WorkflowStepTypes.Find("graphify-codebase")!.Output!)!["properties"]!.AsObject().Select(member => member.Key).ToList();
+        Assert.Contains("seconds", answers);
+        Assert.Contains($"A graphify-codebase step answers {string.Join(", ", answers)}:", prose, StringComparison.Ordinal);
+        Assert.Contains($"one of every {DssHarness.Core.Codebase.CodebaseGraphService.ReadShare.ToString(CultureInfo.InvariantCulture)} of the machine's processors", prose, StringComparison.Ordinal);
+        Assert.Contains($"first {DssHarness.Core.FileSystem.BinaryContent.Window.ToString("N0", CultureInfo.InvariantCulture)} bytes - git's own window", prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"{OrchestratorLayout.GraphViewsDirectoryName}/<agent>.json, an agent's view"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("with in, its view is that agent's - the base for one that only reads - and its output's view names the one it synced"), prose, StringComparison.Ordinal);
+        Assert.All(DssHarness.Core.Codebase.CodeEdgeKinds.Described, described => Assert.Contains(Prose.Words($"{described.Kind}, {described.Meaning}"), prose, StringComparison.Ordinal));
+        Assert.Contains(Prose.Words("a file it could not read is tried again at every sync"), prose, StringComparison.Ordinal);
+        Assert.Contains(HelpTopics.Described, described => described.Name == "codebase-graph");
+
+        var layout = HelpText.Of("orchestrators").StandardOutput;
+
+        foreach (var file in new[] { OrchestratorLayout.GraphManifestFileName, OrchestratorLayout.GraphSymbolsFileName, OrchestratorLayout.GraphExtractsDirectoryName, OrchestratorLayout.GraphSyncFileName })
+        {
+            Assert.Contains($"{OrchestratorLayout.GraphDirectoryName}/{file}", layout, StringComparison.Ordinal);
+        }
+    }
 }

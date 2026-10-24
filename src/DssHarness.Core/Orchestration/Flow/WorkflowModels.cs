@@ -74,6 +74,38 @@ public sealed record WorkflowDefinition(
     /// none, and then no step may say <c>recover</c>.
     /// </summary>
     public FlowRecover? Recover { get; init; } = null;
+
+    /// <summary>
+    /// The shape of the run's one codebase graph, said once for the run since every <c>graphify-codebase</c> step syncs
+    /// the same graph; <see langword="null"/> where the workflow says nothing, and every default holds.
+    /// </summary>
+    public FlowCodebaseGraph? CodebaseGraph { get; init; } = null;
+}
+
+/// <summary>
+/// The workflow's <c>codebaseGraph</c>: what the run's one graph is made of, as the file says it - each key left out
+/// <see langword="null"/>, a list given empty kept empty for the check to refuse.
+/// </summary>
+/// <param name="Include">Patterns only the paths one of which matches are graphed.</param>
+/// <param name="Exclude">Patterns the paths one of which matches are not graphed.</param>
+/// <param name="Languages">The implementations used, by name.</param>
+/// <param name="MaxFileBytes">The largest file read.</param>
+/// <param name="Generated">What becomes of generated code: <c>low</c> or <c>exclude</c>.</param>
+/// <param name="MapTokens">The cap, in tokens, of a repository map a later slice makes; nothing reads it yet.</param>
+public sealed record FlowCodebaseGraph(
+    IReadOnlyList<string>? Include,
+    IReadOnlyList<string>? Exclude,
+    IReadOnlyList<string>? Languages,
+    int? MaxFileBytes,
+    string? Generated,
+    int? MapTokens)
+{
+    /// <summary>
+    /// The shape the block gives the run's graph, every key it leaves out at its default: read from the block, never
+    /// written with it - the run's frozen definition, and its digest, hold what the file says, not this build's defaults.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Codebase.CodebaseGraphShape Shape => Codebase.CodebaseGraphShape.Of(Include, Exclude, Languages, MaxFileBytes, Generated, MapTokens);
 }
 
 /// <summary>
@@ -338,6 +370,18 @@ public sealed record WorkflowStep
     /// <summary>How often this handler may be raised; past it the run asks.</summary>
     public int? MaxVisits { get; init; } = null;
 
+    /// <summary>
+    /// The longest one attempt of a step that runs may take, in whole minutes, where the file says: counted by the engine
+    /// from each start of the step and never while it waits on a question, and past it the step is stopped and ends
+    /// incomplete (21). Absent, its type's own limit where the type says one (<see cref="WorkflowStepTypes.TimeLimitOf"/>),
+    /// else none. A reason step's handoff turn at a pause is bounded by the workflow's top-level <c>handoffSeconds</c>
+    /// (<see cref="WorkflowDefinition.HandoffSeconds"/>), not by this. Never a group's or a pause step's key.
+    /// </summary>
+    public int? TimeoutMinutes { get; init; } = null;
+
+    /// <summary>The most minutes <see cref="TimeoutMinutes"/> may say: a day.</summary>
+    public const int MostTimeoutMinutes = 1_440;
+
     /// <summary>An expression yielding the work items a <c>forEach</c> group runs its steps for, once each.</summary>
     public string? ForEach { get; init; } = null;
 
@@ -477,6 +521,9 @@ public sealed record WorkflowStep
     /// <summary>Whether a sweep drives only the arms with no recorded <c>passed</c> that still holds.</summary>
     public bool? Pending { get; init; } = null;
 
+    /// <summary>Whether a <c>graphify-codebase</c> step extracts every file of the tree it syncs again, reusing no extract.</summary>
+    public bool? Rebuild { get; init; } = null;
+
     /// <summary>Whether a <c>create-agent</c> step makes its agent with nothing handed to it.</summary>
     public bool? Empty { get; init; } = null;
 
@@ -549,17 +596,17 @@ public sealed record WorkflowStep
     /// <summary>How long a CI wait waits for the first check to appear.</summary>
     public int? AppearSeconds { get; init; } = null;
 
-    /// <summary>How long a CI wait waits, from its start, for every check to end.</summary>
+    /// <summary>How long a CI wait waits, from its start, for every check to end; absent, <see cref="DefaultWaitMinutes"/>.</summary>
     public int? WaitMinutes { get; init; } = null;
+
+    /// <summary>How long a CI wait waits for every check to end where the file says not: an hour.</summary>
+    public const int DefaultWaitMinutes = Ci.CiChecksRequest.DefaultWaitMinutes;
 
     /// <summary>How often a CI wait reads the checks while it waits.</summary>
     public int? PollSeconds { get; init; } = null;
 
     /// <summary>The checks a CI wait does not count, by name.</summary>
     public IReadOnlyList<string> Ignore { get; init; } = [];
-
-    /// <summary>Minutes a short call of git or the forge is given, where the file says.</summary>
-    public int? TimeoutMinutes { get; init; } = null;
 
     /// <summary>The commit message a commit step writes, a template.</summary>
     public string? Message { get; init; } = null;

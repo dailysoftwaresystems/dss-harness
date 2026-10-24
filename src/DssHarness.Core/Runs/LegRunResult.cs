@@ -68,14 +68,26 @@ public sealed record LegRunResult(
         return json
             ? new CommandOutcome(ExitCode, Message)
             {
-                Data = [Stopped
-                    ? Report.ToJson(ExitCode, Message, RunDirectory, shown, Run, MutationRecord)
-                    : Report.ToJson(Cancelled, Unfinished, RunDirectory, shown, Run, MutationRecord)],
+                Data = [ToDocument(shown)],
 
                 // The document is the whole answer; one more line would be one more thing for a reader to strip.
                 Quiet = true,
                 Cause = Cause,
             }
             : new CommandOutcome(ExitCode, Message, Details) { Cause = Cause };
+    }
+
+    /// <summary>
+    /// The ledger as data, as <c>--json</c> gives it whatever ended the run: what a command answers asked for data, and
+    /// what a step of an orchestrator run keeps of its legs.
+    /// </summary>
+    /// <param name="shown">How the document's reader is told a path or a line of the harness's own, as <see cref="ToOutcome"/> says.</param>
+    public string ToDocument(Func<string, string> shown)
+    {
+        ArgumentNullException.ThrowIfNull(shown);
+
+        return Stopped
+            ? Report.ToJson(ExitCode, Message, RunDirectory, shown, Run, MutationRecord)
+            : Report.ToJson(Cancelled, Unfinished, RunDirectory, shown, Run, MutationRecord);
     }
 }

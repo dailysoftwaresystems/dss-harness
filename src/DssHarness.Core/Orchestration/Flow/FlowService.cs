@@ -22,8 +22,9 @@ public interface IFlowService : IUseCase
 {
     /// <summary>
     /// Starts a run of a declared workflow: validates it (12), holds its inputs and its name to what they take (10),
-    /// makes the run's name, record and owner inside the repository's one section - refused (13) where its worktrees
-    /// would pass this machine's path limit - and runs the session.
+    /// makes the run's name, record and owner inside the repository's one section - refused (13), with nothing made,
+    /// where the main checkout is no place a run starts from (<see cref="FlowCheckout.StartRefusal"/>), where its pull
+    /// request's base cannot be filled, or where its worktrees would pass this machine's path limit - and runs the session.
     /// </summary>
     /// <param name="startDirectory">The directory the command acts on: the repository, and where an input's <c>@file</c> is read from.</param>
     /// <param name="definition">The workflow to run, as the repository's config declares it.</param>
@@ -71,8 +72,8 @@ public interface IFlowService : IUseCase
 /// <param name="StopWait">How long <c>stop-orchestrator</c> waits for the engine to end before <c>--now</c> is the way, and how long <c>--now</c> waits for the process it ended.</param>
 public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSpan StopWait)
 {
-    /// <summary>The tool's own: a poll every 2 s, a look every 200 ms, a stop waited for 30 s.</summary>
-    public static FlowTimings Default { get; } = new(TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(200), TimeSpan.FromSeconds(30));
+    /// <summary>The tool's own: a poll and a look at every command's cadence (<see cref="StopCadence"/>), a stop waited for 30 s.</summary>
+    public static FlowTimings Default { get; } = new(StopCadence.PollEvery, StopCadence.WatchEvery, TimeSpan.FromSeconds(30));
 }
 
 /// <summary>Wires the commands of a run over the engine's own services.</summary>
@@ -84,11 +85,11 @@ public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSp
 /// <param name="sessions">One unfinished run at a time: the test at the start of every session, the run's name, record and owner.</param>
 /// <param name="validation">Validates the workflow a run is started of, and reads the entry a resume is held to.</param>
 /// <param name="runner">The step runner every step of the run is given to.</param>
-/// <param name="runnerFacts">What the engine asks of the runners a workflow names.</param>
 /// <param name="log">One line for each command the tool ran for the run.</param>
 /// <param name="children">Ends what a killed engine's steps left running, first in every command over a run.</param>
 /// <param name="pathBudget">Reckons the run's deepest paths against this machine's limit at its start.</param>
 /// <param name="output">Says what the engine's poller met and what it did about it.</param>
+/// <param name="gitClient">Reads the checkout a run starts from, by the probe its orient step reads.</param>
 /// <param name="clock">When the run's records are written, and how every wait of these commands is timed.</param>
 /// <param name="timings">How often the commands look; <see cref="FlowTimings.Default"/> where not given.</param>
 public sealed class FlowService(
@@ -100,11 +101,11 @@ public sealed class FlowService(
     FlowSessions sessions,
     IWorkflowValidationService validation,
     IFlowStepRunner runner,
-    IFlowRunnerFacts runnerFacts,
     OrchestrationLog log,
     ChildSessions children,
     IPathBudget pathBudget,
     IHarnessOutput output,
+    Git.IGitClient gitClient,
     TimeProvider? clock = null,
     FlowTimings? timings = null) : IFlowService
 {
@@ -134,11 +135,11 @@ public sealed class FlowService(
     private readonly FlowSessions _sessions = sessions;
     private readonly IWorkflowValidationService _validation = validation;
     private readonly IFlowStepRunner _runner = runner;
-    private readonly IFlowRunnerFacts _runnerFacts = runnerFacts;
     private readonly OrchestrationLog _log = log;
     private readonly ChildSessions _children = children;
     private readonly IPathBudget _pathBudget = pathBudget;
     private readonly IHarnessOutput _output = output;
+    private readonly Git.IGitClient _gitClient = gitClient;
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly FlowTimings _timings = timings ?? FlowTimings.Default;
     private readonly FlowRunOwner _owner = new(store, identity, clock);
@@ -203,10 +204,16 @@ public sealed class FlowService(
         }
 
         // The inputs are held to the definition before anything of a run is made, by the one owner of what an input
-        // takes - the engine holds its run to the same - so nothing is written for a start that is refused.
+        // takes - the engine holds its run to the same - so nothing is written for a start that is refused. The checkout
+        // the run starts from is read by the probe its orient step reads, and held to what a run starts from once the
+        // run's name, which its pull request's base may read, is chosen.
+        IReadOnlyDictionary<string, string> resolved;
+        FlowCheckout checkout;
+
         try
         {
-            _ = FlowInputs.Resolve(workflow, given);
+            resolved = FlowInputs.Resolve(workflow, given);
+            checkout = await FlowCheckout.ReadAsync(_gitClient, context.Layout.MainCheckoutRoot, workflow, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -221,22 +228,28 @@ public sealed class FlowService(
 
         try
         {
-            (layout, runContext) = _sessions.Create(
+            (layout, runContext) = await _sessions.CreateAsync(
                 context.Layout,
                 workflow,
                 run,
                 given,
-                refusal: name => FlowRunPaths.RefusalAtStart(_pathBudget, context.Config, context.Layout, name, workflow, _platform.PlatformKey));
+                checkout.Head,
+                checkout.Branch,
+                refusal: name => StartRefusal(checkout, workflow, resolved, name)
+                    ?? FlowRunPaths.RefusalAtStart(_pathBudget, context, name, workflow, _platform.PlatformKey),
+                cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
             return new CommandOutcome(ex.ExitCode, ex.Message);
         }
 
+        // A base that cannot be told held the checkout's branch to nothing: the start says so, never silently.
         return await SessionAsync(
+            context,
             layout,
             RunCommand,
-            reclaimed: null,
+            checkout.BaseUnknown(FlowTemplate.PullRequestBase(workflow, resolved, layout.Name, out _)),
             () => (workflow, runContext, null),
             answered: null,
             interrupts,
@@ -265,7 +278,7 @@ public sealed class FlowService(
 
         try
         {
-            reclaimed = _sessions.Claim(context.Layout, layout);
+            reclaimed = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -273,7 +286,7 @@ public sealed class FlowService(
             return Ended(layout, ResumeCommand, outcome, ResultOf(layout, outcome), json);
         }
 
-        return await SessionAsync(layout, ResumeCommand, reclaimed, () => Resumed(layout, digest!), answered: null, interrupts, json, cancellationToken).ConfigureAwait(false);
+        return await SessionAsync(context, layout, ResumeCommand, reclaimed, () => Resumed(layout, digest!), answered: null, interrupts, json, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -420,7 +433,7 @@ public sealed class FlowService(
 
         try
         {
-            reclaimed = _sessions.Claim(context.Layout, layout);
+            reclaimed = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -430,7 +443,7 @@ public sealed class FlowService(
 
         // The session begins with the answer: the question it names, answered by a person through this command, and
         // everything that can run after it.
-        return await SessionAsync(layout, AnswerCommand, reclaimed, () => Resumed(layout, digest!), (asked.Id, answer, takes ? text : null), interrupts, json, cancellationToken).ConfigureAwait(false);
+        return await SessionAsync(context, layout, AnswerCommand, reclaimed, () => Resumed(layout, digest!), (asked.Id, answer, takes ? text : null), interrupts, json, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -560,6 +573,21 @@ public sealed class FlowService(
     }
 
     /// <summary>
+    /// Why run <paramref name="run"/> of <paramref name="workflow"/> cannot start from <paramref name="checkout"/>: its
+    /// pull request's base cannot be filled, or the checkout is not one a run starts from (<see cref="FlowCheckout.StartRefusal"/>,
+    /// read against that base, else the remote's default branch); null where it can.
+    /// </summary>
+    internal static string? StartRefusal(FlowCheckout checkout, WorkflowDefinition workflow, IReadOnlyDictionary<string, string> inputs, string run)
+    {
+        var filled = FlowTemplate.PullRequestBase(workflow, inputs, run, out var problem);
+        var refusal = problem is not null
+            ? $"its pull request's base cannot be filled: {problem}"
+            : checkout.StartRefusal(filled);
+
+        return refusal is null ? null : $"run '{run}' of '{workflow.Name}' cannot start: {refusal}. Nothing was made.";
+    }
+
+    /// <summary>
     /// Loads the run's context and layout, and sweeps what a killed engine's steps left running before anything else of
     /// the run is read - or the refusal that answers for the command: a bad name (10), or no such run (13, with nothing
     /// written, for a run that is not there has no directory to log in).
@@ -636,9 +664,10 @@ public sealed class FlowService(
     /// refusal, a defect - the owner is released and the outcome is in the run's log.
     /// </summary>
     private async Task<CommandOutcome> SessionAsync(
+        HarnessContext context,
         OrchestratorLayout layout,
         string command,
-        string? reclaimed,
+        string? opening,
         Func<(WorkflowDefinition Definition, FlowRunContext Context, FlowResumeState? Resume)> begin,
         (string Question, string Answer, string? Text)? answered,
         FlowInterrupts? interrupts,
@@ -649,9 +678,11 @@ public sealed class FlowService(
         var inbox = false;
         var offered = new Dictionary<string, Task<FlowHandedOver>>(StringComparer.Ordinal);
 
-        if (reclaimed is not null)
+        // What the session says before anything else: a dead owner it reclaimed, or what a start could not hold its
+        // checkout to.
+        if (opening is not null)
         {
-            said.Add(reclaimed);
+            said.Add(opening);
         }
 
         // Cut off by its terminal, the session answers for the run as every command over it does, the session itself
@@ -663,7 +694,21 @@ public sealed class FlowService(
             var (definition, runContext, resume) = begin();
 
             using var records = new FlowRunRecords(_fileSystem, _store, layout, runContext, _clock);
-            var coordinator = new FlowCoordinator(definition, _runner, _runnerFacts, _clock, runContext.Inputs, records, resume, layout.Name);
+
+            // Every step is handed the run it belongs to, and each create-agent step the model its agent is made for,
+            // resolved from the configuration as the definition's check resolves it; a run step claims its tree as the
+            // configuration's runners say a run of it writes there.
+            var coordinator = new FlowCoordinator(
+                definition,
+                _runner,
+                new ConfiguredRunnerFacts(context.Config),
+                _clock,
+                runContext.Inputs,
+                records,
+                resume,
+                layout.Name,
+                new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, runContext.StartCommit, definition),
+                Agents.AgentProviders.Resolve(context.Config).Providers is { } providers ? WorkflowValidator.AgentModels(definition, providers) : null);
             var before = _store.ReadFlowQuestions(layout);
 
             if (answered is { } given && !coordinator.TryAnswer(given.Question, given.Answer, given.Text, out var problem, AnswerCommand))
@@ -1059,6 +1104,7 @@ public sealed class FlowService(
             new("events", layout.EventsFile),
             new("report", layout.ReportFile),
             new("reportJson", layout.ReportJsonFile),
+            new("folds", layout.FoldsFile),
             .. inbox ? new[] { new FlowRecordPath("inbox", layout.InboxFile) } : [],
         ];
 
@@ -1199,9 +1245,9 @@ public sealed class FlowService(
 
     /// <summary>
     /// <c>stop-orchestrator --now</c>: the engine's process ended without asking it - only one of this machine's, only
-    /// the process its owner names by its start, and never this one - then what its steps' contained children left is
-    /// ended and its owner is removed. A process that could not be ended is a failure, said; what is left is what a crash
-    /// leaves, less those processes.
+    /// the process its owner names by its start, and never this one - then its owner is removed and what its steps left
+    /// running is ended: a contained child's session, a leg's process group. A process that could not be ended is a
+    /// failure, said; what is left is what a crash leaves, less those processes.
     /// </summary>
     private async Task<CommandOutcome> EndNowAsync(OrchestratorLayout layout, RunOwner held, bool json, CancellationToken cancellationToken)
     {
@@ -1209,60 +1255,28 @@ public sealed class FlowService(
 
         CommandOutcome Answer(CommandOutcome outcome) => Ended(layout, StopCommand, outcome, ResultOf(layout, outcome), json);
 
-        if (!_owner.IsHere(held))
+        var ending = await _identity.EndWhereItStandsAsync(held.Machine, held.ProcessId, held.Stamp, _timings.StopWait, cancellationToken).ConfigureAwait(false);
+
+        if (ending.NothingMoreToDo($"the engine of run '{layout.Name}'", name, "owner", $"{StopCommand} {layout.Name}", _timings.StopWait) is { } nothingMore)
         {
-            return Answer(CommandOutcome.Refused(
-                $"run '{layout.Name}' is owned by an engine on another machine ({name}); --now ends only a process of this machine. {StopCommand} {layout.Name} without --now asks it to stop, or end it on its own machine. Nothing was changed."));
+            return Answer(nothingMore);
         }
 
-        if (held.ProcessId == _identity.CurrentId)
-        {
-            return Answer(CommandOutcome.Refused($"run '{layout.Name}' is owned by this very process; --now ends another engine's process. Nothing was changed."));
-        }
-
-        if (held.Stamp is not { } stamp || !_identity.IsSame(held.ProcessId, stamp))
-        {
-            if (!_identity.IsAlive(held.ProcessId, held.Stamp))
-            {
-                _owner.RemoveGone(layout);
-                return Answer(CommandOutcome.Ok($"the engine of run '{layout.Name}' ({name}) had already ended; its owner was removed", [$"{ResumeCommand} goes on from the records"]));
-            }
-
-            return Answer(CommandOutcome.Refused(
-                $"{name} cannot be told to be the engine of run '{layout.Name}' - its start cannot be read beside the one its owner recorded - so it was not ended. Nothing was changed."));
-        }
-
-        try
-        {
-            using var process = System.Diagnostics.Process.GetProcessById(held.ProcessId);
-            process.Kill(entireProcessTree: true);
-
-            using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            bound.CancelAfter(_timings.StopWait);
-            await process.WaitForExitAsync(bound.Token).ConfigureAwait(false);
-        }
-        catch (ArgumentException)
-        {
-            // It ended meanwhile.
-        }
-        catch (OperationCanceledException)
-        {
-            return Answer(CommandOutcome.Failed(HarnessExit.CommandFailed, $"{name}, the engine of run '{layout.Name}', was ended and had not gone within {_timings.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s; its owner is kept"));
-        }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException or AggregateException)
-        {
-            return Answer(CommandOutcome.Failed(HarnessExit.CommandFailed, $"{name}, the engine of run '{layout.Name}', could not be ended: {ex.Message.TrimEnd('.')}; its owner is kept"));
-        }
-
+        // Gone already or ended now, the engine leaves its steps' children to the sweep, which ends what its owner's end left.
         _owner.RemoveGone(layout);
         var ended = await _children.SweepAsync(layout, StopCommand).ConfigureAwait(false);
+        IReadOnlyList<string> endedWithIt = ended.Count == 0 ? [] : [$"what its steps left running was ended with it: {EndedChildSessions.Counted(ended)}"];
+
+        if (ending.How == ProcessEnded.AlreadyGone)
+        {
+            return Answer(CommandOutcome.Ok(
+                $"the engine of run '{layout.Name}' ({name}) had already ended; its owner was removed",
+                [.. endedWithIt, $"{ResumeCommand} goes on from the records"]));
+        }
 
         return Answer(CommandOutcome.Ok(
             $"ended the engine of run '{layout.Name}' ({name}) where it stood",
-            [
-                .. ended.Count == 0 ? [] : new[] { $"{ReportText.Counted(ended.Count, "session")} its steps' contained children led {(ended.Count == 1 ? "was" : "were")} ended with it" },
-                $"what it left is what a crash leaves; {ResumeCommand} goes on from the records",
-            ]));
+            [.. endedWithIt, $"what it left is what a crash leaves; {ResumeCommand} goes on from the records"]));
     }
 
     /// <summary>A record read for an answer that must not fail for it: null where it is not there or does not read.</summary>

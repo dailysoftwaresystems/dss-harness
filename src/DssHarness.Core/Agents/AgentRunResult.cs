@@ -18,7 +18,10 @@ public enum AgentRunStatus
     /// <summary>Ended by a safe pause, with the agent's handoff or without.</summary>
     HandedOff,
 
-    /// <summary>Never began: the program is missing or does not start as this tool starts it, the key is missing, or the configuration is wrong.</summary>
+    /// <summary>
+    /// Never began: the program is missing or does not start as this tool starts it, the key is missing, the configuration
+    /// is wrong, or this tool itself runs elevated.
+    /// </summary>
     NotStarted,
 
     /// <summary>No progress for longer than the stall bound.</summary>
@@ -66,6 +69,12 @@ public enum AgentNotStartedBecause
 
     /// <summary>The configuration is wrong.</summary>
     ConfigurationWrong,
+
+    /// <summary>
+    /// This tool itself runs elevated, as root or an administrator: no agent starts while it does, for every rule of the
+    /// agents' policy assumes a user's powers.
+    /// </summary>
+    Elevated,
 }
 
 /// <summary>
@@ -105,6 +114,14 @@ public sealed record AgentModelUsage(string Model, AgentUsage Usage);
 /// <param name="PerModel">Each model's part, in the order they served.</param>
 /// <param name="Cost">What it cost, and where each number is from; null where nothing has said or counted it.</param>
 public sealed record AgentUsageReport(AgentUsage Total, IReadOnlyList<AgentModelUsage> PerModel, AgentCost? Cost = null);
+
+/// <summary>
+/// An account at its limit: what a request is billed to - a provider's key, or a client's login - has no more to give
+/// for now, as the provider said it.
+/// </summary>
+/// <param name="BalanceSpent">Whether what is spent is its balance or its included usage, which time alone does not give back.</param>
+/// <param name="Lifts">When the limit lifts, where the provider says; null where it does not.</param>
+public sealed record AgentAccountLimit(bool BalanceSpent, DateTimeOffset? Lifts = null);
 
 /// <summary>The agent's answer to the handoff turn, or why there is none.</summary>
 /// <param name="Answer">The answer, masked; null where the agent gave none.</param>
@@ -170,6 +187,98 @@ public sealed record AgentRunResult(
     public IReadOnlyList<string> Files { get; init; } = [];
 
     /// <summary>
+    /// The keys the provider refused while it ran, by their names and never their values, in the order they were met:
+    /// each passed over for the rest of the run, which the engine records. Empty where none was refused.
+    /// </summary>
+    public IReadOnlyList<string> KeysRefused { get; init; } = [];
+
+    /// <summary>
+    /// A session file a launch left all the same, told to keep none, which the client removed - its own launch's, named
+    /// by the session id the client chose, and nothing else; empty where none was left.
+    /// </summary>
+    public IReadOnlyList<string> SessionFilesRemoved { get; init; } = [];
+
+    /// <summary>
+    /// The account's limit, where the run ended on one (<see cref="AgentRunStatus.RateLimited"/>): whether its balance or
+    /// included usage is spent, and when it lifts where the provider says. Null for every other ending.
+    /// </summary>
+    public AgentAccountLimit? Limit { get; init; }
+
+    /// <summary>What a declined request was of, where the run ended <see cref="AgentRunStatus.Refused"/> and the provider names it.</summary>
+    public string? DeclinedFor { get; init; }
+
+    /// <summary>
+    /// What the container of a child the client started could not reach when that child ended, and why - one entry for
+    /// each child whose container missed some of what it held, for what that child started may still run. Empty where
+    /// every child was ended whole.
+    /// </summary>
+    public IReadOnlyList<string> Uncontained { get; init; } = [];
+
+    /// <summary>
+    /// What is wrong with this result, as its own fields say it; null when nothing is. Each field that only one ending
+    /// carries is held to it - why it never began to <see cref="AgentRunStatus.NotStarted"/>, an account's limit to
+    /// <see cref="AgentRunStatus.RateLimited"/>, what a declined request was of to <see cref="AgentRunStatus.Refused"/>, an
+    /// answer read against its schema to <see cref="AgentRunStatus.Completed"/>, a handoff to
+    /// <see cref="AgentRunStatus.HandedOff"/>, questions to <see cref="AgentRunStatus.Asked"/> - and each ending that
+    /// carries one says it; a run that completed says no error, no count is below naught, and every list is written.
+    /// </summary>
+    public string? Problem()
+    {
+        var lists = new (string Name, object? List)[]
+        {
+            ("assumptions", Assumptions), ("questions", Questions), ("served", Served), ("files", Files),
+            ("keysRefused", KeysRefused), ("sessionFilesRemoved", SessionFilesRemoved), ("uncontained", Uncontained),
+        };
+
+        var counts = new (string Name, int Count)[]
+        {
+            ("turns", Turns), ("toolCalls", ToolCalls), ("denials", Denials), ("filesWritten", FilesWritten),
+            ("webRequests", WebRequests), ("compactions", Compactions), ("retries", Retries),
+        };
+
+        return !Enum.IsDefined(Status) ? $"its status {(int)Status} is no ending a run has"
+            : lists.FirstOrDefault(list => list.List is null) is { Name: { } unwritten } ? $"its {unwritten} is null, and that list is always written"
+            : counts.FirstOrDefault(count => count.Count < 0) is { Name: { } below } named ? $"its {below} is {named.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)}, and a count is never below naught"
+            : Duration < TimeSpan.Zero ? $"its duration is {Duration}, and a run never ran for less than naught"
+            : Status == AgentRunStatus.NotStarted && NotStartedBecause is null ? "it never began, and says not why"
+            : Status != AgentRunStatus.NotStarted && NotStartedBecause is not null ? $"it ended {Status}, and says why it never began"
+            : NotStartedBecause is { } because && !Enum.IsDefined(because) ? $"why it never began, {(int)because}, is no reason a run never begins"
+            : Status == AgentRunStatus.RateLimited && Limit is null ? "it ended RateLimited, and names no account's limit"
+            : Status != AgentRunStatus.RateLimited && Limit is not null ? $"it ended {Status}, and names an account's limit, which only a run that ended RateLimited does"
+            : Status != AgentRunStatus.Refused && DeclinedFor is not null ? $"it ended {Status}, and names what a declined request was of, which only a run that ended Refused does"
+            : Status != AgentRunStatus.Completed && StructuredOutput is not null ? $"it ended {Status}, and holds an answer read against its schema, which only a run that completed does"
+            : Status == AgentRunStatus.HandedOff && Handoff is null ? "it ended HandedOff, and says not whether its agent answered the handoff"
+            : Status != AgentRunStatus.HandedOff && Handoff is not null ? $"it ended {Status}, and holds a handoff, which only a run that handed off does"
+            : Handoff is { Answer: not null, WhyNone: not null } ? "its handoff holds both an answer and why there is none, and it holds one of them"
+            : Handoff is { Answer: null, WhyNone: null } ? "its handoff holds neither an answer nor why there is none, and it holds one of them"
+            : Status == AgentRunStatus.Asked && Questions.Count == 0 ? "it ended Asked, and asks nothing"
+            : Status != AgentRunStatus.Asked && Questions.Count > 0 ? $"it ended {Status}, and asks the person, which only a run that ended Asked does"
+            : Status == AgentRunStatus.Completed && Error is not null ? "it completed, and says why it failed"
+            : Served.Any(served => served is null) ? "it names a model that served it as null"
+            : Served.FirstOrDefault(served => served.FromTurn < 1) is { } early ? $"it names '{early.Model}' as serving from turn {early.FromTurn.ToString(System.Globalization.CultureInfo.InvariantCulture)}, and turns are counted from one"
+            : null;
+    }
+
+    /// <summary>
+    /// This run as one that failed for <paramref name="error"/>: what only another ending carries - why it never began, an
+    /// account's limit, what a declined request was of, an answer read against its schema, its questions, its handoff -
+    /// is not a failed run's, and goes; what it did and what it used stay.
+    /// </summary>
+    /// <param name="error">Why it failed, masked.</param>
+    public AgentRunResult FailedFor(string error)
+        => this with
+        {
+            Status = AgentRunStatus.Failed,
+            NotStartedBecause = null,
+            StructuredOutput = null,
+            Handoff = null,
+            Questions = [],
+            Limit = null,
+            DeclinedFor = null,
+            Error = error,
+        };
+
+    /// <summary>
     /// The exit code the run command answers for a step whose agent asked the person and produced no output: its own
     /// per-command code, which the run command's slice wires.
     /// </summary>
@@ -195,9 +304,12 @@ public sealed record AgentRunResult(
             AgentRunStatus.Asked => CommandOutcome.Failed(AskedExitCode, line),
             AgentRunStatus.Cancelled or AgentRunStatus.HandedOff => CommandOutcome.Failed(HarnessExit.Cancelled, line),
             AgentRunStatus.NotStarted => CommandOutcome.Failed(
-                NotStartedBecause == AgentNotStartedBecause.ProgramMissing ? HarnessExit.ToolMissing
-                    : NotStartedBecause == AgentNotStartedBecause.KeyMissing ? HarnessExit.Refused
-                    : HarnessExit.ConfigInvalid,
+                NotStartedBecause switch
+                {
+                    AgentNotStartedBecause.ProgramMissing => HarnessExit.ToolMissing,
+                    AgentNotStartedBecause.KeyMissing or AgentNotStartedBecause.Elevated => HarnessExit.Refused,
+                    _ => HarnessExit.ConfigInvalid,
+                },
                 line),
             AgentRunStatus.Stalled or AgentRunStatus.TimedOut or AgentRunStatus.RateLimited => CommandOutcome.Failed(HarnessExit.Incomplete, line),
             _ => CommandOutcome.Failed(HarnessExit.CommandFailed, line),

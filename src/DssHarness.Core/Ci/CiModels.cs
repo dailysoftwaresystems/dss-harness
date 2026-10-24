@@ -18,8 +18,8 @@ public sealed record CiStep(string Name, string? Conclusion, DateTimeOffset? Sta
             ? completed - started
             : null;
 
-    /// <summary>Whether the step reported failure. Only failure is failure; see <see cref="CiJob"/>.</summary>
-    public bool Failed => string.Equals(Conclusion, CiConclusions.Failure, StringComparison.Ordinal);
+    /// <summary>Whether the step reported failure: red, as <see cref="CiConclusions.Of"/> reads its conclusion.</summary>
+    public bool Failed => CiConclusions.Of(Conclusion) == CiCheckState.Red;
 }
 
 /// <summary>One job of a CI run.</summary>
@@ -28,6 +28,9 @@ public sealed record CiStep(string Name, string? Conclusion, DateTimeOffset? Sta
 /// <param name="Steps">Its steps, in the order the run recorded them.</param>
 public sealed record CiJob(string Name, string? Conclusion, IReadOnlyList<CiStep> Steps)
 {
+    /// <summary>The job's id, as the forge numbers it - what a check of it points at - or null where it said none.</summary>
+    public long? Id { get; init; }
+
     /// <summary>The step with this exact name, or null. Names are matched exactly, never by prefix.</summary>
     /// <param name="name">The step's name.</param>
     public CiStep? Step(string name)
@@ -47,7 +50,61 @@ public sealed record CiRun(
     string? Branch,
     string? CreatedAt,
     string? Conclusion,
-    IReadOnlyList<CiJob> Jobs);
+    IReadOnlyList<CiJob> Jobs)
+{
+    /// <summary>The name of the workflow it is a run of, as the workflow declares it, or null where the forge said none.</summary>
+    public string? Workflow { get; init; }
+
+    /// <summary>The workflow's file, relative to the repository (<c>.github/workflows/ci.yml</c>), or null where the forge said none.</summary>
+    public string? WorkflowPath { get; init; }
+}
+
+/// <summary>One check run the forge lists for a commit, the latest of its name.</summary>
+/// <param name="Name">
+/// Its name: a job's own, as its workflow names it - never <c>workflow / job (event)</c>, as a pull request shows it -
+/// or the name the app that made it gave it.
+/// </param>
+/// <param name="Status">Where it stands: <see cref="Completed"/> once it has ended; <c>queued</c> or <c>in_progress</c> among others before.</param>
+/// <param name="Conclusion">How it ended, once completed; null before.</param>
+/// <param name="Url">Its page.</param>
+/// <param name="RunId">The workflow run it is a job of, or null for a check no workflow run made.</param>
+/// <param name="JobId">The job it is, or null for a check no workflow run made.</param>
+public sealed record CiCheckRun(string Name, string Status, string? Conclusion, string Url, long? RunId, long? JobId)
+{
+    /// <summary>The status of a check run that has ended.</summary>
+    public const string Completed = "completed";
+
+    /// <summary>What it came to, as <see cref="CiConclusions.Of"/> reads its conclusion; pending before it ended.</summary>
+    public CiCheckState State
+        => string.Equals(Status, Completed, StringComparison.Ordinal) ? CiConclusions.Of(Conclusion) : CiCheckState.Pending;
+}
+
+/// <summary>One commit status the forge lists for a commit, the newest of its context.</summary>
+/// <param name="Context">Its context, the name the forge shows it by.</param>
+/// <param name="State"><c>pending</c>, <c>success</c>, <c>failure</c> or <c>error</c>.</param>
+/// <param name="Url">The page it points at, or empty where it names none.</param>
+/// <param name="Description">The text the forge shows for it, or null where it gave none.</param>
+public sealed record CiCommitStatus(string Context, string State, string Url, string? Description)
+{
+    /// <summary>What it came to, as <see cref="CiConclusions.OfStatus"/> reads its state.</summary>
+    public CiCheckState Reading => CiConclusions.OfStatus(State);
+}
+
+/// <summary>What one check of a commit came to.</summary>
+public enum CiCheckState
+{
+    /// <summary>It has not ended.</summary>
+    Pending,
+
+    /// <summary>It concluded success, neutral or skipped: nothing in it is wrong.</summary>
+    Green,
+
+    /// <summary>It concluded failure; a status says failure or error.</summary>
+    Red,
+
+    /// <summary>It ended any other way - cancelled, timed out, waiting on a person, stale, never started - which only a second run of it settles.</summary>
+    Unsettled,
+}
 
 /// <summary>The conclusions a forge records, spelled once so no comparison invents a spelling.</summary>
 public static class CiConclusions
@@ -67,6 +124,37 @@ public static class CiConclusions
 
     /// <summary>The conclusion of a job that never ran.</summary>
     public const string Skipped = "skipped";
+
+    /// <summary>The conclusion of a check that found nothing to judge either way.</summary>
+    public const string Neutral = "neutral";
+
+    /// <summary>
+    /// What a check that ended with <paramref name="conclusion"/> came to: <see cref="Failure"/> alone is red;
+    /// <see cref="Success"/>, <see cref="Neutral"/> and <see cref="Skipped"/> are green; anything else ended without
+    /// either, and is unsettled.
+    /// </summary>
+    /// <param name="conclusion">The check's conclusion.</param>
+    public static CiCheckState Of(string? conclusion)
+        => conclusion switch
+        {
+            Failure => CiCheckState.Red,
+            Success or Neutral or Skipped => CiCheckState.Green,
+            _ => CiCheckState.Unsettled,
+        };
+
+    /// <summary>
+    /// What a commit status in <paramref name="state"/> came to: <c>failure</c> and <c>error</c> are red, <c>success</c>
+    /// green, <c>pending</c> not ended, and a state no forge writes unsettled.
+    /// </summary>
+    /// <param name="state">The status's state.</param>
+    public static CiCheckState OfStatus(string state)
+        => state switch
+        {
+            Failure or "error" => CiCheckState.Red,
+            Success => CiCheckState.Green,
+            "pending" => CiCheckState.Pending,
+            _ => CiCheckState.Unsettled,
+        };
 }
 
 /// <summary>What check-ci-legs found for one leg.</summary>

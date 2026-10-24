@@ -49,8 +49,10 @@ public interface IFileSystem
 
     /// <summary>
     /// Puts the file at <paramref name="source"/> in place of <paramref name="destination"/> in one step - a rename over
-    /// whatever is there - so a reader never sees a file half written. Windows refusing for a moment, while another
-    /// process holds the destination, is tried again a few times before it is reported.
+    /// whatever is there - so a reader never sees a file half written. On every system it is renamed as POSIX renames: one
+    /// who holds the old file open, sharing its deletion as every read here does, goes on reading the old one, and Windows'
+    /// own rename is used only where a volume cannot. Windows refusing for a moment, while another process holds the
+    /// destination without sharing its deletion, is tried again a few times before it is reported.
     /// </summary>
     /// <param name="source">A file written beside the destination, on the same volume.</param>
     /// <param name="destination">The file it replaces, or where it goes.</param>
@@ -156,21 +158,10 @@ public interface IFileSystem
     /// <summary>Enumerates immediate subdirectories of <paramref name="path"/>.</summary>
     IEnumerable<string> EnumerateDirectories(string path);
 
-    /// <summary>Reads a whole file as UTF-8 text.</summary>
-    string ReadAllText(string path);
-
-    /// <summary>Reads a whole file's bytes, as they are.</summary>
-    /// <param name="path">The file.</param>
-    byte[] ReadAllBytes(string path);
-
-    /// <summary>Reads a whole file's bytes, as they are, stopping between one block and the next when asked.</summary>
-    /// <param name="path">The file.</param>
-    /// <param name="cancellationToken">Stops the read.</param>
-    Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default);
-
     /// <summary>
-    /// Opens a file for reading its bytes. Streamed rather than read whole, because a tree sync
-    /// hashes every file in a repository and holding one in memory per file bounds nothing.
+    /// Opens a file for reading its bytes: the one way a file is read, a whole one included (<see cref="WholeFiles"/>).
+    /// Streamed rather than read whole, because a tree sync hashes every file in a repository and holding one in memory
+    /// per file bounds nothing, and a record read straight from it is never held as a text besides.
     /// </summary>
     /// <param name="path">The file to open.</param>
     Stream OpenRead(string path);
@@ -253,11 +244,16 @@ public interface IFileSystem
     Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Writes UTF-8 text, without a byte order mark, to a sibling temporary file and
-    /// renames it over the target, so a reader never observes a half-written file and
-    /// a crash never truncates one.
+    /// Writes a file through <paramref name="write"/>, which is given a sibling temporary file to write, and renames
+    /// that over the target once it returns (<see cref="ReplaceFile"/>), so a reader never observes a half-written file, a
+    /// crash never truncates one, and one who is reading the old file goes on reading it. The way a file is written whole
+    /// from what is made as it is written - a record, a text (<see cref="WholeFiles"/>); bytes already in hand are written
+    /// by <see cref="WriteAllBytesAtomicAsync"/>. What <paramref name="write"/> raises leaves the target as it was and the
+    /// temporary file gone.
     /// </summary>
-    void WriteAllTextAtomic(string path, string contents);
+    /// <param name="path">The file to write, its directory made where it is not there.</param>
+    /// <param name="write">Writes the file's bytes, a little at a time, so a large record is never held whole.</param>
+    void WriteAtomic(string path, Action<Stream> write);
 
     /// <summary>
     /// Restricts a file to the current user: mode 0600 on Unix, which SSH requires of

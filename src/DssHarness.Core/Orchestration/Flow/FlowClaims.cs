@@ -72,7 +72,8 @@ public static class FlowClaims
     /// The agent the step's <c>in</c> or <c>of</c> names, as the run resolved it: the one that step's instance of the
     /// create-agent made, so each item of a <c>forEach</c> claims its own agent's tree and never a sibling's. Null where
     /// the step names none, or the run has made none for it yet - the name the step wrote is then the tree, which is
-    /// one tree for every instance that names it.
+    /// one tree for every instance that names it. For a step of <c>others</c>, the target whose turn it is: its tree
+    /// alone is the step's, never the main tree for it, and none where no target is left.
     /// </param>
     public static IReadOnlyList<FlowClaim> Of(WorkflowStep step, IFlowRunnerFacts runners, string? agent = null)
     {
@@ -80,7 +81,7 @@ public static class FlowClaims
         ArgumentNullException.ThrowIfNull(runners);
 
         var writesTree = step.Type == "run" && step.Runner is { } runner && runners.WritesTree(runner);
-        var tree = step.In is null && step.Of is null ? Main : agent ?? step.In ?? step.Of!;
+        var tree = step.Others is not null ? agent : step.In is null && step.Of is null ? Main : agent ?? step.In ?? step.Of!;
         var claims = new List<FlowClaim>();
 
         foreach (var held in TypeOf(step)?.ClaimsOf ?? [])
@@ -90,20 +91,22 @@ public static class FlowClaims
                 case "read main":
                     claims.Add(new(Main, FlowClaimKind.Read));
                     break;
+                case "read the agent's tree where in names one" when step.In is not null && tree is not null:
+                    claims.Add(new(tree, FlowClaimKind.Read));
+                    break;
                 case "write main":
                     claims.Add(new(Main, FlowClaimKind.Write));
                     break;
-                case "run(tree)" when !writesTree:
+                case "run(tree)" when !writesTree && tree is not null:
                     claims.Add(new(tree, FlowClaimKind.Run));
                     break;
-                case "write(tree) where its runner says writesTree" when writesTree:
+                case "write(tree) where its runner says writesTree" when writesTree && tree is not null:
                     claims.Add(new(tree, FlowClaimKind.Write));
                     break;
-                case "write the agent's tree":
-                case "write its target":
+                case "write the agent's tree" or "write its target" when tree is not null:
                     claims.Add(new(tree, FlowClaimKind.Write));
                     break;
-                case "write the agent's tree where its access is write" when step.Access == "write":
+                case "write the agent's tree where its access is write" when step.Access == "write" && tree is not null:
                     claims.Add(new(tree, FlowClaimKind.Write));
                     break;
                 case "the remote resource":
@@ -134,7 +137,22 @@ public static class FlowClaims
 /// </summary>
 public interface IFlowRunnerFacts
 {
-    /// <summary>Whether the runner <paramref name="runner"/> writes the tree it works in (<c>writesTree</c>).</summary>
+    /// <summary>
+    /// Whether a run of the runner <paramref name="runner"/> writes the tree it works in (<c>writesTree</c>): the runner
+    /// says so, or a runner its run checks name does.
+    /// </summary>
     /// <param name="runner">A runner's name, as a <c>run</c> step names it.</param>
     bool WritesTree(string runner);
+}
+
+/// <summary>
+/// The runner facts of one run, read from the configuration it runs under: a run of a runner writes the tree where
+/// <see cref="Configuration.HarnessConfig.WritingRunners"/> names any - the one answer the <c>run</c> step's runner works
+/// in place by, and the definition's check refuses on the main tree.
+/// </summary>
+/// <param name="config">The configuration the run runs under.</param>
+public sealed class ConfiguredRunnerFacts(Configuration.HarnessConfig config) : IFlowRunnerFacts
+{
+    /// <inheritdoc/>
+    public bool WritesTree(string runner) => config.WritingRunners(runner).Count > 0;
 }

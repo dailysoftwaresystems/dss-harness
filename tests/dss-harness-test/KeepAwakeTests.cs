@@ -48,6 +48,7 @@ public sealed class KeepAwakeTests
         Assert.Equal(["-dimsu", "-w", Environment.ProcessId.ToString(CultureInfo.InvariantCulture)], request.Arguments);
         Assert.Equal("mac", request.Environment["RH_HOST"]);
         Assert.Equal(Directories, request.ProgramDirectories.Appended);
+        Assert.True(request.Bound, "the command is a process the leg starts on this machine, bound to the process running it");
         Assert.False(stopping.IsCancellationRequested);
 
         await holding.DisposeAsync();

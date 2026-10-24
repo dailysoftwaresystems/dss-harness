@@ -390,14 +390,14 @@ public sealed class InitServiceTests
         /// <summary>Why it will not.</summary>
         public const string Why = "the device is not ready.";
 
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
             if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(refused), StringComparison.OrdinalIgnoreCase))
             {
                 throw new IOException(Why);
             }
 
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
         }
     }
 

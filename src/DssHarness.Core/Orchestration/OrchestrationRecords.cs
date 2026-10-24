@@ -365,13 +365,22 @@ public sealed record SeedRecord
     /// </summary>
     public List<string>? Absent { get; init; }
 
+    /// <summary>
+    /// Whether handing the agent the main tree's uncommitted state stopped part way as it was made, so its seed names only
+    /// what was handed before it stopped: the agent is not whole (<see cref="AgentService.MakingUnfinished"/>) until a seed
+    /// finishes the hand-over, which writes it absent. True or absent, so a whole agent's seed says nothing of it.
+    /// </summary>
+    public bool? HandOverStopped { get; init; }
+
     /// <summary>Every path it shares with the main tree: each a fold weighs whatever the agent's status says.</summary>
     [JsonIgnore]
     public IEnumerable<string> Weighed => Paths.Keys.Concat(Absent ?? []);
 
     /// <summary>What is wrong with it; null when nothing is.</summary>
     public string? Problem()
-        => Empty && (Paths.Count > 0 || Absent is { Count: > 0 }) ? "it was handed nothing, and names paths it shares"
+        => HandOverStopped is false ? "it says its hand-over did not stop, which only its absence says"
+            : Empty && HandOverStopped is true ? "it was handed nothing, and says handing it over stopped part way"
+            : Empty && (Paths.Count > 0 || Absent is { Count: > 0 }) ? "it was handed nothing, and names paths it shares"
             : Executable?.FirstOrDefault(path => !Paths.ContainsKey(path)) is { } stray ? $"'{stray}' is named executable, and it holds no file there"
             : Absent?.FirstOrDefault(Paths.ContainsKey) is { } both ? $"'{both}' is named both as a file and as absent"
             : Absent?.Count != Absent?.Distinct(StringComparer.Ordinal).Count() ? "it names a path absent twice"
@@ -466,6 +475,50 @@ public static partial class OrchestrationRules
     public static int LongestGeneratedAgentName(int mostInstances)
         => GeneratedAgentPrefix.Length + Math.Max(mostInstances, 1).ToString(System.Globalization.CultureInfo.InvariantCulture).Length;
 
+    /// <summary>
+    /// The name a run gives the next agent it makes: <see cref="GeneratedAgentPrefix"/> and one past the highest number any
+    /// of <paramref name="taken"/> carries - the run's agent directories and the names its steps' records hold - so a
+    /// name is never given twice, a deleted agent's included. Names of another shape are no number, and count for none,
+    /// a number too large to give among them.
+    /// </summary>
+    /// <param name="taken">Every name the run has given or holds.</param>
+    public static string NextAgentName(IEnumerable<string> taken)
+    {
+        ArgumentNullException.ThrowIfNull(taken);
+
+        var highest = taken
+            .Select(NumberOf)
+            .OfType<long>()
+            .Where(number => number < long.MaxValue)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        return GeneratedAgentPrefix + (highest + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// The order agents' names go in where a run takes its agents in turn: the names it gives, <see cref="GeneratedAgentPrefix"/>
+    /// and a number, by that number - <c>a2</c> before <c>a10</c> - and every other name after them, as ordinal text orders it.
+    /// </summary>
+    public static IComparer<string> AgentNameOrder { get; } = Comparer<string>.Create((one, other) =>
+        (NumberOf(one), NumberOf(other)) switch
+        {
+            ({ } first, { } second) when first != second => first.CompareTo(second),
+            ({ }, null) => -1,
+            (null, { }) => 1,
+            _ => string.CompareOrdinal(one, other),
+        });
+
+    /// <summary>The number a name the run gave carries after <see cref="GeneratedAgentPrefix"/>; null for a name of another shape.</summary>
+    private static long? NumberOf(string name)
+        => name.Length > GeneratedAgentPrefix.Length
+            && name.StartsWith(GeneratedAgentPrefix, StringComparison.Ordinal)
+            && name[GeneratedAgentPrefix.Length] != '0'
+            && name.Skip(GeneratedAgentPrefix.Length).All(char.IsAsciiDigit)
+            && long.TryParse(name.AsSpan(GeneratedAgentPrefix.Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var number)
+                ? number
+                : null;
+
     /// <summary>What is wrong with an agent's name beside its orchestrator's: never the same, since the two would share a log and a plans directory.</summary>
     /// <param name="orchestrator">The orchestrator's name.</param>
     /// <param name="agent">The agent's name.</param>
@@ -513,11 +566,19 @@ public static partial class OrchestrationRules
             ? null
             : $"'{session}' is not a Claude session's id: letters, digits, hyphens and underscores, at most 128, beginning with a letter or a digit";
 
+    /// <summary>Whether <paramref name="id"/> is an id git gives an object - a commit's, a blob's: forty or sixty-four lower-case hexadecimal characters.</summary>
+    /// <param name="id">The id.</param>
+    public static bool IsObjectId(string? id) => id is not null && CommitPattern().IsMatch(id);
+
+    /// <summary>Whether <paramref name="digest"/> is a SHA-256 digest: sixty-four lower-case hexadecimal characters.</summary>
+    /// <param name="digest">The digest.</param>
+    public static bool IsDigest(string? digest) => digest is not null && DigestPattern().IsMatch(digest);
+
     /// <summary>What is wrong with a commit's id; null where it is one, or where none is recorded.</summary>
     /// <param name="commit">The id.</param>
     /// <param name="what">What it is, for the reason.</param>
     public static string? CommitProblem(string? commit, string what)
-        => commit is null || CommitPattern().IsMatch(commit) ? null : $"its {what}, '{commit}', is not a commit's id";
+        => commit is null || IsObjectId(commit) ? null : $"its {what}, '{commit}', is not a commit's id";
 
     /// <summary>What is wrong with a SHA-256 digest; null where it is one, or, where <paramref name="allowNone"/>, where it is null.</summary>
     /// <param name="digest">The digest.</param>
@@ -525,7 +586,7 @@ public static partial class OrchestrationRules
     /// <param name="allowNone">Whether null - no file there - is allowed.</param>
     public static string? DigestProblem(string? digest, string path, bool allowNone)
         => digest is null ? (allowNone ? null : $"'{path}' has no digest")
-            : DigestPattern().IsMatch(digest) ? null
+            : IsDigest(digest) ? null
             : $"'{path}' has '{digest}', which is not a SHA-256 digest";
 
     /// <summary>

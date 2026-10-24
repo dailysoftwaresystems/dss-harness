@@ -381,7 +381,8 @@ public sealed class WorkflowExportServiceTests
                 harness.ContextLoader,
                 files,
                 harness.Platform,
-                new DssHarness.Core.Secrets.AgentKeyStore(files, harness.FilePermissions, harness.Platform)),
+                new DssHarness.Core.Secrets.AgentKeyStore(files, harness.FilePermissions, harness.Platform),
+                DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
             files,
             process ?? new FixedProcessContext());
     }
@@ -431,7 +432,7 @@ public sealed class WorkflowExportServiceTests
     {
         private int _writes;
 
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
             if (++_writes == failOn)
             {
@@ -439,7 +440,7 @@ public sealed class WorkflowExportServiceTests
                 throw new IOException("the disk is full.");
             }
 
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
 
             // Stopped once this many files are written, as a person's interrupt would stop it between two.
             if (stop is { } asked && _writes == asked.After)

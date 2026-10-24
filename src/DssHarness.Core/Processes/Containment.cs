@@ -60,20 +60,23 @@ internal static class Containment
             : PlaceOnPosix(group, program, arguments, status);
 
     /// <summary>
-    /// Ends a contained child's whole session on Linux and macOS: every process in it, and while the
+    /// Ends a contained child's whole session on Linux and macOS - or, where <paramref name="group"/>, the whole process
+    /// group a child apart from the terminal leads within its starter's session: every process in it, and while the
     /// child stands every one in its tree, is asked to end - the group as one, each member outside
     /// the group on its own - and every one still standing once they have all gone or
     /// <paramref name="grace"/> is spent is killed.
     /// </summary>
-    /// <param name="leader">The child, which leads the session and the group by its own process id.</param>
+    /// <param name="leader">The child, which leads the session and the group, or the group alone, by its own process id.</param>
     /// <param name="read">Reads the machine's process table.</param>
     /// <param name="grace">How long the asking signal is given to be obeyed.</param>
+    /// <param name="group">Whether the child leads a process group alone, in a session that is not its own.</param>
     /// <returns>
-    /// What could not be reached, and why, or <see langword="null"/> where the session was read
-    /// each time it was looked for. A table that cannot be read - on macOS it is read through
+    /// Whether anything was still in it to end, and what could not be reached, and why - none where
+    /// it was read each time it was looked for. A table that cannot be read - on macOS it is read through
     /// <c>ps</c>, which a session that has used up every process it may start leaves unable to start -
     /// ends nothing less than the group: the group is signalled by its id, which needs no table, and
-    /// only what left it goes unreached.
+    /// only what left it goes unreached. The leader need not stand: what it led is read by its id,
+    /// which no later process is given while a session or a group still carries it.
     /// </returns>
     /// <remarks>
     /// <para>
@@ -90,20 +93,26 @@ internal static class Containment
     /// under the same id and start, so an id given to another process meanwhile is left alone. A
     /// session with nothing in it is not read again, nor signalled. A process that left
     /// both the session and the tree - a daemon that made a session of its own and whose parent
-    /// has gone - is reached by nothing here.
+    /// has gone - is reached by nothing here. A group is ended the same way, by its own members and
+    /// the leader's tree, never by the session it shares with the process that started it.
     /// </para>
     /// </remarks>
-    public static async Task<string?> EndSessionAsync(int leader, Func<CancellationToken, Task<ProcessTableReading>> read, TimeSpan grace)
+    public static async Task<HeldEnding> EndSessionAsync(int leader, Func<CancellationToken, Task<ProcessTableReading>> read, TimeSpan grace, bool group = false)
     {
         ArgumentNullException.ThrowIfNull(read);
 
         var calls = Posix.Calls();
-        var (first, unread) = await ReadAsync(read).ConfigureAwait(false);
-        var members = first is null ? [] : Members(first, leader);
 
-        if (members.Count == 0 && calls.SignalGroup(leader, 0) == -1)
+        // What the leader leads: its session, or its group alone - never the session it shares with its starter.
+        bool In(int process) => (group ? calls.GroupOf(process) : calls.SessionOf(process)) == leader;
+
+        var held = group ? "the process group a child apart from the terminal led" : "the contained child's session";
+        var (first, unread) = await ReadAsync(read).ConfigureAwait(false);
+        var members = first is null ? [] : Members(first, leader, In);
+
+        if (members.Count == 0 && !GroupHolds(leader))
         {
-            return unread is null ? null : Unreached(unread, "its group had already ended");
+            return unread is null ? new HeldEnding(Found: false, null) : new HeldEnding(Found: true, Unreached(unread, held, "its group had already ended"));
         }
 
         calls.SignalGroup(leader, Posix.AskToEnd);
@@ -126,36 +135,55 @@ internal static class Containment
 
         if (unread is not null)
         {
-            return Unreached(unread, "its group was ended");
+            return new HeldEnding(Found: true, Unreached(unread, held, "its group was ended"));
         }
 
         var (again, unreadAgain) = await ReadAsync(read).ConfigureAwait(false);
 
         if (again is null)
         {
-            // Still a member of the session is still one of the run's, whoever its parent: only what
-            // left the session can no longer be told from another process under the same id.
-            foreach (var member in members.Where(member => calls.SessionOf(member.Id) == leader))
+            // Still a member of the session - or the group - is still one of the run's, whoever its
+            // parent: only what left it can no longer be told from another process under the same id.
+            foreach (var member in members.Where(member => In(member.Id)))
             {
                 calls.Signal(member.Id, Posix.Kill);
             }
 
-            return $"the process table could not be read again once the contained child's session had been asked to end ({unreadAgain}): "
-                + "its group and what the first reading found still in the session were ended, and what was started meanwhile outside the group, "
-                + "and what of its tree had left the session, was not reached";
+            return new HeldEnding(
+                Found: true,
+                group
+                    ? $"the process table could not be read again once {held} had been asked to end ({unreadAgain}): "
+                        + "its group was ended, and what of its tree had left the group was not reached"
+                    : $"the process table could not be read again once {held} had been asked to end ({unreadAgain}): "
+                        + "its group and what the first reading found still in the session were ended, and what was started meanwhile outside the group, "
+                        + "and what of its tree had left the session, was not reached");
         }
 
         // Known by id and start alone: a process handed to another parent, or one that became
         // another program, is still the one the first reading found.
         var known = members.Select(member => (member.Id, member.StartedUtc)).ToHashSet();
 
-        foreach (var member in again.Processes.Where(process => known.Contains((process.Id, process.StartedUtc)) || calls.SessionOf(process.Id) == leader))
+        foreach (var member in again.Processes.Where(process => known.Contains((process.Id, process.StartedUtc)) || In(process.Id)))
         {
             calls.Signal(member.Id, Posix.Kill);
         }
 
-        return null;
+        return new HeldEnding(Found: true, null);
     }
+
+    /// <summary>
+    /// Whether the process group <paramref name="leader"/> leads still holds a process, on Linux and macOS: a group with
+    /// nothing left in it cannot be signalled, and the signal with no number asks nothing of one that can.
+    /// </summary>
+    /// <param name="leader">The id of the group, its leader's whether or not the leader stands.</param>
+    public static bool GroupHolds(int leader) => Posix.Calls().SignalGroup(leader, 0) != -1;
+
+    /// <summary>
+    /// Kills every process in the group <paramref name="leader"/> leads, on Linux and macOS, at once: what a stop of a child
+    /// that leads a group of its own reaches beside its tree - a process its tree handed on, still in the group.
+    /// </summary>
+    /// <param name="leader">The id of the group.</param>
+    public static void KillGroup(int leader) => Posix.Calls().SignalGroup(leader, Posix.Kill);
 
     /// <summary>The process table, or why it could not be read: a reading that fails takes nothing from the stop it was taken for.</summary>
     private static async Task<(ProcessTableReading? Reading, string? Unread)> ReadAsync(Func<CancellationToken, Task<ProcessTableReading>> read)
@@ -170,27 +198,26 @@ internal static class Containment
         }
     }
 
-    /// <summary>What a session ended without its table did not reach, and why.</summary>
-    private static string Unreached(string why, string ended)
-        => $"the process table could not be read to end the contained child's session ({why}): {ended}, "
+    /// <summary>What a session or a group ended without its table did not reach, and why.</summary>
+    private static string Unreached(string why, string held, string ended)
+        => $"the process table could not be read to end {held} ({why}): {ended}, "
             + "and what it started outside the group was not reached";
 
     /// <summary>
-    /// Every process of <paramref name="reading"/> in the session <paramref name="leader"/> leads, and
-    /// while the leader stands every one in its tree: the leader itself among them.
+    /// Every process of <paramref name="reading"/> in the session or the group <paramref name="leader"/>
+    /// leads, and while the leader stands every one in its tree: the leader itself among them.
     /// </summary>
     /// <remarks>
-    /// The tree is read only while its root is still the session's leader. One that has ended is no
+    /// The tree is read only while its root still leads what it led. One that has ended is no
     /// one's parent - what it started was handed on - and its id may already be another process's,
     /// whose tree this run never started.
     /// </remarks>
-    private static List<SampledProcess> Members(ProcessTableReading reading, int leader)
+    private static List<SampledProcess> Members(ProcessTableReading reading, int leader, Func<int, bool> led)
     {
-        var calls = Posix.Calls();
         var byId = reading.Processes.GroupBy(process => process.Id).ToDictionary(same => same.Key, same => same.First());
-        var stands = calls.SessionOf(leader) == leader;
+        var stands = led(leader);
 
-        return [.. byId.Values.Where(process => calls.SessionOf(process.Id) == leader || (stands && ProcessSampler.InHarnessTree(process, byId, leader)))];
+        return [.. byId.Values.Where(process => led(process.Id) || (stands && ProcessSampler.InHarnessTree(process, byId, leader)))];
     }
 
     /// <summary>
@@ -250,8 +277,10 @@ internal static class Containment
         }
 
         // Said before the program is become, which closes the channel: a channel closed after this
-        // line and nothing more is a program that is running.
-        status.Placed();
+        // line and nothing more is a program that is running. The start said with it is this process's,
+        // which the program it becomes keeps: read here, while it stands, it is what a record of the
+        // child tells it from a later process by, however soon the program ends.
+        status.Placed(new ProcessIdentity(new HostPlatform()).Current);
 
         try
         {

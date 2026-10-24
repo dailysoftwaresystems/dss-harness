@@ -41,7 +41,7 @@ public sealed class HarnessFactory
         Output = new ConsoleHarnessOutput(StandardOutput, StandardError, verbose, home);
 
         FileSystem = new PhysicalFileSystem(FilePermissions);
-        ProcessRunner = new ProcessRunner(Platform, FilePermissions);
+        ProcessRunner = new ProcessRunner(Platform, FilePermissions, CliRunner.CliProgram);
         ProcessTable = ProcessTableFactory.Create(Platform, ProcessRunner);
         GitClient = new GitClient(ProcessRunner, Output, localVariables: LocalVariables);
         RepositoryLocator = new RepositoryLocator(GitClient);
@@ -141,14 +141,14 @@ public sealed class HarnessFactory
     }
 
     /// <summary>
-    /// The records of orchestrators' contained children over <paramref name="fileSystem"/>, ending what a killed process
+    /// The records of what orchestrators' steps leave running over <paramref name="fileSystem"/>, ending what a gone process
     /// left as the real command ends it, and saying so on this factory's output.
     /// </summary>
     /// <param name="fileSystem">Reads, writes and removes the records.</param>
     public ChildSessions SessionsOver(IFileSystem fileSystem)
         => new(fileSystem, Identity, new LeftSessions(Platform, ProcessTable), Output, new EndedChildSessions());
 
-    /// <summary>The records of orchestrators' contained children over the real disk.</summary>
+    /// <summary>The records of what orchestrators' steps leave running over the real disk.</summary>
     public ChildSessions ChildSessions { get; }
 
     /// <summary>
@@ -190,7 +190,7 @@ public sealed class HarnessFactory
     public GitLocalVariables LocalVariables => SharedLocalVariables;
 
     private static readonly GitLocalVariables SharedLocalVariables = new(
-        new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()));
+        new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram));
 
     public IRepositoryLocator RepositoryLocator { get; }
 
@@ -270,6 +270,17 @@ public sealed class HarnessFactory
     public IOrchestratorService OrchestratorService { get; }
 
     public AgentService AgentService { get; }
+
+    /// <summary>The sync of a run's codebase graph over this build's implementations, as the tool registers it: one for the factory, as one for the process.</summary>
+    public DssHarness.Core.Codebase.CodebaseGraphService CodebaseGraph
+        => _codebaseGraph ??= new(GitClient, FileSystem, OrchestrationStore, DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild, Platform, RunningTool, Output, TimeProvider.System);
+
+    /// <summary>The engine's own syncs of a run's codebase graph, over <see cref="CodebaseGraph"/>.</summary>
+    public DssHarness.Core.Orchestration.Flow.FlowGraphSyncs GraphSyncs
+        => _graphSyncs ??= new(CodebaseGraph, OrchestrationStore, new DssHarness.Core.Orchestration.Flow.FoldLedger(OrchestrationStore, FileSystem, TimeProvider.System), ContextLoader, Platform, FileSystem, Output, TimeProvider.System);
+
+    private DssHarness.Core.Codebase.CodebaseGraphService? _codebaseGraph;
+    private DssHarness.Core.Orchestration.Flow.FlowGraphSyncs? _graphSyncs;
 
     /// <summary>Creates a git repository with one commit, so worktrees can be added.</summary>
     public async Task InitializeGitRepositoryAsync(string path, CancellationToken cancellationToken)

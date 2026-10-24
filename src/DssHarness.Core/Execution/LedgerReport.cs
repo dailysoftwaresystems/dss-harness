@@ -69,6 +69,9 @@ public sealed record LedgerLine(
     /// <summary>The last lines the leg's last phase that did not pass printed, as <see cref="LegEntry.LogTail"/> says.</summary>
     public IReadOnlyList<string> LogTail { get; init; } = [];
 
+    /// <summary>The phase <see cref="LogTail"/>'s lines are of, as <see cref="LegEntry.TailPhase"/> says.</summary>
+    public string? TailPhase { get; init; }
+
     /// <summary>The compilers CMake configured the leg's build with.</summary>
     public IReadOnlyList<Build.CompilerFact> Compilers { get; init; } = [];
 
@@ -376,6 +379,7 @@ public sealed class LedgerReport
                     ManualSteps = entry.ManualSteps,
                     UnselectedSteps = entry.UnselectedSteps,
                     LogTail = entry.LogTail,
+                    TailPhase = entry.TailPhase,
                     Compilers = entry.Compilers,
                     DeveloperEnvironment = entry.DeveloperEnvironment,
                     SetUps = entry.SetUps,
@@ -734,6 +738,7 @@ public sealed class LedgerReport
 
                 // Only for a leg that has one: a phase of its own did not pass.
                 LogTail = line.LogTail.Count > 0 ? line.LogTail : null,
+                line.TailPhase,
 
                 // Only where CMake named the compilers it configured the leg's build with.
                 Compilers = line.Compilers.Count > 0

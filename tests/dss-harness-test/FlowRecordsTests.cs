@@ -57,6 +57,15 @@ public sealed class FlowRecordsTests
         var itemWithoutIndex = step with { Instance = "one", Item = JsonNode.Parse("""{"a": 1}""") };
         Assert.Contains("an item without its index", itemWithoutIndex.Problem(), StringComparison.Ordinal);
 
+        // The agent a step works in and the one it makes each name a directory of the run: held to the one name rule.
+        Assert.Null((step with { Instance = "one", Agent = "a1", Made = "a2" }).Problem());
+
+        foreach (var name in new[] { "../a1", "a/b", "a b", " " })
+        {
+            Assert.Equal($"its agent: {OrchestrationRules.NameProblem(name)}", (step with { Instance = "one", Agent = name }).Problem());
+            Assert.Equal($"the agent it makes: {OrchestrationRules.NameProblem(name)}", (step with { Instance = "one", Made = name }).Problem());
+        }
+
         var owner = new RunOwner(string.Empty, 0, DateTimeOffset.UtcNow);
         Assert.NotNull(owner.Problem());
 
@@ -309,6 +318,75 @@ public sealed class FlowRecordsTests
         Assert.Equal("a1", work.Agent);
     }
 
+    /// <summary>
+    /// The records name the next agent one past the highest a&lt;N&gt; the run's agent directories hold and every name its
+    /// steps hold - a directory of another shape counting for none.
+    /// </summary>
+    [Fact]
+    public void TheRecords_NameTheNextAgent_OverTheRunsAgentDirectories()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, _, records) = Records("r1", temp.Path, Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+            """), new ManualClock());
+
+        using (records)
+        {
+            harness.FileSystem.CreateDirectory(layout.AgentDirectory("a8"));
+            harness.FileSystem.CreateDirectory(layout.AgentDirectory("notes"));
+            harness.FileSystem.CreateDirectory(layout.AgentDirectory("a099"));
+            IFlowRecords named = records;
+
+            Assert.Equal("a9", named.NameAgent(["a3"]));
+            Assert.Equal("a13", named.NameAgent(["a12"]));
+        }
+    }
+
+    /// <summary>
+    /// A step that works in an agent names no agent while its create-agent step runs - the agent is named, not yet made -
+    /// and names it once it is made. Here the step does not wait for the making, as the definition's check would refuse,
+    /// so the two run at once.
+    /// </summary>
+    [Fact]
+    public async Task AStepWorkingInAnAgent_NamesItOnlyOnceItIsMade()
+    {
+        using var temp = new TempDirectory();
+        var clock = new ManualClock();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: worker.md
+              - name: work
+                type: build
+                in: make
+            """);
+        var runner = new Runner().Hold("make").Hold("work");
+        var (harness, layout, _, records) = Records("r1", temp.Path, definition, clock);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+            await runner.StartedAsync("make").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            await runner.StartedAsync("work").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            var running = harness.OrchestrationStore.ReadFlow(layout)!.Steps;
+            Assert.Equal("a1", running.Single(step => step.Instance == "make").Made);
+            Assert.Null(running.Single(step => step.Instance == "work").Agent);
+
+            runner.Complete("make");
+            runner.Complete("work");
+            await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal("a1", harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "work").Agent);
+    }
+
     /// <summary>The handoff a safe pause writes is a file in the stopped step's own directory, and it is removed once the next attempt is given it.</summary>
     [Fact]
     public async Task TheHandoffIsAFileInTheStoppedStepsDirectory_RemovedOnceGiven()
@@ -549,6 +627,28 @@ public sealed class FlowRecordsTests
         Assert.NotEqual(FlowRunContext.DigestOf(here), FlowRunContext.DigestOf(changed));
     }
 
+    /// <summary>
+    /// A run's codebase graph is frozen - and digested - as the file says it, never with the shape this build's defaults
+    /// make of it: a key the file leaves out stays out, so a build whose defaults moved reads the same definition.
+    /// </summary>
+    [Fact]
+    public void AFrozenCodebaseGraph_HoldsWhatTheFileSays_NeverThisBuildsDefaults()
+    {
+        var definition = Parse("""
+            name: flow
+            codebaseGraph:
+              include: ['src/**']
+            steps:
+              - name: one
+                type: orient
+            """);
+
+        var frozen = JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(definition with { Path = string.Empty }, JsonStateFile.Options))!;
+
+        Assert.Equal("""{"include":["src/**"]}""", frozen["codebaseGraph"]!.ToJsonString());
+        Assert.Equal(DssHarness.Core.Codebase.CodebaseGraphShape.DefaultMaxFileBytes, definition.CodebaseGraph!.Shape.MaxFileBytes);
+    }
+
     /// <summary>A runner that answers each step as its test scripted it, holding open the steps the test wants to time and recording the handoffs its attempts are given.</summary>
     private sealed class Runner : IFlowStepRunner
     {
@@ -663,9 +763,9 @@ public sealed class FlowRecordsTests
         /// <summary>Each file written atomically, in the order they were written.</summary>
         public List<string> Writes { get; } = [];
 
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
             Writes.Add(path);
         }
     }

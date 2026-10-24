@@ -33,7 +33,7 @@ internal static class FixLineEndingsCommand
     {
         var command = new Command(
             Name,
-            "Rewrite files to the line endings .gitattributes declares for them, read through 'git check-attr'. The policy is never restated here, so one statement of it governs both what git stores and what this writes.");
+            "Rewrite files to the line endings .gitattributes declares for them, read through 'git check-attr'. The policy is never restated here, so one statement of it governs both what git stores and what this writes. A file declared text=auto that git's own detection calls binary - a NUL anywhere, a carriage return no line feed follows, or more than one control byte for every 128 that print - is left as git leaves it; one declared text, or given an eol alone, is rewritten whatever it holds, as git converts it.");
 
         command.Options.Add(AllOption);
         command.Options.Add(ChangedOption);

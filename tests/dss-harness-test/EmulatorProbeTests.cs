@@ -330,7 +330,7 @@ public sealed class EmulatorProbeTests
     private static LocalProgramResolver Resolver() => new(new HostPlatform(), FilePermissionsFactory.Create());
 
     private static EmulatorProbe Probe()
-        => new(Platform("linux", "x86_64"), new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()), FileSystem());
+        => new(Platform("linux", "x86_64"), new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram), FileSystem());
 
     private static IHostPlatform Platform(string os, string processor)
     {

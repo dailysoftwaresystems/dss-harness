@@ -101,18 +101,21 @@ public sealed class FlowEventLog : IDisposable
             return ([], null);
         }
 
-        var text = fileSystem.ReadAllText(file);
-        var lastNewline = text.LastIndexOf('\n');
-        var torn = lastNewline + 1 < text.Length
-            ? $"the log's last line has no newline and was set aside: '{text[(lastNewline + 1)..]}'"
-            : null;
-        var whole = lastNewline < 0 ? [] : text[..lastNewline].Split('\n');
+        string? torn = null;
         var events = new List<FlowEvent>();
+        var at = 0;
 
-        for (var at = 0; at < whole.Length; at++)
+        // A line at a time: the log grows with its run.
+        foreach (var (text, ended) in FileLines.Read(fileSystem, file))
         {
-            var line = whole[at].TrimEnd('\r');
-            var number = (at + 1).ToString(CultureInfo.InvariantCulture);
+            if (!ended)
+            {
+                torn = $"the log's last line has no newline and was set aside: '{text}'";
+                break;
+            }
+
+            var line = text.TrimEnd('\r');
+            var number = (++at).ToString(CultureInfo.InvariantCulture);
             FlowEvent? read;
 
             try

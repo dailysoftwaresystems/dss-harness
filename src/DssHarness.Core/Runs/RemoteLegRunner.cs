@@ -145,6 +145,11 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                     HoldStandardInputOpen = true,
                     StandardInputBeat = HostAgentProtocol.BeatOf(request),
 
+                    // Bound as a local leg's phase is: what reaches the host ends with this process on Windows, and
+                    // under a run's machine step is out of reach of the engine's terminal and recorded while it runs,
+                    // so a safe pause leaves the host's leg running and a killed engine leaves nothing unrecorded.
+                    Bound = true,
+
                     // What the host's command prints is relayed line by line, under --verbose every line of
                     // every step, and the end of it is all the result keeps; its ledger arrives whole, a
                     // line at a time, and is kept below.
@@ -391,6 +396,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
 
             // What the phase that failed there printed last: its log stays on that host.
             LogTail = [.. (entry.LogTail ?? []).Select(line => HostProbes.AsConfigured(line, connection))],
+            TailPhase = entry.TailPhase,
             Compilers = [.. entry.Compilers ?? []],
             DeveloperEnvironment = entry.DeveloperEnvironment,
 
@@ -505,7 +511,8 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         IReadOnlyList<PhaseLogFile>? Logs = null,
         PendingSweep? PendingSweep = null,
         IReadOnlyList<RemoteLedgerControl>? Controls = null,
-        IReadOnlyList<SetUps.SetUpFact>? SetUps = null);
+        IReadOnlyList<SetUps.SetUpFact>? SetUps = null,
+        string? TailPhase = null);
 
     /// <summary>One control of a host's sweep that did not pass, beneath its leg's line.</summary>
     private sealed record RemoteLedgerControl(

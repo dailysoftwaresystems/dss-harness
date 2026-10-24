@@ -20,9 +20,9 @@ public sealed record ChildInput
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly string? _text;
-    private readonly Action<Stream>? _write;
+    private readonly Action<Stream, CancellationToken>? _write;
 
-    private ChildInput(string? text, Action<Stream>? write)
+    private ChildInput(string? text, Action<Stream, CancellationToken>? write)
     {
         _text = text;
         _write = write;
@@ -48,6 +48,22 @@ public sealed record ChildInput
     {
         ArgumentNullException.ThrowIfNull(write);
 
+        return new(null, (stream, _) => write(stream));
+    }
+
+    /// <summary>
+    /// What <paramref name="write"/> writes to the child's input, as it writes it, told when the child has gone: for a
+    /// writer that waits for what to write - a conversation's next line - and would otherwise wait on a child that will
+    /// never read it, holding up the end of the run that started it.
+    /// </summary>
+    /// <param name="write">
+    /// Writes the input as <see cref="WrittenBy(Action{Stream})"/>'s writer does, given a token cancelled once the child
+    /// has exited, whereupon it returns, whatever it was still to write.
+    /// </param>
+    public static ChildInput WrittenBy(Action<Stream, CancellationToken> write)
+    {
+        ArgumentNullException.ThrowIfNull(write);
+
         return new(null, write);
     }
 
@@ -58,13 +74,18 @@ public sealed record ChildInput
 
     /// <summary>Writes the input to <paramref name="stream"/>, all of it, as UTF-8.</summary>
     /// <param name="stream">Where the child reads it from.</param>
-    public void WriteTo(Stream stream)
+    public void WriteTo(Stream stream) => WriteTo(stream, CancellationToken.None);
+
+    /// <summary>Writes the input to <paramref name="stream"/>, as UTF-8, until it is all written or the child has gone.</summary>
+    /// <param name="stream">Where the child reads it from.</param>
+    /// <param name="exited">Cancelled once the child has exited.</param>
+    public void WriteTo(Stream stream, CancellationToken exited)
     {
         ArgumentNullException.ThrowIfNull(stream);
 
         if (_write is not null)
         {
-            _write(stream);
+            _write(stream, exited);
             return;
         }
 

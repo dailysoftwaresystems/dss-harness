@@ -88,6 +88,30 @@ internal static class TestHost
     };
 
     /// <summary>
+    /// How <paramref name="request"/> - a child of this assembly, as <see cref="ChildRequest"/> makes it - is started by a
+    /// test itself, as a process of the test's own rather than through a runner: its program, its arguments and its
+    /// environment, the mode among them. One place, so no such start loses the mode and runs the test runner instead,
+    /// which prints its help and ends at once.
+    /// </summary>
+    /// <param name="request">The child, as a runner would be given it.</param>
+    internal static System.Diagnostics.ProcessStartInfo StartOf(ProcessRequest request)
+    {
+        var start = new System.Diagnostics.ProcessStartInfo(request.FileName) { UseShellExecute = false };
+
+        foreach (var argument in request.Arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        foreach (var (name, value) in request.Environment)
+        {
+            start.Environment[name] = value;
+        }
+
+        return start;
+    }
+
+    /// <summary>
     /// Points every git process the run starts at an empty configuration. A developer's
     /// global or system settings (commit signing, a global excludes file, core.autocrlf,
     /// hook paths) otherwise change what these tests observe, so a suite that passes on

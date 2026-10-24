@@ -375,7 +375,14 @@ public sealed class SharedCopiesTests
         Assert.Equal(HarnessExit.Incomplete, seeded.ExitCode);
         NamesShared(kit, "ag", seeded, succeeded: false);
 
+        // A making whose hand-over stopped is finished by a seed that finishes, before a refresh is taken; the refresh then
+        // stops part way on its own.
+        var finished = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: true, Token);
+
+        Assert.True(finished.Succeeded, OrchestrationKit.Describe(finished));
+
         OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit again\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit again\n");
         var refreshed = await stopping.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt", "b.txt"), apply: true, Token);
 
         Assert.Equal(HarnessExit.Incomplete, refreshed.ExitCode);
@@ -730,14 +737,14 @@ public sealed class SharedCopiesTests
     /// <summary>The real file system, except that one record cannot be written, as onto a disk with no room left.</summary>
     private sealed class UnwritableFileSystem(IFileSystem inner, string record) : PassThroughFileSystem(inner)
     {
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
             if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(record), StringComparison.OrdinalIgnoreCase))
             {
                 throw new IOException("There is not enough space on the disk.");
             }
 
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
         }
     }
 

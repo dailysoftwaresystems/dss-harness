@@ -130,7 +130,11 @@ public sealed record FlowEvent(
 /// </param>
 /// <param name="EndedByQuestion">The kind of the question whose <c>fail</c> answer ended this step, where one did.</param>
 /// <param name="Agent">The agent the step works in - as its <c>in</c> or <c>of</c> names, made by its create-agent - where it names one.</param>
-/// <param name="Made">The agent a create-agent step made, as its output names it; null for every other step.</param>
+/// <param name="Made">
+/// The agent a create-agent step makes: named by the engine and written here, with <paramref name="Model"/>, before
+/// anything makes it, so the step run again asks for the same agent; null for every other step, and for one whose name
+/// is spent.
+/// </param>
 /// <param name="Question">The id of the question the step asks and no answer has come for; null where none is open.</param>
 /// <param name="Handoff">The handoff a stop left, where one was written: who wrote it and why.</param>
 /// <param name="Output">The step's output, as later steps read it; null where it wrote none.</param>
@@ -145,7 +149,8 @@ public sealed record FlowEvent(
 /// <param name="NotRunCause">
 /// Which kind of reason the step is NotRun for, one of <see cref="FlowNotRunCause"/>'s names exactly: a resume runs one
 /// NotRun because the run ended before it (<c>RunEnded</c>), and one whose failed dependency runs again, and leaves one a
-/// standing failure or its group's failure blocks; null for every other state.
+/// standing failure or its group's failure blocks, and one whose agent was never made (<c>AgentNotMade</c>); null for
+/// every other state.
 /// </param>
 /// <param name="Issue">The pre-existing issue this instance was raised to triage, whole, as the reporting step reported it; null for every step the schedule starts.</param>
 /// <param name="IssuesOwed">
@@ -160,6 +165,16 @@ public sealed record FlowEvent(
 /// What its code alone cannot say of its ending, one of <see cref="OutcomeCause"/>'s names exactly: <c>LockHeld</c> for a
 /// refusal whose only obstacle was a lock another run held, which the retry table runs again and a run that ended on it
 /// counts as incomplete (21). Null for every other ending.
+/// </param>
+/// <param name="Model">The model the agent a create-agent step makes is made for, written with <paramref name="Made"/>; null where that is.</param>
+/// <param name="Copied">
+/// A leg step's: true once every leg of its attempt that works in a copy has it, and every one in the tree itself has
+/// ended, so the tree is let go while the legs work on; null until then, and for every other step.
+/// </param>
+/// <param name="Targets">
+/// A refresh's or a rebase's of <c>others</c>: each target, in the order of their names, with where it stands, how many
+/// attempts its turn ran and how it ended - what a resume goes on from, at the first whose turn has not ended; null for
+/// every other step, and before it starts.
 /// </param>
 public sealed record FlowStepRecord(
     string Instance,
@@ -196,7 +211,10 @@ public sealed record FlowStepRecord(
     FlowPreExistingReport? Issue = null,
     IReadOnlyList<FlowPreExistingReport>? IssuesOwed = null,
     string? LeftBy = null,
-    string? Cause = null)
+    string? Cause = null,
+    string? Model = null,
+    bool? Copied = null,
+    IReadOnlyList<FlowTargetRecord>? Targets = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -212,10 +230,16 @@ public sealed record FlowStepRecord(
             : Enum.GetValues<FlowFailure>().Where(value => string.Equals(NameOf(value), Failure, StringComparison.Ordinal)).Cast<FlowFailure?>().FirstOrDefault()
                 ?? throw new InvalidOperationException($"'{Failure}' is not where a failure leaves the run: {string.Join(", ", Failures)}.");
 
-    /// <summary>What is wrong with this record; null when nothing is.</summary>
+    /// <summary>
+    /// What is wrong with this record; null when nothing is. The agent it works in and the one it makes are held to the
+    /// one rule of agents' names, for each names a directory of the run - the step's own, its handoff's - as a fold's
+    /// record and a target's are.
+    /// </summary>
     public string? Problem()
         => !FlowInstanceId.IsWellFormed(Instance) ? $"'{Instance}' is not an instance id"
             : string.IsNullOrWhiteSpace(Step) ? "it names no step"
+            : Agent is not null && OrchestrationRules.NameProblem(Agent) is { } agent ? $"its agent: {agent}"
+            : Made is not null && OrchestrationRules.NameProblem(Made) is { } made ? $"the agent it makes: {made}"
             : !FlowRecordNames.Is<FlowInstanceState>(State) ? $"'{State}' is not an instance state"
             : Attempt < 1 ? $"its attempt is {Attempt.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
             : Visit < 1 ? $"its visit is {Visit.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
@@ -230,6 +254,8 @@ public sealed record FlowStepRecord(
             : RaisedBy is not null && !FlowInstanceId.IsWellFormed(RaisedBy) ? $"'{RaisedBy}' is not an instance id"
             : LeftBy is not null && !FlowInstanceId.IsWellFormed(LeftBy) ? $"'{LeftBy}' is not an instance id"
             : Handoff?.Problem() is { } handoff ? $"its handoff: {handoff}"
+            : Targets?.FirstOrDefault(target => target.Problem() is not null) is { } target ? $"its target '{target.Agent}': {target.Problem()}"
+            : Targets?.GroupBy(target => target.Agent, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice ? $"it names target '{twice.Key}' twice"
             : null;
 }
 
@@ -710,7 +736,7 @@ public sealed record FlowSnapshot(
 /// <param name="Failure">Where this step's failure left the run; null for every other ending.</param>
 /// <param name="EndedByQuestion">The kind of the question whose fail answer ended this step, where one did.</param>
 /// <param name="Agent">The agent the step works in, where it names one with in or of.</param>
-/// <param name="Made">The agent a create-agent step made; null for every other step.</param>
+/// <param name="Made">The agent a create-agent step makes, as the engine named it; null for every other step.</param>
 /// <param name="Question">The id of the question the step asks and no answer has come for; null where none is open.</param>
 /// <param name="Handoff">The handoff a stop left, where one was written: its text, who wrote it and why.</param>
 /// <param name="Output">The step's output; null where it wrote none.</param>
@@ -729,6 +755,9 @@ public sealed record FlowSnapshot(
 /// <param name="IssuesOwed">The pre-existing issues this step reported whose triage is not raised yet; null where none is owed.</param>
 /// <param name="LeftBy">The handler whose redirect sent the run back past this visit; null where none did.</param>
 /// <param name="Cause">What the code alone cannot say of its ending: a refusal over a held lock; none for every other.</param>
+/// <param name="Model">The model the agent a create-agent step makes is made for; null where <paramref name="Made"/> is.</param>
+/// <param name="Copied">Whether the leg step's attempt let its tree go while its legs work on, every copy made (<see cref="FlowStepRecord.Copied"/>).</param>
+/// <param name="Targets">A step of others' targets, each with where it stands (<see cref="FlowStepRecord.Targets"/>); null for every other step.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -764,4 +793,7 @@ public sealed record FlowSnapshotStep(
     FlowPreExistingReport? Issue = null,
     IReadOnlyList<FlowPreExistingReport>? IssuesOwed = null,
     string? LeftBy = null,
-    OutcomeCause Cause = OutcomeCause.None);
+    OutcomeCause Cause = OutcomeCause.None,
+    string? Model = null,
+    bool Copied = false,
+    IReadOnlyList<FlowTargetRecord>? Targets = null);

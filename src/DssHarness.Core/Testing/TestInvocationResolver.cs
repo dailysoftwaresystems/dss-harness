@@ -417,6 +417,30 @@ public static class TestInvocationResolver
         => option.Reads == Ctest.Part.Label ? "carrying a label that matches it" : "whose name matches it";
 
     /// <summary>
+    /// The exclusions <paramref name="invocation"/>'s own args apply: each value they give its exclusion option, in
+    /// any spelling and form the runner reads (<see cref="Ctest.Values"/>) - the last alone where ctest keeps the
+    /// last of an option given twice, and every one where it reads each, a test then left out only where it matches
+    /// them all - each split where the invocation declares an <c>excludeJoin</c>; an empty one leaves nothing out.
+    /// </summary>
+    /// <param name="invocation">A merged test invocation.</param>
+    /// <returns>The exclusions, in the order the args give them; none where the invocation declares no excludeArg.</returns>
+    public static IReadOnlyList<string> ExclusionsOf(ResolvedTestInvocation invocation)
+    {
+        ArgumentNullException.ThrowIfNull(invocation);
+
+        if (string.IsNullOrWhiteSpace(invocation.ExcludeArg))
+        {
+            return [];
+        }
+
+        var option = Ctest.SelectionOf(invocation.Runner, invocation.ExcludeArg);
+        var own = Ctest.Values(invocation.Args, option?.Spellings ?? [invocation.ExcludeArg]).Values;
+        var read = option is { Narrows: false } ? own.TakeLast(1) : own;
+
+        return [.. read.SelectMany(value => invocation.ExcludeJoin is { Length: > 0 } join ? value.Split(join) : [value]).Where(value => value.Length > 0)];
+    }
+
+    /// <summary>
     /// The invocation's args, and the exclusions to add after them, each after an excludeArg of its own.
     /// </summary>
     /// <param name="invocation">The resolved invocation.</param>

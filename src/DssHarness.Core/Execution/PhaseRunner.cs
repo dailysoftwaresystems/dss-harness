@@ -123,6 +123,14 @@ public sealed record PhaseRequest
     /// from there.
     /// </summary>
     public bool WholeLines { get; init; }
+
+    /// <summary>
+    /// Whether what the phase starts is to outlive it and the process that ran it: a set-up's <c>up</c> line, whose
+    /// services legs of other runs share and its <c>down</c> line ends. Every other phase is bound to the process that
+    /// runs it (<see cref="ProcessRequest.Bound"/>): on Windows that process ending in any way ends what the phase started,
+    /// and elsewhere as that property says.
+    /// </summary>
+    public bool LeftRunning { get; init; }
 }
 
 /// <summary>
@@ -288,6 +296,12 @@ public sealed class PhaseRunner(
             // A wall-clock bound only where the phase declares one of its own; the stall bound below
             // is the one in force otherwise, for the reason the class remarks give.
             Timeout = request.Timeout,
+
+            // On Windows ended with the process that runs it, however that process ends (ProcessRequest.Bound says how it
+            // goes elsewhere): a dispatcher killed where it stood left its legs' test runners running for minutes, each
+            // holding a heavy leg's room. A set-up's up line is left out: what it brings up is shared, and outlives the run
+            // on purpose.
+            Bound = !request.LeftRunning,
         };
 
         var startedUtc = _wallClock.GetUtcNow();

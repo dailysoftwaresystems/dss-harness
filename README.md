@@ -102,11 +102,12 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `test [--legs a,b] [--time] [--set-up]` | Build and test every selected leg, with a witness for each verdict; `--set-up` brings up the set-ups its test invocation names around each leg's work, on the machine that runs it, and down after (`help setups`) |
 | `run <runner> [--legs a,b] [--time] [--input name=value] [--set-up]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run; `--set-up` brings up the set-ups the runner and its run checks' runners name around each leg's work, and down after (`help setups`). A run line names what only the tool knows of a leg - its build directory, the file its build makes, and the compiler its build identified, `{compiler_C}` or `{compiler_CXX}`, which is gcc on one leg and cl on another - and a step naming one of those has its leg built first (`help runners`) |
 | `check-mutations [--legs a,b] [--arms a,b] [--self-test] [--list] [--pending]` | Prove each selected leg's tests can fail: in worker copies of its tree, mutate each arm the registry declares, build it, witness every object depending on the site rebuilt, run its test binary whole and judge what reddened; `--self-test` sweeps the fixture the tool carries instead, through each leg's toolchain; `--list` says, without sweeping, each arm's last verdict on each leg and whether anything it was judged on has moved - of what a test binary reads at run time, only the files `mutations.runReads` names for its runner; `--pending` sweeps only the arms with no passed that still holds, and with nothing pending passes, sweeping nothing (`help mutations`) |
+| `stop-run <run> [--now] [--json]` | Stop a `build`, `test`, `run` or `check-mutations` run from another terminal, typed in the tree that ran it: asked of its dispatcher, which stops every leg where it stands as an interrupt does and writes its ledger, and waited for 60 s - said stopped only where its dispatcher took the stop; `--now` ends the dispatcher's process where it stands, with all it started - only on this machine, and only the process its owner file names by its start. On Windows a dispatcher that ends in any way, a kill among them, ends its local legs with it |
 | `clean [--legs a,b] [--dry-run] [--former-workers]` | Remove each selected leg's build directory, the mutation workers its sweeps and self-tests keep in its tree, and the copies of its tree it works in (`.legs`), wherever the leg runs, so a full disk can be freed; `--dry-run` says what each holds and exits as the clean would; `--former-workers` removes only the workers an earlier version kept beside the repository's trees, here and on each host (`help space`) |
 | `up <name> [--input name=value] [--json]` | Bring a set-up up on this machine: run the `up` command line `setUp` declares for it, at the root of the tree - a program and its arguments, no shell, a line per platform where they differ, its declared inputs filled in with what `--input` gives over their defaults (`help setups`) |
 | `down <name> [--input name=value] [--json]` | Bring a set-up down: run its `down` command line there, with the values it was brought up with; refused (13) while a leg of a run on this machine still uses it in that tree - in any of the repository's, for one the machine shares - whose last leg brings it down |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
-| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, workflows, agent clients, anchors, layout, secrets, tools, runners, set-ups, verdicts, mutation testing and CI legs |
+| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, workflows, the codebase graph, agent clients, anchors, layout, secrets, tools, runners, set-ups, verdicts, mutation testing and CI legs |
 
 Every command takes `-C, --directory <dir>` and `-v, --verbose`.
 
@@ -129,8 +130,10 @@ where `heldNow` names a holder), `needs-consent` or `refused` - and whose `heldN
 holder, those copies' among them. Beside them `needs` names each consent the request lacks
 (`fold-new-rows`, `fold-lost-rows`, `fold-over-cells`, `fold-two-changes`), `refusals` each reason
 it is refused for (`conflict` where a path both trees changed has a merge that conflicts, `other`
-for anything else), `folded` what a fold's `--apply` wrote, merged, handed and applied, and `planned` what a
-refresh's or a rebase's plan takes, keeps, hands and merges. An
+for anything else), `folded` what a fold's `--apply` wrote, merged, handed and applied, and `planned` what the
+verb's plan names - what a rebase takes and keeps, a refresh or a fold hands, each merges, a fold writes and deletes,
+the registry files its rows change and the rows it applies - and what each consent it lacks and each conflict it meets
+is about. A refresh or a rebase over a path both trees changed whose merge is clean lacks `--merge` as a fold does. An
 `--apply` refused at its hold answers the same document, `sound`, with the run it met in
 `heldNow`. Either way a dry run still prints all it weighed.
 `dssharness help orchestrators` explains seeding, rebasing, folding and deleting agents, and the five verbs of a run.
@@ -240,7 +243,7 @@ in `config.json`.
 .orchestrators/<o>/agents/<agent>/steps/<instance>/   ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it
 .orchestrators/<o>/agents/<agent>/sessions/<id>/      ignored; API clients only: one conversation with the provider, in the provider's own form
 .orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included
-.orchestrators/<o>/.../<instance>/children/<session>.json   ignored; in either kind of step, Linux and macOS: a session a contained child of the step leads while it runs, ended by the next command over the orchestrator where the process that started it was killed
+.orchestrators/<o>/.../<instance>/children/<session>.json   ignored; in either kind of step, Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by stop-orchestrator --now - once the process that started it has gone
 .mutations/                                  contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree
 .mutations/<key><mark>-<n>/                  ignored; a worker, a repository of its own, and its claim beside it
 .legs/                                       contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree
@@ -470,8 +473,9 @@ entry says what it takes, holds and costs, with the date its numbers were read. 
 are `apiKeyNames`, the names of the variables that hold them in the git-ignored slot
 `.harness-config/workflows/.env/`, in the order they are tried; a second key of one company is a
 second name in the list, and no key is read from the process environment - a CI machine writes the
-file. `list-agent-providers` says it all without saying one key: each provider, client and tier, and
-for every appointed name `present` or `missing`, exit 0 whatever is missing; `--template` prints
+file. `list-agent-providers` says it all without saying one key: each provider, client and tier,
+for every appointed key and token `present` or `missing`, and for each setting a client reads from
+the slot `present` or `absent` (none is needed), exit 0 whatever is missing; `--template` prints
 the agent sections as `init` writes them into a new config, to paste into an existing one - outside
 a repository too, and where the configuration it is to repair does not load. A name
 declared in two of the slot's files is refused as the runner's value directories refuse one, a line
@@ -483,7 +487,14 @@ that fixes it; a setting, such as `CLAUDE_EXECUTABLE`, is no key. `validate-work
 names every key a step's model would read that no file of the slot declares, with the steps that
 would read it, and still passes - a machine that only checks a configuration needs no key. A model
 reached through `claude-api` or `glm` reads its provider's keys; one reached through `claude-code`
-signs in with the machine's login and reads none. The credential slots - the runner's two
+signs in by the client's `auth` (`agentClients.claude-code.auth`): `login`, the machine's login,
+where nothing is said, reading no key; `apiKey`, the provider's keys in their order; `oauthToken`
+or `authToken`, the token the slot holds under the entry's `token` (`CLAUDE_CODE_OAUTH_TOKEN` or
+`ANTHROPIC_AUTH_TOKEN` where it names none) - a name and never a token, appointed once beside
+every provider's keys. Its `configDir` and `executable` name the variables of the slot that hold a
+specific login's Claude Code directory and a program to start in place of npm's
+(`CLAUDE_CONFIG_DIR` and `CLAUDE_EXECUTABLE` where they name none), appointed once the same way and
+never a key. The credential slots - the runner's two
 value directories and this one among them - are never handed to an agent, seeded from the main tree
 or folded back into it, whatever git or the ignore block says.
 
@@ -503,11 +514,130 @@ same never-stopped, read-back sequence `update-tool` has: after a change that fa
 one that ran, it says what npm holds since.
 This build has that step and its refusals; the engine's step runner, which takes it before a run's
 first step that needs Claude Code, is still to come, so no command of this build installs or
-updates Claude Code yet. A program the slot names (`CLAUDE_EXECUTABLE`) is a person's own choice:
+updates Claude Code yet. A program the slot names (`CLAUDE_EXECUTABLE`, or the name the client's
+`executable` gives) is a person's own choice:
 started as named and never installed or updated, and a slot that cannot give it is refused, never
 passed over for npm's. A client's `update` key (`agentClients.<client>.update`, true by default)
 and `DISABLE_UPDATES` in the tool's own environment turn installing and updating off, and a run
 that then needs one that is missing or too old will be refused with the command to run by hand.
+
+What an agent may do is one policy, the same on every client: everything is allowed except the
+root actions, the places no agent reaches, and the restrictions - which only ever refuse, from
+every source at once, and never remove one another's. A restriction is one string,
+`Run(git push *)`, `Write(.github/**)`, `Read(secrets/**)` or `Web(pastebin.com)`: `Run` a command
+prefix (its trailing `*` any arguments, the bare command too), `Write` and `Read` path patterns as
+gitignore reads them, matched against the path as it stands under each of the agent's roots, and
+`Web` one domain, the domain and every name under it, or `Web(*)` the web whole. A repository
+declares them under `agentPolicy.restrictions`, and a workflow's definitions and steps add their
+own to them, all applied together; `agentPolicy.webDomains` is the allow list beside them (left
+out, any address, the machine's own and its network's among them), and a command that runs a
+program which fetches from the network - `curl`, `wget`, `Invoke-WebRequest`, `Invoke-RestMethod`,
+`iwr`, `irm`, `http`, `https`, `gh api` - is decided as a web request too, by each address it
+names, a proxy, a `curl --connect-to`'s or `--resolve`'s target and the proxy its environment names
+among them; one that reads what it reaches from a file (`curl --config`, `wget --input-file` or
+`--execute`) is refused where the web is held to any rule. Refused always, not configurable: the
+root actions (`sudo`, `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`,
+PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command
+names one), writes outside an agent's writable roots, every read and write of a credential slot or
+a Claude Code directory of the run's and every search over one, any command naming one - by `~` or
+`$HOME`, as a redirect's file or an option's value too - and this tool's own verbs and
+`run-side-task`, run by any program or from a response file, whatever any switch says. No agent
+starts while this tool itself runs elevated: its step is recorded never started, saying so, before
+any client is taken. A path is decided as asked and as resolved, and a refusal's places compare in
+any case on every system, a Windows short name read as its long one. On Windows a device prefix
+(`\\?\`, `\\.\`, `\??\`) is dropped from a path and from what the runtime makes of it - one naming
+no drive and no share, a volume by its id or a pipe, is a place it cannot tell, and denied - and a
+shell's spelling of a drive (`/c/x`, `/cygdrive/c/x`, `/mnt/c/x`) is read both as the drive (`C:\x`)
+and as the directory it names on the current drive, an action allowed only where both are; a `cd`
+is followed the same way, from every place the command reached before it, up to 64 places, past
+which the command is denied. A
+shell command is read whole before it is matched, as the shell's own parser reads it - split on
+`;`, `&&`, `||`, `|`, `&` and line ends, a comment and a here-document's lines never commands, the
+bodies of `$(...)`, backticks, `<(...)`, subshells, functions, loops and branches read as commands
+of their own, each substitution's word kept as the expansion it is, a `for`'s word list read for
+the paths it hands its body, a redirect kept apart wherever it stands, the `NAME=value` words
+before a program kept as its environment and a variable naming a program git or another tool runs
+(`GIT_SSH_COMMAND`, `GIT_PAGER`, `EDITOR` and their kind) read as that program's command line, as
+is the value of git's own setting (`-c`, `--config-env`, `GIT_CONFIG_*`) of a key git runs as one,
+wrappers (`env`, `nohup`, `time`, `timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`,
+`eval`, `busybox`, `Invoke-Expression`) stripped, and it goes into `sh -c` and every other
+shell's, a here-string or here-document a shell reads, `cmd /c`, `powershell -Command` and a
+decoded `-EncodedCommand`, and what `trap`, `watch`, `script` and `flock` run, by each shell's own
+quoting, to four levels, and into a shell another program runs with its script
+(`find -exec sh -c`) - so `git -C x push` is `git push`, and `env A=1 git push` and
+`A=1 /usr/bin/git push` are too; every word of a command is tried as the program of the words
+after it, a program read by its name. A word the shell expands where a rule reads a literal one
+makes the command one the rule may be, refused as such (`git $VERB` under `Run(git push *)`), and
+a pattern, a brace or a `file://` address that may name a credential slot or a Claude Code
+directory is refused as naming it. What it cannot read whole it denies, said in help, not guessed
+at: a script nested past four levels, a shell that reads its script from its input
+(`curl ... | sh`) or a process substitution, a program named by a variable, a substitution, a
+pattern or a brace, and an option of git's or gh's own before its command that it does not know;
+what it does not see is the inside of a script file a command runs. The worktree rules
+(`agentPolicy.worktreeRules`, on unless turned off) keep an agent's worktree a thing the engine
+can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
+`help agent-clients`) - a git configured where it runs, by `-c` or `--config-env` of any key but
+the ones that only shape what git prints, or by its environment, the `git config` it is and
+still the command it runs -
+and `gh pr merge`, `gh workflow run`, `gh run rerun`, the `gh api` endpoints and GraphQL mutations
+that merge or start CI and `gh alias set` are refused (reading git stays allowed), git's own
+files - a `.git`, file or directory, at any depth beneath a root and in any case, a nested
+repository's and a submodule's too (`Write(**/.git/**)`) - are not written by a tool whatever
+`protectedPaths` says, and an agent does not edit its own policy
+or what the next launch loads (`.harness-config/config.json`, `.harness-config/orchestrators/**`,
+`.harness-config/skills/**` - but for a step whose `writes` names one skill's own directory by
+name, `.harness-config/skills/<name>/...`, which opens that skill alone -
+`.harness-config/runner/**`, `.claude/settings*.json`, `.mcp.json`). Whatever any switch says, the
+tool's own state is written by its verbs alone, a place of the agent's own within it, as its work
+directory is, the one exception. The protected paths (`agentPolicy.protectedPaths`, on unless turned off) are the
+writes Claude Code guards - `.git/**`, `.vscode/**`, `.husky/**` and the rest of its list, which
+`help agent-clients` prints and a test pins - refused on every client, so a role is not stopped
+on one where it passes on another; turning them off takes this tool's refusal away, and Claude
+Code's own guard stays Claude Code's. A step's `writes` is the one source that narrows: where a
+step has them, a write under its worktree that matches none of their patterns is denied; the
+reporter's reads are narrowed to the run's directory alone, with no command, no write and no web
+at all. For Claude Code the same policy is rendered, never re-decided, into the launch's
+settings: an ask rule for every tool, and the restrictions as deny rules, absolute once for each
+root in the POSIX form Claude Code matches (`//c/x` for `C:\x`), a `Write` rule as the `Edit` rule
+Claude Code holds its file tools' writes to, a read of each credential slot and Claude Code
+directory beside them. This is policy, not
+a sandbox - a program an agent runs opens files as the user it runs as, a file of the credential
+slot among them; what it is never given is a key in its environment, and what no file tool of an
+agent touches is the slot itself, in any root. Where this tool cannot decide a call it denies it, never allows: nothing
+runs while the host that would answer is silent or gone. The policy is built and holds every
+action behind it; the `claude-code` client asks it of every call, the API clients are what comes
+next, and no command of this build runs an agent yet.
+
+The `claude-code` client starts Claude Code once for each launch, a new session every time -
+never resumed or continued, keeping no session file (one a launch leaves all the same is removed
+once it has ended, however it ended, and said) - streamed both ways: the step's prompt is the first
+message on its input, never an argument, and the launch runs in the agent's working directory with
+every other root it reaches added. It is given its model and no fallback, the step's effort, turns and budget, and the tools of
+the agent's capabilities and no other (`read`: `Read`, `Grep`, `Glob`; `write`: `Write`, `Edit`,
+`NotebookEdit`; `run`: `Bash`; `web`: none of Claude Code's), never one that starts agents, loads
+skills, asks a person or plans. Every call is asked of the engine before it runs and answered from
+the policy, a denial with its rule's sentence the model reads and a line of the step's
+`denials.jsonl`; an answer that does not read against the step's schema is sent back, each problem
+by its path; a message the engine gives an agent at work is written to the same launch; a handoff
+asked interrupts the turn and asks the agent for its handoff, no tool running in that turn; every
+message is held to the model asked for; the launch's environment holds nothing of a Claude Code
+session the tool was started in and no credential but the one its `auth` gives; and a key Claude
+Code reports invalid is passed over, the next key given a new launch while the step has done no
+work. The user's own `settings.json` in the launch's Claude Code directory and the user's
+`CLAUDE.md` reach every agent on this client, but no hook of theirs runs: every launch's settings
+say `disableAllHooks`, and each launch's start names that settings file and its SHA-256 and says
+the hooks are off. A settings file that would give a launch a credential - `ANTHROPIC_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_BASE_URL` in its `env`, or
+`apiKeyHelper` - refuses the run before any launch, naming the file; take it out, or give the
+client a directory of its own in the slot: `CLAUDE_CONFIG_DIR`, or the name
+`agentClients.claude-code.configDir` gives. The client holds every launch to the protocol itself:
+one that does not answer the host's `initialize` request within 30 s, that works before its init
+says what it runs as, whose init offers a tool it was not given or names a credential its `auth`
+did not give, or that refuses by itself a call the engine allows never started; a call it ran that the engine was
+never asked about, or refused, fails the step by the tool's name; each is ended at once. A message
+no turn takes within the stall bound stalls the step; a declined request ends it `Refused`, and
+an account at its limit `RateLimited`, with when the limit lifts where Claude Code says.
+`help agent-clients` says it whole.
 
 ```bash
 dssharness validate-workflow                 # check every declared workflow
@@ -548,8 +678,42 @@ template key reads and no skill. A question gives only the texts the engine name
 update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`, `instead`,
 `cause`, `before`); the bar is one text, and so is each run fact (`{worktree}`, `{os}` and the
 rest), which a template reads and an expression does not. The engine starts and drives a run of a workflow
-(`run-orchestrator`, `dssharness help orchestrators`); its step runners are the next thing the tool grows, and until they land
-each step of a run fails, saying no runner serves its type. Run `dssharness help workflows` for the whole of it.
+(`run-orchestrator`, `dssharness help orchestrators`), from the main checkout's HEAD on a branch of its own: a start is
+refused where HEAD is detached, where the checkout is on the branch the run's pull request goes to, where a merge is under
+way and where changes are staged. Sixteen steps are served so far: `orient`, which reads what the repository is and has once
+(its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
+CI, mutation arms, what is dirty, the open agents and who holds the tree); `graphify-codebase`, which syncs the run's one map
+of the repository - every file a node, each declaration a language's implementation reads with its lines, its header and
+the first sentence the code writes of itself (C# through the compiler's own parser, MSBuild's projects and solutions,
+Markdown's headings; every other file by its name and size), and the edges between them, each saying how sure it is - under the run's
+`graph/`, reading again only the files whose content, reader, reader's version, size limit or languages changed and those it could not read, and starting a run's first
+graph from the newest earlier run's - or, with `in`, the view of that agent's worktree, held against the main checkout's
+graph as an overlay of what the worktree holds otherwise, so no file is read whose extract either made; the engine syncs
+on its own too, under the claim its step holds - a reason step's view where it starts, the main checkout's by every path
+the run's folds changed that it has not taken yet and every path a commit changed since its last sync, a worktree's after a refresh or a rebase moved it, and a view dropped
+once its agent is no longer live - and a sync of its own that fails is said, owed until one goes through, and never
+fails the step (`dssharness help codebase-graph`; the workflow's `codebaseGraph` shapes it);
+`validate-plan`, the machine's check of a plan's
+work items; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
+first reason step runs on, both recorded before the agent is made so a step run again asks for the same one; and the leg
+steps `build`, `test`, `run` and `check-mutations`, which run their legs as the commands do, in the worktree of the agent
+they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
+that failed with the phase that did not pass and its last lines, a sweep's arm with its arm - a leg in a copy letting the
+tree go once its copy is made, and keep the ledger, and in an agent's worktree each red leg's failing log, in the step's
+directory; the checks `anchor-balance` and `anchor-citations`, each held to the rows or files a step names; `ci-read`,
+the legs `check-ci-legs` reads; and `ci-wait`, which waits for every check the forge runs on a commit - the one the run
+last pushed where it names none - ends at the first red one with its job's failing step and whole log, and asks where
+none appeared, some are still running, or one ended neither green nor red; and the fold family - `fold`, `delete-agent`,
+`refresh` and `rebase` - which make their verb's dry run first, read what it stood, typed, and ask what it lacks - a
+consent, a path outside a fold's `within`, conflicting merges - with what it is about, a fold and a deletion applying
+only what it named, write each path a fold means to write to the run's ledger of its folds (`folds.json`) before the
+verb and what it left after, and, of `others`, work on each other open agent of the run in turn. A check that finds red
+fails its step under `failOn: red`, every check's default but `ci-read`'s. Every text a step hands on is filled where it
+starts, and one that reads nothing fails the step (12). Every call of `gh` is started so it cannot ask, and ended after
+five minutes, or with its step where the step passes its `timeoutMinutes` first (21). A step of any other type fails,
+saying no runner serves its type; the rest are the next thing the tool grows. A step that works in or on an agent
+waits for the create-agent step that makes it, and is not run where that step did not make it. Run
+`dssharness help workflows` for the whole of it.
 
 ## Anchors
 

@@ -490,6 +490,39 @@ public sealed class GitClientTests
     }
 
     /// <summary>
+    /// What two commits hold differently is every path whose entry differs - an edit, an addition, a deletion, and a rename
+    /// as its two names though configuration pairs renames - and nothing of the work tree; a commit the repository does not
+    /// hold fails it.
+    /// </summary>
+    [Fact]
+    public async Task ListNamesChangedBetweenAsync_NamesEveryPathTheTwoCommitsHoldDifferently()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("edited.txt", "one\n");
+        temp.WriteFile("deleted.txt", "one\n");
+        temp.WriteFile("kept.txt", "one\n");
+        temp.WriteFile("moved.txt", "a file long enough to be found again once it is renamed\n");
+        await harness.CommitAllAsync(temp.Path, "files", cancellationToken);
+        var from = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        await harness.RunGitAsync(temp.Path, ["config", "diff.renames", "true"], cancellationToken);
+        temp.WriteFile("edited.txt", "one\ntwo\n");
+        File.Delete(temp.Combine("deleted.txt"));
+        temp.WriteFile("added.txt", "new\n");
+        await harness.RunGitAsync(temp.Path, ["mv", "moved.txt", "renamed.txt"], cancellationToken);
+        await harness.CommitAllAsync(temp.Path, "changes", cancellationToken);
+        var to = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        temp.WriteFile("kept.txt", "uncommitted\n");
+
+        var changed = await harness.GitClient.ListNamesChangedBetweenAsync(temp.Path, from, to, cancellationToken);
+
+        Assert.Equal(["added.txt", "deleted.txt", "edited.txt", "moved.txt", "renamed.txt"], changed.Select(name => name.Text).Order(StringComparer.Ordinal));
+        await Assert.ThrowsAsync<HarnessException>(() => harness.GitClient.ListNamesChangedBetweenAsync(temp.Path, new string('0', from.Length), to, cancellationToken));
+    }
+
+    /// <summary>
     /// Checking paths out at a commit writes each as the commit holds it and removes each it does not hold, reads every path
     /// literally - a name that reads as a wildcard matches only itself - and leaves every other path, and HEAD, alone.
     /// </summary>

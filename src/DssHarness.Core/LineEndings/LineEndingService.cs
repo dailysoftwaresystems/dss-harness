@@ -94,18 +94,14 @@ public sealed class LineEndingService(
     IGitClient gitClient,
     IFileSystem fileSystem) : ILineEndingService
 {
-    /// <summary>
-    /// Bytes examined for a NUL before a file is rewritten, the window git's own text detection uses.
-    /// A file declared <c>text=auto</c> that holds one is binary to git whatever the declaration says,
-    /// and rewriting its bytes would corrupt it.
-    /// </summary>
-    private const int BinaryProbeLength = 8000;
-
     /// <summary>The attribute that says whether a path is text, and so whether its line endings are git's to write.</summary>
     private const string TextAttribute = "text";
 
     /// <summary>The attribute that declares which line ending a path is checked out with.</summary>
     private const string EndingAttribute = "eol";
+
+    /// <summary>The text attribute's value by which git reads a file's content to say whether it is text.</summary>
+    private const string TextByContent = "auto";
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IGitClient _gitClient = gitClient;
@@ -147,7 +143,7 @@ public sealed class LineEndingService(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var ending = declared.GetValueOrDefault(path, DeclaredLineEnding.None);
+            var (ending, byContent) = declared.GetValueOrDefault(path, new Declared(DeclaredLineEnding.None, ByContent: false));
 
             if (ending == DeclaredLineEnding.Binary)
             {
@@ -170,7 +166,9 @@ public sealed class LineEndingService(
 
             var before = File.ReadAllBytes(full);
 
-            if (IsBinary(before))
+            // Under text=auto git reads the content to say whether the file is text, and leaves one it calls binary as it
+            // is; a file declared text, or given an eol alone, git converts whatever it holds, and so does this.
+            if (byContent && IsBinary(before))
             {
                 binary++;
                 continue;
@@ -230,8 +228,11 @@ public sealed class LineEndingService(
         return [.. written];
     }
 
-    private static bool IsBinary(byte[] content)
-        => content.AsSpan(0, Math.Min(content.Length, BinaryProbeLength)).IndexOf((byte)0) >= 0;
+    /// <summary>
+    /// Whether <paramref name="content"/> is binary by git's conversion rule (<see cref="BinaryContent.ForConversion"/>):
+    /// what <c>text=auto</c> leaves as it is.
+    /// </summary>
+    private static bool IsBinary(byte[] content) => BinaryContent.ForConversion(content);
 
     private static int Count(byte[] content, byte value)
     {
@@ -297,7 +298,7 @@ public sealed class LineEndingService(
     /// own precedence between patterns, directories and the repository's info attributes is the
     /// policy, and a second implementation of it would be a second policy.
     /// </summary>
-    private async Task<Dictionary<string, DeclaredLineEnding>> ReadPolicyAsync(
+    private async Task<Dictionary<string, Declared>> ReadPolicyAsync(
         string root,
         IReadOnlyList<string> paths,
         CancellationToken cancellationToken)
@@ -310,23 +311,30 @@ public sealed class LineEndingService(
                 cancellationToken)
             .ConfigureAwait(false);
 
-        var declared = new Dictionary<string, DeclaredLineEnding>(StringComparer.Ordinal);
+        var declared = new Dictionary<string, Declared>(StringComparer.Ordinal);
 
         foreach (var (path, attributes) in answered)
         {
+            var text = attributes.GetValueOrDefault(TextAttribute);
+
             // `-text` is git's own way of saying "these bytes are the file", so the policy does not reach it.
-            declared[path] = attributes.GetValueOrDefault(TextAttribute) == GitAttributes.Unset
-                ? DeclaredLineEnding.Binary
-                : attributes.GetValueOrDefault(EndingAttribute) switch
-                {
-                    "lf" => DeclaredLineEnding.Lf,
-                    "crlf" => DeclaredLineEnding.Crlf,
-                    _ => DeclaredLineEnding.None,
-                };
+            declared[path] = new Declared(
+                text == GitAttributes.Unset
+                    ? DeclaredLineEnding.Binary
+                    : attributes.GetValueOrDefault(EndingAttribute) switch
+                    {
+                        "lf" => DeclaredLineEnding.Lf,
+                        "crlf" => DeclaredLineEnding.Crlf,
+                        _ => DeclaredLineEnding.None,
+                    },
+                ByContent: text == TextByContent);
         }
 
         return declared;
     }
+
+    /// <summary>What the policy declares for a path: its ending, and whether git decides by its content that it is text.</summary>
+    private readonly record struct Declared(DeclaredLineEnding Ending, bool ByContent);
 }
 
 /// <summary>Turns a line-ending report into what fix-line-endings prints.</summary>

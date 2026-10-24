@@ -1443,14 +1443,14 @@ public sealed class AnchorRegistryServiceTests
     {
         private int _writes;
 
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
             if (Interlocked.Increment(ref _writes) == failOnWrite)
             {
                 throw new IOException("Simulated failure on the second write of a move.");
             }
 
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
         }
     }
 }

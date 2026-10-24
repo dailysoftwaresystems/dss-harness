@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Application;
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
@@ -56,8 +57,19 @@ public sealed class AgentVerbFactsTests
             ["a line"],
             [ConsentKind.FoldNewRows, ConsentKind.FoldLostRows, ConsentKind.FoldOverCells, ConsentKind.FoldTwoChanges],
             [RefusalKind.Conflict, RefusalKind.Other],
-            new AgentFolded(["a.txt"], ["gone.txt"], [Both], "mutations/arms.txt", [new HandedPath("h.txt", "abc"), new HandedPath("d.txt", null)], ["decisions"], [RowId], [$"{RowId}:closing"]),
-            new AgentPlanned(["t.txt"], ["k.txt"], ["h.txt"], [Both], ArmRegistry: null));
+            new AgentFolded(["a.txt"], ["gone.txt"], [Both], "mutations/arms.txt", [new HandedPath("h.txt", "abc"), new HandedPath("d.txt", null)], [".plans/r.md"], [RowId], [$"{RowId}:closing"]),
+            new AgentPlanned(["t.txt"], ["k.txt"], ["h.txt"], [Both], ArmRegistry: null)
+            {
+                Written = ["w.txt"],
+                Deleted = ["x.txt"],
+                Registries = [".plans/r.md"],
+                Rows = [RowId],
+                Mergeable = ["c.txt"],
+                Conflicting = ["k2.txt"],
+                NewRows = ["D-TEST-NEW"],
+                LostCells = [$"{RowId}:closing"],
+                OverCells = [$"{RowId}:status"],
+            });
 
         var document = JsonNode.Parse(Assert.Single(OrchestrationReports.Document(outcome, facts).Data))!.AsObject();
 
@@ -67,10 +79,10 @@ public sealed class AgentVerbFactsTests
         Assert.Equal(["fold-new-rows", "fold-lost-rows", "fold-over-cells", "fold-two-changes"], Texts(document["needs"]));
         Assert.Equal(["conflict", "other"], Texts(document["refusals"]));
         Assert.Equal(
-            """{"written":["a.txt"],"deleted":["gone.txt"],"merged":["src/m.txt"],"armRegistry":"mutations/arms.txt","handed":[{"path":"h.txt","digest":"abc"},{"path":"d.txt","digest":null}],"registries":["decisions"],"rows":["D-TEST-AGENT-ROW"],"overCells":["D-TEST-AGENT-ROW:closing"]}""",
+            """{"written":["a.txt"],"deleted":["gone.txt"],"merged":["src/m.txt"],"armRegistry":"mutations/arms.txt","handed":[{"path":"h.txt","digest":"abc"},{"path":"d.txt","digest":null}],"registries":[".plans/r.md"],"rows":["D-TEST-AGENT-ROW"],"overCells":["D-TEST-AGENT-ROW:closing"]}""",
             document["folded"]!.ToJsonString());
         Assert.Equal(
-            """{"taken":["t.txt"],"kept":["k.txt"],"handed":["h.txt"],"merged":["src/m.txt"],"armRegistry":null}""",
+            """{"taken":["t.txt"],"kept":["k.txt"],"handed":["h.txt"],"merged":["src/m.txt"],"armRegistry":null,"written":["w.txt"],"deleted":["x.txt"],"registries":[".plans/r.md"],"rows":["D-TEST-AGENT-ROW"],"mergeable":["c.txt"],"conflicting":["k2.txt"],"newRows":["D-TEST-NEW"],"lostCells":["D-TEST-AGENT-ROW:closing"],"overCells":["D-TEST-AGENT-ROW:status"]}""",
             document["planned"]!.ToJsonString());
     }
 
@@ -430,8 +442,9 @@ public sealed class AgentVerbFactsTests
                 + $"`{OrchestrationReports.Named(ConsentKind.FoldOverCells)}`, `{OrchestrationReports.Named(ConsentKind.FoldTwoChanges)}`), "
                 + $"`refusals` each reason it is refused for (`{OrchestrationReports.Named(RefusalKind.Conflict)}` where a path both trees "
                 + $"changed has a merge that conflicts, `{OrchestrationReports.Named(RefusalKind.Other)}` for anything else), `folded` "
-                + "what a fold's `--apply` wrote, merged, handed and applied, and `planned` what a refresh's or a rebase's plan takes, "
-                + "keeps, hands and merges.",
+                + "what a fold's `--apply` wrote, merged, handed and applied, and `planned` what the verb's plan names - what a rebase "
+                + "takes and keeps, a refresh or a fold hands, each merges, a fold writes and deletes, the registry files its rows "
+                + "change and the rows it applies - and what each consent it lacks and each conflict it meets is about.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -446,11 +459,296 @@ public sealed class AgentVerbFactsTests
                 + "deletion, which folds back what is left of the agent, did - gone through or stopped part way after writing some of "
                 + "it (21): the paths written, deleted, merged and handed, each handed with its digest, the arm registry where it was "
                 + "merged by arm, the registries its rows changed, the ids of the rows applied and the cells `--accept-over` took; null "
-                + "for every other answer and where it did nothing at all; and `planned`, what the plan of a refresh or of a move of "
-                + "the base names, its dry run's and its `--apply`'s alike: the paths taken, kept, handed and merged, and the arm "
-                + "registry merged by arm; null for a fold and a deletion.",
+                + "for every other answer and where it did nothing at all; and `planned`, what the plan of the verb names, its dry "
+                + "run's and its `--apply`'s alike: the paths taken, kept, handed and merged, the arm registry merged by arm, the "
+                + "paths a fold - a deletion's among them - writes and deletes, the registry files its rows change, as git names "
+                + "them, and the rows it applies, and what each consent it lacks and each conflict it meets is about (`mergeable`, "
+                + "`conflicting`, `newRows`, `lostCells`, `overCells`); null where no plan was measured.",
             architecture,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A fold's dry run names what it would write and what each consent it lacks is about - the paths it writes and
+    /// removes, the clean merge nobody asked for and the row nobody named new, which it does not apply as asked - and,
+    /// that row named new, the row it applies and the registry file it changes: the facts and the document alike, so a
+    /// step of a run asks with them and holds its --apply to them.
+    /// </summary>
+    [Fact]
+    public async Task AFoldsDryRun_NamesWhatItWouldWrite_AndWhatEachConsentItLacksIsAbout()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AtItsBaseAsync(temp);
+        File.Delete(Path.Combine(worktree, "docs", "x.md"));
+        OrchestrationKit.Write(worktree, Both, AgentFoldMergeTests.Text((2, "AGENT 2")));
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text((9, "MAIN 9")));
+        kit.FileRow(Agent, RowId, Row);
+
+        var dry = await kit.Harness.AgentService.FoldAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, new FoldAllowances(), apply: false, Token, json: true);
+        var planned = Facts(dry).Planned!;
+        var document = JsonNode.Parse(Assert.Single(dry.Data))!["planned"]!;
+        var making = await kit.Harness.AgentService.FoldAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, OrchestrationKit.Making(RowId), apply: false, Token, json: true);
+        var madeDocument = JsonNode.Parse(Assert.Single(making.Data))!["planned"]!;
+
+        Assert.Equal(RequestStanding.NeedsConsent, Facts(dry).Standing);
+        Assert.Equal([ConsentKind.FoldNewRows, ConsentKind.FoldTwoChanges], Facts(dry).Needs);
+        Assert.Equal(["b.txt"], planned.Written);
+        Assert.Equal(["docs/x.md"], planned.Deleted);
+        Assert.Equal([Both], planned.Mergeable);
+        Assert.Equal([Both], planned.Named(ConsentKind.FoldTwoChanges));
+        Assert.Equal([RowId], planned.NewRows);
+        Assert.Equal([RowId], planned.Named(ConsentKind.FoldNewRows));
+        Assert.Empty(planned.Rows);
+        Assert.Empty(planned.Registries);
+        Assert.Empty(planned.Conflicting);
+        Assert.Equal(["b.txt", "docs/x.md", Both], planned.WouldWrite);
+        Assert.Equal(["b.txt"], Texts(document["written"]));
+        Assert.Equal(["docs/x.md"], Texts(document["deleted"]));
+        Assert.Equal([Both], Texts(document["mergeable"]));
+        Assert.Equal([RowId], Texts(document["newRows"]));
+        Assert.Equal([ConsentKind.FoldTwoChanges], Facts(making).Needs);
+        Assert.Empty(Facts(making).Planned!.NewRows);
+        Assert.Equal([RowId], Facts(making).Planned!.Rows);
+        Assert.Equal([AnchorSettings.DefaultPendingAnchorsPath], Facts(making).Planned!.Registries);
+        Assert.Equal([AnchorSettings.DefaultPendingAnchorsPath], Texts(madeDocument["registries"]));
+        Assert.Equal([RowId], Texts(madeDocument["rows"]));
+    }
+
+    /// <summary>
+    /// A row a fold moves from one registry to another - closed, from the pending registry to the done one - changes both
+    /// files, and its plan names both by the path git names them by, never by the registry's role; what the fold did names
+    /// them alike.
+    /// </summary>
+    [Fact]
+    public async Task ARowMovedToDone_NamesBothRegistryFiles_ItsPlanAndWhatItDidAlike()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync(Agent);
+        kit.FileRow(Agent, RowId, Row);
+        Assert.True((await kit.FoldAsync(Agent, apply: true, OrchestrationKit.Making(RowId))).Succeeded);
+        kit.FileRow(Agent, RowId, new Dictionary<string, string>(Row) { ["status"] = "closed" });
+
+        var dry = Facts(await kit.FoldAsync(Agent, apply: false));
+        var folded = await kit.FoldAsync(Agent, apply: true);
+
+        // In git's order of names, as every list a plan holds is.
+        string[] both = [AnchorSettings.DefaultDoneAnchorsPath, AnchorSettings.DefaultPendingAnchorsPath];
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Equal(both, dry.Planned!.Registries);
+        Assert.Equal([RowId], dry.Planned.Rows);
+        Assert.Equal(both, Facts(folded).Folded!.Registries);
+        Assert.Equal(both, Facts(folded).Planned!.Registries);
+    }
+
+    /// <summary>
+    /// A refresh over a path both trees changed whose three-way merge is clean lacks a consent - the merge nobody asked
+    /// for - as a fold does, and says so by its kind with the path it is about; its code stays 13. Named with --merge it
+    /// is sound; its --apply without it is refused for something else, an --apply asking no consent.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshOverACleanPathBothChanged_NeedsTheMergeConsent_ItsCodeStill13()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AtItsBaseAsync(temp);
+        OrchestrationKit.Write(worktree, Both, AgentFoldMergeTests.Text((2, "AGENT 2")));
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text((9, "MAIN 9")));
+
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, RefreshRequest.Under(Both), apply: false, Token);
+        var merging = await kit.Harness.AgentService.RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, RefreshRequest.Under(Both) with { Merge = [Both] }, apply: false, Token);
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, RefreshRequest.Under(Both), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.Equal(RequestStanding.NeedsConsent, Facts(dry).Standing);
+        Assert.Equal([ConsentKind.FoldTwoChanges], Facts(dry).Needs);
+        Assert.Empty(Facts(dry).Refusals);
+        Assert.Equal([Both], Facts(dry).Planned!.Mergeable);
+        Assert.Equal(RequestStanding.Sound, Facts(merging).Standing);
+        Assert.Equal(HarnessExit.Refused, applied.ExitCode);
+        Assert.Equal(RequestStanding.Refused, Facts(applied).Standing);
+        Assert.Equal([RefusalKind.Other], Facts(applied).Refusals);
+    }
+
+    /// <summary>A refresh over a path both trees changed whose merge conflicts is refused for a conflict, with the path its plan names.</summary>
+    [Fact]
+    public async Task ARefreshOverAConflictingPath_IsRefusedForAConflict()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AtItsBaseAsync(temp);
+        OrchestrationKit.Write(worktree, Both, AgentFoldMergeTests.Text((2, "AGENT 2")));
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text((2, "MAIN 2")));
+
+        var dry = Facts(await kit.Harness.AgentService.RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, RefreshRequest.Under(Both), apply: false, Token));
+        var applied = Facts(await kit.Harness.AgentService.RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, RefreshRequest.Under(Both), apply: true, Token));
+
+        Assert.Equal(RequestStanding.Refused, dry.Standing);
+        Assert.Empty(dry.Needs);
+        Assert.Equal([RefusalKind.Conflict], dry.Refusals);
+        Assert.Equal([Both], dry.Planned!.Conflicting);
+        Assert.Empty(dry.Planned.Mergeable);
+        Assert.Equal([RefusalKind.Conflict], applied.Refusals);
+    }
+
+    /// <summary>
+    /// A refresh over a path the agent changed where no merge is measured at all - the agent removed it, the main tree
+    /// changed it - is refused for something else: neither a consent anybody can give nor a conflict a merge met.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshOverAPathOneTreeRemoved_IsRefusedForSomethingElse()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AtItsBaseAsync(temp);
+        File.Delete(Path.Combine(worktree, Both));
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text((9, "MAIN 9")));
+
+        var dry = Facts(await kit.Harness.AgentService.RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, RefreshRequest.Under(Both), apply: false, Token));
+
+        Assert.Equal(RequestStanding.Refused, dry.Standing);
+        Assert.Empty(dry.Needs);
+        Assert.Equal([RefusalKind.Other], dry.Refusals);
+        Assert.Empty(dry.Planned!.Mergeable);
+        Assert.Empty(dry.Planned.Conflicting);
+    }
+
+    /// <summary>
+    /// A refresh over a path whose merge conflicts and another it would undo for something else is refused for both: a
+    /// conflict alone is never what it is refused for, so no step hands around it.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshOverAConflictAndAnythingElse_IsRefusedForBoth()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text());
+        OrchestrationKit.Write(kit.Main, Clean, AgentFoldMergeTests.Text());
+        await kit.Harness.CommitAllAsync(kit.Main, "two files both trees will change", Token);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, Both, AgentFoldMergeTests.Text((2, "AGENT 2")));
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text((2, "MAIN 2")));
+        File.Delete(Path.Combine(worktree, Clean));
+        OrchestrationKit.Write(kit.Main, Clean, AgentFoldMergeTests.Text((9, "MAIN 9")));
+
+        var dry = Facts(await kit.Harness.AgentService.RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, new RefreshRequest { Paths = [Both, Clean] }, apply: false, Token));
+
+        Assert.Equal(RequestStanding.Refused, dry.Standing);
+        Assert.Empty(dry.Needs);
+        Assert.Equal([RefusalKind.Conflict, RefusalKind.Other], dry.Refusals);
+        Assert.Equal([Both], dry.Planned!.Conflicting);
+    }
+
+    /// <summary>
+    /// A fold whose only path it cannot fold is a clean merge nobody asked for, but one of whose rows is refused for more
+    /// than a consent, is refused for something else: the merge is still a consent it lacks, and no consent would let it go.
+    /// </summary>
+    [Fact]
+    public async Task AFoldLackingAMergeWithARowRefusedForItself_IsRefusedForSomethingElse()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AtItsBaseAsync(temp);
+        OrchestrationKit.Write(worktree, Both, AgentFoldMergeTests.Text((2, "AGENT 2")));
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text((9, "MAIN 9")));
+        OrchestrationKit.WriteRow(kit.Layout.RowsDirectory(Agent), RowId, ("status", "open"), ("trigger", "t"));
+
+        var dry = Facts(await kit.FoldAsync(Agent, apply: false, OrchestrationKit.Making(RowId)));
+
+        Assert.Equal(RequestStanding.Refused, dry.Standing);
+        Assert.Equal([ConsentKind.FoldTwoChanges], dry.Needs);
+        Assert.Equal([RefusalKind.Other], dry.Refusals);
+    }
+
+    /// <summary>
+    /// A move of an agent's base over a path both changed whose merge is clean lacks the merge consent, as a fold does;
+    /// over a conflict and a clean merge both, it is refused for the conflict alone, the clean merge still a consent it
+    /// lacks - and its --apply, asking none, is refused for something else besides.
+    /// </summary>
+    [Fact]
+    public async Task ARebaseOverACleanPath_NeedsTheMergeConsent_AndOverAConflictBesidesIsRefusedForTheConflictAlone()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text());
+        OrchestrationKit.Write(kit.Main, Clean, AgentFoldMergeTests.Text());
+        await kit.Harness.CommitAllAsync(kit.Main, "two files both trees will change", Token);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, Clean, AgentFoldMergeTests.Text((2, "AGENT 2")));
+        OrchestrationKit.Write(kit.Main, Clean, AgentFoldMergeTests.Text((9, "MAIN 9")));
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var clean = Facts(await kit.Harness.AgentService.RebaseAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, new RebaseRequest(), apply: false, Token));
+
+        OrchestrationKit.Write(worktree, Both, AgentFoldMergeTests.Text((2, "AGENT 2")));
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text((2, "MAIN 2")));
+        await kit.Harness.CommitAllAsync(kit.Main, "a conflict besides", Token);
+
+        var both = Facts(await kit.Harness.AgentService.RebaseAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, new RebaseRequest(), apply: false, Token));
+        var applied = Facts(await kit.Harness.AgentService.RebaseAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, new RebaseRequest(), apply: true, Token));
+
+        Assert.Equal(RequestStanding.NeedsConsent, clean.Standing);
+        Assert.Equal([ConsentKind.FoldTwoChanges], clean.Needs);
+        Assert.Empty(clean.Refusals);
+        Assert.Equal([Clean], clean.Planned!.Mergeable);
+        Assert.Equal(RequestStanding.Refused, both.Standing);
+        Assert.Equal([ConsentKind.FoldTwoChanges], both.Needs);
+        Assert.Equal([RefusalKind.Conflict], both.Refusals);
+        Assert.Equal([Both], both.Planned!.Conflicting);
+        Assert.Equal([RefusalKind.Conflict, RefusalKind.Other], applied.Refusals);
+    }
+
+    /// <summary>
+    /// An --apply held to what its dry run named writes it where it still names exactly that, and where the trees moved
+    /// between the two - its fold would write a path the dry run never named - it is refused for something else and writes
+    /// nothing: a fold and a deletion's fold alike. Held to nothing, as from the command line, it is never compared.
+    /// </summary>
+    [Fact]
+    public async Task AnApplyHeldToItsDryRun_RefusesWhatTheDryRunNeverNamed_AndWritesWhatItDid()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AFoldToMakeAsync(temp);
+        var agents = (IAgentService)kit.Harness.AgentService;
+        var named = Facts(await kit.FoldAsync(Agent, apply: false)).Planned!;
+        OrchestrationKit.Write(worktree, "c.txt", "written after the dry run\n");
+
+        var moved = await agents.FoldAsync(new FoldAgentRequest(kit.Main, OrchestrationKit.Orchestrator, Agent, new FoldAllowances(), Apply: true) { Expected = named }, Token);
+        var deleting = await agents.DeleteAsync(new DeleteAgentRequest(kit.Main, OrchestrationKit.Orchestrator, Agent, new FoldAllowances(), Apply: true, DiscardUncommitted: false) { Expected = named }, Token);
+
+        Assert.Equal(HarnessExit.Refused, moved.Outcome.ExitCode);
+        Assert.Equal(
+            $"Agent '{Agent}' of '{OrchestrationKit.Orchestrator}' was not folded: what it would write is not what its dry run named - written adds 'c.txt'. Nothing was written.",
+            moved.Outcome.Message);
+        Assert.Equal([RefusalKind.Other], moved.Facts!.Refusals);
+        Assert.Equal(["b.txt", "c.txt"], moved.Facts.Planned!.Written);
+        Assert.Null(moved.Facts.Folded);
+        Assert.False(File.Exists(Path.Combine(kit.Main, "c.txt")));
+        Assert.Equal(HarnessExit.Refused, deleting.Outcome.ExitCode);
+        Assert.Equal(
+            $"Agent '{Agent}' of '{OrchestrationKit.Orchestrator}' was not deleted: what it would write is not what its dry run named - written adds 'c.txt'. Nothing was written or removed.",
+            deleting.Outcome.Message);
+        Assert.Equal([RefusalKind.Other], deleting.Facts!.Refusals);
+        Assert.Equal(AgentStates.Live, kit.Record(Agent).State);
+
+        var again = Facts(await kit.FoldAsync(Agent, apply: false)).Planned!;
+        var held = await agents.FoldAsync(new FoldAgentRequest(kit.Main, OrchestrationKit.Orchestrator, Agent, new FoldAllowances(), Apply: true) { Expected = again }, Token);
+
+        Assert.True(held.Outcome.Succeeded, OrchestrationKit.Describe(held.Outcome));
+        Same(new AgentFolded(["b.txt", "c.txt"], [], [], ArmRegistry: null, [], [], [], []), held.Facts!.Folded);
+        Assert.Equal(["b.txt", "c.txt"], held.Facts.Planned!.Written);
+    }
+
+    /// <summary>
+    /// What one plan names differs from another's by each member it writes, merges, hands, removes or applies, said with
+    /// what it adds and what it drops, compared as sets; the consents' names and the order of each list are no difference.
+    /// </summary>
+    [Fact]
+    public void ADifferenceOfPlans_SaysEachMemberAddedAndDropped_ComparedAsSets()
+    {
+        var named = new AgentPlanned([], [], ["h.txt"], ["m.txt"], ArmRegistry: null) { Written = ["a.txt", "b.txt"], Registries = [".plans/r.md"], Rows = ["R-1"] };
+
+        Assert.Null(named.DifferenceFrom(named with { Written = ["b.txt", "a.txt"], Mergeable = ["x.txt"], NewRows = ["R-9"] }));
+        Assert.Equal(
+            "written adds 'c.txt' and drops 'a.txt'; merged adds 'arms.txt'; rows drops 'R-1'",
+            (named with { Written = ["b.txt", "c.txt"], ArmRegistry = "arms.txt", Rows = [] }).DifferenceFrom(named));
+        Assert.Equal("removed adds 'gone.txt'; handed drops 'h.txt'; registries adds '.plans/d.md'", (named with { Deleted = ["gone.txt"], Handed = [], Registries = [".plans/r.md", ".plans/d.md"] }).DifferenceFrom(named));
     }
 
     /// <summary>An agent with one change of its own to fold, <c>b.txt</c>.</summary>

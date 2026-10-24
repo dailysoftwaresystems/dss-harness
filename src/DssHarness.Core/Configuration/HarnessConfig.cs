@@ -90,6 +90,33 @@ public sealed class HarnessConfig
             .Select(entry => new KeyValuePair<string, string>(entry.Key, entry.Value.Action!));
 
     /// <summary>
+    /// The runners a run of <paramref name="runner"/> has write the tree it works in (<c>writesTree</c>), in order: the
+    /// runner itself where it says so, then each runner its run checks name that does - each once, as
+    /// <see cref="RunnerConfig.RunCheckRunners"/> names it, for a run check runs within the run's legs and writes where
+    /// they work. Empty where none writes, and for a runner nobody declared, which is refused where it is run. The one
+    /// answer the definition's check (V24), the run command's placement refusals, a run step's claim and where its legs
+    /// work all read.
+    /// </summary>
+    /// <param name="runner">The runner's name, in any case.</param>
+    public IReadOnlyList<(string Runner, bool IsCheck)> WritingRunners(string runner)
+    {
+        ArgumentNullException.ThrowIfNull(runner);
+
+        if (!PredefinedRunners.TryGetValue(runner, out var declared))
+        {
+            return [];
+        }
+
+        return
+        [
+            .. declared.WritesTree ? [(runner, false)] : Array.Empty<(string, bool)>(),
+            .. declared.RunCheckRunners()
+                .Where(check => PredefinedRunners.TryGetValue(check, out var checkRunner) && checkRunner.WritesTree)
+                .Select(check => (check, true)),
+        ];
+    }
+
+    /// <summary>
     /// The workflows this repository declares, by name and nothing else: each name is a definition
     /// file of its own, <c>.harness-config/workflows/&lt;name&gt;/&lt;name&gt;.yml</c>, which holds
     /// the whole flow and whose directory holds the files the flow names. Keyed by neither section nor
@@ -193,6 +220,12 @@ public sealed class HarnessConfig
     /// and a config that declares none uses every client as it is built in.
     /// </summary>
     public Dictionary<string, AgentClientConfig> AgentClients { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// What an agent of a run may do beyond the rules built into the tool: restrictions that only ever refuse.
+    /// Left out where the repository restricts nothing, which is the default.
+    /// </summary>
+    public AgentPolicyConfig? AgentPolicy { get; init; }
 
     private static Dictionary<string, TValue> Map<TValue>() => new(StringComparer.OrdinalIgnoreCase);
 }

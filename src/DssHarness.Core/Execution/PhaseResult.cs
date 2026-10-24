@@ -116,11 +116,21 @@ public sealed record PhaseResult(
     /// stopped at, or a run's last failure - and none where every one passed.
     /// </summary>
     /// <param name="phases">The phases, in the order they ran.</param>
-    public static IReadOnlyList<string> TailOf(IEnumerable<PhaseResult> phases)
+    public static IReadOnlyList<string> TailOf(IEnumerable<PhaseResult> phases) => LastFailing(phases)?.Tail ?? [];
+
+    /// <summary>
+    /// The name of the phase <see cref="TailOf"/> takes its lines from - the last of <paramref name="phases"/> that did not
+    /// pass - and <see langword="null"/> where every one passed.
+    /// </summary>
+    /// <param name="phases">The phases, in the order they ran.</param>
+    public static string? TailPhaseOf(IEnumerable<PhaseResult> phases) => LastFailing(phases)?.Phase;
+
+    /// <summary>The last of <paramref name="phases"/> that did not pass, or <see langword="null"/> where every one passed.</summary>
+    private static PhaseResult? LastFailing(IEnumerable<PhaseResult> phases)
     {
         ArgumentNullException.ThrowIfNull(phases);
 
-        return phases.LastOrDefault(phase => !phase.Passed)?.Tail ?? [];
+        return phases.LastOrDefault(phase => !phase.Passed);
     }
 
     /// <summary>

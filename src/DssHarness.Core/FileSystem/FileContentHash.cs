@@ -53,4 +53,70 @@ public static class FileContentHash
     /// <summary>The same hash, of bytes already in hand.</summary>
     /// <param name="contents">The bytes.</param>
     public static string Of(ReadOnlySpan<byte> contents) => Convert.ToHexStringLower(SHA256.HashData(contents));
+
+    /// <summary>
+    /// The same hash, of the bytes <paramref name="write"/> writes, taken a little at a time as they are written: a record
+    /// serialized straight into it is never held whole, as text or as bytes.
+    /// </summary>
+    /// <param name="write">Writes the bytes.</param>
+    public static string Of(Action<Stream> write)
+    {
+        ArgumentNullException.ThrowIfNull(write);
+
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using (var sink = new Hashing(hash))
+        {
+            write(sink);
+        }
+
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
+    }
+
+    /// <summary>A stream that only takes bytes, each into the hash.</summary>
+    private sealed class Hashing(IncrementalHash hash) : Stream
+    {
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override void Write(byte[] buffer, int offset, int count) => hash.AppendData(buffer, offset, count);
+
+        public override void Write(ReadOnlySpan<byte> buffer) => hash.AppendData(buffer);
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// The content hash of the file at <paramref name="path"/>, or null where it holds none; a path that cannot be looked
+    /// at raises. A link holds the file it leads to, where it leads to one; a link to a directory, or to nothing, holds none.
+    /// </summary>
+    /// <param name="fileSystem">Looks at the path and opens the file.</param>
+    /// <param name="path">The path.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    public static async Task<string?> OfFileAsync(IFileSystem fileSystem, string path, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        return fileSystem.KindOf(path) switch
+        {
+            PathKind.File => (await OfAsync(fileSystem, path, cancellationToken).ConfigureAwait(false)).Content,
+            // Where the links lead, never whether one is there: a link that leads nowhere is no file on any platform.
+            PathKind.Link when fileSystem.KindOf(fileSystem.ResolveLinks(path)) == PathKind.File => (await OfAsync(fileSystem, path, cancellationToken).ConfigureAwait(false)).Content,
+            _ => null,
+        };
+    }
 }

@@ -9,6 +9,11 @@
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <InvariantGlobalization>true</InvariantGlobalization>
 
+    <!-- English resources alone: the tool speaks English, and under invariant globalization a satellite of another
+         language is never loaded, so each would only make the package larger - System.CommandLine and the
+         compiler's parser each bring thirteen. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+
     <!-- Every build writes under build/ at the repository root instead of bin/ and obj/
          inside each project: binaries, intermediates and packages sit in one ignored
          directory, and deleting it is a complete clean. Conditional so a host that

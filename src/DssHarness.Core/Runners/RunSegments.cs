@@ -175,9 +175,7 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
 
         try
         {
-            return JsonSerializer.Deserialize<RunSegmentRecord>(
-                _fileSystem.ReadAllText(path),
-                SerializerOptions) ?? throw new HarnessException(
+            return JsonStateFile.Read<RunSegmentRecord>(_fileSystem, path, SerializerOptions) ?? throw new HarnessException(
                     HarnessExit.ConfigInvalid,
                     $"'{path}' holds no segment record.");
         }
@@ -315,6 +313,6 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
         var path = RecordPath(runDirectory, record.Leg);
 
         _fileSystem.CreateDirectory(Path.GetDirectoryName(path)!);
-        _fileSystem.WriteAllTextAtomic(path, JsonSerializer.Serialize(record, SerializerOptions));
+        JsonStateFile.Write(_fileSystem, path, record, SerializerOptions);
     }
 }

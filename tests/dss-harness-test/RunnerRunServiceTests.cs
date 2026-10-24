@@ -1193,7 +1193,9 @@ public sealed class RunnerRunServiceTests
 
         Assert.Equal(LegVerdict.Unwitnessed, failed.Verdict.Verdict);
         Assert.Equal(["[fixture drifted]", "[3 of 4 checks held]"], failed.Entry.LogTail);
+        Assert.Equal("measure", failed.Entry.TailPhase);
         Assert.Empty(passed.Entry.LogTail);
+        Assert.Null(passed.Entry.TailPhase);
     }
 
     /// <summary>
@@ -1219,6 +1221,7 @@ public sealed class RunnerRunServiceTests
 
         Assert.Equal(LegVerdict.Unwitnessed, result.Verdict.Verdict);
         Assert.Equal(["[3 of 4 checks held]"], result.Entry.LogTail);
+        Assert.Equal("measure", result.Entry.TailPhase);
     }
 
     [Fact]
@@ -1250,8 +1253,8 @@ public sealed class RunnerRunServiceTests
     {
         // A step whose run block holds several lines is named "step (1/2)", and that slash is a
         // directory separator on every platform this tool runs on.
-        Assert.Equal("build (1-2)", RunnerRunService.LogNameFor("build (1/2)"));
-        Assert.Equal("build (2-2)", RunnerRunService.LogNameFor("build (2/2)"));
+        Assert.Equal("build (1-2)", PhaseLogs.NameFor("build (1/2)"));
+        Assert.Equal("build (2-2)", PhaseLogs.NameFor("build (2/2)"));
     }
 
     [Fact]
@@ -2559,7 +2562,7 @@ public sealed class RunnerRunServiceTests
         var records = new LegRecords(runs, Leg);
 
         Assert.Equal(
-            [.. result.Phases.Select(phase => new PhaseLogFile(RunnerRunService.LogNameFor(phase.Phase), phase.LogFile)).OrderBy(log => log.Phase, StringComparer.Ordinal)],
+            [.. result.Phases.Select(phase => new PhaseLogFile(PhaseLogs.NameFor(phase.Phase), phase.LogFile)).OrderBy(log => log.Phase, StringComparer.Ordinal)],
             records.Logs(factory.FileSystem));
         Assert.Equal(2, records.Logs(factory.FileSystem).Count);
         Assert.True(File.Exists(RunSegments.RecordPath(runs, Leg)));

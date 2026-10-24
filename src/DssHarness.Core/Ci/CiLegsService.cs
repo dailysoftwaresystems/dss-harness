@@ -20,6 +20,7 @@ public sealed record CiLegsRequest(string? Branch, int Limit, IReadOnlyList<long
 {
     /// <summary>Runs read when nothing says otherwise: the newest one.</summary>
     public const int DefaultLimit = 1;
+
 }
 
 /// <summary>Reads the CI verdict of each leg, and separates a real failure from a budget overrun.</summary>
@@ -38,6 +39,23 @@ public interface ICiLegsService
     Task<CiLegsReport> CheckAsync(
         string startDirectory,
         CiLegsRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads one run - the one a check of a commit is a job of - and classifies its legs as <see cref="CheckAsync"/>
+    /// classifies every run it reads. A repository whose ci settings do not say which jobs are legs has none: the run's
+    /// jobs are all there is, and none is classified.
+    /// </summary>
+    /// <param name="startDirectory">A directory inside the repository.</param>
+    /// <param name="runId">The run.</param>
+    /// <param name="cancellationToken">Stops the child processes.</param>
+    /// <exception cref="HarnessException">
+    /// The run could not be read; or a pattern ran out of time, or a budget group captured something that is not a whole
+    /// number of minutes, refused as configuration.
+    /// </exception>
+    Task<CiRunReport> ClassifyRunAsync(
+        string startDirectory,
+        long runId,
         CancellationToken cancellationToken = default);
 }
 
@@ -146,6 +164,34 @@ public sealed class CiLegsService(
         return new CiLegsReport(branch, reports);
     }
 
+    public async Task<CiRunReport> ClassifyRunAsync(
+        string startDirectory,
+        long runId,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
+        var root = context.Layout.RepositoryRoot;
+        var settings = context.Config.Ci;
+        var run = await _jobSource.ReadRunAsync(root, runId, cancellationToken).ConfigureAwait(false);
+        var name = run.Workflow ?? run.WorkflowPath ?? $"run {runId.ToString(CultureInfo.InvariantCulture)}";
+
+        // Which jobs are legs is the repository's to say; where it says it in part or not at all, no job is one.
+        if (settings.Unset().Count > 0)
+        {
+            return new CiRunReport(run, name, false, [.. run.Jobs.Select(job => $"{job.Name}={job.Conclusion ?? "?"}")], []);
+        }
+
+        // The run's own workflow file, where it is among the repository's, gives a leg a budget its job's name lost;
+        // one that is not - a workflow ci.workflows leaves out - gives none, and the other sources answer alone.
+        var workflow = WorkflowFiles(root, settings)
+            .Where(path => _fileSystem.FileExists(path))
+            .Select(path => ReadWorkflow(root, path))
+            .FirstOrDefault(declared => string.Equals(declared.Path, run.WorkflowPath, StringComparison.Ordinal))
+            ?? new CiWorkflow(name, string.Empty, run.WorkflowPath ?? string.Empty);
+
+        return Classify(run, workflow, settings, Conventions.From(settings));
+    }
+
     private static CiRunReport Classify(CiRun run, CiWorkflow workflow, CiSettings settings, Conventions conventions)
     {
         var legs = run.Jobs
@@ -176,7 +222,7 @@ public sealed class CiLegsService(
 
         // Only failure is failure. A cancelled, timed-out, neutral or skipped job is a different fact
         // with a different remedy, and calling it a failure sends a reader after code that never ran.
-        var success = !string.Equals(job.Conclusion, CiConclusions.Failure, StringComparison.Ordinal);
+        var success = CiConclusions.Of(job.Conclusion) != CiCheckState.Red;
 
         var (budget, source) = Budget(fromName, leg, workflow, settings, conventions);
         var elapsed = test?.Elapsed?.TotalSeconds;
@@ -267,13 +313,9 @@ public sealed class CiLegsService(
     /// </summary>
     private IReadOnlyList<CiWorkflow> ReadWorkflows(string root, CiSettings settings)
     {
-        var paths = settings.Workflows is { Count: > 0 } named
-            ? named.Select(path => Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar))).ToList()
-            : Enumerate(Path.Combine(root, WorkflowsDirectory.Replace('/', Path.DirectorySeparatorChar)));
-
         var workflows = new List<CiWorkflow>();
 
-        foreach (var path in paths)
+        foreach (var path in WorkflowFiles(root, settings))
         {
             if (!_fileSystem.FileExists(path))
             {
@@ -282,14 +324,7 @@ public sealed class CiLegsService(
                     $"ci.workflows names '{path}', which is not a file, so CI was NOT read. This is not a pass.");
             }
 
-            // Each line as it reads, whatever ended it: a checkout that writes CRLF would otherwise keep a
-            // budget pattern ending in $ from matching the line it describes.
-            var text = LineText.Of(_fileSystem.ReadAllText(path));
-            var declared = WorkflowName.Match(text);
-
-            workflows.Add(new CiWorkflow(
-                declared.Success ? declared.Groups["name"].Value.Trim('\'', '"') : Path.GetFileName(path),
-                text));
+            workflows.Add(ReadWorkflow(root, path));
         }
 
         if (workflows.Count == 0)
@@ -301,6 +336,26 @@ public sealed class CiLegsService(
         }
 
         return workflows;
+    }
+
+    /// <summary>The workflow files the repository's CI is: the ones configuration names, or every file the conventional directory holds.</summary>
+    private IReadOnlyList<string> WorkflowFiles(string root, CiSettings settings)
+        => settings.Workflows is { Count: > 0 } named
+            ? [.. named.Select(path => Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar)))]
+            : Enumerate(Path.Combine(root, WorkflowsDirectory.Replace('/', Path.DirectorySeparatorChar)));
+
+    /// <summary>One workflow file, read: its declared name, else its file name, its text and its path in the repository.</summary>
+    private CiWorkflow ReadWorkflow(string root, string path)
+    {
+        // Each line as it reads, whatever ended it: a checkout that writes CRLF would otherwise keep a
+        // budget pattern ending in $ from matching the line it describes.
+        var text = LineText.Of(_fileSystem.ReadAllText(path));
+        var declared = WorkflowName.Match(text);
+
+        return new CiWorkflow(
+            declared.Success ? declared.Groups["name"].Value.Trim('\'', '"') : Path.GetFileName(path),
+            text,
+            Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/'));
     }
 
     private IReadOnlyList<string> Enumerate(string directory)
@@ -318,13 +373,7 @@ public sealed class CiLegsService(
             return given;
         }
 
-        var result = await _gitClient
-            .RunAsync(root, ["rev-parse", "--abbrev-ref", "HEAD"], cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-
-        var branch = result.Succeeded ? result.StandardOutput.Trim() : string.Empty;
-
-        if (branch.Length == 0 || string.Equals(branch, "HEAD", StringComparison.Ordinal))
+        if (await _gitClient.GetBranchAsync(root, cancellationToken).ConfigureAwait(false) is not { Length: > 0 } branch)
         {
             throw new HarnessException(
                 HarnessExit.Refused,
@@ -394,15 +443,7 @@ public sealed class CiLegsService(
         /// <exception cref="HarnessException">One the command cannot do without is not set.</exception>
         public static Conventions From(CiSettings settings)
         {
-            var missing = new[]
-                {
-                    ("ci.legJobPattern", settings.LegJobPattern),
-                    ("ci.buildStep", settings.BuildStep),
-                    ("ci.testStep", settings.TestStep),
-                }
-                .Where(setting => string.IsNullOrWhiteSpace(setting.Item2))
-                .Select(setting => setting.Item1)
-                .ToList();
+            var missing = settings.Unset();
 
             if (missing.Count > 0)
             {
@@ -433,10 +474,11 @@ public sealed class CiLegsService(
                     : null;
     }
 
-    /// <summary>One workflow file: what the forge lists its runs under, and its own text.</summary>
+    /// <summary>One workflow file: what the forge lists its runs under, its own text, and where it is.</summary>
     /// <param name="Identifier">The workflow's declared name, or its file name when it declares none.</param>
     /// <param name="Text">The file, read once and searched for a leg's budget when a job name lost it.</param>
-    private sealed record CiWorkflow(string Identifier, string Text)
+    /// <param name="Path">The file, relative to the repository with '/' between its parts, as the forge names a run's workflow.</param>
+    private sealed record CiWorkflow(string Identifier, string Text, string Path)
     {
         /// <summary>
         /// The budget the file gives <paramref name="leg"/>, in minutes, as <paramref name="pattern"/> finds it, or null.
@@ -565,22 +607,31 @@ public static class CiLegsReports
                 ["createdAt"] = run.Run.CreatedAt,
                 ["matrixRan"] = run.MatrixRan,
                 ["jobs"] = new JsonArray([.. run.JobsPresent.Select(job => (JsonNode?)JsonValue.Create(job))]),
-                ["legs"] = new JsonArray([.. run.Legs.Select(leg => (JsonNode)new JsonObject
-                {
-                    ["leg"] = leg.Leg,
-                    ["job"] = leg.Job,
-                    ["success"] = leg.Success,
-                    ["errors"] = new JsonArray([.. leg.Errors.Select(error => (JsonNode?)JsonValue.Create(error))]),
-                    ["overran"] = leg.Overran,
-                    ["unclassified"] = leg.Unclassified,
-                    ["warnings"] = new JsonArray([.. leg.Warnings.Select(warning => (JsonNode?)JsonValue.Create(warning))]),
-                    ["testSeconds"] = leg.TestSeconds,
-                    ["budgetSeconds"] = leg.BudgetSeconds,
-                    ["budgetSource"] = leg.BudgetSource,
-                })]),
+                ["legs"] = new JsonArray([.. run.Legs.Select(leg => (JsonNode)LegDocument(leg))]),
             })]),
         };
 
         return node;
+    }
+
+    /// <summary>One leg as check-ci-legs --json gives it: its name and job, whether it succeeded, why not, and its budget.</summary>
+    /// <param name="leg">What was found for the leg.</param>
+    public static JsonObject LegDocument(CiLegOutcome leg)
+    {
+        ArgumentNullException.ThrowIfNull(leg);
+
+        return new JsonObject
+        {
+            ["leg"] = leg.Leg,
+            ["job"] = leg.Job,
+            ["success"] = leg.Success,
+            ["errors"] = new JsonArray([.. leg.Errors.Select(error => (JsonNode?)JsonValue.Create(error))]),
+            ["overran"] = leg.Overran,
+            ["unclassified"] = leg.Unclassified,
+            ["warnings"] = new JsonArray([.. leg.Warnings.Select(warning => (JsonNode?)JsonValue.Create(warning))]),
+            ["testSeconds"] = leg.TestSeconds,
+            ["budgetSeconds"] = leg.BudgetSeconds,
+            ["budgetSource"] = leg.BudgetSource,
+        };
     }
 }

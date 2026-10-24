@@ -18,7 +18,7 @@
   <ItemGroup>
     <!-- 4.0.1 or later. Under 4.0.0 the test host exits during startup when `dotnet test`
          launches it, and `dotnet test` then reports zero tests instead of a failure. -->
-    <PackageReference Include="xunit.v3" Version="4.0.1" />
+    <PackageReference Include="xunit.v3" Version="4.0.2" />
     <PackageReference Include="NSubstitute" Version="6.2.0" />
   </ItemGroup>
 
@@ -28,8 +28,7 @@
     <!-- Builds the CLI so end-to-end tests can run the real binary, without referencing
          its assembly: DssHarness.Cli is an Exe, and referencing it would put a second
          entry point in this test application. -->
-    <ProjectReference Include="../../src/DssHarness.Cli/DssHarness.Cli.csproj"
-                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../src/DssHarness.Cli/DssHarness.Cli.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
@@ -46,9 +45,7 @@
        Guessing it from directory names breaks as soon as an output layout differs from
        the default one. -->
   <Target Name="EmbedCliPath" BeforeTargets="GetAssemblyAttributes">
-    <MSBuild Projects="../../src/DssHarness.Cli/DssHarness.Cli.csproj"
-             Targets="GetTargetPath"
-             Properties="Configuration=$(Configuration)">
+    <MSBuild Projects="../../src/DssHarness.Cli/DssHarness.Cli.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration)">
       <Output TaskParameter="TargetOutputs" ItemName="_DssHarnessCli" />
     </MSBuild>
 

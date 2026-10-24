@@ -734,18 +734,8 @@ public sealed class ClaudeCodeProtocolTests
     /// <summary>The host's allow of the fake's one ask, in the recorded envelope.</summary>
     private const string Allow = """{"type":"control_response","response":{"subtype":"success","request_id":"00000000-0000-4000-8000-000000000002","response":{"behavior":"allow","updatedInput":{"file_path":"a.txt"}}}}""";
 
-    /// <summary>Where the curated recordings live, in the test tree.</summary>
-    private static string Fixtures(string channel, string file)
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (directory is not null && !directory.EnumerateFiles("DssHarness.slnx").Any())
-        {
-            directory = directory.Parent;
-        }
-
-        return Path.Combine(directory!.FullName, "tests", "dss-harness-test", "fixtures", "claude-code", channel, file);
-    }
+    /// <summary>One curated recording's file.</summary>
+    private static string Fixtures(string channel, string file) => ClaudeCodeProbe.Fixtures(channel, file);
 
     /// <summary>One curated recording's lines.</summary>
     private static List<ClaudeCodeProbe.Line> Lines(string channel, string file) => ClaudeCodeProbe.Read(Fixtures(channel, file));
@@ -782,24 +772,12 @@ public sealed class ClaudeCodeProtocolTests
     /// <summary>Starts the fake <c>claude</c> with <paramref name="arguments"/> and, beside its mode, <paramref name="environment"/>.</summary>
     private static FakeClaude Fake(string[] arguments, IReadOnlyDictionary<string, string>? environment = null)
     {
-        var start = new ProcessStartInfo(TestHost.DotnetExecutable)
-        {
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            CreateNoWindow = true,
-        };
+        var start = TestHost.StartOf(TestHost.ChildRequest("claude-code", arguments));
 
-        start.ArgumentList.Add("exec");
-        start.ArgumentList.Add(TestHost.AssemblyPath);
-
-        foreach (var argument in arguments)
-        {
-            start.ArgumentList.Add(argument);
-        }
-
-        start.Environment[TestHost.ChildModeVariable] = "claude-code";
+        start.RedirectStandardInput = true;
+        start.RedirectStandardOutput = true;
+        start.StandardOutputEncoding = Encoding.UTF8;
+        start.CreateNoWindow = true;
 
         foreach (var (variable, value) in environment ?? new Dictionary<string, string>(StringComparer.Ordinal))
         {

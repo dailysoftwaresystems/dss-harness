@@ -35,7 +35,6 @@ public sealed class CommandSession : IAsyncDisposable
     private readonly IServiceProvider _services;
     private readonly IHarnessOutput _output;
     private readonly Func<SessionContext, int, string, string>? _stopped;
-    private readonly CancellationTokenSource _pause = new();
 
     /// <summary>
     /// Whether this operation's end was handed to the operation it is a step of: that end runs on this operation's
@@ -130,7 +129,7 @@ public sealed class CommandSession : IAsyncDisposable
                 }
                 else
                 {
-                    var scope = new CommandScope(_services, resolved.Directory!, Run, _pause.Token);
+                    var scope = new CommandScope(_services, resolved.Directory!, Run);
                     var outcome = await body(scope, cancellationToken).ConfigureAwait(false);
 
                     if (await EndedDefectiveAsync().ConfigureAwait(false))
@@ -232,8 +231,6 @@ public sealed class CommandSession : IAsyncDisposable
     /// </remarks>
     public async ValueTask DisposeAsync()
     {
-        _pause.Dispose();
-
         if (_endHandedOn)
         {
             return;
@@ -246,13 +243,13 @@ public sealed class CommandSession : IAsyncDisposable
     /// <summary>
     /// Refuses what a session would otherwise ignore or cannot honour, before any service is built for it: a step's end
     /// handed to no operation, a document with no stopped form to answer a stop with, a stopped form for an operation
-    /// that answers with no document, and the options and parts of a front end not honoured yet, which
-    /// this build would otherwise run without a word.
+    /// that answers with no document, and a front end's own output or prompt, which this build does not honour yet and
+    /// would otherwise run without a word.
     /// </summary>
     /// <param name="options">What the operation is asked and how it runs.</param>
     /// <param name="frontEnd">What the front end supplies.</param>
     /// <exception cref="InvalidOperationException">The options contradict themselves or the front end.</exception>
-    /// <exception cref="NotSupportedException">An option or a part of the front end this build does not honour yet.</exception>
+    /// <exception cref="NotSupportedException">The front end supplies an output or a prompt of its own, which this build does not honour yet.</exception>
     internal static void RequireHonoured(SessionOptions options, SessionFrontEnd? frontEnd)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -274,21 +271,6 @@ public sealed class CommandSession : IAsyncDisposable
             throw new InvalidOperationException(
                 $"'{options.Command}' answers with no document ({nameof(DocumentKind)}.{nameof(DocumentKind.None)}), and its front end supplies a stopped form "
                 + $"({nameof(SessionFrontEnd.Stopped)}) it would answer a stop with all the same: a document nobody asked for.");
-        }
-
-        if (options.PausesOnInterrupt)
-        {
-            throw new NotSupportedException(
-                $"{nameof(SessionOptions.PausesOnInterrupt)} is honoured by the run verbs of an orchestrator run, which this build does not have yet: "
-                + "every interrupt still cancels.");
-        }
-
-        if (options.ApartFromTerminal)
-        {
-            throw new NotSupportedException(
-                $"{nameof(SessionOptions.ApartFromTerminal)} is honoured once a session hands it to the processes its operation starts "
-                + $"({nameof(Processes.ProcessRequest)}.{nameof(Processes.ProcessRequest.ApartFromTerminal)}), which this build does not do yet: "
-                + "what an operation starts is in reach of an interrupt.");
         }
 
         if (frontEnd?.Output is not null || frontEnd?.Prompt is not null)
@@ -535,12 +517,14 @@ public sealed class CommandSession : IAsyncDisposable
         : Exception($"'{command}' met a defect of this tool at its end, said in its own output.");
 }
 
-/// <summary>What a command body receives: its services, its directory, its run, and the pause a safe one is asked by.</summary>
+/// <summary>
+/// What a command body receives: its services, its directory and its run. A safe pause is no session's to ask: the run
+/// verbs count their own interrupts (<c>FlowTerminal</c>).
+/// </summary>
 /// <param name="services">The services built for this operation.</param>
 /// <param name="directory">The directory to act on: absolute, and already confirmed to exist.</param>
 /// <param name="run">The run this operation began; <see langword="null"/> where it began none.</param>
-/// <param name="pauseRequested">Cancelled by the first interrupt, where the operation pauses safely; the body's own token is cancelled by the second.</param>
-public sealed class CommandScope(IServiceProvider services, string directory, RunId? run, CancellationToken pauseRequested)
+public sealed class CommandScope(IServiceProvider services, string directory, RunId? run)
 {
     /// <summary>The services built for this operation.</summary>
     public IServiceProvider Services { get; } = services;
@@ -550,9 +534,6 @@ public sealed class CommandScope(IServiceProvider services, string directory, Ru
 
     /// <summary>The run this operation began; <see langword="null"/> where it began none.</summary>
     public RunId? Run { get; } = run;
-
-    /// <summary>Cancelled by the first interrupt, where the operation pauses safely; the body's own token is cancelled by the second.</summary>
-    public CancellationToken PauseRequested { get; } = pauseRequested;
 
     /// <summary>Resolves a use case of this tool.</summary>
     /// <typeparam name="T">The use case.</typeparam>

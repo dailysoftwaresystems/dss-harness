@@ -48,25 +48,26 @@ them.
 | `Help` | Every `help` topic's text, held to the code (`HelpTopics`) |
 | `Anchors` | Anchor registry rows, balance and citations (`IAnchorRegistryService`, `AnchorBalanceService`, `AnchorCitationService`) |
 | `Build` | Build adapters and CMake/Ninja inspection (`BuildService`, `BuildDirectoryGuard`, `CMakeToolchainReader`) |
-| `Ci` | `check-ci-legs` (`CiLegsService`) |
+| `Ci` | `check-ci-legs` and a `ci-wait` step's wait for a commit's checks (`CiLegsService`, `CiChecksService`), each read of the forge through `GhCiJobSource` |
+| `Codebase` | A run's codebase graph: the one contract and its registry (`ICodeGraphExtractor`, `CodeGraphExtractors`), the extract model (`FileExtract`), the one linker (`CodeGraphLinker`, which links again only what a change could have changed), the sync of the main checkout and of each agent's view, by a listing or by paths, the check an answer makes of its files, and their records (`CodebaseGraphService`; the records' shapes in `CodebaseGraphRecords.cs`, `CodeGraphManifest` and `CodeGraphView` among them); each implementation in `Languages/`, which nothing else names |
 | `Commands` | Services for commands with no domain folder (`InitService`, `VerifyGitService`) |
 | `Configuration` | `config.json`: model, load, validation, key lists (`HarnessConfig`, `HarnessConfigValidator`, `ConfigKeys`, `DefaultConfigFactory`) |
 | `Execution` | A leg's run: phases, locks, ledgers, verdicts, admission, input watch (`LegExecutor`, `PhaseRunner`, `RunLock`, `LegLedger`, `LegVerdict`, `LegAdmission`) |
-| `FileSystem` | `IFileSystem`/`PhysicalFileSystem`, `PathCase`, junctions, holds, verified copies |
+| `FileSystem` | `IFileSystem`/`PhysicalFileSystem`, whole-file reads and writes (`WholeFiles`, `FileLines`), records (`JsonStateFile`, and `JsonLineWriter`/`JsonLineReader` in `JsonLines.cs`), what makes content binary (`BinaryContent`), `PathCase`, Windows' own file calls (`Win32Files`), junctions, holds, verified copies |
 | `Git` | `IGitClient`/`GitClient` (partial files for history and merges) |
 | `Hosts` | Reaching and probing ssh and WSL hosts, the tool on each host (`HostCommandRunner`, `HostAgentService`, `ToolUpdateService`) |
 | `Legs` | Leg placement and selection (`LegsService`, `LegPlacement`, `LegSelection`) |
 | `LineEndings` | `.gitattributes` policy (`LineEndingService`) |
 | `Mutations` | `check-mutations` (`MutationService`, `MutationRegistry*`, `ArmJudge`, `MutationFixture`) |
-| `Orchestration` | Orchestrators and agents: seeding, folding, rebasing (`OrchestratorService`, `AgentService`, `AgentFold`) |
+| `Orchestration` | Orchestrators and agents: seeding, folding, rebasing (`OrchestratorService`, `AgentService`, `AgentFold`); the engine in `Flow`, its step runners in `Flow/Runners`, and its own syncs of a run's graph (`FlowGraphSyncs`) |
 | `Output` | `IHarnessOutput`/`ConsoleHarnessOutput`, text and JSON reports |
 | `Platform` | The operating-system seam (`IHostPlatform`, `IFilePermissions`, `IProcessTable`, `PathBudget`) |
-| `Processes` | `IProcessRunner`/`ProcessRunner`, `ProcessRequest`/`ProcessResult`, `CommandLineText` (the one no-shell line splitter) |
+| `Processes` | `IProcessRunner`/`ProcessRunner`, `ProcessRequest`/`ProcessResult`/`ProcessStoppedException`, containment (`ContainExec`, `Containment`, `ProcessScope`), `CommandLineText` (the one no-shell line splitter) |
 | `Projects` | What `init` detects and seeds (`IProjectDetector`) |
 | `Repository` | The harness context and layout, `GitIgnoreManager` |
 | `Results` | `CommandOutcome`, `HarnessException`, `HarnessExit` (the shared exit codes), `KnownCauses.Meaning` (the one place an exception becomes an exit code), `OutcomeCause` |
 | `Runners` | Predefined runners and action files (`RunnerRunService`, `ActionFileParser`) |
-| `Runs` | Leg runs, remote runs, `clean` (`LegRunService`, `RemoteLegRunner`, `CleanService`) |
+| `Runs` | Leg runs, remote runs, `stop-run`, `clean` (`LegRunService`, `RemoteLegRunner`, `RunStopService`/`RunStops`, `CleanService`) |
 | `SetUps` | `up`/`down` and a run's `--set-up`: lines, shared holds, bringing up around a leg (`SetUpService`, `SetUpHolds`, `LegSetUps`) |
 | `Secrets` | Host connection data and its permission checks, and the dotenv readers (`HostSecretsStore`, `ItemEnvironment`, `DotEnvFile`, `DotEnvDirectories`) |
 | `Sync` | Syncing a tree to hosts (`SyncService`, `SyncManifest`, `HostCopies`) |
@@ -103,10 +104,12 @@ From [`docs/architecture.md`](../../../../docs/architecture.md) "Layering", whic
 - [`Directory.Build.props`](../../../../Directory.Build.props) applies to every project: `net10.0`, nullable on,
   implicit usings, `TreatWarningsAsErrors`, `GenerateDocumentationFile` (so a stale `<param>` fails the build; only
   CS1591 is suppressed), the NuGet audit on every advisory, and **`InvariantGlobalization`** — culture-aware APIs
-  answer invariantly, and `string.Normalize` changes nothing, so never rely on Unicode normalization.
+  answer invariantly, and `string.Normalize` changes nothing, so never rely on Unicode normalization; and
+  `SatelliteResourceLanguages` `en`, so no package's resources of another language are shipped.
 - **Everything a build writes lands under `build/`** (`UseArtifactsOutput`): `build/bin/<Project>/<debug|release>/`,
   `build/obj/...`, packages in `build/package`. Deleting `build/` is a complete clean.
-- **Dependencies:** YamlDotNet, System.CommandLine and Microsoft.Extensions.DependencyInjection (Core; the Cli builds no container), xunit v3
+- **Dependencies:** YamlDotNet, System.CommandLine, Microsoft.Extensions.DependencyInjection (Core; the Cli builds no container) and
+  Microsoft.CodeAnalysis.CSharp (Core: the codebase graph's C# implementation reads its syntax trees alone, nothing compiled), xunit v3
   and NSubstitute (tests). No new package without the maintainer's approval.
 - Every file is stored and checked out with LF line endings ([`.gitattributes`](../../../../.gitattributes)); there
   is no CRLF exception.

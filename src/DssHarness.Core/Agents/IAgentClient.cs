@@ -187,7 +187,22 @@ public sealed record AgentSkill(string Name, string Where, string Digest, string
 /// <param name="MaxAnswers">The most answers one asking may take; three unless given.</param>
 public sealed class AgentHandoffSignal(TimeSpan Bound, int MaxAnswers = 3)
 {
-    private volatile bool _asked;
+    /// <summary>The prompt every handoff turn is asked with, on every client: one text for every kind of agent.</summary>
+    public const string Prompt =
+        "The run is being paused. Stop the task where it stands: run nothing more and change nothing more.\n"
+        + "Answer with a handoff for whoever goes on with this work - you, later, or a session that has only this text and the tree.\n"
+        + "- Done: what you finished and what you established, naming the files you changed or relied on.\n"
+        + "- Left: what the task still needs, in the order you would do it.\n"
+        + "- In the middle of: anything started and not finished - a command that was cut off, a file part edited, a check you were about to run - and what to check before going on.\n"
+        + "Say only what you know. This answer is the whole handoff.";
+
+    /// <summary>The rule every call asked in a handoff turn is refused by, on every client.</summary>
+    public const string TurnRule = "the handoff turn";
+
+    /// <summary>What every call asked in a handoff turn is answered: the turn is for the handoff alone.</summary>
+    public const string ToolRefusal = "no tool runs in a handoff turn; answer with the handoff";
+
+    private readonly TaskCompletionSource<AgentHandoffAsked> _asked = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>How long the agent has to answer once asked.</summary>
     public TimeSpan Bound { get; } = Bound;
@@ -196,10 +211,67 @@ public sealed class AgentHandoffSignal(TimeSpan Bound, int MaxAnswers = 3)
     public int MaxAnswers { get; } = MaxAnswers;
 
     /// <summary>Whether the engine has raised the handoff.</summary>
-    public bool Asked => _asked;
+    public bool Asked => _asked.Task.IsCompleted;
 
-    /// <summary>Raises the handoff: the run is pausing, and the agent is asked what it leaves.</summary>
-    public void Ask() => _asked = true;
+    /// <summary>Completes once the engine raises the handoff, with why and what is told before the question.</summary>
+    public Task<AgentHandoffAsked> WhenAsked => _asked.Task;
+
+    /// <summary>Raises the handoff: the run is pausing, and the agent is asked what it leaves. The first asking stands.</summary>
+    /// <param name="why">Why the run is pausing, as the record says it.</param>
+    /// <param name="lead">
+    /// What the agent is told before it is asked - a plan update that changes or withdraws its work item, whole - or
+    /// null where the question stands alone.
+    /// </param>
+    public void Ask(string why = "the run is pausing", string? lead = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(why);
+        _asked.TrySetResult(new AgentHandoffAsked(why, lead));
+    }
+}
+
+/// <summary>Why a handoff was asked, and what the agent is told before the question.</summary>
+/// <param name="Why">Why the run is pausing.</param>
+/// <param name="Lead">What the agent is told before it is asked; null where the question stands alone.</param>
+public sealed record AgentHandoffAsked(string Why, string? Lead);
+
+/// <summary>What an agent may do, as its definition's <c>capabilities</c> name it: each gives it the tools of its kind.</summary>
+public enum AgentCapability
+{
+    /// <summary>Read files, list and search them.</summary>
+    Read,
+
+    /// <summary>Write and edit files.</summary>
+    Write,
+
+    /// <summary>Run commands.</summary>
+    Run,
+
+    /// <summary>Search the web and fetch its pages.</summary>
+    Web,
+}
+
+/// <summary>
+/// The credential a run signs in with, where its client signs in: how (<see cref="AgentAuth"/>), each value the slot
+/// gave for it in the order they are tried - the provider's keys under <c>apiKey</c>, the one token under a token's way,
+/// none under the machine's login - and the Claude Code directory whose login and settings a launch reads.
+/// </summary>
+/// <param name="Auth">How it signs in: one of <see cref="AgentAuth.All"/>.</param>
+/// <param name="Keys">The values it may sign in with, in order; empty for the machine's login.</param>
+/// <param name="Api">The provider's address, which a launch that signs in with a key or a token is sent to; null for the machine's login.</param>
+/// <param name="ConfigDirectory">
+/// The Claude Code directory a launch reads - what the slot holds under the name the client's <c>configDir</c> gives
+/// (<c>CLAUDE_CONFIG_DIR</c> where it gives none), else the tool's own, else none, which is Claude Code's default - and
+/// where a session file it may leave is looked for.
+/// </param>
+public sealed record AgentCredential(string Auth, IReadOnlyList<AgentKey> Keys, string? Api = null, string? ConfigDirectory = null);
+
+/// <summary>One value a run may sign in with, by the name the slot holds it under.</summary>
+/// <param name="Name">The variable's name, which records say.</param>
+/// <param name="Value">The value, which no record says: the run's mask holds it.</param>
+public sealed record AgentKey(string Name, string Value)
+{
+    /// <summary>The key by its name alone, so no text made of it holds the value.</summary>
+    public override string ToString() => Name;
 }
 
 /// <summary>
@@ -257,7 +329,6 @@ public sealed class AgentMessages
 /// <param name="Limits">The bounds it is held to.</param>
 /// <param name="MayAsk">Whether it may ask the person.</param>
 /// <param name="AskRounds">How many times it may ask.</param>
-/// <param name="Restrictions">The extra restrictions its step or definition names.</param>
 /// <param name="Mask">What masks the secrets its lines may carry; null where the step carries none.</param>
 public sealed record AgentStepRequest(
     string Run,
@@ -281,8 +352,35 @@ public sealed record AgentStepRequest(
     AgentLimits Limits,
     bool MayAsk,
     int AskRounds,
-    IReadOnlyList<string> Restrictions,
-    ILineMask? Mask);
+    ILineMask? Mask)
+{
+    /// <summary>
+    /// What the agent's policy is decided against - its restrictions and its capabilities among it; null where the step
+    /// was given none, and nothing then runs.
+    /// </summary>
+    public Policy.AgentPolicyGround? Ground { get; init; }
+
+    /// <summary>The credential the run signs in with, where its client signs in; null for the machine's login.</summary>
+    public AgentCredential? Credential { get; init; }
+
+    /// <summary>The program a client that starts one starts, as the engine found it ready; null for a client that starts none.</summary>
+    public string? Program { get; init; }
+
+    /// <summary>The version that program answered when the engine found it ready, as a refusal names it; null where it was not asked.</summary>
+    public string? ProgramVersion { get; init; }
+
+    /// <summary>
+    /// The names a child the run starts never inherits, whatever the tool's own environment holds: every name the
+    /// configuration appoints a value of the slot for, so no other company's key and no token reaches it.
+    /// </summary>
+    public IReadOnlyList<string> Withheld { get; init; } = [];
+
+    /// <summary>The signal the engine raises when the run is pausing; one of the runner's own where the engine gives none.</summary>
+    public AgentHandoffSignal? Handoff { get; init; }
+
+    /// <summary>What the engine tells the agent while it works; one of the runner's own where the engine gives none.</summary>
+    public AgentMessages? Messages { get; init; }
+}
 
 /// <summary>
 /// A run, resolved: what a client gets and all a client gets. The prompt is filled, the places are absolute, the
@@ -327,4 +425,23 @@ public sealed record AgentRun(
     ILineMask Mask,
     string StepDirectory,
     AgentHandoffSignal Handoff,
-    AgentMessages Messages);
+    AgentMessages Messages)
+{
+    /// <summary>
+    /// What the agent's policy is decided against - its capabilities among it, which name the tools a launch offers; null
+    /// where the step was given none, and a client that asks it runs nothing.
+    /// </summary>
+    public Policy.AgentPolicyGround? Ground { get; init; }
+
+    /// <summary>The credential the run signs in with, where its client signs in; null for the machine's login.</summary>
+    public AgentCredential? Credential { get; init; }
+
+    /// <summary>The program a client that starts one starts, as the engine found it ready; null for a client that starts none.</summary>
+    public string? Program { get; init; }
+
+    /// <summary>The version that program answered when the engine found it ready, as a refusal names it; null where it was not asked.</summary>
+    public string? ProgramVersion { get; init; }
+
+    /// <summary>The names a child the run starts never inherits: every name the configuration appoints a value of the slot for.</summary>
+    public IReadOnlyList<string> Withheld { get; init; } = [];
+}

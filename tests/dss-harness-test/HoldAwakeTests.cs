@@ -438,7 +438,7 @@ public sealed class HoldAwakeTests
         identity.Current.Returns(new ToolIdentity("1.2.3", "abc123"));
 
         var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
-        var processRunner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create());
+        var processRunner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram);
 
         return new HostAgentService(
             platform,

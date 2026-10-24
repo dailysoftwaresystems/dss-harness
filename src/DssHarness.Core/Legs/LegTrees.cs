@@ -54,6 +54,21 @@ public static class LegTrees
             : LocalTrees.AsConfigured;
 
     /// <summary>
+    /// Whether <paramref name="leg"/> builds in this machine's own tree, where a worktree of this machine is its tree: it
+    /// names no host of its own - neither a WSL distribution nor an ssh host - and its operating system is this machine's,
+    /// however its case is written, as the configuration's check reads it. One that names a host builds there, whatever
+    /// its os says.
+    /// </summary>
+    /// <param name="leg">The leg.</param>
+    /// <param name="platformKey">This machine's operating system, as a leg names one.</param>
+    public static bool BuildsHere(LegConfig leg, string platformKey)
+    {
+        ArgumentNullException.ThrowIfNull(leg);
+
+        return leg.Wsl is null && leg.Ssh is null && string.Equals(leg.Os, platformKey, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Whether the configuration has <paramref name="leg"/> work in a copy of its tree where this machine runs it: its own
     /// key, else the repository's default. The one expression of the configuration's half of that order of precedence,
     /// which nothing else repeats.

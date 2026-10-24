@@ -353,6 +353,7 @@ public sealed class AgentStreamTests
                 "sessionStarted.tools", "sessionStarted.skills", "assistantMessage.calls", "outputRepair.problems",
                 "personAsked.questions", "personAsked.questions[0].choices", "result.json.usage.perModel", "result.json.assumptions",
                 "result.json.questions", "result.json.questions[0].choices", "result.json.served", "result.json.files",
+                "result.json.keysRefused", "result.json.sessionFilesRemoved", "result.json.uncontained",
             ],
             refused);
     }
@@ -659,10 +660,10 @@ public sealed class AgentStreamTests
     {
         public List<string> Written { get; } = [];
 
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
             Written.Add(path);
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
         }
     }
 }

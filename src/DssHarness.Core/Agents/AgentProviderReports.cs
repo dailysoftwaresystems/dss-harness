@@ -92,6 +92,7 @@ public static class AgentProviderReports
                 false,
                 [],
                 [],
+                [],
                 [])));
 
     private static string Summary(AgentProviderList list)
@@ -149,6 +150,11 @@ public static class AgentProviderReports
             lines.Add(client.Keys.Count == 0
                 ? $"client '{client.Name}' signs in with {client.SignIn} and reads no key"
                 : $"client '{client.Name}' signs in with {client.SignIn} ({string.Join(", ", client.Keys.Select(key => $"{key.Name}, {(key.Held ? "present" : "missing")}"))})");
+        }
+
+        foreach (var client in list.Settings.GroupBy(setting => setting.Client))
+        {
+            lines.Add($"client '{client.Key}' reads its settings where the slot holds them, none needed: {string.Join(", ", client.Select(setting => $"{setting.Name} ({setting.Key}), {(setting.Held ? "present" : "absent")}"))}");
         }
 
         if (list.Unappointed.Count > 0)
@@ -283,6 +289,7 @@ public static class AgentProviderReports
             ["balanceKeyUsage"] = list.BalanceKeyUsage,
             ["tiers"] = tiers,
             ["clients"] = clients,
+            ["settings"] = new JsonArray([.. list.Settings.Select(setting => new JsonObject { ["client"] = setting.Client, ["key"] = setting.Key, ["name"] = setting.Name, ["held"] = setting.Held })]),
             ["unappointed"] = new JsonArray([.. list.Unappointed.Select(name => (JsonNode?)name)]),
         };
     }

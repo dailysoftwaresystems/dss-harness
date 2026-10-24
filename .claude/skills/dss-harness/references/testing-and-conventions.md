@@ -55,7 +55,7 @@ All in [`tests/dss-harness-test`](../../../../tests/dss-harness-test):
 | `TempDirectory` | A disposable real directory under the test root; `Combine`, `WriteFile`, `WriteProgram` |
 | `TestHost` | Module initialiser: isolates git configuration and the temporary root, and lets the test binary act as a child process |
 | `CliRunner` | Runs the real built CLI for end-to-end and exit-code tests, and parses help output |
-| `PassThroughFileSystem` | Base for one-fault `IFileSystem` doubles (`CaseOf` for a file system that folds case, `UndeletableFile`, `UnlistableDirectory`, full-disk and unlistable variants) |
+| `PassThroughFileSystem` | Base for one-fault `IFileSystem` doubles (`CaseOf` for a file system that folds case, `UndeletableFile`, `UnlistableDirectory`, full-disk and unlistable variants). Every read is an `OpenRead`, and every whole write a `WriteAtomic` or, of bytes in hand, a `WriteAllBytesAtomicAsync`, so a double overrides those; `Reading` gives a file's text as it reads, `WrittenText` what a write holds |
 | `HostTestDoubles` | Scripted hosts and copies (`ScriptedHostCommands`, `NoHosts`, `NoHostCopies`, `RecordingLauncher`) |
 | `QuietProcessRunner`, `QuietProcessTable` | A program that says one line, stays silent for a given life and exits 0 (for stall bounds); a machine running only this test process and any others given |
 | `OrchestrationKit`, `SyncKit`, `AdmissionKit`, `ActionKit` | Ready-made scenes for those areas |

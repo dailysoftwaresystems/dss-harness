@@ -533,6 +533,25 @@ public sealed class AnchorCitationServiceTests
         Assert.Contains("git remote set-head origin --auto", refusal.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The roots the check scans are the ones declared, each once as git spells it; a root that names nothing once
+    /// spelled so - the tree's own '.' among them - is none, and roots that are all such are refused, nothing scanned.
+    /// </summary>
+    [Fact]
+    public async Task TheRootsScanned_AreTheDeclaredOnes_EachOnce_AndNoneIsRefused()
+    {
+        Assert.Equal(["src", "docs"], AnchorCitationService.RootsOf(new AnchorSettings { CitationRoots = ["src", "./src", "docs\\", "", "."] }));
+
+        using var temp = new TempDirectory();
+        var harness = await PrepareAsync(temp, ["."]);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(harness).CheckAsync(temp.Path, AnchorCitationSubject.CurrentTree, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.StartsWith("anchors.citationRoots declares no root, so nothing was scanned and nothing was checked.", refusal.Message, StringComparison.Ordinal);
+    }
+
     private static AnchorCitationService Service(HarnessFactory harness)
         => new(harness.ContextLoader, harness.AnchorRegistryService, harness.GitClient, harness.FileSystem);
 
@@ -554,4 +573,29 @@ public sealed class AnchorCitationServiceTests
             new AnchorWriteRequest(id, "P1", "trigger"),
             dryRun: false,
             TestContext.Current.CancellationToken);
+
+    /// <summary>
+    /// A check held to paths counts a citation that resolves nowhere only where it is in one of those files, each named as
+    /// a citation names its file whatever separators or leading ./ it was given; what it says it read is the whole's.
+    /// </summary>
+    [Fact]
+    public void ACheckHeldToPaths_CountsTheCitationsInThoseFilesAlone()
+    {
+        var report = new AnchorCitationReport(
+            AnchorCitationSubject.CurrentTree,
+            "the tree",
+            ["src"],
+            FilesScanned: 3,
+            CitationsFound: 5,
+            RegistryRows: 2,
+            [new AnchorCitation("A-ONE", "src/a.cs", 3), new AnchorCitation("A-TWO", "src/b/c.cs", 9)]);
+
+        var held = report.HeldTo([@".\src\b\c.cs"]);
+        var clean = report.HeldTo(["src/d.cs"]);
+
+        Assert.Equal(["src/b/c.cs"], held.Unresolved.Select(citation => citation.Path));
+        Assert.False(held.Passed);
+        Assert.True(clean.Passed);
+        Assert.Equal((3, 5, 2), (clean.FilesScanned, clean.CitationsFound, clean.RegistryRows));
+    }
 }

@@ -1300,6 +1300,7 @@ public sealed class LedgerReportTests
             Entry("mac-release", LegVerdict.Failed, TimeSpan.FromSeconds(80), "test exited 8") with
             {
                 LogTail = ["1 test failed out of 412", "The following tests FAILED: 17 - git_state"],
+                TailPhase = "test",
             },
             Entry("win-msvc-release", LegVerdict.Passed, TimeSpan.FromSeconds(134), "412 tests"),
         ],
@@ -1315,7 +1316,9 @@ public sealed class LedgerReportTests
         var legs = json.RootElement.GetProperty("legs");
 
         Assert.Equal(2, legs[0].GetProperty("logTail").GetArrayLength());
+        Assert.Equal("test", legs[0].GetProperty("tailPhase").GetString());
         Assert.False(legs[1].TryGetProperty("logTail", out var none) && none.ValueKind != System.Text.Json.JsonValueKind.Null);
+        Assert.False(legs[1].TryGetProperty("tailPhase", out var noPhase) && noPhase.ValueKind != System.Text.Json.JsonValueKind.Null);
     }
 
     [Fact]

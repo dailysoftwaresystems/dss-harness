@@ -67,6 +67,22 @@ public static class FlowInputs
         return (inputs, null);
     }
 
+    /// <summary>A run's inputs as one object, as the root <c>input</c> reads them wherever a run is read.</summary>
+    /// <param name="inputs">The run's inputs, resolved.</param>
+    public static System.Text.Json.Nodes.JsonObject AsObject(IReadOnlyDictionary<string, string> inputs)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+
+        var values = new System.Text.Json.Nodes.JsonObject();
+
+        foreach (var (name, value) in inputs)
+        {
+            values[name] = value;
+        }
+
+        return values;
+    }
+
     /// <summary>
     /// The values a run of <paramref name="definition"/> starts with: each input the workflow declares, given or its
     /// default - the one owner of what an input takes, which a start holds its inputs to before anything of the run is

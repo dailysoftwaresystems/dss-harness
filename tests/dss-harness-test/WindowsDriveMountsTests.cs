@@ -62,7 +62,7 @@ public sealed class WindowsDriveMountsTests
     /// <summary>The real file system, except that what is mounted reads as <paramref name="mounts"/> answers.</summary>
     private sealed class Listing(IFileSystem inner, Func<string> mounts) : PassThroughFileSystem(inner)
     {
-        public override string ReadAllText(string path)
-            => path == WindowsDriveMounts.MountsFile ? mounts() : base.ReadAllText(path);
+        public override Stream OpenRead(string path)
+            => path == WindowsDriveMounts.MountsFile ? Reading(mounts()) : base.OpenRead(path);
     }
 }

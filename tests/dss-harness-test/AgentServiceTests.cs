@@ -2345,7 +2345,7 @@ public sealed class AgentServiceTests
         => (await Core.FileSystem.FileContentHash.OfAsync(new HarnessFactory().FileSystem, Path.Combine(root, relative), Token)).Content;
 
     /// <summary>The real file system, except that one file cannot be copied, as while another program holds it.</summary>
-    private sealed class UncopyableFileSystem(Core.FileSystem.IFileSystem inner, string held) : PassThroughFileSystem(inner)
+    internal sealed class UncopyableFileSystem(Core.FileSystem.IFileSystem inner, string held) : PassThroughFileSystem(inner)
     {
         public override void CopyFile(string source, string destination, bool overwrite = false)
         {

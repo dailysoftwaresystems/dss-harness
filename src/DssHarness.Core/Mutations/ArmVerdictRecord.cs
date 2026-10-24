@@ -466,7 +466,7 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
                 if (!_fileSystem.FileExists(file))
                 {
                     _fileSystem.CreateDirectory(TablesOf(leg));
-                    _fileSystem.WriteAllTextAtomic(file, JsonSerializer.Serialize(table, JsonStateFile.Options));
+                    JsonStateFile.Write(_fileSystem, file, table);
                 }
             }
 
@@ -502,19 +502,18 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
 
     /// <summary>Writes <paramref name="leg"/>'s record whole, holding <paramref name="arms"/> and <paramref name="tables"/>, while its mutex is held.</summary>
     private void Write(string leg, IReadOnlyDictionary<string, IReadOnlyList<RecordedVerdict>> arms, IReadOnlyDictionary<string, TableIndex> tables)
-        => _fileSystem.WriteAllTextAtomic(
+        => JsonStateFile.Write(
+            _fileSystem,
             FileOf(leg),
-            JsonSerializer.Serialize(
-                new Document
-                {
-                    Format = Format,
-                    Leg = leg,
-                    Arms = new SortedDictionary<string, List<RecordedVerdict>>(
-                        arms.ToDictionary(pair => pair.Key, pair => pair.Value.ToList(), StringComparer.Ordinal),
-                        StringComparer.Ordinal),
-                    Tables = new SortedDictionary<string, TableIndex>(tables.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal),
-                },
-                JsonStateFile.Options));
+            new Document
+            {
+                Format = Format,
+                Leg = leg,
+                Arms = new SortedDictionary<string, List<RecordedVerdict>>(
+                    arms.ToDictionary(pair => pair.Key, pair => pair.Value.ToList(), StringComparer.Ordinal),
+                    StringComparer.Ordinal),
+                Tables = new SortedDictionary<string, TableIndex>(tables.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal),
+            });
 
     /// <summary>The digests of the tables <paramref name="verdict"/> names.</summary>
     private static IEnumerable<string> Names(RecordedVerdict verdict) => verdict.JudgedOn?.Built.Values ?? [];

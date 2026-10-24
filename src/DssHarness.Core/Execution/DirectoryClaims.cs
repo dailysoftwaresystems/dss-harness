@@ -1,4 +1,3 @@
-using System.Text.Json;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
@@ -126,7 +125,7 @@ internal sealed class DirectoryClaims(IFileSystem fileSystem, IHarnessOutput out
                 DateTimeOffset.UtcNow,
                 _identity.Current);
 
-            Written(file, () => _fileSystem.WriteAllTextAtomic(file, JsonSerializer.Serialize(owner, JsonStateFile.Options) + "\n"));
+            Written(file, () => JsonStateFile.Write(_fileSystem, file, owner));
 
             // Made as it is claimed, where claiming makes it: a run names its log directory as where its records are, and
             // one whose legs wrote nothing would otherwise have named a directory that did not exist.

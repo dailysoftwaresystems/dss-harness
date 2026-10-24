@@ -15,6 +15,73 @@ public sealed class AgentClientConfig
     /// run that needs the client will be refused with once the engine's step runner asks it before the run's first step.
     /// </summary>
     public bool? Update { get; init; }
+
+    /// <summary>
+    /// How a claude-code client signs in (claude-code's key): <c>login</c>, the machine's login, where nothing is said;
+    /// <c>apiKey</c>, a key of the provider's <c>apiKeyNames</c>, tried in their order; <c>oauthToken</c> or
+    /// <c>authToken</c>, the token the slot holds under <see cref="Token"/>. A launch is given that credential and no
+    /// other, whatever the tool's own environment holds.
+    /// </summary>
+    public string? Auth { get; init; }
+
+    /// <summary>
+    /// The name of the slot's variable that holds the token a claude-code client signs in with under
+    /// <c>auth: oauthToken</c> (<c>CLAUDE_CODE_OAUTH_TOKEN</c> where nothing is said) or <c>auth: authToken</c>
+    /// (<c>ANTHROPIC_AUTH_TOKEN</c>): a name and never a token, appointed once beside every provider's
+    /// <c>apiKeyNames</c>.
+    /// </summary>
+    public string? Token { get; init; }
+
+    /// <summary>
+    /// The name of the slot's variable that holds the Claude Code directory a claude-code client signs in from and reads
+    /// the user's settings in - a specific login's - where it is not the tool's own (claude-code's key;
+    /// <c>CLAUDE_CONFIG_DIR</c> where nothing is said): a name, appointed once beside every key.
+    /// </summary>
+    public string? ConfigDir { get; init; }
+
+    /// <summary>
+    /// The name of the slot's variable that holds the program a claude-code client starts in place of npm's Claude Code
+    /// (claude-code's key; <c>CLAUDE_EXECUTABLE</c> where nothing is said): a name, appointed once beside every key.
+    /// </summary>
+    public string? Executable { get; init; }
+}
+
+/// <summary>
+/// What an agent of a run may do, under <c>agentPolicy</c>: the restrictions the repository adds to the rules built
+/// into the tool. A restriction only ever refuses, from every source at once, and never removes one.
+/// </summary>
+public sealed class AgentPolicyConfig
+{
+    /// <summary>
+    /// Restriction rules, each one string - <c>Run(git push *)</c>, <c>Write(.github/**)</c>,
+    /// <c>Read(secrets/**)</c>, <c>Web(pastebin.com)</c> - applied beside the tool's built-in refusals to every
+    /// agent of every run under this configuration, and added to by a workflow's definitions and steps. Left out
+    /// where the repository restricts nothing, which is the default.
+    /// </summary>
+    public List<string> Restrictions { get; init; } = [];
+
+    /// <summary>
+    /// The allow list of every web request an agent makes: each entry one domain, and a request is allowed only to
+    /// a domain on the list or a name under it. Left out where every address is allowed, which is the
+    /// default; given empty it is refused - leave the key out instead. A <c>Web(...)</c> restriction refuses
+    /// beside it whatever this allows.
+    /// </summary>
+    public List<string>? WebDomains { get; init; }
+
+    /// <summary>
+    /// Whether the worktree rules are on: what keeps an agent's worktree a thing the engine can measure, and its run
+    /// a thing only the engine moves - git's state-writing verbs, the merges and CI starts of <c>gh</c>, the tool's
+    /// own configuration and state. True where nothing is said. The tool's own verbs and <c>run-side-task</c> are
+    /// refused whatever this says.
+    /// </summary>
+    public bool? WorktreeRules { get; init; }
+
+    /// <summary>
+    /// Whether Claude Code's protected paths are refused on every client - the writes Claude Code guards, held to
+    /// alike where this tool's own clients would pass them. True where nothing is said; false takes this tool's
+    /// refusal away, and each client's own guard, where it has one, stays its own.
+    /// </summary>
+    public bool? ProtectedPaths { get; init; }
 }
 
 /// <summary>

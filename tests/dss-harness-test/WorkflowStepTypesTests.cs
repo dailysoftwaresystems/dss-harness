@@ -22,22 +22,23 @@ public sealed class WorkflowStepTypesTests
 
         Assert.Equal(
             [
-                ("orient", "IGitClient (ResolveCommitAsync, GetStatusAsync), OrchestrationStore.Agents, LegSelection.Resolve"),
+                ("orient", "OrientRunner: FlowCheckout over IGitClient and GitRemotes, LegSelection.Resolve, TestInvocationResolver, AnchorCitationService.RootsOf, CiSettings.Unset, MutationService.Declares, OrchestrationRules.OpenAgents, TreeHolders"),
+                ("graphify-codebase", "GraphifyCodebaseRunner: ICodebaseGraphService.SyncAsync over IGitClient, CodeGraphExtractors and CodeGraphLinker, through OrchestrationStore"),
                 ("reason", "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)"),
-                ("build", "IBuildLegs over LegRunService"),
-                ("test", "ITestLegs over LegRunService"),
-                ("run", "IRunnerLegs over LegRunService"),
-                ("check-mutations", "IMutationLegs through MutationService, over LegRunService"),
-                ("create-agent", "IAgentService.CreateAsync"),
-                ("fold", "IAgentService.FoldAsync"),
-                ("delete-agent", "IAgentService.DeleteAsync"),
-                ("refresh", "IAgentService.RefreshAsync"),
-                ("rebase", "IAgentService.RebaseAsync"),
-                ("validate-plan", "PlanValidator with IPathBudget.Check and CopyPathBudget.Check"),
-                ("anchor-balance", "IAnchorBalanceService.CheckAsync"),
-                ("anchor-citations", "IAnchorCitationService.CheckAsync"),
-                ("ci-read", "ICiLegsService.CheckAsync"),
-                ("ci-wait", "ICiChecksService"),
+                ("build", "BuildStepRunner: IBuildLegs over LegRunService"),
+                ("test", "TestStepRunner: ITestLegs over LegRunService"),
+                ("run", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners"),
+                ("check-mutations", "SweepStepRunner: IMutationLegs through MutationService, over LegRunService"),
+                ("create-agent", "CreateAgentRunner: IAgentService.CreateAsync, SeedAsync and DeleteAsync"),
+                ("fold", "FoldStepRunner: IAgentService.FoldAsync held to its dry run, FoldLedger, FoldWithin"),
+                ("delete-agent", "DeleteAgentStepRunner: IAgentService.DeleteAsync held to its dry run, FoldLedger, FoldWithin"),
+                ("refresh", "RefreshStepRunner: IAgentService.RefreshAsync"),
+                ("rebase", "RebaseStepRunner: IAgentService.RebaseAsync"),
+                ("validate-plan", "PlanCheckRunner: PlanValidator with FlowRunPaths over IPathBudget.Check and CopyPathBudget"),
+                ("anchor-balance", "AnchorBalanceStepRunner: IAnchorBalanceService.CheckAsync, AnchorBalanceReport.HeldTo, AnchorReports.BalanceFindings"),
+                ("anchor-citations", "AnchorCitationsStepRunner: IAnchorCitationService.CheckAsync, AnchorCitationReport.HeldTo, AnchorCitationReports.Line"),
+                ("ci-read", "CiReadStepRunner: ICiLegsService.CheckAsync over GhCiJobSource and GhProcess"),
+                ("ci-wait", "CiWaitStepRunner: ICiChecksService over GhCiJobSource and GhProcess, ICiLegsService.ClassifyRunAsync"),
                 ("commit", "IGitPublisher"),
                 ("push", "IGitPublisher"),
                 ("pull-request", "IGitPublisher"),
@@ -55,6 +56,7 @@ public sealed class WorkflowStepTypesTests
         Assert.Equal(
             [
                 ("orient", "read main"),
+                ("graphify-codebase", "read main, read the agent's tree where in names one"),
                 ("reason", "read main, write the agent's tree where its access is write"),
                 ("build", "run(tree)"),
                 ("test", "run(tree)"),
@@ -91,6 +93,7 @@ public sealed class WorkflowStepTypesTests
         Assert.Equal(
             [
                 ("orient", null),
+                ("graphify-codebase", null),
                 ("reason", "maxReasoningAgents"),
                 ("build", "maxParallelProcesses"),
                 ("test", "maxParallelProcesses"),
@@ -155,6 +158,7 @@ public sealed class WorkflowStepTypesTests
         Assert.Equal(
             [
                 ("orient", "branch, baseBranch, startCommit, hasRemote, hasLegs, legCount, anchors, ciConfigured, hasMutations, tests, dirtyPaths, openAgents, inFlight"),
+                ("graphify-codebase", "graph, view, commit, dirty, files, extracted, reused, removed, nodes, edges, languages, skipped, seconds"),
                 ("reason", null),
                 ("build", "passed, exitCode, verdicts, red, runDirectory"),
                 ("test", "passed, exitCode, verdicts, red, runDirectory"),
@@ -182,12 +186,17 @@ public sealed class WorkflowStepTypesTests
             Assert.Empty(JsonSchemaSubset.SubsetProblems(JsonNode.Parse(type.Output!)!));
         }
 
-        // A sweep's red legs each name the arm, beside what every leg step's say.
-        var arm = JsonSchemaSubset.Read(JsonNode.Parse(WorkflowStepTypes.Find("check-mutations")!.Output!)!).Member("red")!.Items!;
-        var leg = JsonSchemaSubset.Read(JsonNode.Parse(WorkflowStepTypes.Find("test")!.Output!)!).Member("red")!.Items!;
+        // A sweep's red legs each name the arm - none where the leg failed outside every arm - beside what every leg
+        // step's say; a red leg's phase is none where no phase of it failed, and a run that placed no leg has no directory.
+        var sweep = JsonSchemaSubset.Read(JsonNode.Parse(WorkflowStepTypes.Find("check-mutations")!.Output!)!);
+        var test = JsonSchemaSubset.Read(JsonNode.Parse(WorkflowStepTypes.Find("test")!.Output!)!);
+        var arm = sweep.Member("red")!.Items!;
+        var leg = test.Member("red")!.Items!;
 
-        Assert.Equal(["string"], arm.Member("arm")!.Kinds);
+        Assert.Equal(["string", "null"], arm.Member("arm")!.Kinds);
         Assert.Null(leg.Member("arm"));
+        Assert.Equal(["string", "null"], leg.Member("phase")!.Kinds);
+        Assert.Equal(["string", "null"], test.Member("runDirectory")!.Kinds);
     }
 
     /// <summary>
@@ -217,5 +226,70 @@ public sealed class WorkflowStepTypesTests
             StringComparer.Ordinal);
 
         Assert.All(WorkflowStepTypes.ExpressionKeys.Concat(WorkflowStepTypes.ListOrExpressionKeys), key => Assert.Contains(key, keys));
+    }
+
+    /// <summary>
+    /// A pause step alone only asks: every other type takes the keys of every step that runs - a time limit among them -
+    /// and the flattened list a step's unknown keys are refused against names each key once.
+    /// </summary>
+    [Fact]
+    public void APauseStepAloneOnlyAsks_AndEveryOtherTypeTakesTheKeysOfAStepThatRuns()
+    {
+        Assert.Equal(["pause"], WorkflowStepTypes.All.Where(type => type.Asks).Select(type => type.Type));
+        Assert.Equal(["timeoutMinutes"], KeyDescription.Names(WorkflowStepTypes.Running));
+        Assert.All(
+            WorkflowStepTypes.All,
+            type => Assert.Equal(!type.Asks, WorkflowStepTypes.KeysOf(type).Contains("timeoutMinutes", StringComparer.Ordinal)));
+        Assert.Equal(WorkflowStepTypes.AllKeys.Count, WorkflowStepTypes.AllKeys.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    /// <summary>
+    /// The keys <c>help workflows</c> lists for a step are every key the reader takes on one: the common keys, a group's,
+    /// those of every step that runs, and each type's own under its name - none read without being listed.
+    /// </summary>
+    [Fact]
+    public void TheStepKeysHelpLists_AreEveryKeyTheReaderTakesOnAStep()
+    {
+        var listed = KeyDescription.Names(WorkflowKeys.Step).ToHashSet(StringComparer.Ordinal);
+        var typed = WorkflowStepTypes.All.SelectMany(type => WorkflowStepTypes.KeysOf(type).Select(key => (Type: type.Type, Key: key)));
+
+        Assert.All(KeyDescription.Names(WorkflowStepTypes.Common), key => Assert.Contains(key, listed));
+        Assert.All(KeyDescription.Names(WorkflowStepTypes.Group), key => Assert.Contains(key, listed));
+        Assert.Contains("timeoutMinutes", listed);
+        Assert.All(
+            typed.Where(pair => !KeyDescription.Names(WorkflowStepTypes.Running).Contains(pair.Key, StringComparer.Ordinal)),
+            pair => Assert.Contains($"{pair.Type}.{pair.Key}", listed));
+    }
+
+    /// <summary>A step's time limit is its own timeoutMinutes, else its type's where the type has one, else none.</summary>
+    [Fact]
+    public void AStepsTimeLimit_IsItsOwn_ElseItsTypes_ElseNone()
+    {
+        Assert.Equal(30, WorkflowStepTypes.TimeLimitOf(new WorkflowStep { Name = "map", Type = "graphify-codebase" }));
+        Assert.Equal(5, WorkflowStepTypes.TimeLimitOf(new WorkflowStep { Name = "map", Type = "graphify-codebase", TimeoutMinutes = 5 }));
+        Assert.Null(WorkflowStepTypes.TimeLimitOf(new WorkflowStep { Name = "compile", Type = "build" }));
+        Assert.Equal(7, WorkflowStepTypes.TimeLimitOf(new WorkflowStep { Name = "compile", Type = "build", TimeoutMinutes = 7 }));
+        Assert.Null(WorkflowStepTypes.TimeLimitOf(new WorkflowStep { Name = "group" }));
+        Assert.Equal(["graphify-codebase"], WorkflowStepTypes.All.Where(type => type.DefaultTimeoutMinutes is not null).Select(type => type.Type));
+    }
+
+    /// <summary>
+    /// Which steps fold an agent's work into the main tree, by the one rule the definition's check and the step's runner
+    /// both read: a fold, and a deletion that does not discard it.
+    /// </summary>
+    [Fact]
+    public void WhichStepsFold_AreAFold_AndADeletionThatKeepsTheWork()
+    {
+        WorkflowStep[] steps =
+        [
+            new() { Name = "fold", Type = "fold" },
+            new() { Name = "delete", Type = "delete-agent" },
+            new() { Name = "discard", Type = "delete-agent", DiscardUncommitted = true },
+            new() { Name = "refresh", Type = "refresh" },
+            new() { Name = "rebase", Type = "rebase" },
+            new() { Name = "group" },
+        ];
+
+        Assert.Equal(["fold", "delete"], steps.Where(WorkflowStepTypes.Folds).Select(step => step.Name));
     }
 }

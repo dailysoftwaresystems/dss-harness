@@ -1,6 +1,5 @@
 using System.IO.Enumeration;
 using System.Runtime.Versioning;
-using System.Text;
 using DssHarness.Core.Platform;
 
 namespace DssHarness.Core.FileSystem;
@@ -10,8 +9,6 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
 {
     /// <summary>Attempts at the final rename before a transient refusal is reported.</summary>
     private const int ReplaceAttempts = 10;
-
-    private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly IFilePermissions _filePermissions = filePermissions;
 
@@ -418,46 +415,20 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
 
     public IEnumerable<string> EnumerateDirectories(string path) => Directory.EnumerateDirectories(path);
 
-    public string ReadAllText(string path) => File.ReadAllText(path);
-
-    public byte[] ReadAllBytes(string path)
-    {
-        using var stream = OpenRead(path);
-        using var copy = new MemoryStream();
-        stream.CopyTo(copy);
-        return copy.ToArray();
-    }
-
-    public async Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default)
-    {
-        // Opened as every read of a tree's file is, sharing with the tools that hold one open: a sync that hashed a file
-        // through OpenRead is never refused copying it for a narrower share.
-        var stream = OpenRead(path);
-
-        await using (stream.ConfigureAwait(false))
-        {
-            using var copy = new MemoryStream();
-            await stream.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
-            return copy.ToArray();
-        }
-    }
-
-    public void WriteAllTextAtomic(string path, string contents)
+    public void WriteAtomic(string path, Action<Stream> write)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        ArgumentNullException.ThrowIfNull(contents);
+        ArgumentNullException.ThrowIfNull(write);
 
-        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        var temporary = path + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
+        var temporary = TemporaryBeside(path);
 
         try
         {
-            File.WriteAllText(temporary, contents, Utf8NoBom);
+            using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.Read))
+            {
+                write(stream);
+            }
+
             ReplaceWith(temporary, path);
         }
         finally
@@ -559,13 +530,7 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(contents);
 
-        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        var temporary = path + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
+        var temporary = TemporaryBeside(path);
 
         try
         {
@@ -579,6 +544,21 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     }
 
     public void ProtectSecretFile(string path) => _filePermissions.ProtectSecret(path);
+
+    /// <summary>
+    /// A temporary file's name beside <paramref name="path"/>, its directory made where it is not there: an atomic write
+    /// renames the one over the other, which only one volume can do.
+    /// </summary>
+    private static string TemporaryBeside(string path)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        return path + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
+    }
 
     /// <summary>
     /// Renames <paramref name="source"/> over <paramref name="destination"/> in a single
@@ -598,7 +578,7 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
         {
             try
             {
-                File.Move(source, destination, overwrite: true);
+                Replace(source, destination);
                 return;
             }
             catch (IOException) when (attempt < ReplaceAttempts)
@@ -629,7 +609,7 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
 
             try
             {
-                File.Move(source, destination, overwrite: true);
+                Replace(source, destination);
                 return;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < ReplaceAttempts)
@@ -637,6 +617,22 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
                 await Task.Delay(10 * attempt, cancellationToken).ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>
+    /// Renames <paramref name="source"/> over <paramref name="destination"/> once: on Windows as POSIX does, so a file a
+    /// reader holds open is replaced all the same and the reader goes on reading the old one, as on every other system -
+    /// a record is streamed while it is read, and a writer may replace it meanwhile - and Windows' own way where the volume
+    /// cannot (<see cref="Win32Files.TryReplace(string, string)"/>).
+    /// </summary>
+    private static void Replace(string source, string destination)
+    {
+        if (OperatingSystem.IsWindows() && Win32Files.TryReplace(Path.GetFullPath(source), Path.GetFullPath(destination)))
+        {
+            return;
+        }
+
+        File.Move(source, destination, overwrite: true);
     }
 
     /// <summary>

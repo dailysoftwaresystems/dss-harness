@@ -34,7 +34,7 @@ public sealed partial class GitClient
     /// Paths named in one git invocation that takes them as arguments. Batched because a command line is bounded
     /// -- 32,767 characters on Windows -- and a repository has more files than that allows.
     /// </summary>
-    private const int CommandLineBatchSize = 200;
+    internal const int CommandLineBatchSize = 200;
 
     /// <summary>
     /// Characters of path a single batch may carry, well inside the bound above, so a tree of long paths is batched by

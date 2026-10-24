@@ -83,7 +83,8 @@ public sealed class WorkflowValidationService(
     IHarnessContextLoader contextLoader,
     IFileSystem fileSystem,
     IHostPlatform platform,
-    DssHarness.Core.Secrets.AgentKeyStore keys) : IWorkflowValidationService
+    DssHarness.Core.Secrets.AgentKeyStore keys,
+    Codebase.CodeGraphExtractors extractors) : IWorkflowValidationService
 {
     /// <summary>The command this service reports under.</summary>
     public const string CommandName = "validate-workflow";
@@ -92,6 +93,9 @@ public sealed class WorkflowValidationService(
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHostPlatform _platform = platform;
     private readonly DssHarness.Core.Secrets.AgentKeyStore _keys = keys;
+
+    /// <summary>The implementations of the codebase graph's contract, whose names V52 holds <c>codebaseGraph.languages</c> to.</summary>
+    private readonly Codebase.CodeGraphExtractors _extractors = extractors;
 
     /// <inheritdoc/>
     public async Task<WorkflowValidationReport> CheckAsync(
@@ -158,7 +162,8 @@ public sealed class WorkflowValidationService(
             definition,
             context.Config.Commit.Template is not null,
             named => Text(named, directory, name),
-            resolved.Providers));
+            resolved.Providers,
+            _extractors.Languages));
         problems.AddRange(Files(definition, directory, name, context.Config));
 
         // The key slot's own problems - a name declared twice, a line that defines nothing - are the configuration's,
@@ -363,7 +368,7 @@ public sealed class WorkflowValidationService(
     /// </summary>
     private static IEnumerable<string> WritesTheMainTree(WorkflowStep step, string where, HarnessConfig config)
     {
-        if (step.Runner is null || step.In is not null || !config.PredefinedRunners.TryGetValue(step.Runner, out var runner))
+        if (step.Runner is null || step.In is not null)
         {
             yield break;
         }
@@ -371,17 +376,11 @@ public sealed class WorkflowValidationService(
         const string OnTheMainTree = "on the main tree: the run reads its definition there and folds into it, so a runner "
             + "that writes works in an agent's worktree. Name the create-agent step with 'in'";
 
-        if (runner.WritesTree)
+        foreach (var (writer, isCheck) in config.WritingRunners(step.Runner))
         {
-            yield return $"{where} runs '{step.Runner}', which writes the tree (writesTree), {OnTheMainTree}";
-        }
-
-        foreach (var check in runner.RunCheckRunners())
-        {
-            if (config.PredefinedRunners.TryGetValue(check, out var checkRunner) && checkRunner.WritesTree)
-            {
-                yield return $"{where} runs '{step.Runner}', whose run check '{check}' writes the tree (writesTree), {OnTheMainTree}";
-            }
+            yield return isCheck
+                ? $"{where} runs '{step.Runner}', whose run check '{writer}' writes the tree (writesTree), {OnTheMainTree}"
+                : $"{where} runs '{step.Runner}', which writes the tree (writesTree), {OnTheMainTree}";
         }
     }
 

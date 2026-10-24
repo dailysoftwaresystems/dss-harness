@@ -1,4 +1,5 @@
 using DssHarness.Core.Orchestration;
+using DssHarness.Core.Output;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -137,6 +138,14 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
     }
 }
 
+/// <summary>
+/// The question a fold family step's dry run raises, and what it shows: the rows, the cells or the paths it is about,
+/// which an answer gives a consent for by name.
+/// </summary>
+/// <param name="Kind">The question's kind.</param>
+/// <param name="Named">What it shows.</param>
+public sealed record FlowFoldQuestion(string Kind, IReadOnlyList<string> Named);
+
 /// <summary>One answer a question was given: what was answered, with what text, and who gave it.</summary>
 /// <param name="Answer">The answer, as the question's options spell it.</param>
 /// <param name="Text">The text given with it, where the answer takes one; <see langword="null"/> where none was.</param>
@@ -247,8 +256,7 @@ public static class FlowQuestions
     public static int FailCodeOf(string kind)
         => kind switch
         {
-            "foldNewRows" or "foldLostRows" or "foldOverCells" or "foldTwoChanges" or "foldConflicts" or "foldOutside"
-                => DssHarness.Core.Results.HarnessExit.Refused,
+            _ when FoldKinds.Contains(kind, StringComparer.Ordinal) => DssHarness.Core.Results.HarnessExit.Refused,
             "turnLimit" or "stepBudget" or "truncated" or "contextLimit"
                 => DssHarness.Core.Results.HarnessExit.CommandFailed,
             "noChecks" => 2,
@@ -269,6 +277,96 @@ public static class FlowQuestions
     /// <param name="handler">The handler a handler's bound is about; null for every other kind.</param>
     public static string CountedAt(string kind, string? instance, string? handler)
         => $"{kind}|{(kind == "runBudget" || instance is null ? RunsOwn : instance)}{(handler is null ? string.Empty : $":{handler}")}";
+
+    /// <summary>The question a fold's dry run raises where it would write a path its <c>within</c> leaves out.</summary>
+    public const string FoldOutside = "foldOutside";
+
+    /// <summary>
+    /// Every kind of question a fold family step's dry run raises (<see cref="FoldQuestionOf"/>): each consent's
+    /// (<see cref="KindOf"/>), a conflict's and a path outside a fold's <c>within</c>.
+    /// </summary>
+    public static readonly IReadOnlyList<string> FoldKinds = [.. Enum.GetValues<ConsentKind>().Select(KindOf), "foldConflicts", FoldOutside];
+
+    /// <summary>
+    /// Whether <paramref name="answer"/> to a fold family step's question of <paramref name="kind"/> gives its consent by
+    /// name, which the step's dry run made again is held to: <c>allow</c> or <c>merge</c>, where the kind offers it.
+    /// </summary>
+    /// <param name="kind">The question's kind.</param>
+    /// <param name="answer">The answer, as the kind spells it.</param>
+    public static bool GivesConsent(string kind, string answer)
+        => FoldKinds.Contains(kind, StringComparer.Ordinal)
+            && answer is "allow" or "merge"
+            && OptionsOf(kind, step: null).Contains(answer, StringComparer.Ordinal);
+
+    /// <summary>The question kind a consent a fold family step's dry run lacks is named by.</summary>
+    /// <param name="consent">The consent.</param>
+    public static string KindOf(ConsentKind consent)
+        => consent switch
+        {
+            ConsentKind.FoldNewRows => "foldNewRows",
+            ConsentKind.FoldLostRows => "foldLostRows",
+            ConsentKind.FoldOverCells => "foldOverCells",
+            ConsentKind.FoldTwoChanges => "foldTwoChanges",
+            _ => throw new ArgumentOutOfRangeException(nameof(consent), consent, "a consent no fold's question is named by"),
+        };
+
+    /// <summary>
+    /// The question a fold family step's dry run raises, with what it shows - the one rule the step's runner records what
+    /// it asked by and the coordinator raises it by: a refusal for conflicting merges alone raises <c>foldConflicts</c>
+    /// with those paths, for a conflict is never answered merge; any other refusal raises none, and fails the step 13;
+    /// paths it would write that the step's <c>within</c> leaves out raise <c>foldOutside</c> with them; and a consent it
+    /// lacks raises the question its kind names, one at a time, a person's first, with what it is about. Null where it
+    /// raises none.
+    /// </summary>
+    /// <param name="dry">What the dry run stood.</param>
+    public static FlowFoldQuestion? FoldQuestionOf(FlowDryRun dry)
+    {
+        ArgumentNullException.ThrowIfNull(dry);
+
+        if (dry.Standing == RequestStanding.Refused)
+        {
+            return dry.Refusals.Count > 0 && dry.Refusals.All(reason => reason == RefusalKind.Conflict)
+                ? new FlowFoldQuestion("foldConflicts", dry.Conflicting)
+                : null;
+        }
+
+        if (dry.Outside.Count > 0)
+        {
+            return new FlowFoldQuestion(FoldOutside, dry.Outside);
+        }
+
+        if (dry.Standing == RequestStanding.NeedsConsent && dry.Consents.Count > 0)
+        {
+            var consent = FirstOf(dry.Consents);
+            return new FlowFoldQuestion(KindOf(consent), dry.NamedOf(consent));
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// What the question <paramref name="question"/> a fold family step's dry run raised says, in the engine's words: the
+    /// step, its target where it works on one of <c>others</c>, and what the question is about.
+    /// </summary>
+    /// <param name="instance">The step instance that asks.</param>
+    /// <param name="dry">What its dry run stood.</param>
+    /// <param name="question">The question it raises (<see cref="FoldQuestionOf"/>).</param>
+    public static string FoldProblemOf(string instance, FlowDryRun dry, FlowFoldQuestion question)
+    {
+        ArgumentNullException.ThrowIfNull(dry);
+        ArgumentNullException.ThrowIfNull(question);
+
+        var step = $"'{instance}'{(dry.Target is { } target ? $" (target '{target}')" : string.Empty)}";
+        var named = ReportText.Listed([.. question.Named.Select(name => $"'{name}'")]);
+
+        return question.Kind switch
+        {
+            "foldConflicts" => $"{step} was refused: paths both trees changed conflict in their three-way merge: {string.Join(", ", question.Named)}"
+                + (dry.Lines.Count > 0 ? $"\n{string.Join("\n", dry.Lines)}" : string.Empty),
+            FoldOutside => $"{step}: the fold of '{dry.Agent}' would write {named}, which {(question.Named.Count == 1 ? "is" : "are")} outside the paths its within names",
+            _ => $"{step} was not applied: it lacks what nobody gave ({question.Kind}) for {named}: {dry.Summary}",
+        };
+    }
 
     /// <summary>
     /// The consents a fold's dry run needs, one at a time: a person's first, for the matter a person alone can

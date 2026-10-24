@@ -149,7 +149,7 @@ public sealed record AnchorRegistry(AnchorRegistryKind Kind, string RelativePath
     {
         ArgumentNullException.ThrowIfNull(row);
 
-        return new AnchorFinding(RelativePath, row.LineNumber, AnchorFindingSeverity.Fatal, message);
+        return new AnchorFinding(RelativePath, row.LineNumber, AnchorFindingSeverity.Fatal, message) { RowId = row.Id };
     }
 
     /// <summary>A problem at no one line of this registry as it stands now, that stops it being trusted.</summary>
@@ -163,7 +163,7 @@ public sealed record AnchorRegistry(AnchorRegistryKind Kind, string RelativePath
     {
         ArgumentNullException.ThrowIfNull(row);
 
-        return new AnchorFinding(RelativePath, row.LineNumber, AnchorFindingSeverity.Note, message);
+        return new AnchorFinding(RelativePath, row.LineNumber, AnchorFindingSeverity.Note, message) { RowId = row.Id };
     }
 
     /// <summary>A problem in the structure of this registry's file, as a finding of the registry.</summary>
@@ -635,7 +635,14 @@ public sealed record AnchorLookup(IReadOnlyList<AnchorLookupResult> Results)
 /// <param name="LineNumber">The line the problem is at.</param>
 /// <param name="Severity">Whether it stops the registry being trusted.</param>
 /// <param name="Message">What is wrong.</param>
-public sealed record AnchorFinding(string File, int LineNumber, AnchorFindingSeverity Severity, string Message);
+public sealed record AnchorFinding(string File, int LineNumber, AnchorFindingSeverity Severity, string Message)
+{
+    /// <summary>
+    /// The id of the row whose lines it is at, or null for a problem of the registry as a whole - one at no row, or that
+    /// stops the registry being read - which no one row can be told to own.
+    /// </summary>
+    public string? RowId { get; init; }
+}
 
 /// <summary>An anchor open now that was not open where the change began (<see cref="AnchorBalanceReport.Commit"/>).</summary>
 /// <param name="Id">The anchor.</param>
@@ -734,4 +741,26 @@ public sealed record AnchorBalanceReport(
     /// finding is fatal.
     /// </summary>
     public bool Passed => NetNew <= 0 && !Findings.Any(finding => finding.Severity == AnchorFindingSeverity.Fatal);
+
+    /// <summary>
+    /// The balance held to <paramref name="rows"/>: the anchors among them the change opened, closed and lost, counted as
+    /// the whole is counted, and a finding at a line of one of their rows - with every finding of a registry as a whole,
+    /// which no row can be told to own and so counts for every holding. What it says of the registries as a whole - the
+    /// open counts, the commits - is the whole's.
+    /// </summary>
+    /// <param name="rows">The row ids it is held to.</param>
+    public AnchorBalanceReport HeldTo(IReadOnlyCollection<string> rows)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+
+        var held = rows.ToHashSet(AnchorIdMatch.Comparer);
+
+        return this with
+        {
+            Closed = [.. Closed.Where(closing => held.Contains(closing.Id))],
+            Lost = [.. Lost.Where(loss => held.Contains(loss.Id))],
+            Opened = [.. Opened.Where(opening => held.Contains(opening.Id))],
+            Findings = [.. Findings.Where(finding => finding.RowId is not { } row || held.Contains(row))],
+        };
+    }
 }

@@ -79,7 +79,7 @@ internal static class MachineWideFile
         {
             value = fileSystem.KindOf(path) == PathKind.None
                 ? null
-                : JsonSerializer.Deserialize<T>(fileSystem.ReadAllText(path), JsonStateFile.Options)
+                : JsonStateFile.Read<T>(fileSystem, path)
                     ?? throw new JsonException("it holds null");
             unread = null;
 

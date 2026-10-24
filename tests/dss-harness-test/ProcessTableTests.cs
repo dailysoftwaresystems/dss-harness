@@ -222,7 +222,7 @@ public sealed class ProcessTableTests
     public async Task ThisMachinesTable_CarriesTheProgramThisProcessRuns()
     {
         var platform = new HostPlatform();
-        var reading = await new ProcessTable(platform, new ProcessRunner(platform, FilePermissionsFactory.Create())).ReadAsync(Token);
+        var reading = await new ProcessTable(platform, new ProcessRunner(platform, FilePermissionsFactory.Create(), CliRunner.CliProgram)).ReadAsync(Token);
 
         Assert.Null(reading.Degraded);
         PathAssert.Same(

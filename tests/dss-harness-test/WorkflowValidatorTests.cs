@@ -487,12 +487,14 @@ public sealed class WorkflowValidatorTests
                 outputs: schemas/implement.json
                 access: write
                 in: make
+                dependsOn: [make]
               - name: reads-but-names-in
                 type: reason
                 agent: reader
                 prompt: prompts/read.md
                 outputs: schemas/read.json
                 in: make
+                dependsOn: [make]
               - name: resumes
                 type: reason
                 prompt: prompts/mend.md
@@ -628,6 +630,7 @@ public sealed class WorkflowValidatorTests
                 agent: implementer
                 access: write
                 in: make
+                dependsOn: [make]
                 prompt: prompts/implement.md
                 outputs: schemas/implement.json
               - name: borrows
@@ -638,6 +641,7 @@ public sealed class WorkflowValidatorTests
                 tier: best
                 access: write
                 in: make
+                dependsOn: [make]
                 writes: [src/**]
                 prompt: prompts/mend.md
                 resumePrompt: prompts/again.md
@@ -1201,6 +1205,7 @@ public sealed class WorkflowValidatorTests
     {
         Assert.Equal(
             [
+                "step 'items.redo' works in the agent 'items.item-agent' makes, and does not wait for it: name 'item-agent', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made",
                 "amend.whenChangeScope names 'planning.plan', which is not declared beside 'items.implement': the three are alternatives at one place of one forEach group",
                 "amend.whenRemoveScope names 'items.undo', a orient step, and 'items.implement' is a reason step: an alternative runs in that step's place, and is of its type",
                 "amend.whenRemoveScope names 'items.undo', which says dependsOn, when: it runs in the place of 'implement', with that step's dependencies, and begins the work of its instance",
@@ -1885,6 +1890,226 @@ public sealed class WorkflowValidatorTests
                 """), hasCommitTemplate: false, files: null, providers: null));
     }
 
+    /// <summary>
+    /// A step that works in or on an agent waits for the create-agent step that makes it - through its own dependencies,
+    /// a group's around it, a handler's source, or the step it is an alternative to - and one that does not is refused.
+    /// </summary>
+    [Fact]
+    public void AStepThatWorksInOrOnAnAgent_WaitsForItsMaking()
+    {
+        Assert.Equal(
+            [
+                "step 'think' works in the agent 'make' makes, and does not wait for it: name 'make', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made",
+                "step 'close' works on the agent 'make' makes, and does not wait for it: name 'make', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made",
+            ],
+            Problems("""
+                name: flow
+                steps:
+                  - name: make
+                    type: create-agent
+                    agent: agents/worker.md
+                  - name: think
+                    type: reason
+                    agent: agents/worker.md
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                    access: write
+                    in: make
+                  - name: close
+                    type: fold
+                    of: make
+                """));
+
+        // Through another step, a group around it, and a handler's source, it waits.
+        Assert.Empty(Problems("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: agents/worker.md
+              - name: think
+                type: reason
+                agent: agents/worker.md
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+                access: write
+                in: make
+                dependsOn: [make]
+              - name: wrap
+                dependsOn: [think]
+                steps:
+                  - name: close
+                    type: fold
+                    of: make
+              - name: mend
+                on:
+                  step: wrap
+                  outcome: failure
+                steps:
+                  - name: catch-up
+                    type: refresh
+                    of: make
+                    all: true
+            """));
+    }
+
+    /// <summary>
+    /// An alternative to the step that builds a work item runs in its place, with its dependencies: where the two are
+    /// groups, a step inside the alternative waits for the agent the builder waits for, as one inside the builder does.
+    /// </summary>
+    [Fact]
+    public void AStepInsideAnAlternativeGroup_WaitsForTheAgentTheBuilderWaitsFor()
+    {
+        const string grouped = """
+            name: default
+            inputs:
+              - name: request
+            steps:
+              - name: planning
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: planner
+                    prompt: prompts/plan.md
+                    outputs: schemas/plan.json
+                  - name: check
+                    type: validate-plan
+                    dependsOn: [plan]
+                    items: 'plan.latest.items'
+                  - name: plan-update
+                    type: reason
+                    resume: plan
+                    prompt: prompts/plan-update.md
+                    outputs: schemas/plan.json
+              - name: item-check
+                type: validate-plan
+                dependsOn: [planning]
+                items: 'planning.plan.latest.items'
+              - name: items
+                dependsOn: [item-check]
+                forEach: 'item-check.items'
+                steps:
+                  - name: item-agent
+                    type: create-agent
+                    agent: implementer
+                  - name: build
+                    dependsOn: [item-agent]
+                    steps:
+                      - name: implement
+                        type: reason
+                        agent: implementer
+                        access: write
+                        in: item-agent
+                        prompt: prompts/implement.md
+                        outputs: schemas/implement.json
+                  - name: rework
+                    steps:
+                      - name: redo
+                        type: reason
+                        agent: implementer
+                        access: write
+                        in: item-agent
+                        prompt: prompts/redo.md
+                        outputs: schemas/implement.json
+            amend:
+              input: request
+              step: planning.plan-update
+              then: check
+              scope: 'plan.latest.scope'
+              whenAddScope: items.build
+              whenChangeScope: items.rework
+              whenRemoveScope: items.build
+            """;
+
+        Assert.Empty(Problems(grouped));
+
+        // The builder that waits for nothing leaves its alternative's steps waiting for nothing either.
+        Assert.Equal(
+            [
+                "step 'items.build.implement' works in the agent 'items.item-agent' makes, and does not wait for it: name 'item-agent', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made",
+                "step 'items.rework.redo' works in the agent 'items.item-agent' makes, and does not wait for it: name 'item-agent', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made",
+            ],
+            Problems(grouped.Replace("      - name: build\n        dependsOn: [item-agent]\n", "      - name: build\n", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// The model each create-agent step makes its agent for: the first reason step that works in it, as that step - or the
+    /// step whose work it goes on with - resolves it; else the default tier's first. One no model resolves for is refused.
+    /// </summary>
+    [Fact]
+    public void ACreateAgentStepsModel_IsItsFirstReasonSteps_ElseTheDefaultTiers()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: agents/worker.md
+              - name: build
+                type: reason
+                agent: agents/worker.md
+                tier: best
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+                access: write
+                in: make
+                dependsOn: [make]
+              - name: again
+                type: reason
+                agent: agents/worker.md
+                model: glm-5.3
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+                access: write
+                in: make
+                dependsOn: [build]
+              - name: idle
+                type: create-agent
+                agent: agents/worker.md
+            """);
+
+        Assert.Equal(
+            new Dictionary<string, string> { ["make"] = "claude-fable-5-1", ["idle"] = "glm-5.3" },
+            WorkflowValidator.AgentModels(definition, TwoModels()!));
+
+        Assert.Equal(
+            ["workflow 'flow' step 'idle' makes an agent no reason step works in, which is made for the first model of the default tier, and the configuration names no defaults.agentTier; name the tier there"],
+            WorkflowValidator.Validate(Parse("""
+                name: flow
+                steps:
+                  - name: idle
+                    type: create-agent
+                    agent: agents/worker.md
+                """), hasCommitTemplate: false, files: null, providers: Providers(agentTier: null)));
+
+        Assert.Empty(WorkflowValidator.AgentModels(Parse("""
+            name: flow
+            steps:
+              - name: idle
+                type: create-agent
+                agent: agents/worker.md
+            """), Providers(agentTier: null)!));
+
+        // A default tier tierConfig does not define gives no model either, said the same at both places that need one.
+        Assert.Equal(
+            [
+                "workflow 'flow' step 'think' names neither a tier nor a model, and defaults.agentTier names 'deep', which tierConfig does not define. Defined: balanced",
+                "workflow 'flow' step 'idle' makes an agent no reason step works in, which is made for the first model of the default tier, and defaults.agentTier names 'deep', which tierConfig does not define. Defined: balanced",
+            ],
+            WorkflowValidator.Validate(Parse("""
+                name: flow
+                steps:
+                  - name: think
+                    type: reason
+                    agent: agents/worker.md
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: idle
+                    type: create-agent
+                    agent: agents/worker.md
+                """), hasCommitTemplate: false, files: null, providers: Providers(agentTier: "deep")));
+    }
+
     /// <summary>One provider, one model, one tier, as the config-half tests spell the configuration.</summary>
     private static AgentProviders? Providers(string? agentTier = "balanced")
     {
@@ -2216,6 +2441,7 @@ public sealed class WorkflowValidatorTests
                     - name: verify
                       type: test
                       in: make
+                      dependsOn: [make]
                       when: "orient.hasLegs && item.ok"
                       onFailure: recover
             """);
@@ -2513,6 +2739,7 @@ public sealed class WorkflowValidatorTests
                   loopBound: accept
                   contextLimit: compact
               - name: stage
+                dependsOn: [make]
                 onFailure: recover
                 answers:
                   checksUnsettled: accept
@@ -2755,7 +2982,7 @@ public sealed class WorkflowValidatorTests
             ],
             problems);
 
-        // The counts of what runs at once, the reporter's tries, every wait of git, the forge and the checks, a loop's
+        // The counts of what runs at once, the reporter's tries, every wait of the checks and every step's time limit, a loop's
         // rounds, and how long an answer can be changed for.
         Assert.Equal(
             [
@@ -2763,15 +2990,16 @@ public sealed class WorkflowValidatorTests
                 "maxOpenAgents is 0, and so not one or more",
                 "reporter.retries must be from 1 to 20, found 21",
                 "reporter.backoffSeconds must be from 1 to 900, found 0",
+                "step 'replan': timeoutMinutes must be from 1 to 1,440, found 1441",
+                "step 'ci': timeoutMinutes must be from 1 to 1,440, found 1441",
                 "step 'ci': limit is 0, and so not one or more",
-                "step 'ci': timeoutMinutes must be from 1 to 240, found 241",
+                "step 'checks': timeoutMinutes must be from 1 to 1,440, found 0",
                 "step 'checks': appearSeconds must be from 30 to 3,600, found 29",
                 "step 'checks': waitMinutes must be from 1 to 720, found 721",
                 "step 'checks': pollSeconds must be from 10 to 600, found 601",
-                "step 'checks': timeoutMinutes must be from 1 to 240, found 0",
-                "step 'commit': timeoutMinutes must be from 1 to 240, found 0",
-                "step 'push': timeoutMinutes must be from 1 to 240, found 241",
-                "step 'pr': timeoutMinutes must be from 1 to 240, found 0",
+                "step 'commit': timeoutMinutes must be from 1 to 1,440, found 0",
+                "step 'push': timeoutMinutes must be from 1 to 1,440, found 1441",
+                "step 'pr': timeoutMinutes must be from 1 to 1,440, found 0",
                 "group 'rounds': repeat.rounds must be from 1 to 20, found 21",
                 "group 'rounds': repeat.blockersLimitRounds must be from 1 to 20, found 0",
                 "amend.changedAnswerMinutes must be from 1 to 60, found 61",
@@ -2795,10 +3023,11 @@ public sealed class WorkflowValidatorTests
                     agent: planner
                     prompt: prompts/plan.md
                     outputs: schemas/plan.json
+                    timeoutMinutes: 1441
                   - name: ci
                     type: ci-read
                     limit: 0
-                    timeoutMinutes: 241
+                    timeoutMinutes: 1441
                   - name: checks
                     type: ci-wait
                     appearSeconds: 29
@@ -2811,7 +3040,7 @@ public sealed class WorkflowValidatorTests
                     timeoutMinutes: 0
                   - name: push
                     type: push
-                    timeoutMinutes: 241
+                    timeoutMinutes: 1441
                   - name: pr
                     type: pull-request
                     title: 'pr'
@@ -3019,6 +3248,7 @@ public sealed class WorkflowValidatorTests
               - name: both
                 type: refresh
                 of: make
+                dependsOn: [make]
                 others: make
               - name: neither
                 type: rebase
@@ -3028,6 +3258,7 @@ public sealed class WorkflowValidatorTests
               - name: dropped
                 type: delete-agent
                 of: make
+                dependsOn: [make]
                 discardUncommitted: true
                 within: [src/**]
               - name: reads
@@ -3042,6 +3273,7 @@ public sealed class WorkflowValidatorTests
               - name: weighs-both
                 type: refresh
                 of: make
+                dependsOn: [make]
                 paths: [src/a.c]
                 all: true
             """);
@@ -3623,7 +3855,7 @@ public sealed class WorkflowValidatorTests
         static IReadOnlyList<string> OneAllow(string body)
             => Problems(
                 "name: flow\nsteps:\n  - name: make\n    type: create-agent\n    agent: agents/worker.md\n"
-                + "  - name: close\n    type: fold\n    of: make\n    allow:\n" + body);
+                + "  - name: close\n    type: fold\n    of: make\n    dependsOn: [make]\n    allow:\n" + body);
 
         Assert.Equal(
             ["step 'close' takes allow: 'src/a.cs' is named with both merge and settled: a path is merged for you, or reconciled by hand, never both."],
@@ -3651,6 +3883,7 @@ public sealed class WorkflowValidatorTests
               - name: close
                 type: delete-agent
                 of: make
+                dependsOn: [make]
                 allow:
                   new: ['an id']
             """);
@@ -3673,6 +3906,7 @@ public sealed class WorkflowValidatorTests
               - name: weigh
                 type: refresh
                 of: make
+                dependsOn: [make]
                 paths: [.]
                 except: [src/a.cs]
                 stale: [src/b.cs]
@@ -3694,6 +3928,7 @@ public sealed class WorkflowValidatorTests
               - name: weigh
                 type: refresh
                 of: make
+                dependsOn: [make]
                 except: [src/a.cs]
                 stale: [src/a.cs]
             """);
@@ -3713,6 +3948,7 @@ public sealed class WorkflowValidatorTests
               - name: move
                 type: rebase
                 of: make
+                dependsOn: [make]
                 settled: [src/a.cs]
                 merge: [src/a.cs]
             """);
@@ -3740,6 +3976,7 @@ public sealed class WorkflowValidatorTests
               - name: close
                 type: delete-agent
                 of: make
+                dependsOn: [make]
                 within: ['**x']
             """);
 
@@ -3765,6 +4002,7 @@ public sealed class WorkflowValidatorTests
                 outputs: schemas/think.json
                 access: write
                 in: make
+                dependsOn: [make]
                 writes: ['**oops']
             """);
 
@@ -3792,6 +4030,7 @@ public sealed class WorkflowValidatorTests
               - name: weigh
                 type: refresh
                 of: make
+                dependsOn: [make]
                 all: true
                 paths: input.paths
             """);
@@ -3888,6 +4127,53 @@ public sealed class WorkflowValidatorTests
     /// </summary>
     private static IReadOnlyList<string> Problems(string text, IReadOnlyDictionary<string, string> files)
         => [.. WorkflowValidator.Validate(Parse(text), hasCommitTemplate: false, path => files.GetValueOrDefault(path))];
+
+    /// <summary>
+    /// V41: a ci-wait's time limit is always more than its wait - the hour it waits where it says none among them - for one
+    /// attempt waits that long for its checks and reads them once more; a limit past the wait, or with no wait to meet -
+    /// a ci-read's, however short - holds, from 1 to 1,440.
+    /// </summary>
+    [Fact]
+    public void ACiWaitsTimeLimit_IsAlwaysMoreThanItsWait_TheDefaultHourAmongThem()
+    {
+        Assert.Equal(
+            [
+                "step 'short': timeoutMinutes (30) is not more than its waitMinutes (60, the default); one attempt waits that long for its checks, so its time limit is longer",
+                "step 'shorter': timeoutMinutes (89) is not more than its waitMinutes (90); one attempt waits that long for its checks, so its time limit is longer",
+                "step 'even': timeoutMinutes (90) is not more than its waitMinutes (90); one attempt waits that long for its checks, so its time limit is longer",
+                "step 'hour': timeoutMinutes (60) is not more than its waitMinutes (60, the default); one attempt waits that long for its checks, so its time limit is longer",
+            ],
+            Problems("""
+                name: flow
+                steps:
+                  - name: short
+                    type: ci-wait
+                    timeoutMinutes: 30
+                  - name: shorter
+                    type: ci-wait
+                    waitMinutes: 90
+                    timeoutMinutes: 89
+                  - name: even
+                    type: ci-wait
+                    waitMinutes: 90
+                    timeoutMinutes: 90
+                  - name: hour
+                    type: ci-wait
+                    timeoutMinutes: 60
+                  - name: past
+                    type: ci-wait
+                    waitMinutes: 90
+                    timeoutMinutes: 91
+                  - name: quick
+                    type: ci-read
+                    branch: main
+                    timeoutMinutes: 5
+                  - name: day
+                    type: ci-read
+                    branch: main
+                    timeoutMinutes: 1440
+                """));
+    }
 
     /// <summary>
     /// V16-V19's types, for a built-in step: a path is typed by the output part 04 lists for its type, and one no
@@ -4092,6 +4378,7 @@ public sealed class WorkflowValidatorTests
                   - name: fold
                     type: fold
                     of: make
+                    dependsOn: [make]
                     within: 'orient.branch'
                 """));
     }
@@ -4301,5 +4588,134 @@ public sealed class WorkflowValidatorTests
             Problems(definition, files));
 
         Assert.Empty(Problems(definition));
+    }
+
+    /// <summary>
+    /// V52: a workflow's codebaseGraph is held to its bounds - each list named or left out, never given empty; patterns as
+    /// a path pattern reads them; languages named once each and each one this tool extracts; maxFileBytes and mapTokens
+    /// within their ranges; generated one of its values - and to a step that makes the graph.
+    /// </summary>
+    [Fact]
+    public void V52_ACodebaseGraph_IsHeldToItsBounds_AndToAStepThatMakesIt()
+    {
+        Assert.Empty(Problems("""
+            name: flow
+            codebaseGraph:
+              include: ["src/**", "docs/**"]
+              exclude: ["src/gen/**"]
+              languages: [markdown]
+              maxFileBytes: 4096
+              generated: exclude
+              mapTokens: 0
+            steps:
+              - name: map
+                type: graphify-codebase
+            """));
+
+        Assert.Equal(
+            ["codebaseGraph shapes the run's graph, and no step of the workflow is a graphify-codebase step: say where the graph is made, or leave the block out"],
+            Problems("""
+                name: flow
+                codebaseGraph:
+                  generated: low
+                steps:
+                  - name: look
+                    type: orient
+                """));
+
+        Assert.Equal(
+            [
+                "codebaseGraph.include is given empty, which is never read as every path graphed: name its patterns, or leave the key out for every path graphed",
+                "codebaseGraph.exclude names the pattern '../out/**', and it holds a '..' segment, which no path inside the tree holds, so it would name nothing; name the path from the tree's root",
+                "codebaseGraph.languages names 'markdown' more than once",
+                "codebaseGraph.maxFileBytes must be from 4,096 to 16,777,216, found 4095",
+                "codebaseGraph.mapTokens must be from 0 to 2,000, found 2001",
+                "codebaseGraph.generated is 'drop', which is none of 'low', 'exclude': generated code's declarations are kept, its file's entry naming why it is generated, or left out with the file listed",
+            ],
+            Problems("""
+                name: flow
+                codebaseGraph:
+                  include: []
+                  exclude: ["../out/**"]
+                  languages: [markdown, markdown]
+                  maxFileBytes: 4095
+                  mapTokens: 2001
+                  generated: drop
+                steps:
+                  - name: map
+                    type: graphify-codebase
+                """));
+
+        Assert.Equal(
+            [
+                "codebaseGraph.exclude is given empty, which is never read as no path left out: name its patterns, or leave the key out for no path left out",
+                "codebaseGraph.languages is given empty, which is never read as every one used: name the implementations, or leave the key out for every one",
+                "codebaseGraph.maxFileBytes must be from 4,096 to 16,777,216, found 16777217",
+            ],
+            Problems("""
+                name: flow
+                codebaseGraph:
+                  exclude: []
+                  languages: []
+                  maxFileBytes: 16777217
+                steps:
+                  - name: map
+                    type: graphify-codebase
+                """));
+    }
+
+    /// <summary>V52: a language the workflow names is one this build extracts, said with every one it does.</summary>
+    [Fact]
+    public void V52_ALanguageThisToolDoesNotExtract_IsRefused_NamingEveryOneItDoes()
+    {
+        var definition = Parse("""
+            name: flow
+            codebaseGraph:
+              languages: [markdown, cobol, cobol]
+            steps:
+              - name: map
+                type: graphify-codebase
+            """);
+
+        Assert.Equal(
+            [
+                "codebaseGraph.languages names 'cobol' more than once",
+                $"codebaseGraph extracts 'cobol', which this tool has no extractor for; it extracts: {string.Join(", ", DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild.Languages)}",
+            ],
+            WorkflowValidator.Validate(definition, hasCommitTemplate: false, files: null, languages: DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild.Languages));
+    }
+
+    /// <summary>
+    /// A graph step's <c>in</c> names a create-agent step, whose agent's view it syncs, as a build's does; one that names
+    /// another kind of step is refused when its workflow is checked.
+    /// </summary>
+    [Fact]
+    public void AGraphStepsIn_NamesACreateAgentStep_AsABuildsDoes()
+    {
+        Assert.Empty(
+            Problems("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: worker
+              - name: map
+                type: graphify-codebase
+                in: make
+                dependsOn: [make]
+            """));
+
+        Assert.Equal(
+            ["step 'map' works in 'look', which is a orient step; a worktree is made by a create-agent step"],
+            Problems("""
+                name: flow
+                steps:
+                  - name: look
+                    type: orient
+                  - name: map
+                    type: graphify-codebase
+                    in: look
+                    dependsOn: [look]
+                """));
     }
 }

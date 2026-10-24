@@ -322,7 +322,7 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
     public string Named(RunOwner held)
     {
         ArgumentNullException.ThrowIfNull(held);
-        return $"process {held.ProcessId.ToString(CultureInfo.InvariantCulture)}{(IsHere(held) ? string.Empty : " on another machine")}";
+        return $"process {held.ProcessId.ToString(CultureInfo.InvariantCulture)}{_identity.Elsewhere(held.Machine)}";
     }
 
     /// <summary>

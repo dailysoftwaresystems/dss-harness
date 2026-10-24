@@ -1921,14 +1921,14 @@ public sealed class BuildServiceTests
             return Space(path);
         }
 
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
             if (Full)
             {
                 throw new IOException(Unwritten);
             }
 
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
         }
     }
 

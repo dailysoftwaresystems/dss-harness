@@ -463,6 +463,31 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
+    /// A writer that waits for what to write - a conversation's next line - is told when the child has gone, so a child
+    /// that ends on its own is not held up by a writer waiting for a line it will never read, and the run ends with it.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_TellsAWriterThatWaitsWhenTheChildHasGone()
+    {
+        var told = false;
+
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("exit", "3") with
+            {
+                StandardInput = ChildInput.WrittenBy((_, exited) =>
+                {
+                    told = exited.WaitHandle.WaitOne(TimeSpan.FromSeconds(60));
+                }),
+                Timeout = TimeSpan.FromSeconds(120),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(told, "The writer was never told the child had gone.");
+        Assert.False(result.TimedOut);
+        Assert.Equal(3, result.ExitCode);
+    }
+
+    /// <summary>
     /// A writer that fails part way has the input closed though it was to be held open - the child would wait for the
     /// rest, which never comes - and its failure raised once the child has gone, never taken for a child that stopped
     /// reading.

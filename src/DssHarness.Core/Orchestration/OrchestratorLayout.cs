@@ -22,7 +22,30 @@ namespace DssHarness.Core.Orchestration;
 /// agents/&lt;agent&gt;/sessions/&lt;id&gt;/   API clients only: one conversation with the provider, in the provider's own form
 /// agents/&lt;agent&gt;/steps/&lt;instance&gt;/   one step the agent runs, or that runs in or for its worktree, everything of the step in it
 /// steps/&lt;instance&gt;/          one step of the run that no agent owns, the create-agent that makes an agent included
-/// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory: a session a contained child of the step leads while it runs, on Linux and macOS
+/// &lt;step&gt;/step.json            in either kind of step's directory: the step's own record
+/// &lt;step&gt;/output.json          the step's output, validated
+/// &lt;step&gt;/handoff.md           the handoff a stop cut the step off with, until its next attempt is given it
+/// &lt;step&gt;/ledger.json          a leg step: its legs' ledger, as --json gives it
+/// &lt;step&gt;/logs/                a leg step in an agent's worktree: each red leg's phase log that did not pass; a ci-wait: each red job's log
+/// &lt;step&gt;/fold.json            a fold family step: what its dry run named and stood, its question, each consent given, how its apply ended
+/// &lt;step&gt;/targets/&lt;agent&gt;/     a refresh or a rebase of others: one target's fold.json
+/// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it
+/// flow.json                   a run's state, whole: the truth a resume goes on from
+/// workflow.json               a run's status, for a person and a client to read
+/// definition.json             the workflow's definition, frozen as the run began with it
+/// questions.json              every question the run raised and every answer it was given
+/// folds.json                  the run's write-ahead ledger of its folds
+/// pre-existing-issues.json    each pre-existing issue the run listed
+/// events.jsonl                the run's events, one JSON object to a line
+/// report.md, report.json      the report of the run's last session
+/// inbox.json, stop.json       an answer, and a pause or a stop, handed to the engine running the run, until it takes them
+/// asks/                       the planned ask-orchestrator's calls; nothing writes it yet
+/// graph/graph.json            the run's codebase graph: the base's manifest, every file it keeps with its blob, state and extract
+/// graph/symbols.jsonl         the base's link result, as lines: every node and edge, with the digest of the manifest it was made from
+/// graph/extracts/&lt;ab&gt;/&lt;name&gt;   one file's extract, written once, named by its blob, its path, its implementation and version
+/// graph/sync.jsonl            one line for each sync of the graph
+/// graph/views/&lt;agent&gt;.json    an agent's view of the graph: what its worktree holds that the base does not
+/// ../&lt;run&gt;.owner.json        beside the run's directory: the process whose engine holds the run
 /// </code>
 /// The orchestrator's name and each agent's are the directories they are kept in, and an agent is never named as its
 /// orchestrator, since the two would share a log and a plans directory.
@@ -73,10 +96,10 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The extension of a log: one JSON object to a line.</summary>
     public const string LogExtension = ".jsonl";
 
-    /// <summary>The directory, in a step's own, where each session a contained child of the step leads is recorded while it runs.</summary>
+    /// <summary>The directory, in a step's own, where each session a contained child of the step leads, and each group its legs' work leads, is recorded while it runs.</summary>
     public const string ChildrenDirectoryName = "children";
 
-    /// <summary>The extension of the record of a contained child's session.</summary>
+    /// <summary>The extension of the record of a step's child's session or process group.</summary>
     public const string ChildExtension = ".json";
 
     /// <summary>The name of the file a run's state is kept in, whole.</summary>
@@ -123,6 +146,48 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The name of the file a step's output is kept in, validated, in its directory.</summary>
     public const string StepOutputFileName = "output.json";
+
+    /// <summary>The name of the file a leg step keeps its legs' ledger in, as <c>--json</c> gives it, in its directory.</summary>
+    public const string StepLedgerFileName = "ledger.json";
+
+    /// <summary>
+    /// The name of the directory a leg step in an agent's worktree keeps, whole, the log of each red leg's phase that did
+    /// not pass, as <c>&lt;leg&gt;.&lt;phase&gt;.log</c>, in its directory.
+    /// </summary>
+    public const string StepLogsDirectoryName = "logs";
+
+    /// <summary>The name of the run's write-ahead ledger of its folds.</summary>
+    public const string FoldsFileName = "folds.json";
+
+    /// <summary>
+    /// The name of the file a fold family step keeps in its directory - or in its target's, for a step of <c>others</c>:
+    /// what its dry run named and stood, the question it asked, each consent it was given and how its apply ended.
+    /// </summary>
+    public const string StepFoldFileName = "fold.json";
+
+    /// <summary>The name of the directory a refresh or a rebase of <c>others</c> keeps one directory for each target in, in its own.</summary>
+    public const string StepTargetsDirectoryName = "targets";
+
+    /// <summary>The directory a run's codebase graph is kept in: made from the tree, and made again whenever asked.</summary>
+    public const string GraphDirectoryName = "graph";
+
+    /// <summary>The name of the file the base's manifest is kept in, in the graph's directory.</summary>
+    public const string GraphManifestFileName = "graph.json";
+
+    /// <summary>The name of the file the base's link result is kept in, in the graph's directory.</summary>
+    public const string GraphSymbolsFileName = "symbols.jsonl";
+
+    /// <summary>The name of the directory every file's extract is kept in, once, in the graph's directory.</summary>
+    public const string GraphExtractsDirectoryName = "extracts";
+
+    /// <summary>The name of the file one line is appended to for each sync of the graph, in its directory.</summary>
+    public const string GraphSyncFileName = "sync.jsonl";
+
+    /// <summary>The name of the directory each agent's view of the graph is kept in, in the graph's directory.</summary>
+    public const string GraphViewsDirectoryName = "views";
+
+    /// <summary>The extension of a file's extract.</summary>
+    public const string GraphExtractExtension = ".json";
 
     /// <summary>Where the orchestrator named <paramref name="name"/> of the repository at <paramref name="layout"/> is kept.</summary>
     /// <param name="layout">The repository.</param>
@@ -238,15 +303,15 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     public string HandoffFile(string agent, string instance) => Path.Combine(AgentStepDirectory(agent, instance), HandoffFileName);
 
     /// <summary>
-    /// Where the sessions the contained children of the step kept at <paramref name="stepDirectory"/> lead are recorded
-    /// while they run: a step of the run's or of an agent's alike.
+    /// Where the sessions the contained children of the step kept at <paramref name="stepDirectory"/> lead, and the groups
+    /// its legs' work leads, are recorded while they run: a step of the run's or of an agent's alike.
     /// </summary>
     /// <param name="stepDirectory">The step's own directory.</param>
     public static string ChildrenDirectory(string stepDirectory) => Path.Combine(stepDirectory, ChildrenDirectoryName);
 
-    /// <summary>The record of the session <paramref name="session"/>, which a contained child of the step at <paramref name="stepDirectory"/> leads.</summary>
+    /// <summary>The record of the session or the group <paramref name="session"/>, which a child of the step at <paramref name="stepDirectory"/> leads.</summary>
     /// <param name="stepDirectory">The step's own directory.</param>
-    /// <param name="session">The session's id: its leader's process id.</param>
+    /// <param name="session">The id of the session or the group: its leader's process id.</param>
     public static string ChildFile(string stepDirectory, int session)
         => Path.Combine(ChildrenDirectory(stepDirectory), session.ToString(System.Globalization.CultureInfo.InvariantCulture) + ChildExtension);
 
@@ -284,6 +349,43 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>Every question the run raised and every answer it was given, the open ones among them: the one owner of what a question said.</summary>
     public string QuestionsFile => Path.Combine(Directory, QuestionsFileName);
 
+    /// <summary>The run's write-ahead ledger of its folds: each path a fold means to write, the digest it held before and the one the fold left.</summary>
+    public string FoldsFile => Path.Combine(Directory, FoldsFileName);
+
+    /// <summary>The run's codebase graph: derived from the tree, so removed with the run and kept by nothing else.</summary>
+    public string GraphDirectory => Path.Combine(Directory, GraphDirectoryName);
+
+    /// <summary>The base's manifest: every file the graph keeps, with its blob, its state and its extract's name.</summary>
+    public string GraphManifestFile => Path.Combine(GraphDirectory, GraphManifestFileName);
+
+    /// <summary>The base's link result: every node and edge, with the digest of the manifest it was made from.</summary>
+    public string GraphSymbolsFile => Path.Combine(GraphDirectory, GraphSymbolsFileName);
+
+    /// <summary>Where every file's extract is kept, once, each named by <see cref="DssHarness.Core.Codebase.CodeGraphIds.ExtractName"/>.</summary>
+    public string GraphExtractsDirectory => Path.Combine(GraphDirectory, GraphExtractsDirectoryName);
+
+    /// <summary>One line for each sync of the graph: when, which view, why, and what it listed, read and reused.</summary>
+    public string GraphSyncFile => Path.Combine(GraphDirectory, GraphSyncFileName);
+
+    /// <summary>Where each agent's view of the graph is kept: what its worktree holds that the base does not.</summary>
+    public string GraphViewsDirectory => Path.Combine(GraphDirectory, GraphViewsDirectoryName);
+
+    /// <summary>The view of the graph of the agent <paramref name="agent"/>'s worktree.</summary>
+    /// <param name="agent">The agent's name.</param>
+    public string GraphViewFile(string agent)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agent);
+        return Path.Combine(GraphViewsDirectory, agent + GraphExtractExtension);
+    }
+
+    /// <summary>The extract named <paramref name="name"/> (<see cref="DssHarness.Core.Codebase.CodeGraphIds.ExtractName"/>).</summary>
+    /// <param name="name">Its name, under the extracts directory.</param>
+    public string GraphExtractFile(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return Path.Combine(GraphExtractsDirectory, name.Replace('/', Path.DirectorySeparatorChar));
+    }
+
     /// <summary>What another process asked of the running engine: a safe pause, or a stop. Read by the engine at its poll, and taken.</summary>
     public string StopFile => Path.Combine(Directory, StopFileName);
 
@@ -318,6 +420,11 @@ public sealed record OrchestratorLayout(string Name, string Directory)
         => agent is null
             ? StepDirectory(Flow.FlowInstanceId.DirectoryOf(instance))
             : AgentStepDirectory(agent, Flow.FlowInstanceId.DirectoryOf(instance));
+
+    /// <summary>Where a refresh or a rebase of <c>others</c> kept at <paramref name="stepDirectory"/> keeps what it did to <paramref name="agent"/>.</summary>
+    /// <param name="stepDirectory">The step's own directory.</param>
+    /// <param name="agent">The target's name.</param>
+    public static string TargetDirectory(string stepDirectory, string agent) => Path.Combine(stepDirectory, StepTargetsDirectoryName, agent);
 
     /// <summary>The handoff of one step instance, in its own directory (<see cref="InstanceDirectory"/>).</summary>
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>

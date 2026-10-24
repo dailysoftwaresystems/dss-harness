@@ -1672,12 +1672,14 @@ public sealed class MutationServiceTests
     /// </summary>
     private sealed class WrittenAsTheSecondLookBegins(IFileSystem inner, string root, Action move) : PassThroughFileSystem(inner)
     {
+        private bool _listed;
         private bool _hashing;
         private bool _moved;
 
         public override Stream OpenRead(string path)
         {
-            _hashing = true;
+            // Read once the root was first listed: a file of the tree being hashed, never a setting read before the listing.
+            _hashing |= _listed;
             return base.OpenRead(path);
         }
 
@@ -1689,6 +1691,9 @@ public sealed class MutationServiceTests
                 _moved = true;
                 move();
             }
+
+            _listed |= !recursive
+                && string.Equals(Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
 
             return base.EnumerateFiles(path, recursive);
         }
@@ -2102,7 +2107,8 @@ public sealed class MutationServiceTests
             harness.PathBudget,
             harness.FileSystem,
             harness.Platform,
-            harness.Output);
+            harness.Output,
+            new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity)));
 
         return new MutationService(
             loader,
@@ -2159,12 +2165,7 @@ public sealed class MutationServiceTests
     /// <summary>The real file system, save that <paramref name="path"/> is there and every read of it raises <paramref name="raised"/>.</summary>
     private sealed class Unreadable(IFileSystem inner, string path, Exception raised) : PassThroughFileSystem(inner)
     {
-        public override string ReadAllText(string read) => read == path ? throw raised : base.ReadAllText(read);
-
-        public override byte[] ReadAllBytes(string read) => read == path ? throw raised : base.ReadAllBytes(read);
-
-        public override Task<byte[]> ReadAllBytesAsync(string read, CancellationToken cancellationToken = default)
-            => read == path ? Task.FromException<byte[]>(raised) : base.ReadAllBytesAsync(read, cancellationToken);
+        public override Stream OpenRead(string read) => read == path ? throw raised : base.OpenRead(read);
 
         public override IEnumerable<string> EnumerateFiles(string listed, bool recursive)
             => listed == path ? throw raised : base.EnumerateFiles(listed, recursive);

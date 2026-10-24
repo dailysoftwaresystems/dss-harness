@@ -33,6 +33,15 @@ public interface IFlowRecords
     /// <param name="questions">Every question the run raised, in the order raised, with every answer each was given.</param>
     /// <param name="refused">Every answer handed over through the inbox that the run did not take, in the order refused; null where none was.</param>
     void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused);
+
+    /// <summary>
+    /// The name the run gives the next agent it makes (<see cref="OrchestrationRules.NextAgentName"/>), over
+    /// <paramref name="recorded"/> - every name its steps' records hold or the session gave - and every agent directory
+    /// the run has, read under the orchestrator's own lock. A run held in memory alone has no directory, and reckons by
+    /// the names it gave.
+    /// </summary>
+    /// <param name="recorded">Every name the run's steps hold, and every name the session gave.</param>
+    string NameAgent(IReadOnlyCollection<string> recorded) => OrchestrationRules.NextAgentName(recorded);
 }
 
 /// <summary>
@@ -462,6 +471,20 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     }
 
     /// <inheritdoc/>
+    string IFlowRecords.NameAgent(IReadOnlyCollection<string> recorded)
+    {
+        ArgumentNullException.ThrowIfNull(recorded);
+
+        return _store.Exclusively(_layout, () => OrchestrationRules.NextAgentName(
+        [
+            .. recorded,
+            .. _fileSystem.DirectoryExists(_layout.AgentsDirectory)
+                ? _fileSystem.EnumerateDirectories(_layout.AgentsDirectory).Select(directory => Path.GetFileName(Path.TrimEndingDirectorySeparator(directory)))
+                : [],
+        ]));
+    }
+
+    /// <inheritdoc/>
     void IFlowRecords.Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance, string? from, string? to, int? attempt, string? detail)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -573,7 +596,10 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.Issue,
             step.IssuesOwed,
             step.LeftBy,
-            step.Cause is OutcomeCause.None ? null : step.Cause.ToString());
+            step.Cause is OutcomeCause.None ? null : step.Cause.ToString(),
+            step.Model,
+            step.Copied ? true : null,
+            step.Targets);
     }
 
     /// <summary>
@@ -600,7 +626,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
 
         if (step.Output is not null)
         {
-            _fileSystem.WriteAllTextAtomic(Path.Combine(directory, OrchestratorLayout.StepOutputFileName), JsonSerializer.Serialize(step.Output, JsonStateFile.Options) + "\n");
+            JsonStateFile.Write(_fileSystem, Path.Combine(directory, OrchestratorLayout.StepOutputFileName), step.Output);
         }
 
         _store.WriteStepRecord(Path.Combine(directory, OrchestratorLayout.StepRecordFileName), StepRecordOf(step));

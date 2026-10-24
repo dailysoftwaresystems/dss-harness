@@ -35,7 +35,7 @@ public sealed class PhaseTailTests
 
     /// <summary>
     /// A build that did not pass shows the last lines of the phase that failed - configure's, where
-    /// configure failed - and one whose phases all passed shows none.
+    /// configure failed - and names that phase; one whose phases all passed shows none, and names none.
     /// </summary>
     [Fact]
     public void ABuildThatFailed_ShowsTheLastLinesOfThePhaseThatFailed()
@@ -60,6 +60,7 @@ public sealed class PhaseTailTests
         Assert.Equal(["CMake Error at CMakeLists.txt:3 (project):", "  No CMAKE_CXX_COMPILER could be found."], failed.Tail);
         Assert.Equal(["[1/2] Building C object main.c.o", "main.c:3: error: expected ';'"], built.Tail);
         Assert.Empty(passed.Tail);
+        Assert.Equal(("configure", "build", null), (failed.TailPhase, built.TailPhase, passed.TailPhase));
     }
 
     /// <summary>

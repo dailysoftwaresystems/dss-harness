@@ -408,7 +408,8 @@ public sealed class AgentArmRegistryTests
 
     /// <summary>
     /// A fold of two hundred paths whose merged registry cites three of them reads only what the registry's validation asks
-    /// for to judge it: the two texts it reads, of all the fold writes.
+    /// for to judge it: the two texts it reads, of all the fold writes, are the only ones opened again after each path the
+    /// fold writes is opened once to be hashed.
     /// </summary>
     [Fact]
     public async Task AFoldOfTwoHundredPaths_ReadsOnlyTheTextsTheMergedRegistryCites_ToJudgeIt()
@@ -431,7 +432,10 @@ public sealed class AgentArmRegistryTests
 
         Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
         Assert.StartsWith("dry run: folding agent 'ag' of 'o1' writes 200 path(s) into the main tree, merges 1,", dry.Message);
-        Assert.Equal([$"{Texts}/gamma.before", $"{Texts}/gamma.diag"], reads.Read.Where(path => path != Registry).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            [$"{Texts}/gamma.before", $"{Texts}/gamma.diag"],
+            reads.Read.Where(path => path != Registry).GroupBy(path => path).Where(opened => opened.Count() > 1).Select(opened => opened.Key).Order(StringComparer.Ordinal));
+        Assert.Equal(202, reads.Read.Count(path => path != Registry));
     }
 
     /// <summary>
@@ -778,14 +782,14 @@ public sealed class AgentArmRegistryTests
             && line.EndsWith("; no three-way merge is offered: it is 17 MiB, and a merge is offered for a file up to 16 MiB", StringComparison.Ordinal));
     }
 
-    /// <summary>The real file system, noting each file under <paramref name="root"/> read whole, by its path relative to it.</summary>
+    /// <summary>The real file system, noting each time a file under <paramref name="root"/> is opened to be read, by its path relative to it.</summary>
     private sealed class ReadsUnder(IFileSystem inner, string root) : PassThroughFileSystem(inner)
     {
         private readonly ConcurrentQueue<string> _read = new();
 
         public IEnumerable<string> Read => _read;
 
-        public override Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default)
+        public override Stream OpenRead(string path)
         {
             var relative = Path.GetRelativePath(root, path);
 
@@ -794,7 +798,7 @@ public sealed class AgentArmRegistryTests
                 _read.Enqueue(relative.Replace(Path.DirectorySeparatorChar, '/'));
             }
 
-            return base.ReadAllBytesAsync(path, cancellationToken);
+            return base.OpenRead(path);
         }
     }
 }

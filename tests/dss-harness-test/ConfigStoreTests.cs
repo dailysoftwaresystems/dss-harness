@@ -3094,6 +3094,31 @@ public sealed class ConfigStoreTests
             exception.Message);
     }
 
+    /// <summary>A file whose providers and agent policy both do not read is refused once, naming every problem of the two.</summary>
+    [Fact]
+    public void TheProvidersAndTheAgentPolicysProblems_AreSaidTogether()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.WriteFile(
+            "config.json",
+            """
+            {
+              "providers": [
+                { "name": "zai", "type": "zai", "api": "api.z.ai", "apiKeyNames": ["ZAI_API_KEY"], "client": "glm",
+                  "models": [{ "code": "glm-5.3", "name": "GLM 5.3", "tiers": [], "efforts": ["low"], "contextTokens": 1000, "maxOutputTokens": 100 }] }
+              ],
+              "agentPolicy": { "restrictions": ["Run(a*b)"] }
+            }
+            """);
+
+        var exception = Assert.Throws<ConfigException>(() => CreateStore().Load(path));
+
+        Assert.Equal(
+            $"'{path}' could not be read: providers[0] 'zai' api 'api.z.ai' is no absolute https address; an address is the company's own or a gateway's, and http only for localhost "
+                + "agentPolicy.restrictions[0] 'Run(a*b)' does not read: a Run rule's '*' stands for any arguments, at its end",
+            exception.Message);
+    }
+
     /// <summary>An unknown key that was never read is refused as unknown, with nothing said to take its place.</summary>
     [Fact]
     public void AnUnknownKey_IsNotMistakenForARetiredOne()

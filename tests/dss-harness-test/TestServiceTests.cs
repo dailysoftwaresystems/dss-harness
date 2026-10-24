@@ -223,6 +223,7 @@ public sealed class TestServiceTests
 
         // What the suite printed last is on the leg's line, for a reader whose log is on another host.
         Assert.Equal(["2 tests failed"], result.Entry.LogTail);
+        Assert.Equal("test", result.Entry.TailPhase);
     }
 
     [Fact]

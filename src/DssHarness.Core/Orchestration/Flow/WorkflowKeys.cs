@@ -37,6 +37,18 @@ public static class WorkflowKeys
         new("outputs", "what the whole workflow declares it produces") { Keys = Output },
         new("steps", "the flow's steps, in the order they are declared") { Required = true, Keys = Step },
         new("recover", "the steps a step gives its failure to where it says onFailure: recover: they find what went wrong and put it right") { Keys = Recover },
+        new("codebaseGraph", "the shape of the run's one codebase graph, which every graphify-codebase step syncs; absent, every default") { Keys = CodebaseGraph },
+    ];
+
+    /// <summary>What the <c>codebaseGraph</c> section takes.</summary>
+    public static IReadOnlyList<KeyDescription> CodebaseGraph =>
+    [
+        new("include", "patterns: only the paths one of them matches are graphed; absent, every file the tree lists"),
+        new("exclude", "patterns: the paths one of them matches are not graphed; absent, none"),
+        new("languages", "the implementations used, by name - 'help codebase-graph' lists them; a file whose claimant is left out is only listed; absent, every one"),
+        new("maxFileBytes", string.Create(System.Globalization.CultureInfo.InvariantCulture, $"the largest file read, from {Codebase.CodebaseGraphShape.LeastMaxFileBytes:N0} to {Codebase.CodebaseGraphShape.MostMaxFileBytes:N0}; a larger one is listed tooLarge; absent, {Codebase.CodebaseGraphShape.DefaultMaxFileBytes:N0}")),
+        new("generated", $"what becomes of generated code: {Codebase.CodebaseGraphShape.GeneratedLow} (the default), its declarations kept, its file's entry naming why it is generated, or {Codebase.CodebaseGraphShape.GeneratedExclude}, the file listed and its declarations left out"),
+        new("mapTokens", string.Create(System.Globalization.CultureInfo.InvariantCulture, $"the cap of a later slice's repository map, from 0 to {Codebase.CodebaseGraphShape.MostMapTokens:N0} tokens - nothing reads it yet; 0 asks for no map; absent, {Codebase.CodebaseGraphShape.DefaultMapTokens:N0}")),
     ];
 
     /// <summary>What the <c>recover</c> section takes.</summary>
@@ -128,11 +140,12 @@ public static class WorkflowKeys
         new("maxAddedIterations", "iterations a run at the end of its loop is given to carry an update"),
     ];
 
-    /// <summary>What one step takes: the common keys, the group's, and the types', each under its own name.</summary>
+    /// <summary>What one step takes: the common keys, the group's, those of every step that runs, and the types', each under its own name.</summary>
     public static IReadOnlyList<KeyDescription> Step =>
     [
         .. WorkflowStepTypes.Common,
         .. WorkflowStepTypes.Group,
+        .. WorkflowStepTypes.Running,
         .. WorkflowStepTypes.All.SelectMany(type => type.Keys.Select(key => new KeyDescription($"{type.Type}.{key.Name}", key.Meaning) { Required = key.Required })),
     ];
 }

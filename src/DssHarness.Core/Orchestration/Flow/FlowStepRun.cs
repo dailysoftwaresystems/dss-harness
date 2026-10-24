@@ -22,6 +22,22 @@ public sealed record FlowAnswerGiven(string Question, string Answer);
 /// <param name="Blocks">Whether the issue stops the reporting step's own work.</param>
 public sealed record FlowPreExistingReport(string Title, string Description, string Where, string Evidence, bool Blocks);
 
+/// <summary>The run a step belongs to: where it works, its name, the commit it started from and the workflow it runs.</summary>
+/// <param name="Repository">The main checkout's root: where every service a step calls is asked from.</param>
+/// <param name="Run">The run's name, which names its orchestrator.</param>
+/// <param name="StartCommit">The commit the run started from; null where its records name none.</param>
+/// <param name="Definition">The workflow the run runs, as it was frozen when the run began.</param>
+public sealed record FlowRunPlace(string Repository, string Run, string? StartCommit, WorkflowDefinition Definition);
+
+/// <summary>
+/// The agent a step makes, as the engine named it before the step began: written to the step's record with the model
+/// it is made for before anything makes it, so a step run again asks for the same agent whatever the configuration
+/// says by then.
+/// </summary>
+/// <param name="Name">The agent's name, <c>a&lt;N&gt;</c>.</param>
+/// <param name="Model">The model it is made for; null where none resolved for the step, which its runner refuses.</param>
+public sealed record FlowMadeAgent(string Name, string? Model);
+
 /// <summary>
 /// What one step is asked to run: its definition, the instance of it that runs, the scope the instance sits in, and
 /// the answers this visit's questions were given.
@@ -37,6 +53,26 @@ public sealed record FlowPreExistingReport(string Title, string Description, str
 /// <param name="Handoff">The handoff this attempt is given, where a stop cut the attempt before it off; null where it is given none.</param>
 /// <param name="Issue">The pre-existing issue this instance is raised to triage, where it is one; null for every step the schedule starts.</param>
 /// <param name="Visit">Which visit of the step this is: 1 for the first, one more for each time a redirect, a handler or the recovery sent the run back to it.</param>
+/// <param name="Place">Where the run works; null for a run held in memory alone, which no step that calls a service can run in.</param>
+/// <param name="Read">
+/// What the engine read for the step where it starts, by key: a <c>validate-plan</c> step's <c>items</c> and
+/// <c>scope</c>, each where the step gives it; an <c>orient</c> step's <c>base</c>, the flow's <c>pull-request</c> step's
+/// base filled (<see cref="FlowTemplate.PullRequestBase"/>), where one names it; an anchor check's <c>rows</c> or
+/// <c>paths</c>, the names its expression yielded, none where it read nothing; a fold's or a deletion's <c>within</c>,
+/// <c>allow.new</c> and <c>allow.merge</c>, a refresh's <c>paths</c>, <c>except</c>, <c>stale</c> and <c>merge</c> and a
+/// rebase's <c>merge</c>, each the names its expression yielded, under its key - <c>allow.new</c> and <c>allow.merge</c>
+/// spelt so - and none where one that may read nothing did; a <c>ci-wait</c> step's <c>commit</c> where it names none,
+/// the commit the run last pushed. Empty for every other step.
+/// </param>
+/// <param name="Made">The agent a <c>create-agent</c> step makes, as the engine named it; null for every other step.</param>
+/// <param name="WorksIn">
+/// The agent the step works in or acts on - the one its <c>in</c> or <c>of</c> names, as that step's create-agent made
+/// it - whose worktree a leg step works in and whose directory keeps the step's records; null for a step that names none.
+/// </param>
+/// <param name="Target">
+/// The agent a refresh or a rebase of <c>others</c> works on in this attempt: each of its targets in turn, one at a time,
+/// each kept in the step's directory under <c>targets/&lt;agent&gt;/</c>; null for every other step.
+/// </param>
 public sealed record FlowStepRun(
     WorkflowStep Step,
     string Instance,
@@ -48,7 +84,12 @@ public sealed record FlowStepRun(
     IFlowRunEvents Events,
     string? Handoff = null,
     FlowPreExistingReport? Issue = null,
-    int Visit = 1);
+    int Visit = 1,
+    FlowRunPlace? Place = null,
+    IReadOnlyDictionary<string, FlowValue>? Read = null,
+    FlowMadeAgent? Made = null,
+    string? WorksIn = null,
+    string? Target = null);
 
 /// <summary>
 /// The one who runs a step: the code a step type calls - a machine step's service, a reason step's client runner - asked
@@ -99,7 +140,11 @@ public interface IFlowRunEvents
     /// <param name="leg">The leg's name.</param>
     void LegCopyMade(string leg);
 
-    /// <summary>The leg <paramref name="leg"/>'s work in the tree itself has ended: for a leg that works in the tree, the tree is held to this.</summary>
+    /// <summary>
+    /// The leg <paramref name="leg"/> has ended: whatever of the tree it was to read, it has read. A leg that works in the
+    /// tree itself holds it to this, and one placed in a copy whose copy was never made - its sync refused or failed -
+    /// lets it go here too.
+    /// </summary>
     /// <param name="leg">The leg's name.</param>
     void LegEnded(string leg);
 
@@ -116,22 +161,76 @@ public interface IFlowRunEvents
     void HandoffTaken();
 }
 
+/// <summary>What one consent a fold family step's dry run lacks is about: its kind, and the rows, the cells or the paths it names.</summary>
+/// <param name="Kind">The consent.</param>
+/// <param name="Named">What it is about, as the dry run's plan names it.</param>
+public sealed record FlowNamed(ConsentKind Kind, IReadOnlyList<string> Named);
+
 /// <summary>
 /// What a fold family step's dry run stood, as its runner reports it over the verbs' own facts: the consents it lacks
-/// by kind with what it named, or its refusal - for paths whose three-way merge conflicts alone, or with anything else
-/// among its reasons, which fails the step.
+/// by kind with what each is about, the paths it would write that the step's <c>within</c> leaves out, or its refusal -
+/// for paths whose three-way merge conflicts alone, or with anything else among its reasons, which fails the step.
 /// </summary>
 /// <param name="Standing">What the dry run wants of its caller.</param>
 /// <param name="Consents">Each consent the request lacks, by kind, in the order the dry run named them.</param>
-/// <param name="Named">What the dry run named: the rows, the cells or the paths each consent is about.</param>
+/// <param name="Named">What each consent it lacks is about, by its kind.</param>
 /// <param name="Refusals">Each reason the request stands refused for, by kind, where it stands refused.</param>
 /// <param name="Summary">The dry run's own summary, the line it ended on.</param>
 public sealed record FlowDryRun(
     RequestStanding Standing,
     IReadOnlyList<ConsentKind> Consents,
-    IReadOnlyList<string> Named,
+    IReadOnlyList<FlowNamed> Named,
     IReadOnlyList<RefusalKind> Refusals,
-    string Summary);
+    string Summary)
+{
+    /// <summary>The paths both trees changed whose three-way merge conflicts, as its plan names them.</summary>
+    public IReadOnlyList<string> Conflicting { get; init; } = [];
+
+    /// <summary>The paths it would write that the step's <c>within</c> leaves out; empty where the step names none, or it writes none.</summary>
+    public IReadOnlyList<string> Outside { get; init; } = [];
+
+    /// <summary>The lines its dry run said under its summary.</summary>
+    public IReadOnlyList<string> Lines { get; init; } = [];
+
+    /// <summary>The agent the step works on, as its questions name it; null where a test says none.</summary>
+    public string? Agent { get; init; }
+
+    /// <summary>The target a step of <c>others</c> works on now, which its questions name beside the step; null for every other step.</summary>
+    public string? Target { get; init; }
+
+    /// <summary>What the consent of <paramref name="kind"/> is about; nothing where the dry run lacks no such consent.</summary>
+    /// <param name="kind">The consent.</param>
+    public IReadOnlyList<string> NamedOf(ConsentKind kind) => Named.FirstOrDefault(named => named.Kind == kind)?.Named ?? [];
+
+    /// <summary>
+    /// What a fold family step's dry run stood, read from the verb's own facts: its standing, each consent it lacks with
+    /// what its plan names it is about, its refusals, the paths its merges conflict on and its lines - and
+    /// <paramref name="outside"/>, the paths the step's <c>within</c> leaves out, which the verb never sees.
+    /// </summary>
+    /// <param name="dry">What the dry run answered with; its standing weighed.</param>
+    /// <param name="outside">The paths it would write that the step's <c>within</c> leaves out.</param>
+    /// <param name="agent">The agent the step works on.</param>
+    /// <param name="target">The target a step of <c>others</c> works on now; null for every other step.</param>
+    /// <exception cref="ArgumentException">The dry run's standing could not be weighed: no question is asked of it.</exception>
+    public static FlowDryRun Of(AgentVerbFacts dry, IReadOnlyList<string> outside, string agent, string? target)
+    {
+        ArgumentNullException.ThrowIfNull(dry);
+
+        return new FlowDryRun(
+            dry.Standing ?? throw new ArgumentException("a dry run whose standing could not be weighed raises no question", nameof(dry)),
+            dry.Needs,
+            [.. dry.Needs.Select(kind => new FlowNamed(kind, dry.Planned?.Named(kind) ?? []))],
+            dry.Refusals,
+            dry.Summary)
+        {
+            Conflicting = dry.Planned?.Conflicting ?? [],
+            Outside = outside,
+            Lines = dry.Lines,
+            Agent = agent,
+            Target = target,
+        };
+    }
+}
 
 /// <summary>How one step's run ended, as its runner reports it to the coordinator.</summary>
 /// <remarks>
@@ -168,6 +267,14 @@ public sealed record FlowStepResult
     /// <summary>Every leg the step ran, with each one's own verdict; the steps that run no legs give none.</summary>
     public IReadOnlyList<FlowLeg> Legs { get; init; } = [];
 
+    /// <summary>
+    /// A check that runs no legs - an anchor check, a CI read, a wait for checks - reached its verdict, and it is red:
+    /// under <c>failOn: red</c> the step fails with <see cref="Exit"/>, the code its check gives what it found; under
+    /// <c>never</c> it is done, and the steps after it read <c>passed</c>. <see cref="Passed"/> says the check did its
+    /// work. A step that runs legs says red by their verdicts, and never sets it.
+    /// </summary>
+    public bool Red { get; init; }
+
     /// <summary>The typed cause, where the exit code alone cannot say which kind of refusal it was.</summary>
     public OutcomeCause Cause { get; init; }
 
@@ -196,9 +303,28 @@ public sealed record FlowStepResult
     /// <summary>What the wait's question says of what it found, where the runner reports it.</summary>
     public string? ChecksDetail { get; init; }
 
+    /// <summary>
+    /// A <c>create-agent</c> step's name is spent: the agent the engine named for it was deleted, and can never be made
+    /// again under that name, so the step's next attempt is named anew. False for every other result.
+    /// </summary>
+    public bool NameSpent { get; init; }
+
     /// <summary>A result for a step that ended: passed or not, with its code.</summary>
     public static FlowStepResult Ended(bool passed, int exit, string? error = null, JsonNode? output = null, IReadOnlyList<FlowPreExistingReport>? preExisting = null)
         => new() { Asked = null, Passed = passed, Exit = exit, Error = error, Output = output, PreExisting = preExisting ?? [] };
+
+    /// <summary>
+    /// A result for a step whose call of a service ended as <paramref name="outcome"/> did, short of success: its code, its
+    /// cause - a held lock, which the retry table waits out - and its words, or <paramref name="error"/> where the step says
+    /// them itself. The one way a runner hands on a failed outcome, so none drops the cause the code alone cannot say.
+    /// </summary>
+    /// <param name="outcome">How the call ended.</param>
+    /// <param name="error">The step's own words for it; null for the outcome's.</param>
+    public static FlowStepResult Failed(CommandOutcome outcome, string? error = null)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        return Ended(passed: false, outcome.ExitCode, error ?? outcome.Message) with { Cause = outcome.Cause };
+    }
 
     /// <summary>A result for a step that asks: no ending, the question open.</summary>
     public static FlowStepResult Asking(FlowQuestion question)

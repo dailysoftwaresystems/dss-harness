@@ -171,6 +171,7 @@ public sealed record AgentQuestion(string Text, IReadOnlyList<string> Choices, s
 /// <param name="ApiKeySource">Claude Code: the credential source its <c>system/init</c> named.</param>
 /// <param name="SettingsFile">Claude Code: the user's settings file the launch read.</param>
 /// <param name="SettingsDigest">Claude Code: the digest of that file.</param>
+/// <param name="Hooks">Claude Code: whether the user's hooks run in the launch - <c>off</c> in every launch this tool makes.</param>
 public sealed record SessionStarted(
     string Client,
     string Model,
@@ -185,7 +186,8 @@ public sealed record SessionStarted(
     AgentCredentialSource? Credential = null,
     string? ApiKeySource = null,
     string? SettingsFile = null,
-    string? SettingsDigest = null) : AgentEvent;
+    string? SettingsDigest = null,
+    string? Hooks = null) : AgentEvent;
 
 /// <summary>A message the engine gave the agent, whole: which of them it is beside it.</summary>
 /// <param name="Text">The message.</param>
@@ -282,6 +284,8 @@ public sealed record TurnRestarted(string Why) : AgentEvent;
 /// <param name="Turn">The turn it happened on.</param>
 /// <param name="ThrewAway">Whether a part of an answer was thrown away.</param>
 /// <param name="CreditAsked">Whether a credit was asked for.</param>
+/// <param name="FromKey">The name of the key the serving entry signed in with, where it signed in with one; never its value.</param>
+/// <param name="ToKey">The name of the key the entry that takes over signs in with, where it signs in with one.</param>
 public sealed record FallbackStarted(
     string FromModel,
     string FromProvider,
@@ -293,7 +297,9 @@ public sealed record FallbackStarted(
     string How,
     int Turn,
     bool ThrewAway,
-    bool CreditAsked) : AgentEvent;
+    bool CreditAsked,
+    string? FromKey = null,
+    string? ToKey = null) : AgentEvent;
 
 /// <summary>An entry of the fallback that was not taken.</summary>
 /// <param name="Model">The model not taken.</param>

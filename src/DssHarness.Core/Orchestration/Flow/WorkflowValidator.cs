@@ -98,10 +98,10 @@ public static class WorkflowValidator
         ["openAgents"] = (step, _) => step.Then is not null,
 
         // A fold's, or a deletion's that folds, and those a refresh and a rebase share with it.
-        ["foldNewRows"] = (step, _) => Folds(step),
-        ["foldOutside"] = (step, _) => Folds(step),
-        ["foldTwoChanges"] = (step, _) => Folds(step) || step.Type is "refresh" or "rebase",
-        ["foldConflicts"] = (step, _) => Folds(step) || step.Type is "refresh" or "rebase",
+        ["foldNewRows"] = (step, _) => WorkflowStepTypes.Folds(step),
+        ["foldOutside"] = (step, _) => WorkflowStepTypes.Folds(step),
+        ["foldTwoChanges"] = (step, _) => WorkflowStepTypes.Folds(step) || step.Type is "refresh" or "rebase",
+        ["foldConflicts"] = (step, _) => WorkflowStepTypes.Folds(step) || step.Type is "refresh" or "rebase",
 
         // A reasoning step's conversation at a limit of its own.
         ["turnLimit"] = (step, _) => step.Type == "reason",
@@ -114,10 +114,6 @@ public static class WorkflowValidator
         ["checksPending"] = (step, _) => step.Type == "ci-wait",
         ["checksUnsettled"] = (step, _) => step.Type == "ci-wait",
     };
-
-    /// <summary>Whether <paramref name="step"/> folds an agent's work: a fold, or a deletion that does not discard it.</summary>
-    private static bool Folds(WorkflowStep step)
-        => step.Type == "fold" || (step.Type == "delete-agent" && step.DiscardUncommitted is not true);
 
     /// <summary>V26: the most steps one workflow may declare, the recovery's among them, for they run. How deep a flow nests is <see cref="WorkflowFileParser.MaxDepth"/>'s own bound.</summary>
     internal const int MostSteps = 200;
@@ -150,11 +146,21 @@ public static class WorkflowValidator
     /// given, which leaves V38's config half unchecked - a definition is never checked against a configuration the
     /// caller did not choose.
     /// </param>
-    public static IReadOnlyList<string> Validate(WorkflowDefinition definition, bool hasCommitTemplate, Func<string, string?>? files, DssHarness.Core.Agents.AgentProviders? providers = null)
+    /// <param name="languages">
+    /// The names <c>codebaseGraph.languages</c> may hold, as the extractors' registry gives them
+    /// (<see cref="Codebase.CodeGraphExtractors.Languages"/>) - this check keeps no list of its own; or
+    /// <see langword="null"/> where the caller has no registry, which leaves that one rule of V52 unchecked.
+    /// </param>
+    public static IReadOnlyList<string> Validate(
+        WorkflowDefinition definition,
+        bool hasCommitTemplate,
+        Func<string, string?>? files,
+        DssHarness.Core.Agents.AgentProviders? providers = null,
+        IReadOnlyList<string>? languages = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        var check = new Check(definition, hasCommitTemplate, files, providers);
+        var check = new Check(definition, hasCommitTemplate, files, providers, languages);
         return check.Problems;
     }
 
@@ -187,6 +193,22 @@ public static class WorkflowValidator
         ArgumentNullException.ThrowIfNull(providers);
 
         return new Check(definition, hasCommitTemplate: false, files: null, providers).Models();
+    }
+
+    /// <summary>
+    /// The model each create-agent step makes its agent for, by the step's path: the first model of the first reason
+    /// step that works in it (<c>in</c>), as that step resolves it, or - where no reason step works in it - the first
+    /// model of the configuration's default tier (part 04, "What a create-agent step hands the service"). A step whose
+    /// model resolves to none is not among them; the definition's check refuses it.
+    /// </summary>
+    /// <param name="definition">A workflow's parsed definition.</param>
+    /// <param name="providers">The configuration's providers and tiers, resolved.</param>
+    public static IReadOnlyDictionary<string, string> AgentModels(WorkflowDefinition definition, DssHarness.Core.Agents.AgentProviders providers)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(providers);
+
+        return new Check(definition, hasCommitTemplate: false, files: null, providers).AgentModels();
     }
 
     /// <summary>
@@ -246,12 +268,18 @@ public static class WorkflowValidator
         /// </summary>
         private readonly HashSet<string> _refusedForEach = new(StringComparer.Ordinal);
 
-        internal Check(WorkflowDefinition definition, bool hasCommitTemplate, Func<string, string?>? files, DssHarness.Core.Agents.AgentProviders? providers = null)
+        internal Check(
+            WorkflowDefinition definition,
+            bool hasCommitTemplate,
+            Func<string, string?>? files,
+            DssHarness.Core.Agents.AgentProviders? providers = null,
+            IReadOnlyList<string>? languages = null)
         {
             _definition = definition;
             _hasCommitTemplate = hasCommitTemplate;
             _files = files;
             _providers = providers;
+            _languages = languages;
 
             DefinitionRules();
             Index(definition.Steps, parent: null);
@@ -261,6 +289,7 @@ public static class WorkflowValidator
             Cycle();
             WorkflowAnswers();
             Steps();
+            CodebaseGraph();
             Amend();
             Checkpoints();
             SharedEndings();
@@ -518,6 +547,10 @@ public static class WorkflowValidator
                     continue;
                 }
 
+                // Every step that runs may bound one attempt; a group and a step that only asks were refused the key
+                // where the file was read.
+                var limitHolds = Within(entry.Step.TimeoutMinutes, 1, WorkflowStep.MostTimeoutMinutes, $"{where}: timeoutMinutes");
+
                 switch (type.Type)
                 {
                     case "reason":
@@ -528,6 +561,7 @@ public static class WorkflowValidator
                     case "test":
                     case "run":
                     case "check-mutations":
+                    case "graphify-codebase":
                         if (entry.Step.In is not null)
                         {
                             WorksIn(entry, entry.Step.In);
@@ -555,9 +589,24 @@ public static class WorkflowValidator
                     case "ci-wait":
                         Positive(entry.Step.Limit, $"{where}: limit");
                         Within(entry.Step.AppearSeconds, 30, 3_600, $"{where}: appearSeconds");
-                        Within(entry.Step.WaitMinutes, 1, 720, $"{where}: waitMinutes");
+                        var waitHolds = Within(entry.Step.WaitMinutes, 1, 720, $"{where}: waitMinutes");
                         Within(entry.Step.PollSeconds, 10, 600, $"{where}: pollSeconds");
-                        Within(entry.Step.TimeoutMinutes, 1, 240, $"{where}: timeoutMinutes");
+
+                        // One attempt of a wait waits as long as its waitMinutes say, and reads its checks once more as
+                        // they end: a time limit not past that would end a wait that ran its course as incomplete, or race
+                        // its own answer. Weighed only where both are in their ranges, each refused on its own otherwise.
+                        if (type.Type == "ci-wait"
+                            && limitHolds
+                            && waitHolds
+                            && entry.Step.TimeoutMinutes is { } limit
+                            && (entry.Step.WaitMinutes ?? WorkflowStep.DefaultWaitMinutes) is var wait
+                            && limit <= wait)
+                        {
+                            _problems.Add(string.Create(
+                                System.Globalization.CultureInfo.InvariantCulture,
+                                $"{where}: timeoutMinutes ({limit}) is not more than its waitMinutes ({wait}{(entry.Step.WaitMinutes is null ? ", the default" : string.Empty)}); one attempt waits that long for its checks, so its time limit is longer"));
+                        }
+
                         break;
 
                     case "fold":
@@ -589,13 +638,6 @@ public static class WorkflowValidator
                         }
 
                         CommitVariablesWithoutATemplate(entry);
-
-                        Within(entry.Step.TimeoutMinutes, 1, 240, $"{where}: timeoutMinutes");
-                        break;
-
-                    case "push":
-                    case "pull-request":
-                        Within(entry.Step.TimeoutMinutes, 1, 240, $"{where}: timeoutMinutes");
                         break;
 
                     case "pause":
@@ -1045,6 +1087,31 @@ public static class WorkflowValidator
             {
                 _problems.Add($"{where} works in '{name}', which is declared after it; a worktree cannot be worked in before it is made");
             }
+            else
+            {
+                WaitsForTheAgent(entry, worksIn, "works in");
+            }
+        }
+
+        /// <summary>
+        /// A step that works in or on the agent <paramref name="create"/> makes waits for it to end: through its own
+        /// dependencies, or those of a group around it, as far as they go. One that does not could start before the agent
+        /// is made - its tree not there, and its records placed before the agent they belong to.
+        /// </summary>
+        private void WaitsForTheAgent(Entry entry, Entry create, string does)
+        {
+            // An alternative to the step that builds a work item runs in its place, with its dependencies (V44): it - and,
+            // where it is a group, every step inside it, as inside any group - waits for what the builder waits for,
+            // beside what its own dependencies reach.
+            var waits = FlowGraph.Waits(_definition, entry.Path, create.Path)
+                || (_definition.Amend is { } amend
+                    && new[] { amend.WhenChangeScope, amend.WhenRemoveScope }.Any(alternative => entry.Path == alternative || entry.Path.StartsWith(alternative + ".", StringComparison.Ordinal))
+                    && FlowGraph.Waits(_definition, amend.WhenAddScope, create.Path));
+
+            if (!waits)
+            {
+                _problems.Add($"step '{entry.Path}' {does} the agent '{create.Path}' makes, and does not wait for it: name '{create.Step.Name}', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made");
+            }
         }
 
         /// <summary>A tier and a model at one level: the model would be used, and the tier never read.</summary>
@@ -1085,6 +1152,10 @@ public static class WorkflowValidator
                 else if (agent.Step.Type != "create-agent")
                 {
                     _problems.Add($"{where} names '{named}' as its {key}, which is a {agent.Step.Type ?? "group"} step; an agent is made by a create-agent step");
+                }
+                else if (key == "of")
+                {
+                    WaitsForTheAgent(entry, agent, "works on");
                 }
             }
 
@@ -1475,23 +1546,7 @@ public static class WorkflowValidator
 
             foreach (var key in type.TemplateKeys)
             {
-                var texts = key switch
-                {
-                    "filter" => step.Filter is null ? [] : [step.Filter],
-                    "exclude" => step.Exclude,
-                    "labels" => step.Labels,
-                    "inputs" => step.Inputs.Values.ToList(),
-                    "base" => step.Base is null ? [] : [step.Base],
-                    "branch" => step.Branch is null ? [] : [step.Branch],
-                    "commit" => step.Commit is null ? [] : [step.Commit],
-                    "message" => step.Message is null ? [] : [step.Message],
-                    "variables" => step.Variables.Values.ToList(),
-                    "title" => step.Title is null ? [] : [step.Title],
-                    "question" => step.Question is null ? [] : [step.Question],
-                    _ => throw new UnreachableException($"'{key}' is marked a template key of '{type.Type}', and nothing checks it."),
-                };
-
-                foreach (var text in texts)
+                foreach (var text in FlowStepTemplates.Texts(step, key))
                 {
                     if (string.IsNullOrWhiteSpace(text))
                     {
@@ -2000,12 +2055,76 @@ public static class WorkflowValidator
         private IEnumerable<Entry> Triages()
             => _entries.Where(entry => entry.ParentPath is null && entry != _recover && entry.Step.Raised == WorkflowStep.RaisedByPreExisting);
 
-        private void Within(int? value, int least, int most, string what)
+        /// <summary>
+        /// V52: the workflow's <c>codebaseGraph</c> shapes the graph its <c>graphify-codebase</c> steps make, so it stands
+        /// only beside one; its patterns are patterns, its lists not given empty, its languages the registry's, each once,
+        /// and its values in their ranges. A graphify step's <c>in</c> is checked with every machine step's.
+        /// </summary>
+        private void CodebaseGraph()
+        {
+            if (_definition.CodebaseGraph is not { } graph)
+            {
+                return;
+            }
+
+            if (!_entries.Any(entry => entry.Step.Type == "graphify-codebase"))
+            {
+                _problems.Add("codebaseGraph shapes the run's graph, and no step of the workflow is a graphify-codebase step: say where the graph is made, or leave the block out");
+            }
+
+            foreach (var (key, patterns, leftOut) in new[] { ("include", graph.Include, "every path graphed"), ("exclude", graph.Exclude, "no path left out") })
+            {
+                if (patterns is { Count: 0 })
+                {
+                    _problems.Add($"codebaseGraph.{key} is given empty, which is never read as {leftOut}: name its patterns, or leave the key out for {leftOut}");
+                }
+
+                foreach (var pattern in patterns ?? [])
+                {
+                    if (GlobPattern.Problem(pattern) is { } typo)
+                    {
+                        _problems.Add($"codebaseGraph.{key} names the pattern '{pattern}', and it {typo}");
+                    }
+                }
+            }
+
+            if (graph.Languages is { Count: 0 })
+            {
+                _problems.Add("codebaseGraph.languages is given empty, which is never read as every one used: name the implementations, or leave the key out for every one");
+            }
+
+            foreach (var twice in (graph.Languages ?? []).GroupBy(language => language, StringComparer.Ordinal).Where(group => group.Count() > 1))
+            {
+                _problems.Add($"codebaseGraph.languages names '{twice.Key}' more than once");
+            }
+
+            if (_languages is { } known)
+            {
+                foreach (var unknown in (graph.Languages ?? []).Where(language => !known.Contains(language, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal))
+                {
+                    _problems.Add($"codebaseGraph extracts '{unknown}', which this tool has no extractor for; it extracts: {string.Join(", ", known)}");
+                }
+            }
+
+            Within(graph.MaxFileBytes, Codebase.CodebaseGraphShape.LeastMaxFileBytes, Codebase.CodebaseGraphShape.MostMaxFileBytes, "codebaseGraph.maxFileBytes");
+            Within(graph.MapTokens, 0, Codebase.CodebaseGraphShape.MostMapTokens, "codebaseGraph.mapTokens");
+
+            if (graph.Generated is { } generated && !Codebase.CodebaseGraphShape.GeneratedValues.Contains(generated, StringComparer.Ordinal))
+            {
+                _problems.Add($"codebaseGraph.generated is '{generated}', which is none of {string.Join(", ", Codebase.CodebaseGraphShape.GeneratedValues.Select(value => $"'{value}'"))}: generated code's declarations are kept, its file's entry naming why it is generated, or left out with the file listed");
+            }
+        }
+
+        /// <summary>Refuses <paramref name="value"/> outside <paramref name="least"/> to <paramref name="most"/>; whether it holds, absent among them.</summary>
+        private bool Within(int? value, int least, int most, string what)
         {
             if (value < least || value > most)
             {
-                _problems.Add($"{what} must be from {least.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} to {most.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}, found {value}");
+                _problems.Add($"{what} must be from {least.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} to {most.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}, found {value?.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+                return false;
             }
+
+            return true;
         }
 
         private static string IsAre(int count) => count == 1 ? "is" : "are";
@@ -2254,6 +2373,14 @@ public static class WorkflowValidator
                 {
                     AgentRules(providers, entry, $"workflow '{_definition.Name}' step '{entry.Path}'");
                 }
+                else if (entry.Step.Type == "create-agent" && WorkedInBy(entry) is null && DefaultTierProblem(providers) is { } problem)
+                {
+                    // A reason step that works in the agent says its model, and is checked as one; an agent no reason
+                    // step works in is made for the default tier's first model, which must then be there.
+                    _problems.Add(
+                        $"workflow '{_definition.Name}' step '{entry.Path}' makes an agent no reason step works in, which is made for the first model of the default tier, and "
+                        + problem + (providers.DefaultTier is null ? "; name the tier there" : string.Empty));
+                }
             }
 
             if (_definition.Advisor is { } advisor)
@@ -2267,14 +2394,59 @@ public static class WorkflowValidator
             }
         }
 
+        /// <summary>The model each create-agent step makes its agent for, by its path, where one resolves (<see cref="WorkflowValidator.AgentModels"/>).</summary>
+        internal IReadOnlyDictionary<string, string> AgentModels()
+        {
+            var models = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            if (_providers is not { } providers)
+            {
+                return models;
+            }
+
+            foreach (var entry in _entries.Where(entry => entry.Step.Type == "create-agent"))
+            {
+                var (tier, model) = WorkedInBy(entry) is { } reason ? NamedBy(reason) : (null, null);
+
+                if (providers.ModelsFor(tier, model) is [var first, ..])
+                {
+                    models[entry.Path] = first.Model.Code;
+                }
+            }
+
+            return models;
+        }
+
+        /// <summary>The first reason step, in the order declared, that works in the agent the create-agent step <paramref name="create"/> makes; null where none does.</summary>
+        private Entry? WorkedInBy(Entry create)
+            => _entries.FirstOrDefault(entry => entry.Step.Type == "reason" && entry.Step.In is { } name && ReferenceEquals(Scope(entry, name), create));
+
         /// <summary>One step's config half: its model, its client and each model's effort, resolved and checked.</summary>
         private void AgentRules(DssHarness.Core.Agents.AgentProviders providers, Entry entry, string where)
         {
             var step = entry.Step;
-            var inherited = Inherited(entry);
+            var (tier, model) = NamedBy(entry);
 
-            AgentRules(providers, inherited?.Tier ?? step.Tier, inherited?.Model ?? step.Model, step.Effort, step.EffortByModel, step.Client, where);
+            AgentRules(providers, tier, model, step.Effort, step.EffortByModel, step.Client, where);
         }
+
+        /// <summary>
+        /// The tier and the model a reason step runs on, as it names them: its own, or - where it names neither and goes
+        /// on with another's work - those it inherits (<see cref="Inherited"/>). Both null where it runs on the default tier.
+        /// </summary>
+        private (string? Tier, string? Model) NamedBy(Entry reason)
+            => Inherited(reason) ?? (reason.Step.Tier, reason.Step.Model);
+
+        /// <summary>
+        /// Why the configuration's default tier gives no model, as a refusal ends: it names none, or one tierConfig does
+        /// not define; null where it gives one.
+        /// </summary>
+        private static string? DefaultTierProblem(DssHarness.Core.Agents.AgentProviders providers)
+            => providers.DefaultTier is not { } tier
+                ? "the configuration names no defaults.agentTier"
+                : providers.ModelsOf(tier).Count == 0
+                    ? $"defaults.agentTier names '{tier}', which tierConfig does not define. Defined: {string.Join(", ", providers.Tiers.OrderBy(name => name, StringComparer.Ordinal))}"
+                    : null;
 
         /// <summary>
         /// The tier or model a step that goes on with another's work inherits, following the chain of resumes to the
@@ -2319,8 +2491,8 @@ public static class WorkflowValidator
             foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason"))
             {
                 var step = entry.Step;
-                var inherited = Inherited(entry);
-                AddLevels($"step '{entry.Path}'", inherited?.Tier ?? step.Tier, inherited?.Model ?? step.Model, step.Effort, step.EffortByModel, providers, lines);
+                var (tier, model) = NamedBy(entry);
+                AddLevels($"step '{entry.Path}'", tier, model, step.Effort, step.EffortByModel, providers, lines);
             }
 
             if (_definition.Advisor is { } advisor)
@@ -2352,7 +2524,7 @@ public static class WorkflowValidator
 
             void Need(string where, string? tier, string? model, string? client)
             {
-                foreach (var (provider, at) in ModelsRunOn(providers, tier, model).Select((entry, at) => (entry.Provider, at)))
+                foreach (var (provider, at) in providers.ModelsFor(tier, model).Select((entry, at) => (entry.Provider, at)))
                 {
                     var missing = providers.KeysRead(provider, client).Where(name => !held.Contains(name, StringComparer.OrdinalIgnoreCase)).ToList();
 
@@ -2385,9 +2557,8 @@ public static class WorkflowValidator
 
             foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason"))
             {
-                var step = entry.Step;
-                var inherited = Inherited(entry);
-                Need($"step '{entry.Path}'", inherited?.Tier ?? step.Tier, inherited?.Model ?? step.Model, step.Client);
+                var (tier, model) = NamedBy(entry);
+                Need($"step '{entry.Path}'", tier, model, entry.Step.Client);
             }
 
             if (_definition.Advisor is { } advisor)
@@ -2416,27 +2587,14 @@ public static class WorkflowValidator
 
             IEnumerable<(string? Tier, string? Model)> agents = _entries
                 .Where(entry => entry.Step.Type == "reason")
-                .Select(entry => Inherited(entry) ?? (entry.Step.Tier, entry.Step.Model))
+                .Select(NamedBy)
                 .Concat(_definition.Advisor is { } advisor ? [(advisor.Tier, advisor.Model)] : [])
                 .Concat(_definition.Reporter is { } reporter ? [(reporter.Tier, reporter.Model)] : []);
 
             return [.. agents
-                .SelectMany(agent => ModelsRunOn(providers, agent.Tier, agent.Model))
+                .SelectMany(agent => providers.ModelsFor(agent.Tier, agent.Model))
                 .DistinctBy(entry => entry.Model.Code, StringComparer.Ordinal)];
         }
-
-        /// <summary>
-        /// The models an agent may run on, in the order they are tried: the model it names, else its tier's, else the
-        /// configuration's default tier's - the one resolution every line said of an agent reads. Empty where what it
-        /// names resolves to nothing, which the checks refuse on their own.
-        /// </summary>
-        private static IReadOnlyList<(Configuration.AgentProviderConfig Provider, Configuration.AgentModelConfig Model)> ModelsRunOn(
-            DssHarness.Core.Agents.AgentProviders providers,
-            string? tier,
-            string? model)
-            => model is { } named
-                ? (providers.Of(named) is { } of ? [(of.Provider, of.Model)] : [])
-                : providers.ModelsOf(tier ?? providers.DefaultTier ?? string.Empty);
 
         private void AddLevels(
             string where,
@@ -2447,7 +2605,7 @@ public static class WorkflowValidator
             DssHarness.Core.Agents.AgentProviders providers,
             List<string> lines)
         {
-            var models = ModelsRunOn(providers, tier, model);
+            var models = providers.ModelsFor(tier, model);
 
             if (models.Count == 0)
             {
@@ -2508,19 +2666,13 @@ public static class WorkflowValidator
                 // A step that names neither a tier nor a model runs on the configuration's default tier, which nothing
                 // builds in: where the config names none, the step is refused naming the two places this build reads
                 // one from (an agent definition's own tier is read when definitions are, a later slice's).
-                if (providers.DefaultTier is null)
+                if (DefaultTierProblem(providers) is { } problem)
                 {
-                    _problems.Add($"{where} names neither a tier nor a model, and the configuration names no defaults.agentTier; say one on the step, or under defaults.agentTier");
+                    _problems.Add($"{where} names neither a tier nor a model, and {problem}{(providers.DefaultTier is null ? "; say one on the step, or under defaults.agentTier" : string.Empty)}");
                     return;
                 }
 
-                var defaults = providers.ModelsOf(providers.DefaultTier);
-
-                if (defaults.Count == 0)
-                {
-                    _problems.Add($"{where} names neither a tier nor a model, and defaults.agentTier names '{providers.DefaultTier}', which tierConfig does not define. Defined: {string.Join(", ", providers.Tiers.OrderBy(name => name, StringComparer.Ordinal))}");
-                    return;
-                }
+                var defaults = providers.ModelsOf(providers.DefaultTier!);
 
                 // The default tier is a tier like a named one: its models are checked each on its own.
                 if (client is not null)
@@ -2952,6 +3104,9 @@ public static class WorkflowValidator
 
         /// <summary>The configuration's providers and tiers, where the caller gave them: V38's config half is checked only under a configuration the caller chose.</summary>
         private readonly DssHarness.Core.Agents.AgentProviders? _providers;
+
+        /// <summary>The names <c>codebaseGraph.languages</c> may hold, where the caller gave the registry's; <see langword="null"/> where it gave none.</summary>
+        private readonly IReadOnlyList<string>? _languages;
 
         /// <summary>Each reason step's schema as a reading, by the path its <c>outputs</c> names; <see langword="null"/> where it types nothing.</summary>
         private readonly Dictionary<string, JsonSchemaSubset.Reading?> _schemas = new(StringComparer.Ordinal);

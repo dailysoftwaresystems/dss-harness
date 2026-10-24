@@ -84,6 +84,14 @@ public interface IGitClient
     Task<IReadOnlyList<GitName>> ListNamesChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Every path whose entry differs between the commits <paramref name="from"/> and <paramref name="to"/> - its content,
+    /// its mode, its addition or its deletion, a submodule's commit among them - each name as git holds it: a rename is its
+    /// two names. Neither the work tree nor the index is read. Nothing is written.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not compare the two commits: one this repository does not hold, for one.</exception>
+    Task<IReadOnlyList<GitName>> ListNamesChangedBetweenAsync(string directory, string from, string to, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// What <paramref name="commit"/> holds at each of <paramref name="paths"/>: a file and its blob, a directory, a
     /// submodule's entry and the commit it names - whether or not this repository holds that commit, on every version of
     /// git - or nothing. One git process for them all, and one listing of the commit where git could not read one of them
@@ -230,10 +238,22 @@ public interface IGitClient
 
     /// <summary>
     /// The index entries below <paramref name="directory"/>, with paths relative to it, and the flags
-    /// that can hide an edit from status.
+    /// that can hide an edit from status, as <c>ls-files --stage -v -z</c> lists them - a conflicted path once
+    /// for each of its stages - without taking the index's lock.
     /// </summary>
-    /// <exception cref="HarnessException">git could not read the index.</exception>
+    /// <exception cref="HarnessException">git could not read the index, or listed what this build cannot read.</exception>
     Task<IReadOnlyList<GitIndexEntry>> ListIndexAsync(string directory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// What the index lists of <paramref name="paths"/> alone, as <see cref="ListIndexAsync(string, CancellationToken)"/>
+    /// lists every entry: each path named as it is spelt, never read as a pattern, and given in batches no command line
+    /// outgrows.
+    /// </summary>
+    /// <param name="directory">The directory git runs in, which the paths are relative to.</param>
+    /// <param name="paths">The paths, with forward separators.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not read the index, or listed what this build cannot read.</exception>
+    Task<IReadOnlyList<GitIndexEntry>> ListIndexAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Makes the index of the repository at <paramref name="directory"/> hold exactly <paramref name="paths"/>:
@@ -431,6 +451,12 @@ public interface IGitClient
     /// </exception>
     Task<string?> MergeBaseAsync(string directory, string first, IReadOnlyList<string> others, CancellationToken cancellationToken = default);
 
+    /// <summary>The branch the HEAD at <paramref name="directory"/> is on, as git names it short, or <see langword="null"/> where it is on none - a detached HEAD.</summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git could not answer.</exception>
+    Task<string?> GetBranchAsync(string directory, CancellationToken cancellationToken = default);
+
     /// <summary>
     /// The commits an unfinished merge in the work tree at <paramref name="directory"/> is bringing into HEAD, as its
     /// MERGE_HEAD records them, or none where no merge is in progress. The work tree then holds what they bring, as far
@@ -584,6 +610,42 @@ public interface IGitClient
     /// (<see cref="GitHeadMoved.LeftAside"/>), and the next pack sent clears it or says why it cannot.
     /// </remarks>
     Task<GitHeadMoved> TakeHistoryAsync(string directory, GitHistoryTaken taken, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Every path of the tree at <paramref name="directory"/> whose working file is not what the index holds - changed,
+    /// gone, conflicted - every path changed in the index alone, its working file the index's
+    /// (<see cref="GitWorkingFile.Differs"/> false), and every untracked one git does not ignore, as <c>status --porcelain=v2
+    /// -z --untracked-files=all --no-renames</c> lists them, without taking the index's lock. A path marked assume-unchanged
+    /// or skip-worktree is not among them: status does not look at its file.
+    /// </summary>
+    /// <param name="directory">The top of the tree.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git failed, or listed what this build cannot read.</exception>
+    Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// What the working tree's status says of <paramref name="paths"/> alone, as
+    /// <see cref="ListWorkingFilesAsync(string, CancellationToken)"/> says it of every path: each path named as it is spelt,
+    /// never read as a pattern, and given in batches no command line outgrows.
+    /// </summary>
+    /// <param name="directory">The top of the tree.</param>
+    /// <param name="paths">The paths, relative to the tree's top with forward separators.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git failed, or listed what this build cannot read.</exception>
+    Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The blob id git would store each of <paramref name="paths"/>' working files as, its filters applied, in the same
+    /// order - nothing written, no lock taken, the paths given on standard input <see cref="GitClient.HashBatch"/> at a time
+    /// - and null for each whose file was not there when git looked: a batch git could not hash is asked again without the
+    /// files found gone, and a file at a time only where that fails too, so a file that went while it was hashed fails
+    /// nothing but its own answer.
+    /// </summary>
+    /// <param name="directory">The top of the tree, which the paths are relative to.</param>
+    /// <param name="paths">The files.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git failed on a file that is there, or answered what this build cannot read.</exception>
+    Task<IReadOnlyList<string?>> HashWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
 
     /// <summary>Runs an arbitrary git subcommand, returning its exit code and output.</summary>
     Task<GitCommandResult> RunAsync(

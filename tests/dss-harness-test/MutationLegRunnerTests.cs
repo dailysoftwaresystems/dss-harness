@@ -4594,10 +4594,10 @@ public sealed class MutationLegRunnerTests
     /// </summary>
     private sealed class Unreadable(IFileSystem inner, bool denied, params string[] names) : PassThroughFileSystem(inner)
     {
-        public override byte[] ReadAllBytes(string path)
+        public override Stream OpenRead(string path)
             => names.Contains(Path.GetFileName(path), StringComparer.Ordinal)
                 ? throw Raised(denied, $"'{Path.GetFileName(path)}' is held by another process.")
-                : base.ReadAllBytes(path);
+                : base.OpenRead(path);
     }
 
     /// <summary>
@@ -4618,8 +4618,8 @@ public sealed class MutationLegRunnerTests
             }
         }
 
-        public override byte[] ReadAllBytes(string path)
-            => _putBack.ContainsKey(path) ? throw Raised(denied, "the disk went away.") : base.ReadAllBytes(path);
+        public override Stream OpenRead(string path)
+            => _putBack.ContainsKey(path) ? throw Raised(denied, "the disk went away.") : base.OpenRead(path);
     }
 
     /// <summary>A file system, recording each date a file was given through it, with what the file held then.</summary>

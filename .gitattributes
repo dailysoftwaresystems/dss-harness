@@ -40,6 +40,10 @@
 # and every text must occur in its site as it is stored, so all of it is named here.
 /tests/mutation-fixture/** text eol=lf
 
+# The measured arm registries the by-arm merge's tests read byte for byte, whose merge
+# is held to its bytes: named for the same reason.
+/tests/dss-harness-test/fixtures/registry-merge/** text eol=lf
+
 # Binary types, declared so no text rule above can rewrite their bytes: a CR or LF
 # byte inside an image is data. These lines stay last, because the last matching line
 # wins.

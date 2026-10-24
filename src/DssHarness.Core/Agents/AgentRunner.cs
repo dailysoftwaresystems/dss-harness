@@ -1,10 +1,12 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
-using System.Text.Json;
+using System.Text;
 using System.Threading.Channels;
+using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 
 namespace DssHarness.Core.Agents;
@@ -17,9 +19,10 @@ namespace DssHarness.Core.Agents;
 /// <remarks>
 /// <para>
 /// The skeleton of it: the client is found by its name among those registered, the prompt is filled from its template
-/// by name, and the models are as the step named them. The resolution of tiers and fallbacks, the continuation of
-/// earlier work and the policy a run is held to come with their own slices and join the request then; nothing here
-/// names a provider, and nothing here runs anything live.
+/// by name, and the models are as the step named them. The policy's ground, the credential, the program and the names
+/// withheld are the request's and handed to the client as they are; the resolution of tiers and fallbacks and the
+/// continuation of earlier work come with their own slices and join the request then. Nothing here names a provider,
+/// and nothing here runs anything live.
 /// </para>
 /// <para>
 /// Whatever the end, the record says it: every run's stream begins with the runner's <see cref="RunStarted"/> and ends
@@ -31,14 +34,29 @@ namespace DssHarness.Core.Agents;
 /// <para>
 /// A run that never began is recorded as one, in the step's own directory: its stream's two ends and a
 /// <c>result.json</c> saying <see cref="AgentRunStatus.NotStarted"/> and why. A step that was not started is a step of
-/// the run all the same - its record says it was not, and for which of the three reasons - and the result and every
-/// exit name where the step's records are, which a step left without any would not have.
+/// the run all the same - its record says it was not, and for which reason <see cref="AgentNotStartedBecause"/> names -
+/// and the result and every exit name where the step's records are, which a step left without any would not have.
+/// </para>
+/// <para>
+/// Every launch of every client passes here, so this is where no agent starts while this tool itself runs elevated: such
+/// a step is recorded <see cref="AgentNotStartedBecause.Elevated"/> before any client is taken, in the words of the
+/// policy's own refusal (<see cref="AgentPolicy.RefusedWhileElevated"/>), for every rule of that policy assumes a user's
+/// powers. So is where a step whose policy resolves the agent's paths from another directory than the one it starts in -
+/// or from one that cannot be compared with it, blank or holding a character no path does - is recorded
+/// <see cref="AgentNotStartedBecause.ConfigurationWrong"/>: that policy would decide for places it is not asked about.
+/// </para>
+/// <para>
+/// A result is what <c>result.json</c> says and what the engine reads: one a client answers that does not hold together
+/// (<see cref="AgentRunResult.Problem"/>) ends the run failed, naming why, keeping what a failed run keeps
+/// (<see cref="AgentRunResult.FailedFor"/>) - bare where what it would keep is itself what is wrong - and none is
+/// written that does not.
 /// </para>
 /// </remarks>
 /// <param name="clients">The clients registered, one of which works each step.</param>
 /// <param name="fileSystem">The file system the step's records are kept on.</param>
+/// <param name="platform">Whether this tool itself runs elevated, which no agent starts under, and how it compares names.</param>
 /// <param name="clock">When each event happened.</param>
-public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem fileSystem, TimeProvider clock) : IAgentRunner
+public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem fileSystem, IHostPlatform platform, TimeProvider clock) : IAgentRunner
 {
     /// <summary>The run's own record, in the step's directory: the result as it ended.</summary>
     public const string ResultFileName = "result.json";
@@ -49,6 +67,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     private readonly IReadOnlyList<IAgentClient> _clients = [.. (clients ?? throw new ArgumentNullException(nameof(clients)))];
 
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
+
+    private readonly IHostPlatform _platform = platform ?? throw new ArgumentNullException(nameof(platform));
 
     private readonly TimeProvider _clock = clock ?? throw new ArgumentNullException(nameof(clock));
 
@@ -99,11 +119,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 // whatever the client made of its stop, it failed, and its result names why.
                 await pump.FinishAsync(lost =>
                 {
-                    result = lost is null ? worked : worked with
-                    {
-                        Status = AgentRunStatus.Failed,
-                        Error = mask.Redact($"The step's stored stream '{stream.FilePath}' could not be written, so the run was stopped: {lost.Message}"),
-                    };
+                    result = lost is null
+                        ? worked
+                        : worked.FailedFor(mask.Redact($"The step's stored stream '{stream.FilePath}' could not be written, so the run was stopped: {lost.Message}"));
 
                     return new RunFinished(result.Status, result.Error);
                 }).ConfigureAwait(false);
@@ -136,11 +154,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
         if (unclosed is not null && !recordLost)
         {
-            result = result with
-            {
-                Status = AgentRunStatus.Failed,
-                Error = mask.Redact($"The step's stored stream '{stream.FilePath}' could not be closed whole, so its last lines may not be on the disk: {unclosed.Message}"),
-            };
+            result = result.FailedFor(mask.Redact($"The step's stored stream '{stream.FilePath}' could not be closed whole, so its last lines may not be on the disk: {unclosed.Message}"));
         }
 
         // The record is whole, closed, and the run has ended: the result is written after the stream that says how it
@@ -237,6 +251,31 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         AgentEventPump pump,
         CancellationToken cancellationToken)
     {
+        if (_platform.IsPrivilegedProcess)
+        {
+            // Never begun, whatever the step names: no client is taken while this tool runs past a user's powers.
+            var refused = (AgentPolicyAnswer.Denied)AgentPolicy.RefusedWhileElevated();
+
+            return (new AgentRunResult(
+                AgentRunStatus.NotStarted,
+                AgentNotStartedBecause.Elevated,
+                Model: step.Model,
+                Error: $"The step's agent was not started: {refused.Reason}."),
+                null);
+        }
+
+        if (step.Ground is { } ground && Elsewhere(ground.WorkingDirectory, step.Workspace.WorkingDirectory) is { } elsewhere)
+        {
+            // Never begun: a policy that resolves the agent's paths from one directory while it starts in another - or
+            // in one that cannot be told from it - decides for places it is not asked about.
+            return (new AgentRunResult(
+                AgentRunStatus.NotStarted,
+                AgentNotStartedBecause.ConfigurationWrong,
+                Model: step.Model,
+                Error: elsewhere),
+                null);
+        }
+
         if (Client(step) is not { } client)
         {
             // Never begun, and the configuration is why: a record of the step exists all the same, saying so.
@@ -250,12 +289,25 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 null);
         }
 
-        var messages = new AgentMessages();
+        var messages = step.Messages ?? new AgentMessages();
 
         try
         {
             var result = await client.RunAsync(Resolved(step, directory, mask, messages), pump, pump.Stopping).ConfigureAwait(false);
-            return (result, null);
+
+            if (result.Problem() is not { } wrong)
+            {
+                return (result, null);
+            }
+
+            // An answer that does not hold together is no ending the engine could read: the run failed, saying why, and
+            // keeps what a failed run keeps of what the client reported - what it did and used, the children it could not
+            // end, the session files it removed, the keys refused. Where what it keeps is itself what is wrong, it fails
+            // bare.
+            var error = mask.Redact($"Client '{client.Name}' answered a result that does not hold together: {wrong}.");
+            var failed = result.FailedFor(error);
+
+            return (failed.Problem() is null ? failed : new AgentRunResult(AgentRunStatus.Failed, Model: step.Model, Error: error), null);
         }
         catch (Exception ex)
         {
@@ -273,6 +325,27 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         }
     }
 
+    /// <summary>
+    /// Why a policy resolving the agent's paths from <paramref name="resolvedFrom"/> is not the agent's, which starts in
+    /// <paramref name="startsIn"/>: the two are other directories, or one is no directory the two could be compared by
+    /// (blank, or holding a character no path does); null where they are the same.
+    /// </summary>
+    /// <param name="resolvedFrom">The directory the step's policy resolves the agent's paths from.</param>
+    /// <param name="startsIn">The directory the agent starts in.</param>
+    private string? Elsewhere(string resolvedFrom, string startsIn)
+    {
+        try
+        {
+            return PathContainment.AreSame(resolvedFrom, startsIn, _platform.PathComparison)
+                ? null
+                : $"The step's policy resolves the agent's paths from '{resolvedFrom}', but the agent starts in '{startsIn}'.";
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or System.Security.SecurityException)
+        {
+            return $"The step's policy resolves the agent's paths from '{resolvedFrom}', and the agent starts in '{startsIn}': the two cannot be compared ({ex.Message}).";
+        }
+    }
+
     /// <summary>The client the step names, or the one there is where it names none; null where there is none.</summary>
     /// <param name="step">The step.</param>
     private IAgentClient? Client(AgentStepRequest step)
@@ -283,8 +356,16 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <summary>Writes the run's own record beside its stream, in one step, so that one there is one written whole.</summary>
     /// <param name="directory">The step's own directory.</param>
     /// <param name="result">How the run ended.</param>
+    /// <exception cref="InvalidOperationException">The result does not hold together, which none the runner makes does.</exception>
     private void Ended(string directory, AgentRunResult result)
-        => _fileSystem.WriteAllTextAtomic(Path.Combine(directory, ResultFileName), JsonSerializer.Serialize(result, JsonStateFile.Options) + "\n");
+    {
+        if (result.Problem() is { } problem)
+        {
+            throw new InvalidOperationException($"Refusing to write a result that does not read back: {problem}.");
+        }
+
+        JsonStateFile.Write(_fileSystem, Path.Combine(directory, ResultFileName), result);
+    }
 
     /// <summary>The step's run, as the client takes it: the prompt filled, the places as they are, the directory its own.</summary>
     /// <param name="step">The step.</param>
@@ -307,8 +388,15 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             [],
             mask,
             directory,
-            new AgentHandoffSignal(Bound(step)),
-            messages);
+            step.Handoff ?? new AgentHandoffSignal(Bound(step)),
+            messages)
+        {
+            Ground = step.Ground,
+            Credential = step.Credential,
+            Program = step.Program,
+            ProgramVersion = step.ProgramVersion,
+            Withheld = step.Withheld,
+        };
 
     /// <summary>The step's own directory, as the one owner of the paths spells it.</summary>
     /// <param name="step">The step.</param>
@@ -328,14 +416,24 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <param name="template">The template.</param>
     /// <param name="values">Its values.</param>
     /// <remarks>
-    /// The grammar of a prompt's own placeholders comes with the definition read; this fills a name where it stands,
-    /// reading the template once so a value that names another value is never filled in its turn.
+    /// Read by the one template grammar (<see cref="Orchestration.Flow.FlowTemplate.Pieces"/>): a brace doubled stands for
+    /// one, another expander's <c>${...}</c> is left as written, and a placeholder this step has no value for stands as
+    /// written, as does the rest of a template from a placeholder never closed. The template is read once, so a value
+    /// that names another value is never filled in its turn.
     /// </remarks>
     private static string Filled(string template, IReadOnlyDictionary<string, string> values)
-        => System.Text.RegularExpressions.Regex.Replace(
-            template,
-            @"\{(\w+)\}",
-            matched => values.TryGetValue(matched.Groups[1].Value, out var value) ? value : matched.Value);
+    {
+        var filled = new StringBuilder(template.Length);
+
+        foreach (var piece in Orchestration.Flow.FlowTemplate.Pieces(template))
+        {
+            filled.Append(piece.Kind != Orchestration.Flow.FlowTemplate.PieceKind.Placeholder
+                ? piece.Text
+                : values.TryGetValue(piece.Name, out var value) ? value : $"{{{piece.Text}}}");
+        }
+
+        return filled.ToString();
+    }
 
     /// <summary>One sink that takes each event into a channel, as the front end reads it; nothing once no one reads.</summary>
     /// <param name="yielded">The channel the events are yielded through.</param>
