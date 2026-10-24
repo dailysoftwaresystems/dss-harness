@@ -1,0 +1,1 @@
+{"nodes":[{"id":"pubspec:packages/geometry/pubspec.yaml","kind":"project","name":"geometry","qualified":"packages/geometry/pubspec.yaml","start":1,"end":2,"signature":"name: geometry","modifiers":[]}],"scopes":[],"imports":[],"addressRoots":[{"prefix":"package:geometry/","directory":"lib"}],"references":[],"dynamic":[]}

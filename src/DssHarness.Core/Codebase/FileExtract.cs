@@ -128,6 +128,8 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
         }
 
         return (Imports ?? []).Select(import => import?.Problem(lineCount) is { } wrong ? $"an import of '{import.Target}': {wrong}" : import is null ? "it holds an import that is null" : null).FirstOrDefault(found => found is not null)
+            ?? (Imports ?? []).Select((import, at) => import.Fallback && (at == 0 || Imports![at - 1].Form == CodeImportForms.Scope)
+                ? $"its import of '{import.Target}' stands in for the import before it, and no import of a file is before it" : null).FirstOrDefault(found => found is not null)
             ?? (AddressRoots ?? []).Select(root => root is null || string.IsNullOrWhiteSpace(root.Prefix) || string.IsNullOrWhiteSpace(root.Directory) ? "it holds an address root with no prefix or no directory" : null).FirstOrDefault(found => found is not null)
             ?? (References ?? []).Select(reference => reference is null ? "it holds a reference that is null"
                 : !ids.ContainsKey(reference.From) ? $"a reference to '{reference.Name}' is made from '{reference.From}', which it holds no node of"
@@ -163,12 +165,23 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     internal static bool Within(int line, int lineCount) => line >= 1 && line <= lineCount;
 
     /// <summary>
+    /// The line of a file of <paramref name="lineCount"/> lines nearest <paramref name="line"/>: what a reader's position
+    /// before the file's first line or past its last is said as, so every line an extract names is the file's.
+    /// </summary>
+    /// <param name="line">A line a reader names, from 1.</param>
+    /// <param name="lineCount">The file's lines.</param>
+    public static int LineWithin(int line, int lineCount) => Math.Clamp(line, 1, Math.Max(lineCount, 1));
+
+    /// <summary>
     /// Whether <paramref name="text"/> is whole UTF-16 - no surrogate apart from its pair - as a record is written in and
     /// read back: a cut that splits a pair is no text a store holds.
     /// </summary>
-    internal static bool IsWhole(string text)
+    internal static bool IsWhole(string text) => Apart(text, 0) < 0;
+
+    /// <summary>The index of the first surrogate apart from its pair in <paramref name="text"/> from <paramref name="from"/> on; -1 where none is.</summary>
+    internal static int Apart(string text, int from)
     {
-        for (var at = 0; at < text.Length; at++)
+        for (var at = from; at < text.Length; at++)
         {
             if (char.IsHighSurrogate(text[at]) && at + 1 < text.Length && char.IsLowSurrogate(text[at + 1]))
             {
@@ -176,16 +189,16 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             }
             else if (char.IsSurrogate(text[at]))
             {
-                return false;
+                return at;
             }
         }
 
-        return true;
+        return -1;
     }
 
     /// <summary>Every text the extract holds, each of which a store writes.</summary>
     private IEnumerable<string> Texts()
-        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id, node.Kind, node.Name, node.Qualified, node.Signature, node.SubKind, node.Scope, node.Parent, node.Summary, node.ValueType, node.Extends, .. node.Modifiers ?? []])
+        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id, node.Kind, node.Name, node.Qualified, node.Signature, node.SubKind, node.Scope, node.Parent, node.Summary, node.ValueType, node.Extends, node.SeenIn, .. node.Modifiers ?? [], .. node.Exports ?? []])
             .Concat((Scopes ?? []).SelectMany(scope => (string?[])[scope.Name, scope.Parent]))
             .Concat((Imports ?? []).SelectMany(import => (string?[])[import.Form, import.Target, import.Prefix, .. import.Show ?? [], .. import.Hide ?? []]))
             .Concat((AddressRoots ?? []).SelectMany(root => (string?[])[root.Prefix, root.Directory]))
@@ -257,6 +270,23 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
     public string? Extends { get; init; }
 
     /// <summary>
+    /// The scope whose declarations alone see it, by its qualified name, where it is kept to them: a declaration written in
+    /// that scope, or in a scope inside it, sees it, and one anywhere else does not - a Dart library's private name, which
+    /// the library's file and its parts see and no importer does. <see langword="null"/> where every declaration that
+    /// reaches it sees it.
+    /// </summary>
+    public string? SeenIn { get; init; }
+
+    /// <summary>
+    /// The names another file imports it by besides its own, where it is exported so - a JavaScript module's
+    /// <c>default</c>, the name an <c>export { a as b }</c> gives it: an import of its file - or of a file that exports
+    /// that file's names - finds it by one of them whatever scope <see cref="SeenIn"/> keeps it to, and nothing else finds
+    /// it by one: no reference written in its own file, and none in the repository by name; <see langword="null"/> where it
+    /// is exported by none.
+    /// </summary>
+    public IReadOnlyList<string>? Exports { get; init; }
+
+    /// <summary>
     /// The SHA-256 of its lines (<see cref="CodeGraphIds.Digest"/>): set by the core once the implementation has answered,
     /// never by it, and what says whether the bytes served are the ones extracted.
     /// </summary>
@@ -280,6 +310,8 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
             : MinArity is < 0 || (MaxArity is { } most && (MinArity is not { } least || most < least)) ? "its arity is no range of argument counts"
             : ValueType is { } valueType && string.IsNullOrWhiteSpace(valueType) ? "its value's type is empty"
             : Extends is { } extends && string.IsNullOrWhiteSpace(extends) ? "the type it extends is empty"
+            : SeenIn is { } seenIn && string.IsNullOrWhiteSpace(seenIn) ? "the scope it is seen in is empty"
+            : Exports is { } exports && (exports.Count == 0 || exports.Any(string.IsNullOrWhiteSpace)) ? "a name it is exported by is empty, or it lists none"
             : Digest is { } digest && !OrchestrationRules.IsDigest(digest) ? "its digest is no SHA-256"
             : null;
 }
@@ -319,6 +351,29 @@ public sealed record ExtractImport(string Form, string Target, int Line)
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Global { get; init; }
 
+    /// <summary>
+    /// Whether it stands in for the import before it, of a file: it is taken only where that one - and each that one
+    /// stands in for in turn - names no file of the tree, so a run of imports is one import, the first of them that names a
+    /// file - as <c>#include "x.h"</c> looks beside its file, then anywhere in the tree.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Fallback { get; init; }
+
+    /// <summary>
+    /// Whether it is an export: what the file it names makes visible - its filters applied - is made visible to every file
+    /// that imports this one, and not to this file itself, as Dart's <c>export</c> and JavaScript's <c>export ... from</c>.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Export { get; init; }
+
+    /// <summary>
+    /// Whether the file it names shares its imports with this one: what that file imports - each import's filters and
+    /// prefix with it - this file imports too, after its own, as a Dart part does its library's. What the file it names
+    /// shares in turn is not followed.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Shares { get; init; }
+
     /// <summary>Whether the import makes <paramref name="name"/> visible, by its filters.</summary>
     /// <param name="name">A simple name.</param>
     public bool Lets(string name)
@@ -330,6 +385,11 @@ public sealed record ExtractImport(string Form, string Target, int Line)
             : string.IsNullOrWhiteSpace(Target) ? "it names nothing"
             : !FileExtract.Within(Line, lineCount) ? string.Create(CultureInfo.InvariantCulture, $"it is on line {Line}, outside the file's {lineCount}")
             : Prefix is { } prefix && string.IsNullOrWhiteSpace(prefix) ? "its prefix is empty"
+            : Fallback && Form == CodeImportForms.Scope ? "it is of a scope, and stands in for another import: only an import of a file does"
+            : Export && Form == CodeImportForms.Scope ? "it is of a scope, and is an export: only an import of a file is exported"
+            : Export && Prefix is not null ? "it is an export with a prefix: an export makes names visible by themselves"
+            : Shares && Form == CodeImportForms.Scope ? "it is of a scope, and shares its imports: only a file's are shared"
+            : Shares && (Export || Prefix is not null || Show is not null || Hide is not null) ? "it shares its imports, and is an export or has a prefix or a filter: what is shared is the file's imports as they are"
             : null;
 }
 
@@ -342,7 +402,7 @@ public static class CodeImportForms
     /// <summary>A file, by a path relative to the importing file's directory.</summary>
     public const string Relative = "relative";
 
-    /// <summary>A file, by an address whose prefix an address root gives a directory (<see cref="ExtractAddressRoot"/>).</summary>
+    /// <summary>A file, by an address an address root gives a meaning (<see cref="ExtractAddressRoot"/>): a directory its prefix stands for, or the one file a whole address is.</summary>
     public const string Address = "address";
 
     /// <summary>A file, by the ending of its path: every file of the tree whose path ends so.</summary>
@@ -352,10 +412,30 @@ public static class CodeImportForms
     public static IReadOnlyList<string> All { get; } = [Scope, Relative, Address, Ending];
 }
 
-/// <summary>What an address prefix means, as a project file declares it: <c>package:foo/</c> is the directory <c>lib/</c> beside it.</summary>
-/// <param name="Prefix">The prefix of an address.</param>
-/// <param name="Directory">The directory it stands for, relative to the declaring file's own, with forward separators.</param>
-public sealed record ExtractAddressRoot(string Prefix, string Directory);
+/// <summary>
+/// What an address prefix means, as a project file declares it: <c>package:foo/</c> is the directory <c>lib/</c> beside
+/// it, and every address it begins is a path under that directory - or, where it is <see cref="Whole"/>, one address alone
+/// is one file, as an npm package's name is its entry. An address is the first root's that matches it and names a file of
+/// the tree: first the <see cref="Local"/> roots of the files in whose directories the importing file is, the nearest
+/// file's first; then every other; in each, the longest prefix first, roots of one prefix in the order their files declare
+/// them, the files in their paths' order.
+/// </summary>
+/// <param name="Prefix">The prefix of an address, or the whole address of one file.</param>
+/// <param name="Directory">The directory it stands for - the file, for a whole address - relative to the declaring file's own, with forward separators.</param>
+public sealed record ExtractAddressRoot(string Prefix, string Directory)
+{
+    /// <summary>Whether <see cref="Prefix"/> is a whole address, which <see cref="Directory"/> - a file - is the one file of.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Whole { get; init; }
+
+    /// <summary>
+    /// Whether it gives its meaning to the addresses only the files in its file's directory, or below it, import - a
+    /// TypeScript project's path mappings, which its own files resolve by, before any other way - rather than to every
+    /// file's, as a package's name is everyone's.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Local { get; init; }
+}
 
 /// <summary>One reference a file makes, by name, for the linker to resolve into an edge.</summary>
 /// <param name="From">The id of the node of the extract it is made in.</param>
@@ -367,7 +447,7 @@ public sealed record ExtractReference(string From, string Kind, string Name, int
     /// <summary>How many arguments a call gives; <see langword="null"/> where it is no call, or that is not known.</summary>
     public int? Arity { get; init; }
 
-    /// <summary>Where the name is looked for, and nowhere else, where the code says: a receiver's type or value, a type's name, <c>this</c>, an import's prefix.</summary>
+    /// <summary>Where the name is looked for, and nowhere else, where the code says: a receiver's type or value, a type's name, <c>this</c>, an import's prefix, a scope.</summary>
     public ExtractQualifier? Qualifier { get; init; }
 
     /// <summary>What is wrong with this reference; <see langword="null"/> where nothing is.</summary>
@@ -378,7 +458,7 @@ public sealed record ExtractReference(string From, string Kind, string Name, int
             : Arity is < 0 ? "its arity is below zero"
             : Qualifier is { } qualifier && !CodeQualifierKinds.All.Contains(qualifier.Kind, StringComparer.Ordinal) ? $"its qualifier's kind is '{qualifier.Kind}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
             : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix } named && string.IsNullOrWhiteSpace(named.Name) ? "its qualifier names nothing"
-            : Qualifier is { Kind: CodeQualifierKinds.Value, Name: { } value } && string.IsNullOrWhiteSpace(value) ? "its qualifier's name is empty"
+            : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.Scope, Name: { } value } && string.IsNullOrWhiteSpace(value) ? "its qualifier's name is empty"
             : null;
 }
 
@@ -418,11 +498,21 @@ public static class CodeQualifierKinds
     /// call is written in, nearest first, and its call through the type that member is declared with - a chain of names
     /// through each one's type in turn, a type the repository does not declare holding nothing it declares - else in the
     /// repository by name and arity alone, where nothing is known of its type - never in those scopes as a call of their own.
+    /// A name no such member has that an import of the file is reached by is that import's prefix: the call is looked for
+    /// where <see cref="Prefix"/> looks, as a file that shares another's imports writes that file's prefixes.
     /// </summary>
     public const string Value = "value";
 
+    /// <summary>
+    /// A scope by its qualified name, and past it the repository's own top: the name is looked for as that scope declares
+    /// it, else as a declaration in no scope, and nowhere else - as PHP finds a function its namespace declares, else the
+    /// global one; with no name, among the declarations in no scope alone - a name PHP writes from its global namespace,
+    /// or after a leading <c>\</c>. Either is looked for among the declarations of the reference's own language alone.
+    /// </summary>
+    public const string Scope = "scope";
+
     /// <summary>Every kind.</summary>
-    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value];
+    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope];
 }
 
 /// <summary>A place an implementation saw something it cannot bind, or stopped reading.</summary>

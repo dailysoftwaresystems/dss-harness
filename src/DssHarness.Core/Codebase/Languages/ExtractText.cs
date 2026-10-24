@@ -15,7 +15,7 @@ internal static partial class ExtractText
 
     /// <summary><paramref name="header"/>, a declaration's header on one line, cut to fit a node's signature.</summary>
     /// <param name="header">The header.</param>
-    public static string Signature(string header) => Cut(header, FileExtract.MostSignature);
+    public static string Signature(string header) => Cut(Whole(header), FileExtract.MostSignature);
 
     /// <summary>
     /// The first sentence of <paramref name="text"/>, one line of what the code says of itself - up to the first <c>.</c>,
@@ -25,8 +25,37 @@ internal static partial class ExtractText
     public static string Summary(string text)
     {
         var stop = Sentence().Match(text);
-        return Cut(stop.Success ? text[..(stop.Index + 1)] : text, FileExtract.MostSummary);
+        return Cut(Whole(stop.Success ? text[..(stop.Index + 1)] : text), FileExtract.MostSummary);
     }
+
+    /// <summary>
+    /// <paramref name="text"/> as whole UTF-16, as a record holds it: each surrogate apart from its pair - a file cut inside
+    /// a character - the replacement character.
+    /// </summary>
+    /// <param name="text">Text read from a file.</param>
+    public static string Whole(string text)
+    {
+        var apart = FileExtract.Apart(text, 0);
+
+        if (apart < 0)
+        {
+            return text;
+        }
+
+        var whole = text.ToCharArray();
+
+        for (; apart >= 0; apart = FileExtract.Apart(text, apart + 1))
+        {
+            whole[apart] = '\uFFFD';
+        }
+
+        return new string(whole);
+    }
+
+    /// <summary><paramref name="name"/> joined to <paramref name="scope"/>, the qualified name it is declared in, by the model's separator, a dot; itself at the top.</summary>
+    /// <param name="scope">The qualified name of the scope it is declared in; <see langword="null"/> at the top.</param>
+    /// <param name="name">Its name.</param>
+    public static string Qualify(string? scope, string name) => scope is null ? name : $"{scope}.{name}";
 
     /// <summary><paramref name="text"/> cut, where it is longer than <paramref name="most"/>, at a word before it with an ellipsis - never inside a surrogate pair.</summary>
     private static string Cut(string text, int most)

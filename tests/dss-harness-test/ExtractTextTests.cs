@@ -39,6 +39,22 @@ public sealed class ExtractTextTests
         Assert.Equal(letters, ExtractText.Signature(letters));
     }
 
+    /// <summary>A text cut inside a character is made whole: each surrogate apart from its pair the replacement character, a pair kept, a whole text the very one.</summary>
+    [Fact]
+    public void ATextCutInsideACharacter_IsMadeWhole()
+    {
+        var whole = "a😀b";
+
+        Assert.Same(whole, ExtractText.Whole(whole));
+        Assert.Equal("a\uFFFDb\uFFFD😀\uFFFD", ExtractText.Whole("a" + whole[1] + "b" + whole[2] + whole[1] + whole[2] + whole[1]));
+        Assert.True(FileExtract.IsWhole(ExtractText.Whole(whole[2] + "x")));
+    }
+
+    /// <summary>A name is joined to the scope it is declared in by the model's separator, and stands alone at the top.</summary>
+    [Fact]
+    public void AName_IsJoinedToItsScopeByADot()
+        => Assert.Equal(("a.b.c", "c"), (ExtractText.Qualify("a.b", "c"), ExtractText.Qualify(null, "c")));
+
     /// <summary>An id already given is told apart by its place among those alike - the next one no declaration has.</summary>
     [Fact]
     public void AnIdAlreadyGiven_IsToldApartByItsPlace_TheNextOneNoDeclarationHas()

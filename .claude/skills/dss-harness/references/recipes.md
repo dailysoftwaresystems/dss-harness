@@ -141,7 +141,7 @@ and tested; embedding another takes one `EmbeddedResource` line in the test proj
    `CodeGraphLinker.Revision` instead.
 4. Help, `codebaseGraph.languages`, V52 and the step read the registry: nothing else changes. Docs: what the
    language reads and does not see is its `Help`, which `help codebase-graph` prints; `docs/architecture.md` "The
-   codebase graph" names no language but the fallback.
+   codebase graph" says how each language's reader works, a paragraph each.
 
 ## 10. Before calling any change done
 

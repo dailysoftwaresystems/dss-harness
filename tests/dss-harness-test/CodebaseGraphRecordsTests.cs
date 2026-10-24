@@ -59,6 +59,7 @@ public sealed class CodebaseGraphRecordsTests
 
         Assert.Null(sound.Problem("toy", 3));
         Assert.Null((sound with { Nodes = [Node with { Summary = "An \U0001F600 A." }] }).Problem("toy", 3));
+        Assert.Null((sound with { Nodes = [Node with { Exports = ["default"] }], AddressRoots = [new ExtractAddressRoot("pkg", "src/index.ts") { Whole = true }] }).Problem("toy", 3));
 
         var wrong = new (FileExtract Extract, string Problem)[]
         {
@@ -80,6 +81,11 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Nodes = [Node with { Digest = "ABC" }] }, "its digest is no SHA-256"),
             (sound with { Nodes = [Node with { ValueType = " " }] }, "its value's type is empty"),
             (sound with { Nodes = [Node with { Extends = "" }] }, "the type it extends is empty"),
+            (sound with { Nodes = [Node with { SeenIn = " " }] }, "the scope it is seen in is empty"),
+            (sound with { Nodes = [Node with { SeenIn = "lib\uD83D" }] }, "a surrogate cut from its pair"),
+            (sound with { Nodes = [Node with { Exports = [] }] }, "a name it is exported by is empty, or it lists none"),
+            (sound with { Nodes = [Node with { Exports = ["default", " "] }] }, "a name it is exported by is empty, or it lists none"),
+            (sound with { Nodes = [Node with { Exports = ["x\uD83D"] }] }, "a surrogate cut from its pair"),
             (sound with { Nodes = [Node with { ValueType = "x\uD83D" }] }, "a surrogate cut from its pair"),
             (sound with { Nodes = [Node, Node with { Id = "toy:B", Parent = "toy:Z" }] }, "is declared inside 'toy:Z', which it holds no node of"),
             (sound with { Nodes = [Node with { End = 2 }, Node with { Id = "toy:B", Start = 2, End = 3, Parent = "toy:A" }] }, "whose lines do not hold it"),
@@ -94,6 +100,16 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, " ", 1)] }, "it names nothing"),
             (sound with { Imports = [new ExtractImport(CodeImportForms.Scope, "lib", 4)] }, "it is on line 4, outside the file's 3"),
             (sound with { Imports = [new ExtractImport(CodeImportForms.Scope, "lib", 1) { Prefix = "" }] }, "its prefix is empty"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Ending, "x.h", 1) { Fallback = true }] }, "its import of 'x.h' stands in for the import before it, and no import of a file is before it"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Scope, "lib", 1), new ExtractImport(CodeImportForms.Ending, "x.h", 1) { Fallback = true }] }, "no import of a file is before it"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "x.h", 1), new ExtractImport(CodeImportForms.Scope, "lib", 1) { Fallback = true }] }, "it is of a scope, and stands in for another import: only an import of a file does"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Scope, "lib", 1) { Export = true }] }, "it is of a scope, and is an export: only an import of a file is exported"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "x.dart", 1) { Export = true, Prefix = "p" }] }, "it is an export with a prefix"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Scope, "lib", 1) { Shares = true }] }, "it is of a scope, and shares its imports: only a file's are shared"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "x.dart", 1) { Shares = true, Export = true }] }, "it shares its imports, and is an export or has a prefix or a filter"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "x.dart", 1) { Shares = true, Prefix = "p" }] }, "it shares its imports, and is an export or has a prefix or a filter"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "x.dart", 1) { Shares = true, Show = ["A"] }] }, "it shares its imports, and is an export or has a prefix or a filter"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "x.dart", 1) { Shares = true, Hide = ["A"] }] }, "it shares its imports, and is an export or has a prefix or a filter"),
             (sound with { AddressRoots = [new ExtractAddressRoot("package:x/", "")] }, "an address root with no prefix or no directory"),
             (sound with { References = [new ExtractReference("toy:Z", CodeEdgeKinds.Calls, "Go", 1)] }, "is made from 'toy:Z', which it holds no node of"),
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Dispatches, "Go", 1)] }, "its kind is 'dispatches'"),
@@ -105,12 +121,26 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Named, " ") }] }, "its qualifier names nothing"),
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Type) }] }, "its qualifier names nothing"),
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Value, "") }] }, "its qualifier's name is empty"),
+            (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Scope, " ") }] }, "its qualifier's name is empty"),
             (sound with { Generated = " " }, "it says it is generated and not why"),
             (sound with { Dynamic = [new ExtractDynamic(1, "")] }, "it marks a line dynamic and not why"),
             (sound with { Dynamic = [new ExtractDynamic(9, "macro")] }, "it marks line 9 dynamic, outside its 3 lines"),
         };
 
         Assert.All(wrong, pair => Assert.Contains(pair.Problem, pair.Extract.Problem("toy", 3), StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A path a project file writes relative to its own directory is made one clean path - its <c>.</c> and <c>..</c> out,
+    /// a <c>..</c> kept where it climbs above that directory - and a line a reader names is the file's nearest one.
+    /// </summary>
+    [Fact]
+    public void APathRelativeToADirectory_IsMadeClean_AndALineIsTheFilesNearest()
+    {
+        Assert.Equal(
+            ["src", "src/x", "../shared", "../../a", ".", ".", "a/c"],
+            new[] { "./src/", "src\\.\\x", "../shared", "a/../../../a", "./", "a/..", "a/b/../c" }.Select(CodeGraphIds.Clean));
+        Assert.Equal([1, 1, 3, 3, 1], new[] { (0, 3), (1, 3), (3, 3), (9, 3), (5, 0) }.Select(pair => FileExtract.LineWithin(pair.Item1, pair.Item2)));
     }
 
     /// <summary>The digests the core sets are each node's lines', and a node whose lines are not the file's is left without one.</summary>
@@ -121,6 +151,7 @@ public sealed class CodebaseGraphRecordsTests
         var digested = new FileExtract([Node, Node with { Id = "toy:B", End = 9 }]).WithDigests(lines);
 
         Assert.Equal(CodeGraphIds.Sha256("class A\n  go\nend"), digested.Nodes[0].Digest);
+
         Assert.Equal(CodeGraphIds.Digest(CodeFileText.Lines("class A\n  go\nend"), 1, 3), digested.Nodes[0].Digest);
         Assert.Null(digested.Nodes[1].Digest);
         Assert.Throws<ArgumentOutOfRangeException>(() => CodeGraphIds.Digest(lines, 2, 4));

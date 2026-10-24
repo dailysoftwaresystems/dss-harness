@@ -70,7 +70,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
                 }
 
                 // The root element's line, as the project's header.
-                signature ??= ExtractText.Signature(ExtractText.Flat(lines[Math.Clamp(at.LineNumber, 1, lines.Count) - 1]));
+                signature ??= ExtractText.Signature(ExtractText.Flat(lines[FileExtract.LineWithin(at.LineNumber, lines.Count) - 1]));
                 describing = !solution && reader.LocalName == "Description" && !reader.IsEmptyElement;
 
                 var named = (solution, reader.LocalName) switch
@@ -82,7 +82,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
 
                 foreach (var project in (named ?? string.Empty).Split(';').Select(ProjectName).OfType<string>())
                 {
-                    references.Add(new ExtractReference(id, CodeEdgeKinds.ProjectReference, project, Math.Clamp(at.LineNumber, 1, lines.Count)));
+                    references.Add(new ExtractReference(id, CodeEdgeKinds.ProjectReference, project, FileExtract.LineWithin(at.LineNumber, lines.Count)));
                 }
             }
         }
@@ -90,7 +90,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
         {
             // What follows the first fault is not read: the file is graphed as far as it parses, and its extract says where
             // it stopped, so a reference missing after it is never taken for one the project does not make.
-            stopped = new ExtractDynamic(Math.Clamp(ex.LineNumber, 1, lines.Count), "the file stops reading as XML here, and nothing after it is read");
+            stopped = new ExtractDynamic(FileExtract.LineWithin(ex.LineNumber, lines.Count), "the file stops reading as XML here, and nothing after it is read");
         }
 
         var node = new ExtractNode(id, CodeNodeKinds.Project, name, input.Path, 1, lines.Count, signature ?? name)

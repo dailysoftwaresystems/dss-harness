@@ -162,6 +162,91 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
+    /// An import of a file that stands in for the one before it is taken only where that one names no file: beside the
+    /// importing file first, then by the path's ending - its edge, and what a name is found through, the one taken alone.
+    /// </summary>
+    [Fact]
+    public void AnImportStandingInForAnother_IsTakenOnlyWhereThatOneNamesNoFile()
+    {
+        var linked = Link(
+            File("src/util.h", [Type("Near")]),
+            File("lib/util.h", [Type("Far"), Type("Near") with { Id = "t:Near@lib" }]),
+            File("src/a.c", [Member("Go", 0)],
+                [Ref("Go", CodeEdgeKinds.References, "Near")],
+                imports: [Import(CodeImportForms.Relative, "util.h"), Import(CodeImportForms.Ending, "util.h") with { Fallback = true }]),
+            File("app/b.c", [Member("Stop", 0)],
+                [Ref("Stop", CodeEdgeKinds.References, "Far")],
+                imports: [Import(CodeImportForms.Relative, "util.h"), Import(CodeImportForms.Ending, "util.h") with { Fallback = true }]));
+
+        // Beside the file: that one alone, and no edge to the other file of that name.
+        Assert.Contains(new CodeEdge("file:src/a.c", "file:src/util.h", CodeEdgeKinds.Imports, 1, CodeConfidences.Exact), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.From == "file:src/a.c" && edge.To == "file:lib/util.h");
+        Assert.Contains(Edge("t:Go", "t:Near", CodeEdgeKinds.References, CodeConfidences.Unique), linked.Edges);
+
+        // None beside it: every file the ending names.
+        Assert.Contains(new CodeEdge("file:app/b.c", "file:src/util.h", CodeEdgeKinds.Imports, 1, CodeConfidences.Candidates), linked.Edges);
+        Assert.Contains(new CodeEdge("file:app/b.c", "file:lib/util.h", CodeEdgeKinds.Imports, 1, CodeConfidences.Candidates), linked.Edges);
+        Assert.Contains(Edge("t:Stop", "t:Far", CodeEdgeKinds.References, CodeConfidences.Unique), linked.Edges);
+    }
+
+    /// <summary>
+    /// A declaration with no body found beside the one with a body it declares - of its language, qualified name and
+    /// parameters - is that one: a call is its edge alone, where both were candidates; one of another name is no such pair.
+    /// </summary>
+    [Fact]
+    public void APrototypeFoundBesideItsBody_IsThatBody()
+    {
+        var linked = Link(
+            File("a.c", [Member("Run", 0) with { Prototype = true }, Member("Run", 0) with { Id = "t:Run~2" }, Member("Two", 0) with { Prototype = true }]),
+            File("b.c", [Member("Go", 0), Member("Two", 0) with { Id = "t:Two@b" }, Member("ns.Two", 0) with { Id = "t:ns.Two", Name = "Two" }], [Call("Go", "Run", 0), Call("Go", "Two", 0) with { Line = 2 }]));
+
+        Assert.Contains(Edge("t:Go", "t:Run~2", CodeEdgeKinds.Calls, CodeConfidences.Unique), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.Kind == CodeEdgeKinds.Calls && edge.To == "t:Run");
+
+        // Two's prototype and body are one; ns.Two is another declaration of that name, so two candidates are left.
+        Assert.Contains(new CodeEdge("t:Go", "t:Two@b", CodeEdgeKinds.Calls, 2, CodeConfidences.Candidates), linked.Edges);
+        Assert.Contains(new CodeEdge("t:Go", "t:ns.Two", CodeEdgeKinds.Calls, 2, CodeConfidences.Candidates), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.Kind == CodeEdgeKinds.Calls && edge.To == "t:Two");
+
+        // A prototype that takes otherwise than a body of its name declares none, and is no part of it.
+        var unlike = Link(
+            File("a.c", [Member("Three", 1) with { MaxArity = 2, Prototype = true }, Member("Three", 1) with { Id = "t:Three~2" }]),
+            File("b.c", [Member("Go", 0)], [Call("Go", "Three", 1)]));
+
+        Assert.DoesNotContain(unlike.Edges, edge => edge.Kind == CodeEdgeKinds.Declares);
+        Assert.Equal(2, unlike.Edges.Count(edge => edge.Kind == CodeEdgeKinds.Calls));
+    }
+
+    /// <summary>A prototype given a body - or a body made a prototype, or renamed - changes what a call beside it finds, so linking again finds that call again.</summary>
+    [Theory]
+    [InlineData(false, "Run")]
+    [InlineData(true, "Other")]
+    public void APrototypeMadeABody_IsFoundAgainByACallInAnotherFile(bool prototype, string qualified)
+    {
+        var go = File("b.c", [Member("Go", 0)], [Call("Go", "Run", 0)]);
+        var before = File("a.c", [Member("Run", 0) with { Prototype = true }, Member("Run", 0) with { Id = "t:Run~2" }]);
+        var after = File("a.c", [Member("Run", 0) with { Prototype = prototype, Qualified = qualified }, Member("Run", 0) with { Id = "t:Run~2" }]);
+
+        Assert.Single(Link(before, go).Edges, edge => edge.Kind == CodeEdgeKinds.Calls);
+        Assert.Equal(2, Again([before, go], [after, go]).Edges.Count(edge => edge.Kind == CodeEdgeKinds.Calls));
+    }
+
+    /// <summary>
+    /// A member defined outside its type's body - held by no node of that type in its file - is in that type by the scope
+    /// it is declared in: <c>this</c> and <c>base</c> look there, as they do for a member its type's body holds.
+    /// </summary>
+    [Fact]
+    public void AMemberDefinedOutsideItsTypesBody_IsInThatTypeByItsScope()
+    {
+        var linked = Link(
+            File("a.h", [Type("app.A"), Member("app.A.Run", 0), Type("app.B"), Member("app.B.Log", 0)], [Ref("app.B", CodeEdgeKinds.Inherits, "A")], [Open("app")]),
+            File("b.cc", [Member("app.B.Go", 0)], [Call("app.B.Go", "Log", 0, new ExtractQualifier(CodeQualifierKinds.This)), Call("app.B.Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.Base)) with { Line = 2 }], [Open("app")]));
+
+        Assert.Contains(new CodeEdge("t:app.B.Go", "t:app.B.Log", CodeEdgeKinds.Calls, 1, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("t:app.B.Go", "t:app.A.Run", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact), linked.Edges);
+    }
+
+    /// <summary>
     /// Last, the repository by name and arity: one is unique; two to five are an edge to each, candidates; more are counted
     /// unresolved; none is counted external.
     /// </summary>
@@ -215,10 +300,32 @@ public sealed class CodeGraphLinkerTests
     public void AClosedScopesDeclarations_AreSeenFromItsFileAlone()
     {
         var linked = Link(
-            File("a.t", [Member("Go", 0), Member("hidden.Secret", 0) with { Scope = "hidden" }], [Call("Go", "Secret", 0)], [new ExtractScope("hidden", Open: false)]),
+            File("a.t", [Member("Go", 0), Type("hidden"), Member("hidden.Secret", 0) with { Scope = "hidden" }], [Call("Go", "Secret", 0)], [new ExtractScope("hidden", Open: false)]),
             File("b.t", [Member("Other", 0)], [Call("Other", "Secret", 0)], [new ExtractScope("hidden", Open: false)]));
 
         Assert.Contains(Edge("t:Go", "t:hidden.Secret", CodeEdgeKinds.Calls, CodeConfidences.Unique), linked.Edges);
+        Assert.Equal(1, linked.External["t:Other"]);
+    }
+
+    /// <summary>
+    /// A closed scope at a file's top - no scope holds it, and it is no type's or namespace's own, as a C file's for its
+    /// <c>static</c> names - is one every declaration of the file is written in: what it declares is found exact from
+    /// anywhere in the file, after the declaration's own scopes; a closed type's members are not, and another file finds
+    /// none of it.
+    /// </summary>
+    [Fact]
+    public void AFilesTopClosedScope_IsOneEveryDeclarationOfItIsWrittenIn()
+    {
+        var linked = Link(
+            File(
+                "a.t",
+                [Member("Go", 0), Member("Helper", 0) with { Id = "t:a.t:Helper", Scope = "file:a.t" }, Type("Local"), Member("Local.Run", 0) with { Scope = "Local" }],
+                [Call("Go", "Helper", 0), Call("Go", "Run", 0)],
+                [new ExtractScope("file:a.t", Open: false), new ExtractScope("Local", Open: false)]),
+            File("b.t", [Member("Other", 0)], [Call("Other", "Helper", 0)]));
+
+        Assert.Contains(Edge("t:Go", "t:a.t:Helper", CodeEdgeKinds.Calls, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(Edge("t:Go", "t:Local.Run", CodeEdgeKinds.Calls, CodeConfidences.Unique), linked.Edges);
         Assert.Equal(1, linked.External["t:Other"]);
     }
 
@@ -431,6 +538,40 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
+    /// A scope qualifier finds the name as that scope declares it, else among the declarations in no scope, exact - and with
+    /// no name among those alone - never in a scope the reference is written in, nor in another language's files; what
+    /// neither holds is external.
+    /// </summary>
+    [Fact]
+    public void AScopeQualifier_FindsTheNameInThatScope_ElseAtTheTop_OfItsLanguageAlone()
+    {
+        var linked = Link(
+            File("app.t", [Member("App.Go", 0), Member("App.Local", 0), Member("App.Sub.Inner", 0)],
+                [
+                    Call("App.Go", "Local", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "App")),
+                    Call("App.Go", "Helper", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "App")) with { Line = 2 },
+                    Call("App.Go", "Local", 0, new ExtractQualifier(CodeQualifierKinds.Scope)) with { Line = 3 },
+                    Call("App.Go", "Inner", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "App")) with { Line = 4 },
+                    Call("App.Go", "Native", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "App")) with { Line = 5 },
+                    Call("App.Go", "Local", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "Lib")) with { Line = 6 },
+                    Call("App.Go", "Other", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "App")) with { Line = 7 },
+                ],
+                [Open("App"), Open("App.Sub")]),
+            File("top.t", [Member("Helper", 0), Member("Local", 0)]),
+            File("native.c", [Member("Native", 0), Member("App.Other", 0)], scopes: [Open("App")]) with { Language = "c" });
+
+        Assert.Equal(
+            [
+                ("t:App.Local", 1, CodeConfidences.Exact),
+                ("t:Helper", 2, CodeConfidences.Exact),
+                ("t:Local", 3, CodeConfidences.Exact),
+                ("t:Local", 6, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.From == "t:App.Go" && edge.Kind == CodeEdgeKinds.Calls).Select(edge => (edge.To, edge.Line, edge.Confidence)));
+        Assert.Equal(3, linked.External["t:App.Go"]);
+    }
+
+    /// <summary>
     /// A member declared to extend a type is found, <c>unique</c>, for a call on a value of that type - <c>this</c> among
     /// them - or of a type built on it, or of a type the repository does not declare named alike, where the call's file
     /// reaches it - through an import of its scope or its file, from its own file where it is closed, or from the top -
@@ -499,6 +640,311 @@ public sealed class CodeGraphLinkerTests
             ],
             linked.Edges.Where(edge => edge is { From: "t:app.Circle.Go", Kind: CodeEdgeKinds.Calls }).Select(edge => (edge.To, edge.Line, edge.Confidence)));
         Assert.DoesNotContain(linked.Edges, edge => edge.Kind == CodeEdgeKinds.Overrides);
+    }
+
+    /// <summary>
+    /// An import of a file makes visible what each file it exports does - each export's filter applied, exports of exports
+    /// followed, each file once though they come round again - and an export makes nothing visible to the file that makes
+    /// it, which finds the name as though it imported nothing.
+    /// </summary>
+    [Fact]
+    public void AnImportOfAFile_SeesWhatItExports_EachFilterApplied_AndExportsThatComeRoundEnd()
+    {
+        static ExtractImport Export(string target) => Import(CodeImportForms.Relative, target) with { Export = true };
+
+        var linked = Link(
+            File("lib/barrel.t", [Member("Own", 0)], [Call("Own", "Run", 0)], imports: [Export("src/a.t"), Export("src/b.t") with { Hide = ["Hidden"] }]),
+            File("lib/src/a.t", [Member("Run", 0)], imports: [Export("../barrel.t")]),
+            File("lib/src/b.t", [Member("Stop", 0), Member("Hidden", 0)], imports: [Export("c.t") with { Show = ["Far"] }]),
+            File("lib/src/c.t", [Member("Far", 0), Member("Near", 0)]),
+            File("z.t", [Member("z.Run", 0)]),
+            File("use.t", [Member("Go", 0)],
+                [
+                    Call("Go", "Run", 0, Prefix("p")),
+                    Call("Go", "Stop", 0, Prefix("p")) with { Line = 2 },
+                    Call("Go", "Hidden", 0, Prefix("p")) with { Line = 3 },
+                    Call("Go", "Far", 0, Prefix("p")) with { Line = 4 },
+                    Call("Go", "Near", 0, Prefix("p")) with { Line = 5 },
+                ],
+                imports: [Import(CodeImportForms.Relative, "lib/barrel.t") with { Prefix = "p" }]));
+
+        Assert.Equal(
+            [("t:Run", 1), ("t:Stop", 2), ("t:Far", 4)],
+            linked.Edges.Where(edge => edge is { From: "t:Go", Kind: CodeEdgeKinds.Calls, Confidence: CodeConfidences.Exact }).Select(edge => (edge.To, edge.Line)));
+        Assert.Equal(2, linked.External["t:Go"]);
+        Assert.Equal(
+            ["t:Run", "t:z.Run"],
+            linked.Edges.Where(edge => edge is { From: "t:Own", Kind: CodeEdgeKinds.Calls }).Select(edge => edge.To).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A declaration kept to a scope is seen from the declarations written in that scope, or in one inside it, alone: its
+    /// file and a file that declares into the scope find it by its name; a file that imports it finds none - by its name,
+    /// through a prefix, as a type or in the repository - and an extension kept so is reached from that scope alone.
+    /// </summary>
+    [Fact]
+    public void ADeclarationKeptToAScope_IsSeenFromThatScopeAlone()
+    {
+        var linked = Link(
+            File("lib/a.t",
+                [
+                    Member("lib.a._run", 0) with { SeenIn = "lib.a" },
+                    Type("lib.a.T"), Member("lib.a.T.Go", 0) with { Parent = "t:lib.a.T" },
+                    Type("lib.a._Hidden") with { SeenIn = "lib.a" }, Member("lib.a._Hidden.Make", 0),
+                    Type("lib.a._Ext") with { SeenIn = "lib.a" }, Member("lib.a._Ext.Shine", 0) with { Extends = "Shape", SeenIn = "lib.a" },
+                ],
+                [Call("lib.a.T.Go", "_run", 0), Call("lib.a.T.Go", "Shine", 0, Named("Shape")) with { Line = 2 }],
+                [Open("lib.a")]),
+            File("lib/part.t", [Member("lib.a.Use", 0)], [Call("lib.a.Use", "_run", 0) with { Line = 3 }, Call("lib.a.Use", "Make", 0, Named("_Hidden")) with { Line = 4 }]),
+            File("shape.t", [Type("Shape")]),
+            File("use.t", [Member("Go", 0)],
+                [
+                    Call("Go", "_run", 0) with { Line = 5 },
+                    Call("Go", "_run", 0, Prefix("p")) with { Line = 6 },
+                    Call("Go", "Make", 0, Named("_Hidden")) with { Line = 7 },
+                    Call("Go", "Shine", 0, Named("Shape")) with { Line = 8 },
+                ],
+                imports: [Import(CodeImportForms.Relative, "lib/a.t"), Import(CodeImportForms.Relative, "lib/a.t") with { Prefix = "p" }]));
+
+        Assert.Equal(
+            [
+                ("t:lib.a.T.Go", "t:lib.a._run", 1, CodeConfidences.Exact),
+                ("t:lib.a.T.Go", "t:lib.a._Ext.Shine", 2, CodeConfidences.Unique),
+                ("t:lib.a.Use", "t:lib.a._run", 3, CodeConfidences.Exact),
+                ("t:lib.a.Use", "t:lib.a._Hidden.Make", 4, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls).Select(edge => (edge.From, edge.To, edge.Line, edge.Confidence)));
+        Assert.Equal(4, linked.External["t:Go"]);
+    }
+
+    /// <summary>
+    /// A file that shares another's imports imports what that one does, after its own - each import's prefix and filters
+    /// with it, a relative path read from the file that made it - so a prefix that file writes, written here as a value no
+    /// scope holds, is that import; what the shared file shares in turn is not followed, nor is the file it shares
+    /// imported by that: an extension that file reaches is not reached from here.
+    /// </summary>
+    [Fact]
+    public void AFileThatSharesAnothersImports_ImportsWhatThatOneDoes_AndNoFurther()
+    {
+        var linked = Link(
+            File("ext/lib.t", [], scopes: [Open("ext")]),
+            File("ext/part.t", [Type("ext.StrExt"), Member("ext.StrExt.Shout", 0) with { Extends = "String", Parent = "t:ext.StrExt" }]),
+            File("lib/far.t", [], imports: [Import(CodeImportForms.Relative, "../ext/lib.t") with { Shares = true }]),
+            File("lib/near.t", [Member("Near", 0)], [Call("Near", "Shout", 0, new ExtractQualifier(CodeQualifierKinds.Type, "String"))], imports: [Import(CodeImportForms.Relative, "far.t") with { Shares = true }]),
+            File("lib/lib.t", [], imports: [Import(CodeImportForms.Relative, "src/run.t") with { Prefix = "p" }, Import(CodeImportForms.Relative, "src/stop.t") with { Hide = ["Stop"] }]),
+            File("lib/src/run.t", [Member("Run", 0)]),
+            File("lib/src/stop.t", [Member("Stop", 0), Member("Halt", 0)]),
+            File("other.t", [Member("other.Stop", 0), Member("other.Halt", 0)]),
+            File("lib/part.t", [Member("Go", 0)],
+                [
+                    Call("Go", "Run", 0, Prefix("p")),
+                    Call("Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.Value, "p")) with { Line = 2 },
+                    Call("Go", "Halt", 0) with { Line = 3 },
+                    Call("Go", "Stop", 0) with { Line = 4 },
+                ],
+                imports: [Import(CodeImportForms.Relative, "lib.t") with { Shares = true }]),
+            File("lib/sub.t", [Member("Deeper", 0)], [Call("Deeper", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Relative, "part.t") with { Shares = true }]));
+
+        Assert.Equal(
+            [("t:Run", 1, CodeConfidences.Exact), ("t:Run", 2, CodeConfidences.Exact), ("t:Halt", 3, CodeConfidences.Unique)],
+            linked.Edges.Where(edge => edge is { From: "t:Go", Kind: CodeEdgeKinds.Calls } && edge.Line < 4).Select(edge => (edge.To, edge.Line, edge.Confidence)));
+        Assert.Equal(["t:Stop", "t:other.Stop"], linked.Edges.Where(edge => edge is { From: "t:Go", Line: 4 }).Select(edge => edge.To).Order(StringComparer.Ordinal));
+        Assert.Contains(Edge("file:lib/part.t", "file:lib/lib.t", CodeEdgeKinds.Imports, CodeConfidences.Exact), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.From == "t:Deeper" && edge.Kind == CodeEdgeKinds.Calls);
+        Assert.DoesNotContain(linked.Edges, edge => edge.From == "t:Near" && edge.Kind == CodeEdgeKinds.Calls);
+    }
+
+    /// <summary>
+    /// A type written through the prefix a file is imported by - a value's type, a qualifier - is what that import makes
+    /// visible of that name, its filter applied: a call on a value of it goes through it.
+    /// </summary>
+    [Fact]
+    public void ATypeWrittenThroughAFilesPrefix_IsWhatThatImportMakesVisibleOfIt()
+    {
+        var linked = Link(
+            File("shape.t", [Type("Shape"), Member("Shape.Draw", 0), Type("Other"), Member("Other.Draw", 0)]),
+            File("lib.t",
+                [Value("lib.cur", "p.Shape"), Value("lib.hid", "q.Shape"), Member("lib.Go", 0)],
+                [
+                    Call("lib.Go", "Draw", 0, new ExtractQualifier(CodeQualifierKinds.Value, "cur")),
+                    Call("lib.Go", "Draw", 0, new ExtractQualifier(CodeQualifierKinds.Value, "hid")) with { Line = 2 },
+                    Call("lib.Go", "Draw", 0, Named("p.Other")) with { Line = 3 },
+                ],
+                [Open("lib")],
+                [Import(CodeImportForms.Relative, "shape.t") with { Prefix = "p" }, Import(CodeImportForms.Relative, "shape.t") with { Prefix = "q", Show = ["Other"] }]));
+
+        Assert.Equal(
+            [("t:Shape.Draw", 1), ("t:Other.Draw", 3)],
+            linked.Edges.Where(edge => edge is { From: "t:lib.Go", Kind: CodeEdgeKinds.Calls, Confidence: CodeConfidences.Exact }).Select(edge => (edge.To, edge.Line)));
+    }
+
+    /// <summary>
+    /// A value written with the name of a prefix its file's shared imports make stands for that import alone: where the
+    /// import is of no file of the tree, what it names is outside the tree, never a declaration of the name found elsewhere.
+    /// </summary>
+    [Fact]
+    public void AValueNamedAsASharedImportsPrefix_IsThatImportsAlone_OutsideTheTreeWhereItIs()
+    {
+        var linked = Link(
+            File("lib.t", [], imports: [Import(CodeImportForms.Address, "package:far/far.t") with { Prefix = "p" }]),
+            File("use.t", [Member("Go", 0)], [Call("Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.Value, "p"))], imports: [Import(CodeImportForms.Relative, "lib.t") with { Shares = true }]),
+            File("run.t", [Member("Run", 0)]));
+
+        Assert.DoesNotContain(linked.Edges, edge => edge is { From: "t:Go", Kind: CodeEdgeKinds.Calls });
+        Assert.Equal(1, linked.External["t:Go"]);
+    }
+
+    /// <summary>
+    /// A type is looked in before its bases and its bases nearest first: the mixins it names, the last first, before what
+    /// it inherits and implements, whatever order it names them in - for a call, an override and a dispatch alike - and a
+    /// base found among candidates answers with every one of them that holds the name.
+    /// </summary>
+    [Fact]
+    public void ATypesBases_AreLookedInNearestFirst_AMixinBeforeWhatItIsAppliedOver_ACandidateBaseWhole()
+    {
+        var linked = Link(
+            File("i.t", [Type("I"), Member("I.Run", 0) with { Parent = "t:I" }]),
+            File("s.t", [Type("S"), Member("S.Run", 0) with { Parent = "t:S" }, Member("S.Stop", 0) with { Parent = "t:S" }]),
+            File("m1.t", [Type("M1"), Member("M1.Run", 0) with { Parent = "t:M1" }, Member("M1.Stop", 0) with { Parent = "t:M1" }]),
+            File("m2.t", [Type("M2"), Member("M2.Run", 0) with { Parent = "t:M2" }]),
+            File("c.t",
+                [Type("C"), Member("C.Go", 0) with { Parent = "t:C" }, Member("C.Run", 0) with { Parent = "t:C" }],
+                [
+                    Ref("C", CodeEdgeKinds.MixesIn, "M1"),
+                    Ref("C", CodeEdgeKinds.Inherits, "S") with { Line = 2 },
+                    Ref("C", CodeEdgeKinds.MixesIn, "M2") with { Line = 3 },
+                    Ref("C", CodeEdgeKinds.Implements, "I") with { Line = 4 },
+                    Call("C.Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.Base)) with { Line = 5 },
+                    Call("C.Go", "Stop", 0, new ExtractQualifier(CodeQualifierKinds.This)) with { Line = 6 },
+                    new ExtractReference("t:C.Run", CodeEdgeKinds.Overrides, "Run", 7) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Base) },
+                ]),
+            File("a/base.t", [Type("a.Base"), Member("a.Base.Run", 0) with { Parent = "t:a.Base" }]),
+            File("b/base.t", [Type("b.Base"), Member("b.Base.Run", 0) with { Parent = "t:b.Base" }]),
+            File("d.t",
+                [Type("D"), Member("D.Go", 0) with { Parent = "t:D" }],
+                [Ref("D", CodeEdgeKinds.Inherits, "Base"), Call("D.Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.This)) with { Line = 2 }]),
+            File("e.t", [Type("E")], [Ref("E", CodeEdgeKinds.Inherits, "S"), Ref("E", CodeEdgeKinds.MixesIn, "M1") with { Line = 2 }, Ref("E", CodeEdgeKinds.Implements, "I") with { Line = 3 }]));
+
+        Assert.Contains(Edge("t:C.Go", "t:M2.Run", CodeEdgeKinds.Calls, CodeConfidences.Exact) with { Line = 5 }, linked.Edges);
+        Assert.Contains(Edge("t:C.Go", "t:M1.Stop", CodeEdgeKinds.Calls, CodeConfidences.Exact) with { Line = 6 }, linked.Edges);
+        Assert.Equal(["t:M2.Run"], linked.Edges.Where(edge => edge is { From: "t:C.Run", Kind: CodeEdgeKinds.Overrides }).Select(edge => edge.To));
+        Assert.Equal(["t:M1.Run"], linked.Edges.Where(edge => edge is { From: "t:I.Run", Kind: CodeEdgeKinds.Dispatches } && edge.To != "t:C.Run").Select(edge => edge.To));
+        Assert.Equal(
+            [("t:a.Base.Run", CodeConfidences.Candidates), ("t:b.Base.Run", CodeConfidences.Candidates)],
+            linked.Edges.Where(edge => edge is { From: "t:D.Go", Kind: CodeEdgeKinds.Calls }).Select(edge => (edge.To, edge.Confidence)).Order());
+    }
+
+    /// <summary>
+    /// Past the first level, what a level's types inherit is still one rank, whichever of them names it - two
+    /// grandparents that declare the name both answer - and what a mixin is declared on is not looked in where the mixin is
+    /// applied: what it is applied over, the type's own base, answers - for a call and a dispatch alike; what a mixin
+    /// implements is.
+    /// </summary>
+    [Fact]
+    public void PastTheFirstLevel_WhatALevelInheritsIsOneRank_AndAMixinsOwnBasesAreNotLookedIn()
+    {
+        static ExtractNode Method(string qualified) => Member(qualified, 0) with { Parent = $"t:{qualified[..qualified.LastIndexOf('.')]}" };
+
+        var linked = Link(
+            File("pa.t", [Type("PA"), Method("PA.F")]),
+            File("pb.t", [Type("PB"), Method("PB.F")]),
+            File("xy.t", [Type("X"), Type("Y")], [Ref("X", CodeEdgeKinds.Inherits, "PA"), Ref("Y", CodeEdgeKinds.Inherits, "PB") with { Line = 2 }]),
+            File("z.t", [Type("Z"), Method("Z.G")],
+                [Ref("Z", CodeEdgeKinds.Inherits, "X"), Ref("Z", CodeEdgeKinds.Inherits, "Y") with { Line = 2 }, Call("Z.G", "F", 0, new ExtractQualifier(CodeQualifierKinds.This)) with { Line = 3 }]),
+            File("i.t", [Type("I"), Method("I.F")]),
+            File("a.t", [Type("A"), Method("A.F")]),
+            File("b.t", [Type("B"), Method("B.F")], [Ref("B", CodeEdgeKinds.Inherits, "A")]),
+            File("sm.t", [Type("S"), Type("M")], [Ref("S", CodeEdgeKinds.Inherits, "B"), Ref("M", CodeEdgeKinds.Inherits, "A") with { Line = 2 }]),
+            File("cl.t", [Type("Closeable"), Method("Closeable.Close"), Type("AutoClose"), Type("Resource"), Method("Resource.Go")],
+                [
+                    Ref("AutoClose", CodeEdgeKinds.Implements, "Closeable"),
+                    Ref("Resource", CodeEdgeKinds.MixesIn, "AutoClose") with { Line = 2 },
+                    Call("Resource.Go", "Close", 0, new ExtractQualifier(CodeQualifierKinds.This)) with { Line = 3 },
+                ]),
+            File("c.t", [Type("C"), Type("D"), Method("D.G")],
+                [
+                    Ref("C", CodeEdgeKinds.Inherits, "S"),
+                    Ref("C", CodeEdgeKinds.MixesIn, "M") with { Line = 2 },
+                    Ref("C", CodeEdgeKinds.Implements, "I") with { Line = 3 },
+                    Ref("D", CodeEdgeKinds.Inherits, "S") with { Line = 4 },
+                    Ref("D", CodeEdgeKinds.MixesIn, "M") with { Line = 5 },
+                    Call("D.G", "F", 0, new ExtractQualifier(CodeQualifierKinds.This)) with { Line = 6 },
+                ]));
+
+        Assert.Equal(
+            [("t:PA.F", CodeConfidences.Candidates), ("t:PB.F", CodeConfidences.Candidates)],
+            linked.Edges.Where(edge => edge is { From: "t:Z.G", Kind: CodeEdgeKinds.Calls }).Select(edge => (edge.To, edge.Confidence)).Order());
+        Assert.Equal([("t:B.F", CodeConfidences.Exact)], linked.Edges.Where(edge => edge is { From: "t:D.G", Kind: CodeEdgeKinds.Calls }).Select(edge => (edge.To, edge.Confidence)));
+        Assert.Equal(["t:B.F"], linked.Edges.Where(edge => edge is { From: "t:I.F", Kind: CodeEdgeKinds.Dispatches }).Select(edge => edge.To));
+        Assert.Contains(Edge("t:Resource.Go", "t:Closeable.Close", CodeEdgeKinds.Calls, CodeConfidences.Exact) with { Line = 3 }, linked.Edges);
+    }
+
+    /// <summary>
+    /// A base that two ways up reach answers a dispatch as sure as the surer way, whichever is found first; what a mixin is
+    /// declared on is no way up from where the mixin is applied.
+    /// </summary>
+    [Fact]
+    public void ABaseTwoWaysReach_AnswersAsSureAsTheSurerWay_WhicheverComesFirst()
+    {
+        var linked = Link(
+            File("p2.t", [Type("P2"), Type("S2")], [Ref("P2", CodeEdgeKinds.Inherits, "G"), Ref("S2", CodeEdgeKinds.Inherits, "G") with { Line = 2 }]),
+            File("n.t",
+                [
+                    Type("n.G"), Member("n.G.Run", 0) with { Parent = "t:n.G" }, Member("n.G.Go", 0) with { Parent = "t:n.G" }, Type("n.P1"),
+                    Type("n.I"), Member("n.I.Run", 0) with { Parent = "t:n.I" }, Type("n.T"),
+                    Type("n.J"), Member("n.J.Go", 0) with { Parent = "t:n.J" }, Type("n.M2"), Type("n.C2"),
+                ],
+                [
+                    Ref("n.P1", CodeEdgeKinds.Inherits, "G"),
+                    Ref("n.T", CodeEdgeKinds.Implements, "I") with { Line = 2 },
+                    Ref("n.T", CodeEdgeKinds.Inherits, "P2") with { Line = 3, Qualifier = Prefix("p") },
+                    Ref("n.T", CodeEdgeKinds.Inherits, "P1") with { Line = 4 },
+                    Ref("n.M2", CodeEdgeKinds.Inherits, "G") with { Line = 5 },
+                    Ref("n.C2", CodeEdgeKinds.Implements, "J") with { Line = 6 },
+                    Ref("n.C2", CodeEdgeKinds.MixesIn, "M2") with { Line = 7 },
+                    Ref("n.C2", CodeEdgeKinds.Inherits, "S2") with { Line = 8, Qualifier = Prefix("p") },
+                ],
+                imports: [Import(CodeImportForms.Relative, "p2.t") with { Prefix = "p" }]));
+
+        Assert.Contains(Edge("t:P2", "t:n.G", CodeEdgeKinds.Inherits, CodeConfidences.Unique), linked.Edges);
+        Assert.Contains(Edge("t:n.P1", "t:n.G", CodeEdgeKinds.Inherits, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(Edge("t:n.T", "t:n.I", CodeEdgeKinds.Implements, CodeConfidences.Exact) with { Line = 2 }, linked.Edges);
+        Assert.Contains(Edge("t:n.T", "t:P2", CodeEdgeKinds.Inherits, CodeConfidences.Exact) with { Line = 3 }, linked.Edges);
+        Assert.Contains(Edge("t:n.T", "t:n.P1", CodeEdgeKinds.Inherits, CodeConfidences.Exact) with { Line = 4 }, linked.Edges);
+        Assert.Equal([("t:n.G.Run", CodeConfidences.Exact)], linked.Edges.Where(edge => edge is { From: "t:n.I.Run", Kind: CodeEdgeKinds.Dispatches }).Select(edge => (edge.To, edge.Confidence)));
+        Assert.Contains(Edge("t:n.M2", "t:n.G", CodeEdgeKinds.Inherits, CodeConfidences.Exact) with { Line = 5 }, linked.Edges);
+        Assert.Equal([("t:n.G.Go", CodeConfidences.Unique)], linked.Edges.Where(edge => edge is { From: "t:n.J.Go", Kind: CodeEdgeKinds.Dispatches }).Select(edge => (edge.To, edge.Confidence)));
+    }
+
+    /// <summary>
+    /// An extension is reached through an import of a file that declares its scope open - a library its part declares it
+    /// into - or that exports one that does, each filter on the way letting the extension's own name; a file imported by a
+    /// prefix reaches it still, and a scope imported by an alias, which names the scope and imports nothing, does not.
+    /// </summary>
+    [Fact]
+    public void AnExtension_IsReachedThroughWhatAnImportMakesVisible_ItsNameLetByEachFilter()
+    {
+        CodeGraphFile User(string name, params ExtractImport[] imports)
+            => File($"{name}.t", [Member($"{name}.Go", 0)], [Call($"{name}.Go", "Shout", 0, new ExtractQualifier(CodeQualifierKinds.Type, "String"))], imports: imports);
+
+        var library = Import(CodeImportForms.Relative, "ext/lib.t");
+        var barrel = Import(CodeImportForms.Relative, "barrel.t");
+
+        var linked = Link(
+            File("ext/lib.t", [], scopes: [Open("ext")]),
+            File("ext/part.t", [Type("ext.StrExt"), Member("ext.StrExt.Shout", 0) with { Extends = "String", Parent = "t:ext.StrExt" }]),
+            File("barrel.t", [], imports: [library with { Export = true }]),
+            User("a", library),
+            User("b", library with { Hide = ["StrExt"] }),
+            User("c", barrel),
+            User("d", barrel with { Show = ["Other"] }),
+            User("e", library with { Prefix = "p" }),
+            User("f", Import(CodeImportForms.Scope, "ext") with { Prefix = "E" }),
+            User("g", Import(CodeImportForms.Scope, "ext")));
+
+        Assert.Equal(
+            ["t:a.Go", "t:c.Go", "t:e.Go", "t:g.Go"],
+            linked.Edges.Where(edge => edge is { To: "t:ext.StrExt.Shout", Kind: CodeEdgeKinds.Calls }).Select(edge => edge.From).Order(StringComparer.Ordinal));
     }
 
     /// <summary>
@@ -778,8 +1224,8 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
-    /// Address roots are tried the longest prefix first, and two of one prefix in one order - by directory - whatever order
-    /// the files that declare them come in.
+    /// Address roots are tried the longest prefix first, and two of one prefix in one order - their files' paths' - whatever
+    /// order the files that declare them come in.
     /// </summary>
     [Fact]
     public void AddressRoots_AreTriedLongestFirst_AndTwoAlikeInOneOrder()
@@ -810,6 +1256,88 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
+    /// A whole address root stands for its address alone - none longer, none it begins - and is a file's; roots of one
+    /// prefix are tried in the order their file declares them until one names a file the tree holds, a root that names a
+    /// directory or a file it does not hold passed over.
+    /// </summary>
+    [Fact]
+    public void AWholeAddressRoot_StandsForItsAddressAlone_AndRootsAreTriedUntilOneNamesAFile()
+    {
+        var linked = Link(
+            File("pkg.t", []) with
+            {
+                Extract = new FileExtract([])
+                {
+                    AddressRoots = [new("pkg", "src/missing.t") { Whole = true }, new("pkg", "src") { Whole = true }, new("pkg", "src/main.t") { Whole = true }, new("pkg", "dist/main.t") { Whole = true }],
+                },
+            },
+            File("src/main.t", []),
+            File("dist/main.t", []),
+            File("use.t", [], imports: [Import(CodeImportForms.Address, "pkg"), Import(CodeImportForms.Address, "pkg/main.t") with { Line = 2 }, Import(CodeImportForms.Address, "pkgs") with { Line = 3 }]));
+
+        Assert.Equal(
+            [new CodeEdge("file:use.t", "file:src/main.t", CodeEdgeKinds.Imports, 1, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Imports));
+    }
+
+    /// <summary>
+    /// A name a declaration is exported by besides its own is what an import of its file by that name finds - by a prefix
+    /// or by what it shows, as exact or as sure as its own name would be - and nothing else: its own file, a file that
+    /// imports it by no such name, and a reference of that name nowhere imported find nothing by it.
+    /// </summary>
+    [Fact]
+    public void ANameADeclarationIsExportedBy_IsWhatAnImportOfItsFileFindsByIt()
+    {
+        // Its own name kept to its file's scope: an importer by an export's name still finds it.
+        var shape = File("shape.t", [Member("Make", 0) with { Exports = ["default", "build"], SeenIn = "shape" }, Member("Self", 0)], [Call("Self", "default", 0) with { From = "t:Self" }], [Open("shape")]);
+        var linked = Link(
+            shape,
+            File("prefixed.t", [Member("Go", 0)], [Call("Go", "default", 0, Prefix("S"))], imports: [Import(CodeImportForms.Relative, "shape.t") with { Prefix = "S", Show = ["default"] }]),
+            File("shown.t", [Member("Go2", 0)], [Call("Go2", "build", 0)], imports: [Import(CodeImportForms.Relative, "shape.t") with { Show = ["build"] }]),
+            File("none.t", [Member("Go3", 0)], [Call("Go3", "build", 0)]));
+
+        Assert.Contains(Edge("t:Go", "t:Make", CodeEdgeKinds.Calls, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(Edge("t:Go2", "t:Make", CodeEdgeKinds.Calls, CodeConfidences.Unique), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.From is "t:Self" or "t:Go3" && edge.Kind == CodeEdgeKinds.Calls);
+
+        // By its own name, kept to its scope, no importer finds it.
+        var own = Link(shape, File("own.t", [Member("Go4", 0)], [Call("Go4", "Make", 0)], imports: [Import(CodeImportForms.Relative, "shape.t") with { Show = ["Make"] }]));
+
+        Assert.DoesNotContain(own.Edges, edge => edge is { From: "t:Go4", Kind: CodeEdgeKinds.Calls });
+    }
+
+    /// <summary>
+    /// A local address root gives its meaning to the addresses its own file's directory's files import alone, before any
+    /// root that is every file's, the nearest file's first - whatever prefix a farther one's is - and a file in no such
+    /// directory is given none by it.
+    /// </summary>
+    [Fact]
+    public void ALocalAddressRoot_IsItsDirectorysFilesAlone_TheNearestFirst_BeforeEveryFilesRoot()
+    {
+        CodeGraphFile Roots(string path, params ExtractAddressRoot[] roots) => File(path, []) with { Extract = new FileExtract([]) { AddressRoots = roots } };
+
+        var linked = Link(
+            Roots("pkg.t", new ExtractAddressRoot("@x/", "global")),
+            Roots("apps/cfg.t", new ExtractAddressRoot("@x/", "outer") { Local = true }, new ExtractAddressRoot("@x/deep/", "deeper") { Local = true }),
+            Roots("apps/in/cfg.t", new ExtractAddressRoot("@x/", "near") { Local = true }),
+            File("global/y.t", []),
+            File("apps/outer/y.t", []),
+            File("apps/outer/z.t", []),
+            File("apps/in/near/y.t", []),
+            File("apps/deeper/w.t", []),
+            File("apps/in/use.t", [], imports: [Import(CodeImportForms.Address, "@x/y.t"), Import(CodeImportForms.Address, "@x/z.t") with { Line = 2 }, Import(CodeImportForms.Address, "@x/deep/w.t") with { Line = 3 }]),
+            File("apps/use.t", [], imports: [Import(CodeImportForms.Address, "@x/y.t")]),
+            File("other/use.t", [], imports: [Import(CodeImportForms.Address, "@x/y.t")]));
+
+        Assert.Equal(
+            [
+                ("file:apps/in/use.t", "file:apps/deeper/w.t", 3), ("file:apps/in/use.t", "file:apps/in/near/y.t", 1), ("file:apps/in/use.t", "file:apps/outer/z.t", 2),
+                ("file:apps/use.t", "file:apps/outer/y.t", 1), ("file:other/use.t", "file:global/y.t", 1),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Imports).Select(edge => (edge.From, edge.To, edge.Line)).Order());
+    }
+
+    /// <summary>
     /// A concrete type another implements still answers its interface's member; the type implementing it in turn answers
     /// both, and so does a type mixing it in; and the member of an interface reaches every type implementing one that extends
     /// it - never an interface's own.
@@ -832,7 +1360,8 @@ public sealed class CodeGraphLinkerTests
     /// <summary>
     /// A dispatch is as sure as the least sure edge on its way: a type that inherits one of two types of a name, one of
     /// which implements an interface exactly, answers that interface's member only as one of the candidates; a member
-    /// found up a base of two of a name answers as one of them; and two bases that answer alike each answer as one.
+    /// found up a base of two of a name answers as one of them; and two bases it inherits that answer alike each answer as
+    /// one.
     /// </summary>
     [Fact]
     public void ADispatch_IsAsSureAsTheLeastSureEdgeOnItsWay()
@@ -846,7 +1375,7 @@ public sealed class CodeGraphLinkerTests
             [
                 Ref("n.Impl", CodeEdgeKinds.Implements, "Repo"), Ref("m.Mock", CodeEdgeKinds.Inherits, "Impl"),
                 Ref("n.T", CodeEdgeKinds.Implements, "Repo"), Ref("n.T", CodeEdgeKinds.Inherits, "Base"),
-                Ref("n.U", CodeEdgeKinds.Implements, "Repo"), Ref("n.U", CodeEdgeKinds.MixesIn, "A"), Ref("n.U", CodeEdgeKinds.MixesIn, "B"),
+                Ref("n.U", CodeEdgeKinds.Implements, "Repo"), Ref("n.U", CodeEdgeKinds.Inherits, "A"), Ref("n.U", CodeEdgeKinds.Inherits, "B"),
             ]));
 
         Assert.Contains(Edge("t:n.Impl", "t:n.Repo", CodeEdgeKinds.Implements, CodeConfidences.Exact), linked.Edges);
@@ -857,7 +1386,7 @@ public sealed class CodeGraphLinkerTests
         Assert.Contains(Edge("t:n.T", "t:p.Base", CodeEdgeKinds.Inherits, CodeConfidences.Candidates), linked.Edges);
         Assert.Equal(CodeConfidences.Candidates, Assert.Single(linked.Edges, edge => edge is { Kind: CodeEdgeKinds.Dispatches, To: "t:p.Base.Run" }).Confidence);
 
-        Assert.Contains(Edge("t:n.U", "t:n.A", CodeEdgeKinds.MixesIn, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(Edge("t:n.U", "t:n.A", CodeEdgeKinds.Inherits, CodeConfidences.Exact), linked.Edges);
         Assert.Equal(CodeConfidences.Candidates, Assert.Single(linked.Edges, edge => edge is { Kind: CodeEdgeKinds.Dispatches, To: "t:n.A.Run" }).Confidence);
         Assert.Equal(CodeConfidences.Candidates, Assert.Single(linked.Edges, edge => edge is { Kind: CodeEdgeKinds.Dispatches, To: "t:n.B.Run" }).Confidence);
     }
@@ -1067,7 +1596,6 @@ public sealed class CodeGraphLinkerTests
     private static Dictionary<string, (string Reader, CodeGraphFile[] Before, CodeGraphFile[] After)> Reading()
     {
         static ExtractQualifier TypeQualifier(string name) => new(CodeQualifierKinds.Type, name);
-        static ExtractQualifier Prefix(string name) => new(CodeQualifierKinds.Prefix, name);
         static ExtractNode Node(string id, string kind, string qualified, string? scope) => new(id, kind, Last(qualified), qualified, 1, 1, qualified) { Scope = scope };
 
         var cases = new Dictionary<string, (string Reader, CodeGraphFile[] Before, CodeGraphFile[] After)>(StringComparer.Ordinal);
@@ -1122,6 +1650,27 @@ public sealed class CodeGraphLinkerTests
             [File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Address, "pkg:x.t") with { Prefix = "p" }]), File("lib/x.t", [Member("Run", 0)])],
             new CodeGraphFile("r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "elsewhere")] }),
             new CodeGraphFile("r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "lib")] }));
+
+        // Whether an address root is whole: one become an address's alone, which no longer stands for the files under it.
+        Case(
+            "whether an address root is whole",
+            [File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Address, "pkg:x.t") with { Prefix = "p" }]), File("lib/x.t", [Member("Run", 0)])],
+            new CodeGraphFile("r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "lib")] }),
+            new CodeGraphFile("r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "lib") { Whole = true }] }));
+
+        // Whether an address root is local: one become its directory's files' alone, which no longer gives the call's file its meaning.
+        Case(
+            "whether an address root is local",
+            [File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Address, "pkg:x.t") with { Prefix = "p" }]), File("lib/x.t", [Member("Run", 0)])],
+            new CodeGraphFile("cfg/r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "../lib")] }),
+            new CodeGraphFile("cfg/r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "../lib") { Local = true }] }));
+
+        // The names a declaration of a file imported by its path is exported by besides its own.
+        Case(
+            "the names a declaration is exported by",
+            [File("use.t", [go], [Call("Go", "default", 0, Prefix("p"))], imports: [Import(CodeImportForms.Relative, "lib.t") with { Prefix = "p" }])],
+            File("lib.t", [Member("Run", 0)]),
+            File("lib.t", [Member("Run", 0) with { Exports = ["default"] }]));
 
         // The containers of a qualified name: a type come where a namespace of that name was, whose base holds the call.
         var stop = File("b.t", [Type("B"), Member("B.Stop", 0)]);
@@ -1183,6 +1732,18 @@ public sealed class CodeGraphLinkerTests
             File("q.t", [Type("Q")], [Ref("Q", CodeEdgeKinds.Inherits, "B1")]),
             File("q.t", [Type("Q")], [Ref("Q", CodeEdgeKinds.Inherits, "B2")]));
 
+        // A type's bases in their ranks: a mixin become a base it inherits beside another, so a call on the type finds the
+        // member each of them declares, where the mixin's alone was nearer.
+        Case(
+            "a type's bases in their ranks",
+            [
+                File("m.t", [Type("M"), Member("M.Run", 0) with { Parent = "t:M" }]),
+                File("s.t", [Type("S"), Member("S.Run", 0) with { Parent = "t:S" }]),
+                File("use.t", [go], [Call("Go", "Run", 0, TypeQualifier("C"))]),
+            ],
+            File("c.t", [Type("C")], [Ref("C", CodeEdgeKinds.Inherits, "S"), Ref("C", CodeEdgeKinds.MixesIn, "M") with { Line = 2 }]),
+            File("c.t", [Type("C")], [Ref("C", CodeEdgeKinds.Inherits, "M"), Ref("C", CodeEdgeKinds.Inherits, "S") with { Line = 2 }]));
+
         // The scope a container is: closed in its own file, it is that file's alone, and not seen from the call's.
         Case(
             "the scope a container is",
@@ -1225,6 +1786,56 @@ public sealed class CodeGraphLinkerTests
         Case("an import's prefix", shapes, importing, File("ext.t", extension, imports: [geo with { Prefix = "G" }]));
         Case("what an import shows", shapes, importing, File("ext.t", extension, imports: [geo with { Show = ["Other"] }]));
         Case("what an import hides", shapes, importing, File("ext.t", extension, imports: [geo with { Hide = ["Shape"] }]));
+        var shares = File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Relative, "lib.t") with { Shares = true }]);
+
+        // What a file imported by its path exports, which a name is found through.
+        var importsBarrel = File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Relative, "lib.t") with { Prefix = "p" }]);
+        Case(
+            "what a file imported by its path exports",
+            [importsBarrel, File("run.t", [Member("Run", 0)])],
+            File("lib.t", [Member("Stop", 0)]),
+            File("lib.t", [Member("Stop", 0)], imports: [Import(CodeImportForms.Relative, "run.t") with { Export = true }]));
+
+        // The scope a declaration is kept to, which the finding's declaration is not written in.
+        Case(
+            "the scope a declaration is kept to",
+            [File("use.t", [go], [Call("Go", "Run", 0)])],
+            File("run.t", [Member("lib.Run", 0)]),
+            File("run.t", [Member("lib.Run", 0) with { SeenIn = "lib" }]));
+
+        // Whether a file imported by its path has an extract: one read now, which exports what is called.
+        Case(
+            "whether a file imported by its path has an extract",
+            [File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Relative, "lib.t") with { Prefix = "p" }]), File("run.t", [Member("Run", 0)])],
+            new CodeGraphFile("lib.t", "t", null),
+            File("lib.t", [], imports: [Import(CodeImportForms.Relative, "run.t") with { Export = true }]));
+
+        // Whether a file an extension is reached through has an extract: one read now, which exports the library of the
+        // extension's scope.
+        Case(
+            "whether a file an extension is reached through has an extract",
+            [
+                File("use.t", [go], [Call("Go", "Shout", 0, TypeQualifier("String"))], imports: [Import(CodeImportForms.Relative, "barrel.t")]),
+                File("ext/lib.t", [], scopes: [Open("ext")]),
+                File("ext/part.t", [Type("ext.StrExt"), Member("ext.StrExt.Shout", 0) with { Extends = "String", Parent = "t:ext.StrExt" }]),
+            ],
+            new CodeGraphFile("barrel.t", "t", null),
+            File("barrel.t", [], imports: [Import(CodeImportForms.Relative, "ext/lib.t") with { Export = true }]));
+
+        // Whether a file whose imports are shared has an extract: one read now, which imports what is called.
+        Case(
+            "whether a file whose imports are shared has an extract",
+            [shares, File("run.t", [Member("Run", 0)])],
+            new CodeGraphFile("lib.t", "t", null),
+            File("lib.t", [], imports: [Import(CodeImportForms.Relative, "run.t") with { Prefix = "p" }]));
+
+        // What a file whose imports are shared imports.
+        Case(
+            "what a file whose imports are shared imports",
+            [shares, File("run.t", [Member("Run", 0)])],
+            File("lib.t", []),
+            File("lib.t", [], imports: [Import(CodeImportForms.Relative, "run.t") with { Prefix = "p" }]));
+
         Case(
             "the language a file's global imports come by",
             [.. shapes, File("usings.t", [], imports: [geo with { Global = true }])],
@@ -1325,7 +1936,7 @@ public sealed class CodeGraphLinkerTests
         {
             References = references,
             Scopes = declared,
-            Imports = [.. Enumerable.Range(0, random.Next(0, 3)).Select(_ => RandomImport(random))],
+            Imports = RandomImports(random),
             AddressRoots = Chance(random, 5) ? [RandomRoot(random)] : [],
         });
     }
@@ -1377,6 +1988,9 @@ public sealed class CodeGraphLinkerTests
         var arity = random.Next(0, 2);
         var id = value ? $"t:{type}.{member}" : $"t:{type}.{member}({arity})";
 
+        // Now and then a second declaration of one name and parameters in a file: a prototype and its body, each its own id.
+        id = !value && Chance(random, 6) && nodes.Any(node => node.Id == id) ? $"{id}~2" : id;
+
         if (nodes.Any(node => node.Id == id))
         {
             return;
@@ -1392,6 +2006,8 @@ public sealed class CodeGraphLinkerTests
             Extends = !value && Chance(random, 3) ? Dotted(random) : null,
             Prototype = !value && Chance(random, 8),
             Test = !value && Chance(random, 8),
+            SeenIn = Chance(random, 8) ? Pick(random, RandomScopes) : null,
+            Exports = Chance(random, 8) ? [Pick(random, RandomNames)] : null,
         });
     }
 
@@ -1410,7 +2026,7 @@ public sealed class CodeGraphLinkerTests
         => new(from, Pick(random, [CodeEdgeKinds.Calls, CodeEdgeKinds.Calls, CodeEdgeKinds.References]), Pick(random, RandomNames), line)
         {
             Arity = random.Next(0, 2),
-            Qualifier = random.Next(9) switch
+            Qualifier = random.Next(10) switch
             {
                 0 or 1 => null,
                 2 => new ExtractQualifier(CodeQualifierKinds.Named, Dotted(random)),
@@ -1418,9 +2034,24 @@ public sealed class CodeGraphLinkerTests
                 4 or 5 => new ExtractQualifier(CodeQualifierKinds.Value, Dotted(random)),
                 6 => new ExtractQualifier(CodeQualifierKinds.This, null),
                 7 => new ExtractQualifier(CodeQualifierKinds.Base, null),
+                8 => new ExtractQualifier(CodeQualifierKinds.Scope, random.Next(2) == 0 ? null : Pick(random, RandomScopes)),
                 _ => new ExtractQualifier(CodeQualifierKinds.Prefix, "p"),
             },
         };
+
+    /// <summary>Up to three imports made at random, one of a file standing in for the one of a file before it now and then.</summary>
+    private static List<ExtractImport> RandomImports(Random random)
+    {
+        var imports = new List<ExtractImport>();
+
+        for (var made = random.Next(0, 4); made > 0; made--)
+        {
+            var import = RandomImport(random);
+            imports.Add(import.Form != CodeImportForms.Scope && imports.Count > 0 && imports[^1].Form != CodeImportForms.Scope && Chance(random, 2) ? import with { Fallback = true } : import);
+        }
+
+        return imports;
+    }
 
     private static ExtractImport RandomImport(Random random)
         => random.Next(4) switch
@@ -1435,11 +2066,16 @@ public sealed class CodeGraphLinkerTests
             2 => Import(Pick(random, [CodeImportForms.Relative, CodeImportForms.Ending]), Pick(random, ["../lib/x.t", "x.t", "../top.t", "y.t", "../app/m.t", "in/w.t", "lib/y.t", "z.t"])) with
             {
                 Prefix = Chance(random, 3) ? "p" : null,
-            },
+            } is var file && Chance(random, 4) ? file with { Prefix = null, Export = true, Hide = Chance(random, 3) ? [Pick(random, RandomNames)] : null }
+                : file.Prefix is null && Chance(random, 5) ? file with { Shares = true }
+                : file,
             _ => Import(CodeImportForms.Address, Pick(random, ["pkg:x.t", "pkg:in/w.t", "q:m.t", "q:ui/v.t"])),
         };
 
-    private static ExtractAddressRoot RandomRoot(Random random) => new(Pick(random, ["pkg:", "q:"]), Pick(random, ["../lib", "../app", "lib", ".", "../../out"]));
+    private static ExtractAddressRoot RandomRoot(Random random)
+        => (Chance(random, 3)
+            ? new ExtractAddressRoot(Pick(random, ["pkg:x.t", "q:m.t"]), Pick(random, ["../lib/x.t", "../app/m.t", "lib", "x.t"])) { Whole = true }
+            : new ExtractAddressRoot(Pick(random, ["pkg:", "q:"]), Pick(random, ["../lib", "../app", "lib", ".", "../../out"]))) with { Local = Chance(random, 3) };
 
     /// <summary>
     /// <paramref name="tree"/> with one small change of one file made at random: a value's type, what a member extends, a
@@ -1486,6 +2122,8 @@ public sealed class CodeGraphLinkerTests
         {
             case 0:
                 Each(node => node.Kind == CodeNodeKinds.Member && node.MinArity is null && Chance(random, 2), node => node with { ValueType = Chance(random, 4) ? null : Dotted(random) });
+                Each(node => Chance(random, 3), node => node with { SeenIn = node.SeenIn is null ? Pick(random, RandomScopes) : null });
+                Each(node => Chance(random, 4), node => node with { Exports = node.Exports is null ? [Pick(random, RandomNames)] : null });
                 break;
 
             case 13:
@@ -1499,6 +2137,7 @@ public sealed class CodeGraphLinkerTests
                     0 => imports[changing] with { Prefix = imports[changing].Prefix is null ? Pick(random, ["p", "A"]) : null },
                     1 => imports[changing] with { Show = imports[changing].Show is null ? [Pick(random, RandomNames)] : null },
                     2 => imports[changing] with { Hide = imports[changing].Hide is null ? [Pick(random, RandomNames)] : null },
+                    3 when imports[changing] is { Form: not CodeImportForms.Scope, Prefix: null } => imports[changing] with { Export = !imports[changing].Export, Shares = false },
                     _ => imports[changing] with { Global = !imports[changing].Global },
                 };
                 break;
@@ -1566,7 +2205,7 @@ public sealed class CodeGraphLinkerTests
                 break;
 
             case 5:
-                roots = roots.Count > 0 && Chance(random, 2) ? [] : [RandomRoot(random)];
+                roots = roots.Count > 0 && Chance(random, 3) ? [] : roots.Count > 0 && Chance(random, 2) ? [Chance(random, 2) ? roots[0] with { Whole = !roots[0].Whole } : roots[0] with { Local = !roots[0].Local }] : [RandomRoot(random)];
                 break;
 
             case 6:
@@ -1661,6 +2300,8 @@ public sealed class CodeGraphLinkerTests
             File("app/tools.t", [Member("Tool", 0)]),
             File("cfg/roots.t", []) with { Extract = new FileExtract([]) { AddressRoots = [new("pkg:", "lib")] } },
             File("app/addr.t", [Member("Addr", 0)], [Call("Addr", "Shape", 0)], imports: [Import(CodeImportForms.Address, "pkg:shape.t")]),
+            File("cfg/entry.t", []) with { Extract = new FileExtract([]) { AddressRoots = [new("entry", "../app/tools.t") { Whole = true }] } },
+            File("app/entry.t", [Member("Entry", 0)], [Call("Entry", "default", 0, Prefix("e"))], imports: [Import(CodeImportForms.Address, "entry") with { Prefix = "e" }]),
             File("glob.t", [], imports: [Import(CodeImportForms.Scope, "lib") with { Global = true }]),
             File("closed.t", [Member("Go2", 0), Member("hidden.Secret", 0) with { Scope = "hidden" }], [Call("Go2", "Secret", 0)], [new ExtractScope("hidden", Open: false)]),
             File("notes.t", []) with { Extract = null },
@@ -1703,7 +2344,16 @@ public sealed class CodeGraphLinkerTests
             File("app/rel.t", [Member("Rel", 0)], [Call("Rel", "Base", 0)], imports: [Import(CodeImportForms.Relative, "../lib/shape.t")]),
             File("app/rel.t", [Member("Rel", 0)], [Call("Rel", "Base", 0)], imports: [Import(CodeImportForms.Ending, "base.t")]),
         ]);
-        yield return ("app/tools.t", [File("app/tools.t", [Member("Tool", 0), Member("Tool2", 0)])]);
+        yield return ("app/tools.t",
+        [
+            File("app/tools.t", [Member("Tool", 0), Member("Tool2", 0)]),
+            File("app/tools.t", [Member("Tool", 0) with { Exports = ["default"] }]),
+        ]);
+        yield return ("cfg/entry.t",
+        [
+            File("cfg/entry.t", []) with { Extract = new FileExtract([]) { AddressRoots = [new("entry", "../app") { Whole = true }] } },
+            File("cfg/entry.t", []) with { Extract = new FileExtract([]) { AddressRoots = [new("entry", "../lib/base.t") { Whole = true }, new("entry", "../app/tools.t") { Whole = true }] } },
+        ]);
         yield return ("cfg/roots.t",
         [
             File("cfg/roots.t", []) with { Extract = new FileExtract([]) { AddressRoots = [new("pkg:", "app")] } },
@@ -1750,6 +2400,8 @@ public sealed class CodeGraphLinkerTests
     private static ExtractReference Ref(string from, string kind, string name) => new($"t:{from}", kind, name, 1);
 
     private static ExtractQualifier Named(string name) => new(CodeQualifierKinds.Named, name);
+
+    private static ExtractQualifier Prefix(string name) => new(CodeQualifierKinds.Prefix, name);
 
     private static ExtractImport Import(string form, string target) => new(form, target, 1);
 
