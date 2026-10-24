@@ -13,6 +13,9 @@ internal sealed record ScanFrame(string? Prefix, string? Scope, string? Parent, 
     /// <summary>How many blocks deep a reader reads declarations: one nested deeper is not read, so no text nests a reader past its stack.</summary>
     public const int MostDepth = 64;
 
+    /// <summary>Why a reader marks dynamic where declarations nest past <see cref="MostDepth"/> blocks.</summary>
+    public static string TooDeepWhy { get; } = $"declarations nested more than {MostDepth} blocks deep, which are not read";
+
     /// <summary>The frame of a file's top: no scope, no prefix, no type.</summary>
     public static ScanFrame Top { get; } = new(null, null, null, null);
 

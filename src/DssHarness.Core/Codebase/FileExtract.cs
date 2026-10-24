@@ -190,7 +190,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 
     /// <summary>Every text the extract holds, each of which a store writes.</summary>
     private IEnumerable<string> Texts()
-        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id, node.Kind, node.Name, node.Qualified, node.Signature, node.SubKind, node.Scope, node.Parent, node.Summary, node.ValueType, node.Extends, .. node.Modifiers ?? []])
+        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id, node.Kind, node.Name, node.Qualified, node.Signature, node.SubKind, node.Scope, node.Parent, node.Summary, node.ValueType, node.Extends, node.SeenIn, .. node.Modifiers ?? []])
             .Concat((Scopes ?? []).SelectMany(scope => (string?[])[scope.Name, scope.Parent]))
             .Concat((Imports ?? []).SelectMany(import => (string?[])[import.Form, import.Target, import.Prefix, .. import.Show ?? [], .. import.Hide ?? []]))
             .Concat((AddressRoots ?? []).SelectMany(root => (string?[])[root.Prefix, root.Directory]))
@@ -262,6 +262,14 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
     public string? Extends { get; init; }
 
     /// <summary>
+    /// The scope whose declarations alone see it, by its qualified name, where it is kept to them: a declaration written in
+    /// that scope, or in a scope inside it, sees it, and one anywhere else does not - a Dart library's private name, which
+    /// the library's file and its parts see and no importer does. <see langword="null"/> where every declaration that
+    /// reaches it sees it.
+    /// </summary>
+    public string? SeenIn { get; init; }
+
+    /// <summary>
     /// The SHA-256 of its lines (<see cref="CodeGraphIds.Digest"/>): set by the core once the implementation has answered,
     /// never by it, and what says whether the bytes served are the ones extracted.
     /// </summary>
@@ -285,6 +293,7 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
             : MinArity is < 0 || (MaxArity is { } most && (MinArity is not { } least || most < least)) ? "its arity is no range of argument counts"
             : ValueType is { } valueType && string.IsNullOrWhiteSpace(valueType) ? "its value's type is empty"
             : Extends is { } extends && string.IsNullOrWhiteSpace(extends) ? "the type it extends is empty"
+            : SeenIn is { } seenIn && string.IsNullOrWhiteSpace(seenIn) ? "the scope it is seen in is empty"
             : Digest is { } digest && !OrchestrationRules.IsDigest(digest) ? "its digest is no SHA-256"
             : null;
 }
@@ -332,6 +341,21 @@ public sealed record ExtractImport(string Form, string Target, int Line)
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Fallback { get; init; }
 
+    /// <summary>
+    /// Whether it is an export: what the file it names makes visible - its filters applied - is made visible to every file
+    /// that imports this one, and not to this file itself, as Dart's <c>export</c> and JavaScript's <c>export ... from</c>.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Export { get; init; }
+
+    /// <summary>
+    /// Whether the file it names shares its imports with this one: what that file imports - each import's filters and
+    /// prefix with it - this file imports too, after its own, as a Dart part does its library's. What the file it names
+    /// shares in turn is not followed.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Shares { get; init; }
+
     /// <summary>Whether the import makes <paramref name="name"/> visible, by its filters.</summary>
     /// <param name="name">A simple name.</param>
     public bool Lets(string name)
@@ -344,6 +368,10 @@ public sealed record ExtractImport(string Form, string Target, int Line)
             : !FileExtract.Within(Line, lineCount) ? string.Create(CultureInfo.InvariantCulture, $"it is on line {Line}, outside the file's {lineCount}")
             : Prefix is { } prefix && string.IsNullOrWhiteSpace(prefix) ? "its prefix is empty"
             : Fallback && Form == CodeImportForms.Scope ? "it is of a scope, and stands in for another import: only an import of a file does"
+            : Export && Form == CodeImportForms.Scope ? "it is of a scope, and is an export: only an import of a file is exported"
+            : Export && Prefix is not null ? "it is an export with a prefix: an export makes names visible by themselves"
+            : Shares && Form == CodeImportForms.Scope ? "it is of a scope, and shares its imports: only a file's are shared"
+            : Shares && (Export || Prefix is not null || Show is not null || Hide is not null) ? "it shares its imports, and is an export or has a prefix or a filter: what is shared is the file's imports as they are"
             : null;
 }
 
@@ -432,6 +460,8 @@ public static class CodeQualifierKinds
     /// call is written in, nearest first, and its call through the type that member is declared with - a chain of names
     /// through each one's type in turn, a type the repository does not declare holding nothing it declares - else in the
     /// repository by name and arity alone, where nothing is known of its type - never in those scopes as a call of their own.
+    /// A name no such member has that an import of the file is reached by is that import's prefix: the call is looked for
+    /// where <see cref="Prefix"/> looks, as a file that shares another's imports writes that file's prefixes.
     /// </summary>
     public const string Value = "value";
 

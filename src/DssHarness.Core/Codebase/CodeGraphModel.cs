@@ -208,6 +208,46 @@ public static class CodeGraphIds
     public static string FileName(string path) => path[(path.LastIndexOf('/') + 1)..];
 
     /// <summary>
+    /// The path <paramref name="relative"/> names beside the file <paramref name="path"/> - in its directory, with its
+    /// <c>.</c> and <c>..</c> taken out - as an import by a relative path and an address root name one; <see langword="null"/>
+    /// where it climbs out of the tree.
+    /// </summary>
+    /// <param name="path">A file's path, relative to the tree's root with forward separators.</param>
+    /// <param name="relative">A path relative to that file's directory.</param>
+    public static string? Beside(string path, string relative)
+        => Normalize(path.LastIndexOf('/') is var slash and >= 0 ? $"{path[..slash]}/{relative}" : relative);
+
+    /// <summary><paramref name="path"/> with its <c>.</c> and <c>..</c> taken out; <see langword="null"/> where it climbs out of the tree.</summary>
+    /// <param name="path">A path relative to the tree's root, with either separator.</param>
+    public static string? Normalize(string path)
+    {
+        var parts = new List<string>();
+
+        foreach (var part in path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (part == ".")
+            {
+                continue;
+            }
+
+            if (part == "..")
+            {
+                if (parts.Count == 0)
+                {
+                    return null;
+                }
+
+                parts.RemoveAt(parts.Count - 1);
+                continue;
+            }
+
+            parts.Add(part);
+        }
+
+        return string.Join('/', parts);
+    }
+
+    /// <summary>
     /// Each of <paramref name="ids"/>'s handle: the first <see cref="HandleLength"/> hexadecimal characters of its
     /// SHA-256, lengthened, for every id that shares them, until no two of the given ids share one.
     /// </summary>

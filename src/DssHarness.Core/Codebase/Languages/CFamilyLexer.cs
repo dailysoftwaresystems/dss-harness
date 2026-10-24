@@ -62,7 +62,7 @@ internal static class CFamilyLexer
 
         var name = at;
 
-        while (at < end && IsNamePart(text[at]))
+        while (at < end && ScanLexing.IsNamePart(text[at]))
         {
             at++;
         }
@@ -82,11 +82,6 @@ internal static class CFamilyLexer
         ["endif"] = ScanBranch.Closes,
     };
 
-    /// <summary>Whether <paramref name="character"/> may begin a name: a letter, <c>_</c>, <c>$</c>, or a character past ASCII that is a letter.</summary>
-    internal static bool IsNameStart(char character) => char.IsLetter(character) || character is '_' or '$';
-
-    private static bool IsNamePart(char character) => char.IsLetterOrDigit(character) || character is '_' or '$';
-
     /// <summary>
     /// Whether the text at <paramref name="at"/> is white space the code is not cut by - a blank, or a backslash that ends a
     /// line, which joins it to the next - and how wide it is. A line break is no such space.
@@ -100,7 +95,7 @@ internal static class CFamilyLexer
             return true;
         }
 
-        if (text[at] == '\\' && LineBreakAt(text, at + 1, end) is var breaks and > 0)
+        if (text[at] == '\\' && ScanLexing.LineBreakAt(text, at + 1, end) is var breaks and > 0)
         {
             width = 1 + breaks;
             return true;
@@ -109,20 +104,9 @@ internal static class CFamilyLexer
         return false;
     }
 
-    /// <summary>How wide the line break at <paramref name="at"/> is: 2 for CR LF, 1 for CR or LF, 0 where none is.</summary>
-    private static int LineBreakAt(string text, int at, int end)
-        => at >= end ? 0
-            : text[at] == '\r' ? (at + 1 < end && text[at + 1] == '\n' ? 2 : 1)
-            : text[at] == '\n' ? 1
-            : 0;
-
     /// <summary>One run of the lexer over a span of a text.</summary>
-    private sealed class Lexing(string text, CodeLineIndex lines, bool cpp, bool directive)
+    private sealed class Lexing(string text, CodeLineIndex lines, bool cpp, bool directive) : ScanLexing(lines)
     {
-        public List<ScanToken> Tokens { get; } = [];
-
-        public List<ScanComment> Comments { get; } = [];
-
         public void Run(int start, int end)
         {
             var at = start;
@@ -194,13 +178,6 @@ internal static class CFamilyLexer
             }
         }
 
-        /// <summary>A comment from <paramref name="start"/> to <paramref name="end"/>, kept apart; answers where the text goes on.</summary>
-        private int Comment(int start, int end)
-        {
-            Comments.Add(new ScanComment(start, end - start, lines.LineAt(start), lines.LineAt(Math.Max(start, end - 1))));
-            return end;
-        }
-
         /// <summary>Where the line <paramref name="at"/> is on ends: at a line break no backslash continues.</summary>
         private int LineEnd(int at, int end)
         {
@@ -261,7 +238,7 @@ internal static class CFamilyLexer
             }
 
             var (name, _) = DirectiveName(text, start, at);
-            Tokens.Add(new ScanToken(ScanTokenKind.Directive, start, at - start, lines.LineAt(start), lines.LineAt(Math.Max(start, at - 1)), Branches.GetValueOrDefault(name)));
+            Add(ScanTokenKind.Directive, start, at, Branches.GetValueOrDefault(name));
             return at;
         }
 
@@ -399,10 +376,7 @@ internal static class CFamilyLexer
                 return 2;
             }
 
-            return character is > ' ' and < '\u007f' && !IsNamePart(character) ? 1 : 0;
+            return Alone(character);
         }
-
-        private void Add(ScanTokenKind kind, int start, int end)
-            => Tokens.Add(new ScanToken(kind, start, end - start, lines.LineAt(start), lines.LineAt(Math.Max(start, end - 1))));
     }
 }

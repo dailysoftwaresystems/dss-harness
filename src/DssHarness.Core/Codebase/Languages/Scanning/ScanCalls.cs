@@ -7,10 +7,11 @@ namespace DssHarness.Core.Codebase.Languages.Scanning;
 /// <param name="Arity">How many arguments it gives: the top-level commas between its parentheses, and one, where anything is between them.</param>
 internal readonly record struct ScannedCall(int Name, int Open, int Close, int Arity);
 
-/// <summary>What a scanned language says of its calls: the names no call is made by, and how it writes a call's type arguments.</summary>
+/// <summary>What a scanned language says of its calls: the names no call is made by, how it writes a call's type arguments, and whether a comma may end its arguments.</summary>
 /// <param name="Keywords">The names of the language no call is made by.</param>
 /// <param name="TypeArguments">How it writes a list of type arguments between a call's name and its parenthesis; <see langword="null"/> where it writes none.</param>
-internal sealed record ScanCallRules(IReadOnlySet<string> Keywords, ScanTypeArguments? TypeArguments);
+/// <param name="TrailingComma">Whether a comma may end a call's arguments with none after it, as Dart's may; where not - C's macros - it is followed by an empty one.</param>
+internal sealed record ScanCallRules(IReadOnlySet<string> Keywords, ScanTypeArguments? TypeArguments, bool TrailingComma = false);
 
 /// <summary>
 /// How a scanned language writes a list of type arguments, <c>&lt;</c> to <c>&gt;</c>: the punctuators a type it names
@@ -24,12 +25,14 @@ internal sealed record ScanCallRules(IReadOnlySet<string> Keywords, ScanTypeArgu
 /// end or its next piece follows - C++'s <c>&amp;&amp;</c> in code: <c>a &lt; b &amp;&amp; c &gt; (d)</c> is no list,
 /// <c>std::forward&lt;T&amp;&amp;&gt;</c> is; none where a punctuator written twice is a type's like any other.
 /// </param>
-internal sealed record ScanTypeArguments(IReadOnlySet<string> Punctuators, IReadOnlySet<string> Followers, IReadOnlySet<string>? Conjunctions = null);
+/// <param name="Introducers">The words a literal's list of type arguments may follow, which end no operand: Dart's <c>const</c> in <c>const &lt;K, V&gt;{}</c>; none where it writes no such literal.</param>
+internal sealed record ScanTypeArguments(IReadOnlySet<string> Punctuators, IReadOnlySet<string> Followers, IReadOnlySet<string>? Conjunctions = null, IReadOnlySet<string>? Introducers = null);
 
 /// <summary>
 /// The structural scanner's reading of a call, the same for every scanned language: a name that is no keyword of the
 /// language, an optional list of type arguments, then <c>(</c>, its arity counted by the commas at its own depth - a
-/// comma inside a nested bracket, or inside a type-argument list one of the language's followers follows, counts nothing.
+/// comma inside a nested bracket, or inside a list of type arguments (<see cref="IsTypeArguments"/>), counts nothing,
+/// nor one that ends the arguments where the language lets one.
 /// </summary>
 internal static class ScanCalls
 {
@@ -64,21 +67,24 @@ internal static class ScanCalls
         }
 
         var close = scan.Match(open) is var matched and >= 0 ? matched : scan.IsStranded(open) ? open + 1 : scan.Count;
-        return new ScannedCall(at, open, close, Arity(scan, open, close, rules.TypeArguments));
+        return new ScannedCall(at, open, close, Arity(scan, open, close, rules));
     }
 
     /// <summary>
     /// How many arguments the parentheses at <paramref name="open"/> and <paramref name="close"/> give: none where nothing
-    /// but directives stands between them, else one more than the commas at their own depth.
+    /// but directives stands between them, else one more than the commas at their own depth - one that ends them not
+    /// counted where the language lets a comma end them.
     /// </summary>
     /// <param name="scan">The text.</param>
     /// <param name="open">The index of the opening parenthesis.</param>
     /// <param name="close">The index of the closing one, or <see cref="ScannedText.Count"/>.</param>
-    /// <param name="types">How the language writes type arguments, whose commas count nothing where a follower follows the list; <see langword="null"/> where it writes none.</param>
-    public static int Arity(ScannedText scan, int open, int close, ScanTypeArguments? types)
+    /// <param name="rules">What the language says of its calls; <see langword="null"/> where only the parentheses count - a macro's parameters.</param>
+    public static int Arity(ScannedText scan, int open, int close, ScanCallRules? rules)
     {
         var any = false;
         var commas = 0;
+        var endsInComma = false;
+        var types = rules?.TypeArguments;
 
         for (var at = open + 1; at < close; at++)
         {
@@ -88,24 +94,59 @@ internal static class ScanCalls
             }
 
             any = true;
+            endsInComma = scan.Is(at, ",");
 
             if (scan.Opens(at))
             {
                 at = Math.Min(scan.Past(at), close) - 1;
             }
-            else if (types is not null && scan.Is(at, "<") && scan.IsName(scan.Previous(at)) && TypeArgumentsEnd(scan, at, types) is var past and >= 0
-                && past < scan.Count && types.Followers.Contains(scan.Text(past)))
+            else if (types is not null && scan.Is(at, "<") && TypeArgumentsEnd(scan, at, types) is var past and >= 0 && past <= close && IsTypeArguments(scan, at, past, types))
             {
                 at = past - 1;
             }
-            else if (scan.Is(at, ","))
+            else if (endsInComma)
             {
                 commas++;
             }
         }
 
-        return any ? commas + 1 : 0;
+        return !any ? 0 : commas + (endsInComma && rules?.TrailingComma == true ? 0 : 1);
     }
+
+    /// <summary>
+    /// Whether the list the <c>&lt;</c> at <paramref name="less"/> opens, read as a type's arguments to <paramref name="past"/>,
+    /// is one, and no expression's comparisons: a literal's, which no operand ends before and its brackets follow - Dart's
+    /// <c>&lt;String, int&gt;{}</c>, <c>&lt;int&gt;[]</c> - or one a name stands before, and after it one of the language's
+    /// followers, the text's end, or what no operand begins with and a comparison's <c>&gt;</c> is never followed by -
+    /// <c>as Map&lt;String, dynamic&gt;)</c>. A <c>&lt;&lt;</c>'s second <c>&lt;</c> opens neither.
+    /// </summary>
+    private static bool IsTypeArguments(ScannedText scan, int less, int past, ScanTypeArguments types)
+    {
+        var before = scan.Previous(less);
+
+        if (!EndsOperand(scan, before, types))
+        {
+            return scan.Is(past, "[") || scan.Is(past, "{");
+        }
+
+        return scan.IsName(before)
+            && (past >= scan.Count || types.Followers.Contains(scan.Text(past)) || scan.Is(past, ")") || scan.Is(past, "]") || scan.Is(past, "}")
+                || scan.Is(past, ",") || scan.Is(past, ";") || scan.Is(past, ":") || scan.Is(past, "?"));
+    }
+
+    /// <summary>
+    /// Whether an operand may end at <paramref name="at"/>, so that a <c>&lt;</c> after it may compare: a name but one of
+    /// the words a literal's list follows, a number, a text, a group's closer, a non-null assertion's <c>!</c> - one after
+    /// an operand, where a negation's comes before one - a postfix <c>++</c> or <c>--</c> (two tokens, as the lexers cut
+    /// them).
+    /// </summary>
+    private static bool EndsOperand(ScannedText scan, int at, ScanTypeArguments types)
+        => at >= 0 && at < scan.Count
+            && ((scan[at].Kind == ScanTokenKind.Name && types.Introducers?.Contains(scan.Text(at)) != true)
+                || scan[at].Kind is ScanTokenKind.Number or ScanTokenKind.Text
+                || scan.Is(at, ")") || scan.Is(at, "]")
+                || (scan.Is(at, "!") && EndsOperand(scan, scan.Previous(at), types))
+                || ((scan.Is(at, "+") || scan.Is(at, "-")) && scan.Is(scan.Previous(at), scan.Text(at))));
 
     /// <summary>
     /// The spans between the top-level commas of a list of declarations from <paramref name="from"/> to
@@ -258,6 +299,45 @@ internal static class ScanCalls
                 at = scan.Match(at);
             }
             else if (!types.Punctuators.Contains(scan.Text(at)) || Conjoins(scan, at, types))
+            {
+                return -1;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// The index of the <c>&lt;</c> the <c>&gt;</c> at <paramref name="greater"/> closes, its list a type's arguments by
+    /// <paramref name="types"/>; -1 where none does, or the list runs past <see cref="MostTypeArguments"/> tokens.
+    /// </summary>
+    /// <param name="scan">The text.</param>
+    /// <param name="greater">The index of the <c>&gt;</c>.</param>
+    /// <param name="types">How the language writes type arguments where the list stands.</param>
+    public static int TypeArgumentsStart(ScannedText scan, int greater, ScanTypeArguments types)
+    {
+        var depth = 0;
+
+        for (var at = greater; at >= 0 && greater - at < MostTypeArguments; at--)
+        {
+            if (scan.Is(at, ">"))
+            {
+                depth++;
+            }
+            else if (scan.Is(at, "<") && --depth == 0)
+            {
+                return TypeArgumentsEnd(scan, at, types) == greater + 1 ? at : -1;
+            }
+            else if (scan.Is(at, ")") || scan.Is(at, "]"))
+            {
+                if (scan.Match(at) < 0)
+                {
+                    return -1;
+                }
+
+                at = scan.Match(at);
+            }
+            else if (scan.Is(at, ";") || scan.Is(at, "{") || scan.Is(at, "}"))
             {
                 return -1;
             }

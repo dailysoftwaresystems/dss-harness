@@ -223,6 +223,79 @@ public sealed class StructuralScannerTests
     public void ATypeArgumentList_EndsPastItsCloser(string text, int past)
         => Assert.Equal(past, ScanCalls.TypeArgumentsEnd(CFamilyLexer.Scan(text, cpp: true), 1, CppLike));
 
+    /// <summary>
+    /// A list's start is found back from its closer where the list it closes is a type's arguments, and none where it is a
+    /// comparison's or a statement or a brace comes first; an angle bracket's end is past its closer, groups passed over,
+    /// or at the brace or the semicolon that cuts it short.
+    /// </summary>
+    [Fact]
+    public void ATypeArgumentListsStart_IsFoundFromItsCloser_AndAnAnglesEndPastIt()
+    {
+        var scan = CFamilyLexer.Scan("a<b<c>, d(e, f)> x; g < h; i > j; k<l {m> n;", cpp: true);
+
+        Assert.Equal(1, ScanCalls.TypeArgumentsStart(scan, At(scan, ">", 2), CppLike));
+        Assert.Equal(3, ScanCalls.TypeArgumentsStart(scan, At(scan, ">", 1), CppLike));
+        Assert.Equal(-1, ScanCalls.TypeArgumentsStart(scan, At(scan, ">", 3), CppLike));
+        Assert.Equal(-1, ScanCalls.TypeArgumentsStart(scan, At(scan, ">", 4), CppLike));
+        Assert.Equal(At(scan, ">", 2) + 1, scan.AngleEnd(1, scan.Count));
+        Assert.Equal(At(scan, ";", 2), scan.AngleEnd(At(scan, "<", 3), scan.Count));
+        Assert.Equal(At(scan, "{", 1), scan.AngleEnd(At(scan, "<", 4), scan.Count));
+    }
+
+    /// <summary>
+    /// Dart's lexer keeps whole the punctuators Dart writes whole and every other one alone - two closers of type
+    /// arguments two tokens - reads a number with its separators, its exponent's sign and a fraction that begins at its
+    /// point, and a name with a dollar in it.
+    /// </summary>
+    [Fact]
+    public void DartsLexer_CutsDartsTokens()
+    {
+        var scan = DartLexer.Scan("a?..b ...?c ??= d?.e .. f => g ?? h; List<List<int>> $x = 1_000 + 0xFF + 1e-5 + .5;").Scan;
+
+        Assert.Equal(
+            [
+                "a", "?..", "b", "...?", "c", "??=", "d", "?.", "e", "..", "f", "=>", "g", "??", "h", ";", "List", "<", "List", "<", "int", ">", ">", "$x", "=",
+                "1_000", "+", "0xFF", "+", "1e-5", "+", ".5", ";",
+            ],
+            Enumerable.Range(0, scan.Count).Select(at => scan.Text(at)));
+    }
+
+    /// <summary>
+    /// Dart's lexer reads a number's point only where a digit follows it, a hexadecimal number with no exponent, and a
+    /// string or a block comment the text ends in to its end.
+    /// </summary>
+    [Fact]
+    public void DartsLexer_ReadsNumbersAndUnendedTexts()
+    {
+        var numbers = DartLexer.Scan("1.toString(); .5; 1e-3; 0xE-1; 2.5e+3;").Scan;
+        var unended = DartLexer.Scan("a = 'abc").Scan;
+        var comment = DartLexer.Scan("a /* b /* c */ d").Scan;
+
+        Assert.Equal(
+            ["1", ".", "toString", "(", ")", ";", ".5", ";", "1e-3", ";", "0xE", "-", "1", ";", "2.5e+3", ";"],
+            Enumerable.Range(0, numbers.Count).Select(at => numbers.Text(at)));
+        Assert.Equal(["a", "=", "'abc"], Enumerable.Range(0, unended.Count).Select(at => unended.Text(at)));
+        Assert.Equal(["a"], Enumerable.Range(0, comment.Count).Select(at => comment.Text(at)));
+        Assert.Equal(1, Assert.Single(comment.Comments).Line);
+    }
+
+    /// <summary>
+    /// A call's arity counts the commas of a type's arguments a literal's list or a type test's holds nothing, and a
+    /// comma that ends the arguments nothing where the language lets one; C's macro arguments count an empty one there.
+    /// </summary>
+    [Fact]
+    public void ACallsArity_PassesOverATypesArguments_AndAnEndingCommaWhereTheLanguageLetsOne()
+    {
+        var scan = CFamilyLexer.Scan("f(a, b,) g(x < y, z > w) h(<K, V>{}) i(m as Map<K, V>) j(std::pair<int, int>(1, 2)) k(i++ < n, j > m) l(x << 2, y >> 2)", cpp: true);
+        var trailing = new ScanCallRules(new HashSet<string>(), CppLike, TrailingComma: true);
+        var plain = new ScanCallRules(new HashSet<string>(), CppLike);
+
+        Assert.Equal(
+            [2, 2, 1, 1, 1, 2, 2],
+            new[] { "f", "g", "h", "i", "j", "k", "l" }.Select(name => ScanCalls.At(scan, At(scan, name, 1), trailing)!.Value.Arity));
+        Assert.Equal(3, ScanCalls.At(scan, At(scan, "f", 1), plain)!.Value.Arity);
+    }
+
     /// <summary>A list that runs past the most tokens one is read over is taken for none.</summary>
     [Fact]
     public void ATypeArgumentListTooLong_IsNone()

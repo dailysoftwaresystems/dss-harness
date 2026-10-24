@@ -52,7 +52,8 @@ internal static class ScanComments
 
     /// <summary>
     /// Why the text is generated code: what a comment among its first <see cref="GeneratedLines"/> lines says, as a
-    /// generator writes - <c>DO NOT EDIT</c> or <c>@generated</c>; <see langword="null"/> where none does.
+    /// generator writes - <c>DO NOT EDIT</c>, <c>DO NOT MODIFY BY HAND</c> (Dart's builders) or <c>@generated</c>;
+    /// <see langword="null"/> where none does.
     /// </summary>
     /// <param name="scan">The text.</param>
     public static string? Generated(ScannedText scan)
@@ -64,6 +65,11 @@ internal static class ScanComments
             if (text.Contains("DO NOT EDIT", StringComparison.Ordinal))
             {
                 return "its first lines say DO NOT EDIT, as a generator writes";
+            }
+
+            if (text.Contains("DO NOT MODIFY BY HAND", StringComparison.Ordinal))
+            {
+                return "its first lines say DO NOT MODIFY BY HAND, as a generator writes";
             }
 
             if (text.Contains("@generated", StringComparison.Ordinal))

@@ -485,7 +485,7 @@ internal sealed class CFamilyReading
 
         if (frame.TooDeep)
         {
-            _extract.Dynamic(_scan[at].Line, $"declarations nested more than {ScanFrame.MostDepth} blocks deep, which are not read");
+            _extract.Dynamic(_scan[at].Line, ScanFrame.TooDeepWhy);
             return end;
         }
 
@@ -516,7 +516,7 @@ internal sealed class CFamilyReading
                 return _scan.StatementEnd(at, end);
             }
 
-            var past = Angled(less, end);
+            var past = _scan.AngleEnd(less, end);
             named.AddRange(TypeParameters(less, past).Where(_typeParameters.Add));
             at = Attributes(past, end);
             templated = true;
@@ -844,7 +844,7 @@ internal sealed class CFamilyReading
 
             while (next < end && !_scan.Is(next, "{") && !_scan.Is(next, ";"))
             {
-                next = _scan.Is(next, "(") || _scan.Is(next, "[") ? _scan.Past(next) : _scan.Is(next, "<") ? Angled(next, end) : _scan.Next(next);
+                next = _scan.Is(next, "(") || _scan.Is(next, "[") ? _scan.Past(next) : _scan.Is(next, "<") ? _scan.AngleEnd(next, end) : _scan.Next(next);
             }
         }
 
@@ -1006,7 +1006,7 @@ internal sealed class CFamilyReading
 
             while (at < open && !_scan.Is(at, ","))
             {
-                at = _scan.Opens(at) ? _scan.Past(at) : _scan.Is(at, "<") ? Angled(at, open) : _scan.Next(at);
+                at = _scan.Opens(at) ? _scan.Past(at) : _scan.Is(at, "<") ? _scan.AngleEnd(at, open) : _scan.Next(at);
             }
 
             at = _scan.Next(at);
@@ -1237,7 +1237,7 @@ internal sealed class CFamilyReading
 
             if (_scan.Is(index, "<") && _cpp && _scan.IsName(_scan.Previous(index)) && !SpellsOperator(index))
             {
-                index = Angled(index, last) - 1;
+                index = _scan.AngleEnd(index, last) - 1;
                 continue;
             }
 
@@ -1287,7 +1287,7 @@ internal sealed class CFamilyReading
         {
             first = word;
             var spelled = TypeText(_scan.Next(word), at + 1, -1);
-            name = spelled.Length > 0 && CFamilyLexer.IsNameStart(spelled[0]) ? $"operator {spelled}" : $"operator{spelled}";
+            name = spelled.Length > 0 && ScanLexing.IsNameStart(spelled[0]) ? $"operator {spelled}" : $"operator{spelled}";
         }
         else if (_scan.IsName(at) && !_keywords.Contains(_scan.Text(at)))
         {
@@ -1300,7 +1300,7 @@ internal sealed class CFamilyReading
                 name = "~" + name;
             }
         }
-        else if (_cpp && _scan.Is(at, ">") && AngledBack(_scan, at, CppTypes) is var less and >= 0 && _scan.IsName(_scan.Previous(less)) && !_keywords.Contains(_scan.Text(_scan.Previous(less))))
+        else if (_cpp && _scan.Is(at, ">") && ScanCalls.TypeArgumentsStart(_scan, at, CppTypes) is var less and >= 0 && _scan.IsName(_scan.Previous(less)) && !_keywords.Contains(_scan.Text(_scan.Previous(less))))
         {
             // An explicit specialization's name, its arguments after it.
             first = _scan.Previous(less);
@@ -1318,7 +1318,7 @@ internal sealed class CFamilyReading
         {
             var part = _scan.Previous(_scan.Previous(first));
 
-            if (_scan.Is(part, ">") && AngledBack(_scan, part, CppTypes) is var opens and >= 0)
+            if (_scan.Is(part, ">") && ScanCalls.TypeArgumentsStart(_scan, part, CppTypes) is var opens and >= 0)
             {
                 part = _scan.Previous(opens);
             }
@@ -1614,7 +1614,7 @@ internal sealed class CFamilyReading
             }
             else if (_cpp && _scan.Is(at, "<"))
             {
-                at = Angled(at, end) - 1;
+                at = _scan.AngleEnd(at, end) - 1;
             }
         }
 
@@ -1809,7 +1809,7 @@ internal sealed class CFamilyReading
             return !StatementWords.Contains(before) && (!_keywords.Contains(before) || Builtins.Contains(before));
         }
 
-        if (!_cpp || !scan.Is(previous, ">") || AngledBack(scan, previous, CppCodeTypes) is not (var less and >= 0) || !scan.IsName(scan.Previous(less)))
+        if (!_cpp || !scan.Is(previous, ">") || ScanCalls.TypeArgumentsStart(scan, previous, CppCodeTypes) is not (var less and >= 0) || !scan.IsName(scan.Previous(less)))
         {
             return false;
         }
@@ -1901,7 +1901,7 @@ internal sealed class CFamilyReading
             previous = scan.Previous(previous);
         }
 
-        if (scan.Is(previous, ">") && AngledBack(scan, previous, CppCodeTypes) is var less and >= 0)
+        if (scan.Is(previous, ">") && ScanCalls.TypeArgumentsStart(scan, previous, CppCodeTypes) is var less and >= 0)
         {
             previous = scan.Previous(less);
         }
@@ -2076,7 +2076,7 @@ internal sealed class CFamilyReading
 
         while (true)
         {
-            if (scan.Is(at, ">") && AngledBack(scan, at, CppCodeTypes) is var less and >= 0)
+            if (scan.Is(at, ">") && ScanCalls.TypeArgumentsStart(scan, at, CppCodeTypes) is var less and >= 0)
             {
                 at = scan.Previous(less);
             }
@@ -2159,7 +2159,7 @@ internal sealed class CFamilyReading
 
             if (_cpp && _scan.Is(at, "<") && _scan.IsName(_scan.Previous(at)))
             {
-                at = Angled(at, end) - 1;
+                at = _scan.AngleEnd(at, end) - 1;
                 continue;
             }
 
@@ -2254,7 +2254,7 @@ internal sealed class CFamilyReading
                 return null;
             }
 
-            if (_cpp && Holders.Contains(chain[(chain.LastIndexOf('.') + 1)..]) && scan.Previous(past) is var held && scan.Is(held, ">") && AngledBack(scan, held, types) is var less and >= 0)
+            if (_cpp && Holders.Contains(chain[(chain.LastIndexOf('.') + 1)..]) && scan.Previous(past) is var held && scan.Is(held, ">") && ScanCalls.TypeArgumentsStart(scan, held, types) is var less and >= 0)
             {
                 return TypeKey(scan, scan.Next(less), held, types);
             }
@@ -2378,67 +2378,6 @@ internal sealed class CFamilyReading
         }
 
         return at;
-    }
-
-    /// <summary>The index past the <c>&gt;</c> that closes the <c>&lt;</c> at <paramref name="less"/>, every group within passed over; where a brace or a semicolon cuts it short, that one's index.</summary>
-    private int Angled(int less, int end)
-    {
-        var depth = 0;
-
-        for (var at = less; at < end; at++)
-        {
-            if (_scan.Is(at, "<"))
-            {
-                depth++;
-            }
-            else if (_scan.Is(at, ">") && --depth == 0)
-            {
-                return at + 1;
-            }
-            else if (_scan.Is(at, "(") || _scan.Is(at, "["))
-            {
-                at = _scan.Bounds(at, end).Past - 1;
-            }
-            else if (_scan.Is(at, "{") || _scan.Is(at, ";") || _scan.Is(at, "}"))
-            {
-                return Math.Max(at, less + 1);
-            }
-        }
-
-        return Math.Max(end, less + 1);
-    }
-
-    /// <summary>The index of the <c>&lt;</c> the <c>&gt;</c> at <paramref name="greater"/> closes, its list a type's arguments; -1 where none does.</summary>
-    private static int AngledBack(ScannedText scan, int greater, ScanTypeArguments types)
-    {
-        var depth = 0;
-
-        for (var at = greater; at >= 0 && greater - at < 256; at--)
-        {
-            if (scan.Is(at, ">"))
-            {
-                depth++;
-            }
-            else if (scan.Is(at, "<") && --depth == 0)
-            {
-                return ScanCalls.TypeArgumentsEnd(scan, at, types) == greater + 1 ? at : -1;
-            }
-            else if (scan.Is(at, ")") || scan.Is(at, "]"))
-            {
-                if (scan.Match(at) < 0)
-                {
-                    return -1;
-                }
-
-                at = scan.Match(at);
-            }
-            else if (scan.Is(at, ";") || scan.Is(at, "{") || scan.Is(at, "}"))
-            {
-                return -1;
-            }
-        }
-
-        return -1;
     }
 
     /// <summary>The id of a declaration named <paramref name="name"/>: its language's prefix and its name - its file's path before it, where it is its file's alone.</summary>

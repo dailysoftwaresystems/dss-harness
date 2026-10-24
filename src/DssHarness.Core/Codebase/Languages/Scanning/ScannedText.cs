@@ -163,6 +163,38 @@ internal sealed class ScannedText
         => Match(open) is var close and >= 0 && close < end ? (close, close + 1) : IsStranded(open) ? (open + 1, open + 1) : (end, end);
 
     /// <summary>
+    /// The index past the <c>&gt;</c> that closes the <c>&lt;</c> at <paramref name="less"/>, within <paramref name="end"/>,
+    /// every group within passed over; where a brace or a semicolon cuts it short, that one's index - always past
+    /// <paramref name="less"/>.
+    /// </summary>
+    public int AngleEnd(int less, int end)
+    {
+        var depth = 0;
+
+        for (var at = less; at < end; at++)
+        {
+            if (Is(at, "<"))
+            {
+                depth++;
+            }
+            else if (Is(at, ">") && --depth == 0)
+            {
+                return at + 1;
+            }
+            else if (Is(at, "(") || Is(at, "["))
+            {
+                at = Bounds(at, end).Past - 1;
+            }
+            else if (Is(at, "{") || Is(at, ";") || Is(at, "}"))
+            {
+                return Math.Max(at, less + 1);
+            }
+        }
+
+        return Math.Max(end, less + 1);
+    }
+
+    /// <summary>
     /// The index past the statement that begins at <paramref name="at"/>, within <paramref name="end"/>: past its
     /// <c>;</c>, its groups passed over; at the <c>}</c> that ends the block it is in; past a block it ends with, and a
     /// <c>;</c> after that; at the end of the branch a stranded bracket in it lies in, the rest of that branch with it.

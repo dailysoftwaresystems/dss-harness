@@ -44,11 +44,33 @@ public static class YamlReading
     /// </param>
     public static YamlMappingNode? Root(string text, string oneDocument, List<string> problems, YamlBounds? bounds = null)
     {
-        ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(problems);
 
-        if (bounds is not null && !Bounded(text, bounds, problems))
+        var root = Load(text, oneDocument, bounds, out var stop);
+
+        if (stop is not null)
         {
+            problems.Add(stop.Line > 0 ? $"line {stop.Line}, column {stop.Column}: {stop.Why}" : stop.Why);
+        }
+
+        return root;
+    }
+
+    /// <summary>
+    /// Loads <paramref name="text"/> as <see cref="Root"/> does, and says where and why it is no such document where it is
+    /// not - for a reader that marks the line a file stops reading at, as a graph's does.
+    /// </summary>
+    /// <param name="text">The file's contents.</param>
+    /// <param name="oneDocument">How a refusal says the file holds one document (<see cref="Root"/>).</param>
+    /// <param name="bounds">What the text is held to before it is read into nodes, or <see langword="null"/>.</param>
+    /// <param name="stop">Where and why it is no such document; <see langword="null"/> where it is one.</param>
+    public static YamlMappingNode? Load(string text, string oneDocument, YamlBounds? bounds, out YamlStop? stop)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        if (bounds is not null && Bounded(text, bounds) is { } bounded)
+        {
+            stop = bounded;
             return null;
         }
 
@@ -60,31 +82,35 @@ public static class YamlReading
         }
         catch (YamlException exception)
         {
-            problems.Add($"line {exception.Start.Line}, column {exception.Start.Column}: "
-                + $"the file is not valid YAML ({exception.Message}).");
+            stop = new YamlStop(Line(exception.Start.Line), Line(exception.Start.Column), $"the file is not valid YAML ({exception.Message}).");
             return null;
         }
 
         if (stream.Documents.Count == 0)
         {
-            problems.Add("the file is empty.");
+            stop = new YamlStop(0, 0, "the file is empty.");
             return null;
         }
 
         if (stream.Documents.Count > 1)
         {
-            problems.Add($"the file holds {stream.Documents.Count} YAML documents; {oneDocument}.");
+            stop = new YamlStop(0, 0, $"the file holds {stream.Documents.Count} YAML documents; {oneDocument}.");
             return null;
         }
 
         if (stream.Documents[0].RootNode is YamlMappingNode mapping)
         {
+            stop = null;
             return mapping;
         }
 
-        problems.Add(At(stream.Documents[0].RootNode, "the file's top level is not a mapping of keys."));
+        var node = stream.Documents[0].RootNode;
+        stop = new YamlStop(Line(node.Start.Line), Line(node.Start.Column), "the file's top level is not a mapping of keys.");
         return null;
     }
+
+    /// <summary>A line or a column YamlDotNet counts, as an <see cref="int"/>.</summary>
+    private static int Line(long at) => (int)Math.Clamp(at, 0, int.MaxValue);
 
     /// <summary>A problem's place in the file, so it points at what it is about.</summary>
     public static string At(YamlNode node, string message)
@@ -168,9 +194,9 @@ public static class YamlReading
     }
 
     /// <summary>
-    /// Whether <paramref name="text"/> keeps to <paramref name="bounds"/>, read as events before
-    /// anything is read into nodes: no alias, and mappings and lists nested no deeper than the
-    /// bounds allow. The first place it does not is added to <paramref name="problems"/>.
+    /// Where <paramref name="text"/> first does not keep to <paramref name="bounds"/>, read as events
+    /// before anything is read into nodes: no alias, and mappings and lists nested no deeper than the
+    /// bounds allow; <see langword="null"/> where it keeps to them.
     /// </summary>
     /// <remarks>
     /// Read as events because nodes are what the bounds guard: an alias makes a few hundred bytes
@@ -178,7 +204,7 @@ public static class YamlReading
     /// read at all. Text that is not YAML passes here, to be refused where it is read into nodes, in
     /// the parser's own words.
     /// </remarks>
-    private static bool Bounded(string text, YamlBounds bounds, List<string> problems)
+    private static YamlStop? Bounded(string text, YamlBounds bounds)
     {
         var parser = new Parser(new StringReader(text));
         var depth = 0;
@@ -190,14 +216,12 @@ public static class YamlReading
                 switch (parser.Current)
                 {
                     case AnchorAlias alias:
-                        problems.Add($"line {alias.Start.Line}, column {alias.Start.Column}: the alias '*{alias.Value}' repeats a part of the file by reference; {bounds.NoAlias}.");
-                        return false;
+                        return new YamlStop(Line(alias.Start.Line), Line(alias.Start.Column), $"the alias '*{alias.Value}' repeats a part of the file by reference; {bounds.NoAlias}.");
 
                     case MappingStart or SequenceStart:
                         if (++depth > bounds.MaxDepth)
                         {
-                            problems.Add($"line {parser.Current.Start.Line}, column {parser.Current.Start.Column}: the file nests more than {bounds.MaxDepth} levels deep; {bounds.TooDeep}.");
-                            return false;
+                            return new YamlStop(Line(parser.Current.Start.Line), Line(parser.Current.Start.Column), $"the file nests more than {bounds.MaxDepth} levels deep; {bounds.TooDeep}.");
                         }
 
                         break;
@@ -210,12 +234,18 @@ public static class YamlReading
         }
         catch (YamlException)
         {
-            return true;
+            return null;
         }
 
-        return true;
+        return null;
     }
 }
+
+/// <summary>Where and why a text is no document of one mapping (<see cref="YamlReading.Load"/>).</summary>
+/// <param name="Line">The line it is found at, from 1; 0 where it is the whole file's.</param>
+/// <param name="Column">The column, from 1; 0 where it is the whole file's.</param>
+/// <param name="Why">Why, as a sentence.</param>
+public sealed record YamlStop(int Line, int Column, string Why);
 
 /// <summary>
 /// What a reader holds its files' YAML to before they are read into nodes (<see cref="YamlReading.Root"/>): no alias,

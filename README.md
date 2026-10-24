@@ -685,7 +685,7 @@ way and where changes are staged. Sixteen steps are served so far: `orient`, whi
 CI, mutation arms, what is dirty, the open agents and who holds the tree); `graphify-codebase`, which syncs the run's one map
 of the repository - every file a node, each declaration a language's implementation reads with its lines, its header and
 the first sentence the code writes of itself (C# through the compiler's own parser, MSBuild's projects and solutions,
-C and C++ through a structural scanner that reads every branch of a conditional, Markdown's headings; every other file by its name and size), and the edges between them, each saying how sure it is - under the run's
+C and C++ through a structural scanner that reads every branch of a conditional, Dart through the same scanner - a library and its parts one scope, its private names its own - and each Dart package's `pubspec.yaml` with the root its `package:` imports resolve through, Markdown's headings; every other file by its name and size), and the edges between them, each saying how sure it is - under the run's
 `graph/`, reading again only the files whose content, reader, reader's version, size limit or languages changed and those it could not read, and starting a run's first
 graph from the newest earlier run's - or, with `in`, the view of that agent's worktree, held against the main checkout's
 graph as an overlay of what the worktree holds otherwise, so no file is read whose extract either made; the engine syncs

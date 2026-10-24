@@ -1858,9 +1858,9 @@ tree lists is a node, every declaration an implementation reads is one, and the 
 sure they are (`exact`, `unique`, `candidates`). Nothing of it names a language. Everything that reads a file's contents
 is an implementation of one contract, `ICodeGraphExtractor` - its `Language`, its `Version`, its `Claims`, whether it
 `Outlines` its files rather than reading a language's declarations, a pure `Extract` and its `Help` - which answers a
-language-neutral `FileExtract`: nodes - a value's type (`ValueType`) and the type an extension extends (`Extends`)
-among what they say - the scopes they are put in (open to
-other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address or path ending, with their prefixes and filters,
+language-neutral `FileExtract`: nodes - a value's type (`ValueType`), the type an extension extends (`Extends`) and
+the scope whose declarations alone see it (`SeenIn`) among what they say - the scopes they are put in (open to
+other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address or path ending, with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`) and an import of a file whose imports this one shares (`Shares`),
 address roots, references by name with their qualifiers, and four marks - a prototype, a test, generated code with
 why, and each line it saw something it cannot bind or stopped reading at (`dynamic`) - of which the linker reads the
 first two. An implementation is registered by being written:
@@ -1886,7 +1886,9 @@ written where missing with `DSSHARNESS_STORE_EXTRACTS=1`), and the edges its fix
 
 A language no parser this tool can carry reads goes through the structural scanner (`Codebase\Languages\Scanning\`),
 whose core knows no language: a language's lexer cuts the text into tokens (`ScanToken`), its comments apart and each
-conditional's directives marked as opening, alternative or closing, and `ScannedText` matches the brackets - each branch
+conditional's directives marked as opening, alternative or closing - each lexer's run a `ScanLexing`, which holds what
+every language's reads alike: the tokens and comments it collects, a name's characters, a line break, a punctuator read
+alone - and `ScannedText` matches the brackets - each branch
 of a conditional read from where the conditional began, the brackets every branch leaves open at one depth joined into
 one closed by the bracket after it (a brace the first branch leaves open kept though another leaves none, as
 `extern "C" {` is), every other bracket a branch leaves unbalanced stranded - matching nothing, holding nothing, and
@@ -1900,17 +1902,39 @@ of declarations at its top-level commas and finds the first of a token at its to
 and type arguments passed over alike;
 `ScanComments` reads a declaration's summary from the comments above it and the mark of a generator from a file's
 first lines; `ScanFrame.Walk` walks declarations, always moving on, and a frame nested past `ScanFrame.MostDepth`
-blocks reads none, so no text nests a reader past its stack; and `ScanExtract` gathers nodes by keys, giving their ids
+blocks reads none - marked dynamic where it stops (`ScanFrame.TooDeepWhy`) - so no text nests a reader past its stack; and `ScanExtract` gathers nodes by keys, giving their ids
 once the file is read - a declaration with a body before one without, so a prototype never takes its definition's id -
-with a namespace's parts in one file one node. A language's reader (C and C++ share `CFamilyReading`) says what a
-declaration, a scope and an import are.
+with a namespace's parts in one file one node. `ScannedText.AngleEnd` and `ScanCalls.TypeArgumentsStart` find a list of
+type arguments' end and its start from either bracket, alike for every language that writes them. A language's reader
+(C and C++ share `CFamilyReading`; Dart's is `DartReading`, over `DartLexer`) says what a declaration, a scope and an
+import are. Dart's lexer keeps a string whole with every interpolation it holds and says where each `${...}` holds
+code, which the reader scans as a text of its own; its reader puts a library's declarations - its file's and its parts'
+- in one open scope named by the library's path, keeps each private name to it (`SeenIn`), has a part share its
+library's imports (`Shares`), and reads a test framework's `test`, `testWidgets` and `group` calls in a test file as test
+nodes. Any name but a reserved word's may name a member - `of`, `show`, `get` - and a member's call is one whatever its
+name spells after the receiver's dot (`x.when(...)`); a call's arity counts no comma that ends its arguments, where
+the language lets one (`ScanCallRules.TrailingComma`), and no comma of a type's arguments a literal's list or a type
+test holds. Declarations, interpolations and test groups nested past `ScanFrame.MostDepth` are marked dynamic and read no
+deeper.
+`pubspec`, an outline over the repository's YAML reader (`YamlReading.Load`, which says the line and column a text stops
+being one mapping at, as `Root`'s refusals do), declares the address root each package's `package:` imports resolve
+through.
 
 The one linker (`CodeGraphLinker`) resolves every reference by the same steps for every language - the qualifier's
 scope, a type and its bases among it; the enclosing scopes from the inside out; a scope import's prefix (an alias),
-for what that import stands for; the file's imports in order, filters applied; the repository by name and arity - a
+for what that import stands for; the file's imports in order, filters applied - a file imported making visible what it
+declares at its top, the open scopes it declares and what each file it exports does, each export's filter applied and
+each file once, an export making nothing visible to the file that makes it, and a file that shares another's imports
+(`ExtractImport.Shares`, a Dart part's of its library) importing those after its own; the repository by name and arity - a
 qualifier being read as such a prefix too where no type or scope has it as its whole qualified name, from the file
-that makes the import or, made global, from every file of its language - and derives `dispatches`, `declares` and `tests` from the `implements` edges
-and the marks. A closed scope at a file's top - one no scope holds and that is no type's or namespace's own, as a C
+that makes the import or, made global, from every file of its language, and a name no value or type has that an import's
+prefix is standing for that import, written as a value or before a type's name - and derives `dispatches`, `declares`
+and `tests` from the `implements` edges and the marks. A type is looked in before its bases and its bases a level at a
+time, each level nearest first, the first rank that holds the name deciding with all it holds: the mixins each type of
+the level names, a rank each, the last first - each applied over what comes before it - then one rank of everything
+the level's types inherit and implement, a mixin's own inherited bases (what a Dart mixin is declared `on`) not followed
+where it is applied; a dispatch answers as sure as the surest way up to its answer. A declaration kept to a scope (`ExtractNode.SeenIn`) is seen only from the
+declarations written in that scope or inside it, as the scopes they are written in climb. A closed scope at a file's top - one no scope holds and that is no type's or namespace's own, as a C
 file's for its `static` names - is one every declaration of the file is written in, looked in after its own scopes, so
 what it declares is found `exact` from anywhere in the file. An import marked `Fallback` stands in for the one before it - a C `#include` in quotes, found by its
 path's ending where the including file's folder lacks it - and is taken only where that one names no file; a
@@ -1924,8 +1948,11 @@ type, a type the repository does not declare holding nothing it declares; a call
 its name in the repository, never to a type and never to the caller's own scopes. A call a type does not hold goes,
 `unique`, to a member that `Extends` that type or a base of it, as the extension's own file names the type - or a type
 the repository lacks, by its written name - where the call's file reaches it: the scope of the extension's type, or
-the one holding that, is one the call is written in or its file imports, or is the top, or the call's file imports the
-extension's by path; one in a closed scope is reached from its own file alone, and no override is an extension. Extracts keep names, not targets, so a name a changed file adds
+the one holding that, is one the call is written in, or is the top; or an import of the call's file makes it visible -
+an import of that scope with no prefix (an alias names a scope and imports nothing), or of a file that declares the
+extension, declares that scope open or exports one that does - each filter on the way letting the name of
+what holds the extension; one in a closed scope is reached from its own file alone, one kept to a scope from that scope alone,
+and no override is an extension. Extracts keep names, not targets, so a name a changed file adds
 binds callers in files that did not change. Each finding keeps every key it read - a name's declarations, an id's parts,
 a qualified name's containers, a name's run's end, a scope's parent, a type's bases, a file's imports and open scopes,
 a language's global imports, the address roots, a path, a file name - each read through the one accessor of its index,
