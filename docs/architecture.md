@@ -1919,11 +1919,41 @@ deeper.
 `pubspec`, an outline over the repository's YAML reader (`YamlReading.Load`, which says the line and column a text stops
 being one mapping at, as `Root`'s refusals do), declares the address root each package's `package:` imports resolve
 through.
+JavaScript and TypeScript share one reader (`JsReading`, over `JsLexer`), JSX and TSX with them. The lexer tells a
+regular expression from a division by what the slash follows, keeps a template whole with each `${...}` said to be code,
+and in a JSX file reads an element - its tags, attributes, text and the elements it holds - as one token whose code and
+whose tags' names it says; a statement ends where JavaScript's automatic semicolons end it, and a type where
+TypeScript's grammar does. A module - a file that imports or exports, `require`s or assigns `module.exports`, or is a
+`.mjs`, `.cjs`, `.mts` or `.cts` - puts its declarations in one open scope named by its path, each it does not export
+kept to it (`SeenIn`); a script's are the repository's, at no scope. Each binding is an import of its own: the names a
+statement binds as they are exported one that shows them, a default, renamed, namespace or `require`d binding one with
+its local name as its prefix, showing the name it imports; a call through such a binding is named by what it imports.
+A specifier is tried as Node resolves it - as written, with each extension, then as a directory's `index` - a
+TypeScript `.js` specifier as its `.ts` source first, each try an import that stands in for the one before it; a bare
+one is an address; `export *` re-exports all but the default. A declaration exported by a name besides its own
+(`export default`, `export { a as b }`, `module.exports =`) lists it (`ExtractNode.Exports`), its own name still the
+module's: an import of its file finds it by that name, whatever scope keeps its own, and nothing else does. A
+receiver's type is the call's qualifier where the file states it; a call through what the file cannot name - a computed
+member, `eval`, a function a parameter, a local or a function-typed field holds, a receiver typed or cast `any`, an
+import of a module the code computes - is marked dynamic. A function a body declares is the body's own wherever it calls
+it. A declaration file's (`.d.ts`) members are prototypes, and code at a module's top is held by its file's `(module)`
+node, CommonJS exports its blocks hold read as the top's. `npm`, over `JsonOutline` (the reader of a project file's
+JSON, which keeps the line each value begins on as the core counts lines and says where and why a file is no object),
+names a package by its name, refers to each package it depends on, and declares its address roots: its name alone each
+file its entry may be - its `exports`' `.` conditions in the order written, then `source`, `module`, `main`, `types`
+and `typings`, then the usual `index` files, each tried as TypeScript and Node try a path; each subpath its
+`exports` name (`ProjectRoots`, the one owner of a mapping's roots for both); and, where it names no `exports`, its name and `/` its directory. A whole root
+(`ExtractAddressRoot.Whole`) stands for its one address and names a file; roots of one prefix are tried in the order
+declared until one names a file the tree holds. `tsconfig` (comments and trailing commas allowed) refers to each project
+its `references` name and declares local roots (`ExtractAddressRoot.Local`) for its `compilerOptions.paths` from its
+`baseUrl` - a pattern whose `*` ends it a directory's, one with none a file's tried as TypeScript and Node try it - which the
+files in its directory and below resolve a bare import by before any other root, the nearest configuration's first.
 
 The one linker (`CodeGraphLinker`) resolves every reference by the same steps for every language - the qualifier's
 scope, a type and its bases among it; the enclosing scopes from the inside out; a scope import's prefix (an alias),
 for what that import stands for; the file's imports in order, filters applied - a file imported making visible what it
-declares at its top, the open scopes it declares and what each file it exports does, each export's filter applied and
+declares at its top, what it declares exported by another name by that name, the open scopes it declares and what each
+file it exports does, each export's filter applied and
 each file once, an export making nothing visible to the file that makes it, and a file that shares another's imports
 (`ExtractImport.Shares`, a Dart part's of its library) importing those after its own; the repository by name and arity - a
 qualifier being read as such a prefix too where no type or scope has it as its whole qualified name, from the file

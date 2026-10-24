@@ -14,8 +14,8 @@ namespace DssHarness.Core.Codebase;
 /// A reference with a qualifier is looked for where the qualifier says alone - a type and its bases, a scope, an
 /// import's prefix, a value's type. One without is looked for in the scopes it is written in, from the inside out, then
 /// as a scope import's prefix (an alias) for what that import stands for, then in what its file imports, in order, each
-/// import's filter applied - a file imported making visible what it declares and what it exports, an export's filter
-/// applied in turn - then in the repository by name and arity. A type qualifier is a type or a scope found as
+/// import's filter applied - a file imported making visible what it declares, what it declares exported by another
+/// name by that name, and what it exports, an export's filter applied in turn - then in the repository by name and arity. A type qualifier is a type or a scope found as
 /// such a name is: in those scopes, by its whole qualified name, as an alias it is or begins with, in the imports, in
 /// the repository; else every type or scope its name ends. A named qualifier is that too, unless a value the scopes hold
 /// is nearer - a member, and the call goes through the type that member is declared with, a chain of names through each
@@ -53,7 +53,7 @@ public static class CodeGraphLinker
     /// revision that made it (<see cref="CodeGraphSymbolsFile.Linker"/>), so a graph linked by another one is linked again
     /// though no file changed, and no file is read again.
     /// </summary>
-    public const int Revision = 5;
+    public const int Revision = 6;
 
     /// <summary>Links <paramref name="files"/>, one tree's every file, into its symbols and edges.</summary>
     /// <param name="files">Every file the graph keeps, each once: those whose declarations are kept with their extracts.</param>
@@ -89,6 +89,18 @@ public static class CodeGraphLinker
     private sealed record Declaration(ExtractNode Node, CodeGraphFile File, string? ScopeKey, bool FileOnly, string? SeenKey)
     {
         public string Id => Node.Id;
+    }
+
+    /// <summary>One address root an extract declares, placed.</summary>
+    /// <param name="Prefix">The prefix of an address, or the whole address of one file.</param>
+    /// <param name="Directory">The directory it stands for - the file, for a whole address - from the tree's root.</param>
+    /// <param name="Whole">Whether <paramref name="Prefix"/> is a whole address.</param>
+    /// <param name="Under">The directory of the file that declares it where it is that directory's files' alone (<see cref="ExtractAddressRoot.Local"/>), the tree's root as empty; <see langword="null"/> where it is every file's.</param>
+    /// <param name="Order">Its place among every root: the longest prefix first, roots of one prefix in the order their files - in their paths' order - declare them.</param>
+    private sealed record AddressRoot(string Prefix, string Directory, bool Whole, string? Under, int Order)
+    {
+        /// <summary>Whether it gives its meaning to an address the file at <paramref name="path"/> imports.</summary>
+        public bool Reaches(string path) => Under is not { } under || under.Length == 0 || path.StartsWith(under + "/", StringComparison.Ordinal);
     }
 
     /// <summary>What a finding may read, each kind of key in a table of its own.</summary>
@@ -251,11 +263,20 @@ public static class CodeGraphLinker
         /// <summary>Each scope's parent scope, by key, as the extracts declare or their containers place it.</summary>
         private readonly Dictionary<string, string?> _scopeParents = new(StringComparer.Ordinal);
 
-        /// <summary>The address roots every extract declares: a prefix to the directory it stands for, from the tree's root.</summary>
-        private readonly List<(string Prefix, string Directory)> _roots = [];
+        /// <summary>The address roots every extract declares, each placed (<see cref="AddressRoot.Order"/>).</summary>
+        private readonly List<AddressRoot> _roots = [];
+
+        /// <summary>The whole roots by the address each is: an address is looked up among them, never held against each.</summary>
+        private readonly Dictionary<string, List<AddressRoot>> _wholeRoots = new(StringComparer.Ordinal);
+
+        /// <summary>The roots that are prefixes, in their order.</summary>
+        private readonly List<AddressRoot> _prefixRoots = [];
 
         /// <summary>Each file's declarations at its top - in no node and no scope - by name: what a file imported by path makes visible of its own.</summary>
         private readonly Dictionary<CodeGraphFile, Dictionary<string, List<Declaration>>> _topByFile = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>Each file's declarations by each name another file imports them by besides their own (<see cref="ExtractNode.Exports"/>).</summary>
+        private readonly Dictionary<CodeGraphFile, Dictionary<string, List<Declaration>>> _exportedByFile = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>Each file's closed scopes at its top, by key: found once for each file.</summary>
         private readonly Dictionary<CodeGraphFile, IReadOnlyList<string>> _tops = new(ReferenceEqualityComparer.Instance);
@@ -336,7 +357,7 @@ public static class CodeGraphLinker
                 {
                     if (CodeGraphIds.Beside(file.Path, root.Directory) is { } directory)
                     {
-                        _roots.Add((root.Prefix, directory));
+                        _roots.Add(new AddressRoot(root.Prefix, directory, root.Whole, root.Local ? file.Path[..Math.Max(file.Path.LastIndexOf('/'), 0)] : null, _roots.Count));
                     }
                 }
 
@@ -351,6 +372,12 @@ public static class CodeGraphLinker
                     if (node.Parent is null && node.Scope is null)
                     {
                         Add(top, node.Name, declaration);
+                    }
+
+                    // A name it is exported by is its importers' to see, whatever scope its own name is kept to.
+                    foreach (var exported in node.Exports ?? [])
+                    {
+                        Add(_exportedByFile.TryGetValue(file, out var names) ? names : _exportedByFile[file] = new(StringComparer.Ordinal), exported, declaration with { FileOnly = false, SeenKey = null });
                     }
 
                     if (declaration.ScopeKey is { } key)
@@ -388,10 +415,23 @@ public static class CodeGraphLinker
                 Add(_byTrailing, Trailing(qualified), qualified);
             }
 
-            // The longest prefix first; two alike, in one order whatever order the files came in.
-            _roots.Sort((one, other) => other.Prefix.Length != one.Prefix.Length
-                ? other.Prefix.Length.CompareTo(one.Prefix.Length)
-                : string.CompareOrdinal(one.Prefix, other.Prefix) is var byPrefix and not 0 ? byPrefix : string.CompareOrdinal(one.Directory, other.Directory));
+            // The longest prefix first; roots of one prefix in the order their files declare them - a path mapping's places, a
+            // package's entries - the files in their paths' order, whatever order they came in.
+            var ordered = _roots.OrderByDescending(root => root.Prefix.Length).ThenBy(root => root.Prefix, StringComparer.Ordinal).Select((root, order) => root with { Order = order }).ToList();
+            _roots.Clear();
+            _roots.AddRange(ordered);
+
+            foreach (var root in ordered)
+            {
+                if (root.Whole)
+                {
+                    Add(_wholeRoots, root.Prefix, root);
+                }
+                else
+                {
+                    _prefixRoots.Add(root);
+                }
+            }
         }
 
         /// <summary>The stages a reference is found in: the bases twice, then every other reference.</summary>
@@ -627,6 +667,13 @@ public static class CodeGraphLinker
             }
 
             return Scoped(from, reference.Name, Accepts) is { Count: > 0 } scoped ? (scoped, CodeConfidences.Exact) : Beyond(from, reference.Name, Accepts);
+        }
+
+        /// <summary>What the file at <paramref name="path"/> declares that another file imports by the name <paramref name="name"/> besides its own.</summary>
+        private IReadOnlyList<Declaration> ExportedNamed(string path, string name)
+        {
+            Touch(Read.Name, name);
+            return _byPath.TryGetValue(path, out var file) && _exportedByFile.TryGetValue(file, out var exported) && exported.TryGetValue(name, out var named) ? named : [];
         }
 
         /// <summary>What the scopes <paramref name="from"/> is written in declare named <paramref name="name"/>, from the inside out, with each type's bases: the first that holds one decides.</summary>
@@ -1125,8 +1172,9 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// What a file imported by path makes visible named <paramref name="name"/>: its own top-level declarations, those of
-        /// the open scopes it declares, and what each file it exports makes visible, that export's filter applied - each file
-        /// once, so exports that come round again end.
+        /// the open scopes it declares, those it declares exported by that name (<see cref="ExtractNode.Exports"/>), and what
+        /// each file it exports makes visible, that export's filter applied - each file once, so exports that come round again
+        /// end.
         /// </summary>
         private IEnumerable<Declaration> Visible(string path, string name, HashSet<string> seen)
         {
@@ -1135,7 +1183,7 @@ public static class CodeGraphLinker
                 return [];
             }
 
-            var own = TopNamed(path, name).Concat(OpensOf(path).SelectMany(scope => ScopeNamed(OpenKey(scope), name))).ToList();
+            var own = TopNamed(path, name).Concat(OpensOf(path).SelectMany(scope => ScopeNamed(OpenKey(scope), name))).Concat(ExportedNamed(path, name)).ToList();
             Touch(Read.Imports, path);
 
             if (_byPath.TryGetValue(path, out var file) && file.Extract is not null)
@@ -1168,18 +1216,15 @@ public static class CodeGraphLinker
                     return IsFile(relative) ? [relative] : [];
 
                 case CodeImportForms.Address:
-                    foreach (var (prefix, directory) in Roots())
+                    // The first root that matches and names a file of the tree: a prefix every address it begins, a whole address
+                    // its own alone - several roots may share one, as a path mapping lists places.
+                    foreach (var root in RootsOf(file.Path, import.Target))
                     {
-                        if (import.Target.StartsWith(prefix, StringComparison.Ordinal))
+                        var addressed = CodeGraphIds.Normalize(root.Whole ? root.Directory : $"{root.Directory}/{import.Target[root.Prefix.Length..]}");
+
+                        if (addressed is not null && IsFile(addressed))
                         {
-                            var addressed = CodeGraphIds.Normalize($"{directory}/{import.Target[prefix.Length..]}");
-
-                            if (addressed is null)
-                            {
-                                return [];
-                            }
-
-                            return IsFile(addressed) ? [addressed] : [];
+                            return [addressed];
                         }
                     }
 
@@ -1561,11 +1606,21 @@ public static class CodeGraphLinker
             return _paths.Contains(path);
         }
 
-        /// <summary>The address roots every extract declares, the longest prefix first.</summary>
-        private IReadOnlyList<(string Prefix, string Directory)> Roots()
+        /// <summary>
+        /// The address roots that match <paramref name="address"/> as the file at <paramref name="path"/> imports it, in the
+        /// order they are tried: the local roots of the files in whose directories it is, the nearest file's first, then
+        /// every root that is no file's own - in each, in their order (<see cref="AddressRoot.Order"/>).
+        /// </summary>
+        private IEnumerable<AddressRoot> RootsOf(string path, string address)
         {
             Touch(Read.Roots, string.Empty);
-            return _roots;
+
+            return (_wholeRoots.TryGetValue(address, out var whole) ? whole : [])
+                .Concat(_prefixRoots.Where(root => address.StartsWith(root.Prefix, StringComparison.Ordinal)))
+                .Where(root => root.Reaches(path))
+                .OrderBy(root => root.Under is null)
+                .ThenByDescending(root => root.Under?.Length ?? 0)
+                .ThenBy(root => root.Order);
         }
 
         /// <summary>The paths of the files named <paramref name="fileName"/>.</summary>
@@ -1661,11 +1716,12 @@ public static class CodeGraphLinker
         /// What <paramref name="file"/> holds of each key a finding may read, in order: each of its declarations under its
         /// name and its id - and, for a type or a scope, under its qualified name, its name's last run and its own scope's -
         /// each scope's parent, its open scopes, its imports with its language, what every file of its language imports, and
-        /// its address roots. A declaration's part is what a finding reads of it, by whichever key it was reached: its id,
-        /// its kind, the scope it is declared in and the scope it is, the declaration that holds it - which says whether it
-        /// is its file's top - what it takes, its value's type, what it extends and the scope it is kept to. Its name and its qualified name are keys
-        /// and no field - a declaration whose name changed leaves one key for another, and a scope's key holds its qualified
-        /// name; a line or a body is never read. A file with no extract holds no part: one that gains or loses its extract
+        /// its address roots, each whole or not and local or not. A declaration's part is what a finding reads of it, by
+        /// whichever key it was reached: its id, its kind, the scope it is declared in and the scope it is, the declaration
+        /// that holds it - which says whether it is its file's top - what it takes, its value's type, what it extends, the
+        /// scope it is kept to and the names it is exported by. Its name, its qualified name and each name it is exported by
+        /// are keys and no field - a declaration whose name changed leaves one key for another, and a scope's key holds its
+        /// qualified name; a line or a body is never read. A file with no extract holds no part: one that gains or loses its extract
         /// changes its open scopes'.
         /// </summary>
         private Dictionary<int, string> Parts(CodeGraphFile? file)
@@ -1698,7 +1754,7 @@ public static class CodeGraphLinker
 
             foreach (var root in extract.AddressRoots)
             {
-                Add(Read.Roots, string.Empty, $"{file.Path}{FieldEnd}{root.Prefix}{FieldEnd}{root.Directory}");
+                Add(Read.Roots, string.Empty, $"{file.Path}{FieldEnd}{root.Prefix}{FieldEnd}{root.Directory}{FieldEnd}{(root.Whole ? "whole" : None)}{FieldEnd}{(root.Local ? "local" : None)}");
             }
 
             foreach (var scope in extract.Scopes)
@@ -1724,9 +1780,16 @@ public static class CodeGraphLinker
                     node.Extends ?? None,
                     node.SeenIn is { } seenIn ? KeyOf(file, seenIn, closed) : None,
                     node.Qualified,
-                    node.Prototype ? "prototype" : None);
+                    node.Prototype ? "prototype" : None,
+                    string.Join(PartEnd, node.Exports ?? []));
 
                 Add(Read.Name, node.Name, shape);
+
+                foreach (var exported in node.Exports ?? [])
+                {
+                    Add(Read.Name, exported, shape);
+                }
+
                 Add(Read.Id, node.Id, shape);
 
                 if (own is not null)

@@ -104,7 +104,7 @@ internal sealed class DartReading
     /// <summary>The punctuators a member's name follows its receiver after: a dot, a null-aware one, a cascade's.</summary>
     private static readonly HashSet<string> Accessors = new(StringComparer.Ordinal) { ".", "?.", "..", "?.." };
 
-    private readonly DartText _text;
+    private readonly InterpolatedText _text;
     private readonly ScannedText _scan;
     private readonly string _prefix;
     private readonly string _path;
@@ -939,7 +939,7 @@ internal sealed class DartReading
             if (_scan.Is(next, "(") && next < pieceEnd)
             {
                 var close = Math.Min(_scan.Bounds(next, pieceEnd).Inner, pieceEnd);
-                _extract.Reference(key, CodeEdgeKinds.Calls, constructor, _scan[next].Line, ScanCalls.Arity(_scan, next, close, DartCalls), new ExtractQualifier(CodeQualifierKinds.This));
+                _extract.Reference(key, CodeEdgeKinds.Calls, constructor, _scan[next].Line, ScanCalls.CallArity(_scan, next, close, DartCalls), new ExtractQualifier(CodeQualifierKinds.This));
                 Calls(_text, next + 1, close, key, new Locals(), frame.Owner, depth: 0);
             }
         }
@@ -1679,7 +1679,7 @@ internal sealed class DartReading
     /// interpolations are read as text of their own, a test framework's test calls as nodes of their own, and a pattern's
     /// types as what it references. <paramref name="owner"/> is the type whose members the body sees.
     /// </summary>
-    private void Calls(DartText text, int from, int to, string key, Locals locals, string? owner, int depth)
+    private void Calls(InterpolatedText text, int from, int to, string key, Locals locals, string? owner, int depth)
     {
         var scan = text.Scan;
 
@@ -1741,7 +1741,7 @@ internal sealed class DartReading
             if (word is "super" or "this" && scan.Is(scan.Next(at), "(") && !IsMember(scan, scan.Previous(at)))
             {
                 var open = scan.Next(at);
-                _extract.Reference(key, CodeEdgeKinds.Calls, "new", line, ScanCalls.Arity(scan, open, CloseOf(scan, open), DartCalls),
+                _extract.Reference(key, CodeEdgeKinds.Calls, "new", line, ScanCalls.CallArity(scan, open, CloseOf(scan, open), DartCalls),
                     new ExtractQualifier(word == "super" ? CodeQualifierKinds.Base : CodeQualifierKinds.This));
                 continue;
             }
@@ -2382,7 +2382,7 @@ internal sealed class DartReading
     /// own, named by its description and held by the node of <paramref name="parent"/>, what its arguments call its own;
     /// answers the index of its closing parenthesis, or 0 where it gives no description.
     /// </summary>
-    private int Test(DartText text, int at, ScannedCall call, string parent, Locals locals, string? owner, int depth)
+    private int Test(InterpolatedText text, int at, ScannedCall call, string parent, Locals locals, string? owner, int depth)
     {
         var scan = text.Scan;
         var pieces = ScanCalls.Split(scan, call.Open + 1, call.Close, DartTypes);

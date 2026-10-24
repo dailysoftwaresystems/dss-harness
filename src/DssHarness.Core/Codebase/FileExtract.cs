@@ -165,6 +165,14 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     internal static bool Within(int line, int lineCount) => line >= 1 && line <= lineCount;
 
     /// <summary>
+    /// The line of a file of <paramref name="lineCount"/> lines nearest <paramref name="line"/>: what a reader's position
+    /// before the file's first line or past its last is said as, so every line an extract names is the file's.
+    /// </summary>
+    /// <param name="line">A line a reader names, from 1.</param>
+    /// <param name="lineCount">The file's lines.</param>
+    public static int LineWithin(int line, int lineCount) => Math.Clamp(line, 1, Math.Max(lineCount, 1));
+
+    /// <summary>
     /// Whether <paramref name="text"/> is whole UTF-16 - no surrogate apart from its pair - as a record is written in and
     /// read back: a cut that splits a pair is no text a store holds.
     /// </summary>
@@ -190,7 +198,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 
     /// <summary>Every text the extract holds, each of which a store writes.</summary>
     private IEnumerable<string> Texts()
-        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id, node.Kind, node.Name, node.Qualified, node.Signature, node.SubKind, node.Scope, node.Parent, node.Summary, node.ValueType, node.Extends, node.SeenIn, .. node.Modifiers ?? []])
+        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id, node.Kind, node.Name, node.Qualified, node.Signature, node.SubKind, node.Scope, node.Parent, node.Summary, node.ValueType, node.Extends, node.SeenIn, .. node.Modifiers ?? [], .. node.Exports ?? []])
             .Concat((Scopes ?? []).SelectMany(scope => (string?[])[scope.Name, scope.Parent]))
             .Concat((Imports ?? []).SelectMany(import => (string?[])[import.Form, import.Target, import.Prefix, .. import.Show ?? [], .. import.Hide ?? []]))
             .Concat((AddressRoots ?? []).SelectMany(root => (string?[])[root.Prefix, root.Directory]))
@@ -270,6 +278,15 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
     public string? SeenIn { get; init; }
 
     /// <summary>
+    /// The names another file imports it by besides its own, where it is exported so - a JavaScript module's
+    /// <c>default</c>, the name an <c>export { a as b }</c> gives it: an import of its file - or of a file that exports
+    /// that file's names - finds it by one of them whatever scope <see cref="SeenIn"/> keeps it to, and nothing else finds
+    /// it by one: no reference written in its own file, and none in the repository by name; <see langword="null"/> where it
+    /// is exported by none.
+    /// </summary>
+    public IReadOnlyList<string>? Exports { get; init; }
+
+    /// <summary>
     /// The SHA-256 of its lines (<see cref="CodeGraphIds.Digest"/>): set by the core once the implementation has answered,
     /// never by it, and what says whether the bytes served are the ones extracted.
     /// </summary>
@@ -294,6 +311,7 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
             : ValueType is { } valueType && string.IsNullOrWhiteSpace(valueType) ? "its value's type is empty"
             : Extends is { } extends && string.IsNullOrWhiteSpace(extends) ? "the type it extends is empty"
             : SeenIn is { } seenIn && string.IsNullOrWhiteSpace(seenIn) ? "the scope it is seen in is empty"
+            : Exports is { } exports && (exports.Count == 0 || exports.Any(string.IsNullOrWhiteSpace)) ? "a name it is exported by is empty, or it lists none"
             : Digest is { } digest && !OrchestrationRules.IsDigest(digest) ? "its digest is no SHA-256"
             : null;
 }
@@ -384,7 +402,7 @@ public static class CodeImportForms
     /// <summary>A file, by a path relative to the importing file's directory.</summary>
     public const string Relative = "relative";
 
-    /// <summary>A file, by an address whose prefix an address root gives a directory (<see cref="ExtractAddressRoot"/>).</summary>
+    /// <summary>A file, by an address an address root gives a meaning (<see cref="ExtractAddressRoot"/>): a directory its prefix stands for, or the one file a whole address is.</summary>
     public const string Address = "address";
 
     /// <summary>A file, by the ending of its path: every file of the tree whose path ends so.</summary>
@@ -394,10 +412,30 @@ public static class CodeImportForms
     public static IReadOnlyList<string> All { get; } = [Scope, Relative, Address, Ending];
 }
 
-/// <summary>What an address prefix means, as a project file declares it: <c>package:foo/</c> is the directory <c>lib/</c> beside it.</summary>
-/// <param name="Prefix">The prefix of an address.</param>
-/// <param name="Directory">The directory it stands for, relative to the declaring file's own, with forward separators.</param>
-public sealed record ExtractAddressRoot(string Prefix, string Directory);
+/// <summary>
+/// What an address prefix means, as a project file declares it: <c>package:foo/</c> is the directory <c>lib/</c> beside
+/// it, and every address it begins is a path under that directory - or, where it is <see cref="Whole"/>, one address alone
+/// is one file, as an npm package's name is its entry. An address is the first root's that matches it and names a file of
+/// the tree: first the <see cref="Local"/> roots of the files in whose directories the importing file is, the nearest
+/// file's first; then every other; in each, the longest prefix first, roots of one prefix in the order their files declare
+/// them, the files in their paths' order.
+/// </summary>
+/// <param name="Prefix">The prefix of an address, or the whole address of one file.</param>
+/// <param name="Directory">The directory it stands for - the file, for a whole address - relative to the declaring file's own, with forward separators.</param>
+public sealed record ExtractAddressRoot(string Prefix, string Directory)
+{
+    /// <summary>Whether <see cref="Prefix"/> is a whole address, which <see cref="Directory"/> - a file - is the one file of.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Whole { get; init; }
+
+    /// <summary>
+    /// Whether it gives its meaning to the addresses only the files in its file's directory, or below it, import - a
+    /// TypeScript project's path mappings, which its own files resolve by, before any other way - rather than to every
+    /// file's, as a package's name is everyone's.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Local { get; init; }
+}
 
 /// <summary>One reference a file makes, by name, for the linker to resolve into an edge.</summary>
 /// <param name="From">The id of the node of the extract it is made in.</param>

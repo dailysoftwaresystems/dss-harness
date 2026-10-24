@@ -54,6 +54,16 @@ internal sealed class ScanExtract
     /// <summary>The node of <paramref name="key"/>, as added.</summary>
     public ExtractNode Node(string key) => _nodes[IndexOf(key)];
 
+    /// <summary>
+    /// Changes the node of <paramref name="key"/> to what <paramref name="change"/> makes of it - what the file says of a
+    /// declaration after it, as a JavaScript module's <c>export { a }</c> does - its key and the id it would take kept.
+    /// </summary>
+    public void Change(string key, Func<ExtractNode, ExtractNode> change)
+    {
+        var at = IndexOf(key);
+        _nodes[at] = change(_nodes[at]) with { Id = key, Parent = _nodes[at].Parent };
+    }
+
     /// <summary>Declares the scope <paramref name="name"/>, once: its first declaration says whether it is open and what holds it.</summary>
     public void Scope(string name, bool open, string? parent) => _scopes.TryAdd(name, new ExtractScope(name, open) { Parent = parent });
 

@@ -18,7 +18,7 @@ internal static class DartLexer
 
     /// <summary>Scans <paramref name="text"/> by Dart's rules.</summary>
     /// <param name="text">A file's text.</param>
-    public static DartText Scan(string text) => Scan(text, 0, text.Length, CodeFileText.LineIndex(text));
+    public static InterpolatedText Scan(string text) => Scan(text, 0, text.Length, CodeFileText.LineIndex(text));
 
     /// <summary>
     /// Scans the part of <paramref name="text"/> from <paramref name="start"/> to <paramref name="end"/> by Dart's rules,
@@ -28,19 +28,16 @@ internal static class DartLexer
     /// <param name="start">Where the part begins.</param>
     /// <param name="end">Where it ends.</param>
     /// <param name="lines">The text's lines.</param>
-    public static DartText Scan(string text, int start, int end, CodeLineIndex lines)
+    public static InterpolatedText Scan(string text, int start, int end, CodeLineIndex lines)
     {
         var lexing = new Lexing(text, lines);
         lexing.Run(start, end);
-        return new DartText(new ScannedText(text, lexing.Tokens, lexing.Comments), lexing.Interpolations, lines);
+        return new InterpolatedText(new ScannedText(text, lexing.Tokens, lexing.Comments), lexing.Interpolations, lines);
     }
 
     /// <summary>One run of the lexer over a text.</summary>
     private sealed class Lexing(string text, CodeLineIndex lines) : ScanLexing(lines)
     {
-        /// <summary>For each string that holds code, by where it begins: where each <c>${...}</c> it holds directly begins and ends.</summary>
-        public Dictionary<int, List<(int Start, int End)>> Interpolations { get; } = [];
-
         public void Run(int start, int end)
         {
             var at = start;
@@ -55,14 +52,7 @@ internal static class DartLexer
                 }
                 else if (character == '/' && at + 1 < end && text[at + 1] == '/')
                 {
-                    var close = at;
-
-                    while (close < end && LineBreakAt(text, close, end) == 0)
-                    {
-                        close++;
-                    }
-
-                    at = Comment(at, close);
+                    at = Comment(at, LineEnd(text, at, end));
                 }
                 else if (character == '/' && at + 1 < end && text[at + 1] == '*')
                 {
@@ -86,7 +76,7 @@ internal static class DartLexer
                 }
                 else if (char.IsAsciiDigit(character) || (character == '.' && at + 1 < end && char.IsAsciiDigit(text[at + 1])))
                 {
-                    at = Number(at, end);
+                    at = Number(text, at, end);
                 }
                 else if (character is '\'' or '"')
                 {
@@ -133,35 +123,6 @@ internal static class DartLexer
             }
 
             return end;
-        }
-
-        /// <summary>A number: digits, letters of a hexadecimal one, separators, a fraction's point before a digit and an exponent's sign.</summary>
-        private int Number(int start, int end)
-        {
-            var at = start;
-
-            while (at < end)
-            {
-                if (at + 1 < end && text[at] is 'e' or 'E' && text[at + 1] is '+' or '-' && !text.AsSpan(start, at - start).Contains('x'))
-                {
-                    at += 2;
-                }
-                else if (text[at] == '.' && at + 1 < end && char.IsAsciiDigit(text[at + 1]))
-                {
-                    at++;
-                }
-                else if (IsNamePart(text[at]) && text[at] != '$')
-                {
-                    at++;
-                }
-                else
-                {
-                    break;
-                }
-            }
-
-            Add(ScanTokenKind.Number, start, at);
-            return at;
         }
 
         /// <summary>
@@ -266,15 +227,6 @@ internal static class DartLexer
             return at;
         }
 
-        /// <summary>Records that the string beginning at <paramref name="literal"/> holds code from <paramref name="start"/> to <paramref name="end"/>.</summary>
-        private void Interpolated(int literal, int start, int end)
-        {
-            if (end > start)
-            {
-                (Interpolations.TryGetValue(literal, out var spans) ? spans : Interpolations[literal] = []).Add((start, end));
-            }
-        }
-
         /// <summary>Opens the string whose first quote is at <paramref name="quote"/> on <paramref name="frames"/>; answers where its text begins.</summary>
         private int Open(List<Frame> frames, int quote, bool raw, int end)
         {
@@ -304,8 +256,3 @@ internal static class DartLexer
     private readonly record struct Frame(char Mark, bool Triple, bool Raw, bool Code, int Depth);
 }
 
-/// <summary>A Dart text the lexer has scanned: its tokens, and where the strings among them hold code.</summary>
-/// <param name="Scan">The tokens, comments apart and brackets matched.</param>
-/// <param name="Interpolations">For each string that holds code, by where it begins: where each <c>${...}</c> it holds directly begins and ends.</param>
-/// <param name="Lines">The text's lines.</param>
-internal sealed record DartText(ScannedText Scan, IReadOnlyDictionary<int, List<(int Start, int End)>> Interpolations, CodeLineIndex Lines);

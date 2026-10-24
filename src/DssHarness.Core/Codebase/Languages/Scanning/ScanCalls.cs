@@ -4,8 +4,8 @@ namespace DssHarness.Core.Codebase.Languages.Scanning;
 /// <param name="Name">The index of its name's token.</param>
 /// <param name="Open">The index of the parenthesis its arguments open.</param>
 /// <param name="Close">The index of the one that closes them: past the parenthesis where it is stranded, so it holds nothing; <see cref="ScannedText.Count"/> where none closes it.</param>
-/// <param name="Arity">How many arguments it gives: the top-level commas between its parentheses, and one, where anything is between them.</param>
-internal readonly record struct ScannedCall(int Name, int Open, int Close, int Arity);
+/// <param name="Arity">How many arguments it gives: the top-level commas between its parentheses, and one, where anything is between them; <see langword="null"/> where an argument spreads (<see cref="ScanCalls.CallArity"/>).</param>
+internal readonly record struct ScannedCall(int Name, int Open, int Close, int? Arity);
 
 /// <summary>What a scanned language says of its calls: the names no call is made by, how it writes a call's type arguments, and whether a comma may end its arguments.</summary>
 /// <param name="Keywords">The names of the language no call is made by.</param>
@@ -26,7 +26,8 @@ internal sealed record ScanCallRules(IReadOnlySet<string> Keywords, ScanTypeArgu
 /// <c>std::forward&lt;T&amp;&amp;&gt;</c> is; none where a punctuator written twice is a type's like any other.
 /// </param>
 /// <param name="Introducers">The words a literal's list of type arguments may follow, which end no operand: Dart's <c>const</c> in <c>const &lt;K, V&gt;{}</c>; none where it writes no such literal.</param>
-internal sealed record ScanTypeArguments(IReadOnlySet<string> Punctuators, IReadOnlySet<string> Followers, IReadOnlySet<string>? Conjunctions = null, IReadOnlySet<string>? Introducers = null);
+/// <param name="Braces">Whether a type may be written in braces, as TypeScript's object type <c>{ id: number }</c> is: a list holds a matched pair of them as it holds a group.</param>
+internal sealed record ScanTypeArguments(IReadOnlySet<string> Punctuators, IReadOnlySet<string> Followers, IReadOnlySet<string>? Conjunctions = null, IReadOnlySet<string>? Introducers = null, bool Braces = false);
 
 /// <summary>
 /// The structural scanner's reading of a call, the same for every scanned language: a name that is no keyword of the
@@ -67,7 +68,30 @@ internal static class ScanCalls
         }
 
         var close = scan.Match(open) is var matched and >= 0 ? matched : scan.IsStranded(open) ? open + 1 : scan.Count;
-        return new ScannedCall(at, open, close, Arity(scan, open, close, rules));
+        return new ScannedCall(at, open, close, CallArity(scan, open, close, rules));
+    }
+
+    /// <summary>
+    /// How many arguments the call whose parentheses are at <paramref name="open"/> and <paramref name="close"/> gives
+    /// (<see cref="Arity"/>); <see langword="null"/> where one at their own depth spreads - JavaScript's <c>f(...xs)</c>,
+    /// C++'s pack expansion <c>f(args...)</c> - which gives as many as it holds, no count the text says.
+    /// </summary>
+    /// <param name="scan">The text.</param>
+    /// <param name="open">The index of the opening parenthesis.</param>
+    /// <param name="close">The index of the closing one, or <see cref="ScannedText.Count"/>.</param>
+    /// <param name="rules">What the language says of its calls.</param>
+    public static int? CallArity(ScannedText scan, int open, int close, ScanCallRules rules)
+    {
+        for (var at = open + 1; at < close && at < scan.Count; at = scan.Opens(at) ? Math.Min(scan.Past(at), close) : at + 1)
+        {
+            // An argument's first or last token: sizeof...(args) spreads nothing.
+            if (scan.Is(at, "...") && (scan.Previous(at) is var before && (before == open || scan.Is(before, ",")) || (scan.Next(at) is var after && (after >= close || scan.Is(after, ",")))))
+            {
+                return null;
+            }
+        }
+
+        return Arity(scan, open, close, rules);
     }
 
     /// <summary>
@@ -289,7 +313,7 @@ internal static class ScanCalls
                     return at + 1;
                 }
             }
-            else if (scan.Is(at, "(") || scan.Is(at, "["))
+            else if (scan.Is(at, "(") || scan.Is(at, "[") || (types.Braces && scan.Is(at, "{")))
             {
                 if (scan.Match(at) < 0)
                 {

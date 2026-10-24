@@ -280,6 +280,108 @@ public sealed class StructuralScannerTests
     }
 
     /// <summary>
+    /// JavaScript's lexer keeps whole the punctuators JavaScript writes whole and every other one alone - two closers of
+    /// type arguments two tokens, <c>?.</c> but before a digit, where it is a condition's - reads a private name with its
+    /// <c>#</c>, a number with its separators and suffix, and a first line's <c>#!</c> as a comment.
+    /// </summary>
+    [Fact]
+    public void JavaScriptsLexer_CutsJavaScriptsTokens()
+    {
+        var scan = JsLexer.Scan("#!/usr/bin/env node\na?.b ?? c ??= d === e !== f ... g => h ** i; Map<Set<T>> #x = 1_000n + 0xFFn + 1e-5 + .5; k ?.5 : 6", markup: false).Scan;
+
+        Assert.Equal(
+            [
+                "a", "?.", "b", "??", "c", "??=", "d", "===", "e", "!==", "f", "...", "g", "=>", "h", "**", "i", ";", "Map", "<", "Set", "<", "T", ">", ">",
+                "#x", "=", "1_000n", "+", "0xFFn", "+", "1e-5", "+", ".5", ";", "k", "?", ".5", ":", "6",
+            ],
+            Enumerable.Range(0, scan.Count).Select(at => scan.Text(at)));
+        Assert.Equal(1, Assert.Single(scan.Comments).Line);
+    }
+
+    /// <summary>
+    /// A slash after what ends an operand divides, and after anything else - an operator, a keyword an expression begins
+    /// after, a statement's start - opens a regular expression, which runs past a slash in a class and an escaped one to
+    /// its flags; a template keeps its code's braces, strings and templates and says where each interpolation is code.
+    /// </summary>
+    [Fact]
+    public void JavaScriptsLexer_TellsARegularExpressionFromADivision_AndKeepsATemplatesCode()
+    {
+        var scan = JsLexer.Scan("a = b / c / d; e = /[/]+\\/x/gi.test(f); return /y/; g(`h ${i({ j: '}' })} ${`k ${l}`} m`)", markup: false);
+        var texts = Enumerable.Range(0, scan.Scan.Count).Where(at => scan.Scan[at].Kind == ScanTokenKind.Text).Select(at => scan.Scan.Text(at)).ToList();
+        var template = Enumerable.Range(0, scan.Scan.Count).Single(at => scan.Scan.Text(at).StartsWith('`'));
+
+        Assert.Equal(["/[/]+\\/x/gi", "/y/", "`h ${i({ j: '}' })} ${`k ${l}`} m`"], texts);
+        Assert.Equal(2, scan.Scan.Code(0, scan.Scan.Count).Count(at => scan.Scan.Is(at, "/")));
+        Assert.Equal(
+            ["i({ j: '}' })", "`k ${l}`"],
+            scan.Interpolations[scan.Scan[template].Start].Select(span => scan.Scan.Source[span.Start..span.End]));
+    }
+
+    /// <summary>
+    /// In markup an element - its tags, attributes, text and the elements it holds - is one token: each <c>{...}</c> it
+    /// holds is code, and the name of each tag it opens is said; a <c>&lt;</c> after an operand compares, and a list of a
+    /// generic arrow's type parameters (<c>&lt;T,&gt;</c>, <c>&lt;T extends U&gt;</c>) opens none. Out of markup, none is read.
+    /// </summary>
+    [Fact]
+    public void JavaScriptsLexer_ReadsAnElementAsOneToken_ItsCodeAndTagsSaid()
+    {
+        const string Text = "x = a < b; y = <Card title={`t${n}`} on={() => go('>')}>Don't {list.map(i => <Item key={i} />)}<br/></Card>; z = <T,>(v: T) => v; w = <></>;";
+        var scan = JsLexer.Scan(Text, markup: true);
+        var element = Enumerable.Range(0, scan.Scan.Count).Single(at => scan.Scan.Text(at).StartsWith("<Card", StringComparison.Ordinal));
+        var start = scan.Scan[element].Start;
+
+        Assert.Equal("<Card title={`t${n}`} on={() => go('>')}>Don't {list.map(i => <Item key={i} />)}<br/></Card>", scan.Scan.Text(element));
+        Assert.Equal(["`t${n}`", "() => go('>')", "list.map(i => <Item key={i} />)"], scan.Interpolations[start].Select(span => Text[span.Start..span.End]));
+        Assert.Equal(["Card", "br"], scan.Elements![start].Select(span => Text[span.Start..span.End]));
+        Assert.Contains(Enumerable.Range(0, scan.Scan.Count), at => scan.Scan.Text(at) == "<>" + "</>");
+        Assert.Equal(2, Enumerable.Range(0, scan.Scan.Count).Count(at => scan.Scan.Is(at, "<")));
+        Assert.Empty(JsLexer.Scan(Text, markup: false).Elements!);
+    }
+
+    /// <summary>
+    /// A regular expression in a template's code is read whole, its quotes and braces none of the code's; a member's name
+    /// and TypeScript's non-null assertion end an operand, so a slash after either divides; and in markup a generic
+    /// function type's list - an arrow or a return type after its parameters - opens no element, an element's text in
+    /// parentheses still one.
+    /// </summary>
+    [Fact]
+    public void JavaScriptsLexer_ReadsATemplatesRegularExpression_AndTellsWhatEndsAnOperand()
+    {
+        var template = JsLexer.Scan("h = `<a title=\"${t.replace(/\"/g, '&quot;')}\">${s.replace(/}/g, '')}`; f()", markup: false).Scan;
+
+        Assert.Equal(["h", "=", "`<a title=\"${t.replace(/\"/g, '&quot;')}\">${s.replace(/}/g, '')}`", ";", "f", "(", ")"], Enumerable.Range(0, template.Count).Select(at => template.Text(at)));
+
+        var tick = JsLexer.Scan("h = `${a(/`/)} ${b()}`; f()", markup: false).Scan;
+
+        Assert.Equal(["h", "=", "`${a(/`/)} ${b()}`", ";", "f", "(", ")"], Enumerable.Range(0, tick.Count).Select(at => tick.Text(at)));
+
+        var divisions = JsLexer.Scan("r = total! / count; q = cfg.default / 2 / 3; z = a.in < b", markup: true).Scan;
+
+        Assert.Equal(3, Enumerable.Range(0, divisions.Count).Count(at => divisions.Is(at, "/")));
+        Assert.Single(Enumerable.Range(0, divisions.Count), at => divisions.Is(at, "<"));
+
+        var generics = JsLexer.Scan("type R = <T>(item: T) => string; const id = <const T,>(x: T) => x; const e = <b>(note)</b>; const f = <small>(optional): </small>; type G = <T>(x: T) => void; const t = <Table>x</Table>;", markup: true);
+
+        Assert.Equal(["<b>(note)</b>", "<small>(optional): </small>", "<Table>x</Table>"], Enumerable.Range(0, generics.Scan.Count).Where(at => generics.Scan.Text(at).StartsWith('<') && generics.Scan[at].Kind == ScanTokenKind.Text).Select(at => generics.Scan.Text(at)));
+    }
+
+    /// <summary>
+    /// A string, a template, a regular expression and an element the text ends in are read to its end, and elements
+    /// nested past the scanner's depth stop being read: never an exception, and every token where the text has it.
+    /// </summary>
+    [Fact]
+    public void JavaScriptsLexer_ReadsUnendedTexts_AndElementsTooDeep_ToTheEnd()
+    {
+        foreach (var text in (string[])["a = 'abc", "a = `x ${b", "a = /re", "a = <div {b", "a = <div>", "a = <a>{" + string.Concat(Enumerable.Repeat("<a>{", 500))])
+        {
+            var scan = JsLexer.Scan(text, markup: true).Scan;
+
+            Assert.Equal(["a", "="], Enumerable.Range(0, 2).Select(at => scan.Text(at)));
+            Assert.Equal(text.Length, scan[scan.Count - 1].End);
+        }
+    }
+
+    /// <summary>
     /// A call's arity counts the commas of a type's arguments a literal's list or a type test's holds nothing, and a
     /// comma that ends the arguments nothing where the language lets one; C's macro arguments count an empty one there.
     /// </summary>

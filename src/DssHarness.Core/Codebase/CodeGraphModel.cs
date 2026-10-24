@@ -14,7 +14,7 @@ public static class CodeNodeKinds
     /// <summary>A file the tree lists, whatever reads it. Made by the core for every file it keeps, never by an implementation.</summary>
     public const string File = "file";
 
-    /// <summary>A project file that names others: a <c>.csproj</c>, a <c>.slnx</c>, a Dart package's <c>pubspec.yaml</c>.</summary>
+    /// <summary>A project file that names others: a <c>.csproj</c>, a <c>.slnx</c>, a Dart package's <c>pubspec.yaml</c>, a Node package's <c>package.json</c>, a <c>tsconfig.json</c>.</summary>
     public const string Project = "project";
 
     /// <summary>A namespace of a language that has them.</summary>
@@ -219,7 +219,18 @@ public static class CodeGraphIds
 
     /// <summary><paramref name="path"/> with its <c>.</c> and <c>..</c> taken out; <see langword="null"/> where it climbs out of the tree.</summary>
     /// <param name="path">A path relative to the tree's root, with either separator.</param>
-    public static string? Normalize(string path)
+    public static string? Normalize(string path) => Parts(path, climbs: false) is { } parts ? string.Join('/', parts) : null;
+
+    /// <summary>
+    /// <paramref name="path"/>, relative to a directory, with its <c>.</c> and <c>..</c> taken out and forward separators -
+    /// a <c>..</c> kept only where it climbs above that directory - and <c>.</c> where nothing is left: a path as a
+    /// project file's extract writes one relative to its own directory.
+    /// </summary>
+    /// <param name="path">A path relative to a directory, with either separator.</param>
+    public static string Clean(string path) => Parts(path, climbs: true) is { Count: > 0 } parts ? string.Join('/', parts) : ".";
+
+    /// <summary>The parts of <paramref name="path"/> once its <c>.</c> and <c>..</c> are taken out; <see langword="null"/> where it climbs above where it begins and <paramref name="climbs"/> does not keep that.</summary>
+    private static List<string>? Parts(string path, bool climbs)
     {
         var parts = new List<string>();
 
@@ -232,9 +243,15 @@ public static class CodeGraphIds
 
             if (part == "..")
             {
-                if (parts.Count == 0)
+                if (parts.Count == 0 || parts[^1] == "..")
                 {
-                    return null;
+                    if (!climbs)
+                    {
+                        return null;
+                    }
+
+                    parts.Add(part);
+                    continue;
                 }
 
                 parts.RemoveAt(parts.Count - 1);
@@ -244,7 +261,7 @@ public static class CodeGraphIds
             parts.Add(part);
         }
 
-        return string.Join('/', parts);
+        return parts;
     }
 
     /// <summary>

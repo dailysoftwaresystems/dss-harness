@@ -1190,8 +1190,8 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
-    /// Address roots are tried the longest prefix first, and two of one prefix in one order - by directory - whatever order
-    /// the files that declare them come in.
+    /// Address roots are tried the longest prefix first, and two of one prefix in one order - their files' paths' - whatever
+    /// order the files that declare them come in.
     /// </summary>
     [Fact]
     public void AddressRoots_AreTriedLongestFirst_AndTwoAlikeInOneOrder()
@@ -1219,6 +1219,88 @@ public sealed class CodeGraphLinkerTests
             Assert.Contains(new CodeEdge("file:use.t", "file:three/y.t", CodeEdgeKinds.Imports, 2, CodeConfidences.Exact), linked.Edges);
             Assert.Equal(2, linked.Edges.Count(edge => edge is { From: "file:use.t", Kind: CodeEdgeKinds.Imports }));
         }
+    }
+
+    /// <summary>
+    /// A whole address root stands for its address alone - none longer, none it begins - and is a file's; roots of one
+    /// prefix are tried in the order their file declares them until one names a file the tree holds, a root that names a
+    /// directory or a file it does not hold passed over.
+    /// </summary>
+    [Fact]
+    public void AWholeAddressRoot_StandsForItsAddressAlone_AndRootsAreTriedUntilOneNamesAFile()
+    {
+        var linked = Link(
+            File("pkg.t", []) with
+            {
+                Extract = new FileExtract([])
+                {
+                    AddressRoots = [new("pkg", "src/missing.t") { Whole = true }, new("pkg", "src") { Whole = true }, new("pkg", "src/main.t") { Whole = true }, new("pkg", "dist/main.t") { Whole = true }],
+                },
+            },
+            File("src/main.t", []),
+            File("dist/main.t", []),
+            File("use.t", [], imports: [Import(CodeImportForms.Address, "pkg"), Import(CodeImportForms.Address, "pkg/main.t") with { Line = 2 }, Import(CodeImportForms.Address, "pkgs") with { Line = 3 }]));
+
+        Assert.Equal(
+            [new CodeEdge("file:use.t", "file:src/main.t", CodeEdgeKinds.Imports, 1, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Imports));
+    }
+
+    /// <summary>
+    /// A name a declaration is exported by besides its own is what an import of its file by that name finds - by a prefix
+    /// or by what it shows, as exact or as sure as its own name would be - and nothing else: its own file, a file that
+    /// imports it by no such name, and a reference of that name nowhere imported find nothing by it.
+    /// </summary>
+    [Fact]
+    public void ANameADeclarationIsExportedBy_IsWhatAnImportOfItsFileFindsByIt()
+    {
+        // Its own name kept to its file's scope: an importer by an export's name still finds it.
+        var shape = File("shape.t", [Member("Make", 0) with { Exports = ["default", "build"], SeenIn = "shape" }, Member("Self", 0)], [Call("Self", "default", 0) with { From = "t:Self" }], [Open("shape")]);
+        var linked = Link(
+            shape,
+            File("prefixed.t", [Member("Go", 0)], [Call("Go", "default", 0, Prefix("S"))], imports: [Import(CodeImportForms.Relative, "shape.t") with { Prefix = "S", Show = ["default"] }]),
+            File("shown.t", [Member("Go2", 0)], [Call("Go2", "build", 0)], imports: [Import(CodeImportForms.Relative, "shape.t") with { Show = ["build"] }]),
+            File("none.t", [Member("Go3", 0)], [Call("Go3", "build", 0)]));
+
+        Assert.Contains(Edge("t:Go", "t:Make", CodeEdgeKinds.Calls, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(Edge("t:Go2", "t:Make", CodeEdgeKinds.Calls, CodeConfidences.Unique), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.From is "t:Self" or "t:Go3" && edge.Kind == CodeEdgeKinds.Calls);
+
+        // By its own name, kept to its scope, no importer finds it.
+        var own = Link(shape, File("own.t", [Member("Go4", 0)], [Call("Go4", "Make", 0)], imports: [Import(CodeImportForms.Relative, "shape.t") with { Show = ["Make"] }]));
+
+        Assert.DoesNotContain(own.Edges, edge => edge is { From: "t:Go4", Kind: CodeEdgeKinds.Calls });
+    }
+
+    /// <summary>
+    /// A local address root gives its meaning to the addresses its own file's directory's files import alone, before any
+    /// root that is every file's, the nearest file's first - whatever prefix a farther one's is - and a file in no such
+    /// directory is given none by it.
+    /// </summary>
+    [Fact]
+    public void ALocalAddressRoot_IsItsDirectorysFilesAlone_TheNearestFirst_BeforeEveryFilesRoot()
+    {
+        CodeGraphFile Roots(string path, params ExtractAddressRoot[] roots) => File(path, []) with { Extract = new FileExtract([]) { AddressRoots = roots } };
+
+        var linked = Link(
+            Roots("pkg.t", new ExtractAddressRoot("@x/", "global")),
+            Roots("apps/cfg.t", new ExtractAddressRoot("@x/", "outer") { Local = true }, new ExtractAddressRoot("@x/deep/", "deeper") { Local = true }),
+            Roots("apps/in/cfg.t", new ExtractAddressRoot("@x/", "near") { Local = true }),
+            File("global/y.t", []),
+            File("apps/outer/y.t", []),
+            File("apps/outer/z.t", []),
+            File("apps/in/near/y.t", []),
+            File("apps/deeper/w.t", []),
+            File("apps/in/use.t", [], imports: [Import(CodeImportForms.Address, "@x/y.t"), Import(CodeImportForms.Address, "@x/z.t") with { Line = 2 }, Import(CodeImportForms.Address, "@x/deep/w.t") with { Line = 3 }]),
+            File("apps/use.t", [], imports: [Import(CodeImportForms.Address, "@x/y.t")]),
+            File("other/use.t", [], imports: [Import(CodeImportForms.Address, "@x/y.t")]));
+
+        Assert.Equal(
+            [
+                ("file:apps/in/use.t", "file:apps/deeper/w.t", 3), ("file:apps/in/use.t", "file:apps/in/near/y.t", 1), ("file:apps/in/use.t", "file:apps/outer/z.t", 2),
+                ("file:apps/use.t", "file:apps/outer/y.t", 1), ("file:other/use.t", "file:global/y.t", 1),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Imports).Select(edge => (edge.From, edge.To, edge.Line)).Order());
     }
 
     /// <summary>
@@ -1534,6 +1616,27 @@ public sealed class CodeGraphLinkerTests
             [File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Address, "pkg:x.t") with { Prefix = "p" }]), File("lib/x.t", [Member("Run", 0)])],
             new CodeGraphFile("r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "elsewhere")] }),
             new CodeGraphFile("r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "lib")] }));
+
+        // Whether an address root is whole: one become an address's alone, which no longer stands for the files under it.
+        Case(
+            "whether an address root is whole",
+            [File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Address, "pkg:x.t") with { Prefix = "p" }]), File("lib/x.t", [Member("Run", 0)])],
+            new CodeGraphFile("r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "lib")] }),
+            new CodeGraphFile("r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "lib") { Whole = true }] }));
+
+        // Whether an address root is local: one become its directory's files' alone, which no longer gives the call's file its meaning.
+        Case(
+            "whether an address root is local",
+            [File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Address, "pkg:x.t") with { Prefix = "p" }]), File("lib/x.t", [Member("Run", 0)])],
+            new CodeGraphFile("cfg/r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "../lib")] }),
+            new CodeGraphFile("cfg/r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "../lib") { Local = true }] }));
+
+        // The names a declaration of a file imported by its path is exported by besides its own.
+        Case(
+            "the names a declaration is exported by",
+            [File("use.t", [go], [Call("Go", "default", 0, Prefix("p"))], imports: [Import(CodeImportForms.Relative, "lib.t") with { Prefix = "p" }])],
+            File("lib.t", [Member("Run", 0)]),
+            File("lib.t", [Member("Run", 0) with { Exports = ["default"] }]));
 
         // The containers of a qualified name: a type come where a namespace of that name was, whose base holds the call.
         var stop = File("b.t", [Type("B"), Member("B.Stop", 0)]);
@@ -1870,6 +1973,7 @@ public sealed class CodeGraphLinkerTests
             Prototype = !value && Chance(random, 8),
             Test = !value && Chance(random, 8),
             SeenIn = Chance(random, 8) ? Pick(random, RandomScopes) : null,
+            Exports = Chance(random, 8) ? [Pick(random, RandomNames)] : null,
         });
     }
 
@@ -1933,7 +2037,10 @@ public sealed class CodeGraphLinkerTests
             _ => Import(CodeImportForms.Address, Pick(random, ["pkg:x.t", "pkg:in/w.t", "q:m.t", "q:ui/v.t"])),
         };
 
-    private static ExtractAddressRoot RandomRoot(Random random) => new(Pick(random, ["pkg:", "q:"]), Pick(random, ["../lib", "../app", "lib", ".", "../../out"]));
+    private static ExtractAddressRoot RandomRoot(Random random)
+        => (Chance(random, 3)
+            ? new ExtractAddressRoot(Pick(random, ["pkg:x.t", "q:m.t"]), Pick(random, ["../lib/x.t", "../app/m.t", "lib", "x.t"])) { Whole = true }
+            : new ExtractAddressRoot(Pick(random, ["pkg:", "q:"]), Pick(random, ["../lib", "../app", "lib", ".", "../../out"]))) with { Local = Chance(random, 3) };
 
     /// <summary>
     /// <paramref name="tree"/> with one small change of one file made at random: a value's type, what a member extends, a
@@ -1981,6 +2088,7 @@ public sealed class CodeGraphLinkerTests
             case 0:
                 Each(node => node.Kind == CodeNodeKinds.Member && node.MinArity is null && Chance(random, 2), node => node with { ValueType = Chance(random, 4) ? null : Dotted(random) });
                 Each(node => Chance(random, 3), node => node with { SeenIn = node.SeenIn is null ? Pick(random, RandomScopes) : null });
+                Each(node => Chance(random, 4), node => node with { Exports = node.Exports is null ? [Pick(random, RandomNames)] : null });
                 break;
 
             case 13:
@@ -2062,7 +2170,7 @@ public sealed class CodeGraphLinkerTests
                 break;
 
             case 5:
-                roots = roots.Count > 0 && Chance(random, 2) ? [] : [RandomRoot(random)];
+                roots = roots.Count > 0 && Chance(random, 3) ? [] : roots.Count > 0 && Chance(random, 2) ? [Chance(random, 2) ? roots[0] with { Whole = !roots[0].Whole } : roots[0] with { Local = !roots[0].Local }] : [RandomRoot(random)];
                 break;
 
             case 6:
@@ -2157,6 +2265,8 @@ public sealed class CodeGraphLinkerTests
             File("app/tools.t", [Member("Tool", 0)]),
             File("cfg/roots.t", []) with { Extract = new FileExtract([]) { AddressRoots = [new("pkg:", "lib")] } },
             File("app/addr.t", [Member("Addr", 0)], [Call("Addr", "Shape", 0)], imports: [Import(CodeImportForms.Address, "pkg:shape.t")]),
+            File("cfg/entry.t", []) with { Extract = new FileExtract([]) { AddressRoots = [new("entry", "../app/tools.t") { Whole = true }] } },
+            File("app/entry.t", [Member("Entry", 0)], [Call("Entry", "default", 0, Prefix("e"))], imports: [Import(CodeImportForms.Address, "entry") with { Prefix = "e" }]),
             File("glob.t", [], imports: [Import(CodeImportForms.Scope, "lib") with { Global = true }]),
             File("closed.t", [Member("Go2", 0), Member("hidden.Secret", 0) with { Scope = "hidden" }], [Call("Go2", "Secret", 0)], [new ExtractScope("hidden", Open: false)]),
             File("notes.t", []) with { Extract = null },
@@ -2199,7 +2309,16 @@ public sealed class CodeGraphLinkerTests
             File("app/rel.t", [Member("Rel", 0)], [Call("Rel", "Base", 0)], imports: [Import(CodeImportForms.Relative, "../lib/shape.t")]),
             File("app/rel.t", [Member("Rel", 0)], [Call("Rel", "Base", 0)], imports: [Import(CodeImportForms.Ending, "base.t")]),
         ]);
-        yield return ("app/tools.t", [File("app/tools.t", [Member("Tool", 0), Member("Tool2", 0)])]);
+        yield return ("app/tools.t",
+        [
+            File("app/tools.t", [Member("Tool", 0), Member("Tool2", 0)]),
+            File("app/tools.t", [Member("Tool", 0) with { Exports = ["default"] }]),
+        ]);
+        yield return ("cfg/entry.t",
+        [
+            File("cfg/entry.t", []) with { Extract = new FileExtract([]) { AddressRoots = [new("entry", "../app") { Whole = true }] } },
+            File("cfg/entry.t", []) with { Extract = new FileExtract([]) { AddressRoots = [new("entry", "../lib/base.t") { Whole = true }, new("entry", "../app/tools.t") { Whole = true }] } },
+        ]);
         yield return ("cfg/roots.t",
         [
             File("cfg/roots.t", []) with { Extract = new FileExtract([]) { AddressRoots = [new("pkg:", "app")] } },

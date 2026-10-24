@@ -82,7 +82,7 @@ public sealed class PubspecExtractor : ICodeGraphExtractor
         {
             References = references,
             AddressRoots = name is not null ? [new ExtractAddressRoot($"package:{name}/", "lib")] : [],
-            Dynamic = stop is null ? [] : [new ExtractDynamic(Math.Clamp(stop.Line, 1, Math.Max(lines.Count, 1)), $"the file stops reading here: {stop.Why}")],
+            Dynamic = stop is null ? [] : [new ExtractDynamic(FileExtract.LineWithin(stop.Line, lines.Count), $"the file stops reading here: {stop.Why}")],
         };
     }
 
@@ -91,5 +91,5 @@ public sealed class PubspecExtractor : ICodeGraphExtractor
         => mapping.Children.TryGetValue(new YamlScalarNode(key), out var value) && YamlReading.ScalarOf(value) is { Length: > 0 } scalar ? scalar : null;
 
     /// <summary>The line <paramref name="node"/> begins on, within the file's <paramref name="lineCount"/> lines.</summary>
-    private static int Line(YamlNode node, int lineCount) => (int)Math.Clamp(node.Start.Line, 1, Math.Max(lineCount, 1));
+    private static int Line(YamlNode node, int lineCount) => FileExtract.LineWithin((int)Math.Min(node.Start.Line, int.MaxValue), lineCount);
 }
