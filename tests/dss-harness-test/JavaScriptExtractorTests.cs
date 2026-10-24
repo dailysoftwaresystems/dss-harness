@@ -903,6 +903,11 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Single(groups.Dynamic, dynamic => dynamic.Why.Contains("nested more than", StringComparison.Ordinal));
     }
 
+    /// <summary>A shebang says how the file is run, and is no summary of the declaration below it.</summary>
+    [Fact]
+    public void AShebang_IsNoSummary()
+        => Assert.Null(Assert.Single(Read("bin/cli.js", "#!/usr/bin/env node\nexport function main() {}").Nodes).Summary);
+
     private static FileExtract Read(string path, string text) => new JavaScriptExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);

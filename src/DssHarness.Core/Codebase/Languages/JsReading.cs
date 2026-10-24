@@ -38,6 +38,9 @@ namespace DssHarness.Core.Codebase.Languages;
 /// </remarks>
 internal sealed class JsReading
 {
+    /// <summary>What the reader reads code nested in no deeper than <see cref="ScanFrame.MostDepth"/> of, as its dynamic mark says it.</summary>
+    private const string Nesting = "templates, elements and test groups";
+
     /// <summary>JavaScript's reserved words, and the few TypeScript reserves beside them.</summary>
     private static readonly HashSet<string> Reserved = new(StringComparer.Ordinal)
     {
@@ -577,7 +580,7 @@ internal sealed class JsReading
     private void Required(int at)
     {
         var stop = StatementEnd(at, _scan.Count);
-        var boundary = _scan.Is(LastOf(stop), ";") ? LastOf(stop) : stop;
+        var boundary = _scan.Is(_scan.LastOf(stop), ";") ? _scan.LastOf(stop) : stop;
 
         foreach (var (start, end) in Declarators(_scan.Next(at), boundary))
         {
@@ -1038,7 +1041,7 @@ internal sealed class JsReading
     private int DefaultExport(int start, int head, int at, int end, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators)
     {
         var stop = StatementEnd(at, end);
-        var boundary = _scan.Is(LastOf(stop), ";") ? LastOf(stop) : stop;
+        var boundary = _scan.Is(_scan.LastOf(stop), ";") ? _scan.LastOf(stop) : stop;
 
         if (FunctionAt(at, boundary) is { } function)
         {
@@ -1046,7 +1049,7 @@ internal sealed class JsReading
             return stop;
         }
 
-        var key = _extract.Add(new ExtractNode(Id(frame.Qualify("default")), CodeNodeKinds.Member, "default", frame.Qualify("default"), _scan[start].Line, _scan[LastOf(stop)].EndLine, Signature(head, at))
+        var key = _extract.Add(new ExtractNode(Id(frame.Qualify("default")), CodeNodeKinds.Member, "default", frame.Qualify("default"), _scan[start].Line, _scan[_scan.LastOf(stop)].EndLine, _scan.Signature(head, at))
         {
             SubKind = "variable",
             Scope = frame.Scope,
@@ -1105,7 +1108,7 @@ internal sealed class JsReading
         }
 
         var stop = StatementEnd(at, end);
-        var boundary = _scan.Is(LastOf(stop), ";") ? LastOf(stop) : stop;
+        var boundary = _scan.Is(_scan.LastOf(stop), ";") ? _scan.LastOf(stop) : stop;
         var value = _scan.Next(assign);
         var line = _scan[at].Line;
 
@@ -1140,7 +1143,7 @@ internal sealed class JsReading
         }
         else
         {
-            var key = _extract.Add(new ExtractNode(Id(frame.Qualify(exported)), CodeNodeKinds.Member, exported, frame.Qualify(exported), _scan[start].Line, _scan[LastOf(stop)].EndLine, Signature(start, assign))
+            var key = _extract.Add(new ExtractNode(Id(frame.Qualify(exported)), CodeNodeKinds.Member, exported, frame.Qualify(exported), _scan[start].Line, _scan[_scan.LastOf(stop)].EndLine, _scan.Signature(start, assign))
             {
                 SubKind = "variable",
                 Scope = frame.Scope,
@@ -1397,7 +1400,7 @@ internal sealed class JsReading
                 continue;
             }
 
-            _extract.Add(new ExtractNode(Id(inside.Qualify(member)), CodeNodeKinds.Member, member, inside.Qualify(member), _scan[pieceStart].Line, _scan[LastOf(pieceEnd)].EndLine, Signature(pieceStart, pieceEnd))
+            _extract.Add(new ExtractNode(Id(inside.Qualify(member)), CodeNodeKinds.Member, member, inside.Qualify(member), _scan[pieceStart].Line, _scan[_scan.LastOf(pieceEnd)].EndLine, _scan.Signature(pieceStart, pieceEnd))
             {
                 SubKind = "constant",
                 Scope = inside.Scope,
@@ -1414,7 +1417,7 @@ internal sealed class JsReading
     private int TypeAlias(int start, int head, int nameAt, int end, ScanFrame frame, List<string> modifiers, List<string> marks, string? seenIn)
     {
         var stop = StatementEnd(nameAt, end);
-        var last = LastOf(stop);
+        var last = _scan.LastOf(stop);
         var name = _scan.Text(nameAt);
         var cursor = _scan.Next(nameAt);
         var typeParameters = _scan.Is(cursor, "<") ? TypeParameters(cursor, stop) : [];
@@ -1478,7 +1481,7 @@ internal sealed class JsReading
         foreach (var name in names)
         {
             var qualified = inside.Qualify(name);
-            var key = _extract.Part(new ExtractNode(Id(qualified), CodeNodeKinds.Namespace, name, qualified, _scan[start].Line, _scan[Math.Min(inner, _scan.Count - 1)].EndLine, Signature(head, cursor))
+            var key = _extract.Part(new ExtractNode(Id(qualified), CodeNodeKinds.Namespace, name, qualified, _scan[start].Line, _scan[Math.Min(inner, _scan.Count - 1)].EndLine, _scan.Signature(head, cursor))
             {
                 SubKind = subKind,
                 Scope = inside.Scope,
@@ -1534,7 +1537,7 @@ internal sealed class JsReading
     }
 
     private ExtractNode TypeNode(int start, int head, int last, ScanFrame frame, string name, string subKind, List<string> modifiers, List<string> marks, int signatureEnd, string? seenIn)
-        => new(Id(frame.Qualify(name)), CodeNodeKinds.Type, name, frame.Qualify(name), _scan[start].Line, _scan[Math.Clamp(last, start, _scan.Count - 1)].EndLine, Signature(head, signatureEnd))
+        => new(Id(frame.Qualify(name)), CodeNodeKinds.Type, name, frame.Qualify(name), _scan[start].Line, _scan[Math.Clamp(last, start, _scan.Count - 1)].EndLine, _scan.Signature(head, signatureEnd))
         {
             SubKind = subKind,
             Scope = frame.Scope,
@@ -1790,7 +1793,7 @@ internal sealed class JsReading
     private int Field(int start, int head, int nameAt, string name, int at, int end, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, MemberPlace place, bool ambient, string? seenIn)
     {
         var stop = StatementEnd(nameAt, end, commas: place == MemberPlace.Interface, typed: place == MemberPlace.Interface || (_typescript && _scan.Is(at, ":")));
-        var last = LastOf(stop);
+        var last = _scan.LastOf(stop);
         var boundary = _scan.Is(last, ";") || _scan.Is(last, ",") ? last : stop;
         var typeStart = _typescript && _scan.Is(at, ":") ? _scan.Next(at) : -1;
         var assign = typeStart >= 0 ? ScanCalls.TopLevel(_scan, typeStart, boundary, "=", _types) : _scan.Is(at, "=") ? at : boundary;
@@ -1802,7 +1805,7 @@ internal sealed class JsReading
             return stop;
         }
 
-        var key = _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Member, name, frame.Qualify(name), _scan[start].Line, _scan[last].EndLine, Signature(head, assign < boundary ? assign : boundary))
+        var key = _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Member, name, frame.Qualify(name), _scan[start].Line, _scan[last].EndLine, _scan.Signature(head, assign < boundary ? assign : boundary))
         {
             SubKind = place == MemberPlace.Interface ? "property" : "field",
             Scope = frame.Scope,
@@ -1852,7 +1855,7 @@ internal sealed class JsReading
         foreach (var property in function.Parameters.Properties)
         {
             var name = _scan.Text(property.NameAt);
-            var fieldKey = _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Member, name, frame.Qualify(name), _scan[property.Start].Line, _scan[LastOf(property.End)].EndLine, Signature(property.Start, property.End))
+            var fieldKey = _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Member, name, frame.Qualify(name), _scan[property.Start].Line, _scan[_scan.LastOf(property.End)].EndLine, _scan.Signature(property.Start, property.End))
             {
                 SubKind = "field",
                 Scope = frame.Scope,
@@ -2022,7 +2025,7 @@ internal sealed class JsReading
             return new FunctionShape(parameters, returnStart, returnEnd, body, Math.Min(_scan.Bounds(body, end).Inner, _scan.Count - 1), Arrow: false, SignatureEnd: arrow);
         }
 
-        return new FunctionShape(parameters, returnStart, returnEnd, arrow, Math.Max(arrow, LastOf(Math.Min(end, _scan.Count))), Arrow: true, SignatureEnd: arrow);
+        return new FunctionShape(parameters, returnStart, returnEnd, arrow, Math.Max(arrow, _scan.LastOf(Math.Min(end, _scan.Count))), Arrow: true, SignatureEnd: arrow);
     }
 
     /// <summary>A <c>function</c> declaration at <paramref name="at"/>: a member node of its name - <c>default</c> where a default export's has none.</summary>
@@ -2075,7 +2078,7 @@ internal sealed class JsReading
     {
         var word = _scan.Text(at);
         var stop = StatementEnd(head, end);
-        var last = LastOf(stop);
+        var last = _scan.LastOf(stop);
         var boundary = _scan.Is(last, ";") ? last : stop;
         var named = new List<string>(modifiers) { word };
 
@@ -2130,7 +2133,7 @@ internal sealed class JsReading
                 continue;
             }
 
-            var key = _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Member, name, frame.Qualify(name), _scan[begins].Line, _scan[LastOf(pieceEnd)].EndLine, ExtractText.Signature(ExtractText.Flat($"{_scan.Spelled(head, _scan.Next(at))} {_scan.Spelled(nameAt, assign)}")))
+            var key = _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Member, name, frame.Qualify(name), _scan[begins].Line, _scan[_scan.LastOf(pieceEnd)].EndLine, ExtractText.Signature(ExtractText.Flat($"{_scan.Spelled(head, _scan.Next(at))} {_scan.Spelled(nameAt, assign)}")))
             {
                 SubKind = word == "const" ? "constant" : "variable",
                 Scope = frame.Scope,
@@ -2233,7 +2236,7 @@ internal sealed class JsReading
         var prototype = function.Body < 0 || _declarations;
         var parameters = function.Parameters;
 
-        var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[start].Line, _scan[Math.Max(function.Last, start)].EndLine, Signature(head, function.SignatureEnd))
+        var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[start].Line, _scan[Math.Max(function.Last, start)].EndLine, _scan.Signature(head, function.SignatureEnd))
         {
             SubKind = subKind,
             Scope = frame.Scope,
@@ -2797,7 +2800,7 @@ internal sealed class JsReading
 
             if (token.Kind == ScanTokenKind.Text)
             {
-                if (text.Interpolations.TryGetValue(token.Start, out var spans) && Deeper(depth, token.Line))
+                if (text.Interpolations.TryGetValue(token.Start, out var spans) && ScanFrame.ReadsDeeper(_extract, depth, token.Line, Nesting))
                 {
                     foreach (var (spanStart, spanEnd) in spans)
                     {
@@ -2867,7 +2870,7 @@ internal sealed class JsReading
                         continue;
 
                     case "super" when scan.Is(next, "("):
-                        _extract.Reference(From(), CodeEdgeKinds.Calls, "constructor", line, ScanCalls.CallArity(scan, next, CloseOf(scan, next), _calls), new ExtractQualifier(CodeQualifierKinds.Base));
+                        _extract.Reference(From(), CodeEdgeKinds.Calls, "constructor", line, ScanCalls.CallArity(scan, next, scan.CloseOf(next), _calls), new ExtractQualifier(CodeQualifierKinds.Base));
                         continue;
 
                     // import('./x'), require('./x'): the file imported, no name of it bound; one the code computes, marked dynamic.
@@ -2920,7 +2923,7 @@ internal sealed class JsReading
                 {
                     if (TestCall(scan, at) is { } test)
                     {
-                        if (!Deeper(depth, line))
+                        if (!ScanFrame.ReadsDeeper(_extract, depth, line, Nesting))
                         {
                             shallowFrom = test.Close;
                         }
@@ -3058,7 +3061,7 @@ internal sealed class JsReading
             return null;
         }
 
-        var close = CloseOf(scan, open);
+        var close = scan.CloseOf(open);
         return new ScannedCall(at, open, close, ScanCalls.CallArity(scan, open, close, _calls));
     }
 
@@ -3200,7 +3203,7 @@ internal sealed class JsReading
 
         while (scan.IsName(at))
         {
-            names.Insert(0, scan.Text(at));
+            names.Add(scan.Text(at));
             first = at;
             var before = scan.Previous(at);
 
@@ -3211,6 +3214,9 @@ internal sealed class JsReading
 
             at = Unasserted(scan, scan.Previous(before));
         }
+
+        // Read from its end, last first.
+        names.Reverse();
 
         if (names.Count == 0)
         {
@@ -3507,21 +3513,6 @@ internal sealed class JsReading
         return test.Close;
     }
 
-    /// <summary>
-    /// Whether code nested <paramref name="depth"/> templates, elements and test groups deep is read one deeper: not past
-    /// <see cref="ScanFrame.MostDepth"/>, where what is nested there is marked dynamic at <paramref name="line"/>.
-    /// </summary>
-    private bool Deeper(int depth, int line)
-    {
-        if (depth < ScanFrame.MostDepth)
-        {
-            return true;
-        }
-
-        _extract.Dynamic(line, $"code nested more than {ScanFrame.MostDepth} templates, elements and test groups deep, which is not read");
-        return false;
-    }
-
     /// <summary>The key of the node what the file's top does outside its declarations is the calls of: made the first time it is needed.</summary>
     private string ModuleKey()
     {
@@ -3734,9 +3725,6 @@ internal sealed class JsReading
     /// <summary><paramref name="at"/>, or the token before it where it is TypeScript's non-null assertion <c>!</c>.</summary>
     private static int Unasserted(ScannedText scan, int at) => scan.Is(at, "!") ? scan.Previous(at) : at;
 
-    /// <summary>The index of the bracket that closes the one at <paramref name="open"/>; the text's end where none does.</summary>
-    private static int CloseOf(ScannedText scan, int open) => scan.Match(open) is var close and >= 0 ? close : scan.Count;
-
     /// <summary>Whether the token at <paramref name="at"/> is a template literal: a text that begins with a backquote.</summary>
     private static bool IsTemplate(ScannedText scan, int at) => IsText(scan, at) && scan.Source[scan[at].Start] == '`';
 
@@ -3765,7 +3753,7 @@ internal sealed class JsReading
     {
         var argument = scan.Next(open);
         var after = scan.Next(argument);
-        return after == CloseOf(scan, open) || scan.Is(after, ",") ? SpecifierOf(scan, argument) : null;
+        return after == scan.CloseOf(open) || scan.Is(after, ",") ? SpecifierOf(scan, argument) : null;
     }
 
     /// <summary>Whether <paramref name="name"/> is written as a type's is: its first letter, past any <c>_</c> or <c>$</c>, a capital.</summary>
@@ -3774,9 +3762,4 @@ internal sealed class JsReading
     /// <summary>The id of a declaration of the qualified name <paramref name="qualified"/>.</summary>
     private string Id(string qualified) => _prefix + qualified;
 
-    /// <summary>The header from the token at <paramref name="start"/> to the one before <paramref name="end"/>, on one line, as a node's signature.</summary>
-    private string Signature(int start, int end) => ExtractText.Signature(ExtractText.Flat(_scan.Spelled(start, end)));
-
-    /// <summary>The index of the token before <paramref name="past"/>, within the text.</summary>
-    private int LastOf(int past) => Math.Clamp(past - 1, 0, Math.Max(_scan.Count - 1, 0));
 }

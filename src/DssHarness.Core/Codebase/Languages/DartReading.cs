@@ -29,6 +29,9 @@ namespace DssHarness.Core.Codebase.Languages;
 /// </remarks>
 internal sealed class DartReading
 {
+    /// <summary>What the reader reads code nested in no deeper than <see cref="ScanFrame.MostDepth"/> of, as its dynamic mark says it.</summary>
+    private const string Nesting = "interpolations and test groups";
+
     /// <summary>Dart's reserved words.</summary>
     private static readonly HashSet<string> Reserved = new(StringComparer.Ordinal)
     {
@@ -223,7 +226,7 @@ internal sealed class DartReading
                 PartOf(at, _scan.Next(next));
             }
             else if (_scan.Is(at, "typedef") && TypedefHead(at, _scan.Count) is (>= 0 and var nameAt, var aliased, var stop)
-                && (aliased < 0 || IsFunctionType(aliased + 1, LastOf(stop))))
+                && (aliased < 0 || IsFunctionType(aliased + 1, _scan.LastOf(stop))))
             {
                 // A typedef of a function type, wherever the file writes it: a value of it is a function value.
                 _functionTypes.Add(_scan.Text(nameAt));
@@ -538,7 +541,7 @@ internal sealed class DartReading
         if (subKind == "class" && _scan.Is(at, "="))
         {
             var stop = _scan.StatementEnd(at, end);
-            var alias = DeclareType(start, head, LastOf(stop), frame, name, subKind, modifiers, marks, signatureEnd: _scan.Is(LastOf(stop), ";") ? LastOf(stop) : stop);
+            var alias = DeclareType(start, head, _scan.LastOf(stop), frame, name, subKind, modifiers, marks, signatureEnd: _scan.Is(_scan.LastOf(stop), ";") ? _scan.LastOf(stop) : stop);
             Clauses(alias, _scan.Next(at), stop, CodeEdgeKinds.Inherits);
             return stop;
         }
@@ -689,7 +692,7 @@ internal sealed class DartReading
 
             foreach (var (field, type) in representation.Locals)
             {
-                var fieldKey = _extract.Add(new ExtractNode(Id(inside.Qualify(field)), CodeNodeKinds.Member, field, inside.Qualify(field), nameLine, _scan[close].EndLine, Signature(next + 1, close))
+                var fieldKey = _extract.Add(new ExtractNode(Id(inside.Qualify(field)), CodeNodeKinds.Member, field, inside.Qualify(field), nameLine, _scan[close].EndLine, _scan.Signature(next + 1, close))
                 {
                     SubKind = "field",
                     Scope = inside.Scope,
@@ -705,7 +708,7 @@ internal sealed class DartReading
                 }
             }
 
-            _extract.Add(new ExtractNode(Id(inside.Qualify(constructor)), CodeNodeKinds.Member, constructor, inside.Qualify(constructor), nameLine, _scan[close].EndLine, Signature(at, close + 1))
+            _extract.Add(new ExtractNode(Id(inside.Qualify(constructor)), CodeNodeKinds.Member, constructor, inside.Qualify(constructor), nameLine, _scan[close].EndLine, _scan.Signature(at, close + 1))
             {
                 SubKind = "constructor",
                 Scope = inside.Scope,
@@ -739,7 +742,7 @@ internal sealed class DartReading
             return stop;
         }
 
-        var last = LastOf(stop);
+        var last = _scan.LastOf(stop);
         var aliasEnd = _scan.Is(last, ";") ? last : stop;
         var name = _scan.Text(nameAt);
         var typeParameters = _scan.Is(_scan.Next(nameAt), "<") ? TypeParameters(_scan.Next(nameAt), stop) : [];
@@ -803,7 +806,7 @@ internal sealed class DartReading
 
     /// <summary>A type node over the tokens from <paramref name="start"/> to <paramref name="last"/>, its signature the tokens from <paramref name="head"/> before <paramref name="signatureEnd"/>; answers its key.</summary>
     private string DeclareType(int start, int head, int last, ScanFrame frame, string name, string subKind, List<string> modifiers, List<string> marks, int signatureEnd, string? seenIn = null)
-        => _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Type, name, frame.Qualify(name), _scan[start].Line, _scan[Math.Clamp(last, start, _scan.Count - 1)].EndLine, Signature(head, signatureEnd))
+        => _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Type, name, frame.Qualify(name), _scan[start].Line, _scan[Math.Clamp(last, start, _scan.Count - 1)].EndLine, _scan.Signature(head, signatureEnd))
         {
             SubKind = subKind,
             Scope = frame.Scope,
@@ -910,7 +913,7 @@ internal sealed class DartReading
                 continue;
             }
 
-            var key = _extract.Add(new ExtractNode(Id(frame.Qualify(_scan.Text(name))), CodeNodeKinds.Member, _scan.Text(name), frame.Qualify(_scan.Text(name)), _scan[pieceStart].Line, _scan[LastOf(pieceEnd)].EndLine, ExtractText.Signature(_scan.Text(name)))
+            var key = _extract.Add(new ExtractNode(Id(frame.Qualify(_scan.Text(name))), CodeNodeKinds.Member, _scan.Text(name), frame.Qualify(_scan.Text(name)), _scan[pieceStart].Line, _scan[_scan.LastOf(pieceEnd)].EndLine, ExtractText.Signature(_scan.Text(name)))
             {
                 SubKind = "constant",
                 Scope = frame.Scope,
@@ -1120,7 +1123,7 @@ internal sealed class DartReading
             named.Add(_scan.Is(_scan.Next(after), "*") ? $"{_scan.Text(after)}*" : _scan.Text(after));
         }
 
-        var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[start].Line, _scan[last].EndLine, Signature(head, body >= 0 ? body : last))
+        var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[start].Line, _scan[last].EndLine, _scan.Signature(head, body >= 0 ? body : last))
         {
             SubKind = subKind,
             Scope = frame.Scope,
@@ -1206,7 +1209,7 @@ internal sealed class DartReading
         if (redirect >= 0)
         {
             body = -1;
-            last = LastOf(_scan.StatementEnd(redirect, end));
+            last = _scan.LastOf(_scan.StatementEnd(redirect, end));
         }
         else if (_scan.Is(after, "{"))
         {
@@ -1216,12 +1219,12 @@ internal sealed class DartReading
         else if (_scan.Is(after, "=>"))
         {
             body = after;
-            last = LastOf(ArrowEnd(_scan, after, end));
+            last = _scan.LastOf(ArrowEnd(_scan, after, end));
         }
         else
         {
             body = -1;
-            last = _scan.Is(after, ";") ? after : LastOf(_scan.StatementEnd(close, end));
+            last = _scan.Is(after, ";") ? after : _scan.LastOf(_scan.StatementEnd(close, end));
         }
 
         var qualified = frame.Qualify(name);
@@ -1232,7 +1235,7 @@ internal sealed class DartReading
             named.Add("redirecting");
         }
 
-        var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[start].Line, _scan[last].EndLine, Signature(head, initializers >= 0 ? initializers : body >= 0 ? body : redirect >= 0 ? redirect : last))
+        var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[start].Line, _scan[last].EndLine, _scan.Signature(head, initializers >= 0 ? initializers : body >= 0 ? body : redirect >= 0 ? redirect : last))
         {
             SubKind = "constructor",
             Scope = frame.Scope,
@@ -1317,7 +1320,7 @@ internal sealed class DartReading
     private int Variables(int start, int head, int typeStart, int end, ScanFrame frame, List<string> marks, List<string> modifiers)
     {
         var stop = _scan.StatementEnd(head, end);
-        var last = LastOf(stop);
+        var last = _scan.LastOf(stop);
         var pieces = ScanCalls.Split(_scan, typeStart, _scan.Is(last, ";") ? last : stop, DartTypes);
 
         if (pieces.Count == 0)
@@ -1472,7 +1475,7 @@ internal sealed class DartReading
 
         if (_scan.Is(at, "=>"))
         {
-            return (at, LastOf(ArrowEnd(_scan, at, end)));
+            return (at, _scan.LastOf(ArrowEnd(_scan, at, end)));
         }
 
         return _scan.Is(at, ";") ? (-1, at) : (-1, -1);
@@ -1692,7 +1695,7 @@ internal sealed class DartReading
 
             if (token.Kind == ScanTokenKind.Text)
             {
-                if (text.Interpolations.TryGetValue(token.Start, out var spans) && Deeper(depth, token.Line))
+                if (text.Interpolations.TryGetValue(token.Start, out var spans) && ScanFrame.ReadsDeeper(_extract, depth, token.Line, Nesting))
                 {
                     foreach (var (spanStart, spanEnd) in spans)
                     {
@@ -1741,7 +1744,7 @@ internal sealed class DartReading
             if (word is "super" or "this" && scan.Is(scan.Next(at), "(") && !IsMember(scan, scan.Previous(at)))
             {
                 var open = scan.Next(at);
-                _extract.Reference(key, CodeEdgeKinds.Calls, "new", line, ScanCalls.CallArity(scan, open, CloseOf(scan, open), DartCalls),
+                _extract.Reference(key, CodeEdgeKinds.Calls, "new", line, ScanCalls.CallArity(scan, open, scan.CloseOf(open), DartCalls),
                     new ExtractQualifier(word == "super" ? CodeQualifierKinds.Base : CodeQualifierKinds.This));
                 continue;
             }
@@ -1780,7 +1783,7 @@ internal sealed class DartReading
             // A test call nested too deep is marked once, those it holds read as its holder's calls.
             if (_testFile && TestCalls.Contains(word) && at > shallowFrom)
             {
-                if (!Deeper(depth, line))
+                if (!ScanFrame.ReadsDeeper(_extract, depth, line, Nesting))
                 {
                     shallowFrom = call.Close;
                 }
@@ -1847,9 +1850,6 @@ internal sealed class DartReading
     /// <summary>Whether the token at <paramref name="at"/> makes what follows it a member of what precedes it: <c>.</c>, <c>?.</c>, <c>..</c>, <c>?..</c>.</summary>
     private static bool IsMember(ScannedText scan, int at) => at >= 0 && at < scan.Count && Accessors.Contains(scan.Text(at));
 
-    /// <summary>The index of the bracket that closes the one at <paramref name="open"/>; past it where it is stranded, the text's end where none does.</summary>
-    private static int CloseOf(ScannedText scan, int open) => scan.Match(open) is var close and >= 0 ? close : scan.IsStranded(open) ? open + 1 : scan.Count;
-
     /// <summary>
     /// The first <c>..</c> or <c>?..</c> of the cascade the one at <paramref name="cascade"/> is a section of: back over
     /// the sections before it at its own depth - each a member's name, its arguments and what it assigns - to what
@@ -1907,7 +1907,7 @@ internal sealed class DartReading
                 break;
             }
 
-            names.Insert(0, scan.Text(at));
+            names.Add(scan.Text(at));
             first = at;
             var before = scan.Previous(at);
 
@@ -1918,6 +1918,9 @@ internal sealed class DartReading
 
             at = Unasserted(scan, scan.Previous(before));
         }
+
+        // Read from its end, last first.
+        names.Reverse();
 
         if (names.Count == 0)
         {
@@ -1962,21 +1965,6 @@ internal sealed class DartReading
         }
 
         return IsTypeName(names[0]) ? new ExtractQualifier(CodeQualifierKinds.Named, string.Join('.', names)) : new ExtractQualifier(CodeQualifierKinds.Value, string.Join('.', names));
-    }
-
-    /// <summary>
-    /// Whether code nested <paramref name="depth"/> interpolations and test groups deep is read one deeper: not past
-    /// <see cref="ScanFrame.MostDepth"/>, where what is nested there is marked dynamic at <paramref name="line"/>.
-    /// </summary>
-    private bool Deeper(int depth, int line)
-    {
-        if (depth < ScanFrame.MostDepth)
-        {
-            return true;
-        }
-
-        _extract.Dynamic(line, $"code nested more than {ScanFrame.MostDepth} interpolations and test groups deep, which is not read");
-        return false;
     }
 
     /// <summary><paramref name="at"/>, or the token before it where it is a non-null assertion's <c>!</c>.</summary>
@@ -2523,9 +2511,4 @@ internal sealed class DartReading
     /// <summary>The id of a declaration of the qualified name <paramref name="qualified"/>.</summary>
     private string Id(string qualified) => _prefix + qualified;
 
-    /// <summary>The header from the token at <paramref name="start"/> to the one before <paramref name="end"/>, on one line, as a node's signature.</summary>
-    private string Signature(int start, int end) => ExtractText.Signature(ExtractText.Flat(_scan.Spelled(start, end)));
-
-    /// <summary>The index of the token before <paramref name="past"/>, within the text.</summary>
-    private int LastOf(int past) => Math.Clamp(past - 1, 0, Math.Max(_scan.Count - 1, 0));
 }

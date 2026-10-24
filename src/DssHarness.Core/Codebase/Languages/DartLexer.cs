@@ -4,7 +4,7 @@ namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
 /// The lexical rules of Dart for the structural scanner: comments (<c>//</c>, <c>///</c>, and <c>/* */</c>, which nest)
-/// kept apart; a string - in single or double quotes, triple-quoted over lines, raw (<c>r'...'</c>) - as one token with
+/// and a first line's script tag (<c>#!</c>) kept apart; a string - in single or double quotes, triple-quoted over lines, raw (<c>r'...'</c>) - as one token with
 /// every interpolation it holds (<c>$name</c>, <c>${...}</c> with braces and strings of its own), never read as code;
 /// names that may hold <c>$</c>; numbers with their separators; <c>?..</c>, <c>...?</c>, <c>...</c>, <c>??=</c>,
 /// <c>?.</c>, <c>..</c>, <c>=&gt;</c> and <c>??</c> whole and every other punctuator alone, so <c>&gt;&gt;</c> closes two
@@ -40,7 +40,7 @@ internal static class DartLexer
     {
         public void Run(int start, int end)
         {
-            var at = start;
+            var at = Shebang(text, start, end);
 
             while (at < end)
             {
@@ -133,41 +133,18 @@ internal static class DartLexer
         /// </summary>
         private int Literal(int start, int quote, bool raw, int end)
         {
-            var frames = new List<Frame>();
-            var at = Open(frames, quote, raw, end);
+            var literals = new LiteralStack<Quote>(this, start);
+            var at = Open(literals, quote, raw, end);
 
-            // Where the interpolation the string holds directly, that the reading is in, began; -1 outside one.
-            var code = -1;
-
-            while (at < end && frames.Count > 0)
+            while (at < end && literals.Open)
             {
-                var top = frames[^1];
                 var character = text[at];
 
-                if (top.Code)
+                if (literals.InCode)
                 {
-                    if (character == '{')
+                    if (character is '{' or '}')
                     {
-                        frames[^1] = top with { Depth = top.Depth + 1 };
-                        at++;
-                    }
-                    else if (character == '}')
-                    {
-                        if (top.Depth == 0)
-                        {
-                            frames.RemoveAt(frames.Count - 1);
-
-                            if (frames.Count == 1)
-                            {
-                                Interpolated(start, code, at);
-                                code = -1;
-                            }
-                        }
-                        else
-                        {
-                            frames[^1] = top with { Depth = top.Depth - 1 };
-                        }
-
+                        literals.Brace(character == '{', at);
                         at++;
                     }
                     else if (character == '/' && at + 1 < end && text[at + 1] == '*')
@@ -176,7 +153,7 @@ internal static class DartLexer
                     }
                     else if (character is '\'' or '"')
                     {
-                        at = Open(frames, at, raw: at > 0 && text[at - 1] == 'r' && (at < 2 || !IsNamePart(text[at - 2])), end);
+                        at = Open(literals, at, raw: at > 0 && text[at - 1] == 'r' && (at < 2 || !IsNamePart(text[at - 2])), end);
                     }
                     else
                     {
@@ -186,23 +163,20 @@ internal static class DartLexer
                     continue;
                 }
 
+                var top = literals.Mark;
+
                 if (!top.Raw && character == '\\')
                 {
                     at += 2;
                 }
                 else if (!top.Raw && character == '$' && at + 1 < end && text[at + 1] == '{')
                 {
-                    frames.Add(new Frame(Mark: '\0', Triple: false, Raw: false, Code: true, Depth: 0));
                     at += 2;
-
-                    if (frames.Count == 2)
-                    {
-                        code = at;
-                    }
+                    literals.OpenCode(at);
                 }
                 else if (character == top.Mark && (!top.Triple || (at + 2 < end && text[at + 1] == character && text[at + 2] == character)))
                 {
-                    frames.RemoveAt(frames.Count - 1);
+                    literals.CloseLiteral();
                     at += top.Triple ? 3 : 1;
                 }
                 else if (!top.Triple && LineBreakAt(text, at, end) > 0)
@@ -216,24 +190,18 @@ internal static class DartLexer
             }
 
             at = Math.Min(at, end);
-
-            // An interpolation the text ends in is read to where the string ends.
-            if (code >= 0)
-            {
-                Interpolated(start, code, at);
-            }
-
+            literals.End(at);
             Add(ScanTokenKind.Text, start, at);
             return at;
         }
 
-        /// <summary>Opens the string whose first quote is at <paramref name="quote"/> on <paramref name="frames"/>; answers where its text begins.</summary>
-        private int Open(List<Frame> frames, int quote, bool raw, int end)
+        /// <summary>Opens the string whose first quote is at <paramref name="quote"/> on <paramref name="literals"/>; answers where its text begins.</summary>
+        private int Open(LiteralStack<Quote> literals, int quote, bool raw, int end)
         {
             var mark = text[quote];
             var triple = quote + 2 < end && text[quote + 1] == mark && text[quote + 2] == mark;
 
-            frames.Add(new Frame(mark, triple, raw, Code: false, Depth: 0));
+            literals.OpenLiteral(new Quote(mark, triple, raw));
             return quote + (triple ? 3 : 1);
         }
 
@@ -252,7 +220,7 @@ internal static class DartLexer
         }
     }
 
-    /// <summary>What a string's reading is in: a string, by its quote, or an interpolation's code, by how many braces it holds open.</summary>
-    private readonly record struct Frame(char Mark, bool Triple, bool Raw, bool Code, int Depth);
+    /// <summary>A string's quote, whether it is three of them, and whether it is raw.</summary>
+    private readonly record struct Quote(char Mark, bool Triple, bool Raw);
 }
 

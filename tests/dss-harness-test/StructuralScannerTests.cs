@@ -382,6 +382,59 @@ public sealed class StructuralScannerTests
     }
 
     /// <summary>
+    /// PHP's lexer reads code only between its open tags - <c>&lt;?php</c>, <c>&lt;?=</c> - and <c>?&gt;</c>, kept as a
+    /// token, a line comment ending before it; a variable is one name, a name with namespaces' separators one, but the
+    /// separator before a group's brace; and its punctuators of more than one character are whole.
+    /// </summary>
+    [Fact]
+    public void PhpsLexer_CutsPhpsTokens_BetweenItsTags()
+    {
+        var scan = PhpLexer.Scan("<p>a()</p><?xml version=\"1.0\"?><?phpx b() <?php $a?->b <=> $c ?? $d ??= \\App\\Models\\User::class . $$e ... f => g ** 1_000 + 0x1F; # c\n// d ?>x()<?= h ?><? use App\\{A, B};").Scan;
+
+        Assert.Equal(
+            [
+                "$a", "?->", "b", "<=>", "$c", "??", "$d", "??=", "\\App\\Models\\User", "::", "class", ".", "$$e", "...", "f", "=>", "g", "**", "1_000", "+",
+                "0x1F", ";", "?>", "h", "?>", "use", "App", "\\", "{", "A", ",", "B", "}", ";",
+            ],
+            Enumerable.Range(0, scan.Count).Select(at => scan.Text(at)));
+        Assert.Equal(2, scan.Comments.Count);
+    }
+
+    /// <summary>
+    /// A string in single quotes, double quotes or backticks, a heredoc and a nowdoc are each one token; a double-quoted
+    /// string's and a heredoc's interpolations - <c>{$...}</c> from its <c>$</c>, <c>${...}</c> after its brace, holding
+    /// strings and braces of their own - are said as code, a single-quoted string's and a nowdoc's never; a string or a
+    /// heredoc the text ends in is read to its end.
+    /// </summary>
+    [Fact]
+    public void PhpsLexer_ReadsStringsHeredocsAndNowdocs_AndSaysTheirInterpolations()
+    {
+        const string Text = "<?php $a = 'x {$no}' . \"y {$b->c(\"}\")} ${d} {$o->{'p'}->q()} {$a['{$']} \\\" e\" . `f` . <<<EOT\n  g {$h->i()}\n  EOT . <<<'N'\n  {$j}\n  N;";
+        var scan = PhpLexer.Scan(Text);
+        var texts = Enumerable.Range(0, scan.Scan.Count).Where(at => scan.Scan[at].Kind == ScanTokenKind.Text).ToList();
+
+        Assert.Equal(
+            ["'x {$no}'", "\"y {$b->c(\"}\")} ${d} {$o->{'p'}->q()} {$a['{$']} \\\" e\"", "`f`", "<<<EOT\n  g {$h->i()}\n  EOT", "<<<'N'\n  {$j}\n  N"],
+            texts.Select(at => scan.Scan.Text(at)));
+        Assert.Equal(["$b->c(\"}\")", "d", "$o->{'p'}->q()", "$a['{$']"], scan.Interpolations[scan.Scan[texts[1]].Start].Select(span => Text[span.Start..span.End]));
+        Assert.Equal(["$h->i()"], scan.Interpolations[scan.Scan[texts[3]].Start].Select(span => Text[span.Start..span.End]));
+        Assert.False(scan.Interpolations.ContainsKey(scan.Scan[texts[0]].Start));
+        Assert.False(scan.Interpolations.ContainsKey(scan.Scan[texts[4]].Start));
+        Assert.Equal(";", scan.Scan.Text(scan.Scan.Count - 1));
+
+        foreach (var unended in (string[])["<?php a = 'abc", "<?php a = \"x {$b", "<?php a = <<<EOT\nabc {$d"])
+        {
+            var cut = PhpLexer.Scan(unended).Scan;
+
+            Assert.Equal(["a", "="], Enumerable.Range(0, 2).Select(at => cut.Text(at)));
+            Assert.Equal(unended.Length, cut[cut.Count - 1].End);
+        }
+
+        var open = PhpLexer.Scan("<?php a = \"x {$b->c()");
+        Assert.Equal(["$b->c()"], open.Interpolations.Values.Single().Select(span => "<?php a = \"x {$b->c()"[span.Start..span.End]));
+    }
+
+    /// <summary>
     /// A call's arity counts the commas of a type's arguments a literal's list or a type test's holds nothing, and a
     /// comma that ends the arguments nothing where the language lets one; C's macro arguments count an empty one there.
     /// </summary>

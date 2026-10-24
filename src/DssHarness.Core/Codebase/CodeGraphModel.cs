@@ -14,7 +14,7 @@ public static class CodeNodeKinds
     /// <summary>A file the tree lists, whatever reads it. Made by the core for every file it keeps, never by an implementation.</summary>
     public const string File = "file";
 
-    /// <summary>A project file that names others: a <c>.csproj</c>, a <c>.slnx</c>, a Dart package's <c>pubspec.yaml</c>, a Node package's <c>package.json</c>, a <c>tsconfig.json</c>.</summary>
+    /// <summary>A project file that names others: a <c>.csproj</c>, a <c>.slnx</c>, a Dart package's <c>pubspec.yaml</c>, a Node package's <c>package.json</c>, a <c>tsconfig.json</c>, a Composer package's <c>composer.json</c>.</summary>
     public const string Project = "project";
 
     /// <summary>A namespace of a language that has them.</summary>

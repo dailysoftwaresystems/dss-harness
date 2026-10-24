@@ -447,7 +447,7 @@ public sealed record ExtractReference(string From, string Kind, string Name, int
     /// <summary>How many arguments a call gives; <see langword="null"/> where it is no call, or that is not known.</summary>
     public int? Arity { get; init; }
 
-    /// <summary>Where the name is looked for, and nowhere else, where the code says: a receiver's type or value, a type's name, <c>this</c>, an import's prefix.</summary>
+    /// <summary>Where the name is looked for, and nowhere else, where the code says: a receiver's type or value, a type's name, <c>this</c>, an import's prefix, a scope.</summary>
     public ExtractQualifier? Qualifier { get; init; }
 
     /// <summary>What is wrong with this reference; <see langword="null"/> where nothing is.</summary>
@@ -458,7 +458,7 @@ public sealed record ExtractReference(string From, string Kind, string Name, int
             : Arity is < 0 ? "its arity is below zero"
             : Qualifier is { } qualifier && !CodeQualifierKinds.All.Contains(qualifier.Kind, StringComparer.Ordinal) ? $"its qualifier's kind is '{qualifier.Kind}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
             : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix } named && string.IsNullOrWhiteSpace(named.Name) ? "its qualifier names nothing"
-            : Qualifier is { Kind: CodeQualifierKinds.Value, Name: { } value } && string.IsNullOrWhiteSpace(value) ? "its qualifier's name is empty"
+            : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.Scope, Name: { } value } && string.IsNullOrWhiteSpace(value) ? "its qualifier's name is empty"
             : null;
 }
 
@@ -503,8 +503,16 @@ public static class CodeQualifierKinds
     /// </summary>
     public const string Value = "value";
 
+    /// <summary>
+    /// A scope by its qualified name, and past it the repository's own top: the name is looked for as that scope declares
+    /// it, else as a declaration in no scope, and nowhere else - as PHP finds a function its namespace declares, else the
+    /// global one; with no name, among the declarations in no scope alone - a name PHP writes from its global namespace,
+    /// or after a leading <c>\</c>. Either is looked for among the declarations of the reference's own language alone.
+    /// </summary>
+    public const string Scope = "scope";
+
     /// <summary>Every kind.</summary>
-    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value];
+    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope];
 }
 
 /// <summary>A place an implementation saw something it cannot bind, or stopped reading.</summary>

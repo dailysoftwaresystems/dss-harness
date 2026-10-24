@@ -538,6 +538,40 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
+    /// A scope qualifier finds the name as that scope declares it, else among the declarations in no scope, exact - and with
+    /// no name among those alone - never in a scope the reference is written in, nor in another language's files; what
+    /// neither holds is external.
+    /// </summary>
+    [Fact]
+    public void AScopeQualifier_FindsTheNameInThatScope_ElseAtTheTop_OfItsLanguageAlone()
+    {
+        var linked = Link(
+            File("app.t", [Member("App.Go", 0), Member("App.Local", 0), Member("App.Sub.Inner", 0)],
+                [
+                    Call("App.Go", "Local", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "App")),
+                    Call("App.Go", "Helper", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "App")) with { Line = 2 },
+                    Call("App.Go", "Local", 0, new ExtractQualifier(CodeQualifierKinds.Scope)) with { Line = 3 },
+                    Call("App.Go", "Inner", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "App")) with { Line = 4 },
+                    Call("App.Go", "Native", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "App")) with { Line = 5 },
+                    Call("App.Go", "Local", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "Lib")) with { Line = 6 },
+                    Call("App.Go", "Other", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "App")) with { Line = 7 },
+                ],
+                [Open("App"), Open("App.Sub")]),
+            File("top.t", [Member("Helper", 0), Member("Local", 0)]),
+            File("native.c", [Member("Native", 0), Member("App.Other", 0)], scopes: [Open("App")]) with { Language = "c" });
+
+        Assert.Equal(
+            [
+                ("t:App.Local", 1, CodeConfidences.Exact),
+                ("t:Helper", 2, CodeConfidences.Exact),
+                ("t:Local", 3, CodeConfidences.Exact),
+                ("t:Local", 6, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.From == "t:App.Go" && edge.Kind == CodeEdgeKinds.Calls).Select(edge => (edge.To, edge.Line, edge.Confidence)));
+        Assert.Equal(3, linked.External["t:App.Go"]);
+    }
+
+    /// <summary>
     /// A member declared to extend a type is found, <c>unique</c>, for a call on a value of that type - <c>this</c> among
     /// them - or of a type built on it, or of a type the repository does not declare named alike, where the call's file
     /// reaches it - through an import of its scope or its file, from its own file where it is closed, or from the top -
@@ -1992,7 +2026,7 @@ public sealed class CodeGraphLinkerTests
         => new(from, Pick(random, [CodeEdgeKinds.Calls, CodeEdgeKinds.Calls, CodeEdgeKinds.References]), Pick(random, RandomNames), line)
         {
             Arity = random.Next(0, 2),
-            Qualifier = random.Next(9) switch
+            Qualifier = random.Next(10) switch
             {
                 0 or 1 => null,
                 2 => new ExtractQualifier(CodeQualifierKinds.Named, Dotted(random)),
@@ -2000,6 +2034,7 @@ public sealed class CodeGraphLinkerTests
                 4 or 5 => new ExtractQualifier(CodeQualifierKinds.Value, Dotted(random)),
                 6 => new ExtractQualifier(CodeQualifierKinds.This, null),
                 7 => new ExtractQualifier(CodeQualifierKinds.Base, null),
+                8 => new ExtractQualifier(CodeQualifierKinds.Scope, random.Next(2) == 0 ? null : Pick(random, RandomScopes)),
                 _ => new ExtractQualifier(CodeQualifierKinds.Prefix, "p"),
             },
         };

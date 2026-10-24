@@ -51,42 +51,11 @@ public sealed class NpmExtractor : ICodeGraphExtractor
     public FileExtract Extract(CodeFileInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
-
-        var lines = input.Lines;
-        var id = $"{Language}:{input.Path}";
-        var root = JsonOutline.Load(input.Text, lenient: false, out var stop);
-        var named = root?.Properties!.LastOrDefault(property => property.Name == "name" && property.Value.NonEmpty is not null);
-        var name = named?.Value.Text;
-        var references = new List<ExtractReference>();
-
-        foreach (var section in Sections)
-        {
-            foreach (var dependency in root?[section] is { Kind: JsonValueKind.Object } dependencies ? dependencies.Properties! : [])
-            {
-                if (dependency.Name.Length > 0)
-                {
-                    references.Add(new ExtractReference(id, CodeEdgeKinds.ProjectReference, dependency.Name, FileExtract.LineWithin(dependency.Line, lines.Count)));
-                }
-            }
-        }
-
-        var header = named is not null ? ExtractText.Signature(ExtractText.Flat(lines[FileExtract.LineWithin(named.Line, lines.Count) - 1])) : string.Empty;
-
-        var node = new ExtractNode(id, CodeNodeKinds.Project, name ?? CodeGraphIds.FileName(input.Path), input.Path, 1, Math.Max(lines.Count, 1), header.Length > 0 ? header : CodeGraphIds.FileName(input.Path))
-        {
-            Summary = root?["description"]?.NonEmpty is { } description && ExtractText.Flat(description) is { Length: > 0 } flat ? ExtractText.Summary(flat) : null,
-        };
-
-        return new FileExtract([node])
-        {
-            References = references,
-            AddressRoots = name is not null ? Roots(name, root!) : [],
-            Dynamic = stop is null ? [] : [new ExtractDynamic(FileExtract.LineWithin(stop.Line, lines.Count), stop.Why)],
-        };
+        return PackageManifest.Read(Language, input, Sections, _ => true, Roots);
     }
 
     /// <summary>The address roots of the package <paramref name="name"/> the file <paramref name="root"/> is: its entry's files, each subpath its exports name, and its directory where they name none.</summary>
-    private static List<ExtractAddressRoot> Roots(string name, JsonOutlineValue root)
+    private static IReadOnlyList<ExtractAddressRoot> Roots(string name, JsonOutlineValue root)
     {
         var roots = new List<ExtractAddressRoot>();
         var exports = root["exports"];

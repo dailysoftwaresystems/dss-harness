@@ -121,6 +121,7 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Named, " ") }] }, "its qualifier names nothing"),
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Type) }] }, "its qualifier names nothing"),
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Value, "") }] }, "its qualifier's name is empty"),
+            (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Scope, " ") }] }, "its qualifier's name is empty"),
             (sound with { Generated = " " }, "it says it is generated and not why"),
             (sound with { Dynamic = [new ExtractDynamic(1, "")] }, "it marks a line dynamic and not why"),
             (sound with { Dynamic = [new ExtractDynamic(9, "macro")] }, "it marks line 9 dynamic, outside its 3 lines"),

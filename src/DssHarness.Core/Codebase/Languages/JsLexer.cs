@@ -61,13 +61,8 @@ internal static class JsLexer
         /// </summary>
         public int Run(int start, int end, bool closing = false)
         {
-            var at = start;
+            var at = Shebang(text, start, end);
             var braces = 0;
-
-            if (start == 0 && text.StartsWith("#!", StringComparison.Ordinal))
-            {
-                at = Comment(0, LineEnd(text, 0, end));
-            }
 
             while (at < end)
             {
@@ -200,20 +195,18 @@ internal static class JsLexer
         /// </summary>
         private int Template(int start, int end)
         {
-            // Each entry is a template, or an interpolation's code with how many braces it holds open.
-            var frames = new List<(bool Code, int Depth)> { (false, 0) };
+            var literals = new LiteralStack<char>(this, start);
+            literals.OpenLiteral('`');
             var at = start + 1;
-            var code = -1;
 
             // The last character of the code read, which tells a regular expression's slash from a division's.
             var last = '{';
 
-            while (at < end && frames.Count > 0)
+            while (at < end && literals.Open)
             {
-                var top = frames[^1];
                 var character = text[at];
 
-                if (!top.Code)
+                if (!literals.InCode)
                 {
                     if (character == '\\')
                     {
@@ -221,19 +214,14 @@ internal static class JsLexer
                     }
                     else if (character == '`')
                     {
-                        frames.RemoveAt(frames.Count - 1);
+                        literals.CloseLiteral();
                         at++;
                     }
                     else if (character == '$' && at + 1 < end && text[at + 1] == '{')
                     {
-                        frames.Add((true, 0));
                         at += 2;
+                        literals.OpenCode(at);
                         last = '{';
-
-                        if (frames.Count == 2)
-                        {
-                            code = at;
-                        }
                     }
                     else
                     {
@@ -247,7 +235,7 @@ internal static class JsLexer
                 }
                 else if (character == '`')
                 {
-                    frames.Add((false, 0));
+                    literals.OpenLiteral('`');
                     at++;
                     last = character;
                 }
@@ -260,29 +248,9 @@ internal static class JsLexer
                     at = ExpressionEnd(at, end);
                     last = '/';
                 }
-                else if (character == '{')
+                else if (character is '{' or '}')
                 {
-                    frames[^1] = top with { Depth = top.Depth + 1 };
-                    at++;
-                    last = character;
-                }
-                else if (character == '}')
-                {
-                    if (top.Depth > 0)
-                    {
-                        frames[^1] = top with { Depth = top.Depth - 1 };
-                    }
-                    else
-                    {
-                        frames.RemoveAt(frames.Count - 1);
-
-                        if (frames.Count == 1)
-                        {
-                            Interpolated(start, code, at);
-                            code = -1;
-                        }
-                    }
-
+                    literals.Brace(character == '{', at);
                     at++;
                     last = character;
                 }
@@ -294,13 +262,7 @@ internal static class JsLexer
             }
 
             at = Math.Min(at, end);
-
-            // An interpolation the text ends in is read to where the literal ends.
-            if (code >= 0)
-            {
-                Interpolated(start, code, at);
-            }
-
+            literals.End(at);
             Add(ScanTokenKind.Text, start, at);
             return at;
         }

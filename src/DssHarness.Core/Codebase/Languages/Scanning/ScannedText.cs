@@ -21,13 +21,16 @@ internal sealed class ScannedText
 {
     private readonly int[] _match;
     private readonly bool[] _stranded;
+    private readonly string? _closer;
 
     /// <summary>Scans <paramref name="tokens"/> of <paramref name="source"/>, matching their brackets.</summary>
     /// <param name="source">The text.</param>
     /// <param name="tokens">Its tokens, in order.</param>
     /// <param name="comments">Its comments, in order.</param>
-    public ScannedText(string source, IReadOnlyList<ScanToken> tokens, IReadOnlyList<ScanComment> comments)
+    /// <param name="closer">A token that ends a statement as a <c>;</c> does, where the language has one - PHP's <c>?&gt;</c>.</param>
+    public ScannedText(string source, IReadOnlyList<ScanToken> tokens, IReadOnlyList<ScanComment> comments, string? closer = null)
     {
+        _closer = closer;
         Source = source;
         Tokens = tokens;
         Comments = comments;
@@ -59,6 +62,15 @@ internal sealed class ScannedText
     /// <summary>The text from the token at <paramref name="first"/> to the one before <paramref name="end"/>, as written.</summary>
     public string Text(int first, int end)
         => first < end ? Source[Tokens[first].Start..Tokens[end - 1].End] : string.Empty;
+
+    /// <summary>The tokens from <paramref name="start"/> to the one before <paramref name="end"/> as a node's signature: spelled on one line, and cut to a signature's length.</summary>
+    public string Signature(int start, int end) => ExtractText.Signature(ExtractText.Flat(Spelled(start, end)));
+
+    /// <summary>The index of the token before <paramref name="past"/>, within the text.</summary>
+    public int LastOf(int past) => Math.Clamp(past - 1, 0, Math.Max(Tokens.Count - 1, 0));
+
+    /// <summary>The index of the bracket that closes the one at <paramref name="open"/>; past it where it is stranded; the text's end where none does.</summary>
+    public int CloseOf(int open) => Match(open) is var close and >= 0 ? close : IsStranded(open) ? open + 1 : Tokens.Count;
 
     /// <summary>
     /// The tokens from <paramref name="first"/> to the one before <paramref name="end"/>, directives left out, each written as
@@ -194,16 +206,20 @@ internal sealed class ScannedText
         return Math.Max(end, less + 1);
     }
 
+    /// <summary>Whether the token at <paramref name="at"/> ends a statement: a <c>;</c>, or the closer its language gives - PHP's <c>?&gt;</c>.</summary>
+    public bool EndsStatement(int at) => Is(at, ";") || (_closer is { } closer && Is(at, closer));
+
     /// <summary>
     /// The index past the statement that begins at <paramref name="at"/>, within <paramref name="end"/>: past its
-    /// <c>;</c>, its groups passed over; at the <c>}</c> that ends the block it is in; past a block it ends with, and a
-    /// <c>;</c> after that; at the end of the branch a stranded bracket in it lies in, the rest of that branch with it.
+    /// <c>;</c> or its language's closer, its groups passed over; at the <c>}</c> that ends the block it is in; past a
+    /// block it ends with, and a <c>;</c> after that; at the end of the branch a stranded bracket in it lies in, the rest
+    /// of that branch with it.
     /// </summary>
     public int StatementEnd(int at, int end)
     {
         for (var index = at; index < end; index++)
         {
-            if (Is(index, ";"))
+            if (EndsStatement(index))
             {
                 return index + 1;
             }

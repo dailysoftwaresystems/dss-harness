@@ -1893,8 +1893,9 @@ of a conditional read from where the conditional began, the brackets every branc
 one closed by the bracket after it (a brace the first branch leaves open kept though another leaves none, as
 `extern "C" {` is), every other bracket a branch leaves unbalanced stranded - matching nothing, holding nothing, and
 ending its statement with the rest of its branch - and a stray parenthesis or square bracket stopped at a brace so it
-never ends a body; it gives a group's bounds, a statement's end, the code between two indices, the comments above a
-declaration (`CommentsAbove`) and a header on one line (`Spelled`). `ScanCalls` reads a call alike for every such
+never ends a body; it gives a group's bounds and the bracket that closes one (`CloseOf`), a statement's end - past a `;`,
+or the closer a language gives (`EndsStatement`) - the code between two indices, the comments above a declaration
+(`CommentsAbove`) and a header on one line (`Spelled`, and as a node's signature `Signature`). `ScanCalls` reads a call alike for every such
 language by the rules it gives (`ScanCallRules`: its keywords, and how it writes type arguments - the punctuators a
 type holds and what may follow a list in an expression, which C++ gives a declaration's types more of than code's,
 where `<` compares too) - a name, type arguments, `(` - its arity counted by the commas at its own depth; splits a list
@@ -1908,14 +1909,15 @@ with a namespace's parts in one file one node. `ScannedText.AngleEnd` and `ScanC
 type arguments' end and its start from either bracket, alike for every language that writes them. A language's reader
 (C and C++ share `CFamilyReading`; Dart's is `DartReading`, over `DartLexer`) says what a declaration, a scope and an
 import are. Dart's lexer keeps a string whole with every interpolation it holds and says where each `${...}` holds
-code, which the reader scans as a text of its own; its reader puts a library's declarations - its file's and its parts'
+code - through `ScanLexing.LiteralStack`, the one stack of what a literal's reading is in, JavaScript's and PHP's lexers'
+too - which the reader scans as a text of its own; its reader puts a library's declarations - its file's and its parts'
 - in one open scope named by the library's path, keeps each private name to it (`SeenIn`), has a part share its
 library's imports (`Shares`), and reads a test framework's `test`, `testWidgets` and `group` calls in a test file as test
 nodes. Any name but a reserved word's may name a member - `of`, `show`, `get` - and a member's call is one whatever its
 name spells after the receiver's dot (`x.when(...)`); a call's arity counts no comma that ends its arguments, where
 the language lets one (`ScanCallRules.TrailingComma`), and no comma of a type's arguments a literal's list or a type
 test holds. Declarations, interpolations and test groups nested past `ScanFrame.MostDepth` are marked dynamic and read no
-deeper.
+deeper (`ScanFrame.ReadsDeeper`).
 `pubspec`, an outline over the repository's YAML reader (`YamlReading.Load`, which says the line and column a text stops
 being one mapping at, as `Root`'s refusals do), declares the address root each package's `package:` imports resolve
 through.
@@ -1948,6 +1950,28 @@ declared until one names a file the tree holds. `tsconfig` (comments and trailin
 its `references` name and declares local roots (`ExtractAddressRoot.Local`) for its `compilerOptions.paths` from its
 `baseUrl` - a pattern whose `*` ends it a directory's, one with none a file's tried as TypeScript and Node try it - which the
 files in its directory and below resolve a bare import by before any other root, the nearest configuration's first.
+PHP's reader (`PhpReading`, over `PhpLexer`) reads code only between `<?php` or `<?=` and `?>`, the rest of a file its
+text, each `?>` ending a statement as a semicolon does (`ScannedText.EndsStatement`, the closer a lexer gives) and nothing
+after `__halt_compiler();` read; the lexer keeps a string, a heredoc and a nowdoc whole, saying
+where a double-quoted string's or a heredoc's `{$...}` and `${...}` hold code, and a name with namespaces' separators one
+token. The reader writes PHP's `\` as the model's dot: each namespace - in braces, or ended by its semicolon to the next
+- is an open scope and a node of each file that declares it, each type an open scope in it; each name a reference writes
+is written out as PHP resolves it, by the file's `use` declarations and its namespace - a class in the namespace that
+names it alone, a function in its namespace and then the global one (a `scope` qualifier) - and each `use` is an import
+of the class it names, its alias the prefix, or of a function's or a constant's namespace, showing its name. A property
+is named by its variable (`$name`), a constructor's promoted parameters properties of its type, and what a property's
+hooks call its calls. A receiver's type is the call's qualifier where the file states it - a typed parameter, a local a
+`new` made, a caught exception, a typed property reached through `$this` - `self::`, `static::` and `$this::` a `this`
+qualifier and `parent::` a `base` one. `require` and `include` of a path the code writes - a text, or one joined to
+`__DIR__` or `dirname(__DIR__)` - import it by a path from the file's directory; one the code computes is marked dynamic,
+its code read, as a call through a variable or of a value the code computes, `call_user_func` and `eval` are. A class
+that extends a `TestCase`, or is named for a test and extends one, is a test class, its public `test...` methods tests,
+and its methods - or a trait's - marked `#[Test]` or `@test`; in a file under
+`tests/` or `test/` Pest's `test`, `it` and `describe` calls are test nodes; and the code of a file's top is its `(script)`
+node's. `composer`, over `PackageManifest` - the one reader of a package manager's JSON manifest, `npm`'s too - names a
+package by its name and refers to each package its `require` and `require-dev` name, a name with no `/` - PHP's
+platform's: `php`, `ext-*`, `lib-*`, `composer-plugin-api` - none; it declares no address root, since a class is found by
+its namespace.
 
 The one linker (`CodeGraphLinker`) resolves every reference by the same steps for every language - the qualifier's
 scope, a type and its bases among it; the enclosing scopes from the inside out; a scope import's prefix (an alias),
@@ -1972,7 +1996,9 @@ prototype found beside its body - the same language and qualified name - is that
 its type's body, as C++ writes `T::f`, is in the type its declaration's scope names. A qualified reference is looked for where its qualifier says alone. A `type` qualifier is a type or
 scope found as a name is - nearest first in the scopes it is written in, then the container of its whole qualified
 name, an alias, an import's, the repository's - else every container its name ends; a `named` one is that too, unless
-a value a scope it is written in holds (a base's among them) is nearer. A value - and a `value` qualifier - is
+a value a scope it is written in holds (a base's among them) is nearer; a `scope` one is the scope it names alone, else
+the declarations in no scope - with no name those alone - each of its own language, `exact`, as PHP finds a function in
+its namespace and then the global one. A value - and a `value` qualifier - is
 followed through its member's `ValueType`, each name of a chain, from a value or from a type, through the one before's
 type, a type the repository does not declare holding nothing it declares; a call on a value of no said type goes by
 its name in the repository, never to a type and never to the caller's own scopes. A call a type does not hold goes,

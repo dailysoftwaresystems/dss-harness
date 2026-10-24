@@ -10,7 +10,7 @@ internal readonly record struct ScannedCall(int Name, int Open, int Close, int? 
 /// <summary>What a scanned language says of its calls: the names no call is made by, how it writes a call's type arguments, and whether a comma may end its arguments.</summary>
 /// <param name="Keywords">The names of the language no call is made by.</param>
 /// <param name="TypeArguments">How it writes a list of type arguments between a call's name and its parenthesis; <see langword="null"/> where it writes none.</param>
-/// <param name="TrailingComma">Whether a comma may end a call's arguments with none after it, as Dart's may; where not - C's macros - it is followed by an empty one.</param>
+/// <param name="TrailingComma">Whether a comma may end a call's arguments with none after it, as Dart's, JavaScript's and PHP's may; where not - C's macros - it is followed by an empty one.</param>
 internal sealed record ScanCallRules(IReadOnlySet<string> Keywords, ScanTypeArguments? TypeArguments, bool TrailingComma = false);
 
 /// <summary>
@@ -67,13 +67,13 @@ internal static class ScanCalls
             return null;
         }
 
-        var close = scan.Match(open) is var matched and >= 0 ? matched : scan.IsStranded(open) ? open + 1 : scan.Count;
+        var close = scan.CloseOf(open);
         return new ScannedCall(at, open, close, CallArity(scan, open, close, rules));
     }
 
     /// <summary>
     /// How many arguments the call whose parentheses are at <paramref name="open"/> and <paramref name="close"/> gives
-    /// (<see cref="Arity"/>); <see langword="null"/> where one at their own depth spreads - JavaScript's <c>f(...xs)</c>,
+    /// (<see cref="Arity"/>); <see langword="null"/> where one at their own depth spreads - JavaScript's <c>f(...xs)</c>, PHP's <c>f(...$xs)</c>,
     /// C++'s pack expansion <c>f(args...)</c> - which gives as many as it holds, no count the text says.
     /// </summary>
     /// <param name="scan">The text.</param>

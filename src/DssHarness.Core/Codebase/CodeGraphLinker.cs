@@ -53,7 +53,7 @@ public static class CodeGraphLinker
     /// revision that made it (<see cref="CodeGraphSymbolsFile.Linker"/>), so a graph linked by another one is linked again
     /// though no file changed, and no file is read again.
     /// </summary>
-    public const int Revision = 6;
+    public const int Revision = 7;
 
     /// <summary>Links <paramref name="files"/>, one tree's every file, into its symbols and edges.</summary>
     /// <param name="files">Every file the graph keeps, each once: those whose declarations are kept with their extracts.</param>
@@ -733,6 +733,15 @@ public static class CodeGraphLinker
 
                 case CodeQualifierKinds.Type:
                     return Typed(from, Containers(from, qualifier.Name!), qualifier.Name!, name, accepts, withSelf: true);
+
+                case CodeQualifierKinds.Scope:
+                    // The scope the code names, else what no scope holds: a PHP function's namespace, then the global one -
+                    // its language's, as another language's top is no namespace of its own.
+                    bool Own(Declaration target) => target.File.Language == from.File.Language && accepts(target);
+
+                    return qualifier.Name is { } scope && InScope(OpenKey(scope), name, Own, withBases: false) is { Count: > 0 } held
+                        ? (held, CodeConfidences.Exact)
+                        : (Distinct(RepositoryNamed(from.File, name).Where(target => target.Node.Scope is null && Own(target))), CodeConfidences.Exact);
 
                 default:
                     // A value the scopes hold, nearer than any type or scope of its name, is that value; a type or a scope is
@@ -1717,9 +1726,9 @@ public static class CodeGraphLinker
         /// name and its id - and, for a type or a scope, under its qualified name, its name's last run and its own scope's -
         /// each scope's parent, its open scopes, its imports with its language, what every file of its language imports, and
         /// its address roots, each whole or not and local or not. A declaration's part is what a finding reads of it, by
-        /// whichever key it was reached: its id, its kind, the scope it is declared in and the scope it is, the declaration
-        /// that holds it - which says whether it is its file's top - what it takes, its value's type, what it extends, the
-        /// scope it is kept to and the names it is exported by. Its name, its qualified name and each name it is exported by
+        /// whichever key it was reached: its id, its file's language, its kind, the scope it is declared in and the scope it
+        /// is, the declaration that holds it - which says whether it is its file's top - what it takes, its value's type, what
+        /// it extends, the scope it is kept to and the names it is exported by. Its name, its qualified name and each name it is exported by
         /// are keys and no field - a declaration whose name changed leaves one key for another, and a scope's key holds its
         /// qualified name; a line or a body is never read. A file with no extract holds no part: one that gains or loses its extract
         /// changes its open scopes'.
@@ -1770,6 +1779,7 @@ public static class CodeGraphLinker
                 var shape = string.Join(
                     FieldEnd,
                     node.Id,
+                    file.Language ?? None,
                     node.Kind,
                     scopeKey ?? None,
                     own ?? None,

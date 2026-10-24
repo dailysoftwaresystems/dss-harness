@@ -871,6 +871,15 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
 
     private const int ScanDepth = 64;
 
+    /// <summary>A script tag on the first line is kept apart, so the declaration below it is read, and is no summary of it.</summary>
+    [Fact]
+    public void AScriptTag_IsKeptApart_AndNoSummary()
+    {
+        var main = Assert.Single(Read("bin/tool.dart", "#!/usr/bin/env dart\nvoid main() { run(); }").Nodes);
+
+        Assert.Equal(("main", null), (main.Name, main.Summary));
+    }
+
     private static FileExtract Read(string path, string text) => new DartExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);

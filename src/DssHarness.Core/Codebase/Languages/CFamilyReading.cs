@@ -670,7 +670,7 @@ internal sealed class CFamilyReading
         {
             var qualified = ExtractText.Qualify(scope, part);
             _extract.Scope(qualified, open: true, scope);
-            parent = _extract.Part(new ExtractNode(_prefix + qualified, CodeNodeKinds.Namespace, part, qualified, _scan[start].Line, LastLine(close), Signature(start, name))
+            parent = _extract.Part(new ExtractNode(_prefix + qualified, CodeNodeKinds.Namespace, part, qualified, _scan[start].Line, LastLine(close), _scan.Signature(start, name))
             {
                 Scope = scope,
                 Parent = parent,
@@ -1328,10 +1328,12 @@ internal sealed class CFamilyReading
                 break;
             }
 
-            scopes.Insert(0, _scan.Text(part));
+            scopes.Add(_scan.Text(part));
             first = part;
         }
 
+        // Read from its end, last first.
+        scopes.Reverse();
         return new FunctionName(name, scopes.Count > 0 ? string.Join('.', scopes) : null, first, open, _scan.Match(open));
     }
 
@@ -1460,7 +1462,7 @@ internal sealed class CFamilyReading
             modifiers.Add("template");
         }
 
-        var key = _extract.Add(new ExtractNode(Id(name, fileLocal), CodeNodeKinds.Member, head.Name, qualified, _scan[start].Line, _scan[last].EndLine, Signature(start, body >= 0 ? body : _scan.Is(last, ";") ? last : last + 1))
+        var key = _extract.Add(new ExtractNode(Id(name, fileLocal), CodeNodeKinds.Member, head.Name, qualified, _scan[start].Line, _scan[last].EndLine, _scan.Signature(start, body >= 0 ? body : _scan.Is(last, ";") ? last : last + 1))
         {
             SubKind = subKind,
             Scope = Placed(scopePrefix ?? frame.Scope, fileLocal && frame.Owner is null && head.Written is null),
@@ -1627,7 +1629,7 @@ internal sealed class CFamilyReading
         var name = declared.Name!;
         var qualified = frame.Qualify(name);
 
-        var key = _extract.Add(new ExtractNode(Id(qualified, local), CodeNodeKinds.Member, name, qualified, _scan[start].Line, _scan[last].EndLine, Signature(start, _scan.Is(last, ";") ? last : last + 1))
+        var key = _extract.Add(new ExtractNode(Id(qualified, local), CodeNodeKinds.Member, name, qualified, _scan[start].Line, _scan[last].EndLine, _scan.Signature(start, _scan.Is(last, ";") ? last : last + 1))
         {
             SubKind = frame.Owner is not null ? "field" : "variable",
             Scope = Placed(frame.Scope, local && frame.Owner is null),
@@ -1662,7 +1664,7 @@ internal sealed class CFamilyReading
     /// <paramref name="signatureEnd"/>; answers its key.
     /// </summary>
     private string Declare(int start, int last, ScanFrame frame, bool local, string name, string kind, string subKind, string qualified, int signatureEnd, bool templated)
-        => _extract.Add(new ExtractNode(Id(qualified, local), kind, name, qualified, _scan[start].Line, _scan[Math.Clamp(last, start, _scan.Count - 1)].EndLine, Signature(start, signatureEnd))
+        => _extract.Add(new ExtractNode(Id(qualified, local), kind, name, qualified, _scan[start].Line, _scan[Math.Clamp(last, start, _scan.Count - 1)].EndLine, _scan.Signature(start, signatureEnd))
         {
             SubKind = subKind,
             Scope = Placed(frame.Scope, local && frame.Owner is null),
@@ -2036,7 +2038,7 @@ internal sealed class CFamilyReading
 
         while (scan.IsName(at))
         {
-            names.Insert(0, scan.Text(at));
+            names.Add(scan.Text(at));
             first = at;
             var before = scan.Previous(at);
 
@@ -2047,6 +2049,9 @@ internal sealed class CFamilyReading
 
             at = scan.Previous(before);
         }
+
+        // Read from its end, last first.
+        names.Reverse();
 
         // A receiver that is no chain of names - a call's result, an element - is a value of no type the file says.
         if (names.Count == 0 || scan.Is(scan.Previous(first), ".") || scan.Is(scan.Previous(first), "->"))
@@ -2086,7 +2091,7 @@ internal sealed class CFamilyReading
                 break;
             }
 
-            names.Insert(0, scan.Text(at));
+            names.Add(scan.Text(at));
 
             if (!scan.Is(scan.Previous(at), "::"))
             {
@@ -2096,6 +2101,8 @@ internal sealed class CFamilyReading
             at = scan.Previous(scan.Previous(at));
         }
 
+        // Read from its end, last first.
+        names.Reverse();
         return names.Count > 0 ? string.Join('.', names) : null;
     }
 
@@ -2400,8 +2407,6 @@ internal sealed class CFamilyReading
         return _closed;
     }
 
-    /// <summary>The header from the token at <paramref name="start"/> to the one before <paramref name="end"/>, on one line, as a node's signature.</summary>
-    private string Signature(int start, int end) => ExtractText.Signature(ExtractText.Flat(_scan.Spelled(start, end)));
 
     /// <summary>The modifiers of the declaration at <paramref name="at"/>: <paramref name="modifiers"/>, and <c>conditional</c> where it lies under a conditional.</summary>
     private IReadOnlyList<string> Marks(int at, IReadOnlyList<string> modifiers)

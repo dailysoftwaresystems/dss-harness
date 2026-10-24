@@ -49,6 +49,14 @@ internal abstract class ScanLexing(CodeLineIndex lines)
         return end;
     }
 
+    /// <summary>
+    /// Where the text's code begins from <paramref name="start"/>: past a first line's shebang (<c>#!</c>), which a
+    /// script's interpreter reads and the lexer keeps as a comment - JavaScript's and Dart's; <paramref name="start"/>
+    /// where it begins none, or the run is not the text's own from its start.
+    /// </summary>
+    protected int Shebang(string text, int start, int end)
+        => start == 0 && text.StartsWith("#!", StringComparison.Ordinal) ? Comment(0, LineEnd(text, 0, end)) : start;
+
     /// <summary>Where the line <paramref name="at"/> is on ends, within <paramref name="end"/>: at its line break, which a comment that runs to it does not hold.</summary>
     protected static int LineEnd(string text, int at, int end)
     {
@@ -70,7 +78,81 @@ internal abstract class ScanLexing(CodeLineIndex lines)
     }
 
     /// <summary>
-    /// A number at <paramref name="start"/>, as Dart and JavaScript write one: digits, the letters of a hexadecimal, a
+    /// What a literal's reading is in, innermost last: the literal, an interpolation's code with how many braces it holds
+    /// open, a literal that code holds, and on - one stack, never a call into itself, so no nesting reaches past the
+    /// reader's stack - each run of code the literal holds directly recorded as its own where it ends.
+    /// </summary>
+    /// <typeparam name="TMark">What the lexer keeps of each literal it opens: its quote, whether it is raw, whether it is triple.</typeparam>
+    /// <param name="lexing">The run the literal is read in.</param>
+    /// <param name="literal">Where the literal begins.</param>
+    protected sealed class LiteralStack<TMark>(ScanLexing lexing, int literal)
+    {
+        private readonly List<(TMark Mark, bool Code, int Depth)> _frames = [];
+
+        /// <summary>Where the run of code the literal holds directly that the reading is in began; -1 outside one.</summary>
+        private int _code = -1;
+
+        /// <summary>Whether the literal is still open.</summary>
+        public bool Open => _frames.Count > 0;
+
+        /// <summary>Whether the reading is in an interpolation's code.</summary>
+        public bool InCode => _frames[^1].Code;
+
+        /// <summary>What the lexer keeps of the literal the reading is in.</summary>
+        public TMark Mark => _frames[^1].Mark;
+
+        /// <summary>Opens a literal: the one read, or one an interpolation's code holds.</summary>
+        public void OpenLiteral(TMark mark) => _frames.Add((mark, false, 0));
+
+        /// <summary>Closes the literal the reading is in.</summary>
+        public void CloseLiteral() => _frames.RemoveAt(_frames.Count - 1);
+
+        /// <summary>Opens an interpolation's code, which begins at <paramref name="at"/>.</summary>
+        public void OpenCode(int at)
+        {
+            _frames.Add((default!, true, 0));
+
+            if (_frames.Count == 2)
+            {
+                _code = at;
+            }
+        }
+
+        /// <summary>
+        /// A brace in an interpolation's code at <paramref name="at"/>: an opening one held open; a closing one closing the
+        /// last held open, else the code itself - recorded where it is the literal's own.
+        /// </summary>
+        public void Brace(bool opens, int at)
+        {
+            var top = _frames[^1];
+
+            if (opens || top.Depth > 0)
+            {
+                _frames[^1] = top with { Depth = top.Depth + (opens ? 1 : -1) };
+                return;
+            }
+
+            _frames.RemoveAt(_frames.Count - 1);
+
+            if (_frames.Count == 1)
+            {
+                lexing.Interpolated(literal, _code, at);
+                _code = -1;
+            }
+        }
+
+        /// <summary>Ends the reading at <paramref name="at"/>: an interpolation the text ends in is read to there.</summary>
+        public void End(int at)
+        {
+            if (_code >= 0)
+            {
+                lexing.Interpolated(literal, _code, at);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A number at <paramref name="start"/>, as Dart, JavaScript and PHP write one: digits, the letters of a hexadecimal, a
     /// binary or an octal one and of a suffix, separators, a fraction's point before a digit, and an exponent's sign but in
     /// a hexadecimal one. Answers where the text goes on.
     /// </summary>
@@ -105,7 +187,7 @@ internal abstract class ScanLexing(CodeLineIndex lines)
 }
 
 /// <summary>
-/// A scanned text whose literals may hold code - Dart's and JavaScript's interpolations, a JSX element's expressions -
+/// A scanned text whose literals may hold code - Dart's, JavaScript's and PHP's interpolations, a JSX element's expressions -
 /// which a reader scans in its turn as a text of its own.
 /// </summary>
 /// <param name="Scan">The tokens, comments apart and brackets matched.</param>

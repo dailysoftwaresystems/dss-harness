@@ -16,6 +16,22 @@ internal sealed record ScanFrame(string? Prefix, string? Scope, string? Parent, 
     /// <summary>Why a reader marks dynamic where declarations nest past <see cref="MostDepth"/> blocks.</summary>
     public static string TooDeepWhy { get; } = $"declarations nested more than {MostDepth} blocks deep, which are not read";
 
+    /// <summary>
+    /// Whether code nested <paramref name="depth"/> of what <paramref name="nested"/> names deep - a language's
+    /// interpolations, templates, elements and test groups - is read one deeper: not past <see cref="MostDepth"/>, where
+    /// what is nested there is marked dynamic in <paramref name="extract"/> at <paramref name="line"/>.
+    /// </summary>
+    public static bool ReadsDeeper(ScanExtract extract, int depth, int line, string nested)
+    {
+        if (depth < MostDepth)
+        {
+            return true;
+        }
+
+        extract.Dynamic(line, $"code nested more than {MostDepth} {nested} deep, which is not read");
+        return false;
+    }
+
     /// <summary>The frame of a file's top: no scope, no prefix, no type.</summary>
     public static ScanFrame Top { get; } = new(null, null, null, null);
 
