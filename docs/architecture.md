@@ -1884,12 +1884,38 @@ from many threads, a sound model, tolerance of any cut of a fixture, pure conten
 another's, the extracts stored with the tests for its version (`fixtures/codebase-graph/<language>/v<version>/`,
 written where missing with `DSSHARNESS_STORE_EXTRACTS=1`), and the edges its fixtures name through the linker.
 
+A language no parser this tool can carry reads goes through the structural scanner (`Codebase\Languages\Scanning\`),
+whose core knows no language: a language's lexer cuts the text into tokens (`ScanToken`), its comments apart and each
+conditional's directives marked as opening, alternative or closing, and `ScannedText` matches the brackets - each branch
+of a conditional read from where the conditional began, the brackets every branch leaves open at one depth joined into
+one closed by the bracket after it (a brace the first branch leaves open kept though another leaves none, as
+`extern "C" {` is), every other bracket a branch leaves unbalanced stranded - matching nothing, holding nothing, and
+ending its statement with the rest of its branch - and a stray parenthesis or square bracket stopped at a brace so it
+never ends a body; it gives a group's bounds, a statement's end, the code between two indices, the comments above a
+declaration (`CommentsAbove`) and a header on one line (`Spelled`). `ScanCalls` reads a call alike for every such
+language by the rules it gives (`ScanCallRules`: its keywords, and how it writes type arguments - the punctuators a
+type holds and what may follow a list in an expression, which C++ gives a declaration's types more of than code's,
+where `<` compares too) - a name, type arguments, `(` - its arity counted by the commas at its own depth; splits a list
+of declarations at its top-level commas and finds the first of a token at its top (a parameter's default `=`), groups
+and type arguments passed over alike;
+`ScanComments` reads a declaration's summary from the comments above it and the mark of a generator from a file's
+first lines; `ScanFrame.Walk` walks declarations, always moving on, and a frame nested past `ScanFrame.MostDepth`
+blocks reads none, so no text nests a reader past its stack; and `ScanExtract` gathers nodes by keys, giving their ids
+once the file is read - a declaration with a body before one without, so a prototype never takes its definition's id -
+with a namespace's parts in one file one node. A language's reader (C and C++ share `CFamilyReading`) says what a
+declaration, a scope and an import are.
+
 The one linker (`CodeGraphLinker`) resolves every reference by the same steps for every language - the qualifier's
 scope, a type and its bases among it; the enclosing scopes from the inside out; a scope import's prefix (an alias),
 for what that import stands for; the file's imports in order, filters applied; the repository by name and arity - a
 qualifier being read as such a prefix too where no type or scope has it as its whole qualified name, from the file
 that makes the import or, made global, from every file of its language - and derives `dispatches`, `declares` and `tests` from the `implements` edges
-and the marks. A qualified reference is looked for where its qualifier says alone. A `type` qualifier is a type or
+and the marks. A closed scope at a file's top - one no scope holds and that is no type's or namespace's own, as a C
+file's for its `static` names - is one every declaration of the file is written in, looked in after its own scopes, so
+what it declares is found `exact` from anywhere in the file. An import marked `Fallback` stands in for the one before it - a C `#include` in quotes, found by its
+path's ending where the including file's folder lacks it - and is taken only where that one names no file; a
+prototype found beside its body - the same language and qualified name - is that body; and a member defined outside
+its type's body, as C++ writes `T::f`, is in the type its declaration's scope names. A qualified reference is looked for where its qualifier says alone. A `type` qualifier is a type or
 scope found as a name is - nearest first in the scopes it is written in, then the container of its whole qualified
 name, an alias, an import's, the repository's - else every container its name ends; a `named` one is that too, unless
 a value a scope it is written in holds (a base's among them) is nearer. A value - and a `value` qualifier - is

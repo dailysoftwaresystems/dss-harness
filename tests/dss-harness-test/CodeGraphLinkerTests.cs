@@ -162,6 +162,91 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
+    /// An import of a file that stands in for the one before it is taken only where that one names no file: beside the
+    /// importing file first, then by the path's ending - its edge, and what a name is found through, the one taken alone.
+    /// </summary>
+    [Fact]
+    public void AnImportStandingInForAnother_IsTakenOnlyWhereThatOneNamesNoFile()
+    {
+        var linked = Link(
+            File("src/util.h", [Type("Near")]),
+            File("lib/util.h", [Type("Far"), Type("Near") with { Id = "t:Near@lib" }]),
+            File("src/a.c", [Member("Go", 0)],
+                [Ref("Go", CodeEdgeKinds.References, "Near")],
+                imports: [Import(CodeImportForms.Relative, "util.h"), Import(CodeImportForms.Ending, "util.h") with { Fallback = true }]),
+            File("app/b.c", [Member("Stop", 0)],
+                [Ref("Stop", CodeEdgeKinds.References, "Far")],
+                imports: [Import(CodeImportForms.Relative, "util.h"), Import(CodeImportForms.Ending, "util.h") with { Fallback = true }]));
+
+        // Beside the file: that one alone, and no edge to the other file of that name.
+        Assert.Contains(new CodeEdge("file:src/a.c", "file:src/util.h", CodeEdgeKinds.Imports, 1, CodeConfidences.Exact), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.From == "file:src/a.c" && edge.To == "file:lib/util.h");
+        Assert.Contains(Edge("t:Go", "t:Near", CodeEdgeKinds.References, CodeConfidences.Unique), linked.Edges);
+
+        // None beside it: every file the ending names.
+        Assert.Contains(new CodeEdge("file:app/b.c", "file:src/util.h", CodeEdgeKinds.Imports, 1, CodeConfidences.Candidates), linked.Edges);
+        Assert.Contains(new CodeEdge("file:app/b.c", "file:lib/util.h", CodeEdgeKinds.Imports, 1, CodeConfidences.Candidates), linked.Edges);
+        Assert.Contains(Edge("t:Stop", "t:Far", CodeEdgeKinds.References, CodeConfidences.Unique), linked.Edges);
+    }
+
+    /// <summary>
+    /// A declaration with no body found beside the one with a body it declares - of its language, qualified name and
+    /// parameters - is that one: a call is its edge alone, where both were candidates; one of another name is no such pair.
+    /// </summary>
+    [Fact]
+    public void APrototypeFoundBesideItsBody_IsThatBody()
+    {
+        var linked = Link(
+            File("a.c", [Member("Run", 0) with { Prototype = true }, Member("Run", 0) with { Id = "t:Run~2" }, Member("Two", 0) with { Prototype = true }]),
+            File("b.c", [Member("Go", 0), Member("Two", 0) with { Id = "t:Two@b" }, Member("ns.Two", 0) with { Id = "t:ns.Two", Name = "Two" }], [Call("Go", "Run", 0), Call("Go", "Two", 0) with { Line = 2 }]));
+
+        Assert.Contains(Edge("t:Go", "t:Run~2", CodeEdgeKinds.Calls, CodeConfidences.Unique), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.Kind == CodeEdgeKinds.Calls && edge.To == "t:Run");
+
+        // Two's prototype and body are one; ns.Two is another declaration of that name, so two candidates are left.
+        Assert.Contains(new CodeEdge("t:Go", "t:Two@b", CodeEdgeKinds.Calls, 2, CodeConfidences.Candidates), linked.Edges);
+        Assert.Contains(new CodeEdge("t:Go", "t:ns.Two", CodeEdgeKinds.Calls, 2, CodeConfidences.Candidates), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.Kind == CodeEdgeKinds.Calls && edge.To == "t:Two");
+
+        // A prototype that takes otherwise than a body of its name declares none, and is no part of it.
+        var unlike = Link(
+            File("a.c", [Member("Three", 1) with { MaxArity = 2, Prototype = true }, Member("Three", 1) with { Id = "t:Three~2" }]),
+            File("b.c", [Member("Go", 0)], [Call("Go", "Three", 1)]));
+
+        Assert.DoesNotContain(unlike.Edges, edge => edge.Kind == CodeEdgeKinds.Declares);
+        Assert.Equal(2, unlike.Edges.Count(edge => edge.Kind == CodeEdgeKinds.Calls));
+    }
+
+    /// <summary>A prototype given a body - or a body made a prototype, or renamed - changes what a call beside it finds, so linking again finds that call again.</summary>
+    [Theory]
+    [InlineData(false, "Run")]
+    [InlineData(true, "Other")]
+    public void APrototypeMadeABody_IsFoundAgainByACallInAnotherFile(bool prototype, string qualified)
+    {
+        var go = File("b.c", [Member("Go", 0)], [Call("Go", "Run", 0)]);
+        var before = File("a.c", [Member("Run", 0) with { Prototype = true }, Member("Run", 0) with { Id = "t:Run~2" }]);
+        var after = File("a.c", [Member("Run", 0) with { Prototype = prototype, Qualified = qualified }, Member("Run", 0) with { Id = "t:Run~2" }]);
+
+        Assert.Single(Link(before, go).Edges, edge => edge.Kind == CodeEdgeKinds.Calls);
+        Assert.Equal(2, Again([before, go], [after, go]).Edges.Count(edge => edge.Kind == CodeEdgeKinds.Calls));
+    }
+
+    /// <summary>
+    /// A member defined outside its type's body - held by no node of that type in its file - is in that type by the scope
+    /// it is declared in: <c>this</c> and <c>base</c> look there, as they do for a member its type's body holds.
+    /// </summary>
+    [Fact]
+    public void AMemberDefinedOutsideItsTypesBody_IsInThatTypeByItsScope()
+    {
+        var linked = Link(
+            File("a.h", [Type("app.A"), Member("app.A.Run", 0), Type("app.B"), Member("app.B.Log", 0)], [Ref("app.B", CodeEdgeKinds.Inherits, "A")], [Open("app")]),
+            File("b.cc", [Member("app.B.Go", 0)], [Call("app.B.Go", "Log", 0, new ExtractQualifier(CodeQualifierKinds.This)), Call("app.B.Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.Base)) with { Line = 2 }], [Open("app")]));
+
+        Assert.Contains(new CodeEdge("t:app.B.Go", "t:app.B.Log", CodeEdgeKinds.Calls, 1, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("t:app.B.Go", "t:app.A.Run", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact), linked.Edges);
+    }
+
+    /// <summary>
     /// Last, the repository by name and arity: one is unique; two to five are an edge to each, candidates; more are counted
     /// unresolved; none is counted external.
     /// </summary>
@@ -215,10 +300,32 @@ public sealed class CodeGraphLinkerTests
     public void AClosedScopesDeclarations_AreSeenFromItsFileAlone()
     {
         var linked = Link(
-            File("a.t", [Member("Go", 0), Member("hidden.Secret", 0) with { Scope = "hidden" }], [Call("Go", "Secret", 0)], [new ExtractScope("hidden", Open: false)]),
+            File("a.t", [Member("Go", 0), Type("hidden"), Member("hidden.Secret", 0) with { Scope = "hidden" }], [Call("Go", "Secret", 0)], [new ExtractScope("hidden", Open: false)]),
             File("b.t", [Member("Other", 0)], [Call("Other", "Secret", 0)], [new ExtractScope("hidden", Open: false)]));
 
         Assert.Contains(Edge("t:Go", "t:hidden.Secret", CodeEdgeKinds.Calls, CodeConfidences.Unique), linked.Edges);
+        Assert.Equal(1, linked.External["t:Other"]);
+    }
+
+    /// <summary>
+    /// A closed scope at a file's top - no scope holds it, and it is no type's or namespace's own, as a C file's for its
+    /// <c>static</c> names - is one every declaration of the file is written in: what it declares is found exact from
+    /// anywhere in the file, after the declaration's own scopes; a closed type's members are not, and another file finds
+    /// none of it.
+    /// </summary>
+    [Fact]
+    public void AFilesTopClosedScope_IsOneEveryDeclarationOfItIsWrittenIn()
+    {
+        var linked = Link(
+            File(
+                "a.t",
+                [Member("Go", 0), Member("Helper", 0) with { Id = "t:a.t:Helper", Scope = "file:a.t" }, Type("Local"), Member("Local.Run", 0) with { Scope = "Local" }],
+                [Call("Go", "Helper", 0), Call("Go", "Run", 0)],
+                [new ExtractScope("file:a.t", Open: false), new ExtractScope("Local", Open: false)]),
+            File("b.t", [Member("Other", 0)], [Call("Other", "Helper", 0)]));
+
+        Assert.Contains(Edge("t:Go", "t:a.t:Helper", CodeEdgeKinds.Calls, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(Edge("t:Go", "t:Local.Run", CodeEdgeKinds.Calls, CodeConfidences.Unique), linked.Edges);
         Assert.Equal(1, linked.External["t:Other"]);
     }
 
@@ -1325,7 +1432,7 @@ public sealed class CodeGraphLinkerTests
         {
             References = references,
             Scopes = declared,
-            Imports = [.. Enumerable.Range(0, random.Next(0, 3)).Select(_ => RandomImport(random))],
+            Imports = RandomImports(random),
             AddressRoots = Chance(random, 5) ? [RandomRoot(random)] : [],
         });
     }
@@ -1377,6 +1484,9 @@ public sealed class CodeGraphLinkerTests
         var arity = random.Next(0, 2);
         var id = value ? $"t:{type}.{member}" : $"t:{type}.{member}({arity})";
 
+        // Now and then a second declaration of one name and parameters in a file: a prototype and its body, each its own id.
+        id = !value && Chance(random, 6) && nodes.Any(node => node.Id == id) ? $"{id}~2" : id;
+
         if (nodes.Any(node => node.Id == id))
         {
             return;
@@ -1421,6 +1531,20 @@ public sealed class CodeGraphLinkerTests
                 _ => new ExtractQualifier(CodeQualifierKinds.Prefix, "p"),
             },
         };
+
+    /// <summary>Up to three imports made at random, one of a file standing in for the one of a file before it now and then.</summary>
+    private static List<ExtractImport> RandomImports(Random random)
+    {
+        var imports = new List<ExtractImport>();
+
+        for (var made = random.Next(0, 4); made > 0; made--)
+        {
+            var import = RandomImport(random);
+            imports.Add(import.Form != CodeImportForms.Scope && imports.Count > 0 && imports[^1].Form != CodeImportForms.Scope && Chance(random, 2) ? import with { Fallback = true } : import);
+        }
+
+        return imports;
+    }
 
     private static ExtractImport RandomImport(Random random)
         => random.Next(4) switch

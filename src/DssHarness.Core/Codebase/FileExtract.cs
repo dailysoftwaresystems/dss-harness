@@ -128,6 +128,8 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
         }
 
         return (Imports ?? []).Select(import => import?.Problem(lineCount) is { } wrong ? $"an import of '{import.Target}': {wrong}" : import is null ? "it holds an import that is null" : null).FirstOrDefault(found => found is not null)
+            ?? (Imports ?? []).Select((import, at) => import.Fallback && (at == 0 || Imports![at - 1].Form == CodeImportForms.Scope)
+                ? $"its import of '{import.Target}' stands in for the import before it, and no import of a file is before it" : null).FirstOrDefault(found => found is not null)
             ?? (AddressRoots ?? []).Select(root => root is null || string.IsNullOrWhiteSpace(root.Prefix) || string.IsNullOrWhiteSpace(root.Directory) ? "it holds an address root with no prefix or no directory" : null).FirstOrDefault(found => found is not null)
             ?? (References ?? []).Select(reference => reference is null ? "it holds a reference that is null"
                 : !ids.ContainsKey(reference.From) ? $"a reference to '{reference.Name}' is made from '{reference.From}', which it holds no node of"
@@ -166,9 +168,12 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     /// Whether <paramref name="text"/> is whole UTF-16 - no surrogate apart from its pair - as a record is written in and
     /// read back: a cut that splits a pair is no text a store holds.
     /// </summary>
-    internal static bool IsWhole(string text)
+    internal static bool IsWhole(string text) => Apart(text, 0) < 0;
+
+    /// <summary>The index of the first surrogate apart from its pair in <paramref name="text"/> from <paramref name="from"/> on; -1 where none is.</summary>
+    internal static int Apart(string text, int from)
     {
-        for (var at = 0; at < text.Length; at++)
+        for (var at = from; at < text.Length; at++)
         {
             if (char.IsHighSurrogate(text[at]) && at + 1 < text.Length && char.IsLowSurrogate(text[at + 1]))
             {
@@ -176,11 +181,11 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             }
             else if (char.IsSurrogate(text[at]))
             {
-                return false;
+                return at;
             }
         }
 
-        return true;
+        return -1;
     }
 
     /// <summary>Every text the extract holds, each of which a store writes.</summary>
@@ -319,6 +324,14 @@ public sealed record ExtractImport(string Form, string Target, int Line)
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Global { get; init; }
 
+    /// <summary>
+    /// Whether it stands in for the import before it, of a file: it is taken only where that one - and each that one
+    /// stands in for in turn - names no file of the tree, so a run of imports is one import, the first of them that names a
+    /// file - as <c>#include "x.h"</c> looks beside its file, then anywhere in the tree.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Fallback { get; init; }
+
     /// <summary>Whether the import makes <paramref name="name"/> visible, by its filters.</summary>
     /// <param name="name">A simple name.</param>
     public bool Lets(string name)
@@ -330,6 +343,7 @@ public sealed record ExtractImport(string Form, string Target, int Line)
             : string.IsNullOrWhiteSpace(Target) ? "it names nothing"
             : !FileExtract.Within(Line, lineCount) ? string.Create(CultureInfo.InvariantCulture, $"it is on line {Line}, outside the file's {lineCount}")
             : Prefix is { } prefix && string.IsNullOrWhiteSpace(prefix) ? "its prefix is empty"
+            : Fallback && Form == CodeImportForms.Scope ? "it is of a scope, and stands in for another import: only an import of a file does"
             : null;
 }
 

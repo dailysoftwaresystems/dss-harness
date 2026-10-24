@@ -48,7 +48,7 @@ public static class CodeGraphLinker
     /// revision that made it (<see cref="CodeGraphSymbolsFile.Linker"/>), so a graph linked by another one is linked again
     /// though no file changed, and no file is read again.
     /// </summary>
-    public const int Revision = 3;
+    public const int Revision = 4;
 
     /// <summary>Links <paramref name="files"/>, one tree's every file, into its symbols and edges.</summary>
     /// <param name="files">Every file the graph keeps, each once: those whose declarations are kept with their extracts.</param>
@@ -250,6 +250,9 @@ public static class CodeGraphLinker
 
         /// <summary>Each file's declarations at its top - in no node and no scope - by name: what a file imported by path makes visible of its own.</summary>
         private readonly Dictionary<CodeGraphFile, Dictionary<string, List<Declaration>>> _topByFile = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>Each file's closed scopes at its top, by key: found once for each file.</summary>
+        private readonly Dictionary<CodeGraphFile, IReadOnlyList<string>> _tops = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>The containers a written name was found to be, from one file and scope: a name such as a type no file declares is looked for once.</summary>
         private readonly Dictionary<(string Path, string? Scope, string Written), (IReadOnlyList<Declaration> Value, int[] Reads)> _containersFound = [];
@@ -528,7 +531,8 @@ public static class CodeGraphLinker
 
             try
             {
-                var (found, confidence) = Found(from, reference);
+                var (all, confidence) = Found(from, reference);
+                var found = Bodied(all);
 
                 if (found.Count == 0)
                 {
@@ -882,6 +886,32 @@ public static class CodeGraphLinker
                 // Read only where the scope before decided nothing: its parent is what is looked in next.
                 key = ParentOf(key, out var parent) ? parent : null;
             }
+
+            // Then the closed scopes at its file's top, which every declaration of the file is written in.
+            foreach (var top in TopsOf(from.File).Where(seen.Add))
+            {
+                yield return top;
+            }
+        }
+
+        /// <summary>
+        /// The closed scopes at the top of <paramref name="file"/>, by key: those no scope holds and that are no type's or
+        /// namespace's own - what the file keeps to itself throughout, as a C file's <c>static</c> names. Read from the
+        /// file's own extract alone, so a finding that reads them is found again whenever the file changes.
+        /// </summary>
+        private IReadOnlyList<string> TopsOf(CodeGraphFile file)
+        {
+            if (_tops.TryGetValue(file, out var tops))
+            {
+                return tops;
+            }
+
+            var extract = file.Extract;
+            var own = extract?.Nodes.Where(IsContainer).Select(node => node.Qualified).ToHashSet(StringComparer.Ordinal) ?? [];
+
+            return _tops[file] = extract is null
+                ? []
+                : [.. extract.Scopes.Where(scope => !scope.Open && scope.Parent is null && !own.Contains(scope.Name)).Select(scope => ClosedKey(file.Path, scope.Name))];
         }
 
         /// <summary>What the scope <paramref name="key"/> declares named <paramref name="name"/>, and - where it is a type's, and <paramref name="withBases"/> - what its bases do.</summary>
@@ -1008,9 +1038,43 @@ public static class CodeGraphLinker
                 Touch(Read.Global, language);
             }
 
-            return file.Extract!.Imports.Select(import => (import, file)).Concat(file.Language is { } named && _global.TryGetValue(named, out var global)
+            return Taken(file).Select(import => (import, file)).Concat(file.Language is { } named && _global.TryGetValue(named, out var global)
                 ? global.Where(made => !ReferenceEquals(made.File, file)).Select(made => (made.Import, made.File))
                 : []);
+        }
+
+        /// <summary>
+        /// The imports <paramref name="file"/> makes, in order, each run of an import and those that stand in for it
+        /// (<see cref="ExtractImport.Fallback"/>) taken as the first of them that names a file of the tree - the run's first
+        /// where none does.
+        /// </summary>
+        private IEnumerable<ExtractImport> Taken(CodeGraphFile file)
+        {
+            var imports = file.Extract!.Imports;
+
+            for (var at = 0; at < imports.Count;)
+            {
+                var past = at + 1;
+
+                while (past < imports.Count && imports[past].Fallback)
+                {
+                    past++;
+                }
+
+                var taken = imports[at];
+
+                for (var standing = at; past - at > 1 && standing < past; standing++)
+                {
+                    if (FilesOf(imports[standing], file).Count > 0)
+                    {
+                        taken = imports[standing];
+                        break;
+                    }
+                }
+
+                yield return taken;
+                at = past;
+            }
         }
 
         /// <summary>Each file's <c>imports</c> edges: to a scope the repository declares, and to each file a path names.</summary>
@@ -1020,7 +1084,7 @@ public static class CodeGraphLinker
             {
                 var from = CodeGraphIds.FileId(file.Path);
 
-                foreach (var import in file.Extract!.Imports)
+                foreach (var import in Taken(file))
                 {
                     if (import.Form == CodeImportForms.Scope)
                     {
@@ -1171,7 +1235,7 @@ public static class CodeGraphLinker
             foreach (var prototype in _declarations.Where(declaration => declaration.Node.Prototype))
             {
                 var bodies = Distinct(definitions[(prototype.File.Language, prototype.Node.Qualified)]
-                    .Where(body => body.Id != prototype.Id && TakeAlike(body.Node, prototype.Node) && Sees(prototype.File, body)));
+                    .Where(body => body.Id != prototype.Id && Declared(prototype, body) && Sees(prototype.File, body)));
 
                 if (bodies.Count is > 0 and <= CodeConfidences.MostCandidates)
                 {
@@ -1194,7 +1258,11 @@ public static class CodeGraphLinker
             }
         }
 
-        /// <summary>The type <paramref name="from"/> is declared in, or is; none where what holds it never reaches one.</summary>
+        /// <summary>
+        /// The type <paramref name="from"/> is declared in, or is: the one what holds it reaches - else, where what holds it
+        /// reaches none, the type whose scope it is declared in, as a member defined outside its type's body is; none where
+        /// neither is.
+        /// </summary>
         private Declaration? EnclosingType(Declaration from)
         {
             var at = from;
@@ -1204,7 +1272,9 @@ public static class CodeGraphLinker
             {
                 if (at.Node.Parent is not { } parent || !seen.Add(parent) || !_owners[from.File].TryGetValue(parent, out var holder))
                 {
-                    return null;
+                    return from.ScopeKey is { } key
+                        ? ContainersOf(QualifiedOf(key)).FirstOrDefault(container => container.Node.Kind == CodeNodeKinds.Type && KeyOf(container.File, container.Node.Qualified) == key)
+                        : null;
                 }
 
                 at = holder;
@@ -1444,7 +1514,9 @@ public static class CodeGraphLinker
                     node.MinArity?.ToString(CultureInfo.InvariantCulture) ?? None,
                     node.MaxArity?.ToString(CultureInfo.InvariantCulture) ?? None,
                     node.ValueType ?? None,
-                    node.Extends ?? None);
+                    node.Extends ?? None,
+                    node.Qualified,
+                    node.Prototype ? "prototype" : None);
 
                 Add(Read.Name, node.Name, shape);
                 Add(Read.Id, node.Id, shape);
@@ -1478,8 +1550,9 @@ public static class CodeGraphLinker
         }
 
         /// <summary>
-        /// What an import is, as a finding reads it: its form, target, prefix and filters - never its line, and not whether
-        /// it is global, which only what every file of its language imports holds it under.
+        /// What an import is, as a finding reads it: its form, target, prefix, filters and whether it stands in for the one
+        /// before it - never its line, and not whether it is global, which only what every file of its language imports
+        /// holds it under.
         /// </summary>
         private static string ImportPart(ExtractImport import)
             => string.Join(
@@ -1488,7 +1561,8 @@ public static class CodeGraphLinker
                 import.Target,
                 import.Prefix ?? None,
                 import.Show is { } show ? string.Join(',', show) : None,
-                import.Hide is { } hide ? string.Join(',', hide) : None);
+                import.Hide is { } hide ? string.Join(',', hide) : None,
+                import.Fallback ? "fallback" : None);
 
         /// <summary>The names of the closed scopes <paramref name="extract"/> declares.</summary>
         private static HashSet<string> Closed(FileExtract extract) => extract.Scopes.Where(scope => !scope.Open).Select(scope => scope.Name).ToHashSet(StringComparer.Ordinal);
@@ -1540,6 +1614,20 @@ public static class CodeGraphLinker
     /// </summary>
     private static bool TakeAlike(ExtractNode one, ExtractNode other)
         => (one.MinArity is null) == (other.MinArity is null) && one.MaxArity == other.MaxArity;
+
+    /// <summary>
+    /// <paramref name="found"/> with each declaration that has no body left out where one with a body, of its language,
+    /// qualified name and parameters, is among them: a prototype found beside the definition it declares is that
+    /// definition, as <c>declares</c> binds them.
+    /// </summary>
+    private static IReadOnlyList<Declaration> Bodied(IReadOnlyList<Declaration> found)
+        => found.Any(declaration => declaration.Node.Prototype) && found.Any(declaration => !declaration.Node.Prototype)
+            ? [.. found.Where(declaration => !declaration.Node.Prototype || !found.Any(body => !body.Node.Prototype && Declared(declaration, body)))]
+            : found;
+
+    /// <summary>Whether <paramref name="prototype"/>, a declaration with no body, declares <paramref name="body"/>: of one language, one qualified name, and taking alike.</summary>
+    private static bool Declared(Declaration prototype, Declaration body)
+        => body.File.Language == prototype.File.Language && body.Node.Qualified == prototype.Node.Qualified && TakeAlike(body.Node, prototype.Node);
 
     /// <summary>Whether a reference of <paramref name="kind"/> names a base of the type it is made in.</summary>
     private static bool IsBase(string kind) => kind is CodeEdgeKinds.Inherits or CodeEdgeKinds.Implements or CodeEdgeKinds.MixesIn;
