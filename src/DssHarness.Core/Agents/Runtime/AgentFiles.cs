@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
+using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
 
 namespace DssHarness.Core.Agents.Runtime;
@@ -230,7 +231,32 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
 /// </param>
 /// <param name="Unread">How many places under the directory could not be read: a directory beneath it, or what a listed path is.</param>
 /// <param name="FirstUnread">The first of them and why; <see langword="null"/> where every place was read.</param>
-public sealed record AgentListing(IReadOnlyList<string> Files, int Unnamed, int Unread, AgentSearchUnread? FirstUnread);
+public sealed record AgentListing(IReadOnlyList<string> Files, int Unnamed, int Unread, AgentSearchUnread? FirstUnread)
+{
+    /// <summary>The note that <paramref name="count"/> files the reader may not read were left out.</summary>
+    /// <param name="count">How many.</param>
+    public static string Refused(int count) => $"[{ReportText.Counted(count, "file")} you may not read were left out]";
+
+    /// <summary>
+    /// What the listing left out, a note each: the files whose names no pattern reads, and the places it could not read,
+    /// with why the first was not.
+    /// </summary>
+    /// <param name="said">How a place is said, from its path relative to the directory listed.</param>
+    public IEnumerable<string> LeftOut(Func<string, string> said)
+    {
+        ArgumentNullException.ThrowIfNull(said);
+
+        if (Unnamed > 0)
+        {
+            yield return $"[{ReportText.Counted(Unnamed, "file")} whose names no pattern reads were left out]";
+        }
+
+        if (FirstUnread is { } first)
+        {
+            yield return first.Note(Unread, "place", said);
+        }
+    }
+}
 
 /// <summary>What one search found: its hits, how many more there were, and the files it did not read.</summary>
 /// <param name="Hits">The hits given, file by file, each file's in its lines' order.</param>
@@ -249,12 +275,55 @@ public sealed record AgentSearch(
     int Searched,
     AgentListing Listing,
     int Unread,
-    AgentSearchUnread? FirstUnread);
+    AgentSearchUnread? FirstUnread)
+{
+    /// <summary>
+    /// What the search did not read, a note each: the files the reader may not read, those passed over, what its listing
+    /// left out, and the files it could not read, with why the first was not.
+    /// </summary>
+    /// <param name="said">How a file is said, from its path relative to the directory searched.</param>
+    public IEnumerable<string> LeftOut(Func<string, string> said)
+    {
+        ArgumentNullException.ThrowIfNull(said);
+
+        if (Refused > 0)
+        {
+            yield return AgentListing.Refused(Refused);
+        }
+
+        if (Passed > 0)
+        {
+            yield return $"[{ReportText.Counted(Passed, "file")} passed over: binary, over {DiskSpace.Size(AgentFiles.MostSearchedBytes)}, or no text this tool reads]";
+        }
+
+        foreach (var note in Listing.LeftOut(said))
+        {
+            yield return note;
+        }
+
+        if (FirstUnread is { } first)
+        {
+            yield return first.Note(Unread, "file", said);
+        }
+    }
+}
 
 /// <summary>A place a listing or a search could not read, and why.</summary>
 /// <param name="Path">The place, relative to the directory listed or searched with forward separators.</param>
 /// <param name="Reason">Why, as the file system said it.</param>
-public sealed record AgentSearchUnread(string Path, string Reason);
+public sealed record AgentSearchUnread(string Path, string Reason)
+{
+    /// <summary>The note that <paramref name="count"/> <paramref name="kind"/>s could not be read, and why this, the first, was not.</summary>
+    /// <param name="count">How many could not be read.</param>
+    /// <param name="kind">What they are: a file, a place.</param>
+    /// <param name="said">How this place is said, from its path.</param>
+    public string Note(int count, string kind, Func<string, string> said)
+    {
+        ArgumentNullException.ThrowIfNull(said);
+
+        return $"[{ReportText.Counted(count, kind)} could not be read, the first '{said(Path)}': {Reason.TrimEnd('.')}]";
+    }
+}
 
 /// <summary>A line a search matched, with the lines around it.</summary>
 /// <param name="Path">Its file, relative to the directory searched with forward separators.</param>

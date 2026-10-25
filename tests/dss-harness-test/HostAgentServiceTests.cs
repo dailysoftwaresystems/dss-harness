@@ -956,6 +956,7 @@ public sealed class HostAgentServiceTests
                 FlowService.RunCommand,
                 FlowService.StopCommand,
                 DssHarness.Core.Runs.RunStopService.CommandName,
+                DssHarness.Core.Codebase.CodebaseGraphQueryService.CommandName,
             }.Order(StringComparer.Ordinal),
             HostAgentProtocol.NotForwardable.Order(StringComparer.Ordinal));
 

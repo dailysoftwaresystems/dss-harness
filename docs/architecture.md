@@ -19,8 +19,8 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
-`update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `clean`, `up`, `down` and
-`help`.
+`update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `query-codebase-graph`, `clean`, `up`,
+`down` and `help`.
 
 Every section of this document now describes code that exists. Where a rule is stated in
 the present tense it is enforced, and a gap between the two is a defect in the tool rather
@@ -2176,8 +2176,8 @@ the rest, after its reads either - and, where the tree's HEAD moved since its la
 between the commit that sync recorded and the one HEAD names now (`IGitClient.ListNamesChangedBetweenAsync`), HEAD asked
 before anything is listed, so a commit made in the tree meanwhile that touched no path given leaves no file as the older
 commit held it under the newer head; where git cannot name them - that commit no longer held, or either naming none - the
-tree is synced whole; `CheckAsync` is the check an answer of the graph makes of the files it names before it is given - no command
-answers from the graph yet - a `stat` against what the view recorded, or against what an earlier check found of a file
+tree is synced whole; `CheckAsync` is the check an answer of the graph makes of the files it names before it is given - the `graph` tool's, once a step is
+given it (below) - a `stat` against what the view recorded, or against what an earlier check found of a file
 whose time alone moved, trusted only where that time is older than the tree's last whole sync's record (`Tree.Written`),
 as git trusts an index entry older than its index; a file either moved, whose time is not older, or that could not be
 read listed again by its path, as a sync by paths lists it - so it is held to the blob a listing gives it, never to a
@@ -2204,6 +2204,41 @@ again. A sync of these that fails, for any cause but a stop, is said - a line of
 names the view, and a warning that says what takes it up again - and never fails its step - nor does a reason step's repository that does not read where
 the hook looks for it, which its runner finds as it does.
 `delete-orchestrator` removes the graph with its run, outside what `--delete-evidence` guards.
+
+What an agent asks of the graph is one tool, `graph` (`Agents\Runtime\CodebaseGraphTool`), whose `op` is `find`, `node`,
+`related`, `outline`, `body`, `edit` or `wholeFile`, over the lookups of `CodebaseGraphQueries` - each node by its id,
+handle, qualified name (one written with its language's `::` or `\` read as the model's `.`) and simple name and
+`path:line`, each file's nodes, each node's edges in and out by kind, the words its
+name splits into weighed by how rare they are, and the 99th percentile of each kind's degree on either side - built once
+from a `CodebaseGraphRead`. Every node an answer names is one line with its handle, kind, signature and `path:start-end
+#hash` (the first eight characters of its digest); `find` ranks a whole qualified name, then a simple name, then a
+prefix, then the share of the query's words weighed by their rarity, a summary's and a path's words a twentieth as much,
+generated code after every other and ties by id; `related` gives a hub - more edges of the relation's kinds than the
+99th percentile and at least `CodebaseGraphQueries.CrowdFloor` - and does not go through it; each operation is bounded
+(`CodebaseGraphTool.FindLines` and the rest) and every answer cut at a whole line past `CodebaseGraphTool.MostCharacters`,
+saying the offset to ask again with; every answer ends naming the files whose extract the view no longer holds
+(`CodebaseGraphQueries.Unheld`), whose declarations no answer gives. Where the graph is not sure - no node matched, a
+name it does not hold, an edge of `candidates`, a node named with external or unresolved callees or in a file `dynamic`
+or generated - the answer adds the lines that hold the name as a whole word, searched by `AgentFiles.SearchAsync` as
+`search_files` searches and saying what it did not read in the same notes (`AgentSearch.LeftOut`), through the read rule
+the tool is handed, which leaves out and counts every node, edge and hit of a file it refuses; a path or a `path:line`
+is searched for by no word. `body` reads a node's lines fresh - a type's members' bodies left out unless `full`, each
+member's signature line kept - and where its hash moved since the view was read, has the file checked again before
+serving it, where the tool may sync, the node looked for again in the same file (`CodebaseGraphQueries.Part`); `edit`,
+one at a time, writes a node's lines through `EditedText.ReplaceLines` only where the hash given is its hash now
+(optimistic concurrency) - a node spread over files in the part that hash names - after the write rule the tool is
+handed, keeping the file's encoding, endings and final newline, and answers the card the file's new extract gives. The
+schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
+`wholeFile` with `narrow`), and a call given a member its operation does not read, one of the wrong type, or missing one
+it needs, is a usage line (`CodebaseGraphTool.Misused`). Nothing gives a step the tool yet: slice 27d adds it to the tool
+runtime's table with its write rules and edit check.
+`query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
+through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a
+view linked in memory from the base's files and its record, and a link result another linker made linked again in
+memory - with a read rule that refuses what no graph lists (`CodebaseGraphService.NeverListed`), the main checkout's run
+and configuration wherever it is typed (`MainTree`); a misuse is told by `CodebaseGraphTool.Misused` before anything is
+read, and a view not made yet is said and the base answered; it ends 0, 13 where the run has no graph and 10 for a
+usage error, and no host is asked to run it.
 
 ## Anchor registries
 
@@ -3448,7 +3483,7 @@ tool replaces, where a green result had quietly stopped meaning anything.
 - Every other command asked for `--json` that stops before it has anything of its own to say
   answers in its own document's shape, never the ledger's: the agent verbs with the agent
   document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
-  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down` and `stop-run` with their own document
+  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down`, `stop-run` and `query-codebase-graph` with their own document
   holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs
   (`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`,
   `stop-orchestrator`) with the flow document - the session they would have run, empty

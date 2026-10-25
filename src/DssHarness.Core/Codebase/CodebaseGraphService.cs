@@ -77,6 +77,23 @@ public interface ICodebaseGraphService
     /// <param name="agent">The agent.</param>
     /// <param name="cancellationToken">Cancels the wait for a sync of that view.</param>
     Task DropViewAsync(OrchestratorLayout run, string agent, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The run's graph as it stands on disk, read only: no gate taken, no sync, nothing written. The base, or the view of
+    /// <paramref name="agent"/>'s worktree where one is asked - the overlay of what the worktree holds otherwise over the
+    /// base as it stands, linked in memory from the extracts on disk. For the <c>query-codebase-graph</c> verb, where an
+    /// answer is read by hand with no run under way, so what was served can be checked. <see langword="null"/> where the run
+    /// has no graph, or the named view was not made yet; the file at a node's span is not read, so a body is read from the
+    /// tree against this.
+    /// </summary>
+    /// <param name="run">The run whose graph it is.</param>
+    /// <param name="agent">The agent whose view to read; <see langword="null"/> for the base.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    /// <exception cref="HarnessException">
+    /// The base's manifest or the view's record is there and does not read, or the view stands on a base the graph no
+    /// longer keeps (<see cref="HarnessExit.Refused"/>, saying why); a record could not be read at all, by its cause.
+    /// </exception>
+    Task<CodebaseGraphRead?> ReadOnlyAsync(OrchestratorLayout run, string? agent, CancellationToken cancellationToken = default);
 }
 
 /// <summary>One sync asked of a run's graph.</summary>
@@ -282,6 +299,13 @@ public sealed class CodebaseGraphService(
     /// </summary>
     public const int ReadShare = 2;
 
+    /// <summary>
+    /// What no graph lists, and so never serves - the credential slots and the tool's own state - as patterns relative
+    /// to a tree's root: the one list a sync leaves out and a read of the graph by hand refuses.
+    /// </summary>
+    /// <param name="worktreesRoot">The configured worktrees root, which the tool's state paths name.</param>
+    public static IReadOnlyList<string> NeverListed(string worktreesRoot) => [.. HarnessLayout.SecretSlots, .. HarnessLayout.StatePaths(worktreesRoot)];
+
     /// <summary>What this process holds of each graph, by its directory.</summary>
     private readonly ConcurrentDictionary<string, Graph> _graphs = new(StringComparer.Ordinal);
 
@@ -431,6 +455,93 @@ public sealed class CodebaseGraphService(
             run,
             cancellationToken).ConfigureAwait(false);
     }
+
+    /// <inheritdoc/>
+    public Task<CodebaseGraphRead?> ReadOnlyAsync(OrchestratorLayout run, string? agent, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        return Task.FromResult(ReadOnly(run, agent));
+    }
+
+    /// <inheritdoc cref="ReadOnlyAsync"/>
+    private CodebaseGraphRead? ReadOnly(OrchestratorLayout run, string? agent)
+    {
+        // A record that is there and does not read is said with why, never taken for none.
+        if (ManifestOrNull(run, out var unread) is not { } manifest)
+        {
+            return unread is null ? null : throw unread;
+        }
+
+        if (agent is null)
+        {
+            // Where the link result on disk is this manifest's and this build's linker's, it is read; else it is made again in memory.
+            var baseTree = ReadSymbolsOrNull(run, manifest.Digest) is { } symbols
+                ? new Tree(BaseView, manifest.Tree, manifest.Files, manifest.Files.Keys.ToHashSet(StringComparer.Ordinal), null, null, manifest.Digest) { Manifest = manifest, Symbols = symbols }
+                : LinkedTree(run, BaseView, manifest.Tree, manifest.Files, manifest.Digest, manifest, record: null);
+
+            return ReadOf(run, baseTree, EmptyExtracts);
+        }
+
+        if (ViewOrNull(run, agent, out var refused) is not { } record)
+        {
+            return refused is null ? null : throw refused;
+        }
+
+        // A view held against a base no longer kept does not read until its next whole sync, as a sync finds it.
+        if (record.Base != manifest.Digest)
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"the codebase graph's view '{agent}' of run '{run.Name}' stands on a base the graph no longer keeps; its next whole sync makes it again against the base as it stands");
+        }
+
+        // A view is the overlay of its worktree over the base it stands on, linked in memory: its link result is on no disk.
+        var files = Whole(manifest.Files, record);
+        var viewTree = LinkedTree(run, agent, record.Tree, files, record.Base, manifest: null, record: record);
+
+        return ReadOf(run, viewTree, EmptyExtracts);
+    }
+
+    /// <summary>The view <paramref name="view"/> of <paramref name="files"/>, linked in memory from the extracts on disk, nothing written.</summary>
+    private Tree LinkedTree(OrchestratorLayout run, string view, string treePath, IReadOnlyDictionary<string, CodeGraphFileEntry> files, string @base, CodeGraphManifest? manifest, CodeGraphView? record)
+    {
+        var sorted = new SortedDictionary<string, CodeGraphFileEntry>(files.ToDictionary(file => file.Key, file => file.Value, StringComparer.Ordinal), StringComparer.Ordinal);
+        var linked = new Dictionary<string, CodeGraphFile>(StringComparer.Ordinal);
+
+        foreach (var (path, entry) in sorted)
+        {
+            linked[path] = Linked(path, entry, entry.Extract is { } name ? ExtractOrNull(run, name, path)?.Extract : null);
+        }
+
+        return new Tree(view, treePath, files, files.Keys.ToHashSet(StringComparer.Ordinal), linked, CodeGraphLinker.Link([.. sorted.Keys.Select(path => linked[path])]), @base)
+        {
+            Manifest = manifest,
+            View = record,
+        };
+    }
+
+    /// <summary>
+    /// The run's link result, where it reads and was made from the manifest of <paramref name="digest"/> by this build's
+    /// linker; null where it is to be made again - none, one that does not read, or one of another manifest or linker.
+    /// One that could not be read at all is no record that does not read, and fails the read.
+    /// </summary>
+    private CodeGraphSymbolsFile? ReadSymbolsOrNull(OrchestratorLayout run, string digest)
+    {
+        try
+        {
+            return _store.ReadGraphSymbols(run) is { } symbols && symbols.Graph == digest && symbols.Linker == CodeGraphLinker.Revision ? symbols : null;
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.Refused)
+        {
+            return null;
+        }
+    }
+
+    private static readonly IReadOnlyDictionary<string, FileExtract> EmptyExtracts = new Dictionary<string, FileExtract>(StringComparer.Ordinal);
+
+    /// <summary>The file <paramref name="path"/> as the linker is given it: a generated file under <c>generated: exclude</c> is listed and its extract kept, its declarations left out of the link.</summary>
+    private static CodeGraphFile Linked(string path, CodeGraphFileEntry entry, FileExtract? extract)
+        => new(path, entry.Language, entry.State == CodeFileStates.Generated ? null : extract);
 
     private Graph GraphOf(OrchestratorLayout run) => _graphs.GetOrAdd(run.GraphDirectory, _ => new Graph());
 
@@ -938,7 +1049,7 @@ public sealed class CodebaseGraphService(
             _run = request.Run;
             _shape = request.Shape;
             _versions = [.. service._extractors.All.Select(extractor => new CodeGraphExtractorVersion(extractor.Language, extractor.Version))];
-            _never = [.. HarnessLayout.SecretSlots, .. HarnessLayout.StatePaths(request.WorktreesRoot)];
+            _never = NeverListed(request.WorktreesRoot);
         }
 
         /// <summary>Why the tree's record does not read, where <see cref="Current"/> found it there and not reading; null otherwise.</summary>
@@ -2196,7 +2307,7 @@ public sealed class CodebaseGraphService(
                     continue;
                 }
 
-                files[path] = new CodeGraphFile(path, entry.Language, entry.State == CodeFileStates.Generated ? null : extract);
+                files[path] = Linked(path, entry, extract);
             }
 
             foreach (var (path, made) in await ReadAsync(toMake).ConfigureAwait(false))
@@ -2209,7 +2320,7 @@ public sealed class CodebaseGraphService(
                     _reused--;
                 }
 
-                files[path] = new CodeGraphFile(path, made.Language, made.State == CodeFileStates.Generated ? null : _read.GetValueOrDefault(path));
+                files[path] = Linked(path, made, _read.GetValueOrDefault(path));
             }
 
             List<CodeGraphFile> list = [.. entries.Keys.Select(path => files[path])];
@@ -2219,22 +2330,8 @@ public sealed class CodebaseGraphService(
         /// <summary>The extract <paramref name="name"/> of <paramref name="path"/>, where it reads as one made for it; null where it does not.</summary>
         private CodeGraphStoredExtract? ExtractOrNull(string name, string path) => _service.ExtractOrNull(_run, name, path);
 
-        /// <summary>
-        /// The run's link result, where it reads and was made from the manifest of <paramref name="digest"/> by this build's
-        /// linker; null where it is to be made again - none, one that does not read, or one of another manifest or linker.
-        /// One that could not be read at all is no record that does not read, and fails the sync.
-        /// </summary>
-        private CodeGraphSymbolsFile? Symbols(string digest)
-        {
-            try
-            {
-                return _service._store.ReadGraphSymbols(_run) is { } symbols && symbols.Graph == digest && symbols.Linker == CodeGraphLinker.Revision ? symbols : null;
-            }
-            catch (HarnessException ex) when (ex.ExitCode == HarnessExit.Refused)
-            {
-                return null;
-            }
-        }
+        /// <summary>The run's link result, where it reads and was made from the manifest of <paramref name="digest"/> by this build's linker.</summary>
+        private CodeGraphSymbolsFile? Symbols(string digest) => _service.ReadSymbolsOrNull(_run, digest);
 
         /// <summary>For each implementation that read a file, how many it read and the nodes they hold.</summary>
         private static IReadOnlyList<CodebaseGraphLanguage> Languages(IReadOnlyDictionary<string, CodeGraphFileEntry> files, CodeGraphSymbolsFile? symbols)

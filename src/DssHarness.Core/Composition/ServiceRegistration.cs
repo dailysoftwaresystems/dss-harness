@@ -316,6 +316,7 @@ public static class ServiceRegistration
         services.AddSingleton<IWslPageCache, WslPageCache>();
         services.AddSingleton<RunStops>();
         services.AddSingleton<RunStopService>();
+        services.AddSingleton<Codebase.CodebaseGraphQueryService>();
         services.AddSingleton<LegRunService>();
         services.AddSingleton<CleanService>();
 

@@ -104,6 +104,7 @@ public static class HostAgentProtocol
     /// The run verbs are no host's either (part 04, "Commands and use cases"): a flow runs where it was typed, and
     /// its machine steps reach hosts as legs do - never the session that drives them. Nor is the stop of a run of legs:
     /// it is asked of the run's dispatcher where that runs, and the dispatcher's stop is what stops its legs on every host.
+    /// A run's codebase graph is read where the run's records are, so its read verb is no host's either.
     /// </summary>
     public static IReadOnlyList<string> NotForwardable { get; } =
         [
@@ -116,7 +117,8 @@ public static class HostAgentProtocol
             Orchestration.Flow.FlowService.AnswerCommand,
             Orchestration.Flow.FlowService.PauseCommand,
             Orchestration.Flow.FlowService.StopCommand,
-            Runs.RunStopService.CommandName];
+            Runs.RunStopService.CommandName,
+            Codebase.CodebaseGraphQueryService.CommandName];
 
     /// <summary>Whether <paramref name="command"/> is one a host is never asked to run, in whatever case it is typed.</summary>
     public static bool IsNotForwardable(string command) => NotForwardable.Contains(command, StringComparer.OrdinalIgnoreCase);

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
@@ -3490,6 +3491,30 @@ public static class HelpTopics
             + $"runs in the engine's process on one of every {CodebaseGraphService.ReadShare} of the machine's processors, so a build beside it is not starved; it "
             + "runs no leg and counts against no limit; with in, its view is that agent's - the base for one that only reads - "
             + "and its output's view names the one it synced.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "What an agent asks of the graph is one tool, graph, whose op says what is asked: "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Find)} - the nodes a query's words match, best first, generated code after every other, at most {CodebaseGraphTool.FindLines} ({CodebaseGraphTool.FindMost} with limit); "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Node)} - a node's card and its edges by kind, {CodebaseGraphTool.NodeLinesAKind} of each with the count of the rest; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Related)} - the nodes one relation ({string.Join(", ", GraphRelations.All)}) reaches, 1 to {CodebaseGraphTool.MostDepth} hops, at most {CodebaseGraphTool.RelatedLines}, a node with more edges of that kind than the view's 99th percentile, and at least {CodebaseGraphQueries.CrowdFloor}, given and not gone through; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Outline)} - a file's or a type's declarations, or the repository's, at most {CodebaseGraphTool.OutlineLines}; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Body)} - the lines of 1 to {CodebaseGraphTool.BodySymbols} nodes, read fresh and numbered as view_file numbers them, a type's members' bodies left out unless full - each member's signature line kept - at most {CodebaseGraphTool.BodyLines} in all; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Edit)} - a node's lines replaced where the hash given is its hash now - a node spread over files in the part that hash names - the file's encoding, line endings and final newline kept, and nothing written where it changed; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.WholeFile)} - the narrowing of reads lifted for one file, with why. "
+            + "No step is given the tool yet - the API clients will offer it - and query-codebase-graph below runs its read operations; a step is to be given the read operations, edit only where it may write and wholeFile only where its reads are narrowed, its schema naming those alone. An operation given a member it does not read, one of the wrong type, or missing one it needs, is refused with a usage line. "
+            + "Every node an answer names carries path:start-end - a declaration # with the first eight characters of its digest too, a file its lines - every answer ends naming the files whose extract the graph no longer holds, if any, and every answer is cut at a whole line past "
+            + $"{(CodebaseGraphTool.MostCharacters / 1024).ToString(CultureInfo.InvariantCulture)} KB, saying how to ask for the rest with offset. Where the graph is not sure - no node matched, a name it does not hold, "
+            + $"an edge of {CodeConfidences.Candidates}, a node named with external or unresolved callees or in a file dynamic or generated - the answer adds text: at most {CodebaseGraphTool.TextHits} lines that hold the name as a whole word, "
+            + "searched as search_files searches, each path:line with no hash, saying how many more there were and the files it did not read; a path or a path:line is searched for by no word.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"{ToolPackage.Command} {CodebaseGraphQueryService.CommandName} <run> runs one of the read operations by hand - --find <query>, --node <symbol>, "
+            + "--related <symbol> --relation <relation> [--depth <n>], --outline [<path or symbol>] or --body <symbol>... - on the run's graph, the base or with "
+            + "--agent <agent> that agent's view, and prints the answer an agent would be given; --json the same in one document. It reads only - no sync, "
+            + "no lock, nothing written - the main checkout's run and configuration wherever it is typed, a misuse told before anything is read, and a view not made yet said and the base answered. It ends 0, "
+            + $"{HarnessExit.Refused} where the run has no graph, and {HarnessExit.UsageError} for a usage error; no host is asked to run it.");
 
         return builder.ToString();
     }

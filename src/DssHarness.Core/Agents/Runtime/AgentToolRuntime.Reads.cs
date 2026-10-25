@@ -235,10 +235,10 @@ public sealed partial class AgentToolRuntime
 
         if (refused > 0)
         {
-            builder.Append($"\n[{ReportText.Counted(refused, "file")} you may not read were left out]");
+            builder.Append('\n').Append(AgentListing.Refused(refused));
         }
 
-        foreach (var note in LeftOut(listing, directory))
+        foreach (var note in listing.LeftOut(SaidIn(directory)))
         {
             builder.Append('\n').Append(note);
         }
@@ -352,49 +352,17 @@ public sealed partial class AgentToolRuntime
             builder.Append($"[{ReportText.Counted(search.More, "more matching line")} not shown: narrow the search, or raise max_results]\n");
         }
 
-        if (search.Refused > 0)
-        {
-            builder.Append($"[{ReportText.Counted(search.Refused, "file")} you may not read were left out]\n");
-        }
-
-        if (search.Passed > 0)
-        {
-            builder.Append($"[{ReportText.Counted(search.Passed, "file")} passed over: binary, over {DiskSpace.Size(AgentFiles.MostSearchedBytes)}, or no text this tool reads]\n");
-        }
-
-        foreach (var note in LeftOut(search.Listing, directory))
+        foreach (var note in search.LeftOut(SaidIn(directory)))
         {
             builder.Append(note).Append('\n');
-        }
-
-        if (search.FirstUnread is { } first)
-        {
-            builder.Append(Unread(search.Unread, "file", first, directory)).Append('\n');
         }
 
         return builder.ToString().TrimEnd('\n');
     }
 
-    /// <summary>
-    /// What a listing left out, a note each: the files whose names no pattern reads (<see cref="AgentListing.Unnamed"/>),
-    /// and the places it could not read, with why the first was not.
-    /// </summary>
-    private IEnumerable<string> LeftOut(AgentListing listing, string directory)
-    {
-        if (listing.Unnamed > 0)
-        {
-            yield return $"[{ReportText.Counted(listing.Unnamed, "file")} whose names no pattern reads were left out]";
-        }
-
-        if (listing.FirstUnread is { } first)
-        {
-            yield return Unread(listing.Unread, "place", first, directory);
-        }
-    }
-
-    /// <summary>How many <paramref name="kind"/>s could not be read, and why the first was not.</summary>
-    private string Unread(int count, string kind, AgentSearchUnread first, string directory)
-        => $"[{ReportText.Counted(count, kind)} could not be read, the first '{Said(Path.Combine(directory, first.Path.Replace('/', Path.DirectorySeparatorChar)))}': {first.Reason.TrimEnd('.')}]";
+    /// <summary>How a place under <paramref name="directory"/> is said, from its path relative to it, as every path an answer gives is said.</summary>
+    private Func<string, string> SaidIn(string directory)
+        => relative => Said(Path.Combine(directory, relative.Replace('/', Path.DirectorySeparatorChar)));
 
     /// <summary>Whether the agent may read <paramref name="file"/>, absolute: inside its roots by where it leads, and allowed by the policy.</summary>
     private bool MayRead(string file) => ReadPlace(file).Full is not null;
