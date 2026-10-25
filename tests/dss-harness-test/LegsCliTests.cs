@@ -282,6 +282,7 @@ public sealed class LegsCliTests
 
         Assert.Contains($"<PackageId>{ToolPackage.Id}</PackageId>", project, StringComparison.Ordinal);
         Assert.Contains($"<ToolCommandName>{ToolPackage.Command}</ToolCommandName>", project, StringComparison.Ordinal);
+        Assert.Contains($"<PackageProjectUrl>{ToolPackage.ProjectUrl}</PackageProjectUrl>", project, StringComparison.Ordinal);
 
         // The assembly is named for the command, not for the package: the command-line library builds the usage
         // line of every command's own help from the executable's name, so an assembly named for the product had

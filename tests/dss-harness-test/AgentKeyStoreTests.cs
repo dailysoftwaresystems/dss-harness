@@ -264,6 +264,10 @@ public sealed class AgentKeyStoreTests
         {
         }
 
+        public void CopyMode(string from, string to)
+        {
+        }
+
         public bool IsPrivate(string path) => isPrivate;
 
         public bool IsWritableByOthers(string path) => writableByOthers;

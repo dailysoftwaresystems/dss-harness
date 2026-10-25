@@ -422,8 +422,8 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
-    /// On Windows, a volume or a Windows that cannot rename as POSIX does - each error it answers so with - is handed back
-    /// to Windows' own rename, nothing renamed meanwhile; and a rename Windows refuses is raised as the runtime's own file
+    /// On Windows, a volume or a Windows that cannot rename as POSIX does - each error it answers so with - and a file to go
+    /// to another volume are handed back to Windows' own rename, nothing renamed meanwhile; and a rename Windows refuses is raised as the runtime's own file
     /// calls raise it, naming where the file was to go.
     /// </summary>
     [Fact]
@@ -438,7 +438,7 @@ public sealed class PhysicalFileSystemTests
         File.WriteAllText(source, "new");
         File.WriteAllText(destination, "old");
 
-        foreach (var unsupported in new[] { 1, 50, 87 })
+        foreach (var unsupported in new[] { 1, 17, 50, 87 })
         {
             Assert.False(Win32Files.TryReplace(source, destination, (_, _) => unsupported), $"error {unsupported} was not handed back to Windows' own rename");
         }
@@ -663,6 +663,116 @@ public sealed class PhysicalFileSystemTests
         Assert.Equal("There is not enough space on the disk.", raised.Message);
         Assert.Equal("old", File.ReadAllText(path));
         Assert.Equal([path], Directory.GetFiles(temp.Path));
+    }
+
+    /// <summary>
+    /// A file written whole again, by either atomic write, keeps its mode: a script stays one the system runs, and a file
+    /// of its owner's alone stays so. A file new to its place keeps the mode it was made with.
+    /// </summary>
+    [Fact]
+    public async Task AnAtomicWrite_KeepsTheModeOfTheFileItReplaces()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no mode with a file.");
+
+        using var temp = new TempDirectory();
+        var fileSystem = Create();
+        var permissions = FilePermissionsFactory.Create();
+        var script = temp.WriteFile("run.sh", "#!/bin/sh\n");
+        var secret = temp.WriteFile("secret.env", "KEY=1\n");
+        permissions.SetExecutable(script, executable: true);
+        fileSystem.ProtectSecretFile(secret);
+
+        await fileSystem.WriteAllBytesAtomicAsync(script, "#!/bin/sh\necho again\n"u8.ToArray(), TestContext.Current.CancellationToken);
+        fileSystem.WriteAtomic(secret, stream => stream.Write("KEY=2\n"u8));
+        fileSystem.WriteAllTextAtomic(temp.Combine("new.txt"), "new");
+
+        Assert.True(permissions.IsExecutable(script), "a write took the script's execute bit");
+        Assert.True(permissions.IsPrivate(secret), "a write opened a file of its owner's alone to others");
+        Assert.False(permissions.IsExecutable(temp.Combine("new.txt")));
+    }
+
+    /// <summary>
+    /// A pipe is refused before it is opened, said for what it is: its open would wait for a writer past any stop. A
+    /// regular file beside it is read as ever.
+    /// </summary>
+    [Fact]
+    public async Task OpenRead_RefusesAPipe_BeforeOpeningIt()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows holds no pipe among a directory's files.");
+
+        using var temp = new TempDirectory();
+        var fileSystem = Create();
+        var pipe = temp.Combine("pipe");
+        using (var made = System.Diagnostics.Process.Start("mkfifo", [pipe]))
+        {
+            await made.WaitForExitAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(0, made.ExitCode);
+        }
+
+        // Opened beside the test, so an open that waits fails the test rather than holding it.
+        var refused = await Record.ExceptionAsync(() => Task.Run(() => fileSystem.OpenRead(pipe).Dispose(), TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+
+        Assert.Equal($"'{pipe}' is a pipe, which is no file to read", Assert.IsType<IOException>(refused).Message);
+        Assert.Equal("text", fileSystem.ReadAllText(temp.WriteFile("plain.txt", "text")));
+    }
+
+    /// <summary>
+    /// A walk that passes by what it cannot read gives every file it reaches - never through a directory link - and tells
+    /// of a directory beneath it it could not read, where a whole walk would stop at it; the directory walked itself
+    /// unread fails it.
+    /// </summary>
+    [Fact]
+    public void AReachableWalk_PassesByADirectoryItCannotRead()
+    {
+        using var temp = new TempDirectory();
+        var fileSystem = Create();
+        temp.WriteFile("top.txt", "t");
+        temp.WriteFile(Path.Combine("a", "x.txt"), "x");
+        temp.WriteFile(Path.Combine("a", "b", "y.txt"), "y");
+        var unread = new List<string>();
+
+        Assert.Equal(
+            fileSystem.EnumerateFiles(temp.Path, recursive: true).Order(StringComparer.Ordinal),
+            fileSystem.EnumerateReachableFiles(temp.Path, (place, _) => unread.Add(place)).Order(StringComparer.Ordinal));
+        Assert.Empty(unread);
+
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var locked = temp.Combine("locked");
+        temp.WriteFile(Path.Combine("locked", "z.txt"), "z");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+
+        try
+        {
+            Assert.SkipWhen(Lists(locked), "This process reads every directory: it runs as root.");
+
+            var reached = fileSystem.EnumerateReachableFiles(temp.Path, (place, _) => unread.Add(place)).Select(file => Path.GetRelativePath(temp.Path, file)).Order(StringComparer.Ordinal);
+
+            Assert.Equal([Path.Combine("a", "b", "y.txt"), Path.Combine("a", "x.txt"), "top.txt"], reached);
+            Assert.Equal([locked], unread);
+            Assert.Throws<UnauthorizedAccessException>(() => fileSystem.EnumerateReachableFiles(locked, (_, _) => { }).ToList());
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        // Whether this process lists the directory all the same, as one that runs as root lists every one.
+        static bool Lists(string directory)
+        {
+            try
+            {
+                _ = Directory.EnumerateFileSystemEntries(directory).Any();
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
     }
 
     /// <summary>

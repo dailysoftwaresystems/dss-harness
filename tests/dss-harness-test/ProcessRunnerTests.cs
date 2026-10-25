@@ -436,6 +436,50 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
+    /// On Windows a batch file is refused before it starts where an argument holds what cmd.exe, which starts it, reads as
+    /// its own: the child would run another command than the one asked. A batch file with plain arguments starts.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_RefusesABatchFileWhoseArgumentsCmdReadsAgain()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows starts a batch file through cmd.exe.");
+
+        using var temp = new TempDirectory();
+        var made = temp.Combine("made.txt");
+        var batch = temp.WriteFile("echo.cmd", "@echo [%~1]\r\n");
+
+        var refused = await Assert.ThrowsAsync<ArgumentException>(() => CreateRunner().RunAsync(
+            new ProcessRequest { FileName = batch, Arguments = [$"x&echo made>{made}"], Timeout = TimeSpan.FromSeconds(60) },
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("is a batch file, which cmd.exe starts and whose arguments it reads again", refused.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(made));
+
+        var ran = await CreateRunner().RunAsync(
+            new ProcessRequest { FileName = batch, Arguments = ["plain words"], Timeout = TimeSpan.FromSeconds(60) },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("[plain words]", ran.StandardOutput.Trim());
+    }
+
+    /// <summary>
+    /// A program or an argument that holds a NUL is refused before the child starts: the system would hand the child the
+    /// word cut there, another command than the one asked.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_RefusesANul_BeforeStartingTheChild()
+    {
+        var request = TestHost.ChildRequest("echo-args", ["a"]);
+
+        foreach (var cut in new[] { request with { FileName = request.FileName + "\0x" }, request with { Arguments = [.. request.Arguments, "b\0c"] } })
+        {
+            var refused = await Assert.ThrowsAsync<ArgumentException>(() => CreateRunner().RunAsync(cut, TestContext.Current.CancellationToken));
+
+            Assert.Contains("holds a NUL, where the system would cut it", refused.Message, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// An input a writer writes as it makes it reaches the child whole and in order, and is closed once written, as text
     /// is: the child, reading to the end, finishes only once it is.
     /// </summary>

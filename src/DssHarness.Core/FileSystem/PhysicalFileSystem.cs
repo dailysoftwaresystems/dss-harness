@@ -255,6 +255,42 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     public IEnumerable<string> EnumerateFiles(string path, bool recursive)
         => Walk(path, recursive, (ref FileSystemEntry entry) => !entry.IsDirectory, (ref FileSystemEntry entry) => entry.ToSpecifiedFullPath());
 
+    public IEnumerable<string> EnumerateReachableFiles(string path, Action<string, Exception> unread)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(unread);
+
+        // A directory at a time, so one that cannot be read is passed by alone where one walk would stop at it.
+        var waiting = new Stack<string>([path]);
+
+        while (waiting.TryPop(out var directory))
+        {
+            List<string> files;
+            List<string> beneath;
+
+            try
+            {
+                files = [.. Walk(directory, recursive: false, (ref FileSystemEntry entry) => !entry.IsDirectory, (ref FileSystemEntry entry) => entry.ToSpecifiedFullPath())];
+                beneath = [.. Walk(directory, recursive: false, (ref FileSystemEntry entry) => entry.IsDirectory && !IsLink(ref entry), (ref FileSystemEntry entry) => entry.ToSpecifiedFullPath())];
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && !ReferenceEquals(directory, path))
+            {
+                unread(directory, ex);
+                continue;
+            }
+
+            foreach (var file in files)
+            {
+                yield return file;
+            }
+
+            foreach (var next in Enumerable.Reverse(beneath))
+            {
+                waiting.Push(next);
+            }
+        }
+    }
+
     public IEnumerable<WrittenFile> EnumerateWrittenFiles(string path)
         => Dated(Walk(
             path,
@@ -429,6 +465,7 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
                 write(stream);
             }
 
+            _filePermissions.CopyMode(path, temporary);
             ReplaceWith(temporary, path);
         }
         finally
@@ -500,6 +537,13 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
+        // A pipe, a socket or a device opens as a file does, and a pipe's open waits for a writer past any stop: refused
+        // before it is opened, as a read of what cannot be read fails.
+        if (!OperatingSystem.IsWindows() && UnixFiles.Special(path) is { } special)
+        {
+            throw new IOException($"'{path}' is {special}, which is no file to read");
+        }
+
         // Sequential, and sharing read access: a tree sync walks every file in a repository while
         // other tools legitimately hold some of them open for reading.
         return new FileStream(
@@ -535,6 +579,7 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
         try
         {
             await File.WriteAllBytesAsync(temporary, contents, cancellationToken).ConfigureAwait(false);
+            _filePermissions.CopyMode(path, temporary);
             await ReplaceWithAsync(temporary, path, cancellationToken).ConfigureAwait(false);
         }
         finally

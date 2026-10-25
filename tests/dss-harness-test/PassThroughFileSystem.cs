@@ -43,6 +43,8 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
 
     public virtual IEnumerable<string> EnumerateFiles(string path, bool recursive) => inner.EnumerateFiles(path, recursive);
 
+    public virtual IEnumerable<string> EnumerateReachableFiles(string path, Action<string, Exception> unread) => inner.EnumerateReachableFiles(path, unread);
+
     public virtual IEnumerable<WrittenFile> EnumerateWrittenFiles(string path) => inner.EnumerateWrittenFiles(path);
 
     public virtual IEnumerable<string> EnumerateDirectoryLinks(string path) => inner.EnumerateDirectoryLinks(path);

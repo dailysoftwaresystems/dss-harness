@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Repository;
 using Xunit;
@@ -47,6 +48,7 @@ public sealed class ClaudeSettingsTests
         var rendered = ClaudeSettings.Render(
             ["Read", "Grep", "Glob", "Write", "Edit", "Bash"],
             SettingsGround(Windows, []),
+            AgentCommandSettings.Default,
             StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal(
@@ -61,7 +63,9 @@ public sealed class ClaudeSettingsTests
                 "DISABLE_AUTOUPDATER": "1",
                 "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
                 "CLAUDE_CODE_RETRY_WATCHDOG": "0",
-                "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1"
+                "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
+                "BASH_DEFAULT_TIMEOUT_MS": "120000",
+                "BASH_MAX_TIMEOUT_MS": "3600000"
               },
               "permissions": {
                 "ask": [
@@ -101,6 +105,7 @@ public sealed class ClaudeSettingsTests
         var rendered = ClaudeSettings.Render(
             ["Read", "Grep"],
             PolicyGrounds.Of(worktree, [main], [worktree, work], [slot], [claude], []),
+            AgentCommandSettings.Default,
             StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal([slotRule, claudeRule], Deny(rendered));
@@ -148,6 +153,7 @@ public sealed class ClaudeSettingsTests
                     new("Write(.github/**)", AgentPolicySource.Config),
                     new("Read(secrets/**)", AgentPolicySource.Agent),
                 ]),
+            AgentCommandSettings.Default,
             StringComparison.OrdinalIgnoreCase);
 
         // The working directory first, then the main checkout, then the work directory: the one list of roots, in its
@@ -168,6 +174,7 @@ public sealed class ClaudeSettingsTests
         var rendered = ClaudeSettings.Render(
             ["Read"],
             PolicyGrounds.Of(worktree, [main], [], [], [], [new("Read(secrets/**)", AgentPolicySource.Config)]),
+            AgentCommandSettings.Default,
             StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal([worktreeRead, mainRead], Deny(rendered));
@@ -186,6 +193,7 @@ public sealed class ClaudeSettingsTests
         var rendered = ClaudeSettings.Render(
             ["Bash"],
             SettingsGround(Ground(system), [new("Write(.orchestrators/**)", AgentPolicySource.Config)]),
+            AgentCommandSettings.Default,
             StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal([worktreeEdit, workEdit], Deny(rendered));
@@ -194,8 +202,8 @@ public sealed class ClaudeSettingsTests
     [Fact]
     public void WebRulesAreWebFetchDomainRules_AndTheWebWholeWebSearchBesideIt()
     {
-        var domain = ClaudeSettings.Render(["Bash"], SettingsGround(Posix, [new("Web(pastebin.com)", AgentPolicySource.Config)]), StringComparison.Ordinal);
-        var whole = ClaudeSettings.Render(["Bash"], SettingsGround(Posix, [new("Web(*)", AgentPolicySource.Config)]), StringComparison.Ordinal);
+        var domain = ClaudeSettings.Render(["Bash"], SettingsGround(Posix, [new("Web(pastebin.com)", AgentPolicySource.Config)]), AgentCommandSettings.Default, StringComparison.Ordinal);
+        var whole = ClaudeSettings.Render(["Bash"], SettingsGround(Posix, [new("Web(*)", AgentPolicySource.Config)]), AgentCommandSettings.Default, StringComparison.Ordinal);
 
         Assert.Equal(["WebFetch(domain:pastebin.com)"], Deny(domain));
         Assert.Equal(["WebFetch", "WebSearch"], Deny(whole));

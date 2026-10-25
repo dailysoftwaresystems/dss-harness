@@ -12,7 +12,7 @@ public static partial class CommandAnalysis
     /// command substitution, a backtick, a process substitution and a subshell read as commands of their own, each
     /// before the command it stands in, its text kept in the word it stands in, so the word is the expansion it is; a
     /// comment and a here-document's lines never read as commands, a here-document's or a here-string's text kept as
-    /// the input it gives; a redirect kept apart from the command's words, after them, its operator before the file it
+    /// the input it gives; a redirect kept apart from the command's words as its own, its operator and the file it
     /// names; the shell's reserved words read only where a command begins and only unquoted; a <c>for</c>'s and a
     /// <c>select</c>'s head kept as a command its reserved word leads, so no word of it is a program, and a
     /// <c>case</c>'s patterns never read as commands. What the shell would refuse to read -
@@ -20,33 +20,24 @@ public static partial class CommandAnalysis
     /// </summary>
     /// <param name="script">The script.</param>
     /// <param name="nesting">How deep in parentheses the script stands: refused past <see cref="Nesting"/>.</param>
-    private static IReadOnlyList<IReadOnlyList<string>> Script(string script, int nesting)
+    private static IReadOnlyList<AnalyzedCommand> Script(string script, int nesting)
         => new ShellReader(script, nesting).Read();
 
-    /// <summary>Whether <paramref name="word"/> is a redirect as the reader keeps one: its operator, then the file it names or the text it gives.</summary>
-    internal static bool IsRedirect(string word)
-        => word.Length > 0 && word[0] is '<' or '>' && !(word.Length > 1 && word[1] == '(');
+    /// <summary>A descriptor bash gives a redirect of its own, its number kept in the variable named: <c>{name}</c>, right before the operator.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"\G\{[A-Za-z_][A-Za-z0-9_]*\}")]
+    private static partial System.Text.RegularExpressions.Regex NamedDescriptor();
 
     /// <summary>
-    /// The text a redirect word gives a command as its input - a here-document's lines or a here-string's word, kept
-    /// as <c>&lt;&lt;&lt;text</c> - or null where the word gives none.
-    /// </summary>
-    internal static string? InputText(string word)
-        => word.StartsWith("<<<", StringComparison.Ordinal) ? word[3..] : null;
-
-    /// <summary>
-    /// One simple command as the reader builds it: its words, and its redirects kept apart - put after its words once
-    /// it is read, so a word's place is the place the program reads it at.
+    /// One simple command as the reader builds it: its words, and its redirects kept apart, so a word's place is the
+    /// place the program reads it at.
     /// </summary>
     private sealed class Simple
     {
         public List<string> Words { get; } = [];
 
-        public List<string> Redirects { get; } = [];
+        public List<ShellRedirect> Redirects { get; } = [];
 
         public bool IsEmpty => Words.Count == 0 && Redirects.Count == 0;
-
-        public IReadOnlyList<string> Whole() => [.. Words, .. Redirects];
     }
 
     /// <summary>A here-document a line named, read once the line ends: the command it fills and its place there.</summary>
@@ -81,7 +72,22 @@ public static partial class CommandAnalysis
         /// <summary>How deep in parentheses and substitutions the reader stands: refused past <see cref="Nesting"/>.</summary>
         private int _depth = nesting;
 
-        public IReadOnlyList<IReadOnlyList<string>> Read()
+        /// <summary>
+        /// Whether the reader stands where a double quote's rules hold - in one, in arithmetic, in an expanding here-document
+        /// - where a single quote is a character like any, and what substitutes inside it runs.
+        /// </summary>
+        private bool _quoted;
+
+        /// <summary>Whether an <c>esac</c> was read where a command begins, which ends the case clause read and the case.</summary>
+        private bool _caseClosed;
+
+        /// <summary>
+        /// The places an arithmetic's reading began at and did not close as one: what it is depends on its place alone, so
+        /// each is read once - nested ones that do not close would each be read again by every one around them.
+        /// </summary>
+        private readonly HashSet<int> _notArithmetic = [];
+
+        public IReadOnlyList<AnalyzedCommand> Read()
         {
             if (_depth > Nesting)
             {
@@ -91,7 +97,7 @@ public static partial class CommandAnalysis
             ReadList(ListEnd.Script);
             ReadDocuments();
 
-            return [.. _read.Where(command => !command.IsEmpty).Select(command => command.Whole())];
+            return [.. _read.Where(command => !command.IsEmpty).Select(command => new AnalyzedCommand([.. command.Words], [.. command.Redirects]))];
         }
 
         /// <summary>Reads commands until <paramref name="end"/>: the script's end, the parenthesis that closes the list, or a case clause's terminator.</summary>
@@ -164,7 +170,7 @@ public static partial class CommandAnalysis
                     continue;
                 }
 
-                if (end is ListEnd.CaseClause && AtWord("esac"))
+                if (end is ListEnd.CaseClause && (_caseClosed || AtWord("esac")))
                 {
                     return;
                 }
@@ -179,11 +185,20 @@ public static partial class CommandAnalysis
             }
         }
 
-        /// <summary>A subshell, read as a list of its own; what follows it is its redirects, and a word there names the program by what the subshell printed.</summary>
+        /// <summary>
+        /// A subshell, read as a list of its own - or an arithmetic command, <c>((...))</c>, read as the arithmetic it is;
+        /// what follows either is its redirects, and a word there names the program by what the subshell printed.
+        /// </summary>
         private void ReadSubshell()
         {
-            _at++;
-            Deeper(() => ReadList(ListEnd.Parenthesis));
+            var start = _at;
+            _at += 2;
+
+            if (!At(start, "((") || !ReadArithmetic(bracket: false))
+            {
+                _at = start + 1;
+                Deeper(() => ReadList(ListEnd.Parenthesis));
+            }
 
             var after = new Simple();
             _read.Add(after);
@@ -295,9 +310,10 @@ public static partial class CommandAnalysis
                         continue;
                     }
 
+                    // Read here as the word it is - a line continued inside it among its spellings - it closes the case.
                     if (word == "esac" && end is ListEnd.CaseClause)
                     {
-                        _at = start;
+                        _caseClosed = true;
                         return;
                     }
 
@@ -309,7 +325,7 @@ public static partial class CommandAnalysis
 
                             if (AtWord("-p"))
                             {
-                                _at += 2;
+                                _at = WordEnd("-p");
                             }
                         }
 
@@ -346,7 +362,7 @@ public static partial class CommandAnalysis
                 return;
             }
 
-            _at += 2;
+            _at = WordEnd("in");
             head.Words.Add("in");
 
             // The words it goes over, up to the separator before its body: their expansions run, and they run nothing.
@@ -381,11 +397,17 @@ public static partial class CommandAnalysis
                 throw new NotSupportedException("a case names no 'in', which this does not read");
             }
 
-            _at += 2;
+            _at = WordEnd("in");
 
             while (true)
             {
                 SkipBlanksAndLines();
+
+                if (_caseClosed)
+                {
+                    _caseClosed = false;
+                    return;
+                }
 
                 if (_at >= text.Length)
                 {
@@ -394,7 +416,7 @@ public static partial class CommandAnalysis
 
                 if (AtWord("esac"))
                 {
-                    _at += 4;
+                    _at = WordEnd("esac");
                     return;
                 }
 
@@ -573,6 +595,8 @@ public static partial class CommandAnalysis
         /// <summary>A double-quoted stretch: a backslash escapes only a quote, a backtick, a dollar, itself and a line end; substitutions and expansions read as anywhere.</summary>
         private void ReadDoubleQuoted(StringBuilder word)
         {
+            var quoted = _quoted;
+            _quoted = true;
             _at++;
 
             while (true)
@@ -587,6 +611,7 @@ public static partial class CommandAnalysis
                 if (character == '"')
                 {
                     _at++;
+                    _quoted = quoted;
                     return;
                 }
 
@@ -630,11 +655,30 @@ public static partial class CommandAnalysis
         /// </summary>
         private void ReadDollar(StringBuilder word)
         {
+            // An arithmetic expansion, $((...)) or $[...], read as the arithmetic it is - where it closes as one.
+            if (At(_at, "$((") || At(_at, "$["))
+            {
+                var start = _at;
+                _at += text[_at + 1] == '[' ? 2 : 3;
+
+                if (ReadArithmetic(bracket: text[start + 1] == '['))
+                {
+                    word.Append(text, start, _at - start);
+                    return;
+                }
+
+                _at = start;
+            }
+
             if (_at + 1 < text.Length && text[_at + 1] == '(')
             {
+                // A substitution is a script of its own, whatever quote it stands in.
                 var open = _at + 1;
+                var quoted = _quoted;
                 _at = open + 1;
+                _quoted = false;
                 Deeper(() => ReadList(ListEnd.Parenthesis));
+                _quoted = quoted;
                 word.Append('$').Append(text, open, _at - open);
                 return;
             }
@@ -651,6 +695,97 @@ public static partial class CommandAnalysis
             word.Append('$');
             _at++;
         }
+
+        /// <summary>
+        /// The arithmetic of a <c>$((...))</c>, a <c>((...))</c> or a <c>$[...]</c>, from after its opening to past its close:
+        /// its substitutions and expansions read as anywhere, nothing else in it a command, a redirect or a here-document -
+        /// its <c>&lt;&lt;</c> shifts. Its close is found as the shell finds it, a quote's parenthesis none; its text is
+        /// read as a double quote's, so a single quote's substitution runs. Nested past <see cref="Nesting"/>, refused.
+        /// False, with nothing of it read, where it does not close as arithmetic (<c>$( (a) )</c> is a substitution of a
+        /// subshell), as the shell falls back so too.
+        /// </summary>
+        private bool ReadArithmetic(bool bracket)
+        {
+            if (_notArithmetic.Contains(_at))
+            {
+                return false;
+            }
+
+            if (++_depth > Nesting)
+            {
+                throw Deep();
+            }
+
+            // A line end inside a substitution reads the documents pending before it: the fall-back reads them again.
+            var (at, read, pending, quoted, depth, single) = (_at, _read.Count, _documents.ToList(), _quoted, 0, false);
+            var scratch = new StringBuilder();
+            _quoted = true;
+
+            while (_at < text.Length)
+            {
+                var character = text[_at];
+
+                if (character == '\'')
+                {
+                    single = !single;
+                    _at++;
+                }
+                else if (character == '$')
+                {
+                    ReadDollar(scratch);
+                }
+                else if (character == '`')
+                {
+                    ReadBacktick(scratch);
+                }
+                else if (single)
+                {
+                    _at++;
+                }
+                else if (character == (bracket ? '[' : '('))
+                {
+                    depth++;
+                    _at++;
+                }
+                else if (character == (bracket ? ']' : ')'))
+                {
+                    if (depth > 0)
+                    {
+                        depth--;
+                        _at++;
+                    }
+                    else if (bracket || At(_at, "))"))
+                    {
+                        _at += bracket ? 1 : 2;
+                        (_quoted, _depth) = (quoted, _depth - 1);
+                        return true;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+                else if (character == '"')
+                {
+                    ReadDoubleQuoted(scratch);
+                }
+                else
+                {
+                    _at += character == '\\' ? 2 : 1;
+                }
+            }
+
+            (_quoted, _depth) = (quoted, _depth - 1);
+            _notArithmetic.Add(at);
+            _at = at;
+            _read.RemoveRange(read, _read.Count - read);
+            _documents.Clear();
+            _documents.AddRange(pending);
+            return false;
+        }
+
+        /// <summary>Whether <paramref name="spelled"/> stands at <paramref name="at"/>.</summary>
+        private bool At(int at, string spelled) => at + spelled.Length <= text.Length && string.CompareOrdinal(text, at, spelled, 0, spelled.Length) == 0;
 
         /// <summary>A parameter's expansion in braces, to the brace that closes it: quotes, substitutions and expansions inside read as in a word.</summary>
         private void ReadBraced()
@@ -674,7 +809,7 @@ public static partial class CommandAnalysis
                     case '\\':
                         _at = Math.Min(_at + 2, text.Length);
                         break;
-                    case '\'':
+                    case '\'' when !_quoted:
                         var closing = text.IndexOf('\'', _at + 1);
                         _at = closing < 0 ? throw new NotSupportedException("a quote in it does not close, which this does not read") : closing + 1;
                         break;
@@ -762,16 +897,14 @@ public static partial class CommandAnalysis
 
         /// <summary>
         /// A redirect: its operator (a descriptor's number before it, <c>&amp;&gt;</c> for both outputs) and the file it
-        /// names, kept as one word; a duplicated descriptor names no file; a here-string's word and a here-document's
+        /// names, kept as the command's redirect with the descriptor it sets; a duplicated descriptor names no file, and is
+        /// kept only where it is duplicated onto the input, which a shell may read its script from; a here-string's word and a here-document's
         /// lines kept as the input text they give, the document's read once its line ends.
         /// </summary>
         private void ReadRedirect(Simple command)
         {
-            while (_at < text.Length && char.IsAsciiDigit(text[_at]))
-            {
-                _at++;
-            }
-
+            var (operatorAt, given) = RedirectHere() ?? throw new InvalidOperationException("no redirect begins here");
+            _at = operatorAt;
             var operators = new[] { "<<<", "<<-", "<<", "<>", "<&", "<", ">>", ">|", ">&", ">", "&>>", "&>" };
             var spelled = operators.First(At);
             _at += spelled.Length;
@@ -783,20 +916,27 @@ public static partial class CommandAnalysis
             }
 
             var (target, quoted) = ReadWord(false);
+            var descriptor = given ?? (spelled[0] == '<' ? 0 : 1);
+            var source = target.EndsWith('-') ? target[..^1] : target;
 
             switch (spelled)
             {
                 case "<<" or "<<-":
-                    command.Redirects.Add("<<<");
+                    command.Redirects.Add(new ShellRedirect(descriptor, "<<<", string.Empty));
                     _documents.Add(new PendingDocument(command, command.Redirects.Count - 1, target, quoted >= 0, spelled == "<<-"));
                     return;
                 case "<<<":
-                    command.Redirects.Add("<<<" + target);
+                    command.Redirects.Add(new ShellRedirect(descriptor, "<<<", target));
                     return;
-                case "<&" or ">&" when target == "-" || target.All(char.IsAsciiDigit):
+                case "<&" or ">&" when source.All(char.IsAsciiDigit):
+                    if (descriptor == 0 && source.Length > 0)
+                    {
+                        command.Redirects.Add(new ShellRedirect(0, "<&", source));
+                    }
+
                     return;
                 default:
-                    command.Redirects.Add((spelled is "<&" ? "<" : spelled is ">&" or "&>" or ">|" ? ">" : spelled is "&>>" ? ">>" : spelled) + target);
+                    command.Redirects.Add(new ShellRedirect(descriptor, spelled is "<&" ? "<" : spelled is ">&" or "&>" or ">|" ? ">" : spelled is "&>>" ? ">>" : spelled, target));
                     return;
             }
         }
@@ -845,7 +985,7 @@ public static partial class CommandAnalysis
                     ReadExpansions(body);
                 }
 
-                document.Command.Redirects[document.Place] = "<<<" + body;
+                document.Command.Redirects[document.Place] = document.Command.Redirects[document.Place] with { Target = body };
             }
 
             _documents.Clear();
@@ -854,7 +994,7 @@ public static partial class CommandAnalysis
         /// <summary>The substitutions of an expanding here-document's text, each read as the commands it runs; nothing else in it runs.</summary>
         private void ReadExpansions(string body)
         {
-            var reader = new ShellReader(body, _depth + 1);
+            var reader = new ShellReader(body, _depth + 1) { _quoted = true };
             var scratch = new StringBuilder();
 
             while (reader._at < body.Length)
@@ -910,35 +1050,98 @@ public static partial class CommandAnalysis
             return true;
         }
 
-        /// <summary>Whether a redirect begins here: its operator, a descriptor's number before it - but no process substitution, which is a word.</summary>
-        private bool AtRedirect()
+        /// <summary>Whether a redirect begins here: its operator, a descriptor before it - but no process substitution, which is a word.</summary>
+        private bool AtRedirect() => RedirectHere() is not null;
+
+        /// <summary>
+        /// Where the operator of a redirect beginning here stands, and the descriptor before it - a number an int holds,
+        /// or a <c>{name}</c> the shell gives one of its own (<see cref="int.MaxValue"/> here); null where no redirect
+        /// begins here, as where digits past an int's reach are a word, as bash reads them.
+        /// </summary>
+        private (int Operator, int? Descriptor)? RedirectHere()
         {
             var at = _at;
+            int? descriptor = null;
 
-            while (at < text.Length && char.IsAsciiDigit(text[at]))
+            if (NamedDescriptor().Match(text, at) is { Success: true } named)
             {
-                at++;
+                at += named.Length;
+                descriptor = int.MaxValue;
+            }
+            else
+            {
+                while (at < text.Length && char.IsAsciiDigit(text[at]))
+                {
+                    at++;
+                }
+
+                if (at > _at)
+                {
+                    if (!int.TryParse(text.AsSpan(_at, at - _at), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var number))
+                    {
+                        return null;
+                    }
+
+                    descriptor = number;
+                }
             }
 
             if (at >= text.Length)
             {
-                return false;
+                return null;
             }
 
             if (text[at] == '&' && at == _at)
             {
-                return at + 1 < text.Length && text[at + 1] == '>';
+                return at + 1 < text.Length && text[at + 1] == '>' ? (at, null) : null;
             }
 
-            return text[at] is '<' or '>' && !(at + 1 < text.Length && text[at + 1] == '(');
+            return text[at] is '<' or '>' && !(at + 1 < text.Length && text[at + 1] == '(') ? (at, descriptor) : null;
         }
 
         /// <summary>Whether <paramref name="spelled"/> stands at the reader's place.</summary>
         private bool At(string spelled) => string.CompareOrdinal(text, _at, spelled, 0, spelled.Length) == 0 && _at + spelled.Length <= text.Length;
 
         /// <summary>Whether the unquoted word <paramref name="word"/> stands at the reader's place, whole.</summary>
-        private bool AtWord(string word)
-            => At(word) && (_at + word.Length >= text.Length || text[_at + word.Length] is ' ' or '\t' or '\n' or '\r' or ';' or '&' or '|' or ')' or '(' or '<' or '>');
+        private bool AtWord(string word) => WordEnd(word) >= 0;
+
+        /// <summary>
+        /// Where the unquoted word <paramref name="word"/> standing whole at the reader's place ends - a line continued
+        /// inside it or after it, which the shell joins before it reads the word, passed over - or -1 where it does not.
+        /// </summary>
+        private int WordEnd(string word)
+        {
+            var at = _at;
+
+            foreach (var letter in word)
+            {
+                at += Continuation(at);
+
+                if (at >= text.Length || text[at] != letter)
+                {
+                    return -1;
+                }
+
+                at++;
+            }
+
+            at += Continuation(at);
+
+            return at >= text.Length || text[at] is ' ' or '\t' or '\n' or '\r' or ';' or '&' or '|' or ')' or '(' or '<' or '>' ? at : -1;
+        }
+
+        /// <summary>How many characters the continued lines at <paramref name="at"/> take: each a backslash and the line end after it.</summary>
+        private int Continuation(int at)
+        {
+            var start = at;
+
+            while (at + 1 < text.Length && text[at] == '\\' && (text[at + 1] == '\n' || (text[at + 1] == '\r' && at + 2 < text.Length && text[at + 2] == '\n')))
+            {
+                at += text[at + 1] == '\n' ? 2 : 3;
+            }
+
+            return at - start;
+        }
 
         private void SkipBlanks()
         {
@@ -1008,10 +1211,11 @@ public static partial class CommandAnalysis
         private static NotSupportedException Deep() => new($"its parentheses nest past {Nesting} levels, which this does not read");
 
         /// <summary>A command another reader read whole, as this reader keeps one.</summary>
-        private static Simple Built(IReadOnlyList<string> words)
+        private static Simple Built(AnalyzedCommand read)
         {
             var command = new Simple();
-            command.Words.AddRange(words);
+            command.Words.AddRange(read.Words);
+            command.Redirects.AddRange(read.Redirects);
             return command;
         }
     }

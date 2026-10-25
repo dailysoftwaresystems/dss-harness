@@ -28,6 +28,9 @@ public static class ToolPackage
     /// </remarks>
     public const string Command = "dssharness";
 
+    /// <summary>Where the project lives, as the CLI project declares it (<c>PackageProjectUrl</c>): what a request this tool makes names it by.</summary>
+    public const string ProjectUrl = "https://github.com/dailysoftwaresystems/dss-harness";
+
     /// <summary>The oldest .NET SDK major version that can install and run the tool.</summary>
     public const int MinimumSdkMajor = 10;
 

@@ -148,6 +148,23 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 nameof(request));
         }
 
+        // The system hands a program its name and its arguments cut at a NUL, so a child started with one would run
+        // another command than the one asked - and decided, where a policy decides it.
+        if (request.FileName.Contains('\0', StringComparison.Ordinal) || request.Arguments.Any(argument => argument.Contains('\0', StringComparison.Ordinal)))
+        {
+            throw new ArgumentException("A program or an argument holds a NUL, where the system would cut it: no child is started with one.", nameof(request));
+        }
+
+        // Windows starts a batch file through cmd.exe, which reads the line a second time: an argument holding what it reads
+        // as its own would run or change another command than the one asked.
+        if (OperatingSystem.IsWindows() && BatchFiles.Is(request.FileName) && BatchFiles.Reread(request.Arguments) is { } reread)
+        {
+            throw new ArgumentException(
+                $"'{request.FileName}' is a batch file, which cmd.exe starts and whose arguments it reads again, and the argument '{reread}' "
+                + "holds what cmd reads as its own: no batch file is started with one.",
+                nameof(request));
+        }
+
         // Checked before starting. On Linux and macOS a missing working directory fails with
         // the same error number as a missing executable, so it would otherwise be reported
         // as "git is not installed" when git is installed and it is the directory that is gone.

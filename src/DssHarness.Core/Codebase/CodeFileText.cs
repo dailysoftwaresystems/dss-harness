@@ -1,14 +1,14 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.Text;
 using DssHarness.Core.FileSystem;
 
 namespace DssHarness.Core.Codebase;
 
 /// <summary>
-/// The core's rules for a file's bytes, which hold before any implementation reads it: what is binary, what is a Git LFS
-/// pointer, which encodings are read, and how a text is cut into the lines every span counts. The one place each rule
-/// is, so the graph, an answer that reads a body fresh and an edit all read a file alike.
+/// The core's rules for a file's bytes, which hold before any implementation reads it: what is a Git LFS pointer, what
+/// the graph calls a file it does not read - which encodings are read being <see cref="EncodedText"/>'s one rule - and
+/// how a text is cut into the lines every span counts. The one place the cut is, so the graph, an answer that reads a body
+/// fresh and an edit (<see cref="EditedText"/>) count a file's lines alike.
 /// </summary>
 public static class CodeFileText
 {
@@ -25,12 +25,6 @@ public static class CodeFileText
     /// <summary>The longest a Git LFS pointer is, in bytes: a file that begins like one and is longer is a file of its own.</summary>
     private const int MostLfsPointer = 1024;
 
-    /// <summary>An encoding of UTF-16 that raises on what forms no character, little-endian.</summary>
-    private static readonly UnicodeEncoding Utf16Little = new(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true);
-
-    /// <summary>An encoding of UTF-16 that raises on what forms no character, big-endian.</summary>
-    private static readonly UnicodeEncoding Utf16Big = new(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: true);
-
     /// <summary>
     /// What <paramref name="bytes"/>, a file's whole content, are to the graph: a Git LFS pointer and a file with a NUL in
     /// its first <see cref="BinaryContent.Window"/> bytes are binary; UTF-16 is read by its mark, and UTF-8 with or without
@@ -44,34 +38,12 @@ public static class CodeFileText
             return CodeFileDecoding.Refused(CodeFileStates.Binary, "a Git LFS pointer, whose file git keeps elsewhere");
         }
 
-        // UTF-16 holds a NUL in every character of ASCII, so its mark is read before the NUL that makes a file binary; a
-        // UTF-32 mark, which begins as UTF-16's does, is no UTF-16 and falls to the NUL below.
-        var utf32 = bytes.StartsWith((ReadOnlySpan<byte>)[0xFF, 0xFE, 0x00, 0x00]);
+        // Which encodings are read is the file system's one rule (EncodedText), the graph's states named here.
+        var reading = EncodedText.Read(bytes);
 
-        if (!utf32 && (bytes.StartsWith((ReadOnlySpan<byte>)[0xFF, 0xFE]) || bytes.StartsWith((ReadOnlySpan<byte>)[0xFE, 0xFF])))
-        {
-            var encoding = bytes[0] == 0xFF ? Utf16Little : Utf16Big;
-
-            try
-            {
-                return CodeFileDecoding.Read(encoding.GetString(bytes[2..]));
-            }
-            catch (DecoderFallbackException)
-            {
-                return CodeFileDecoding.Refused(CodeFileStates.Unreadable, "it begins with UTF-16's mark and is not UTF-16 after it");
-            }
-        }
-
-        if (BinaryContent.Holds(bytes))
-        {
-            return CodeFileDecoding.Refused(CodeFileStates.Binary, "a NUL among its first bytes");
-        }
-
-        var body = Utf8Text.OpensWithByteOrderMark(bytes) ? bytes[Encoding.UTF8.Preamble.Length..] : bytes;
-
-        return Utf8Text.TryDecode(body, out var text, out var problem)
-            ? CodeFileDecoding.Read(text)
-            : CodeFileDecoding.Refused(CodeFileStates.Unreadable, $"it {problem}, and is not UTF-16 by its mark either");
+        return reading.IsRead
+            ? CodeFileDecoding.Read(reading.Text.Text)
+            : CodeFileDecoding.Refused(reading.Binary ? CodeFileStates.Binary : CodeFileStates.Unreadable, reading.Why);
     }
 
     /// <summary>
@@ -85,10 +57,7 @@ public static class CodeFileText
     /// </remarks>
     /// <param name="text">A file's text.</param>
     public static IReadOnlyList<string> Lines(string text)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-        return [.. Spans(text).Select(line => text[line.Start..line.End])];
-    }
+        => [.. Spans(text).Select(line => text[line.Start..line.End])];
 
     /// <summary>
     /// Where each of <paramref name="text"/>'s lines begins, as <see cref="Lines"/> cuts them: an implementation that reads
@@ -97,35 +66,40 @@ public static class CodeFileText
     /// </summary>
     /// <param name="text">A file's text.</param>
     public static CodeLineIndex LineIndex(string text)
+        => new([.. Spans(text).Select(line => line.Start)]);
+
+    /// <summary>
+    /// Each line of <paramref name="text"/> as <see cref="Lines"/> cuts it - at each CR LF, LF and CR, a final ending
+    /// closing the last line, an empty text one empty line - with where its text ends and where its ending does. The one
+    /// cut of a text into lines.
+    /// </summary>
+    /// <param name="text">A file's text.</param>
+    public static IReadOnlyList<CodeLineSpan> Spans(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        return new CodeLineIndex([.. Spans(text).Select(line => line.Start)]);
-    }
 
-    /// <summary>Each line of <paramref name="text"/>: where it begins, and where its text ends before its ending.</summary>
-    private static List<(int Start, int End)> Spans(string text)
-    {
-        var lines = new List<(int Start, int End)>();
+        var lines = new List<CodeLineSpan>();
         var start = 0;
 
         for (var at = 0; at < text.Length; at++)
         {
             if (text[at] is '\r' or '\n')
             {
-                lines.Add((start, at));
+                var end = at;
 
                 if (text[at] == '\r' && at + 1 < text.Length && text[at + 1] == '\n')
                 {
                     at++;
                 }
 
+                lines.Add(new CodeLineSpan(start, end, at + 1));
                 start = at + 1;
             }
         }
 
         if (start < text.Length || lines.Count == 0)
         {
-            lines.Add((start, text.Length));
+            lines.Add(new CodeLineSpan(start, text.Length, text.Length));
         }
 
         return lines;
@@ -136,18 +110,15 @@ public static class CodeFileText
     public static string Probe(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-
-        // Cut by characters, never inside a surrogate pair.
-        var length = Math.Min(text.Length, ProbeCharacters);
-
-        if (length > 0 && length < text.Length && char.IsHighSurrogate(text[length - 1]))
-        {
-            length--;
-        }
-
-        return text[..length];
+        return Output.TextCut.Head(text, ProbeCharacters);
     }
 }
+
+/// <summary>One line of a text, as <see cref="CodeFileText.Spans"/> cuts it.</summary>
+/// <param name="Start">Where the line begins.</param>
+/// <param name="End">Where its text ends, before its ending.</param>
+/// <param name="Next">Where its ending ends: where the next line begins, or the text's end.</param>
+public readonly record struct CodeLineSpan(int Start, int End, int Next);
 
 /// <summary>Where a text's lines begin (<see cref="CodeFileText.LineIndex"/>): a position in it told as the line it is on.</summary>
 /// <param name="Starts">Where each line begins, in order; the first at 0.</param>

@@ -25,7 +25,7 @@ public static partial class CommandAnalysis
     /// them. A word of an option this does not know is read as the address it may be, never
     /// passed over.
     /// </summary>
-    /// <param name="words">One command's words, its environment first where it has one, as <see cref="Commands(string)"/> or <see cref="Commands(IReadOnlyList{string})"/> flattened it.</param>
+    /// <param name="words">One command's words, its environment first where it has one, as <see cref="AnalyzedCommand.Words"/> holds them.</param>
     /// <exception cref="NotSupportedException">An address's host is named by an expansion, which this does not read.</exception>
     public static IReadOnlyList<string> WebAddresses(IReadOnlyList<string> words)
     {
@@ -73,8 +73,8 @@ public static partial class CommandAnalysis
         }
 
         var program = Name(words[environment]);
-        var arguments = words.Skip(environment + 1).Where(word => !IsRedirect(word)).ToList();
-        var assigned = words.Take(environment).Select(assignment => assignment.Split('=', 2)).ToList();
+        var arguments = words.Skip(environment + 1).ToList();
+        var assigned = words.Take(environment).Select(assignment => new[] { AssignedName(assignment), assignment.Split('=', 2)[1] }).ToList();
         var proxies = assigned
             .Where(pair => ProxyNames.Contains(pair[0], StringComparer.OrdinalIgnoreCase) && pair[1].Length > 0)
             .Select(pair => pair[1])

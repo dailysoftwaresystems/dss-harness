@@ -136,6 +136,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var run = kit.Run(credential: new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", "sk-work")], "https://gateway.example", config)) with
         {
             Withheld = ["ZAI_API_KEY", "WORK_KEY"],
+            Commands = AgentCommandSettings.Default with { TimeoutSeconds = 90, MaxTimeoutSeconds = 900 },
         };
 
         var result = await kit.Client().RunAsync(run, new Sink(), Token);
@@ -161,10 +162,15 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Null(given["CLAUDE_CODE_OAUTH_TOKEN"]);
         Assert.Equal(config, given["CLAUDE_CONFIG_DIR"]);
 
-        foreach (var (name, value) in ClaudeSettings.Controlled)
+        foreach (var (name, value) in ClaudeSettings.Launched(run.Commands))
         {
             Assert.Equal(value, given[name]);
         }
+
+        // The command times are Claude Code's own bounds of a shell command, in its environment and its settings alike.
+        var env = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["env"]!;
+        Assert.Equal(("90000", "900000"), (given[ClaudeSettings.BashTimeoutVariable], given[ClaudeSettings.BashMaxTimeoutVariable]));
+        Assert.Equal(("90000", "900000"), (env[ClaudeSettings.BashTimeoutVariable]!.GetValue<string>(), env[ClaudeSettings.BashMaxTimeoutVariable]!.GetValue<string>()));
 
         var seen = Assert.Single(kit.Launches()).Environment;
         Assert.False(seen.ContainsKey("CLAUDE_CODE_ENTRYPOINT"), "a host session's name reached the launch");
@@ -176,7 +182,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal("sk-work", seen["ANTHROPIC_API_KEY"]);
         Assert.Equal(config, seen[ClaudeTranscripts.ConfigDirectoryVariable]);
 
-        foreach (var (name, value) in ClaudeSettings.Controlled)
+        foreach (var (name, value) in ClaudeSettings.Launched(run.Commands))
         {
             Assert.Equal(value, seen[name]);
         }
@@ -205,6 +211,29 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal("tok-1", seen[read]);
         Assert.False(seen.ContainsKey("ANTHROPIC_API_KEY"), "an ambient key reached a launch that signs in with a token");
         Assert.False(seen.ContainsKey("GATEWAY_TOKEN"));
+    }
+
+    /// <summary>
+    /// A launch loses what every child of an agent loses: a secret-shaped name the configuration never appointed, but one
+    /// agentPolicy.keepEnvironment gives back; a name of no secret's shape it keeps.
+    /// </summary>
+    [Fact]
+    public async Task ALaunch_LosesWhatEveryChildOfAnAgentLoses()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        kit.Own["GITHUB_TOKEN"] = "ghp-1";
+        kit.Own["NPM_TOKEN"] = "npm-1";
+        kit.Own["PLAIN_NAME"] = "plain";
+
+        var result = await kit.Client().RunAsync(kit.Run() with { Commands = AgentCommandSettings.Default with { KeepEnvironment = ["NPM_TOKEN"] } }, new Sink(), Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+
+        var seen = Assert.Single(kit.Launches()).Environment;
+        Assert.False(seen.ContainsKey("GITHUB_TOKEN"), "a secret-shaped name reached a launch");
+        Assert.Equal("npm-1", seen["NPM_TOKEN"]);
+        Assert.Equal("plain", seen["PLAIN_NAME"]);
     }
 
     /// <summary>
@@ -276,7 +305,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal("sudo rm -rf /", denied[1].Subject);
         Assert.Equal(denied.Select(denial => denial.Reason), answers.Skip(1).Select(answer => answer["message"]!.GetValue<string>()));
 
-        var lines = File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.DenialsFileName));
+        var lines = File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName));
         Assert.Equal(3, lines.Length);
         Assert.Equal("Bash", JsonNode.Parse(lines[1])!["tool"]!.GetValue<string>());
 
@@ -636,7 +665,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
     public async Task AResultLargerThanAnEventCarries_IsKeptWholeBesideTheStream()
     {
         using var kit = new Kit();
-        var whole = string.Concat(Enumerable.Range(0, ClaudeCodeClient.ResultCap / 8).Select(at => at.ToString("D8", System.Globalization.CultureInfo.InvariantCulture))) + "tail-end";
+        var whole = string.Concat(Enumerable.Range(0, AgentCallRecords.ResultCap / 8).Select(at => at.ToString("D8", System.Globalization.CultureInfo.InvariantCulture))) + "tail-end";
         kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["result"] = whole }) }]);
         var sink = new Sink();
 
@@ -645,13 +674,13 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal(AgentRunStatus.Completed, result.Status);
 
         var finished = Assert.Single(sink.Of<ToolCallFinished>());
-        var file = Path.Combine(kit.StepDirectory, ClaudeLaunch.ToolResultsDirectoryName, finished.Id + ".txt");
+        var file = AgentCallRecords.ResultFile(kit.StepDirectory, finished.Id);
         Assert.Equal(file, finished.ResultFile);
         Assert.Equal(whole, File.ReadAllText(file));
 
-        const int Head = ClaudeCodeClient.ResultCap / 4;
+        const int Head = AgentCallRecords.ResultHead;
         Assert.Equal(
-            $"{whole[..Head]}\n[{whole.Length - ClaudeCodeClient.ResultCap} characters left out: the whole result is '{file}']\n{whole[^(ClaudeCodeClient.ResultCap - Head)..]}",
+            $"{whole[..Head]}\n[{whole.Length - AgentCallRecords.ResultCap} characters left out: the whole result is '{file}']\n{whole[^(AgentCallRecords.ResultCap - Head)..]}",
             finished.Result);
     }
 
@@ -1098,7 +1127,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var denied = Assert.Single(sink.Of<PermissionDenied>());
         Assert.Equal(("Read", "faulty.txt", AgentPolicy.UndecidedRule, AgentPermissionSource.Builtin, said), (denied.Tool, denied.Subject, denied.Rule, denied.Source, denied.Reason));
 
-        var recorded = JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.DenialsFileName))))!;
+        var recorded = JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName))))!;
         Assert.Equal(("Read", "undecided", "Builtin", said), (recorded["tool"]!.GetValue<string>(), recorded["rule"]!.GetValue<string>(), recorded["source"]!.GetValue<string>(), recorded["reason"]!.GetValue<string>()));
         Assert.Equal(1, File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.ControlFileName)).Count(line => line.Contains("\"subtype\":\"error\"", StringComparison.Ordinal)));
     }
@@ -1144,6 +1173,11 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal(AgentRunStatus.Completed, layered.Status);
         Assert.Equal(1, layered.Denials);
         Assert.Equal(AgentPermissionSource.ClaudeCode, Assert.Single(sink.Of<PermissionDenied>()).Source);
+
+        // Each refusal of Claude Code's own is a line of the step's denials, as every denial is: one from each launch.
+        Assert.Equal(
+            ["ClaudeCode", "ClaudeCode"],
+            File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName)).Select(line => JsonNode.Parse(line)!["source"]!.GetValue<string>()));
     }
 
     /// <summary>
@@ -1718,6 +1752,20 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
 
         Assert.Equal((AgentRunStatus.Completed, "done"), (result.Status, result.FinalText));
+    }
+
+    /// <summary>The run's reporter is given the tools that read and no other, whatever capabilities its ground names.</summary>
+    [Fact]
+    public async Task TheRunsReporter_IsGivenTheToolsThatReadAlone()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        var run = kit.Run() with { Ground = kit.Ground() with { Capabilities = AgentPolicyGround.EveryCapability, ReporterRoot = kit.WorkDirectory } };
+
+        var result = await kit.Client().RunAsync(run, new Sink(), Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal("Read,Grep,Glob", Value(Assert.Single(kit.Launches()).Arguments, "--tools"));
     }
 
     /// <summary>

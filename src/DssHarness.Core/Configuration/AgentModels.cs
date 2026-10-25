@@ -82,6 +82,27 @@ public sealed class AgentPolicyConfig
     /// refusal away, and each client's own guard, where it has one, stays its own.
     /// </summary>
     public bool? ProtectedPaths { get; init; }
+
+    /// <summary>
+    /// The secret-shaped names a command an agent runs keeps from the tool's environment: every name ending with one of
+    /// <see cref="Agents.AgentChildEnvironment.SecretSuffixes"/> is taken from it otherwise, beside every name the
+    /// configuration appoints, which is never given back. Left out where none is given back, which is the default; given
+    /// empty it is refused.
+    /// </summary>
+    public List<string>? KeepEnvironment { get; init; }
+
+    /// <summary>
+    /// How many seconds a command an agent runs may take where its call names no time:
+    /// <see cref="Agents.AgentCommandSettings.DefaultTimeoutSeconds"/> where nothing is said.
+    /// </summary>
+    public int? CommandTimeoutSeconds { get; init; }
+
+    /// <summary>
+    /// The most seconds a call may name for a command an agent runs:
+    /// <see cref="Agents.AgentCommandSettings.DefaultMaxTimeoutSeconds"/> where nothing is said, and at most
+    /// <see cref="Agents.AgentCommandSettings.MostTimeoutSeconds"/>, as the time without a call's is.
+    /// </summary>
+    public int? MaxCommandTimeoutSeconds { get; init; }
 }
 
 /// <summary>

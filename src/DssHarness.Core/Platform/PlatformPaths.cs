@@ -99,7 +99,19 @@ public static class PlatformPaths
             && path[1] == ':'
             && path[2] is '\\' or '/';
 
-        return drive || path.StartsWith(@"\\", StringComparison.Ordinal) || path.StartsWith("//", StringComparison.Ordinal);
+        return drive || NamesAShare(path);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="path"/> begins with two separators, either kind - <c>\\server\share</c>, <c>//server</c>, a
+    /// device's <c>\\?\</c> - which Windows reads as a share or a device, never a place on a drive.
+    /// </summary>
+    /// <param name="path">The text to read.</param>
+    public static bool NamesAShare(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        return path.Length >= 2 && path[0] is '\\' or '/' && path[1] is '\\' or '/';
     }
 
     /// <summary>

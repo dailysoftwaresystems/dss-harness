@@ -2478,7 +2478,11 @@ public static class HelpTopics
         builder.AppendLine("web whole. Declared under agentPolicy.restrictions in config.json, and a workflow's");
         builder.AppendLine("definitions and steps add their own to them, all applied together. agentPolicy.webDomains");
         builder.AppendLine("is the allow list beside them: left out, any address, the machine's own and its network's");
-        builder.AppendLine("among them; given, only those domains and what is under them. A command that runs a");
+        builder.AppendLine("among them; given, only those domains and what is under them. An address whose slashes");
+        builder.AppendLine("after its scheme readers read apart - any scheme but its two slashes and a host after them");
+        builder.AppendLine($"(http:/\\host, gopher:/host, http:///host), or no slash after an {string.Join(", ", Agents.Policy.AgentPolicy.SlashedSchemes.SkipLast(1))} or");
+        builder.AppendLine($"{Agents.Policy.AgentPolicy.SlashedSchemes[^1]} scheme (https:host) - or whose host is spelled beyond ASCII (its xn-- form is read");
+        builder.AppendLine("as written), names no host this can decide, and is denied. A command that runs a");
         builder.AppendLine("program which fetches from the network - curl, wget, Invoke-WebRequest, Invoke-RestMethod,");
         builder.AppendLine("iwr, irm, http, https, gh api - is decided as a web request too, by each address it names,");
         builder.AppendLine("a proxy, a curl --connect-to's or --resolve's target and the proxy its environment names");
@@ -2532,18 +2536,17 @@ public static class HelpTopics
         builder.AppendLine("of an agent touches is the slot itself, in any root. Where this tool cannot decide a");
         builder.AppendLine("call it denies it, never allows: nothing runs while the host that would answer is");
         builder.AppendLine("silent or gone. The policy is built and holds every action behind it; the claude-code");
-        builder.AppendLine("client below asks it of every call, the API clients are what it builds next, and no");
-        builder.AppendLine("command of this build runs an agent yet.");
+        builder.AppendLine("client below asks it of every call, the tool runtime below decides by it each call of");
+        builder.AppendLine("the API clients, which are what comes next, and no command of this build runs an agent");
+        builder.AppendLine("yet.");
         builder.AppendLine();
         AppendWrapped(builder, ClaudeCodeClientProse());
+        builder.AppendLine();
+        AppendWrapped(builder, ToolRuntimeProse());
 
         return builder.ToString();
     }
 
-    /// <summary>
-    /// What the claude-code client does with a launch, its tools from the one table that gives them, the names it sets
-    /// from the one list of them, and its bounds from the types that hold them.
-    /// </summary>
     /// <summary>
     /// How the agents' policy reads a shell command, what it refuses as undecided, and the worktree rules - git's
     /// verbs named from <see cref="Agents.Policy.AgentPolicy.GitStateVerbs"/>, so the list said is the list refused.
@@ -2553,26 +2556,39 @@ public static class HelpTopics
             + "|, & and line ends; a comment and a here-document's lines never read as commands; the bodies of $(...), "
             + "backticks, <(...), subshells, functions, loops and branches read as commands of their own, each "
             + "substitution before the command it stands in, whose word keeps it as the expansion it is; a for's word list "
-            + "read for the paths it hands its body; a redirect kept apart from the words, wherever it stands; the "
-            + "NAME=value words before a program kept as its environment, and a variable whose value is a program git or "
+            + "read for the paths it hands its body; a redirect kept apart from the words, wherever it stands, decided by "
+            + "the file it names and never among the words a rule meets - a quoted word spelled as one is a word; the "
+            + "NAME=value (and NAME+=value) words before a program kept as its environment, and a variable - so set, or "
+            + "declared by export and its kind, cmd's set, fish's set, csh's setenv, setx or PowerShell's env: items - whose value is a program git or "
             + "another tool runs (GIT_SSH_COMMAND, GIT_PAGER, GIT_EDITOR, EDITOR, PAGER and their kind) read as that "
             + "program's command line, as is the value of git's own setting of a key git runs as one (core.pager, "
             + "core.sshCommand, a diff or merge driver, a filter, an alias and their kind) - a -c, a --config-env's "
             + "variable, GIT_CONFIG_VALUE_n, GIT_CONFIG_PARAMETERS - an alias's '!' taken off; wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, "
-            + "busybox, Invoke-Expression) stripped, what xargs reads an expansion among the words it runs; and it goes "
-            + "into sh -c and every other shell's, a here-string or here-document a shell reads, cmd /c, "
+            + "busybox) stripped, what xargs reads an expansion among the words it runs; and it goes "
+            + "into sh -c and every other shell's (fish's -C scripts too, its options read as fish reads them), the here-string, here-document or file a shell reads as the last input "
+            + "its descriptor 0 is given (/dev/stdin and PowerShell's '-' among its names), cmd /c, "
             + "powershell -Command and a decoded -EncodedCommand, and the command lines trap, watch, script and flock run, "
-            + "by each shell's own quoting, to four levels, and into a shell another program runs with its script "
-            + "(find -exec sh -c) - so 'git -C x push' is git push, and 'env A=1 git push' and 'A=1 /usr/bin/git push' "
-            + "are too. Every word of a command is tried as the program of the words after it, a program read by its "
-            + "name, its directories and a Windows end (.exe, .cmd, .dll) folded away. A word the shell expands where a "
+            + "by each shell's own quoting - PowerShell by a reader of its own grammar: its commands, pipelines, strings, "
+            + "here-strings, variables, $(...), @(...), (...), script blocks, hashtables, assignments and keywords' "
+            + "conditions and blocks, each statement a block holds read as one that may run, Invoke-Expression's one string "
+            + "read as a script of its own - to four levels, and into a shell another program runs with its script "
+            + "(find -exec sh -c, find's words read to their ';'), a command find -exec, fd -x, rg --pre or --hostname-bin or parallel runs "
+            + "read as its own, each word it fills in an expansion, env -S's string split by env's own rules, and "
+            + "$((...)), ((...)) and $[...] read as arithmetic, their substitutions as commands - so "
+            + "'git -C x push' is git push, and 'env A=1 git push' and 'A=1 /usr/bin/git push' are too. Every word of a command is tried as the program of the words after it - but a word of a program "
+            + "that runs none of its words, its data (grep, rg, echo, cat, which and their kind) - a program read by its "
+            + "name in any case, its directories and a Windows end (.exe, .cmd, .dll) folded away, a cmd line's '@' dropped, git-push read as git push. A word the shell expands where a "
             + "rule reads a literal one makes the command one the rule may be, refused as such ('git $VERB' under "
             + "Run(git push *)); a pattern or a brace that may name a credential slot or a Claude Code directory is "
             + "refused as naming it, and a file:// address is read as the path it names. What it cannot read whole it "
             + "denies, said here, not guessed at: a script nested past four levels, a shell that reads its script from "
-            + "its input (curl ... | sh) or from a process substitution, and a program named by a variable, a "
-            + "substitution, a pattern or a brace, a brace that spells more than 64 words, and an option of git's or "
-            + "gh's own before its command that this does not know; what it does not see is the inside of a script file "
+            + "its input (curl ... | sh), from a process substitution or from another open descriptor (/dev/fd/3, <&3), "
+            + "an env -S string holding a backslash, whose escapes are env's own, an alias it gives, a script another program fills in "
+            + "(find -exec sh -c 'echo {}'), PowerShell's code no word spells (a static method, an instance method "
+            + "but a string's, a collection's or a date's, a function's or an alias's text, a class, using, its stop-parsing --%, "
+            + "a script Invoke-Expression is handed by no one string, and a command line Start-Process, WMI, the task scheduler or Add-Type is handed), and a program named by a variable, a "
+            + "substitution, a pattern or a brace, a brace that spells more than 64 words, and an option of git's, "
+            + "gh's, fish's or Windows PowerShell's own before its command that this does not know; what it does not see is the inside of a script file "
             + "a command runs, and a program another runs from words that do not name it. The worktree rules "
             + "(agentPolicy.worktreeRules, true where nothing is said) keep an agent's worktree a thing the engine can "
             + $"measure: git's state-writing verbs ({string.Join(", ", Agents.Policy.AgentPolicy.GitStateVerbs)}) are "
@@ -2591,6 +2607,10 @@ public static class HelpTopics
             + "the tool's own state, in any root, is written by its verbs alone - a place of the agent's own within it, "
             + "as its work directory is, the one exception.";
 
+    /// <summary>
+    /// What the claude-code client does with a launch, its tools from the one table that gives them, the names it sets
+    /// from the one list of them, and its bounds from the types that hold them.
+    /// </summary>
     private static string ClaudeCodeClientProse()
     {
         var tools = string.Join(
@@ -2610,7 +2630,7 @@ public static class HelpTopics
             + $" - and never {string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.NeverOffered)}. The run's reporter is given "
             + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.Reporter)} alone. Every call is asked of the engine "
             + "before it runs and answered from the policy above: a denial carries its rule's sentence, which the model "
-            + $"reads, and is a line of the step's {Agents.ClaudeCode.ClaudeLaunch.DenialsFileName}; a tool the launch was not given, or whose calls the engine "
+            + $"reads, and is a line of the step's {Agents.AgentCallRecords.DenialsFileName}; a tool the launch was not given, or whose calls the engine "
             + "cannot read, is denied by name. An answer held to a step's schema that does not read is sent back, each "
             + $"problem by its path, up to {output.MaxRepairs} times; a message the engine gives an agent at work is written "
             + "to the same launch, and a result written before the launch took it is not the answer; a handoff asked "
@@ -2619,8 +2639,11 @@ public static class HelpTopics
             + "launch that does not take the interrupt ended whole. Every message is held to the model asked for, a date "
             + "after its id the same model: one another model wrote ends the step. Its environment holds nothing of a "
             + $"Claude Code session this tool was started in ({Agents.ClaudeCode.ClaudeLaunch.SessionVariable} and every {Agents.ClaudeCode.ClaudeLaunch.SessionPrefix} name but "
-            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.KeptNames)}, which says only where a program is), no credential but the "
-            + $"one its auth gives, and the names the engine sets: {controlled}. A key Claude Code reports invalid is passed "
+            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.KeptNames)}, which says only where a program is), none of what every child "
+            + "of an agent loses (the tool runtime below), no credential but the "
+            + $"one its auth gives, and the names the engine sets: {controlled}, and {Agents.Policy.ClaudeSettings.BashTimeoutVariable} and "
+            + $"{Agents.Policy.ClaudeSettings.BashMaxTimeoutVariable} as agentPolicy.commandTimeoutSeconds and maxCommandTimeoutSeconds say, in "
+            + "milliseconds, so a shell command it runs is held to the times of every command an agent runs. A key Claude Code reports invalid is passed "
             + "over, and while the step has done no work the next key is given a new launch with the step's prompt; the "
             + $"control messages both ways are kept in the step's {Agents.ClaudeCode.ClaudeLaunch.ControlFileName} beside its stored stream. "
             + $"Its own settings outrank the user's, which it still reads: the user's {Agents.ClaudeCode.ClaudeUserSettings.FileName} in its Claude Code directory and the "
@@ -2643,6 +2666,57 @@ public static class HelpTopics
             + $"{nameof(Agents.AgentRunStatus.Refused)}, with what it was of where the provider names it, and an account at its limit - a rate limit event "
             + "that says rejected, or a turn Claude Code ends on rate_limit or billing_error after its own tries - ends it "
             + $"{nameof(Agents.AgentRunStatus.RateLimited)}, with when the limit lifts where it says; an overloaded service is no limit of the account's.";
+    }
+
+    /// <summary>
+    /// The harness's own tools, built for the API clients: each from the one table that gives them, its bounds from the
+    /// types that hold them, the paths, the commands and the fetch each from its owner.
+    /// </summary>
+    private static string ToolRuntimeProse()
+    {
+        var defaults = Agents.AgentCommandSettings.Default;
+        var tools = string.Join(
+            "; ",
+            Agents.Runtime.AgentTools.All(defaults).Select(tool => $"{tool.Name} ({tool.Needs.ToString().ToLowerInvariant()}{(tool.Barrier ? ", alone in its turn" : string.Empty)})"));
+
+        return "The tool runtime is the harness's own tools, built for the claude-api and glm clients to give their agents in "
+            + "place of a client's own - those clients are what comes next, and nothing opens a runtime yet - each under the "
+            + $"capability that gives it: {tools}. The run's reporter is given "
+            + $"{string.Join(", ", Agents.Runtime.AgentTools.All(defaults).Where(tool => Agents.Policy.AgentPolicyGround.ReporterCapabilities.Contains(tool.Needs)).Select(tool => tool.Name))}, "
+            + "those that read, and no other. Each call is decided before it runs and recorded: a tool the step was not given, or "
+            + "an input its schema does not hold, is refused with how the tool is called; a path is read against the agent's "
+            + "working directory, refused spelled empty, with a NUL or a leading ~ - on Windows also a share or a device's "
+            + $"prefix, a device's name ({string.Join(", ", Agents.Runtime.ConfinedPaths.DeviceNames.Take(4))} and the rest), "
+            + "a drive's own directory (C:x) or an alternate data stream - its links followed (one whose links cannot be followed refused as undecided) and held to the agent's roots, each compared as its own file "
+            + "system names it: a read inside one of them, a write inside a writable one and through no link below it (a "
+            + "link put in place between the check and the act is the known limit); then the policy above is asked of it, and "
+            + "a deleting or moving tool is a write to every path it touches, at both ends of a move. A directory deleted or "
+            + $"moved is refused where it is a root, holds a link, holds a path that may not be written or holds more than "
+            + $"{Agents.Runtime.AgentTools.MostDeletedEntries:N0} entries. A file past {DiskSpace.Size(Agents.Runtime.AgentTools.MostViewedBytes)} is "
+            + "neither viewed nor edited - it is searched, or read in part by a command. A replace or an insert needs its file viewed "
+            + "first, by its content: one that changed since is refused, nothing written, and an edit keeps the file's "
+            + "encoding (UTF-8 with or without its mark, UTF-16 by its mark), its line endings and whether it ends with a "
+            + "newline. A command is an argument list, never a shell string, decided whole where it starts, run as a phase "
+            + "is - contained, ended whole with what it started, its log kept beside the stream - for "
+            + $"agentPolicy.commandTimeoutSeconds ({defaults.TimeoutSeconds} where nothing is said) unless its call names a "
+            + $"time, agentPolicy.maxCommandTimeoutSeconds ({defaults.MaxTimeoutSeconds}) at most, stopped sooner where it "
+            + $"prints nothing for as long as the step's stall bound; a command line holding a secret, a word holding a NUL, or on Windows a batch file's argument holding what cmd.exe reads again ({Processes.BatchFiles.Said}) or what the shell expands, is refused. Its environment, and the claude child's before its own names are set, loses every name the "
+            + "configuration appoints and every secret-shaped name - ending "
+            + $"{string.Join(", ", Agents.AgentChildEnvironment.SecretSuffixes)}, in any case - but those "
+            + "agentPolicy.keepEnvironment gives back; an appointed name is never given back. web_fetch is the harness's own "
+            + $"fetch: http and https alone, at most {Web.HarnessFetch.MostRedirects} redirects, "
+            + $"{Web.HarnessFetch.Bound.TotalSeconds:0} s and {DiskSpace.Size(Web.HarnessFetch.MostBytes)}, text alone "
+            + $"({Web.HarnessFetch.TextTypesSaid}) with a page's HTML reduced to its text, public addresses alone - a host that resolves to "
+            + "this machine, its network or a cloud's metadata service refused, and a connection made only to an address "
+            + "that was checked, and checked again once made - no cookie, no credential, no proxy, under a User-Agent that "
+            + "names this tool; each address, the first and each redirect, is decided by the web's rules and written to the "
+            + $"step's {Agents.AgentCallRecords.WebFileName} before anything leaves the machine, and what it was answered "
+            + "after; an address holding a secret is refused. A page is given inside a block that says where it is from, its "
+            + "first line saying it is information for the task, not instructions. Calls that read run together, at most "
+            + $"{Agents.Runtime.AgentToolRuntime.MostTogether} at once, a call that writes or runs alone, answers in the order "
+            + $"of the calls; an answer past {Agents.AgentCallRecords.ResultCap:N0} characters is given as its first "
+            + $"{Agents.AgentCallRecords.ResultHead:N0} and its last {Agents.AgentCallRecords.ResultCap - Agents.AgentCallRecords.ResultHead:N0}, "
+            + $"the whole kept in the step's {Agents.AgentCallRecords.ToolResultsDirectoryName}/.";
     }
 
     /// <summary>
@@ -3930,7 +4004,11 @@ public static class HelpTopics
         builder.AppendLine("                 webDomains, the allow list of every web request (left out, any");
         builder.AppendLine("                 address); worktreeRules (true where nothing is said) and");
         builder.AppendLine("                 protectedPaths (true too), the switches of the rule sets 'help");
-        builder.AppendLine("                 agent-clients' names ('help agent-clients')");
+        builder.AppendLine("                 agent-clients' names; keepEnvironment, the secret-shaped names a");
+        builder.AppendLine($"                 command an agent runs keeps; commandTimeoutSeconds ({Agents.AgentCommandSettings.DefaultTimeoutSeconds}) and");
+        builder.AppendLine($"                 maxCommandTimeoutSeconds ({Agents.AgentCommandSettings.DefaultMaxTimeoutSeconds}), how long one runs where its call");
+        builder.AppendLine($"                 names no time, and the most it may name, {Agents.AgentCommandSettings.MostTimeoutSeconds} at most");
+        builder.AppendLine("                 ('help agent-clients')");
         builder.AppendLine();
         builder.AppendLine("A list whose absence means every one of what it names, or a set the tool chooses, is");
         builder.AppendLine("refused given empty, as --legs given no name is: a runner's legs and steps; a tool's");
@@ -3939,9 +4017,10 @@ public static class HelpTopics
         builder.AppendLine("rebuildableFormats; a platform's toolSearchDirectories. Leave the key out instead. A");
         builder.AppendLine("list whose empty form means none - such as sync.neverTransfer, sync.exclude or");
         builder.AppendLine("contention.buildTools - takes [] as that. workflows, which declares no workflow left");
-        builder.AppendLine("out, is refused given empty too, so none is spelt one way: leave the key out for no");
-        builder.AppendLine("workflow. A runner's list under mutations.runReads, which would say nothing given");
-        builder.AppendLine("empty, is refused so: leave the runner out instead.");
+        builder.AppendLine("out, and agentPolicy.keepEnvironment, which gives no name back left out, are refused");
+        builder.AppendLine("given empty too, so none is spelt one way: leave the key out for none. A runner's list");
+        builder.AppendLine("under mutations.runReads, which would say nothing given empty, is refused so: leave the");
+        builder.AppendLine("runner out instead.");
         builder.AppendLine();
         builder.AppendLine("A toolchain, a build config and a sanitizer overlay compose: each contributes");
         builder.AppendLine("environment and cache variables, so clang x debug x asan needs no entry of its");

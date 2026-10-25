@@ -4,6 +4,7 @@ using DssHarness.Core.Hosts;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Runs;
 
@@ -231,6 +232,9 @@ public sealed partial class AgentPolicy
             .. config.AgentPolicy?.WebDomains is { Count: 0 }
                 ? (IReadOnlyList<string>)["agentPolicy.webDomains is given empty: leave the key out to allow any address, or name the domains an agent may reach"]
                 : [],
+            .. AgentChildEnvironment.Problems(
+                config.AgentPolicy,
+                AgentProviders.Resolve(config).Providers?.Appointed().Select(key => key.Name).ToList() ?? []),
         ];
     }
 
@@ -301,13 +305,22 @@ public sealed partial class AgentPolicy
     /// denied where it cannot be read whole.
     /// </summary>
     /// <param name="argv">The command as the tool runtime hands it: a program and its arguments, never a shell string.</param>
-    public AgentPolicyAnswer Run(IReadOnlyList<string> argv)
+    public AgentPolicyAnswer Run(IReadOnlyList<string> argv) => Run(argv, directory: null);
+
+    /// <summary>
+    /// Whether a command an agent would run in <paramref name="directory"/> may run: decided as <see cref="Run(IReadOnlyList{string})"/>
+    /// decides it, each path it names read against that directory - where the command starts - rather than the working
+    /// directory.
+    /// </summary>
+    /// <param name="argv">The command as the tool runtime hands it: a program and its arguments, never a shell string.</param>
+    /// <param name="directory">Where it starts, absolute or relative to the working directory; null for the working directory.</param>
+    public AgentPolicyAnswer Run(IReadOnlyList<string> argv, string? directory)
     {
         ArgumentNullException.ThrowIfNull(argv);
 
         try
         {
-            return RunDecided(CommandAnalysis.Commands(argv));
+            return RunDecided(CommandAnalysis.Commands(argv), directory is null ? null : Plain(directory, _ground.WorkingDirectory));
         }
         catch (Exception exception) when (Undecidable(exception))
         {
@@ -329,7 +342,7 @@ public sealed partial class AgentPolicy
 
         try
         {
-            return RunDecided(CommandAnalysis.Commands(shell));
+            return RunDecided(CommandAnalysis.Commands(shell), startsIn: null);
         }
         catch (Exception exception) when (Undecidable(exception))
         {
@@ -588,7 +601,9 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>Each flattened command, refused by the first thing it runs that may not run.</summary>
-    private AgentPolicyAnswer RunDecided(IReadOnlyList<IReadOnlyList<string>> commands)
+    /// <param name="commands">The commands, flattened.</param>
+    /// <param name="startsIn">Where the first starts, spelled whole; null for the working directory.</param>
+    private AgentPolicyAnswer RunDecided(IReadOnlyList<AnalyzedCommand> commands, string? startsIn)
     {
         // Everything of a command compares as this platform compares names, but for the root
         // actions and the places no agent reaches, which fold case everywhere.
@@ -604,15 +619,19 @@ public sealed partial class AgentPolicy
 
         // Every directory a path may be read against: the working directory, and each a cd of the
         // string moved to - a path is tried against all of them, for a subshell's cd ends with it.
-        var places = new List<string> { _ground.WorkingDirectory };
+        var places = new List<string> { startsIn ?? _ground.WorkingDirectory };
 
-        foreach (var command in commands)
+        foreach (var analyzed in commands)
         {
-            foreach (var word in command)
+            var command = analyzed.Words;
+
+            // Each word, and the file each redirect names or the text it gives: a redirect is decided by its file, and a
+            // here-document's or here-string's text is none the shell expands braces in.
+            foreach (var (word, braces) in command.Select(word => (word, true)).Concat(analyzed.Redirects.Select(redirect => (redirect.Target, redirect.Operator != "<<<"))))
             {
                 // The sentence says the action it matched, in the one spelling the list holds, so a
                 // word named in either case is refused in the same words.
-                if (RootActionOf(word) is { } action)
+                if (RootActionOf(word, braces) is { } action)
                 {
                     return new AgentPolicyAnswer.Denied(
                         "the root actions",
@@ -620,7 +639,7 @@ public sealed partial class AgentPolicy
                         $"'{action}' is a root action: no agent of this tool acts as root");
                 }
 
-                if (Named(word, places) is AgentPolicyAnswer.Denied named)
+                if (Named(word, places, braces) is AgentPolicyAnswer.Denied named)
                 {
                     return named;
                 }
@@ -642,12 +661,17 @@ public sealed partial class AgentPolicy
 
             // Every word is tried as the program of the words after it, the command's environment
             // before them: a command another program runs - find -exec, ssh, a wrapper this does
-            // not strip - meets the rules on its own program.
-            for (var start = environment; start < command.Count; start++)
+            // not strip - meets the rules on its own program; but a program that runs none of its
+            // words, whose words are its data. Assignments alone run no program, yet set git's
+            // configuration for what runs after them (PowerShell's $env:NAME = value): they meet
+            // the rules too.
+            var starts = environment == command.Count || CommandAnalysis.RunsNoWords(command[environment]) ? environment + 1 : command.Count;
+
+            for (var start = environment; start < starts; start++)
             {
                 IReadOnlyList<string> words = [.. command.Take(environment), .. command.Skip(start)];
 
-                if (Decided(command, start, words, comparison) is AgentPolicyAnswer.Denied denied)
+                if (Decided(analyzed, start, words, comparison) is AgentPolicyAnswer.Denied denied)
                 {
                     return denied;
                 }
@@ -657,12 +681,41 @@ public sealed partial class AgentPolicy
         return AgentPolicyAnswer.Allow;
     }
 
-    /// <summary>The rules on one command's words from <paramref name="start"/>, as the program there would run them.</summary>
-    private AgentPolicyAnswer Decided(IReadOnlyList<string> command, int start, IReadOnlyList<string> words, StringComparison comparison)
+    /// <summary>
+    /// Whether cmd.exe, starting a batch file with <paramref name="word"/> among its arguments, would read in it what was
+    /// not read here: a character of its own (<see cref="BatchFiles"/>), an expansion the shell fills in first, or the
+    /// word another program fills in as it starts it (find's <c>-exec</c>, fd's <c>-x</c>, parallel), an expansion as
+    /// <see cref="CommandAnalysis"/> reads it - with a file's name, which may hold anything. A redirect is the shell's
+    /// own, never among the arguments cmd is handed.
+    /// </summary>
+    private static bool CmdReadsAgain(string word)
+        => BatchFiles.Reread([word]) is not null || CommandAnalysis.Expansion(word) is not null;
+
+    /// <summary>
+    /// The rules on one command's words from <paramref name="start"/>, as the program there would run them: the words it
+    /// is handed, its redirects the shell's own - with no program where the command is assignments alone.
+    /// </summary>
+    private AgentPolicyAnswer Decided(AnalyzedCommand analyzed, int start, IReadOnlyList<string> words, StringComparison comparison)
     {
         var roots = StringComparer.OrdinalIgnoreCase;
-        var program = CommandAnalysis.Name(command[start]);
-        var whole = string.Join(' ', command);
+        var command = analyzed.Words;
+        var program = start < command.Count ? CommandAnalysis.Name(command[start]) : string.Empty;
+        var whole = string.Join(' ', analyzed.Whole);
+
+        // A program that runs a command line it composes - Start-Process's arguments, WMI's, the task scheduler's, code
+        // Add-Type compiles - runs what no word here spells: the command's own program, past the root actions.
+        if (start == CommandAnalysis.EnvironmentOf(command) && CommandAnalysis.ComposesCommandLine([.. command.Skip(start)]) is { } composed)
+        {
+            return Undecided(whole, new NotSupportedException($"'{command[start]}' {composed}, which this does not read"));
+        }
+
+        // A batch file is started on Windows by cmd.exe, which reads its arguments a second time: one holding what cmd
+        // reads as its own, or what the shell expands into it, would run another command than the one read here - wherever
+        // it stands, for a wrapper this does not strip starts it as well.
+        if (_platform.Current is PlatformId.Windows && start < command.Count && BatchFiles.Is(command[start]) && command.Skip(start + 1).FirstOrDefault(CmdReadsAgain) is { } reread)
+        {
+            return Undecided(whole, new NotSupportedException($"'{command[start]}' is a batch file, whose arguments cmd.exe reads again, and '{reread}' holds what cmd reads as its own or what the shell expands"));
+        }
 
         // The tool's own verbs and run-side-task are refused whatever worktreeRules says: an agent
         // does not move its own run, nor leave its step's limits. A verb read from a response file
@@ -689,7 +742,7 @@ public sealed partial class AgentPolicy
         // The Run rules, against each reading of the command's own words in turn: git configured
         // where it runs the git config it is first, then the command with git's options dropped
         // before its subcommand.
-        var readings = CommandAnalysis.ForRules(words, comparison);
+        var readings = CommandAnalysis.ForRules(words, program: start == CommandAnalysis.EnvironmentOf(command));
 
         foreach (var reading in readings)
         {
@@ -786,7 +839,18 @@ public sealed partial class AgentPolicy
         return reaches[0, 0];
     }
 
-    /// <summary>One segment of a shell pattern as the expression it matches a whole name by, in any case.</summary>
+    /// <summary>Whether <paramref name="word"/>'s last name is one a Windows may read as its device's, with any extension (<see cref="Runtime.ConfinedPaths.DeviceNames"/>).</summary>
+    private static bool IsDevice(string word)
+        => Runtime.ConfinedPaths.DeviceNames.Contains(
+            Path.GetFileName(word.TrimEnd(':', ' ', '.').Replace('\\', '/')).Split('.')[0].TrimEnd(' '),
+            StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// One segment of a shell pattern as the expression it matches a whole name by, in any case: a bracket's members
+    /// each the character it is, a range kept; one the shell would not read as a bracket - a <c>]</c> right after its
+    /// <c>[</c> or <c>[!</c> is a member, and one that does not close or holds a reversed range is the characters it
+    /// is - read as those characters.
+    /// </summary>
     private static System.Text.RegularExpressions.Regex SegmentPattern(string segment)
     {
         var expression = new System.Text.StringBuilder("^");
@@ -803,10 +867,9 @@ public sealed partial class AgentPolicy
             {
                 expression.Append('.');
             }
-            else if (character == '[' && segment.IndexOf(']', at + 2) is var closing and > 0)
+            else if (character == '[' && Bracket(segment, at) is var (closing, members) && closing > 0)
             {
-                var set = segment[(at + 1)..closing];
-                expression.Append('[').Append(set.StartsWith('!') ? "^" + System.Text.RegularExpressions.Regex.Escape(set[1..]) : System.Text.RegularExpressions.Regex.Escape(set)).Append(']');
+                expression.Append(members);
                 at = closing;
             }
             else
@@ -815,10 +878,53 @@ public sealed partial class AgentPolicy
             }
         }
 
+        // Matched in time linear in the name, however its stars and classes nest: no pattern backtracks past its bound.
         return new System.Text.RegularExpressions.Regex(
             expression.Append('$').ToString(),
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant,
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.NonBacktracking,
             TimeSpan.FromSeconds(1));
+    }
+
+    /// <summary>
+    /// The bracket a pattern opens at <paramref name="at"/>, as the shell reads one: where it closes and the class it is,
+    /// each member escaped, a range kept where it runs forward - or -1 where it is no bracket, its '[' a character.
+    /// </summary>
+    private static (int Closing, string Members) Bracket(string segment, int at)
+    {
+        var negated = at + 1 < segment.Length && segment[at + 1] is '!' or '^';
+        var first = at + (negated ? 2 : 1);
+
+        // A ']' right after the opening is a member, never the close.
+        var closing = first < segment.Length ? segment.IndexOf(']', first + 1) : -1;
+
+        if (closing < 0)
+        {
+            return (-1, string.Empty);
+        }
+
+        var members = new System.Text.StringBuilder(negated ? "[^" : "[");
+
+        for (var member = first; member < closing; member++)
+        {
+            if (member + 2 < closing && segment[member + 1] == '-')
+            {
+                if (segment[member] > segment[member + 2])
+                {
+                    return (-1, string.Empty);
+                }
+
+                members.Append(Member(segment[member])).Append('-').Append(Member(segment[member + 2]));
+                member += 2;
+            }
+            else
+            {
+                members.Append(Member(segment[member]));
+            }
+        }
+
+        return (closing, members.Append(']').ToString());
+
+        static string Member(char character) => character is '\\' or ']' or '[' or '^' or '-' ? "\\" + character : character.ToString();
     }
 
     /// <summary>
@@ -899,11 +1005,11 @@ public sealed partial class AgentPolicy
     /// The root action <paramref name="word"/> names, in the list's own spelling: the word itself,
     /// each word its braces spell, and each word a script inside it would run - a command another
     /// program runs from one argument (<c>ssh host 'sudo x'</c>) is read so too; null where it names
-    /// none.
+    /// none. <paramref name="braces"/> says whether the shell expands its braces: a here-document's text it never does.
     /// </summary>
-    private static string? RootActionOf(string word)
+    private static string? RootActionOf(string word, bool braces)
     {
-        IEnumerable<string> candidates = CommandAnalysis.BraceExpansions(word);
+        IEnumerable<string> candidates = braces ? CommandAnalysis.BraceExpansions(word) : [word];
 
         if (word.Any(char.IsWhiteSpace))
         {
@@ -974,10 +1080,24 @@ public sealed partial class AgentPolicy
     {
         var text = address.Trim();
 
+        if (SlashedApart(text))
+        {
+            throw new ArgumentException($"'{address}' spells the slashes after its scheme as readers of an address read apart, so its host is not one this can name", nameof(address));
+        }
+
         foreach (var candidate in text.Contains("://", StringComparison.Ordinal) ? [text] : new[] { "https://" + text })
         {
             if (Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && !uri.IsFile && uri.Host.Length > 0)
             {
+                // A host spelled beyond ASCII reaches the one IDNA maps it to, which readers map
+                // each their own way - a browser's and curl's fold full-width letters and drop a
+                // soft hyphen, this tool's .NET, reading without a culture, neither - so the host
+                // one of them reaches is not one this can name. Its ASCII form ('xn--') is.
+                if (!System.Text.Ascii.IsValid(uri.Host))
+                {
+                    throw new ArgumentException($"'{address}' spells its host beyond ASCII, which readers of an address map each their own way, so its host is not one this can name: spell it as its xn-- form", nameof(address));
+                }
+
                 // A host may be spelled with its root dot ('pastebin.com.'), which is the same
                 // host: trimmed here, so a rule written without it meets it.
                 return uri.Host.Trim('[', ']').TrimEnd('.');
@@ -986,6 +1106,36 @@ public sealed partial class AgentPolicy
 
         throw new ArgumentException($"'{address}' names no host", nameof(address));
     }
+
+    /// <summary>
+    /// Whether <paramref name="text"/> spells the slashes after its scheme other than as two and a host after them, where a
+    /// reader of addresses finds a host all the same: any scheme followed by a slash or a backslash - <c>http:/\host</c>,
+    /// <c>gopher:/host</c>, <c>http:///host</c>, for curl takes the host past one to three slashes whatever the scheme -
+    /// and one of <see cref="SlashedSchemes"/> followed by none (<c>https:host</c>). A browser's reader, .NET's and curl's
+    /// each skip such slashes their own way, so the host one of them reaches is not the one a reading of the text would
+    /// name.
+    /// </summary>
+    private static bool SlashedApart(string text)
+    {
+        var colon = text.IndexOf(':', StringComparison.Ordinal);
+
+        if (colon <= 0 || !char.IsAsciiLetter(text[0]) || !text[..colon].All(character => char.IsAsciiLetterOrDigit(character) || character is '+' or '.' or '-'))
+        {
+            return false;
+        }
+
+        var rest = text.AsSpan(colon + 1);
+
+        if (rest.Length == 0 || rest[0] is not ('/' or '\\'))
+        {
+            return SlashedSchemes.Contains(text[..colon], StringComparer.OrdinalIgnoreCase);
+        }
+
+        return !(rest.Length > 2 && rest[0] == '/' && rest[1] == '/' && rest[2] is not ('/' or '\\'));
+    }
+
+    /// <summary>The schemes whose host a reader of addresses finds even with no slash after them (<c>https:host</c>).</summary>
+    public static IReadOnlyList<string> SlashedSchemes { get; } = ["http", "https", "ws", "wss", "ftp"];
 
     /// <summary>Whether the path, as asked or as resolved, is a credential slot of this tool or lies in a Claude Code directory: no file tool of an agent reads or writes either.</summary>
     private AgentPolicyAnswer? Unreached(string asked, string resolved)
@@ -1053,17 +1203,13 @@ public sealed partial class AgentPolicy
     /// <summary>
     /// Whether <paramref name="word"/> names a path into a credential slot or a Claude Code
     /// directory, resolved as a tool's path resolves against each place the command may stand in:
-    /// the word itself, the file a redirect names, the value after an <c>=</c> (<c>--file=...</c>,
-    /// an assignment's), and each word a script inside it would name, a home expanded in each.
+    /// the word itself - a redirect's file or text among them - the value after an <c>=</c>
+    /// (<c>--file=...</c>, an assignment's), and each word a script inside it would name, a home
+    /// expanded in each; its braces' words where <paramref name="braces"/> says the shell expands them.
     /// </summary>
-    private AgentPolicyAnswer? Named(string word, IReadOnlyList<string> places)
+    private AgentPolicyAnswer? Named(string word, IReadOnlyList<string> places, bool braces)
     {
         var candidates = new List<string> { word };
-
-        if (CommandAnalysis.IsRedirect(word))
-        {
-            candidates.Add(word.TrimStart("0123456789<>|".ToCharArray()));
-        }
 
         if (word.IndexOf('=', StringComparison.Ordinal) is var equals and >= 0 && equals + 1 < word.Length)
         {
@@ -1076,7 +1222,7 @@ public sealed partial class AgentPolicy
         }
 
         // Each word its braces spell, and the path a file URL names: curl and its kind read a file so.
-        if (word.Contains('{', StringComparison.Ordinal))
+        if (braces && word.Contains('{', StringComparison.Ordinal))
         {
             candidates.AddRange(CommandAnalysis.BraceExpansions(word));
         }
@@ -1086,7 +1232,10 @@ public sealed partial class AgentPolicy
             .Select(candidate => Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && uri.IsFile ? uri.LocalPath : null)
             .OfType<string>()]);
 
-        foreach (var (candidate, place) in candidates.Where(candidate => candidate.Length > 0).Distinct().SelectMany(candidate => places.Distinct().Select(place => (candidate, place))))
+        foreach (var (candidate, place) in candidates
+            .Where(candidate => candidate.Length > 0)
+            .Distinct()
+            .SelectMany(candidate => places.Distinct().Select(place => (candidate, place))))
         {
             IReadOnlyList<string> readings;
 
@@ -1241,7 +1390,12 @@ public sealed partial class AgentPolicy
     /// </summary>
     private string Plain(string path, string directory)
     {
-        var whole = Path.GetFullPath(Undeviced(path), directory);
+        // A name one Windows reads as its device (NUL, COM1.txt) is to another Windows, and to the shells on it, the
+        // file of that name: read as that file - the device reaches nothing to decide, the file may lie anywhere.
+        var prefixless = Undeviced(path);
+        var whole = OnWindows && ReferenceEquals(prefixless, path) && IsDevice(path)
+            ? Path.Join(Path.GetFullPath(Path.GetDirectoryName(path) is { Length: > 0 } parent ? parent : ".", directory), Path.GetFileName(path))
+            : Path.GetFullPath(prefixless, directory);
 
         // Each prefix dropped shortens the path, so the runtime's spelling of it is plain in a few turns.
         for (var undeviced = Undeviced(whole); !ReferenceEquals(undeviced, whole); undeviced = Undeviced(whole))
@@ -1252,8 +1406,24 @@ public sealed partial class AgentPolicy
         return whole;
     }
 
-    /// <summary>A path as it resolves, its links followed, spelled as <see cref="Plain"/> spells it: a link's target may name its place with a device prefix.</summary>
-    private string Resolved(string path) => Plain(_fileSystem.ResolveLinks(path), _ground.WorkingDirectory);
+    /// <summary>
+    /// A path as it resolves, its links followed, spelled as <see cref="Plain"/> spells it: a link's target may name its
+    /// place with a device prefix. A device-named file this Windows resolves to the device is the file in its directory's
+    /// place, that directory's links followed, as <see cref="Plain"/> reads it.
+    /// </summary>
+    private string Resolved(string path)
+    {
+        var resolved = _fileSystem.ResolveLinks(path);
+
+        try
+        {
+            return Plain(resolved, _ground.WorkingDirectory);
+        }
+        catch (NotSupportedException) when (OnWindows && IsDevice(path) && Path.GetDirectoryName(path) is { Length: > 0 } parent)
+        {
+            return Path.Join(Resolved(parent), Path.GetFileName(path));
+        }
+    }
 
     /// <summary>
     /// <paramref name="path"/> without the device prefix at its start, on Windows - <c>\\?\</c>,
@@ -1338,7 +1508,8 @@ public sealed partial class AgentPolicy
 
     /// <summary>Whether <paramref name="exception"/> is one a decision this cannot make throws: the path or the command is one it cannot read, or the file system would not answer.</summary>
     private static bool Undecidable(Exception exception)
-        => exception is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException or System.Security.SecurityException;
+        => exception is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException or System.Security.SecurityException
+            or System.Text.RegularExpressions.RegexMatchTimeoutException;
 
     /// <summary>
     /// The answer where this tool cannot decide: denied, never allowed, for nothing runs while the

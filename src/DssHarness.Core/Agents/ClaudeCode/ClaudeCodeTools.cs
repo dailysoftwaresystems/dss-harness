@@ -26,8 +26,8 @@ public static class ClaudeCodeTools
         (AgentCapability.Web, []),
     ];
 
-    /// <summary>What the run's reporter is given, whose reads are narrowed: the tools that read, and no other.</summary>
-    public static IReadOnlyList<string> Reporter { get; } = Of([AgentCapability.Read], reporter: false);
+    /// <summary>What the run's reporter is given, whose reads are narrowed: the tools of <see cref="Policy.AgentPolicyGround.ReporterCapabilities"/>.</summary>
+    public static IReadOnlyList<string> Reporter { get; } = Of(Policy.AgentPolicyGround.ReporterCapabilities);
 
     /// <summary>
     /// Claude Code's own tool for an answer held to the launch's <c>--json-schema</c>: the way an answer arrives, never a
@@ -43,15 +43,12 @@ public static class ClaudeCodeTools
     public static IReadOnlyList<string> NeverOffered { get; } = ["Agent", "Task", "Skill", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode"];
 
     /// <summary>The tools a launch is given, in the table's order, each once.</summary>
-    /// <param name="capabilities">What the agent may do.</param>
-    /// <param name="reporter">Whether the agent is the run's reporter, whose reads are narrowed and who is given nothing else.</param>
-    public static IReadOnlyList<string> Of(IReadOnlyList<AgentCapability> capabilities, bool reporter)
+    /// <param name="capabilities">What its tools are given by: the agent's own, or the reporter's (<see cref="Policy.AgentPolicyGround.Given"/>).</param>
+    public static IReadOnlyList<string> Of(IReadOnlyList<AgentCapability> capabilities)
     {
         ArgumentNullException.ThrowIfNull(capabilities);
 
-        return reporter
-            ? Reporter
-            : [.. Table.Where(row => capabilities.Contains(row.Capability)).SelectMany(row => row.Tools).Select(tool => tool.Name).Distinct(StringComparer.Ordinal)];
+        return [.. Table.Where(row => capabilities.Contains(row.Capability)).SelectMany(row => row.Tools).Select(tool => tool.Name).Distinct(StringComparer.Ordinal)];
     }
 
     /// <summary>The table's row of <paramref name="tool"/>: its capability and what its input names; null for a tool the table does not name.</summary>

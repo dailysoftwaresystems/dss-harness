@@ -146,6 +146,9 @@ internal sealed class LineSplitter(Action<string> onLine, int? longest = null, F
         var full = _line.ToString(0, most);
         var at = cut?.Invoke(full) is { } chosen && chosen > 0 && chosen <= full.Length ? chosen : full.Length;
 
+        // The piece is the start of a line that goes on, so a first half of a pair at its end is held back with the rest -
+        // where TextCut, which cuts a text it holds whole, would give a text no longer than its cut whole. Never nothing,
+        // though: a piece of one character goes on as it is.
         if (at > 1 && char.IsHighSurrogate(full[at - 1]))
         {
             at--;

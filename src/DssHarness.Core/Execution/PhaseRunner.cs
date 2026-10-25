@@ -131,6 +131,19 @@ public sealed record PhaseRequest
     /// and elsewhere as that property says.
     /// </summary>
     public bool LeftRunning { get; init; }
+
+    /// <summary>
+    /// Whether what the phase starts is contained (<see cref="ProcessRequest.Contained"/>): ended whole with it, at its own
+    /// end as at a stop, what detached itself among it - a command an agent runs. A phase that is not is ended by its
+    /// process tree, as a leg's always is.
+    /// </summary>
+    public bool Contained { get; init; }
+
+    /// <summary>
+    /// Where a <see cref="Contained"/> phase's session is recorded while it runs, so a later run of the tool ends it where
+    /// this process was killed and left it (<see cref="ProcessRequest.SessionRecord"/>); null where it is recorded nowhere.
+    /// </summary>
+    public IContainedSessionRecord? SessionRecord { get; init; }
 }
 
 /// <summary>
@@ -302,6 +315,8 @@ public sealed class PhaseRunner(
             // holding a heavy leg's room. A set-up's up line is left out: what it brings up is shared, and outlives the run
             // on purpose.
             Bound = !request.LeftRunning,
+            Contained = request.Contained,
+            SessionRecord = request.SessionRecord,
         };
 
         var startedUtc = _wallClock.GetUtcNow();
@@ -350,6 +365,7 @@ public sealed class PhaseRunner(
         {
             // In the order the lines came, masked as each came, whichever stream carried each.
             LastLines = reading.LastLines,
+            Uncontained = result.Uncontained,
         };
     }
 
@@ -395,12 +411,15 @@ public sealed class PhaseRunner(
                 : stall.IsCancellationRequested ? PhaseStop.Silence
                 : PhaseStop.WallClock);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
             // The bound fired, and the runner stopped the child and its descendants. The exit code
             // is meaningless, which is what a stopped phase reports; the lines the child wrote
-            // before it went quiet were kept as they arrived.
-            return (new ProcessResult(-1, string.Empty, string.Empty, clock.Elapsed, TimedOut: true), PhaseStop.Silence);
+            // before it went quiet were kept as they arrived, and what a contained child's container
+            // could not reach at the stop is said.
+            return (
+                new ProcessResult(-1, string.Empty, string.Empty, clock.Elapsed, TimedOut: true) { Uncontained = (ex as ProcessStoppedException)?.Uncontained },
+                PhaseStop.Silence);
         }
         finally
         {

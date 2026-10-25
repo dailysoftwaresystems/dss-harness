@@ -228,8 +228,9 @@ public sealed class AgentRule
                 return at == 0 ? AgentRuleMatch.No : AgentRuleMatch.Expanded;
             }
 
+            // A program is named in any case, as the analysis reads one: a file system that folds case runs GIT as git.
             var matched = at == 0
-                ? string.Equals(CommandAnalysis.Name(patternWords[at]), CommandAnalysis.Name(words[at]), comparison)
+                ? string.Equals(CommandAnalysis.Name(patternWords[at]), CommandAnalysis.Name(words[at]), StringComparison.OrdinalIgnoreCase)
                 : string.Equals(patternWords[at], words[at], comparison);
 
             if (!matched)

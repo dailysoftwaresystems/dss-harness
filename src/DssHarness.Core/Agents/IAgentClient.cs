@@ -375,6 +375,9 @@ public sealed record AgentStepRequest(
     /// </summary>
     public IReadOnlyList<string> Withheld { get; init; } = [];
 
+    /// <summary>What the configuration says of the agent's commands: the names a child is given back, and their times.</summary>
+    public AgentCommandSettings Commands { get; init; } = AgentCommandSettings.Default;
+
     /// <summary>The signal the engine raises when the run is pausing; one of the runner's own where the engine gives none.</summary>
     public AgentHandoffSignal? Handoff { get; init; }
 
@@ -444,4 +447,7 @@ public sealed record AgentRun(
 
     /// <summary>The names a child the run starts never inherits: every name the configuration appoints a value of the slot for.</summary>
     public IReadOnlyList<string> Withheld { get; init; } = [];
+
+    /// <summary>What the configuration says of the agent's commands: the names a child is given back, and their times.</summary>
+    public AgentCommandSettings Commands { get; init; } = AgentCommandSettings.Default;
 }

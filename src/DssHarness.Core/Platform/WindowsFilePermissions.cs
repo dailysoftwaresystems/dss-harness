@@ -56,6 +56,14 @@ public sealed class WindowsFilePermissions : IFilePermissions
         // Nothing to set: Windows keeps no such bit with a file, and none is read or compared there either.
     }
 
+    public void CopyMode(string from, string to)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(from);
+        ArgumentException.ThrowIfNullOrWhiteSpace(to);
+
+        // Nothing to copy: a file written in place of another takes its directory's access, as the one it replaces did.
+    }
+
     public bool IsPrivate(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

@@ -54,13 +54,16 @@ Below that seam a few primitives ask the runtime for one fact each, where nothin
 asked - `PhysicalFileSystem`, `ProcessRunner`, `DetachedProcessLauncher`, `Containment` (the
 session, group, signal and job-object calls containment is made of, and the choice between them
 that `ContainExec` places a child through), `UserState`,
-`WslDiskImages`, `CMakeToolchainReader`, `ProcessContext` (the process's current directory) and the
-command that holds a host awake.
+`WslDiskImages`, `CMakeToolchainReader`, `ProcessContext` (the process's current directory),
+`AgentChildEnvironment.Own` (the tool's own environment, which an agent's child would inherit),
+`SystemWebNames` (a host name's addresses) and `HarnessFetch.Connecting` (the sockets the harness's
+own fetch connects through), and the command that holds a host awake.
 
 A file is read through one stream (`IFileSystem.OpenRead`) and written whole by one of two atomic writes, each writing
 a temporary file beside the target and renaming it over the target: `IFileSystem.WriteAtomic`, handed a stream, for
 what is made as it is written - a record, a text - and `WriteAllBytesAtomicAsync` for bytes already in hand, which a
-tree sync, a fold's copy and a mutation write, waiting between its attempts without holding a thread. A whole text or
+tree sync, a fold's copy and a mutation write, waiting between its attempts without holding a thread. A file either
+replaces keeps its mode (`IFilePermissions.CopyMode`: on Unix a script its execute bit, a secret its owner alone). A whole text or
 a whole file's bytes is read and a text written by a convenience over those (`WholeFiles`), so a double that changes
 how a file reads or writes changes it for every caller, whatever form the caller takes it in. A state file
 (`JsonStateFile.Read`, `JsonStateFile.Write`) is parsed straight off that stream and serialized straight onto it,
@@ -69,7 +72,10 @@ size again, in buffers the runtime's shared pool keeps. A file is renamed into p
 (`Win32Files.TryReplace`): one who holds the old file open - every read here shares its deletion - goes on reading it
 while the new one takes its name, where Windows' own rename is refused while the old file is open at all, so a writer
 could not replace a record another sync was streaming. A volume that cannot rename so - FAT, some shares - is renamed
-Windows' own way.
+Windows' own way. Off Windows, a read refuses a pipe, a socket or a device before it opens one (`UnixFiles`, the
+runtime's own stat, where .NET's attributes call each a plain file): a pipe's open waits for a writer, past any stop.
+A walk that must not stop at what it cannot read (`EnumerateReachableFiles`) goes a directory at a time, passing by
+and naming one beneath it that cannot be read.
 
 A platform-specific implementation is created only where behaviour genuinely
 differs. Today that is three families of behaviour.
@@ -1502,37 +1508,81 @@ branches read as commands of their own, each substitution's commands before the 
 in, whose word keeps the substitution's text, so the word is the expansion it is; a `for`'s or a
 `select`'s head kept as a command its reserved word leads, so the paths it hands its body are read,
 and a `case`'s patterns never; inside `[[ ]]` its parentheses and operators words of the test; a
-redirect kept apart from the words, after them, its operator normalized and before the file it
-names, wherever it stood; reserved words read only where a command begins, unquoted; a continued
-line joined and `$'...'` decoded. The `NAME=value` words before a program are kept as its
-environment and carried to what it runs, and a value that is a program git or another tool runs
-(`CommandAnalysis.ProgramValued`: `GIT_SSH_COMMAND`, `GIT_PAGER`, `EDITOR` and their kind) is read as
-that program's command line, an `export`'s or a declaration's too, and so is the value of git's own
+redirect kept apart from the words as its own (`AnalyzedCommand`, `ShellRedirect`: its operator
+normalized and the file it names), wherever it stood, so a quoted word spelled as one is a word, a
+program's rules meet the words it is handed and a redirect is decided by its file; reserved words read only where a command begins, unquoted; a continued
+line joined and `$'...'` decoded. The `NAME=value` (and `NAME+=value`, `CommandAnalysis.AssignedName`)
+words before a program are kept as its environment and carried to what it runs, and a value that is a
+program git or another tool runs (`CommandAnalysis.ProgramValued`: `GIT_SSH_COMMAND`, `GIT_PAGER`,
+`GIT_PROXY_COMMAND`, `EDITOR` and their kind) is read as that program's command line, what a command
+declares too (`CommandAnalysis.Declarations`, the one owner of it: an `export` or a declaration, cmd's
+`set`, fish's `set`, csh's `setenv`, `setx`, PowerShell's `Set-Item` and its kind of an `env:` item), and so is the value of git's own
 setting of a key git runs as a command line (`CommandAnalysis.RunsProgram`: its pager, editors, ssh,
 drivers, filters, helpers, an alias) - a `-c`, a `--config-env`'s variable (refused where the
 command does not set it), `GIT_CONFIG_VALUE_n`, `GIT_CONFIG_PARAMETERS` - an alias's `!` taken off,
 any other alias the git command it names; wrappers (`env`, `nohup`, `time`,
-`timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`, `eval`, `busybox`, `Invoke-Expression`)
+`timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`, `eval`, `busybox`)
 are stripped with their own options, at most 32 deep, what `xargs` reads standing among the words
 it runs as an expansion; and it goes into `sh -c` and every other shell's (the words after its
-script read as scripts too), a here-string or here-document a shell reads, `cmd /c` and
+script read as scripts too; fish's options read as fish reads them, `CommandAnalysis.FishScripts`,
+its `-C` scripts among what it runs), the here-string, here-document or file a shell reads as the last input
+its descriptor 0 is given (`ShellRedirect.Descriptor`; `/dev/stdin` and PowerShell's `-` among its
+names), `cmd /c` and
 `powershell -Command` and a decoded `-EncodedCommand` - by any prefix PowerShell takes, behind its
 valued options - and the command lines `trap`, `watch`, `script` and `flock` run, each by its own
-shell's quoting, to four levels, and into a shell another program runs with its script among its
-words. What it cannot read whole it refuses, and the policy denies as `undecided`: a script nested
+shell's quoting - PowerShell by a reader of its own (`CommandAnalysis.PowerShellReader`), which
+follows pwsh's tokenizer and grammar and writes each statement on a line and each word whole and
+quoted for the shell reader, so the shell reads no syntax of its own into it: a command's words as
+PowerShell hands them (a quoted string that begins a word ends it, a comma joins what follows it
+unspaced, its blanks, typographic quotes, dashes, escapes and comments its own, a here-string's
+footer where its line begins), a variable an expansion, `$(...)`, `@(...)`, `(...)`, a script
+block and a hashtable a substitution whose statements are read, an expression's strings kept as
+data, an assignment's right side a statement (`$env:NAME = value` the assignment it is), keywords'
+conditions and blocks read, `%` and `?` the cmdlets they are, and `Invoke-Expression`'s one string
+read as a script of its own (`CommandAnalysis.PowerShellReader.InvokeExpression`, to four levels as a
+script gone into is); a static method, an instance method off `CommandAnalysis.PowerShellMethods`, a member a string,
+a variable or an expression names, a null-conditional one alike, a function's or an alias's text
+(a foreach's variable and every target of an assignment among them), a class or `using`, its
+stop-parsing `--%`, a script `Invoke-Expression` is handed by no one string and what PowerShell
+refuses to read are undecided, as is a command line a program composes (`CommandAnalysis.ComposesCommandLine`:
+`Start-Process`'s arguments, WMI's, the task scheduler's, code `Add-Type` compiles, a method
+`ForEach-Object` calls by name) - to four levels, and into a shell another program runs with its script among its
+words, find's `-exec` and its kind to their `;` (or the `+` after a `{}`), reading find's input;
+`env -S`'s string is split by env's own rules (`CommandAnalysis.SplitWords`), never the shell's; a
+command `find -exec`, `fd -x`, `rg --pre` or `--hostname-bin` or `parallel` runs is a command of its own
+(`CommandAnalysis.Executed`), each word it fills in `CommandAnalysis.InputWord` and fd's, rg's and
+parallel's added one too; `$((...))`, `((...))` and `$[...]` are read as arithmetic, their close found
+as bash finds it, their text read as a double quote's and their substitutions read as commands, so a
+`<<` there shifts and opens no here-document; a single quote inside a double quote's or a
+here-document's `${...}` is a character; a shell's options are read as it reads them before its
+script - an `o` in a short cluster taking the next word (`-eo pipefail`), a help or a version
+running nothing only where it stands before what would run; a redirect's descriptor is read as bash
+reads it (`{name}>`, `<&3-`, digits past an int a word); env's own words are read once
+(`CommandAnalysis.EnvWords`) for both its command and its `-S`; parallel's command is read as the
+script it runs through the shell; a script another program fills in (`find -exec sh -c 'echo {}'`)
+is undecided; and a here-document's or here-string's text is read for root actions and paths with
+no brace expansion, which the shell never makes in it, a name one Windows reads as its device
+(`NUL`, `COM1.txt`) the file of that name another Windows and its shells make, and a bracket the shell
+would not read as one its characters; arithmetic that does not close is read once at each place.
+What it cannot read whole it refuses, and the policy denies as `undecided`: a script nested
 past four levels, parentheses past 32, a shell that reads its script from its input or from a file
-an expansion names (`bash <(curl ...)`), an `xargs` handing a shell its script, a program named by a
+an expansion or another open descriptor names (`bash <(curl ...)`, `/dev/fd/3`, `<&3`), an `env -S`
+string holding a backslash or a comment a line end follows, an alias it gives, an `xargs` handing a shell its script, a program named by a
 variable, a substitution, a pattern or a brace, a brace that spells more than 64 words, a word where
-none can stand, and an option of git's or gh's own before its command that this does not know.
-Every word of a command is tried as the program of the words after it, a program matched by its
-name (`CommandAnalysis.Name`, `.exe`, `.cmd` and `.dll` among the ends folded away), so a command
-another program runs meets the rules on its own program; a rule matches through
+none can stand, and an option of git's, gh's, fish's or Windows PowerShell's own before its command that this does
+not know (`CommandAnalysis.WindowsPowerShellValued` and `WindowsPowerShellSwitches` the parameters it knows, its command
+read once, from its first word that is neither).
+Every word of a command is tried as the program of the words after it - but a word of a program
+that runs none of its words (`CommandAnalysis.DataPrograms`: grep, rg, echo, cat, which and their
+kind), and a git or gh tried so reads an option it does not know as one word - a program matched by
+its name in any case (`CommandAnalysis.Name`, `.exe`, `.cmd` and `.dll` among the ends folded away,
+a cmd line's `@` dropped, `git-push` read as `git push`), so a command another program runs meets the rules on its own program; a rule matches through
 `AgentRule.Match`, whose `Expanded` - a word the rule reads is one the shell expands - the policy
 denies as what the rule may be; git's own options, valued ones with their values, are dropped
 before its subcommand, gh's flags before its command's path (`gh pr -R o/r merge` is
 `gh pr merge`), and a git configured where it runs - a `-c` or `--config-env` of any key but the
 ones that only shape what git prints, `--exec-path`, the `GIT_CONFIG` names, `GIT_EXEC_PATH` and
-`GIT_TEMPLATE_DIR` of its environment - is the `git config` it is, and still the command it runs,
+`GIT_TEMPLATE_DIR` its assignments set, never a word of data that spells one - is the `git config` it is, and still the command it runs,
 each reading met by the rules. A word that names a path is read
 as each candidate it may be - the word, a redirect's file, an option's value, the words a script in
 it names, each word its braces spell and the path a `file://` address names - and a pattern the
@@ -1569,11 +1619,12 @@ every call and answers from the same policy in its own
 process. Where the policy cannot decide a call it denies it, never
 allows - nothing runs while the host that would answer is silent or gone. The first client that
 asks it is `Agents\ClaudeCode\ClaudeCodeClient`, the `IAgentClient` of `claude-code`: each
-launch a new session (`ClaudeLaunch` builds its one argument list and its environment - nothing of
-a Claude Code session the tool was started in, the names `ClaudeSettings.Controlled` sets -
+launch a new session (`ClaudeLaunch` builds its one argument list and its environment - what
+every child of an agent has (`AgentChildEnvironment`), nothing of a Claude Code session the tool
+was started in, the names `ClaudeSettings.Launched` sets -
 `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` among them, so every shell command starts in the
 launch's directory, where the policy reads its relative paths, never where an earlier command's
-`cd` left it - and the one credential an `AgentCredential` gives), streamed both ways and read line by line as
+`cd` left it, and Claude Code's own bounds of a shell command from the command times - and the one credential an `AgentCredential` gives), streamed both ways and read line by line as
 `ClaudeLine`s (every kind the probe's recordings hold), each `can_use_tool` it asks decided by
 `ClaudeToolDecider` through the policy, the tools it is given - and what a call of each is of - from
 the one table `ClaudeCodeTools` holds; an answer held to a schema checked by `StructuredOutputGate`
@@ -1592,7 +1643,25 @@ digest named in the launch's start, the hooks off), the `initialize` answer boun
 before any work and its tools and credential source (`ClaudeLaunch.ApiKeySources`) held to the launch's, and every call
 that ran (`ClaudeLine.CallResult.Ran`) one the engine was asked about and allowed; a decline is
 `Refused` and an account at its limit (`ClaudeLine.RateLimit`, or the turn's error) `RateLimited`
-with an `AgentAccountLimit`. The API clients are the next thing the tool grows. This build checks workflow definitions and
+with an `AgentAccountLimit`. Each client's denials, requests of the web and answers too large for
+their events are recorded by the one `AgentCallRecords` (`denials.jsonl`, `web.jsonl`,
+`tool-results/`). The harness's own tools, `Agents\Runtime\AgentToolRuntime`, are built for the
+API clients - which are what comes next; nothing opens a runtime yet - each run's opened by
+`AgentToolHost`: the tools are the one
+table `AgentTools` holds (what a step is offered, what help prints and what runs); each call is
+held to its tool's schema (`JsonSchemaSubset`), each path to the agent's roots by `ConfinedPaths` -
+its spelling, its links followed, a write through no link below its root - before the policy is
+asked; reads and searches go through `AgentFiles` (git's listing in a work tree, a walk elsewhere),
+edits through `EditedText` over `EncodedText` (the encoding rule the graph's `CodeFileText` reads
+by too, its lines cut by `CodeFileText.Spans`), a command through `PhaseRunner` as a contained
+phase - its environment `AgentChildEnvironment`'s, every name the configuration appoints and every
+secret-shaped one gone but those `agentPolicy.keepEnvironment` gives back, its time
+`agentPolicy.commandTimeoutSeconds` unless its call names one, `agentPolicy.maxCommandTimeoutSeconds`
+at most (`AgentCommandSettings`) - and a page through `Web\HarnessFetch`,
+which decides every address before it is asked, connects only to the public addresses
+`WebAddresses` allows - checked on the lookup and again on the connection made - and reduces HTML
+to text by `WebPageText` over AngleSharp. A turn runs its reads together, at most 4 at once, a
+write or a run alone between them. This build checks workflow definitions and
 starts and drives a run of one (see "Running a workflow" below). Each step is given to the runner of its type
 (`FlowStepRunners`, over every `IFlowStepTypeRunner` the root registers - `FlowStepRunners.Served` lists them, and a test
 holds the two to each other); a step of a type none serves yet fails, saying no runner serves its type. Those served

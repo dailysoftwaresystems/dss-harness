@@ -247,10 +247,7 @@ public sealed class AnchorCitationService(
             {
                 // Tracked files and untracked ones git does not ignore: what a person editing the
                 // tree would call "the files", which is what --current-tree is asked about.
-                var listed = await _gitClient.ListNamesAsync(
-                    root,
-                    ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-                    cancellationToken).ConfigureAwait(false);
+                var listed = await _gitClient.ListTreeFilesAsync(root, cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 return new AnchorCitationSelection(listed, "the working tree", null);
             }

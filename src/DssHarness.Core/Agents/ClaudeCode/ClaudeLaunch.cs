@@ -35,12 +35,6 @@ public static class ClaudeLaunch
     /// <summary>What the launch wrote on its standard error, masked.</summary>
     public const string ErrorFileName = "claude-stderr.log";
 
-    /// <summary>Each call the engine refused, one line each.</summary>
-    public const string DenialsFileName = "denials.jsonl";
-
-    /// <summary>The folder, in the step's directory, a call's result too large for its event is kept in whole.</summary>
-    public const string ToolResultsDirectoryName = "tool-results";
-
     /// <summary>The name a Claude Code session sets in the environment of everything it starts.</summary>
     public const string SessionVariable = "CLAUDECODE";
 
@@ -160,10 +154,11 @@ public static class ClaudeLaunch
     }
 
     /// <summary>
-    /// The environment one launch is given, as overrides of the tool's own (null removes a name): nothing of a Claude Code
-    /// session the engine was started in, no name that says who the launch is but what its way of signing in gives, no
-    /// name the configuration appoints a value for, the names the engine controls, and the Claude Code directory whose
-    /// login and settings it reads.
+    /// The environment one launch is given, as overrides of the tool's own (null removes a name): what every child of an
+    /// agent loses (<see cref="AgentChildEnvironment"/> - every name the configuration appoints a value for, and every
+    /// secret-shaped name not given back), nothing of a Claude Code session the engine was started in, no name that says
+    /// who the launch is but what its way of signing in gives, the names the engine controls, and the Claude Code directory
+    /// whose login and settings it reads.
     /// </summary>
     /// <param name="run">The run.</param>
     /// <param name="key">The value it signs in with, where its way of signing in takes one; null for the machine's login.</param>
@@ -173,23 +168,25 @@ public static class ClaudeLaunch
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(own);
 
-        var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+        // What every child of an agent loses, its own names set after it: the key its way of signing in gives among them.
+        var known = own.ToList();
+        var environment = AgentChildEnvironment.Of(known, run.Withheld, run.Commands.KeepEnvironment);
 
         // A host session's own names would outrank the launch's settings, the probe found: none of them is inherited. Told
         // in any case, as every environment this tool hands a child names its variables and as the runner takes a name
         // away in every spelling: on Windows a name in another case is the same variable to the program that reads it.
-        foreach (var name in own.Where(name => string.Equals(name, SessionVariable, StringComparison.OrdinalIgnoreCase)
+        foreach (var name in known.Where(name => string.Equals(name, SessionVariable, StringComparison.OrdinalIgnoreCase)
             || (name.StartsWith(SessionPrefix, StringComparison.OrdinalIgnoreCase) && !KeptNames.Contains(name, StringComparer.OrdinalIgnoreCase))))
         {
             environment[name] = null;
         }
 
-        foreach (var name in IdentityNames.Concat(run.Withheld))
+        foreach (var name in IdentityNames)
         {
             environment[name] = null;
         }
 
-        foreach (var (name, value) in ClaudeSettings.Controlled)
+        foreach (var (name, value) in ClaudeSettings.Launched(run.Commands))
         {
             environment[name] = value;
         }

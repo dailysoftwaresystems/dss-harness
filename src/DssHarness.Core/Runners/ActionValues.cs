@@ -188,8 +188,7 @@ public sealed class ActionValues : ILineMask
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
-        return _secrets.Count > 0
-            && arguments.Any(argument => !string.Equals(Redact(argument), argument, StringComparison.Ordinal));
+        return _secrets.Count > 0 && arguments.Any(argument => this.Holds(argument));
     }
 
     /// <summary>

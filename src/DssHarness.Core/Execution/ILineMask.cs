@@ -23,3 +23,21 @@ public interface ILineMask
     /// <param name="text">The start of the line.</param>
     int Cut(string text);
 }
+
+/// <summary>What a mask says of a text beside masking it.</summary>
+public static class LineMasks
+{
+    /// <summary>
+    /// Whether <paramref name="text"/> holds a secret <paramref name="mask"/> masks: whether masking it would change it.
+    /// The one test of it, which an argument list about to be started and what an agent's tool would send are held to.
+    /// </summary>
+    /// <param name="mask">The mask.</param>
+    /// <param name="text">The text.</param>
+    public static bool Holds(this ILineMask mask, string text)
+    {
+        ArgumentNullException.ThrowIfNull(mask);
+        ArgumentNullException.ThrowIfNull(text);
+
+        return !string.Equals(mask.Redact(text), text, StringComparison.Ordinal);
+    }
+}

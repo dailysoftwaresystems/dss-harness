@@ -134,6 +134,15 @@ public sealed record AgentPolicyGround(
     /// <summary>Every capability, in the order a definition names them.</summary>
     public static IReadOnlyList<AgentCapability> EveryCapability { get; } = [AgentCapability.Read, AgentCapability.Write, AgentCapability.Run, AgentCapability.Web];
 
+    /// <summary>The capabilities the run's reporter acts by, whose reads are narrowed to its one root: reading, and no other.</summary>
+    public static IReadOnlyList<AgentCapability> ReporterCapabilities { get; } = [AgentCapability.Read];
+
+    /// <summary>
+    /// The capabilities the agent's tools are given by, on every client: its own, or <see cref="ReporterCapabilities"/>
+    /// where it is the run's reporter. The one rule of what the reporter is given.
+    /// </summary>
+    public IReadOnlyList<AgentCapability> Given => ReporterRoot is null ? Capabilities : ReporterCapabilities;
+
     /// <summary>Whether the agent has the web at all: the capability <c>web</c> among its <see cref="Capabilities"/>.</summary>
     public bool Web => Capabilities.Contains(AgentCapability.Web);
 

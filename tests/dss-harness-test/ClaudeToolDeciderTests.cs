@@ -15,7 +15,7 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class ClaudeToolDeciderTests : IDisposable
 {
-    private static readonly IReadOnlyList<string> All = ClaudeCodeTools.Of(AgentPolicyGround.EveryCapability, reporter: false);
+    private static readonly IReadOnlyList<string> All = ClaudeCodeTools.Of(AgentPolicyGround.EveryCapability);
 
     private readonly TempDirectory _temp = new();
 
@@ -188,9 +188,9 @@ public sealed class ClaudeToolDeciderTests : IDisposable
         Assert.Empty(ClaudeCodeTools.Table.Single(row => row.Capability == AgentCapability.Web).Tools);
 
         Assert.Equal(["Read", "Grep", "Glob", "Write", "Edit", "NotebookEdit", "Bash"], All);
-        Assert.Equal(["Read", "Grep", "Glob", "Bash"], ClaudeCodeTools.Of([AgentCapability.Run, AgentCapability.Read], reporter: false));
-        Assert.Empty(ClaudeCodeTools.Of([AgentCapability.Web], reporter: false));
-        Assert.Equal(["Read", "Grep", "Glob"], ClaudeCodeTools.Of(AgentPolicyGround.EveryCapability, reporter: true));
+        Assert.Equal(["Read", "Grep", "Glob", "Bash"], ClaudeCodeTools.Of([AgentCapability.Run, AgentCapability.Read]));
+        Assert.Empty(ClaudeCodeTools.Of([AgentCapability.Web]));
+        Assert.Equal(["Read", "Grep", "Glob"], ClaudeCodeTools.Reporter);
         Assert.Equal(ClaudeCodeTools.Reporter, ClaudeCodeTools.Table.Single(row => row.Capability == AgentCapability.Read).Tools.Select(tool => tool.Name));
     }
 

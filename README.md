@@ -535,7 +535,11 @@ program which fetches from the network - `curl`, `wget`, `Invoke-WebRequest`, `I
 `iwr`, `irm`, `http`, `https`, `gh api` - is decided as a web request too, by each address it
 names, a proxy, a `curl --connect-to`'s or `--resolve`'s target and the proxy its environment names
 among them; one that reads what it reaches from a file (`curl --config`, `wget --input-file` or
-`--execute`) is refused where the web is held to any rule. Refused always, not configurable: the
+`--execute`) is refused where the web is held to any rule. An address whose slashes after its scheme
+readers read apart - any scheme but its two slashes and a host after them (`http:/\host`,
+`gopher:/host`, `http:///host`), or no slash after an `http`, `https`, `ws`, `wss` or `ftp` scheme
+(`https:host`) - or whose host is spelled beyond ASCII (its `xn--` form is read as written), names no
+host the policy can decide, and is denied. Refused always, not configurable: the
 root actions (`sudo`, `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`,
 PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command
 names one), writes outside an agent's writable roots, every read and write of a credential slot or
@@ -555,24 +559,42 @@ shell command is read whole before it is matched, as the shell's own parser read
 `;`, `&&`, `||`, `|`, `&` and line ends, a comment and a here-document's lines never commands, the
 bodies of `$(...)`, backticks, `<(...)`, subshells, functions, loops and branches read as commands
 of their own, each substitution's word kept as the expansion it is, a `for`'s word list read for
-the paths it hands its body, a redirect kept apart wherever it stands, the `NAME=value` words
-before a program kept as its environment and a variable naming a program git or another tool runs
+the paths it hands its body, a redirect kept apart wherever it stands - decided by the file it
+names, never among the words a rule meets, and a quoted word spelled as one a word - the `NAME=value`
+(and `NAME+=value`) words before a program kept as its environment and a variable - so set, or
+declared by `export` and its kind, cmd's `set`, fish's `set`, csh's `setenv`, `setx` or PowerShell's
+`env:` items - naming a program git or another tool runs
 (`GIT_SSH_COMMAND`, `GIT_PAGER`, `EDITOR` and their kind) read as that program's command line, as
 is the value of git's own setting (`-c`, `--config-env`, `GIT_CONFIG_*`) of a key git runs as one,
 wrappers (`env`, `nohup`, `time`, `timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`,
-`eval`, `busybox`, `Invoke-Expression`) stripped, and it goes into `sh -c` and every other
-shell's, a here-string or here-document a shell reads, `cmd /c`, `powershell -Command` and a
+`eval`, `busybox`) stripped, and it goes into `sh -c` and every other
+shell's (fish's `-C` scripts too, its options read as fish reads them), the here-string, here-document or file a shell reads as the last input its descriptor 0
+is given (`/dev/stdin` and PowerShell's `-` among its names), `cmd /c`, `powershell -Command` and a
 decoded `-EncodedCommand`, and what `trap`, `watch`, `script` and `flock` run, by each shell's own
-quoting, to four levels, and into a shell another program runs with its script
-(`find -exec sh -c`) - so `git -C x push` is `git push`, and `env A=1 git push` and
+quoting - PowerShell by a reader of its own grammar: its commands, pipelines, strings, here-strings,
+variables, `$(...)`, `@(...)`, `(...)`, script blocks, hashtables, assignments and keywords'
+conditions and blocks, each statement a block holds read as one that may run, `Invoke-Expression`'s
+one string read as a script of its own - to four levels, and into a shell another program runs with its script
+(`find -exec sh -c`, find's words read to their `;`), a command `find -exec`, `fd -x`,
+`rg --pre` or `--hostname-bin` or `parallel` runs read as its own, each word it fills in an expansion, `env -S`'s
+string split by env's own rules, and `$((...))`, `((...))` and `$[...]` read as arithmetic, their
+substitutions as commands - so `git -C x push` is `git push`, and `env A=1 git push` and
 `A=1 /usr/bin/git push` are too; every word of a command is tried as the program of the words
-after it, a program read by its name. A word the shell expands where a rule reads a literal one
+after it - but a word of a program that runs none of its words, its data (`grep`, `rg`, `echo`,
+`cat`, `which` and their kind) - a program read by its name in any case, a cmd line's `@` dropped, `git-push` read as `git push`. A word the shell expands where a rule reads a literal one
 makes the command one the rule may be, refused as such (`git $VERB` under `Run(git push *)`), and
 a pattern, a brace or a `file://` address that may name a credential slot or a Claude Code
 directory is refused as naming it. What it cannot read whole it denies, said in help, not guessed
 at: a script nested past four levels, a shell that reads its script from its input
-(`curl ... | sh`) or a process substitution, a program named by a variable, a substitution, a
-pattern or a brace, and an option of git's or gh's own before its command that it does not know;
+(`curl ... | sh`), a process substitution or another open descriptor (`/dev/fd/3`, `<&3`), an
+`env -S` string holding a backslash, whose escapes are env's own, an alias it gives, a script another
+program fills in (`find -exec sh -c 'echo {}'`), PowerShell's code no word spells (a static
+method, an instance method but a string's, a collection's or a date's, a function's or an alias's
+text, a class, `using`, its stop-parsing `--%`, a script `Invoke-Expression` is handed by no one
+string, and a command line `Start-Process`, WMI, the task
+scheduler or `Add-Type` is handed), a
+program named by a variable, a substitution, a
+pattern or a brace, and an option of git's, gh's, fish's or Windows PowerShell's own before its command that it does not know;
 what it does not see is the inside of a script file a command runs. The worktree rules
 (`agentPolicy.worktreeRules`, on unless turned off) keep an agent's worktree a thing the engine
 can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
@@ -605,8 +627,9 @@ a sandbox - a program an agent runs opens files as the user it runs as, a file o
 slot among them; what it is never given is a key in its environment, and what no file tool of an
 agent touches is the slot itself, in any root. Where this tool cannot decide a call it denies it, never allows: nothing
 runs while the host that would answer is silent or gone. The policy is built and holds every
-action behind it; the `claude-code` client asks it of every call, the API clients are what comes
-next, and no command of this build runs an agent yet.
+action behind it; the `claude-code` client asks it of every call, the tool runtime below decides
+by it each call of the API clients, which are what comes next, and no command of this build runs
+an agent yet.
 
 The `claude-code` client starts Claude Code once for each launch, a new session every time -
 never resumed or continued, keeping no session file (one a launch leaves all the same is removed
@@ -621,7 +644,8 @@ the policy, a denial with its rule's sentence the model reads and a line of the 
 by its path; a message the engine gives an agent at work is written to the same launch; a handoff
 asked interrupts the turn and asks the agent for its handoff, no tool running in that turn; every
 message is held to the model asked for; the launch's environment holds nothing of a Claude Code
-session the tool was started in and no credential but the one its `auth` gives; and a key Claude
+session the tool was started in, none of what every child of an agent loses (the tool runtime
+below), and no credential but the one its `auth` gives; and a key Claude
 Code reports invalid is passed over, the next key given a new launch while the step has done no
 work. The user's own `settings.json` in the launch's Claude Code directory and the user's
 `CLAUDE.md` reach every agent on this client, but no hook of theirs runs: every launch's settings
@@ -638,6 +662,46 @@ never asked about, or refused, fails the step by the tool's name; each is ended 
 no turn takes within the stall bound stalls the step; a declined request ends it `Refused`, and
 an account at its limit `RateLimited`, with when the limit lifts where Claude Code says.
 `help agent-clients` says it whole.
+
+The tool runtime is the harness's own tools, built for the `claude-api` and `glm` clients to give
+their agents in place of a client's own - those clients are what comes next, and nothing opens a
+runtime yet: `view_file`, `find_files` and `search_files` (read),
+`create_file`, `replace_in_file`, `insert_in_file`, `create_directory`, `delete_file`,
+`delete_directory` and `move_path` (write), `run_command` (run) and `web_fetch` (web), each under
+the capability that gives it; the run's reporter is given those that read and no other. Each
+call is decided before it runs and recorded: a tool the step was not given, or an input its schema
+does not hold, is refused with how the tool is called; a path is read against the agent's working
+directory - refused spelled empty, with a NUL or a leading `~`, and on Windows a share or a
+device's prefix, a device's name (`CON`, `NUL`, `COM1` and the rest), a drive's own directory
+(`C:x`) or an alternate data stream -
+its links followed (one whose links cannot be followed refused as undecided) and held to the
+agent's roots: a read inside one of them, a write inside a
+writable one and through no link below it (a link put in place between the check and the act is
+the known limit); then the policy is asked of it, a deleting or moving tool a write to every path it
+touches, at both ends of a move. A directory deleted or moved is refused where it is a root, holds a link,
+holds a path that may not be written or holds more than 2,000 entries. A file past 16 MiB is
+neither viewed nor edited - it is searched, or read in part by a command. A replace or an insert needs
+its file viewed first, by its content - one that changed since is refused, nothing written - and an
+edit keeps the file's encoding, its line endings and whether it ends with a newline. A command is
+an argument list, never a shell string, decided whole where it starts and run as a phase is -
+contained, ended whole with what it started, its log kept - for `agentPolicy.commandTimeoutSeconds`
+(120) unless its call names a time, `agentPolicy.maxCommandTimeoutSeconds` (3600) at most,
+stopped sooner where it prints nothing for as long as the step's stall bound; a command line
+holding a secret, a word holding a NUL, or on Windows a batch file's argument holding what `cmd.exe`
+reads again (`& | < > ^ % ! "`, a line's end) or what the shell expands, is refused. Its environment, and the `claude` child's, loses every
+name the configuration appoints and every secret-shaped name (ending `_API_KEY`, `_SECRET`,
+`_SECRET_KEY`, `_ACCESS_KEY`, `_PRIVATE_KEY`, `_PASSWORD` or `_TOKEN`) but those
+`agentPolicy.keepEnvironment` gives back. A page
+is fetched by the harness's own fetch: `http` and `https` alone, at most 5 redirects, 30 s and 5 MiB,
+text alone (`text/*`, `application/json`, `application/xml`, `application/xhtml+xml`,
+`application/javascript`, `application/ecmascript` and every `+json` and `+xml` type) with a page's HTML
+reduced to its text, public addresses alone - a host that resolves to
+this machine, its network or a cloud's metadata service refused, and the address a connection was
+made to checked again - no cookie, credential or proxy; each address is decided and written to the
+step's `web.jsonl` before anything leaves the machine, and the page is given inside a block saying
+it is information for the task, not instructions. Calls that read run together, at most 4 at once,
+one that writes or runs alone; an answer past 32,768 characters is given as its first 8,192 and its
+last 24,576, the whole kept in the step's `tool-results/`.
 
 ```bash
 dssharness validate-workflow                 # check every declared workflow

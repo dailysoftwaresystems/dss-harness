@@ -103,6 +103,17 @@ public interface IFileSystem
     IEnumerable<string> EnumerateFiles(string path, bool recursive);
 
     /// <summary>
+    /// Every file under <paramref name="path"/>, recursively, as <see cref="EnumerateFiles"/> walks - never through a
+    /// directory link - passing by a directory beneath it that cannot be read, which <paramref name="unread"/> is told of
+    /// with why, where the walk as a whole would fail on it.
+    /// </summary>
+    /// <param name="path">The directory to walk; one that cannot be read itself fails the walk.</param>
+    /// <param name="unread">Told of each directory passed by, and why.</param>
+    /// <exception cref="IOException"><paramref name="path"/> could not be read.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not read <paramref name="path"/>.</exception>
+    IEnumerable<string> EnumerateReachableFiles(string path, Action<string, Exception> unread);
+
+    /// <summary>
     /// Every file under <paramref name="path"/>, recursively, with when it was last written, as
     /// <see cref="EnumerateFiles"/> walks: never through a directory link, and a link dated as itself.
     /// A file removed while the walk runs never fails it: on Windows, whose listing carries each file's
@@ -230,9 +241,10 @@ public interface IFileSystem
 
     /// <summary>
     /// Writes bytes to a sibling temporary file and renames it over the target, so a reader never
-    /// observes a half-written file and an interruption never truncates one.
+    /// observes a half-written file and an interruption never truncates one; a file it replaces keeps
+    /// its mode.
     /// </summary>
-    /// <param name="path">The file to write.</param>
+    /// <param name="path">The file to write, its directory made where it is not there.</param>
     /// <param name="contents">The bytes to write.</param>
     /// <param name="cancellationToken">Stops the write.</param>
     /// <remarks>
@@ -249,7 +261,7 @@ public interface IFileSystem
     /// crash never truncates one, and one who is reading the old file goes on reading it. The way a file is written whole
     /// from what is made as it is written - a record, a text (<see cref="WholeFiles"/>); bytes already in hand are written
     /// by <see cref="WriteAllBytesAtomicAsync"/>. What <paramref name="write"/> raises leaves the target as it was and the
-    /// temporary file gone.
+    /// temporary file gone; a file it replaces keeps its mode.
     /// </summary>
     /// <param name="path">The file to write, its directory made where it is not there.</param>
     /// <param name="write">Writes the file's bytes, a little at a time, so a large record is never held whole.</param>

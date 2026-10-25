@@ -554,7 +554,7 @@ public static partial class HostProbes
             .Select(line => line.Trim())
             .Where(line => line.Length > 0));
 
-        return joined.Length <= ExcerptLength ? joined : "..." + joined[^ExcerptLength..];
+        return joined.Length <= ExcerptLength ? joined : "..." + Output.TextCut.Tail(joined, ExcerptLength);
     }
 
     /// <summary>One run of the characters a host name or an address is spelt from, which nothing else adjoins.</summary>

@@ -106,11 +106,12 @@ public sealed class ClaudeCodeUpdateService(
     private readonly ClaudeCodeInstall _install = install ?? new ClaudeCodeInstall(fileSystem, processRunner);
     private readonly ProgramUpdate _updates = new(processRunner, platform);
 
-    /// <summary>What a program a person names is refused with, when it is not one this tool can start.</summary>
-    private static readonly string[] BatchExtensions = [".cmd", ".bat", ".ps1"];
-
+    /// <summary>
+    /// Whether a program a person names is one this tool does not start as Claude Code: a batch file (<see cref="BatchFiles"/>),
+    /// whose arguments cmd.exe reads again, or a PowerShell script, which only PowerShell starts.
+    /// </summary>
     private static bool IsBatch(string program)
-        => BatchExtensions.Contains(Path.GetExtension(program), StringComparer.OrdinalIgnoreCase);
+        => BatchFiles.Is(program) || Path.GetExtension(program.TrimEnd('.', ' ')).Equals(".ps1", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Makes the Claude Code a run needs ready, or the refusal that says why it cannot be: a program a person named

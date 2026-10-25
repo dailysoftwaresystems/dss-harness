@@ -58,6 +58,26 @@ public sealed class GlobPatternTests
     }
 
     /// <summary>
+    /// A pattern of many <c>**</c> is matched in time however many ways it could split a path among them - each place in
+    /// the pattern against each in the path decided once - and a run of <c>**</c> is one, a trailing run one or more still.
+    /// </summary>
+    [Fact]
+    public void APatternOfManyDoubleStars_IsMatchedInTime()
+    {
+        var spread = GlobPattern.Parse(string.Concat(Enumerable.Repeat("**/a/", 15)) + "zzz");
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        Assert.False(spread.Matches(string.Join('/', Enumerable.Repeat("a", 30))));
+        Assert.True(spread.Matches(string.Join('/', Enumerable.Repeat("a", 30)) + "/zzz"));
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"took {clock.Elapsed}");
+
+        Assert.Equal("a/**/b", GlobPattern.Parse("a/**/**/**/b").ToString());
+        Assert.Equal("a/**", GlobPattern.Parse("a/**/**").ToString());
+        Assert.False(GlobPattern.Parse("a/**/**").Matches("a"));
+        Assert.True(GlobPattern.Parse("a/**/**").Matches("a/b"));
+    }
+
+    /// <summary>
     /// A <c>*</c> matches any run of characters within one segment and never across a separator:
     /// the one difference from a shell glob that a rule's meaning turns on.
     /// </summary>
@@ -70,6 +90,12 @@ public sealed class GlobPatternTests
         Assert.True(pattern.Matches("docs/a-b-c.md"));
         Assert.False(pattern.Matches("docs/inner/readme.md"));
         Assert.False(pattern.Matches("docs/readme.txt"));
+
+        // A name may hold a '*' of its own, which the pattern's '*' runs over as any other character.
+        Assert.True(GlobPattern.Parse("**/*.env").Matches("*prod.env"));
+        Assert.True(GlobPattern.Parse("**/*.env").Matches("a/*x.env"));
+        Assert.True(GlobPattern.Parse("**/secret*").Matches("secret*x"));
+        Assert.False(GlobPattern.Parse("**/*.env").Matches("*prod.txt"));
     }
 
     /// <summary>A <c>?</c> matches one character of a segment, and nothing else does.</summary>

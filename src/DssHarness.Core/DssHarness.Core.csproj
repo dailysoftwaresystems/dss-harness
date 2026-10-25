@@ -31,6 +31,10 @@
          compiler's own parser: a full syntax tree of any file, tolerant of errors, with exact spans. Its syntax
          alone - no compilation, no references, no restore - so nothing of a repository is built to graph it. -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
+
+    <!-- The harness's own fetch reduces a page's HTML to its text (Web\WebPageText) by a parser that reads HTML as a
+         browser does, malformed markup included, with nothing run: no script, no request, no style. -->
+    <PackageReference Include="AngleSharp" Version="1.8.5" />
   </ItemGroup>
 
   <ItemGroup>

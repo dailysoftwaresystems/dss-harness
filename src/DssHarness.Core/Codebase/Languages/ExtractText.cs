@@ -65,8 +65,7 @@ internal static partial class ExtractText
             return text;
         }
 
-        var cut = text[..(most - 1)];
-        cut = char.IsHighSurrogate(cut[^1]) ? cut[..^1] : cut;
+        var cut = Output.TextCut.Head(text, most - 1);
         var space = cut.LastIndexOf(' ');
 
         return (space > most / 2 ? cut[..space] : cut).TrimEnd() + "…";

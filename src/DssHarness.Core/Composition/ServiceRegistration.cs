@@ -207,6 +207,19 @@ public static class ServiceRegistration
             provider.GetRequiredService<ChildSessions>(),
             provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<IAgentRunner, AgentRunner>();
+
+        // The harness's own tools, built for the API clients to give their agents - nothing opens a runtime yet: the one fetch
+        // of the process, the system's own lookup of a name, and the host a runtime is opened from for each run.
+        services.AddSingleton<Web.IWebNames, Web.SystemWebNames>();
+        services.AddSingleton(provider => new Web.HarnessFetch(provider.GetRequiredService<IToolIdentityProvider>(), provider.GetRequiredService<Web.IWebNames>()));
+        services.AddSingleton(provider => new Agents.Runtime.AgentToolHost(
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<IHostPlatform>(),
+            provider.GetRequiredService<IGitClient>(),
+            provider.GetRequiredService<PhaseRunner>(),
+            provider.GetRequiredService<ChildSessions>(),
+            provider.GetRequiredService<Web.HarnessFetch>(),
+            provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<IWorkflowValidationService, WorkflowValidationService>();
         services.AddSingleton<IWorkflowExportService, WorkflowExportService>();
 

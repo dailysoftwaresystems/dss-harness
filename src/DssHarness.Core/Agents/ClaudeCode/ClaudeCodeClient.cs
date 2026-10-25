@@ -59,12 +59,6 @@ public sealed class ClaudeCodeClient(
     /// <summary>The id of the host's <c>initialize</c> request, which its answer names.</summary>
     public const string InitializeId = "initialize";
 
-    /// <summary>
-    /// The largest result a call's event carries whole; a larger one is kept whole in a file beside the stream, and its
-    /// event carries its first quarter and its last three quarters of this, with what was left out between them.
-    /// </summary>
-    public const int ResultCap = 32 * 1024;
-
     /// <summary>The stop reason of a message the model declined to write.</summary>
     private const string Declined = "refusal";
 
@@ -75,7 +69,7 @@ public sealed class ClaudeCodeClient(
     private readonly IHostPlatform _platform = platform ?? throw new ArgumentNullException(nameof(platform));
     private readonly ChildSessions _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
     private readonly TimeProvider _clock = clock ?? throw new ArgumentNullException(nameof(clock));
-    private readonly Func<IReadOnlyDictionary<string, string>> _environment = environment ?? OwnEnvironment;
+    private readonly Func<IReadOnlyDictionary<string, string>> _environment = environment ?? AgentChildEnvironment.Own;
 
     /// <summary>What this client can do, as the capabilities table states it.</summary>
     public static AgentClientCapabilities Descriptor { get; } = new(
@@ -140,7 +134,7 @@ public sealed class ClaudeCodeClient(
         }
 
         var totals = new Totals();
-        var tools = ClaudeCodeTools.Of(ground.Capabilities, ground.ReporterRoot is not null);
+        var tools = ClaudeCodeTools.Of(ground.Given);
         var policy = new AgentPolicy(_fileSystem, _platform, ground);
 
         for (var entry = 0; ; entry++)
@@ -198,12 +192,6 @@ public sealed class ClaudeCodeClient(
             name => name == ClaudeTranscripts.ConfigDirectoryVariable && run.Credential?.ConfigDirectory is { Length: > 0 } directory
                 ? directory
                 : _environment().GetValueOrDefault(name));
-
-    /// <summary>The tool's own environment, as the process holds it.</summary>
-    private static IReadOnlyDictionary<string, string> OwnEnvironment()
-        => System.Environment.GetEnvironmentVariables()
-            .Cast<System.Collections.DictionaryEntry>()
-            .ToDictionary(entry => (string)entry.Key, entry => entry.Value as string ?? string.Empty, StringComparer.Ordinal);
 
     /// <summary>Whether a model a message names is the one asked for: the same id, or the id with a date after it.</summary>
     internal static bool Same(string asked, string named)
@@ -303,7 +291,7 @@ public sealed class ClaudeCodeClient(
         private readonly string _auth = run.Credential?.Auth ?? AgentAuth.Login;
 
         private AppendLog? _control;
-        private AppendLog? _denials;
+        private AgentCallRecords? _records;
         private bool _started;
         private bool _initialized;
         private string? _version = run.ProgramVersion;
@@ -333,7 +321,7 @@ public sealed class ClaudeCodeClient(
 
             var settings = Path.Combine(directory, ClaudeLaunch.SettingsFileName);
             var system = Path.Combine(directory, ClaudeLaunch.SystemFileName);
-            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(tools, run.Ground!, client._platform.PathComparison));
+            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(tools, run.Ground!, run.Commands, client._platform.PathComparison));
             files.WriteAllTextAtomic(system, run.Mask.Redact(run.SystemPrompt));
 
             var working = run.Workspace.WorkingDirectory;
@@ -343,7 +331,7 @@ public sealed class ClaudeCodeClient(
                 .ToList();
 
             using var control = _control = AppendLog.Open(files, Path.Combine(directory, ClaudeLaunch.ControlFileName));
-            using var denials = _denials = AppendLog.Open(files, Path.Combine(directory, ClaudeLaunch.DenialsFileName));
+            using var records = _records = new AgentCallRecords(files, run, client._clock, events);
             using var stderr = AppendLog.Open(files, Path.Combine(directory, ClaudeLaunch.ErrorFileName));
             using var ending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
@@ -618,17 +606,7 @@ public sealed class ClaudeCodeClient(
                 }
 
                 totals.Worked = true;
-                var content = Masked(result.Content);
-                string? file = null;
-
-                if (content.Length > ResultCap)
-                {
-                    const int Head = ResultCap / 4;
-                    file = Path.Combine(run.StepDirectory, ClaudeLaunch.ToolResultsDirectoryName, result.CallId + ".txt");
-                    client._fileSystem.CreateDirectory(Path.GetDirectoryName(file)!);
-                    client._fileSystem.WriteAllTextAtomic(file, content);
-                    content = $"{content[..Head]}\n[{content.Length - ResultCap} characters left out: the whole result is '{file}']\n{content[^(ResultCap - Head)..]}";
-                }
+                var (content, file) = _records!.Kept(result.CallId, result.Content);
 
                 await Emit(new ToolCallFinished(result.CallId, result.Ok, client._clock.GetElapsedTime(call.Started), call.Input, content, file)).ConfigureAwait(false);
 
@@ -770,18 +748,9 @@ public sealed class ClaudeCodeClient(
             if (answer is AgentPolicyAnswer.Denied denied)
             {
                 totals.Denials++;
-                var subject = Masked(ClaudeToolDecider.SubjectOf(tool, asked.Input, run.Workspace.WorkingDirectory) ?? asked.Input?.ToJsonString() ?? string.Empty);
+                var subject = ClaudeToolDecider.SubjectOf(tool, asked.Input, run.Workspace.WorkingDirectory) ?? asked.Input?.ToJsonString() ?? string.Empty;
                 Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "deny", ["message"] = Masked(denied.Reason) }));
-                _denials!.Append(JsonSerializer.Serialize(new
-                {
-                    at = client._clock.GetUtcNow(),
-                    tool,
-                    subject,
-                    rule = denied.Rule,
-                    source = denied.Source.ToString(),
-                    reason = Masked(denied.Reason),
-                }));
-                await Emit(new PermissionDenied(tool, subject, denied.Rule, Source(denied.Source), Masked(denied.Reason))).ConfigureAwait(false);
+                await _records!.DeniedAsync(tool, subject, denied).ConfigureAwait(false);
                 return;
             }
 
@@ -827,7 +796,9 @@ public sealed class ClaudeCodeClient(
         private async Task<LaunchOutcome?> OnRefusalAsync(ClaudeLine.Refusal refusal)
         {
             totals.Denials++;
-            await Emit(new PermissionDenied(refusal.Tool ?? string.Empty, string.Empty, string.Empty, AgentPermissionSource.ClaudeCode, Masked(refusal.Message))).ConfigureAwait(false);
+
+            // Claude Code's own refusal is recorded as every denial is: a line of the step's denials, and its event.
+            await _records!.DeniedAsync(refusal.Tool ?? string.Empty, string.Empty, new AgentPolicyAnswer.Denied(string.Empty, AgentPolicySource.ClaudeCode, refusal.Message)).ConfigureAwait(false);
 
             if (refusal.CallId is not { } id || _decided.ContainsKey(id) || !_calls.TryGetValue(id, out var call))
             {
@@ -1360,15 +1331,6 @@ public sealed class ClaudeCodeClient(
             {
                 ["type"] = "control_response",
                 ["response"] = new JsonObject { ["subtype"] = "error", ["request_id"] = requestId, ["error"] = error },
-            };
-
-        private static AgentPermissionSource Source(AgentPolicySource source)
-            => source switch
-            {
-                AgentPolicySource.Config => AgentPermissionSource.Config,
-                AgentPolicySource.Agent => AgentPermissionSource.Agent,
-                AgentPolicySource.ClaudeCode => AgentPermissionSource.ClaudeCode,
-                _ => AgentPermissionSource.Builtin,
             };
 
         private static async Task Quietly(Task task)

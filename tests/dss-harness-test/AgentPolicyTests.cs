@@ -424,6 +424,29 @@ public sealed class AgentPolicyTests
     }
 
     [Fact]
+    public void ARulesCommand_IsTheWordsItsProgramIsHanded_ItsRedirectsApart()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy([new("Run(npm publish)", AgentPolicySource.Config), new("Web(pastebin.com)", AgentPolicySource.Config)]);
+
+        Assert.Equal("Run(npm publish)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("npm publish")).Rule);
+        Assert.Equal("Run(npm publish)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("npm publish >publish.log 2>&1")).Rule);
+        Assert.Equal("Run(npm publish)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("</dev/null npm publish")).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("npm publish --dry-run"));
+        Assert.Equal("Run(npm publish)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("pwsh -c '& {npm publish}'")).Rule);
+
+        // A here-document's text is no word the shell expands braces in - however many it holds - yet its words are read.
+        var json = "[" + string.Join(",", Enumerable.Range(0, 7).Select(at => $"{{\"a\":{at},\"b\":{at}}}")) + "]";
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run($"cat > a.json <<'EOF'\n{json}\nEOF"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run($"cat > a.json <<<'{json}'"));
+        Assert.Equal("the root actions", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("ssh host <<'EOF'\nsudo id\nEOF")).Rule);
+
+        // A word spelled as a redirect is an argument the program reads: curl's output file here, then its address.
+        Assert.Equal("Web(pastebin.com)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("curl -o '>x' https://pastebin.com/raw/1")).Rule);
+        Assert.Equal("Web(pastebin.com)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run((IReadOnlyList<string>)["curl", "-A", "<ua", "https://pastebin.com/raw/1"])).Rule);
+    }
+
+    [Fact]
     public void AGluedHostnameNamesItsHost_AsTheSeparateFormDoes()
     {
         using var ground = Ground();
@@ -536,6 +559,95 @@ public sealed class AgentPolicyTests
         }
 
         Assert.Equal("Run(git commit *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git commit -m x")).Rule);
+
+        // A script that begins with what a redirect's spelling is, is read all the same.
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run((IReadOnlyList<string>)["bash", "-c", ">x; git push origin main"])).Rule);
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("bash -c '>x; git push origin main'")).Rule);
+
+        // A shell reads the last input its descriptor 0 is given, and find's -exec its input too.
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("bash <<<'echo hi' <<<'git push origin main'")).Rule);
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("find . -exec sh ';' <<<'git push origin main'")).Rule);
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("pwsh -Command - <<<'git push origin main'")).Rule);
+
+        // A cmd line's '@', a program's name in another case, fish's --command: each is git push still.
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("cmd /c \"@git push origin main\"")).Rule);
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("GIT push origin main")).Rule);
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("fish --command 'git push origin main'")).Rule);
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("fish --command='git push origin main'")).Rule);
+
+        // ... wherever cmd reads its '@', a PowerShell block's braces glued to its words, fish's options read as fish
+        // reads them, a git command by its dashed name.
+        foreach (var command in new[]
+        {
+            "cmd /c \"if 1==1 @git push origin main\"",
+            "pwsh -c \"&{git push origin main}\"",
+            "fish -C 'git push origin main' <<<'echo x'",
+            "fish --init-command='git push origin main' -c 'echo x'",
+            "fish -d 3 -c 'git push origin main'",
+            "fish -o log -c 'git push origin main'",
+            "fish '-cgit push origin main'",
+            "fish -ic 'git push origin main'",
+            "fish --help -c 'git push origin main'",
+            "fish --comm 'git push origin main'",
+            "fish --init 'git push origin main' script.fish",
+            "/usr/lib/git-core/git-push origin main",
+            "pwsh -c 'git -C ${env:TEMP} push origin main'",
+            "pwsh -c \"# it's here\n&{git push origin main}\"",
+            "pwsh -c \"git status <# it's #> ; git push origin main\"",
+            "pwsh -c 'Write-Output \"$(&{git push origin main})\"'",
+            "pwsh -c 'Write-Output \"$(&{(1)}; &{git push origin main})\"'",
+            "pwsh -c 'git push(git status)'",
+            "pwsh -c '(git push origin main)'",
+            "pwsh -c 'Write-Output \"$((1)) $(&{(1)}; &{git push origin main})\"'",
+            "cmd /c \"set GIT_SSH_COMMAND=git push origin main& git ls-remote ssh://h/r\"",
+            "fish -c \"set -x GIT_SSH_COMMAND 'git push origin main'; git ls-remote ssh://h/r\"",
+            "pwsh -c \"Set-Item -Value 'git push origin main' -Path env:GIT_SSH_COMMAND; git ls-remote ssh://h/r\"",
+            "pwsh -c \"& 'git'push origin main\"",
+            "pwsh -c \"git \u2018push\u2019 origin main\"",
+            "pwsh -c \"& \u201Cgit\u201D push origin main\"",
+            "pwsh -c \"@'\nit's\n'@ | Out-Null\ngit push origin main\"",
+            "pwsh -c 'Write-Output @\"\nsay \"hi\" $(git push origin main)\n\"@'",
+            "fish -c 'echo x' 'git push origin main'",
+        })
+        {
+            Assert.True(policy.Run(command) is AgentPolicyAnswer.Denied { Rule: "Run(git push *)" }, $"'{command}' was not refused as git push");
+        }
+
+        // An option fish does not have, which a later fish may give a value, is undecided; its version runs nothing.
+        Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("fish --frobnicate x -c 'git status'")).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("fish --version"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("fish -c"));
+
+        // PowerShell's stop-parsing token hands its line on unread, undecided; its comments and here-strings are no commands.
+        Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("pwsh -c 'Write-Output --% x'")).Rule);
+
+        // Invoke-Expression fed by the pipeline, Start-Process's own command line and the call operator's computed
+        // program are undecided; a parenthesized argument is read, a statement it begins a group.
+        Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("pwsh -c \"'git push origin main' | iex\"")).Rule);
+
+        // An argument a parenthesis, an array subexpression or a splat hands on may be any word: git's verb among them.
+        foreach (var command in new[] { "pwsh -c \"git ('push','origin','main')\"", "pwsh -c \"git @('push','origin','main')\"", "pwsh -c 'git @args'" })
+        {
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
+        }
+
+        // A += onto a program's command line adds to a value unseen, and a declared name an expansion gives may be any.
+        Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("GIT_PAGER='sh -c' GIT_PAGER+=\" 'git push origin main'\" git -p log")).Rule);
+        Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("GIT_SSH_COMMAND+='sudo id' git ls-remote ssh://h/r")).Rule);
+        Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("K=GIT_PAGER; export \"$K=git push origin main\"; git -p log")).Rule);
+        Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("pwsh -c 'Set-Item \"env:$k\" x'")).Rule);
+        Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("pwsh -c \"Start-Process git -ArgumentList 'push origin main'\"")).Rule);
+        Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("pwsh -c \"& ('git') push origin main\"")).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("pwsh -c 'Write-Host (Join-Path a b); eval'"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("pwsh -c '$env:PATH += \";C:\\tools\"; dotnet build'"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("pwsh -c \"git status # git push origin main\""));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("pwsh -c \"Write-Output @'\ngit push origin main\n'@\""));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("pwsh -c 'Get-ChildItem | Where-Object { $_.Name -like \"*x*\" } | Select-Object @{n=\"N\";e={$_.Name}}'"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("fish -c 'git status'"));
+
+        // An arithmetic shift is no here-document swallowing the lines after it.
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("echo $((1<<2))\ngit push origin main")).Rule);
+        Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("shopt -s expand_aliases\nalias gp='git push'\ngp origin main")).Rule);
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run((IReadOnlyList<string>)["git", "status"]));
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git log --oneline"));
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run((IReadOnlyList<string>)["git", "blame", "a.cs"]));
@@ -671,6 +783,16 @@ public sealed class AgentPolicyTests
             "export GIT_TEMPLATE_DIR=/tmp/evil",
             "git --exec-path=/tmp/x push",
             "git -c core.pager=less log",
+            "pwsh -c '$env:GIT_CONFIG_PARAMETERS = 1'",
+            "cmd /c \"set GIT_CONFIG_COUNT=1&set GIT_CONFIG_KEY_0=alias.x&set GIT_CONFIG_VALUE_0=commit&git x\"",
+            "fish -c 'set -gx GIT_CONFIG_COUNT 1'",
+            "csh -c 'setenv GIT_TEMPLATE_DIR /tmp/x'",
+            "pwsh -c 'Set-Item env:GIT_CONFIG_COUNT 1'",
+            "pwsh -c '$env:GIT_CONFIG_COUNT += 1'",
+            "pwsh -c '$env:GIT_CONFIG_COUNT = \"$(git status)\" x'",
+            "GIT_CONFIG_COUNT+=1 git x",
+            "GIT_TEMPLATE_DIR+=/tmp/x git status",
+            "GIT_CONFIG_COUNT=1",
         })
         {
             Assert.Equal("Run(git config *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command)).Rule);
@@ -702,6 +824,12 @@ public sealed class AgentPolicyTests
             "git -c difftool.x.path=/usr/bin/sudo difftool",
             "git -c submodule.s.update='!sudo id' submodule update",
             "git -c gpg.ssh.defaultKeyCommand='sudo id' commit -S",
+            "GIT_PROXY_COMMAND='sudo id' git ls-remote git://h/r",
+            "cmd /c \"set GIT_SSH_COMMAND=sudo id& git fetch\"",
+            "fish -c \"set -x GIT_SSH_COMMAND 'sudo id'; git fetch\"",
+            "pwsh -c \"Set-Item -Path env:GIT_SSH_COMMAND -Value 'sudo id'; git fetch\"",
+            "pwsh -c \"ni Env:\\GIT_PAGER -Va:sudo; git log\"",
+            "GH_BROWSER='sudo id' gh pr view --web",
         })
         {
             Assert.True(policy.Run(command) is AgentPolicyAnswer.Denied { Rule: "the root actions" }, $"'{command}' was not refused as a root action");
@@ -775,6 +903,296 @@ public sealed class AgentPolicyTests
 
         Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git --unknown-option x push")).Rule);
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git --no-pager log"));
+    }
+
+    /// <summary>
+    /// On Windows a batch file whose arguments hold what cmd.exe reads as its own is undecided, named by its extension in
+    /// any case and with the dots Windows drops, and wherever it stands - a wrapper this does not strip starts it as well:
+    /// cmd reads those arguments again, so another command would run than the one read. Plain arguments, a program that
+    /// is no batch file, and the same command elsewhere are decided as ever.
+    /// </summary>
+    [Fact]
+    public void PowerShell_IsReadAsPowerShellReadsIt()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy();
+
+        // Its grammar, never the shell's: a parenthesis no arithmetic, a braced variable's text, a here-string's
+        // header and footer where PowerShell finds them, its blanks and a lone CR, its assignments, keywords and blocks.
+        foreach (var command in new[]
+        {
+            "pwsh -c '((git push origin main))'",
+            "pwsh -c 'Write-Output \"$((git push origin main))\"'",
+            "pwsh -c 'echo ${a <#}; git push origin main #> }'",
+            "pwsh -c \"echo @{a=@'\nx'y\n'@}; git push origin main # '\"",
+            "pwsh -c \"echo @'\nx\n  '@\n'@; git push origin main # '\"",
+            "pwsh -c \"echo hi # x\rgit push origin main\"",
+            "pwsh -c \"git\u00A0push origin main\"",
+            "pwsh -c '$x = git push origin main'",
+            "pwsh -c '$a, $b = git push origin main'",
+            "pwsh -c 'if ($true) { git push origin main }'",
+            "pwsh -c 'foreach ($l in git push origin main) { }'",
+            "pwsh -c 'function f { param($x) git push origin main }'",
+            "pwsh -c 'return git push origin main'",
+            "pwsh -c 'Select-Object @{n=(git push origin main)}'",
+            "pwsh -c '& \"gi`u{74}\" push origin main'",
+            "pwsh -c '& { git push origin main }'",
+            "pwsh -c 'git push origin main &'",
+            "pwsh -c ':outer foreach ($l in 1) { git push origin main }'",
+            "pwsh -c 'echo x | . git push origin main'",
+            "pwsh -c 'if ($x) { } else { git push origin main }'",
+            "pwsh -c 'try { } catch { git push origin main }'",
+            "pwsh -c 'do { } while (git push origin main)'",
+            "pwsh -c 'git status || git push origin main'",
+            "pwsh -c 'foreach($l in git push origin main){}'",
+            "pwsh -c 'echo (git push origin main)'",
+            "pwsh -c 'echo x(git push origin main)'",
+            "pwsh -c 'echo x{git push origin main}'",
+            "pwsh -c 'Select-Object @{n=git push origin main}'",
+            "pwsh -c '[ValidateScript({git push origin main})]$x = 1'",
+            "pwsh -c '${a}?[(git push origin main)]'",
+            "pwsh -c '$env:A = git push origin main'",
+            "pwsh -c '$env:A = \"$(git push origin main)\" x'",
+            "pwsh -c '../../../../usr/bin/git push --force origin main'",
+            "pwsh -c '..\\bin\\git.exe push origin main'",
+            "pwsh -c 'echo x; ..\\git push origin main'",
+            "pwsh -c 'git status\n| Out-Null\n| git push origin main'",
+            "pwsh -c 'dotnet build\n|| git push origin main'",
+            "pwsh -c 'git\u2003push origin main'",
+            "pwsh -c 'git\u3000push origin main'",
+            "pwsh -c 'Invoke-Expression -Command \"git push origin main\"'",
+            "pwsh -c 'iex -C \"git push origin main\"'",
+            "pwsh -c 'iex -Command:\"git push origin main\"'",
+            "pwsh -c \"iex 'iex ''git push origin main'''\"",
+        })
+        {
+            Assert.True(policy.Run(command) is AgentPolicyAnswer.Denied { Rule: "Run(git push *)" }, $"'{command}' was not refused as git push");
+        }
+
+        // What runs code no word spells - a static method, a method off the list, one a string or a variable names, a
+        // method ForEach-Object calls by name, a function's or an alias's text, compiled code, WMI's and the scheduler's
+        // command lines, a class - is undecided.
+        foreach (var command in new[]
+        {
+            "pwsh -c '[Diagnostics.Process]::Start(\"git\", \"push origin main\")'",
+            "pwsh -c '$p.Start()'",
+            "pwsh -c '$p.\"Start\"()'",
+            "pwsh -c 'Get-Process | ForEach-Object Kill'",
+            "pwsh -c 'Set-Item function:f \"git push origin main\"; f'",
+            "pwsh -c '$function:f = \"git push origin main\"; f'",
+            "pwsh -c 'Add-Type -TypeDefinition \"x\"'",
+            "pwsh -c 'Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList \"git push\"'",
+            "wmic process call create \"git push origin main\"",
+            "schtasks /create /tn x /tr \"git push origin main\" /sc once /st 00:00",
+            "pwsh -c 'class A { }'",
+            "pwsh -c '[datetime]::Equals(1, 2)'",
+            "pwsh -c '$a, $env:GIT_SSH_COMMAND = \"git push\"'",
+            "pwsh -c '$env:GIT_SSH_COMMAND += \" -v\"; git fetch'",
+            "pwsh -c 'Rename-Item env:A env:$new'",
+            "pwsh -c '$a, $function:f = 1, \"git push origin main\"; f'",
+            "pwsh -c 'foreach ($function:f in \"git push origin main\") { f }'",
+            "pwsh -c 'git$x push origin main'",
+            "pwsh -c '& \"$p\" push origin main'",
+            "pwsh -c 'echo git; & $$ push origin main'",
+            "pwsh -c 'git status; & $^ push origin main'",
+            "pwsh -c '$b, $env:GIT_SSH_COMMAND = \"ssh\"; git fetch'",
+            "pwsh -c '${function:f} = \"git push origin main\"; f'",
+            "pwsh -c 'Get-Process | ForEach-Object -MemberName Kill'",
+            "pwsh -c 'Set-Item -Path:function:f x'",
+            "pwsh -c 'iex (\"git push \" + \"origin main\")'",
+            "pwsh -c '$c = \"git push origin main\"; iex $c'",
+            "pwsh -c 'iex'",
+            "pwsh -c 'iex \"git status\" \"git push origin main\"'",
+            "pwsh -c '[IO.File]::Replace(\"a\", \"b\", \"c\")'",
+            "pwsh -c 'echo $p[0].Kill()'",
+            "pwsh -c '$p.(\"Kill\")()'",
+            "pwsh -c '$x = ${p}?.Kill()'",
+            "pwsh -c '$ExecutionContext.InvokeCommand?.InvokeScript(\"git push origin main\")'",
+            "pwsh -c '\"x\".GetType().Assembly.CreateInstance(\"System.Diagnostics.Process\")'",
+        })
+        {
+            Assert.True(policy.Run(command) is AgentPolicyAnswer.Denied { Rule: "undecided" }, $"'{command}' was not undecided");
+        }
+
+        // A splat is the words a variable holds, which a rule may read.
+        Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("pwsh -c 'git @a'"));
+
+        // An item copied onto the env: drive takes a value unseen: git's configuration among its names. So does every
+        // environment variable an assignment sets - braced, set where unset, one of many targets, or what it makes of
+        // its value - and a foreach's.
+        foreach (var command in new[]
+        {
+            "pwsh -c 'Copy-Item env:A env:GIT_CONFIG_COUNT'",
+            "pwsh -c '${env:GIT_CONFIG_PARAMETERS} = 1; git status'",
+            "pwsh -c '$env:GIT_CONFIG_PARAMETERS ??= 1; git status'",
+            "pwsh -c '$b, $env:GIT_CONFIG_COUNT = 1, 2; git status'",
+            "pwsh -c '$env:GIT_CONFIG_PARAMETERS *= 2; git status'",
+            "pwsh -c 'foreach ($env:GIT_CONFIG_COUNT in 1) { git status }'",
+            "pwsh -c 'Rename-Item env:A GIT_CONFIG_COUNT'",
+        })
+        {
+            Assert.True(policy.Run(command) is AgentPolicyAnswer.Denied { Rule: "Run(git config *)" }, $"'{command}' was not refused as git config");
+        }
+
+        // What PowerShell commonly runs stays allowed.
+        foreach (var command in new[]
+        {
+            "pwsh -c 'Get-ChildItem -Recurse | Where-Object { $_.Length -gt 1MB } | Select-Object FullName'",
+            "pwsh -c 'Write-Host \"Done: $($x.Count)\"'",
+            "pwsh -c 'if ($LASTEXITCODE -ne 0) { exit 1 }'",
+            "pwsh -c '$files = Get-ChildItem *.cs; foreach ($f in $files) { $f.Name.EndsWith(\".cs\") }'",
+            "pwsh -c 'git log --format=\"%H %s\" -n 5 2>&1 > $null'",
+            "pwsh -c \"@'\n* item\n'@ | Set-Content notes.md\"",
+            "pwsh -c 'Get-ChildItem | % { $_.Name }'",
+            "pwsh -c 'Select-Object @{n=\"MB\";e={$_.Length/1MB}}'",
+            "pwsh -c 'Get-ChildItem | ForEach-Object -OutVariable names { $_.Name }'",
+            "pwsh -c 'Set-Content -Path out.txt -Value $content'",
+            "pwsh -c 'Copy-Item -Recurse src/* dest/'",
+            "pwsh -c 'New-Item -ItemType Directory $dir'",
+            "pwsh -c 'Add-Content -Path build.log -Value \"at $(Get-Date)\"'",
+            "pwsh -c '$h = @{ sudo = 1 }'",
+            "pwsh -c \"iex 'git status'\"",
+            "pwsh -c 'Write-Output @{ sudo = 1 }'",
+        })
+        {
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+        }
+    }
+
+    [Fact]
+    public void AProgramsDataWords_AreNeverCommandsOfTheirOwn()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy(web: false);
+
+        foreach (var command in new[] { "grep -rn \"http\" src/", "grep -rn curl README.md", "which curl wget", "grep -rn git --include=*.cs .", "echo git push origin main", "rg https -g '*.md'" })
+        {
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+        }
+
+        // A git another program's words name reads an option it does not know as a word, never refused.
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("find . -name git -prune"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("find . -name gh -prune"));
+
+        // rg's --hostname-bin runs the program it names.
+        Assert.Equal("the root actions", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("rg --hostname-bin=sudo x")).Rule);
+        var ruled = ground.Policy([new("Run(make *)", AgentPolicySource.Config)], web: false);
+        Assert.Equal("Run(make *)", Assert.IsType<AgentPolicyAnswer.Denied>(ruled.Run("rg --hostname-bin make x")).Rule);
+        Assert.Equal("Run(make *)", Assert.IsType<AgentPolicyAnswer.Denied>(ruled.Run("rg --hostname-bin=make x")).Rule);
+
+        // cmd's delayed expansion names a program by a variable, undecided.
+        Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("cmd /v:on /c \"set P=git& !P! push origin main\"")).Rule);
+        Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("cmd /v:on /c \"set P=git& !P:~0! push origin main\"")).Rule);
+
+        // A program that runs its words still meets the rules on them.
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("stdbuf -o0 git push origin main")).Rule);
+        Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("stdbuf -o0 curl https://example.com/x"));
+
+        // A word of data that spells an assignment configures no git; a declared one does.
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("grep -rn GIT_CONFIG_COUNT= src"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git log --grep GIT_TEMPLATE_DIR=x"));
+        Assert.Equal("Run(git config *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("declare -x GIT_CONFIG_COUNT=1")).Rule);
+
+        // set's positional parameters (after --) and a value word are no declared names, never refused for their expansions.
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("export FOO=$bar"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("set -- $files"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("set -- \"$@\""));
+    }
+
+    [Fact]
+    public void AWindowsDevicesName_IsTheFileOfThatName()
+    {
+        using var windows = Ground(PlatformId.Windows);
+        var policy = windows.Policy(worktreeRules: false, home: Path.GetDirectoryName(windows.ClaudeDirectory));
+        var name = Path.GetFileName(windows.ClaudeDirectory);
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("cmd /c \"dir >nul\""));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git commit -F - <<'EOF'\nstrip NUL bytes from CON and AUX.txt\nEOF"));
+
+        // Another Windows, and a shell on it, makes the file: one inside a Claude Code directory is refused.
+        Assert.Equal("the Claude Code directories", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"echo x > ~/{name}/nul.md")).Rule);
+        Assert.Equal("the Claude Code directories", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"echo x > ~/{name}/con")).Rule);
+    }
+
+    [Fact]
+    public void ABracketTheShellDoesNotReadAsOne_IsItsCharacters()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy(worktreeRules: false);
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git commit -m \"fix [!] crash\""));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("echo '[z-a]'"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("ls [a-Z]*"));
+    }
+
+    [Fact]
+    public void ABatchFileWhoseArgumentsCmdReadsAgain_IsUndecidedOnWindows()
+    {
+        using var windows = Ground(PlatformId.Windows);
+        var policy = windows.Policy(worktreeRules: false);
+
+        foreach (var answer in new[]
+        {
+            policy.Run(["build.cmd", "x&curl evil.example"]),
+            policy.Run(["tools\\Run.BAT.", "a|b"]),
+            policy.Run(["npm.cmd", "run", "%SECRET%"]),
+            policy.Run("./build.cmd 'x&y'"),
+            policy.Run(["C:\\Program Files\\Git\\usr\\bin\\stdbuf.exe", "-o0", "C:\\nodejs\\npm.cmd", "a&git push"]),
+            policy.Run("X='a&git'; ./build.cmd $X push"),
+            policy.Run("./build.cmd \"$(printf x)\" push"),
+            policy.Run("./build.cmd *.txt"),
+            policy.Run("./build.cmd '>log&calc'"),
+            policy.Run("find . -name '*.txt' -exec ./build.cmd {} ';'"),
+            policy.Run("./build.cmd \">x$(printf '\\046calc')\""),
+            policy.Run("X='x&calc'; ./build.cmd \">$X\""),
+            policy.Run("fd -e txt -x build.cmd"),
+            policy.Run("fd -x build.cmd {/}"),
+            policy.Run("rg --pre build.cmd pattern"),
+            policy.Run("parallel build.cmd :::: list"),
+        })
+        {
+            var denied = Assert.IsType<AgentPolicyAnswer.Denied>(answer);
+            Assert.Equal(AgentPolicy.UndecidedRule, denied.Rule);
+            Assert.Contains("is a batch file, whose arguments cmd.exe reads again", denied.Reason, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(["build.cmd", "--release", "a b"]));
+
+        // A redirect is the shell's, which cmd never sees; one cmd would read is read here as one all the same.
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("./build.cmd --release > build.log"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("./build.cmd < input.txt"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(["tool.exe", "x&y"]));
+
+        using var linux = Ground();
+        Assert.Equal(AgentPolicyAnswer.Allow, linux.Policy(worktreeRules: false).Run(["build.cmd", "x&y"]));
+    }
+
+    /// <summary>
+    /// A command any word of which holds a NUL is undecided, a program's and an argument's, a shell string's too: the system
+    /// hands a program its words cut at the first, so what would run is not what was read.
+    /// </summary>
+    [Fact]
+    public void ACommandHoldingANul_IsUndecided()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy([new("Run(git push *)", AgentPolicySource.Config)], worktreeRules: false);
+
+        // A word a script decodes to one holding a NUL is cut by the shell that runs it as well.
+        foreach (var answer in new[]
+        {
+            policy.Run(["sudo\0x", "id"]),
+            policy.Run(["git", "push\0x", "origin"]),
+            policy.Run("git push\0x origin"),
+            policy.Run(["bash", "-c", "git $'push\\x00' origin main"]),
+            policy.Run("$'sudo\\0' id"),
+        })
+        {
+            var denied = Assert.IsType<AgentPolicyAnswer.Denied>(answer);
+            Assert.Equal(AgentPolicy.UndecidedRule, denied.Rule);
+            Assert.Contains("it holds a NUL", denied.Reason, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(["git", "pushx", "origin"]));
     }
 
     [Fact]
@@ -871,7 +1289,7 @@ public sealed class AgentPolicyTests
     public void ACommandNestedPastAnyBound_IsDenied_NeverACrash()
     {
         using var ground = Ground();
-        var command = string.Concat(Enumerable.Repeat("(", 20000)) + "sudo x" + string.Concat(Enumerable.Repeat(")", 20000));
+        var command = string.Concat(Enumerable.Repeat("( ", 20000)) + "sudo x" + string.Concat(Enumerable.Repeat(")", 20000));
 
         var denied = Assert.IsType<AgentPolicyAnswer.Denied>(ground.Policy().Run(command));
 
@@ -1071,7 +1489,7 @@ public sealed class AgentPolicyTests
 
         foreach (var command in new[]
         {
-            $"cat ~/{name}/.credentials.json", $"cat $HOME/{name}/x", $"cat ${{HOME}}/{name}/x", $"echo x>~/{name}/x", $"tool --file=~/{name}/x", $"ssh host 'cat ~/{name}/x'",
+            $"cat ~/{name}/.credentials.json", $"cat $HOME/{name}/x", $"cat ${{HOME}}/{name}/x", $"echo x>~/{name}/x", $"bash -c true >~/{name}/x", $"eval true >~/{name}/x", $"env -S 'cat' >~/{name}/x", $"tool --file=~/{name}/x", $"ssh host 'cat ~/{name}/x'",
             $"cat $USERPROFILE/{name}/x", $"cat ${{USERPROFILE}}/{name}/x",
         })
         {
@@ -1186,6 +1604,7 @@ public sealed class AgentPolicyTests
             "curl -x evil.test:8080 https://example.com/",
             "curl --connect-to example.com:443:evil.test:443 https://example.com/",
             "https_proxy=evil.test:3128 curl https://example.com/",
+            "https_proxy+=evil.test:3128 curl https://example.com/",
             "curl ftp://evil.test/x",
         })
         {
@@ -1406,7 +1825,29 @@ public sealed class AgentPolicyTests
 
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Web("https://example.com/page"));
 
-        foreach (var address in new[] { "https://pastebin.com/x", "https://www.pastebin.com/raw/1" })
+        // An address whose slashes after its scheme readers read apart - each finding pastebin.com past them its own way -
+        // names no host this can decide.
+        foreach (var address in new[] { "http:/\\pastebin.com/raw/1", "HTTP:\\\\pastebin.com/x", "https:pastebin.com/x", "http:///pastebin.com/x", "https://\\pastebin.com/x", "wss:/pastebin.com", "gopher:/pastebin.com:70/_x", "ftps:\\pastebin.com/", "http:pastebin.com", "ws:pastebin.com", "wss:pastebin.com", "ftp:pastebin.com" })
+        {
+            var undecided = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Web(address));
+
+            Assert.Equal(AgentPolicy.UndecidedRule, undecided.Rule);
+            Assert.Contains("spells the slashes after its scheme as readers of an address read apart", undecided.Reason, StringComparison.Ordinal);
+        }
+
+        // A host spelled beyond ASCII - full-width letters, an ideographic dot, a soft hyphen, a name of its own language -
+        // is mapped by each reader its own way, so it names no host this can decide; its xn-- form does.
+        foreach (var address in new[] { "https://\uFF50\uFF41\uFF53\uFF54\uFF45\uFF42\uFF49\uFF4E.com/x", "https://pastebin\u3002com/x", "https://paste\u00ADbin.com/x", "https://b\u00FCcher.de/" })
+        {
+            var undecided = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Web(address));
+
+            Assert.Equal(AgentPolicy.UndecidedRule, undecided.Rule);
+            Assert.Contains("spells its host beyond ASCII, which readers of an address map each their own way", undecided.Reason, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Web("https://xn--bcher-kva.de/"));
+
+        foreach (var address in new[] { "https://pastebin.com/x", "https://www.pastebin.com/raw/1", "https://PasteBin.com/x" })
         {
             var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Web(address));
 
@@ -1414,8 +1855,13 @@ public sealed class AgentPolicyTests
             Assert.EndsWith(", a restriction of agentPolicy.restrictions", denied.Reason, StringComparison.Ordinal);
         }
 
-        // A command that runs a program which fetches is decided by the same rule, by each address.
+        // A command that runs a program which fetches is decided by the same rule, by each address: curl takes a host past
+        // one slash whatever the scheme, a proxy's among them.
         Assert.Equal("Web(pastebin.com)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("curl -s https://pastebin.com/raw/1")).Rule);
+        Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("curl dict:/pastebin.com:2628/x")).Rule);
+        Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("curl -x socks5h:/pastebin.com:1080 https://example.com/")).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("wget localhost:3000/x"));
+        Assert.Equal("Web(pastebin.com)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("curl user@pastebin.com:/x")).Rule);
         Assert.Equal("Web(pastebin.com)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("wget pastebin.com/raw/1")).Rule);
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("curl -s https://example.com/x"));
     }
@@ -1507,6 +1953,42 @@ public sealed class AgentPolicyTests
 
         Assert.Contains("agentPolicy.restrictions[0] 'Web(pastebin..com)' does not read:", failure.Message, StringComparison.Ordinal);
         Assert.Contains("agentPolicy.webDomains[1] 'no host' is no domain:", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ZZProbe_Temporary()
+    {
+        var input = Environment.GetEnvironmentVariable("DSS_PROBE");
+        if (input is null)
+        {
+            return;
+        }
+
+        using var ground = Ground(Environment.GetEnvironmentVariable("DSS_PROBE_WIN") is null ? PlatformId.Linux : PlatformId.Windows);
+        var policy = ground.Policy();
+        var output = new System.Text.StringBuilder();
+        foreach (var line in File.ReadAllLines(input))
+        {
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            var command = line.Replace("<NL>", ((char)10).ToString(), StringComparison.Ordinal).Replace("<CR>", ((char)13).ToString(), StringComparison.Ordinal);
+            string commands;
+            try
+            {
+                commands = string.Join(" ;; ", CommandAnalysis.Commands(command).Select(c => string.Join(" | ", c.Whole)));
+            }
+            catch (Exception e)
+            {
+                commands = "THROWS " + e.GetType().Name + ": " + e.Message;
+            }
+
+            output.AppendLine(line).AppendLine("  => " + policy.Run(command)).AppendLine("  cmds: " + commands);
+        }
+
+        File.WriteAllText(input + ".out", output.ToString());
     }
 
     /// <summary>The ground of an agent with a worktree: a main checkout it reads, a worktree and a work directory it writes, the slot of the main checkout, and a Claude Code directory.</summary>
