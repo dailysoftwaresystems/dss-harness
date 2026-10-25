@@ -520,6 +520,20 @@ public sealed class AgentPolicyTests
         Assert.Equal(AgentPolicyAnswer.Allow, opened.Write(Path.Combine(ground.Worktree, ".harness-config", "skills", "release-notes", "SKILL.md")));
     }
 
+    /// <summary>What a step's writes covers is the policy's one rule, asked by its context pack: none where the step names no writes.</summary>
+    [Fact]
+    public void StepWrites_IsWhatTheStepsWritesPatternsName_AndNothingWhereItNamesNone()
+    {
+        using var ground = Ground();
+        var narrowed = ground.Policy(writes: ["src/Storage/**", "docs/*.md"]);
+
+        Assert.True(narrowed.StepWrites("src/Storage/MemoryOrderStore.cs"));
+        Assert.True(narrowed.StepWrites("docs/a.md"));
+        Assert.False(narrowed.StepWrites("src/Orders/Order.cs"));
+        Assert.False(narrowed.StepWrites("docs/deep/a.md"));
+        Assert.False(ground.Policy().StepWrites("src/Storage/MemoryOrderStore.cs"));
+    }
+
     /// <summary>The shipped protected-path list, pinned word for word: a change in it is a change someone made.</summary>
     [Fact]
     public void TheProtectedPathsArePinned()

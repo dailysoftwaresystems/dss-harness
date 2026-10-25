@@ -443,7 +443,7 @@ public sealed class CodebaseGraphQueryServiceTests
     {
         var topic = Prose.Words(HelpTopics.Render("codebase-graph"));
 
-        Assert.Contains($"find - the nodes a query's words match, best first, generated code after every other, at most {CodebaseGraphTool.FindLines} ({CodebaseGraphTool.FindMost} with limit);", topic, StringComparison.Ordinal);
+        Assert.Contains($"find - the nodes a query's words match, best first, generated code after every other, a tie broken by how near the step's own work each is - its context pack or a working set it was given, a file it writes, a file its agent changed, a path or a name its prompt holds - then by id, at most {CodebaseGraphTool.FindLines} ({CodebaseGraphTool.FindMost} with limit);", topic, StringComparison.Ordinal);
         Assert.Contains("No step is given the tool yet - the API clients will offer it - and query-codebase-graph below runs its read operations;", topic, StringComparison.Ordinal);
         Assert.Contains($"{ToolPackage.Command} {CodebaseGraphQueryService.CommandName} <run> runs one of the read operations by hand", topic, StringComparison.Ordinal);
         Assert.Contains($"It ends 0, {HarnessExit.Refused} where the run has no graph, and {HarnessExit.UsageError} for a usage error; no host is asked to run it.", topic, StringComparison.Ordinal);

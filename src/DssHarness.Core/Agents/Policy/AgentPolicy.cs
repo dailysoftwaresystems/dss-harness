@@ -546,6 +546,20 @@ public sealed partial class AgentPolicy
                 && write.Pattern.Matches(relative, comparison));
 
     /// <summary>
+    /// Whether the step's <c>writes</c> names <paramref name="relative"/> - a path relative to its worktree - as the platform
+    /// compares names; false where the step names no writes. What a step's context pack seeds the declarations of.
+    /// </summary>
+    /// <param name="relative">A path relative to the step's worktree, with forward separators.</param>
+    public bool StepWrites(string relative)
+    {
+        ArgumentNullException.ThrowIfNull(relative);
+        return Covers(relative);
+    }
+
+    /// <summary>Whether one of the step's <c>writes</c> patterns names <paramref name="relative"/>, as the platform compares names.</summary>
+    private bool Covers(string relative) => _writes.Any(write => write.Pattern.Matches(relative, _platform.PathComparison));
+
+    /// <summary>
     /// The step's <c>writes</c>, the one source that narrows: where a step has them, a write under
     /// its worktree that matches none of their patterns is denied. What a command the agent ran
     /// writes is not seen here, and is measured where it cannot be missed: at the fold.
@@ -561,7 +575,7 @@ public sealed partial class AgentPolicy
         {
             // Beneath the worktree by any spelling its file system folds to it: the narrowing holds
             // for each, and a pattern allows only the spelling it names as the platform compares.
-            if (Beneath(_workingRoot, form, Refusals) is { } relative && !_writes.Any(write => write.Pattern.Matches(relative, _platform.PathComparison)))
+            if (Beneath(_workingRoot, form, Refusals) is { } relative && !Covers(relative))
             {
                 return new AgentPolicyAnswer.Denied(
                     "the step's writes",

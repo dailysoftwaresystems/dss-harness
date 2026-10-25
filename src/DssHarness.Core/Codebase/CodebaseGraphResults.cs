@@ -1,3 +1,6 @@
+using System.Globalization;
+using DssHarness.Core.Output;
+
 namespace DssHarness.Core.Codebase;
 
 /// <summary>One node as an answer names it: its handle, kind, where it stands and how sure the view is of it.</summary>
@@ -188,4 +191,111 @@ public static class GraphRelations
         IncludedBy => [(GraphSide.In, CodeEdgeKinds.Imports), (GraphSide.In, CodeEdgeKinds.ProjectReference)],
         _ => throw new ArgumentOutOfRangeException(nameof(relation), relation, "Not a relation a related walk follows."),
     };
+}
+
+/// <summary>One edge a walk follows from a node: the node it reaches, which way and by what kind, and how sure the surest such edge is.</summary>
+/// <param name="To">The node reached, by id.</param>
+/// <param name="Side">Which way the edge was followed from the node walked from.</param>
+/// <param name="Kind">The edge's kind (<see cref="CodeEdgeKinds"/>).</param>
+/// <param name="Confidence">How sure the surest edge of that kind and side to it is (<see cref="CodeConfidences"/>).</param>
+public sealed record GraphStep(string To, GraphSide Side, string Kind, string Confidence)
+{
+    /// <summary>Where the walk named this kind and side among those it follows, from 0.</summary>
+    public int Order { get; init; }
+}
+
+/// <summary>
+/// How near a node is to a step's own work, which breaks a tie between nodes <c>find</c> scores alike (part 08): a node of
+/// its context pack or of a working set it was given, then one in a file its <c>writes</c> covers, then one in a file its
+/// agent changed, then one in a path or with a name its prompt holds - each nearer than the next, and every other node
+/// <see cref="Far"/>.
+/// </summary>
+public sealed class GraphNearness
+{
+    /// <summary>How near a node with nothing to do with the step's work is: after every other.</summary>
+    public const int Far = 4;
+
+    private readonly IReadOnlySet<string> _ids;
+    private readonly Func<string, bool> _written;
+    private readonly IReadOnlySet<string> _changed;
+    private readonly IReadOnlySet<string> _paths;
+    private readonly IReadOnlySet<string> _names;
+
+    /// <summary>The nearness of a step's work.</summary>
+    /// <param name="ids">The nodes of its pack and of the working sets it was given.</param>
+    /// <param name="written">Whether its <c>writes</c> covers a file, by its path relative to the tree.</param>
+    /// <param name="changed">The files its agent changed against its base.</param>
+    /// <param name="paths">The files its prompt names.</param>
+    /// <param name="names">The words its prompt holds, each a name a node may carry.</param>
+    public GraphNearness(IEnumerable<string> ids, Func<string, bool> written, IEnumerable<string> changed, IEnumerable<string> paths, IEnumerable<string> names)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        ArgumentNullException.ThrowIfNull(written);
+        ArgumentNullException.ThrowIfNull(changed);
+        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(names);
+
+        _ids = ids.ToHashSet(StringComparer.Ordinal);
+        _written = written;
+        _changed = changed.ToHashSet(StringComparer.Ordinal);
+        _paths = paths.ToHashSet(StringComparer.Ordinal);
+        _names = names.ToHashSet(StringComparer.Ordinal);
+    }
+
+    /// <summary>How near <paramref name="card"/>'s node is, from 0, the nearest, to <see cref="Far"/>.</summary>
+    /// <param name="card">A node.</param>
+    public int Of(GraphCard card)
+    {
+        ArgumentNullException.ThrowIfNull(card);
+
+        return _ids.Contains(card.Id) ? 0
+            : _written(card.Path) ? 1
+            : _changed.Contains(card.Path) ? 2
+            : _paths.Contains(card.Path) || _names.Contains(card.Name) ? 3
+            : Far;
+    }
+}
+
+/// <summary>How a node is written in the lines the <c>graph</c> tool and the context pack give.</summary>
+public static class GraphLines
+{
+    /// <summary>
+    /// The one line a node is named by in every answer and in the context pack: its handle, kind and signature (its
+    /// qualified name where it has none), <c>path:start-end #hash</c>, its summary, and its callers and callees and
+    /// whether its file is generated or dynamic where they say anything.
+    /// </summary>
+    /// <param name="card">The node.</param>
+    public static string Of(GraphCard card)
+    {
+        ArgumentNullException.ThrowIfNull(card);
+
+        var where = card.Hash is { } hash
+            ? $"{card.Path}:{card.Start.ToString(CultureInfo.InvariantCulture)}-{card.End.ToString(CultureInfo.InvariantCulture)} #{hash}"
+            : $"{card.Path}:{card.Start.ToString(CultureInfo.InvariantCulture)}-{card.End.ToString(CultureInfo.InvariantCulture)}";
+        var line = $"{card.Handle} {card.Kind} {(card.Signature.Length > 0 ? card.Signature : card.Qualified)} | {where}";
+
+        if (card.Summary is { } summary)
+        {
+            line += $" | {summary}";
+        }
+
+        var marks = new List<string>();
+
+        if (card.Callers > 0 || card.Callees > 0)
+        {
+            marks.Add($"{ReportText.Counted(card.Callers, "caller")}, {ReportText.Counted(card.Callees, "callee")}");
+        }
+
+        if (card.Generated)
+        {
+            marks.Add("generated");
+        }
+
+        if (card.Dynamic)
+        {
+            marks.Add("dynamic");
+        }
+
+        return marks.Count > 0 ? $"{line} | {string.Join(", ", marks)}" : line;
+    }
 }

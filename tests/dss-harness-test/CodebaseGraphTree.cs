@@ -208,7 +208,8 @@ internal sealed class CodebaseGraphTree : IDisposable
         _worktrees.Dispose();
     }
 
-    private CodebaseGraphSync Request(string? agent = null, string? worktree = null, bool rebuild = false)
+    /// <summary>The sync of <paramref name="agent"/>'s view of <paramref name="worktree"/> - the base's where it names none - as the tests ask the service.</summary>
+    public CodebaseGraphSync Request(string? agent = null, string? worktree = null, bool rebuild = false)
         => new(Layout, Run, _shape, WorktreesRoot, rebuild, "graph#1") { Worktree = agent is null ? null : new CodebaseGraphWorktree(agent, worktree!) };
 
     private CodebaseGraphService Made()

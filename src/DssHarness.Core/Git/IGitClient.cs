@@ -205,6 +205,16 @@ public interface IGitClient
     Task<IReadOnlyList<byte[]?>> ReadBlobsAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The size in bytes of each blob <paramref name="objects"/> names, in order, asked of one git process without reading
+    /// any; <see langword="null"/> for one that is no blob git holds.
+    /// </summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="objects">Blob ids, or names git reads as one, none holding a line break.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git could not answer, or answered other than it was asked.</exception>
+    Task<IReadOnlyList<long?>> ReadBlobSizesAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// What git's attributes declare for each of <paramref name="paths"/> in the work tree at <paramref name="directory"/>:
     /// for each path, each of <paramref name="attributes"/> with what <c>git check-attr</c> answers for it - its value, or
     /// one of <see cref="GitAttributes"/>. Asked of git rather than parsed: git's own precedence between patterns,

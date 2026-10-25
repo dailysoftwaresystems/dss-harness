@@ -3495,7 +3495,7 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             "What an agent asks of the graph is one tool, graph, whose op says what is asked: "
-            + $"{CodebaseGraphTool.NameOf(GraphOp.Find)} - the nodes a query's words match, best first, generated code after every other, at most {CodebaseGraphTool.FindLines} ({CodebaseGraphTool.FindMost} with limit); "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Find)} - the nodes a query's words match, best first, generated code after every other, a tie broken by how near the step's own work each is - its context pack or a working set it was given, a file it writes, a file its agent changed, a path or a name its prompt holds - then by id, at most {CodebaseGraphTool.FindLines} ({CodebaseGraphTool.FindMost} with limit); "
             + $"{CodebaseGraphTool.NameOf(GraphOp.Node)} - a node's card and its edges by kind, {CodebaseGraphTool.NodeLinesAKind} of each with the count of the rest; "
             + $"{CodebaseGraphTool.NameOf(GraphOp.Related)} - the nodes one relation ({string.Join(", ", GraphRelations.All)}) reaches, 1 to {CodebaseGraphTool.MostDepth} hops, at most {CodebaseGraphTool.RelatedLines}, a node with more edges of that kind than the view's 99th percentile, and at least {CodebaseGraphQueries.CrowdFloor}, given and not gone through; "
             + $"{CodebaseGraphTool.NameOf(GraphOp.Outline)} - a file's or a type's declarations, or the repository's, at most {CodebaseGraphTool.OutlineLines}; "
@@ -3507,6 +3507,20 @@ public static class HelpTopics
             + $"{(CodebaseGraphTool.MostCharacters / 1024).ToString(CultureInfo.InvariantCulture)} KB, saying how to ask for the rest with offset. Where the graph is not sure - no node matched, a name it does not hold, "
             + $"an edge of {CodeConfidences.Candidates}, a node named with external or unresolved callees or in a file dynamic or generated - the answer adds text: at most {CodebaseGraphTool.TextHits} lines that hold the name as a whole word, "
             + "searched as search_files searches, each path:line with no hash, saying how many more there were and the files it did not read; a path or a path:line is searched for by no word.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A reason step is to be given, at its start, its context pack - the API clients will give it - the part of the graph its work touches, made from its view and what the step says alone, "
+            + "so the same step on the same tree is given the same pack. Its seeds are what its prompt names exactly - a symbol or a path in backquotes, a qualified name or its last parts (Order.Total), "
+            + $"a handle, a path:line as a stack frame or a compiler writes one - the working sets it is given, the declarations of the files its writes covers, and the {CodebaseContextPack.WordSeeds} nodes its words match best. "
+            + $"The walk goes {CodebaseContextPack.NamedHops} hops from a node named or worked with and {CodebaseContextPack.OtherHops} from the others, over calls both ways, the type relations, tests and the types a node names, each node scored by its seed's weight "
+            + $"halved at each hop and weighed by each edge's confidence ({string.Join(", ", CodeConfidences.All.Select(confidence => $"{confidence} {CodebaseContextPack.Confidence(confidence).ToString(CultureInfo.InvariantCulture)}"))}), "
+            + $"and not gone through along a kind it has more edges of than the view's 99th percentile, and at least {CodebaseGraphQueries.CrowdFloor}, which its line says. It is written best first by file, "
+            + $"one line each as find gives it with how it stands to the node it was reached from, within its cap ({CodebaseContextPack.DefaultTokens.ToString(CultureInfo.InvariantCulture)} estimated tokens - bytes over {EstimatedTokens.BytesPerToken} - by default), "
+            + "what did not fit left out whole and counted on its last line, and none at all where the cap cannot hold its first and last lines. A step that starts from its changes is packed first from "
+            + "the declarations its tree changed against its base - an agent's where its worktree was made or last moved to, the main checkout's the run's start - each with where its lines differ, "
+            + "one moved between files and one taken out as the base held it, then their tests and those of their direct callers, then their callers to two hops, overrides, implementations and "
+            + "dispatches, and derived types; where nothing changed, its first line says so and the task's seeds stand in.");
         builder.AppendLine();
         AppendWrapped(
             builder,

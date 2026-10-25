@@ -172,7 +172,7 @@ public sealed class CodebaseGraphQueryService(
             {
                 input["path"] = file;
             }
-            else if (queries.Resolve(outlineOf) is GraphResolve.NotFound && CodebaseGraphTool.NamesAFile(outlineOf))
+            else if (queries.Resolve(outlineOf) is GraphResolve.NotFound && CodebaseGraphQueries.NamesAFile(outlineOf))
             {
                 input["path"] = outlineOf;
             }

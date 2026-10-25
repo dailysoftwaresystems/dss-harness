@@ -47,6 +47,21 @@ public sealed class FlowGraphSyncs(
     private const string ViewAgain = "the next sync of that view brings it up to date";
 
     /// <summary>
+    /// The commit a step's tree's work started from, which change-first compares the tree with (value 371): an agent's
+    /// worktree's base as its record says it - where its worktree was made, or where its last refresh or rebase brought it -
+    /// and for the main checkout, which an agent that reads and a step with no agent work in, the commit the run started
+    /// from. Null where neither is recorded: a worktree not made yet, a run started beside the tree's history.
+    /// </summary>
+    /// <param name="agent">The record of the agent the step works in; null for a step with none.</param>
+    /// <param name="run">The run's context.</param>
+    public static string? ChangesBase(AgentRecord? agent, FlowRunContext run)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        return agent is { Reads: false } ? agent.Base : run.StartCommit;
+    }
+
+    /// <summary>
     /// A reason step starts: its view is synced by a whole listing - the agent's it works in, the base for one that reads -
     /// where the run has a graph, so a person's change of the main tree and the agent's own work since its last step are in
     /// what it is served.

@@ -3611,6 +3611,23 @@ public sealed partial class HelpTests
     [GeneratedRegex(@"^  (?<key>[A-Za-z]+): \S.*?  +(?<meaning>\S.*)$")]
     private static partial Regex SpeltKeyLine();
 
+    /// <summary>The codebase-graph topic says the context pack's seeds, walk, weights and cap, and find's ties, as the code holds them.</summary>
+    [Fact]
+    public void TheCodebaseGraphTopic_SaysTheContextPacksSeedsWalkAndCap_FromTheCode()
+    {
+        var prose = Prose.Words(HelpText.Of("codebase-graph").StandardOutput);
+
+        Assert.Contains(Prose.Words($"the {DssHarness.Core.Codebase.CodebaseContextPack.WordSeeds} nodes its words match best"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"The walk goes {DssHarness.Core.Codebase.CodebaseContextPack.NamedHops} hops from a node named or worked with and {DssHarness.Core.Codebase.CodebaseContextPack.OtherHops} from the others"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"({string.Join(", ", DssHarness.Core.Codebase.CodeConfidences.All.Select(confidence => $"{confidence} {DssHarness.Core.Codebase.CodebaseContextPack.Confidence(confidence).ToString(System.Globalization.CultureInfo.InvariantCulture)}"))})"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"more edges of than the view's 99th percentile, and at least {DssHarness.Core.Codebase.CodebaseGraphQueries.CrowdFloor}, which its line says"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("none at all where the cap cannot hold its first and last lines"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("A step that starts from its changes is packed first from the declarations its tree changed against its base - an agent's where its worktree was made or last moved to, the main checkout's the run's start - each with where its lines differ"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("then their tests and those of their direct callers, then their callers to two hops, overrides, implementations and dispatches, and derived types; where nothing changed, its first line says so and the task's seeds stand in."), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"within its cap ({DssHarness.Core.Codebase.CodebaseContextPack.DefaultTokens} estimated tokens - bytes over {DssHarness.Core.Codebase.EstimatedTokens.BytesPerToken} - by default)"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("a tie broken by how near the step's own work each is - its context pack or a working set it was given, a file it writes, a file its agent changed, a path or a name its prompt holds - then by id"), prose, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// The codebase-graph topic, under each of its names, says every implementation this build holds - its version, what it
     /// claims, what it reads and what it does not see - every key of codebaseGraph, the graph's files, the step's output,

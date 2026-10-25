@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
@@ -650,6 +651,43 @@ public sealed partial class GitClient
         var read = await ReadBatchAsync(directory, objects, $"read {ReportText.Counted(objects.Count, "object")}", store: null, cancellationToken).ConfigureAwait(false);
 
         return [.. read.Select(answer => answer is { Type: "blob" } blob ? Encoding.Latin1.GetBytes(blob.Content) : null)];
+    }
+
+    public async Task<IReadOnlyList<long?>> ReadBlobSizesAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(objects);
+
+        if (objects.Count == 0)
+        {
+            return [];
+        }
+
+        if (objects.FirstOrDefault(name => name.Contains('\n', StringComparison.Ordinal) || name.Contains('\r', StringComparison.Ordinal)) is { } broken)
+        {
+            throw new ArgumentException($"'{broken}' holds a line break, which git reads as two names.", nameof(objects));
+        }
+
+        var result = await RunCoreAsync(
+                directory,
+                ["cat-file", "--batch-check=%(objecttype) %(objectsize)"],
+                echoOutput: false,
+                untranslated: false,
+                indexFile: null,
+                string.Concat(objects.Select(name => name + "\n")),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        Ensure(result, $"size {ReportText.Counted(objects.Count, "object")}");
+
+        var lines = result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.TrimEnd('\r')).ToList();
+
+        if (lines.Count != objects.Count)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, $"git answered {ReportText.Counted(lines.Count, "line")} for the {objects.Count} object(s) it was asked the size of.");
+        }
+
+        // A blob is its type and size; anything else - another type, or git's word that it holds no such object - is none.
+        return [.. lines.Select(line => line.Split(' ') is ["blob", var size] && long.TryParse(size, NumberStyles.None, CultureInfo.InvariantCulture, out var bytes) ? bytes : (long?)null)];
     }
 
     public Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>> ReadAttributesAsync(

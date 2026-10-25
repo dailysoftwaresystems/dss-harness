@@ -1163,6 +1163,9 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     /// <summary>Runs before each question of what a work tree changes since a commit, with the directory and the commit.</summary>
     public Action<string, string>? BeforeListChangedSince { get; init; }
 
+    /// <summary>Runs before each read of blobs' bytes, with the objects asked for.</summary>
+    public Action<IReadOnlyList<string>>? BeforeReadBlobs { get; init; }
+
     /// <summary>Runs before each arbitrary git command, with its arguments.</summary>
     public Action<IReadOnlyList<string>>? BeforeRun { get; init; }
 
@@ -1303,7 +1306,13 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         => Call(() => inner.MergeTextAsync(ancestor, ours, theirs, names, Token(cancellationToken)));
 
     public Task<IReadOnlyList<byte[]?>> ReadBlobsAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default)
-        => Call(() => inner.ReadBlobsAsync(directory, objects, Token(cancellationToken)));
+    {
+        BeforeReadBlobs?.Invoke(objects);
+        return Call(() => inner.ReadBlobsAsync(directory, objects, Token(cancellationToken)));
+    }
+
+    public Task<IReadOnlyList<long?>> ReadBlobSizesAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default)
+        => Call(() => inner.ReadBlobSizesAsync(directory, objects, Token(cancellationToken)));
 
     public Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>> ReadAttributesAsync(
         string directory,

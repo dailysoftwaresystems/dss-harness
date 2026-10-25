@@ -29,6 +29,12 @@ public static class CodeNodeKinds
     /// <summary>A Markdown heading and the lines under it, so one section can be served alone.</summary>
     public const string Section = "section";
 
+    /// <summary>
+    /// The kinds that are declarations - a type, a member, a section of a document - rather than a file, a project or a
+    /// namespace, whose lines hold others': what a change is told by, and what a context pack seeds from a file.
+    /// </summary>
+    public static IReadOnlyList<string> Declarations { get; } = [Type, Member, Section];
+
     /// <summary>Every kind an implementation may give a node of its extract: all but <see cref="File"/>, which is the core's.</summary>
     public static IReadOnlyList<string> Extracted { get; } = [Project, Namespace, Type, Member, Section];
 }

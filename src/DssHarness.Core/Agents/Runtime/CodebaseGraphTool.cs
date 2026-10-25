@@ -76,13 +76,15 @@ public enum GraphToolOutcome
 /// <param name="mayRead">Whether the step's policy lets a file be read, by its path relative to the tree: a node of a file it does not is left out, and counted.</param>
 /// <param name="mayWrite">The step's policy on writing a file, by its path relative to the tree; null where <c>edit</c> is not given.</param>
 /// <param name="reExtract">Checks a file again by its path relative to the tree and answers the view it leaves; null where nothing may be synced (the verb).</param>
+/// <param name="near">How near each node is to the step's own work, which breaks a tie in <c>find</c> (the step's context pack gives it); null where there is no step.</param>
 public sealed class CodebaseGraphTool(
     CodebaseGraphQueries queries,
     AgentFiles files,
     IFileSystem fileSystem,
     Func<string, bool> mayRead,
     Func<string, AgentPolicyAnswer>? mayWrite = null,
-    Func<string, CancellationToken, Task<CodebaseGraphQueries>>? reExtract = null)
+    Func<string, CancellationToken, Task<CodebaseGraphQueries>>? reExtract = null,
+    GraphNearness? near = null)
 {
     /// <summary>The most characters an answer holds, cut at a whole line past it.</summary>
     public const int MostCharacters = 24 * 1024;
@@ -304,9 +306,9 @@ public sealed class CodebaseGraphTool(
         var query = Str(input, "query")!;
         var limit = Int(input, "limit") ?? FindLines;
         var offset = Int(input, "offset") ?? 0;
-        var matched = _queries.Find(query, Str(input, "kind"), Str(input, "path") is { } path ? _queries.HeldPath(path) ?? path : null, int.MaxValue, 0).Cards;
+        var matched = _queries.Find(query, Str(input, "kind"), Str(input, "path") is { } path ? _queries.HeldPath(path) ?? path : null, int.MaxValue, 0, near).Cards;
         var (kept, left) = Readable(matched);
-        var text = kept.Count == 0 ? "no node matched" : Paged([.. kept.Select(Line)], offset, limit);
+        var text = kept.Count == 0 ? "no node matched" : Paged([.. kept.Select(GraphLines.Of)], offset, limit);
 
         if (matched.Count == 0)
         {
@@ -325,7 +327,7 @@ public sealed class CodebaseGraphTool(
             return Answered(await UnresolvedAsync(symbol, cancellationToken).ConfigureAwait(false));
         }
 
-        var lines = new List<string> { Line(card) };
+        var lines = new List<string> { GraphLines.Of(card) };
         var left = 0;
         var unsure = _queries.Unsure(card.Id);
 
@@ -374,8 +376,8 @@ public sealed class CodebaseGraphTool(
         var reached = _queries.Related(card.Id, relation, depth);
         var kept = reached.Where(one => Reads(one.Card)).ToList();
         var lines = kept.Select(one => one.Crowded is { } edges
-            ? $"{one.Distance}: {Line(one.Card)} | {edges} {relation}, not gone through"
-            : $"{one.Distance}: {Line(one.Card)}").ToList();
+            ? $"{one.Distance}: {GraphLines.Of(one.Card)} | {edges} {relation}, not gone through"
+            : $"{one.Distance}: {GraphLines.Of(one.Card)}").ToList();
         var text = lines.Count == 0 ? $"no node is {relation} of '{card.Qualified}'" : Paged(lines, offset, RelatedLines);
 
         if (_queries.Unsure(card.Id) || kept.Any(one => one.Candidates || _queries.Unsure(one.Card.Id)))
@@ -404,7 +406,7 @@ public sealed class CodebaseGraphTool(
                 return Answered($"the view holds no file at '{path}'");
             }
 
-            return Answered($"outline of {path} ({ReportText.Counted(cards.Count, "declaration")}):\n" + (cards.Count == 0 ? "no declaration" : Paged([.. cards.Select(Line)], offset, OutlineLines)));
+            return Answered($"outline of {path} ({ReportText.Counted(cards.Count, "declaration")}):\n" + (cards.Count == 0 ? "no declaration" : Paged([.. cards.Select(GraphLines.Of)], offset, OutlineLines)));
         }
 
         if (Str(input, "symbol") is { } symbol)
@@ -416,13 +418,13 @@ public sealed class CodebaseGraphTool(
 
             var members = _queries.OutlineType(card.Id);
             var (kept, left) = Readable(members);
-            var text = Line(card) + "\n" + (kept.Count == 0 ? "no declaration inside it" : Paged([.. kept.Select(one => "  " + Line(one))], offset, OutlineLines));
+            var text = GraphLines.Of(card) + "\n" + (kept.Count == 0 ? "no declaration inside it" : Paged([.. kept.Select(one => "  " + GraphLines.Of(one))], offset, OutlineLines));
             return Answered(text + LeftOut(left));
         }
 
         var overview = _queries.Overview();
         var lines = new List<string>();
-        lines.AddRange(overview.Projects.Where(Reads).Select(project => "project " + Line(project)));
+        lines.AddRange(overview.Projects.Where(Reads).Select(project => "project " + GraphLines.Of(project)));
         lines.AddRange(overview.Directories
             .Select(directory => (directory.Directory, Files: directory.Files.Count(_mayRead)))
             .Where(directory => directory.Files > 0)
@@ -596,7 +598,7 @@ public sealed class CodebaseGraphTool(
             // Optimistic concurrency: the lines are written only where they are the ones the agent saw.
             if (!Same(now, hash))
             {
-                return Answered($"'{card.Qualified}' changed since you saw it (#{hash}, now #{now}, lines {card.Start}-{card.End}): read it again and edit with the new hash\n{Line(card with { Hash = now })}");
+                return Answered($"'{card.Qualified}' changed since you saw it (#{hash}, now #{now}, lines {card.Start}-{card.End}): read it again and edit with the new hash\n{GraphLines.Of(card with { Hash = now })}");
             }
         }
 
@@ -609,8 +611,8 @@ public sealed class CodebaseGraphTool(
         var after = await ExtractedAgainAsync(card.Path, cancellationToken).ConfigureAwait(false);
         var written = card.End - card.Start + 1 + moved;
         var shift = moved == 0 ? "no later declaration moved" : $"the file's later declarations moved {ReportText.Counted(Math.Abs(moved), "line")} {(moved > 0 ? "down" : "up")}";
-        var held = (after.OutlineFile(card.Path) ?? []).Where(one => one.Start >= card.Start && one.Start < card.Start + written).Select(one => "  " + Line(one)).ToList();
-        var said = after.Part(card.Id, card.Path) is { } refound ? Line(refound)
+        var held = (after.OutlineFile(card.Path) ?? []).Where(one => one.Start >= card.Start && one.Start < card.Start + written).Select(one => "  " + GraphLines.Of(one)).ToList();
+        var said = after.Part(card.Id, card.Path) is { } refound ? GraphLines.Of(refound)
             : written == 0 ? $"the new lines are none: '{card.Qualified}' is gone from '{card.Path}'"
             : held.Count == 0 ? $"the new lines no longer declare '{card.Qualified}', nor anything else"
             : $"the new lines no longer declare '{card.Qualified}'; they hold:\n" + string.Join('\n', held);
@@ -652,7 +654,7 @@ public sealed class CodebaseGraphTool(
         {
             case GraphResolve.Candidates candidates:
                 var (kept, left) = Readable(candidates.Cards);
-                return $"'{symbol}' is not one name: {ReportText.Counted(kept.Count, "node")} carry it - ask again by a handle\n" + string.Join('\n', kept.Select(Line)) + LeftOut(left);
+                return $"'{symbol}' is not one name: {ReportText.Counted(kept.Count, "node")} carry it - ask again by a handle\n" + string.Join('\n', kept.Select(GraphLines.Of)) + LeftOut(left);
 
             case GraphResolve.Found:
                 return $"'{symbol}' is in a file your reads do not reach";
@@ -814,63 +816,19 @@ public sealed class CodebaseGraphTool(
         return text;
     }
 
-    private static string Line(GraphCard card)
-    {
-        var where = card.Hash is { } hash
-            ? $"{card.Path}:{card.Start.ToString(CultureInfo.InvariantCulture)}-{card.End.ToString(CultureInfo.InvariantCulture)} #{hash}"
-            : $"{card.Path}:{card.Start.ToString(CultureInfo.InvariantCulture)}-{card.End.ToString(CultureInfo.InvariantCulture)}";
-        var line = $"{card.Handle} {card.Kind} {(card.Signature.Length > 0 ? card.Signature : card.Qualified)} | {where}";
-
-        if (card.Summary is { } summary)
-        {
-            line += $" | {summary}";
-        }
-
-        var marks = new List<string>();
-
-        if (card.Callers > 0 || card.Callees > 0)
-        {
-            marks.Add($"{ReportText.Counted(card.Callers, "caller")}, {ReportText.Counted(card.Callees, "callee")}");
-        }
-
-        if (card.Generated)
-        {
-            marks.Add("generated");
-        }
-
-        if (card.Dynamic)
-        {
-            marks.Add("dynamic");
-        }
-
-        return marks.Count > 0 ? $"{line} | {string.Join(", ", marks)}" : line;
-    }
-
     private static string EdgeLine(GraphEdge edge)
-        => string.Equals(edge.Confidence, CodeConfidences.Exact, StringComparison.Ordinal) ? Line(edge.Card) : $"{Line(edge.Card)} | {edge.Confidence}";
+        => string.Equals(edge.Confidence, CodeConfidences.Exact, StringComparison.Ordinal) ? GraphLines.Of(edge.Card) : $"{GraphLines.Of(edge.Card)} | {edge.Confidence}";
 
     /// <summary>The simple name <paramref name="symbol"/> ends with, a text search's word; null where it names a file or a line of one, which no word is.</summary>
     private static string? Simple(string symbol)
     {
-        if (NamesAFile(symbol))
+        if (CodebaseGraphQueries.NamesAFile(symbol))
         {
             return null;
         }
 
         var cut = Math.Max(Math.Max(symbol.LastIndexOf(':'), symbol.LastIndexOf('.')), symbol.LastIndexOf('\\'));
         return cut >= 0 && cut < symbol.Length - 1 ? symbol[(cut + 1)..] : symbol;
-    }
-
-    /// <summary>Whether <paramref name="symbol"/> is written as a file is - with a separator, or as a <c>path:line</c> - rather than as a name.</summary>
-    /// <param name="symbol">What an agent or a person wrote.</param>
-    public static bool NamesAFile(string symbol)
-    {
-        ArgumentNullException.ThrowIfNull(symbol);
-
-        var colon = symbol.LastIndexOf(':');
-        var backslash = symbol.LastIndexOf('\\');
-        return symbol.Contains('/', StringComparison.Ordinal) || (backslash >= 0 && symbol.IndexOf('.', backslash) > backslash)
-            || (colon > 0 && int.TryParse(symbol.AsSpan(colon + 1), NumberStyles.None, CultureInfo.InvariantCulture, out _));
     }
 
     private static IEnumerable<GraphOp> Ordered(IEnumerable<GraphOp> ops) => ops.Order();

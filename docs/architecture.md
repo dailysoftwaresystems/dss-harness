@@ -2207,14 +2207,16 @@ the hook looks for it, which its runner finds as it does.
 
 What an agent asks of the graph is one tool, `graph` (`Agents\Runtime\CodebaseGraphTool`), whose `op` is `find`, `node`,
 `related`, `outline`, `body`, `edit` or `wholeFile`, over the lookups of `CodebaseGraphQueries` - each node by its id,
-handle, qualified name (one written with its language's `::` or `\` read as the model's `.`) and simple name and
-`path:line`, each file's nodes, each node's edges in and out by kind, the words its
+handle, qualified name (one written with its language's `::` or `\` read as the model's `.`, or with only its last
+parts, `Order.Total`) and simple name and `path:line`, each file's nodes, each node's edges in and out by kind, the words its
 name splits into weighed by how rare they are, and the 99th percentile of each kind's degree on either side - built once
 from a `CodebaseGraphRead`. Every node an answer names is one line with its handle, kind, signature and `path:start-end
 #hash` (the first eight characters of its digest); `find` ranks a whole qualified name, then a simple name, then a
 prefix, then the share of the query's words weighed by their rarity, a summary's and a path's words a twentieth as much,
-generated code after every other and ties by id; `related` gives a hub - more edges of the relation's kinds than the
-99th percentile and at least `CodebaseGraphQueries.CrowdFloor` - and does not go through it; each operation is bounded
+generated code after every other, a tie by how near the step's own work each node is (`GraphNearness`: its context
+pack or a working set it was given, a file its `writes` covers, a file its agent changed, a path or a name its prompt
+holds) and then by id; `related` gives a hub - more edges of the relation's kinds than the 99th percentile and at least
+`CodebaseGraphQueries.CrowdFloor`, `CodebaseGraphQueries.Crowd` the one rule of it - and does not go through it; each operation is bounded
 (`CodebaseGraphTool.FindLines` and the rest) and every answer cut at a whole line past `CodebaseGraphTool.MostCharacters`,
 saying the offset to ask again with; every answer ends naming the files whose extract the view no longer holds
 (`CodebaseGraphQueries.Unheld`), whose declarations no answer gives. Where the graph is not sure - no node matched, a
@@ -2231,7 +2233,47 @@ handed, keeping the file's encoding, endings and final newline, and answers the 
 schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
 `wholeFile` with `narrow`), and a call given a member its operation does not read, one of the wrong type, or missing one
 it needs, is a usage line (`CodebaseGraphTool.Misused`). Nothing gives a step the tool yet: slice 27d adds it to the tool
-runtime's table with its write rules and edit check.
+runtime's table with its write rules and edit check. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
+
+The context pack (`CodebaseContextPack`, value 370) is the part of the graph a step's work touches, made at its start
+from the view and what the step says alone (`ContextPackRequest`: its filled prompt, `writes`, the working sets it is
+given, its changes, its read rule and cap), so the same step on the same tree is given the same pack. Its seeds are what
+the prompt names exactly - a symbol or a path in backquotes (a path standing for its declarations), a qualified name
+or its last parts, a handle, a `path:line` as a stack frame or a compiler writes one, the longest of an absolute or a
+foreign path's endings the view holds or the one file it holds that ends with it - each a weight of 4 (a name several readable nodes
+carry, up to `CodeConfidences.MostCandidates`, 2 each), a working set's nodes 4 and an edited one 5, a named file's
+declarations (`CodeNodeKinds.Declarations`) 3, the declarations of the files the step's `writes` covers
+(`AgentPolicy.StepWrites`) 2, and the ten nodes the prompt's words match best (`find`'s ranking, over declarations) 2.
+The walk goes two hops from a node named or worked with and one from the others over `CodebaseContextPack.Walked` -
+`calls`, `inherits`, `mixesIn`, `implements`, `overrides`, `dispatches` and `tests` both ways, `references` out, the
+steps of each `CodebaseGraphQueries.Steps` gives - each node keeping its best score (its seed's weight halved at each
+hop, times 1, 0.7 or 0.3 by each edge's confidence) and its relation to the node it was reached from (`calls
+FoldAsync`). A seed is walked from along every kind, as `related` walks from the node asked about; a node reached is
+not gone through along a kind it is a hub of (`CodebaseGraphQueries.Crowd`, judged per kind), its line saying which;
+a node the step may not read is neither listed, named nor gone through, only counted. The lines are written best first
+by file - generated code after every other - within the cap in estimated tokens (`EstimatedTokens`: UTF-8 bytes over
+four, rounded up), a line that does not fit left out whole and counted, and a cap too small for the first and last
+lines gives no pack, every node counted left out; the first line names the view, its commit, the files that differ
+from its base and what the pack was seeded from, the last its nodes, its tokens and what was left out.
+Change-first (value 371) starts from `ICodebaseGraphService.ChangesAsync`: the paths that differ from the base
+(`ICodebaseGraphService.DifferingAsync`: git's diff against it and the untracked list, kept to what the graph's
+`include` and `exclude` list), each file's blob at the base sized first (`IGitClient.ReadBlobSizesAsync`) - one past
+`maxFileBytes` not read - and read in memory as a sync reads a file (`CodebaseGraphService.Read`, the one reading of a
+file's text into an extract, its size check with it) beside its extract and lines now, and
+`CodebaseGraphChanges.Compared` telling each declaration added, changed by its own lines (`CodeLineDiff`, Myers' walk
+bounded by `CodeLineDiff.MostEdits`, lines taken out judged at the base) or taken out - a type by none of its members,
+each declaration taken out with what it was declared in (`CodeChangedNode.Parent`), a file kept out as generated, or a
+side not read, telling none for that side. The pack lists those first, each with where its lines differ - a
+declaration moved to another file said moved from where it was, a part of a type in each file it changed in listed
+for each, one taken out said as the base held it, whether or not another file still declares a part of it, and what
+went with its container said by the container alone - then their tests and their direct callers' tests, then their
+callers to two hops, overrides both ways, implementations and dispatches, and derived types, then the task's seeds;
+its first line counts the lines the changes lead with, and with no base, its changes unread (and why, on one line:
+`TextLines.OneLine`), no change, or no declaration among the files that differ, says so and the task's seeds stand
+in. `FlowGraphSyncs.ChangesBase` names the base: an agent's recorded `Base`, the run's start commit for the main
+checkout. A pack keeps, beside its text, its seeds (each node once, by its heaviest seed - the one its line says), its
+nodes and each node line it wrote (`ContextPack.Lines`, what a delta gives of a pack a conversation was not given).
+Slice 27d puts the pack at the head of a step's first message and hands the tool its `Near`.
 `query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
 through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a
 view linked in memory from the base's files and its record, and a link result another linker made linked again in

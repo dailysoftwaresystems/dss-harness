@@ -893,6 +893,21 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Contains("type public class Rank | src/Rank.cs:6-8", named.Split('\n')[0], StringComparison.Ordinal);
     }
 
+    /// <summary>Two nodes <c>find</c> scores alike are told apart by how near the step's work each is, where the tool is given that, before their ids.</summary>
+    [Fact]
+    public async Task Find_BreaksATie_ByTheNearnessItIsGiven()
+    {
+        using var tree = await TreeAsync(("src/A.cs", "public class A\n{\n    public void Go()\n    {\n    }\n}\n"), ("src/B.cs", "public class B\n{\n    public void Go()\n    {\n    }\n}\n"));
+        var queries = await QueriesAsync(tree);
+
+        var plain = (await AskAsync(Tool(tree, queries), """{"op":"find","query":"Go"}""")).Text.Split('\n');
+        var near = (await AskAsync(Tool(tree, queries, near: new GraphNearness([], path => path == "src/B.cs", [], [], [])), """{"op":"find","query":"Go"}""")).Text.Split('\n');
+
+        Assert.Contains("| src/A.cs:3-5", plain[0], StringComparison.Ordinal);
+        Assert.Contains("| src/B.cs:3-5", near[0], StringComparison.Ordinal);
+        Assert.Contains("| src/A.cs:3-5", near[1], StringComparison.Ordinal);
+    }
+
     /// <summary>A declaration spread over a prototype and a definition is spoken for by the one with a body, wherever the prototype sorts.</summary>
     [Fact]
     public async Task ADeclarationWithABody_SpeaksForItsPrototypes()
@@ -1110,7 +1125,7 @@ public sealed partial class CodebaseGraphToolTests
     private static async Task<CodebaseGraphQueries> QueriesAsync(CodebaseGraphTree tree) => new((await tree.CheckAsync(null, null)).Read);
 
     /// <summary>The tool over <paramref name="queries"/>, reading what the graph lists where no rule is given, and syncing a file again where <paramref name="sync"/>.</summary>
-    private static CodebaseGraphTool Tool(CodebaseGraphTree tree, CodebaseGraphQueries queries, Func<string, bool>? mayRead = null, Func<string, AgentPolicyAnswer>? mayWrite = null, bool sync = true)
+    private static CodebaseGraphTool Tool(CodebaseGraphTree tree, CodebaseGraphQueries queries, Func<string, bool>? mayRead = null, Func<string, AgentPolicyAnswer>? mayWrite = null, bool sync = true, GraphNearness? near = null)
     {
         var never = CodebaseGraphService.NeverListed(tree.WorktreesRoot);
 
@@ -1120,7 +1135,8 @@ public sealed partial class CodebaseGraphToolTests
             tree.Harness.FileSystem,
             path => !PathPatterns.Matches(never, path, tree.Harness.Platform.PathComparison) && (mayRead?.Invoke(path) ?? true),
             mayWrite ?? (_ => AgentPolicyAnswer.Allow),
-            sync ? async (path, _) => new CodebaseGraphQueries((await tree.CheckAsync(null, null, path)).Read) : null);
+            sync ? async (path, _) => new CodebaseGraphQueries((await tree.CheckAsync(null, null, path)).Read) : null,
+            near);
     }
 
     private static Task<GraphToolAnswer> AskAsync(CodebaseGraphTool tool, string json, IReadOnlySet<GraphOp>? ops = null)
