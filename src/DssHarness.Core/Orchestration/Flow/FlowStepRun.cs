@@ -73,6 +73,11 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// The agent a refresh or a rebase of <c>others</c> works on in this attempt: each of its targets in turn, one at a time,
 /// each kept in the step's directory under <c>targets/&lt;agent&gt;/</c>; null for every other step.
 /// </param>
+/// <param name="WorkedFrom">
+/// A reason step's: the instances whose working sets its context pack is seeded from (<see cref="FlowWorkingSets"/>), in
+/// order - the step it goes on with, each reason step it depends on directly (a group by each one in it), then its own
+/// earlier visits, newest first - each that began once and no other; none for every other step.
+/// </param>
 public sealed record FlowStepRun(
     WorkflowStep Step,
     string Instance,
@@ -89,7 +94,8 @@ public sealed record FlowStepRun(
     IReadOnlyDictionary<string, FlowValue>? Read = null,
     FlowMadeAgent? Made = null,
     string? WorksIn = null,
-    string? Target = null);
+    string? Target = null,
+    IReadOnlyList<FlowWorkedFrom>? WorkedFrom = null);
 
 /// <summary>
 /// The one who runs a step: the code a step type calls - a machine step's service, a reason step's client runner - asked

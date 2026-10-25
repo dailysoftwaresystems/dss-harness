@@ -232,6 +232,21 @@ public sealed class FlowRecordsTests
         Assert.Throws<DssHarness.Core.Results.HarnessException>(() => FlowEventLog.Open(files, file));
     }
 
+    /// <summary>A whole line that reads as JSON but is no event a run writes is refused by its number.</summary>
+    [Fact]
+    public void AWholeLineThatIsNoEvent_IsRefusedByItsNumber()
+    {
+        using var temp = new TempDirectory();
+        var files = Files();
+        var file = temp.Combine("events.jsonl");
+
+        files.WriteAllTextAtomic(file, """{"seq": 1, "at": "2026-10-19 12:00:00", "kind": "nonsense"}""" + "\n");
+
+        var refused = Assert.Throws<DssHarness.Core.Results.HarnessException>(() => FlowEventLog.Read(files, file));
+
+        Assert.StartsWith($"line 1 of '{file}', the run's events, does not read as its next event: 'nonsense' is not an event a run writes. ", refused.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>A whole line whose seq is not the one after the line before it is refused by its number: a reopened log never numbers from an earlier event.</summary>
     [Fact]
     public void ALineNotNumberedOneAfterTheLastIsRefused()

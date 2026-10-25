@@ -12,6 +12,15 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// </remarks>
 public static class ClaudeCodeTools
 {
+    /// <summary>Claude Code's tool that reads a file's lines.</summary>
+    public const string Read = "Read";
+
+    /// <summary>Claude Code's tool that writes a file whole.</summary>
+    public const string Write = "Write";
+
+    /// <summary>Claude Code's tool that replaces a string in a file.</summary>
+    public const string Edit = "Edit";
+
     /// <summary>
     /// Each capability with the tools it names, in the order a definition names the capabilities; each tool with the
     /// member of its input that names what a call of it is of - the path it reads or writes, the command it runs - and
@@ -20,8 +29,8 @@ public static class ClaudeCodeTools
     /// </summary>
     public static IReadOnlyList<(AgentCapability Capability, IReadOnlyList<ClaudeCodeTool> Tools)> Table { get; } =
     [
-        (AgentCapability.Read, [new("Read", "file_path"), new("Grep", "path", Searches: true), new("Glob", "path", Searches: true)]),
-        (AgentCapability.Write, [new("Write", "file_path"), new("Edit", "file_path"), new("NotebookEdit", "notebook_path")]),
+        (AgentCapability.Read, [new(Read, "file_path"), new("Grep", "path", Searches: true), new("Glob", "path", Searches: true)]),
+        (AgentCapability.Write, [new(Write, "file_path"), new(Edit, "file_path"), new("NotebookEdit", "notebook_path")]),
         (AgentCapability.Run, [new("Bash", "command")]),
         (AgentCapability.Web, []),
     ];

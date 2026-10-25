@@ -86,48 +86,19 @@ public sealed record CodebaseGraphChanges(string Base, IReadOnlyList<string> Fil
 
         foreach (var hunk in hunks)
         {
-            var runs = Runs(Math.Max(hunk.Start, node.Start), Math.Min(hunk.End, node.End), spans);
+            var runs = CodeOwnLines.Runs(Math.Max(hunk.Start, node.Start), Math.Min(hunk.End, node.End), spans);
 
             if (runs.Count > 0)
             {
                 own.AddRange(runs.Select((run, at) => new CodeLineHunk(run.Start, run.End - run.Start + 1, at == 0 ? hunk.Taken : 0, hunk.From)));
             }
-            else if (Runs(Math.Max(hunk.From, old.Start), Math.Min(hunk.TakenEnd, old.End), oldSpans).Count > 0)
+            else if (CodeOwnLines.Meet(hunk.From, hunk.TakenEnd, old.Start, old.End, oldSpans))
             {
                 own.Add(new CodeLineHunk(hunk.Start, 0, hunk.Taken, hunk.From));
             }
         }
 
         return own;
-    }
-
-    /// <summary>The runs of lines from <paramref name="start"/> to <paramref name="end"/> that none of <paramref name="spans"/> holds.</summary>
-    private static List<(int Start, int End)> Runs(int start, int end, List<(int Start, int End)> spans)
-    {
-        var runs = new List<(int Start, int End)>();
-        int? open = null;
-
-        for (var line = start; line <= end; line++)
-        {
-            var held = spans.Any(span => span.Start <= line && line <= span.End);
-
-            if (!held && open is null)
-            {
-                open = line;
-            }
-            else if (held && open is { } begun)
-            {
-                runs.Add((begun, line - 1));
-                open = null;
-            }
-        }
-
-        if (open is { } last)
-        {
-            runs.Add((last, end));
-        }
-
-        return runs;
     }
 }
 

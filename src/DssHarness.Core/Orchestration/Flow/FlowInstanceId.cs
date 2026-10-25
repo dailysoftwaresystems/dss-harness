@@ -181,6 +181,31 @@ public static class FlowInstanceId
     }
 
     /// <summary>
+    /// Whether two well-formed ids are visits of one step of one work item: the same, but for each visit and each
+    /// iteration written after the innermost item - an iteration or a visit outside it may hold another item at the same
+    /// place, so there they must match. <c>rounds#1.items[0].fix#2.revise.rework</c> and
+    /// <c>rounds#1.items[0].fix#1.revise.rework</c> are; <c>rounds#2.items[0].fix#1.revise.rework</c> is not of them.
+    /// </summary>
+    /// <param name="one">An instance id, well formed.</param>
+    /// <param name="other">Another.</param>
+    public static bool SameStep(string one, string other)
+    {
+        ArgumentNullException.ThrowIfNull(one);
+        ArgumentNullException.ThrowIfNull(other);
+
+        return string.Equals(Lineage(one), Lineage(other), StringComparison.Ordinal);
+    }
+
+    /// <summary>The id with each visit and iteration written after its innermost item taken out: what <see cref="SameStep"/> compares.</summary>
+    private static string Lineage(string id)
+    {
+        var segments = id.Split('.');
+        var item = Array.FindLastIndex(segments, segment => segment.Contains('['));
+
+        return string.Join('.', segments.Select((segment, at) => at <= item ? segment : segment[..(segment.IndexOfAny(Marks) is >= 0 and var mark ? mark : segment.Length)]));
+    }
+
+    /// <summary>
     /// The id as it names a directory of the run's store: the same text, with each item's brackets written
     /// <c>@</c> - an item is a segment's last mark, so <c>items+2[0]</c> is <c>items+2@0</c>. The id is not checked
     /// here; <see cref="Problem"/> owns that refusal.

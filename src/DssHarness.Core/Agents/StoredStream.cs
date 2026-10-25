@@ -8,9 +8,9 @@ namespace DssHarness.Core.Agents;
 
 /// <summary>
 /// The step's stored stream: every event but the deltas, one line to <c>stream.jsonl</c> in the step's own directory,
-/// masked, appended and on the disk per line. It is the step's transcript and there is no other: three things are
-/// written from it and from nothing else - the last iterations a continuation carries, a handoff the engine writes, and
-/// a compaction.
+/// masked, appended and on the disk per line. It is the step's transcript and there is no other: four things are
+/// written from it and from nothing else - the last iterations a continuation carries, a handoff the engine writes, a
+/// compaction, and, with the step's <c>graph.jsonl</c>, its working set.
 /// </summary>
 /// <remarks>
 /// <para>

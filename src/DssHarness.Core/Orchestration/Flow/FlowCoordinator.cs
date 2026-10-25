@@ -6268,7 +6268,64 @@ public sealed class FlowCoordinator
             read,
             instance.Made is { } made ? new FlowMadeAgent(made, instance.MadeModel) : null,
             WorksInOf(instance),
-            instance.Step.Others is null ? null : CurrentTarget(instance)?.Agent);
+            instance.Step.Others is null ? null : CurrentTarget(instance)?.Agent,
+            WorkedFromOf(instance));
+
+    /// <summary>
+    /// The instances whose working sets a reason step's pack is seeded from (value 372), in order: the step it goes on
+    /// with, each step it depends on directly - its own <c>dependsOn</c> and <c>on</c> and each group's around it, as the
+    /// run holds them now, a group by each reason step in it - then its own earlier visits of the same work item, newest
+    /// first; each a reason step that began, once. None for every other step.
+    /// </summary>
+    private IReadOnlyList<FlowWorkedFrom> WorkedFromOf(FlowInstance instance)
+    {
+        if (instance.Step.Type != "reason")
+        {
+            return [];
+        }
+
+        var sources = new List<FlowInstance>();
+
+        // A step that goes on with its own work finds itself here, and is left out below: its earlier visits are its sources.
+        if (instance.Step.Resume is { } resumed && DeclaredOf(instance, resumed, "reason") is { } goesOnWith)
+        {
+            sources.Add(goesOnWith);
+        }
+
+        for (var at = instance; at is not null; at = at.GroupOf)
+        {
+            if (at.DeclaredScope is not { } scope)
+            {
+                continue;
+            }
+
+            foreach (var name in at.Step.DependsOn.Concat(at.Step.On is { } raised ? [raised.Step] : []))
+            {
+                if (scope.Members.TryGetValue(name, out var dependency))
+                {
+                    sources.AddRange(ReasonStepsOf(dependency));
+                }
+            }
+        }
+
+        sources.AddRange(_created
+            .TakeWhile(other => !ReferenceEquals(other, instance))
+            .Where(other => FlowInstanceId.SameStep(other.Id, instance.Id))
+            .Reverse());
+
+        return [.. sources
+            .Where(source => !ReferenceEquals(source, instance) && source.Step.Type == "reason" && source.StartedAt is not null)
+            .Distinct<FlowInstance>(ReferenceEqualityComparer.Instance)
+            .Select(source => new FlowWorkedFrom(source.Id, WorksInOf(source)))];
+    }
+
+    /// <summary>The steps <paramref name="instance"/> is or holds: itself, or each member of a group, at every level, as the run holds them now - in each scope the definition's order.</summary>
+    private IEnumerable<FlowInstance> ReasonStepsOf(FlowInstance instance)
+        => !instance.Step.IsGroup
+            ? [instance]
+            : ScopesUnder(instance).SelectMany(scope => DeclarationsOf(scope)
+                .Select(declared => scope.Members.GetValueOrDefault(declared.Name))
+                .OfType<FlowInstance>());
 
     /// <summary>What one instance waits on, where it waits: the question it asked, the resume, or what admission says keeps it - a dependency, the quiet an alone step waits for, a claim, a counter, a redirect, the resume.</summary>
     private static IReadOnlyList<string> WaitsOnOf(FlowInstance instance, IReadOnlyDictionary<FlowInstance, Admission> walk)

@@ -39,7 +39,43 @@ public enum GraphOp
 /// <param name="Outcome">Whether it answered, refused a misuse, was refused by the policy, or wrote.</param>
 /// <param name="Path">The file a write touched, or the policy refused, relative to the tree; null otherwise.</param>
 /// <param name="Denied">The policy's refusal, where it refused the call.</param>
-public sealed record GraphToolAnswer(string Text, GraphToolOutcome Outcome, string? Path = null, AgentPolicyAnswer.Denied? Denied = null);
+public sealed record GraphToolAnswer(string Text, GraphToolOutcome Outcome, string? Path = null, AgentPolicyAnswer.Denied? Denied = null)
+{
+    /// <summary>The nodes the call asked about, served and edited: what the step's working set is made of.</summary>
+    public GraphToolFacts Facts { get; init; } = GraphToolFacts.None;
+}
+
+/// <summary>
+/// The nodes one <c>graph</c> call used, each by its id: those it asked about by name - <c>node</c>, <c>related</c> and
+/// <c>body</c> - those whose lines it served, and the one an <c>edit</c> wrote, with the lines it wrote.
+/// </summary>
+/// <param name="Asked">The nodes it asked about, in the order it named them.</param>
+/// <param name="Served">The nodes a line of which a <c>body</c>'s answer gave, in order.</param>
+/// <param name="Edited">The node an <c>edit</c> wrote, by the id it had; none where it wrote none.</param>
+/// <param name="Wrote">The lines an <c>edit</c> wrote, as the file stood once it had; null where it wrote none.</param>
+public sealed record GraphToolFacts(IReadOnlyList<string> Asked, IReadOnlyList<string> Served, IReadOnlyList<string> Edited, GraphWrittenLines? Wrote = null)
+{
+    /// <summary>A call that used no node.</summary>
+    public static GraphToolFacts None { get; } = new([], [], []);
+}
+
+/// <summary>The lines one <c>edit</c> wrote: what a node's new text is matched to the nodes it declares by, whatever they are called now.</summary>
+/// <param name="Path">The file, relative to the tree, as the view names it.</param>
+/// <param name="Start">The first line written, from 1, as the file stood once it had.</param>
+/// <param name="Count">How many lines it wrote; none where its text was empty.</param>
+/// <param name="Hash">
+/// Their hash, as a node's is (<see cref="CodeGraphIds.Digest"/>, its first eight characters): what finds them where a
+/// later write moved them; null where it wrote none.
+/// </param>
+public sealed record GraphWrittenLines(string Path, int Start, int Count, string? Hash = null)
+{
+    /// <summary>Why the lines do not read as an edit's, or null where they do.</summary>
+    public string? Problem()
+        => string.IsNullOrWhiteSpace(Path) ? "an edit names the file it wrote"
+            : Start < 1 || Count < 0 ? "an edit's lines start at line 1 at the earliest, and are never fewer than none"
+            : Hash is not null && (Count == 0 || Hash.Length != 8 || !Hash.All(char.IsAsciiHexDigitLower)) ? "an edit's lines are named by a hash of eight lowercase hexadecimal digits, and no lines by none"
+            : null;
+}
 
 /// <summary>What became of a <c>graph</c> call.</summary>
 public enum GraphToolOutcome
@@ -358,7 +394,7 @@ public sealed class CodebaseGraphTool(
             text += await SearchAsync(card.Name, cancellationToken).ConfigureAwait(false);
         }
 
-        return Answered(text + LeftOut(left));
+        return Answered(text + LeftOut(left), new GraphToolFacts([card.Id], [], []));
     }
 
     private async Task<GraphToolAnswer> RelatedAsync(JsonObject input, CancellationToken cancellationToken)
@@ -385,7 +421,7 @@ public sealed class CodebaseGraphTool(
             text += await SearchAsync(card.Name, cancellationToken).ConfigureAwait(false);
         }
 
-        return Answered(text + LeftOut(reached.Count - kept.Count));
+        return Answered(text + LeftOut(reached.Count - kept.Count), new GraphToolFacts([card.Id], [], []));
     }
 
     private async Task<GraphToolAnswer> OutlineAsync(JsonObject input, CancellationToken cancellationToken)
@@ -441,6 +477,10 @@ public sealed class CodebaseGraphTool(
         var full = Flag(input, "full");
         var builder = new StringBuilder();
         var given = 0;
+        var asked = new List<string>();
+
+        // Each node whose lines began to be given, with where its first line ends in the answer: served only where the cap keeps it.
+        var served = new List<(string Id, int End)>();
 
         foreach (var symbol in Strings(input, "symbols"))
         {
@@ -449,6 +489,8 @@ public sealed class CodebaseGraphTool(
                 builder.Append(await UnresolvedAsync(symbol, cancellationToken).ConfigureAwait(false)).Append('\n');
                 continue;
             }
+
+            asked.Add(card.Id);
 
             var (lines, why) = await ReadLinesAsync(card.Path, cancellationToken).ConfigureAwait(false);
             var hash = lines is null || card.Hash is null ? null : Hash(lines, card);
@@ -494,16 +536,25 @@ public sealed class CodebaseGraphTool(
             }
 
             builder.Append('\n');
+            var first = true;
 
             foreach (var (text, number) in Shown(card, CodebaseGraphQueries.Body(card, lines), full))
             {
                 if (given == BodyLines)
                 {
                     builder.Append($"cut: {BodyLines} lines shown; ask for fewer symbols, or one at a time").Append('\n');
-                    return Answered(builder.ToString().TrimEnd('\n'));
+                    return Served(builder, asked, served);
                 }
 
-                builder.Append(number is { } line ? $"{line.ToString(CultureInfo.InvariantCulture)}\t{text}" : text).Append('\n');
+                builder.Append(number is { } line ? $"{line.ToString(CultureInfo.InvariantCulture)}\t{text}" : text);
+
+                if (first)
+                {
+                    served.Add((card.Id, builder.Length));
+                    first = false;
+                }
+
+                builder.Append('\n');
                 given++;
             }
 
@@ -513,7 +564,25 @@ public sealed class CodebaseGraphTool(
             }
         }
 
-        return Answered(builder.ToString().TrimEnd('\n'));
+        return Served(builder, asked, served);
+    }
+
+    /// <summary>
+    /// A body's answer, cut at its cap, and the nodes it used: each asked about, and each one of whose lines the answer
+    /// gives - the cap keeps what the answer was before it, up to a whole line.
+    /// </summary>
+    private GraphToolAnswer Served(StringBuilder builder, IReadOnlyList<string> asked, IReadOnlyList<(string Id, int End)> served)
+    {
+        var text = builder.ToString().TrimEnd('\n');
+        var answer = Answered(text);
+
+        return answer with
+        {
+            Facts = new GraphToolFacts(
+                [.. asked.Distinct(StringComparer.Ordinal)],
+                [.. served.Where(one => answer.Text.Length >= one.End && answer.Text.AsSpan(0, one.End).SequenceEqual(text.AsSpan(0, one.End))).Select(one => one.Id).Distinct(StringComparer.Ordinal)],
+                []),
+        };
     }
 
     private async Task<GraphToolAnswer> OneEditAtATimeAsync(JsonObject input, CancellationToken cancellationToken)
@@ -617,7 +686,14 @@ public sealed class CodebaseGraphTool(
             : held.Count == 0 ? $"the new lines no longer declare '{card.Qualified}', nor anything else"
             : $"the new lines no longer declare '{card.Qualified}'; they hold:\n" + string.Join('\n', held);
 
-        return new GraphToolAnswer(Capped($"edited '{card.Qualified}' in '{card.Path}'; {shift}\n{said}", Unheld()), GraphToolOutcome.Wrote, card.Path);
+        return new GraphToolAnswer(Capped($"edited '{card.Qualified}' in '{card.Path}'; {shift}\n{said}", Unheld()), GraphToolOutcome.Wrote, card.Path) { Facts = new GraphToolFacts([], [], [card.Id], new GraphWrittenLines(card.Path, card.Start, written, WrittenHash(edited, card.Start, written))) };
+    }
+
+    /// <summary>The hash of the <paramref name="count"/> lines from <paramref name="start"/> of a file as an edit left it, as a node's is; null where there are none.</summary>
+    private static string? WrittenHash(EditedText edited, int start, int count)
+    {
+        var lines = CodeFileText.Lines(edited.Text);
+        return count > 0 && start + count - 1 <= lines.Count ? CodeGraphIds.Digest(lines, start, start + count - 1)[..8] : null;
     }
 
     /// <summary>
@@ -912,6 +988,8 @@ public sealed class CodebaseGraphTool(
 
     /// <summary>An answer, cut at its cap, ending with the files whose declarations no answer of this view can give, where there are any.</summary>
     private GraphToolAnswer Answered(string text) => new(Capped(text, Unheld()), GraphToolOutcome.Answered);
+
+    private GraphToolAnswer Answered(string text, GraphToolFacts facts) => Answered(text) with { Facts = facts };
 
     private string Unheld()
     {

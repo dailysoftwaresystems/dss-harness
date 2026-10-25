@@ -28,6 +28,8 @@ namespace DssHarness.Core.Orchestration;
 /// &lt;step&gt;/ledger.json          a leg step: its legs' ledger, as --json gives it
 /// &lt;step&gt;/logs/                a leg step in an agent's worktree: each red leg's phase log that did not pass; a ci-wait: each red job's log
 /// &lt;step&gt;/fold.json            a fold family step: what its dry run named and stood, its question, each consent given, how its apply ended
+/// &lt;step&gt;/graph.jsonl          a reason step that has a codebase graph: one line for each call of the graph tool; nothing writes it yet
+/// &lt;step&gt;/working-set.json     a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it; nothing writes it yet
 /// &lt;step&gt;/targets/&lt;agent&gt;/     a refresh or a rebase of others: one target's fold.json
 /// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it
 /// flow.json                   a run's state, whole: the truth a resume goes on from
@@ -164,6 +166,15 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// what its dry run named and stood, the question it asked, each consent it was given and how its apply ended.
     /// </summary>
     public const string StepFoldFileName = "fold.json";
+
+    /// <summary>The name of the file a reason step that has a codebase graph keeps a line for each call of the <c>graph</c> tool in, in its directory; nothing writes it yet.</summary>
+    public const string StepGraphFileName = "graph.jsonl";
+
+    /// <summary>
+    /// The name of the file a reason step that has a codebase graph keeps its working set in, in its directory: the nodes it
+    /// edited, served, read and found, which seed the packs of the steps after it; nothing writes it yet.
+    /// </summary>
+    public const string StepWorkingSetFileName = "working-set.json";
 
     /// <summary>The name of the directory a refresh or a rebase of <c>others</c> keeps one directory for each target in, in its own.</summary>
     public const string StepTargetsDirectoryName = "targets";

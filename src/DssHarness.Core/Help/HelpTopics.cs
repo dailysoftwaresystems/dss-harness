@@ -2932,6 +2932,8 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.FoldsFileName}", "the ledger of the run's folds: each path a fold means to write, what the main tree held there before it and what it left"),
                 ($"  <step>/{OrchestratorLayout.StepFoldFileName}", "a fold, delete-agent, refresh or rebase step: what its dry run named and stood, the question it asked, each consent given by name, how its apply ended"),
                 ($"  <step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/", "a refresh or a rebase of others: what it did to each target, as above"),
+                ($"  <step>/{OrchestratorLayout.StepGraphFileName}", "a reason step that has a codebase graph: one line for each call of the graph tool - what it asked about, served and edited; the API clients will write it"),
+                ($"  <step>/{OrchestratorLayout.StepWorkingSetFileName}", "a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it ('help codebase-graph'); the API clients will write it"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphManifestFileName}", "the run's codebase graph: the main checkout's manifest, every file it keeps with its blob, state and extract ('help codebase-graph')"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphSymbolsFileName}", "the graph's link result: every node and edge, with the digest of the manifest it was made from"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphExtractsDirectoryName}/<ab>/<name>", "one file's extract, written once, named by its blob, its path, its implementation and version"),
@@ -3521,6 +3523,18 @@ public static class HelpTopics
             + "the declarations its tree changed against its base - an agent's where its worktree was made or last moved to, the main checkout's the run's start - each with where its lines differ, "
             + "one moved between files and one taken out as the base held it, then their tests and those of their direct callers, then their callers to two hops, overrides, implementations and "
             + "dispatches, and derived types; where nothing changed, its first line says so and the task's seeds stand in.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"When a reason step that has a graph ends, the engine is to write its working set, {OrchestratorLayout.StepWorkingSetFileName} - the API clients will - never the model: "
+            + $"each node it {string.Join(", ", WorkingSetUses.All.SkipLast(1))} or {WorkingSetUses.All[^1]}, with its handle, file, lines and hash at the step's end, at most {CodebaseWorkingSet.MostNodes}, "
+            + "edited first, then by how often each was touched; a node the view no longer holds kept by its id, marked gone. It is made from the step's "
+            + $"{OrchestratorLayout.StepGraphFileName} - each node a graph call asked about by name (found), a line of which body gave (served), or an edit wrote, by its lines - and the tool calls its stored stream holds, "
+            + "on every client's form: a read (Read, view_file) by where the lines its answer gave stand once in the file as the step left it, else by their numbers, a write "
+            + "(Edit, replace_in_file, insert_in_file) by where its new text stands once there - every place, with replace_all - else by the lines it names, a whole file's "
+            + "write (Write, create_file) by every line - each matched to the declarations whose own lines it meets, a member's lines never its type's; a deletion writes "
+            + "no lines, and is counted with the writes placed nowhere. A reason step's pack is to be given the working sets of the step it goes on with (resume), of each step it depends on "
+            + "directly, a group by each reason step in it, and of its own earlier visits of the same work item, newest first: each node a seed named exactly, an edited one above the rest.");
         builder.AppendLine();
         AppendWrapped(
             builder,

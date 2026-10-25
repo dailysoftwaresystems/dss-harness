@@ -2274,6 +2274,28 @@ in. `FlowGraphSyncs.ChangesBase` names the base: an agent's recorded `Base`, the
 checkout. A pack keeps, beside its text, its seeds (each node once, by its heaviest seed - the one its line says), its
 nodes and each node line it wrote (`ContextPack.Lines`, what a delta gives of a pack a conversation was not given).
 Slice 27d puts the pack at the head of a step's first message and hands the tool its `Near`.
+The working set (`CodebaseWorkingSet`, value 372) is what a reason step that has a graph worked with, kept in its
+directory as `working-set.json` (`OrchestrationStore.WriteWorkingSet`): each node it edited, served, read or found
+(`WorkingSetUses`), with how often it was touched and its handle, file, lines and hash at the step's end, at most
+`CodebaseWorkingSet.MostNodes` - edited first, then by how often, the rest counted - and a node the view no longer
+holds kept by its id, marked gone. `CodebaseWorkingSet.Make` reads it from the step's `graph.jsonl` (`GraphStepLine`,
+one `GraphCallLine` for each call of the tool, from the facts its answer carries, `GraphToolFacts`: each node a call
+asked about by name is found, each a line of which a `body`'s answer gives, within its cap, is served, and an `edit` is
+matched by the lines it wrote, as every write is, the node it named edited where they no longer declare it) and from
+the tool calls its stored stream holds (`OrchestrationStore.ReadStepStream`; a call is named by its `ToolCallStarted` or
+the `AssistantMessage` that made it), on every client's form: a read (`Read`, `view_file`) by where the lines its answer
+gave stand once in the file as the step left it, else by the first and the last number it gave them, a write (`Edit`,
+`replace_in_file`, `insert_in_file`) where its new text stands once there - every place, with `replace_all` - else by
+the lines it names, else counted unplaced with a deletion, which writes no lines, and a whole file's write (`Write`,
+`create_file`) by every line; text is found line by line, each line's trailing blanks aside, as a client may strip
+them where it writes - each matched to the declarations whose own lines it meets (`CodeOwnLines`, a member's
+lines never its type's), as the view at the step's end holds them. The coordinator names in each reason step's
+`FlowStepRun.WorkedFrom` the instances whose sets seed its pack: the step it goes on with (`resume`), each step it
+depends on directly - its own `dependsOn` and `on` and each enclosing group's, a group by each reason step in it -
+then its own earlier visits of the same work item (`FlowInstanceId.SameStep`: the same id but for the visits and
+iterations after its innermost item), newest first, each that began, once; `FlowWorkingSets.SeedsOf` reads their sets
+into `ContextPackRequest.Worked` (`CodebaseWorkingSet.Seeds`: each node once, edited where any set says so, none
+gone). Slice 27d writes both files as a step ends and hands the seeds to its pack.
 `query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
 through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a
 view linked in memory from the base's files and its record, and a link result another linker made linked again in
