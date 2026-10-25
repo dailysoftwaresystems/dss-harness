@@ -277,7 +277,7 @@ public static class WorkflowExpressions
 
     /// <summary>
     /// Every name <paramref name="text"/> reads through a <c>{...}</c> placeholder, as the one template grammar reads
-    /// them (<see cref="FlowTemplate.Pieces"/>), in the order they sit in the text, once each.
+    /// them (<see cref="FlowTemplate.Pieces(string)"/>), in the order they sit in the text, once each.
     /// </summary>
     /// <param name="text">A template's text: any run of it may hold one or more <c>{...}</c> placeholders.</param>
     /// <remarks>An empty text reads nothing; that it is empty is the validator's to refuse.</remarks>
@@ -355,17 +355,26 @@ public static class WorkflowExpressions
     }
 
     /// <summary>
-    /// What is wrong with how a template's <paramref name="text"/> is written (<see cref="FlowTemplate.Pieces"/>), where
+    /// What is wrong with how a template's <paramref name="text"/> is written (<see cref="FlowTemplate.Pieces(string)"/>), where
     /// something is: a placeholder left open, after which nothing the text reads would be seen, or one that names
     /// nothing, which no run could fill.
     /// </summary>
     /// <param name="text">A template's text.</param>
     /// <returns>The problem, in words, or <see langword="null"/> where every placeholder is closed and names something.</returns>
-    public static string? TemplateSyntaxProblem(string text)
+    public static string? TemplateSyntaxProblem(string text) => TemplateSyntaxProblem(text, quoted: false);
+
+    /// <summary>
+    /// Why <paramref name="text"/> is not written whole by the one grammar - a placeholder never closed, or one that names
+    /// nothing - read with its placeholders' quoted text as their own where <paramref name="quoted"/>
+    /// (<see cref="FlowTemplate.Pieces(string, bool)"/>); <see langword="null"/> where it is.
+    /// </summary>
+    /// <param name="text">The template.</param>
+    /// <param name="quoted">Whether a placeholder's text in quotes is read as its own.</param>
+    public static string? TemplateSyntaxProblem(string text, bool quoted)
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        foreach (var piece in FlowTemplate.Pieces(text))
+        foreach (var piece in FlowTemplate.Pieces(text, quoted))
         {
             if (piece.Kind == FlowTemplate.PieceKind.Unclosed)
             {

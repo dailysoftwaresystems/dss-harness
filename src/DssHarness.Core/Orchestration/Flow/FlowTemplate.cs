@@ -41,10 +41,68 @@ public static class FlowTemplate
     /// up to one never closed, which ends them.
     /// </summary>
     /// <param name="template">The template, as it is written.</param>
-    public static IEnumerable<Piece> Pieces(string template)
+    public static IEnumerable<Piece> Pieces(string template) => Pieces(template, quoted: false);
+
+    /// <summary>
+    /// <paramref name="template"/> in its pieces, by the one grammar - where <paramref name="quoted"/>, a placeholder's
+    /// quoted text read as its own: a brace between quotes, as a JSONPath query's quoted name may hold, neither closes
+    /// the placeholder nor opens another, and a backslash between them escapes the character after it.
+    /// </summary>
+    /// <param name="template">The template, as it is written.</param>
+    /// <param name="quoted">Whether a placeholder's text in quotes is read as its own.</param>
+    public static IEnumerable<Piece> Pieces(string template, bool quoted)
     {
         ArgumentNullException.ThrowIfNull(template);
 
+        return Read(template, quoted);
+    }
+
+    /// <summary>
+    /// Where the placeholder whose <c>{</c> is at <paramref name="at"/> ends: the first <c>}</c> on its line, before
+    /// the next <c>{</c> opens - neither counted between quotes where <paramref name="quoted"/>; -1 where there is none.
+    /// </summary>
+    private static int End(string template, int at, bool quoted)
+    {
+        char? quote = null;
+        var escaped = false;
+
+        for (var next = at + 1; next < template.Length; next++)
+        {
+            var character = template[next];
+
+            if (character == '\n')
+            {
+                return -1;
+            }
+
+            if (escaped)
+            {
+                escaped = false;
+            }
+            else if (quote is { } open)
+            {
+                escaped = character == '\\';
+                quote = character == open ? null : quote;
+            }
+            else if (character == '}')
+            {
+                return next;
+            }
+            else if (character == '{')
+            {
+                return -1;
+            }
+            else if (quoted && character is '\'' or '"')
+            {
+                quote = character;
+            }
+        }
+
+        return -1;
+    }
+
+    private static IEnumerable<Piece> Read(string template, bool quoted)
+    {
         var text = new StringBuilder();
         var textAt = 0;
         var at = 0;
@@ -78,9 +136,9 @@ public static class FlowTemplate
             }
 
             // A placeholder is closed on its own line, before the next one opens: a '}' further on closes another.
-            var close = template.IndexOfAny(['}', '{', '\n'], at + 1);
+            var close = End(template, at, quoted);
 
-            if (close < 0 || template[close] != '}')
+            if (close < 0)
             {
                 yield return new(at, template[at..], PieceKind.Unclosed);
                 yield break;

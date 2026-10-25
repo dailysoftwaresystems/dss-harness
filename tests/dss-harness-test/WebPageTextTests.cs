@@ -74,4 +74,58 @@ public sealed class WebPageTextTests
         Assert.Equal("plain words", await WebPageText.OfAsync("plain words", TestContext.Current.CancellationToken));
         Assert.Equal(string.Empty, await WebPageText.OfAsync(string.Empty, TestContext.Current.CancellationToken));
     }
+
+    /// <summary>A field that is text is never read as markup: only its blanks are made single.</summary>
+    [Theory]
+    [InlineData("  a  <b>c</b>\n &amp; d ", "a <b>c</b> &amp; d")]
+    [InlineData("Simple charts using the <canvas> tag", "Simple charts using the <canvas> tag")]
+    [InlineData("A reader for IAsyncEnumerable<T> streams", "A reader for IAsyncEnumerable<T> streams")]
+    public void AFieldThatIsText_IsNeverReadAsMarkup(string field, string text) => Assert.Equal(text, WebPageText.OfText(field));
+
+    /// <summary>A field that is markup is reduced to the text a reader of it sees - highlights, entities, an element of its author's own - on one line.</summary>
+    [Theory]
+    [InlineData("How do I group a <span class=\"highlight\">List&lt;T&gt;</span>?", "How do I group a List<T>?")]
+    [InlineData("Tom &amp; Jerry", "Tom & Jerry")]
+    [InlineData("  plain   text\n here ", "plain text here")]
+    [InlineData("<p>One</p><p>Two</p>", "One Two")]
+    [InlineData("AT&T", "AT&T")]
+    [InlineData("<p>Fixed <code>x</code> <g-emoji alias=\"tada\">!</g-emoji><o:p></o:p></p>", "Fixed x !")]
+    public void AMarkupField_IsReducedToItsText(string field, string text) => Assert.Equal(text, WebPageText.OfMarkup(field));
+
+    /// <summary>A page's parts: its title, each heading a reader sees in order, and its body's text.</summary>
+    [Fact]
+    public async Task APagesParts_AreItsTitleHeadingsAndText()
+    {
+        var parts = await WebPageText.PartsAsync(
+            "<html><head><title> The   page </title></head><body><h1>First</h1><p>Body</p><div hidden><h2>Hidden</h2></div><h3>Third <em>one</em><span hidden>unseen</span></h3><h4> </h4><h2>Outer<div><h3>inner</h3></div></h2><h1>Getting<br>Started</h1><h2><table><tr><td>A</td><td>B</td></tr></table></h2></body></html>",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("The page", parts.Title);
+        Assert.Equal(["First", "Third one", "Outer inner", "Getting Started", "A B"], parts.Headings);
+        Assert.Equal("First\nBody\nThird one\nOuter\ninner\nGetting\nStarted\nA B", parts.Text);
+    }
+
+    /// <summary>A field is read no further than its most: markup nested deep past it is never read.</summary>
+    [Fact]
+    public void AField_IsReadNoFurtherThanItsMost()
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        Assert.True(WebPageText.OfMarkup(string.Concat(Enumerable.Repeat("<div>", 200_000)) + "x").Length <= WebPageText.MostFieldRead);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"took {watch.Elapsed}");
+        Assert.Equal(WebPageText.MostFieldRead, WebPageText.OfMarkup(new string('x', WebPageText.MostFieldRead + 100)).Length);
+        Assert.Equal(WebPageText.MostFieldRead, WebPageText.OfText(new string('x', WebPageText.MostFieldRead + 100)).Length);
+    }
+
+    /// <summary>A page's headings are read in the one walk of it, each node once, however deep its markup nests them.</summary>
+    [Fact(Timeout = 30_000)]
+    public async Task APagesHeadings_AreReadOnce_HoweverDeepTheyNest()
+    {
+        const int Deep = 60_000;
+        var html = string.Concat(Enumerable.Repeat("<table><tr><td><h2>x</h2>", Deep));
+
+        var parts = await WebPageText.PartsAsync(html, TestContext.Current.CancellationToken);
+
+        Assert.Equal(Deep, parts.Headings.Count);
+    }
 }

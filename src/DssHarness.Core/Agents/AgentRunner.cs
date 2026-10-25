@@ -417,7 +417,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <param name="template">The template.</param>
     /// <param name="values">Its values.</param>
     /// <remarks>
-    /// Read by the one template grammar (<see cref="Orchestration.Flow.FlowTemplate.Pieces"/>): a brace doubled stands for
+    /// Read by the one template grammar (<see cref="Orchestration.Flow.FlowTemplate.Pieces(string)"/>): a brace doubled stands for
     /// one, another expander's <c>${...}</c> is left as written, and a placeholder this step has no value for stands as
     /// written, as does the rest of a template from a placeholder never closed. The template is read once, so a value
     /// that names another value is never filled in its turn.

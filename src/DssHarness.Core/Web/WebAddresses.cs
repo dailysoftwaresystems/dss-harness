@@ -1,12 +1,15 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Sockets;
 
 namespace DssHarness.Core.Web;
 
 /// <summary>
-/// Which addresses the harness's own fetch connects to: public ones alone - never this machine, its network, a range no
-/// public host holds, or a cloud's metadata service - so a page an agent asks for cannot reach what only this machine
-/// reaches. The one rule of it, asked of every address a host resolves to and of the one a connection was in fact made to.
+/// Which addresses the harness's own fetch asks and connects to: <c>http</c> and <c>https</c> addresses written whole
+/// alone, and public hosts alone - never this machine, its network, a range no public host holds, or a cloud's metadata
+/// service - so a page an agent asks for cannot reach what only this machine reaches. The one rule of each, asked of
+/// every address a reader of the web takes, of every address a host resolves to and of the one a connection was in fact
+/// made to.
 /// </summary>
 public static class WebAddresses
 {
@@ -47,6 +50,64 @@ public static class WebAddresses
 
     /// <summary>The prefix of NAT64's well-known range, whose last four bytes are an IPv4 address.</summary>
     private static readonly byte[] Nat64 = [0x00, 0x64, 0xFF, 0x9B, .. new byte[12]];
+
+    /// <summary>Whether <paramref name="address"/> is an absolute <c>http</c> or <c>https</c> address with a host.</summary>
+    /// <param name="address">The address.</param>
+    public static bool IsWeb([NotNullWhen(true)] string? address) => IsWeb(address, out _);
+
+    /// <summary>Whether <paramref name="address"/> is an absolute <c>http</c> or <c>https</c> address with a host: <paramref name="uri"/>, as read.</summary>
+    /// <param name="address">The address.</param>
+    /// <param name="uri">The address as read; <see langword="null"/> where it is none.</param>
+    public static bool IsWeb([NotNullWhen(true)] string? address, [NotNullWhen(true)] out Uri? uri)
+    {
+        if (Uri.TryCreate(address, UriKind.Absolute, out var read) && read.Scheme is "http" or "https")
+        {
+            uri = read;
+            return true;
+        }
+
+        uri = null;
+        return false;
+    }
+
+    /// <summary>The longest address a link read from a document names: 2,048 characters, as a sitemap's and a browser's are; a longer one names none.</summary>
+    public const int MostLength = 2048;
+
+    /// <summary>
+    /// <paramref name="link"/> as an absolute <c>http</c> or <c>https</c> address - read against <paramref name="relativeTo"/>
+    /// where it is relative - or <see langword="null"/> where it names none, or one longer than <see cref="MostLength"/>.
+    /// </summary>
+    /// <param name="link">The link, as a page or an answer wrote it.</param>
+    /// <param name="relativeTo">The address a relative link is read against; none where there is none.</param>
+    public static string? Absolute(string? link, string? relativeTo)
+    {
+        if (string.IsNullOrWhiteSpace(link))
+        {
+            return null;
+        }
+
+        var trimmed = link.Trim();
+
+        if (trimmed.Length > MostLength)
+        {
+            return null;
+        }
+
+        // Asked as relative first: on Linux and macOS a path from the root ('/docs/x') also reads as an absolute address,
+        // a file's, which it never is here.
+        if (Uri.TryCreate(trimmed, UriKind.Relative, out var relative))
+        {
+            return relativeTo is not null
+                && Uri.TryCreate(relativeTo, UriKind.Absolute, out var basis)
+                && Uri.TryCreate(basis, relative, out var read)
+                && IsWeb(read.AbsoluteUri)
+                && read.AbsoluteUri.Length <= MostLength
+                    ? read.AbsoluteUri
+                    : null;
+        }
+
+        return IsWeb(trimmed, out var whole) && whole.AbsoluteUri.Length <= MostLength ? whole.AbsoluteUri : null;
+    }
 
     /// <summary>Why <paramref name="address"/> is no public address, in a few words; null where it is one.</summary>
     /// <param name="address">The address.</param>

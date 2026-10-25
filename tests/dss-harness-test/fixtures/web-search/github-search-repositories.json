@@ -1,0 +1,20 @@
+{
+  "total_count": 1234,
+  "incomplete_results": false,
+  "items": [
+    {
+      "id": 1,
+      "full_name": "example-org/fast-json",
+      "html_url": "https://github.com/example-org/fast-json",
+      "description": "A fast JSON reader for IAsyncEnumerable<T> streams",
+      "stargazers_count": 512
+    },
+    {
+      "id": 2,
+      "full_name": "example-org/no-description",
+      "html_url": "https://github.com/example-org/no-description",
+      "description": null,
+      "stargazers_count": 3
+    }
+  ]
+}

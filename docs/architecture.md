@@ -1658,11 +1658,39 @@ phase - its environment `AgentChildEnvironment`'s, every name the configuration 
 secret-shaped one gone but those `agentPolicy.keepEnvironment` gives back, its time
 `agentPolicy.commandTimeoutSeconds` unless its call names one, `agentPolicy.maxCommandTimeoutSeconds`
 at most (`AgentCommandSettings`) - and a page through `Web\HarnessFetch`,
-which decides every address before it is asked, connects only to the public addresses
-`WebAddresses` allows - checked on the lookup and again on the connection made - and reduces HTML
-to text by `WebPageText` over AngleSharp. A turn runs its reads together, at most 4 at once, a
-write or a run alone between them. This build checks workflow definitions and
-starts and drives a run of one (see "Running a workflow" below). Each step is given to the runner of its type
+which decides every address before it is asked and gives it its turn (`WebFetchGate`: the decision, the record, the
+reader's pace, waited for outside the fetch's 30 s), asks only the `http` and `https` addresses of public hosts
+`WebAddresses` allows - checked on the lookup and again on the connection made - and reduces HTML to text by
+`WebPageText` over AngleSharp. A turn runs its reads together, at most 4 at once, a
+write or a run alone between them.
+
+The harness's own web search is built under `Web\Search`: each kind of source an implementation of `IWebSearchKind` -
+pure, asking and reading only what it is handed - found by the one scan of the core (`CoreImplementations<T>`, which
+the codebase graph's languages are found by too) into the registry `WebSearchKinds`, which refuses two kinds of one
+name and holds a source to its kind's keys and every source's own (`WebSearchSource.OwnProblems`, the `credential`'s
+shape by `WebSearchCredential`). `json-api` reads an answer by RFC 9535 JSONPath (`Core.Json.JsonPath`, the tool's
+own, held to the standard's compliance suite, its `match` and `search` by `IRegexp`) through `JsonSearchItems`, its
+templates read by the configuration's one brace grammar (`FlowTemplate.Pieces`); `feed` and `opensearch` read feeds
+by `FeedItems` over `WebXml`, the one reader of XML from the web; a field is markup only where its source says so
+(`JsonSearchItems`' `markup`) or its format does (RSS, an Atom text by its type), reduced by `WebPageText.OfMarkup`, and
+any other is text as it stands (`OfText`), never guessed; every status and rate limit is read by `WebRateLimit`
+(no pause longer than a day), an endpoint's answer to a query by `WebSearchStatus` over it; what a site answers is read
+to bounds of its readers' own - robots.txt's 500 KiB (`RobotsTxt.MostRead`), a sitemap's 50,000 entries
+(`SitemapDocument`), a link's 2,048 characters (`WebAddresses.MostLength`), a field's 16 KiB (`WebPageText`), an
+answer's 100 items (`WebSearchAnswer.MostResults`), an I-Regexp's 4 KiB - each rule decided in one pass; and `sitemap` is answered
+by the harness's own index of a site (`Web\Index`): `WebIndex`, BM25 over `pages.jsonl` under
+`.orchestrators/.web-index/<source>/` (`OrchestratorLayout.WebIndexDirectory`) - lines that only grow, a page that could
+not be read among them, written anew under a new generation once the lines replaced outnumber those kept - filled in
+the background by `SitemapFill` (`RobotsTxt`, `SitemapDocument`, the fetch asked by `WebFetchAsk` for markup, a page's
+parts, a gzip, or text whatever type its server says; a fill that leaves nothing a search may find stops short, and why
+one stopped short is kept until one ends whole;
+every page and redirect, and every sitemap of the site robots.txt does not name, held to robots.txt; each request at the
+site's crawl delay and in the source's turn the run's gate gives) through `WebIndexes`, one fill of an index at a time
+on the machine, filled again whenever the source's settings change.
+Nothing asks a search yet: the configuration's sources and the tool that sends their requests come next.
+
+This build checks workflow definitions and starts and drives a run of one (see "Running a workflow" below). Each
+step is given to the runner of its type
 (`FlowStepRunners`, over every `IFlowStepTypeRunner` the root registers - `FlowStepRunners.Served` lists them, and a test
 holds the two to each other); a step of a type none serves yet fails, saying no runner serves its type. Those served
 are machine steps, each a thin adapter over the owner of its rule: `OrientRunner` reads the main checkout by
@@ -1953,9 +1981,9 @@ the scope whose declarations alone see it (`SeenIn`) among what they say - the s
 other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address or path ending, with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`) and an import of a file whose imports this one shares (`Shares`),
 address roots, references by name with their qualifiers, and four marks - a prototype, a test, generated code with
 why, and each line it saw something it cannot bind or stopped reading at (`dynamic`) - of which the linker reads the
-first two. An implementation is registered by being written:
-`CodeGraphExtractors.Implementations` is the one scan of the core, which `AddDssHarness` registers each type of, and the
-registry built from them refuses two of one name, two claims of one exact name or extension of which either gives no
+first two. An implementation is registered by being written: the one scan of the core (`CoreImplementations<T>`, which
+`CodeGraphExtractors.Implementations` reads) finds each, `AddDssHarness` registers each type of it
+(`AddCoreImplementationsOf<T>`), and the registry built from them refuses two of one name, two claims of one exact name or extension of which either gives no
 content test, no fallback or two, a fallback that claims a name or an extension, a claimed name no file can bear or
 extension no file has, and a version below 1 - so a clash is a red test, never an order. A file goes to the
 claimants of its exact name, else of its extension, else to the fallback (`listed`); their content tests decide among

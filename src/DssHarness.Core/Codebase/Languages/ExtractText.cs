@@ -15,7 +15,7 @@ internal static partial class ExtractText
 
     /// <summary><paramref name="header"/>, a declaration's header on one line, cut to fit a node's signature.</summary>
     /// <param name="header">The header.</param>
-    public static string Signature(string header) => Cut(Whole(header), FileExtract.MostSignature);
+    public static string Signature(string header) => Output.TextCut.AtWord(Whole(header), FileExtract.MostSignature);
 
     /// <summary>
     /// The first sentence of <paramref name="text"/>, one line of what the code says of itself - up to the first <c>.</c>,
@@ -25,7 +25,7 @@ internal static partial class ExtractText
     public static string Summary(string text)
     {
         var stop = Sentence().Match(text);
-        return Cut(Whole(stop.Success ? text[..(stop.Index + 1)] : text), FileExtract.MostSummary);
+        return Output.TextCut.AtWord(Whole(stop.Success ? text[..(stop.Index + 1)] : text), FileExtract.MostSummary);
     }
 
     /// <summary>
@@ -56,20 +56,6 @@ internal static partial class ExtractText
     /// <param name="scope">The qualified name of the scope it is declared in; <see langword="null"/> at the top.</param>
     /// <param name="name">Its name.</param>
     public static string Qualify(string? scope, string name) => scope is null ? name : $"{scope}.{name}";
-
-    /// <summary><paramref name="text"/> cut, where it is longer than <paramref name="most"/>, at a word before it with an ellipsis - never inside a surrogate pair.</summary>
-    private static string Cut(string text, int most)
-    {
-        if (text.Length <= most)
-        {
-            return text;
-        }
-
-        var cut = Output.TextCut.Head(text, most - 1);
-        var space = cut.LastIndexOf(' ');
-
-        return (space > most / 2 ? cut[..space] : cut).TrimEnd() + "…";
-    }
 
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex Spaces();

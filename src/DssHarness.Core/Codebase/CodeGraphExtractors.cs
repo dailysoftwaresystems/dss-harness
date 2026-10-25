@@ -91,19 +91,17 @@ public sealed class CodeGraphExtractors
 
     /// <summary>
     /// Every concrete type of the core that implements <see cref="ICodeGraphExtractor"/>, by its full name: the one scan
-    /// that finds them, which the composition root registers each of and the registry of this build is made from.
+    /// that finds them (<see cref="Composition.CoreImplementations{T}"/>), which the composition root registers each of and
+    /// the registry of this build is made from.
     /// </summary>
-    public static IReadOnlyList<Type> Implementations { get; } =
-        [.. typeof(ICodeGraphExtractor).Assembly.GetTypes()
-            .Where(type => type is { IsClass: true, IsAbstract: false } && typeof(ICodeGraphExtractor).IsAssignableFrom(type))
-            .OrderBy(type => type.FullName, StringComparer.Ordinal)];
+    public static IReadOnlyList<Type> Implementations => Composition.CoreImplementations<ICodeGraphExtractor>.Types;
 
     /// <summary>
     /// The registry of this build's own implementations, each made with no argument as the container makes it: for what
     /// has no container to ask - <c>help codebase-graph</c>.
     /// </summary>
     public static CodeGraphExtractors OfThisBuild
-        => LazyInitializer.EnsureInitialized(ref _thisBuild, () => new([.. Implementations.Select(type => (ICodeGraphExtractor)Activator.CreateInstance(type)!)]));
+        => LazyInitializer.EnsureInitialized(ref _thisBuild, () => new(Composition.CoreImplementations<ICodeGraphExtractor>.OfThisBuild));
 
     /// <summary>Every implementation, by its name.</summary>
     public IReadOnlyList<ICodeGraphExtractor> All { get; }

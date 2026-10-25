@@ -1,0 +1,8 @@
+{
+  "hits": [
+    { "objectID": "41000001", "title": "Writing a parser by hand", "url": "https://blog.example.test/parser", "story_text": null, "points": 120 },
+    { "objectID": "41000002", "title": "Ask HN: How do you test parsers?", "url": null, "story_text": "<p>I keep breaking my parser.</p>", "points": 40 }
+  ],
+  "nbHits": 2,
+  "page": 0
+}

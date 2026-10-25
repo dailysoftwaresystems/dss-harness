@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
+  <ShortName>Example</ShortName>
+  <Description>Search the example site</Description>
+  <Url type="text/html" template="https://search.example.test/?q={searchTerms}"/>
+  <Url type="application/x-suggestions+json" rel="suggestions" template="https://search.example.test/suggest?q={searchTerms}"/>
+  <Url type="application/rss+xml" template="https://search.example.test/rss?q={searchTerms}&amp;n={count?}"/>
+  <Url type="application/atom+xml" indexOffset="0" template="https://search.example.test/atom?q={searchTerms}&amp;n={count}&amp;from={startIndex}&amp;lang={language?}&amp;x={example:unknown?}"/>
+</OpenSearchDescription>

@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Web;
 
 namespace DssHarness.Core.Agents.Runtime;
 
@@ -159,8 +160,7 @@ public sealed partial class AgentToolRuntime
             return Answer.Refused(url, secret);
         }
 
-        var fetched = await _host.Fetch.FetchAsync(
-            url,
+        var gate = new WebFetchGate(
             async address =>
             {
                 Tally.Asked();
@@ -171,8 +171,9 @@ public sealed partial class AgentToolRuntime
 
                 return answer;
             },
-            hop => _records.WebAnsweredAsync(AgentTools.WebFetch, hop.Address, hop.Status, hop.Type, hop.Bytes, hop.Failure),
-            cancellationToken).ConfigureAwait(false);
+            hop => _records.WebAnsweredAsync(AgentTools.WebFetch, hop.Address, hop.Status, hop.Type, hop.Bytes, hop.Failure));
+
+        var fetched = await _host.Fetch.FetchAsync(url, gate, cancellationToken).ConfigureAwait(false);
 
         if (fetched.Denial is { } denied)
         {

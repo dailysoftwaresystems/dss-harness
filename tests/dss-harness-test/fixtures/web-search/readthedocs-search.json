@@ -1,0 +1,19 @@
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "type": "page",
+      "project": { "slug": "example-docs", "alias": null },
+      "version": { "slug": "stable" },
+      "title": "Configuration",
+      "domain": "https://example-docs.readthedocs.io",
+      "path": "/en/stable/config.html",
+      "highlights": { "title": [] },
+      "blocks": [
+        { "type": "section", "id": "options", "title": "Options", "content": "Every option, with its default.", "highlights": { "title": [], "content": ["Every <span>option</span>, with its default."] } }
+      ]
+    }
+  ]
+}

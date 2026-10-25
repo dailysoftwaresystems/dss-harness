@@ -245,6 +245,7 @@ in `config.json`.
 .orchestrators/<o>/agents/<agent>/sessions/<id>/      ignored; API clients only: one conversation with the provider, in the provider's own form
 .orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included
 .orchestrators/<o>/.../<instance>/children/<session>.json   ignored; in either kind of step, Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by stop-orchestrator --now - once the process that started it has gone
+.orchestrators/.web-index/<source>/          ignored; the harness's own index of a sitemap search source's site: its state, its pages and the pages it could not read, and its fill's record of each address it asked
 .mutations/                                  contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree
 .mutations/<key><mark>-<n>/                  ignored; a worker, a repository of its own, and its claim beside it
 .legs/                                       contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree

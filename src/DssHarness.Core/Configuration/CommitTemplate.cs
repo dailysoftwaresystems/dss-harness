@@ -5,7 +5,7 @@ namespace DssHarness.Core.Configuration;
 
 /// <summary>
 /// <c>commit.template</c>'s placeholders, its filling and its refusals, in one place: read by the configuration's one
-/// brace grammar (<see cref="FlowTemplate.Pieces"/>) - <c>{{</c> and <c>}}</c> braces, <c>${...}</c> left as written -
+/// brace grammar (<see cref="FlowTemplate.Pieces(string)"/>) - <c>{{</c> and <c>}}</c> braces, <c>${...}</c> left as written -
 /// each placeholder a name of <c>commit.variables</c> matched whatever its case. The configuration's check reads the
 /// placeholders and the refusals here, the definition's check its refusals, and a <c>commit</c> step fills the template
 /// here.

@@ -57,6 +57,18 @@ public sealed class GlobPatternTests
         Assert.False(pattern.Matches("b"));
     }
 
+    /// <summary>A path of many segments is matched in time: every depth it could be covered at is decided in one pass.</summary>
+    [Fact]
+    public void APathOfManySegments_IsMatchedInTime()
+    {
+        var path = string.Join('/', Enumerable.Repeat("a", 64_000));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        Assert.False(GlobPattern.Parse("**/private/**").Matches(path));
+        Assert.True(GlobPattern.Parse("**/a/**").Matches(path));
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"took {clock.Elapsed}");
+    }
+
     /// <summary>
     /// A pattern of many <c>**</c> is matched in time however many ways it could split a path among them - each place in
     /// the pattern against each in the path decided once - and a run of <c>**</c> is one, a trailing run one or more still.

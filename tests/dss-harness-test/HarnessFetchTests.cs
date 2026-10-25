@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
+using System.Text;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Web;
 
@@ -88,28 +89,143 @@ public sealed class HarnessFetchTests
 
         await Assert.ThrowsAsync<InvalidCastException>(() => fetch.FetchAsync(
             "https://example.com/defect",
-            _ => Task.FromResult<AgentPolicyAnswer>(new AgentPolicyAnswer.Allowed()),
-            hop =>
-            {
-                hops.Add(hop);
-                return Task.CompletedTask;
-            },
+            new WebFetchGate(
+                _ => Task.FromResult<AgentPolicyAnswer>(new AgentPolicyAnswer.Allowed()),
+                hop =>
+                {
+                    hops.Add(hop);
+                    return Task.CompletedTask;
+                }),
             TestContext.Current.CancellationToken));
 
         Assert.Equal(("https://example.com/defect", "a defect"), (Assert.Single(hops).Address, hops[0].Failure));
     }
 
-    /// <summary>The fetch's bound holds the reading of a page's markup too, which markup nested deep makes long.</summary>
-    [Fact]
-    public async Task APageThatReadsPastTheBound_IsNoAnswer()
+    /// <summary>The fetch's bound holds the reading of a page's markup too, which markup nested deep makes long - its parts' as its text's.</summary>
+    [Theory]
+    [InlineData(WebFetchHtml.Text)]
+    [InlineData(WebFetchHtml.Parts)]
+    public async Task APageThatReadsPastTheBound_IsNoAnswer(WebFetchHtml html)
     {
         var deep = string.Concat(Enumerable.Repeat("<div>", 50_000)) + "deep";
         using var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page(deep, "text/html")), TimeSpan.FromSeconds(1));
+        var hops = new List<WebHop>();
 
-        var (fetched, _, hops) = await FetchAsync(fetch, "https://example.com/deep");
+        var fetched = await fetch.FetchAsync(
+            "https://example.com/deep",
+            new WebFetchAsk { Html = html },
+            new WebFetchGate(_ => Task.FromResult(AgentPolicyAnswer.Allow), hop =>
+            {
+                hops.Add(hop);
+                return Task.CompletedTask;
+            }) { Pace = _ => Task.FromResult<DateTimeOffset?>(null) },
+            TestContext.Current.CancellationToken);
 
         Assert.Equal("no answer read within 1 s", fetched.Failure);
         Assert.Equal(fetched.Failure, Assert.Single(hops).Failure);
+    }
+
+    /// <summary>The bound is the whole asking's: each hop's time is taken from what is left of it, a redirect's among it.</summary>
+    [Fact]
+    public async Task TheBound_IsSharedByEveryHop()
+    {
+        using var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(request =>
+        {
+            Thread.Sleep(TimeSpan.FromMilliseconds(700));
+            return request.RequestUri!.AbsolutePath == "/a" ? WebEndpoint.Redirect("/b") : WebEndpoint.Page("late", "text/plain");
+        }), TimeSpan.FromSeconds(1));
+
+        var fetched = await fetch.FetchAsync("https://example.com/a", WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.Equal(("https://example.com/b", "no answer read within 1 s"), (fetched.Address, fetched.Failure));
+    }
+
+    /// <summary>Asked for its parts, a page is read into them - its text the parts' text - and anything else is read as asked without them.</summary>
+    [Fact]
+    public async Task AskedForParts_APageIsReadIntoThem()
+    {
+        using var fetch = Fetch(new WebEndpoint(request => request.RequestUri!.AbsolutePath == "/plain"
+            ? WebEndpoint.Page("plain <b>text</b>", "text/plain")
+            : WebEndpoint.Page("<html><head><title>T</title></head><body><h1>H</h1><p>Body</p></body></html>", "text/html")));
+
+        var page = await fetch.FetchAsync("https://example.com/", new WebFetchAsk { Html = WebFetchHtml.Parts }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        var plain = await fetch.FetchAsync("https://example.com/plain", new WebFetchAsk { Html = WebFetchHtml.Parts }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.Equal(("T", "H", "H\nBody", "H\nBody"), (page.Parts!.Title, Assert.Single(page.Parts.Headings), page.Parts.Text, page.Text));
+        Assert.Equal(("plain <b>text</b>", (WebPageParts?)null), (plain.Text, plain.Parts));
+    }
+
+    /// <summary>
+    /// The bound is the asking's alone: a decision and a turn waited for, each hop's, are not charged to it, so a slow pace
+    /// never takes a request's time.
+    /// </summary>
+    [Fact]
+    public async Task ADecisionAndATurn_AreWaitedForOutsideTheBound()
+    {
+        using var fetch = new HarnessFetch(
+            new RunningToolDouble("1.2.3"),
+            WebNamesDouble.AllPublic,
+            new WebEndpoint(request => request.RequestUri!.AbsolutePath == "/a" ? WebEndpoint.Redirect("/b") : WebEndpoint.Page("paced", "text/plain")),
+            TimeSpan.FromSeconds(1));
+        var gate = new WebFetchGate(
+            async _ =>
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(600), TestContext.Current.CancellationToken);
+                return AgentPolicyAnswer.Allow;
+            },
+            _ => Task.CompletedTask)
+        {
+            Pace = async cancellationToken =>
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(600), cancellationToken);
+                return null;
+            },
+        };
+
+        var fetched = await fetch.FetchAsync("https://example.com/a", gate, TestContext.Current.CancellationToken);
+
+        Assert.Equal(("paced", (string?)null), (fetched.Text, fetched.Failure));
+    }
+
+    /// <summary>
+    /// Each address - a redirect's too - is given its turn once it is allowed; a turn refused ends the fetch where it is,
+    /// nothing sent for it and nothing answered, saying until when.
+    /// </summary>
+    [Fact]
+    public async Task ATurnRefused_EndsTheFetch_NothingSent()
+    {
+        var endpoint = new WebEndpoint(request => request.RequestUri!.AbsolutePath == "/a" ? WebEndpoint.Redirect("/b") : WebEndpoint.Page("never", "text/plain"));
+        using var fetch = Fetch(endpoint);
+        var until = new DateTimeOffset(2026, 10, 25, 13, 0, 0, TimeSpan.Zero);
+        var turns = new List<string>();
+        var decided = new List<string>();
+        var hops = new List<WebHop>();
+        var gate = new WebFetchGate(
+            address =>
+            {
+                decided.Add(address);
+                return Task.FromResult(AgentPolicyAnswer.Allow);
+            },
+            hop =>
+            {
+                hops.Add(hop);
+                return Task.CompletedTask;
+            })
+        {
+            Pace = _ =>
+            {
+                turns.Add(decided[^1]);
+                return Task.FromResult<DateTimeOffset?>(turns.Count == 2 ? until : null);
+            },
+        };
+
+        var fetched = await fetch.FetchAsync("https://example.com/a", gate, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["https://example.com/a", "https://example.com/b"], turns);
+        Assert.Equal((until, "https://example.com/b", (string?)null), (fetched.Until, fetched.Address, fetched.Text));
+        Assert.Equal("its turn is spent until 2026-10-25 13:00:00 UTC, and nothing was sent", fetched.Failure);
+        Assert.Equal(["/a"], endpoint.Asked.Select(sent => sent.Address.AbsolutePath));
+        Assert.Equal("https://example.com/a", Assert.Single(hops).Address);
     }
 
     /// <summary>JSON is read as it stands, by the character set its answer names.</summary>
@@ -285,7 +401,7 @@ public sealed class HarnessFetchTests
         Assert.InRange(Assert.Single(unsaidHops).Bytes!.Value, HarnessFetch.MostBytes + 1, HarnessFetch.MostBytes + (128 * 1024));
     }
 
-    /// <summary>What is no text - an image, an archive, a type unsaid - is refused.</summary>
+    /// <summary>What is no text - an image, an archive, a type unsaid - is refused, unless any type is asked for: then it is read as text.</summary>
     [Theory]
     [InlineData("image/png", "its type is 'image/png', and this tool's fetch reads text alone: ")]
     [InlineData("application/octet-stream", "its type is 'application/octet-stream', and this tool's fetch reads text alone: ")]
@@ -301,6 +417,10 @@ public sealed class HarnessFetchTests
 
         Assert.Equal(why + "text/*, application/json, application/xml, application/xhtml+xml, application/javascript, application/ecmascript and every +json and +xml type", fetched.Failure);
         Assert.Equal(200, Assert.Single(hops).Status);
+
+        var any = await fetch.FetchAsync("https://example.com/file", new WebFetchAsk { AnyType = true }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        Assert.Equal(("\u0001\u0002\u0003", (string?)null), (any.Text, any.Failure));
+        Assert.Equal(type, any.Type);
     }
 
     /// <summary>The handler the fetch sends through follows no redirect of its own, and sends no cookie, no credential and through no proxy.</summary>
@@ -364,6 +484,121 @@ public sealed class HarnessFetchTests
             _ => [Public],
         }), endpoint);
 
+    /// <summary>Asked for markup, a page's HTML is kept as it was sent, for a reader that reads it itself; the Accept asked is sent.</summary>
+    [Fact]
+    public async Task AskedForMarkup_APagesHtmlIsKept()
+    {
+        string? accept = null;
+        using var fetch = Fetch(new WebEndpoint(request =>
+        {
+            accept = request.Headers.Accept.ToString();
+            return WebEndpoint.Page("<html><head><title>T</title></head><body><h1>H</h1></body></html>", "text/html");
+        }));
+
+        var fetched = await fetch.FetchAsync("https://example.com/", new WebFetchAsk { Html = WebFetchHtml.Markup, Accept = "text/html" }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.Equal("<html><head><title>T</title></head><body><h1>H</h1></body></html>", fetched.Text);
+        Assert.Equal("text/html", accept);
+    }
+
+    /// <summary>Asked for a gzip, one said as one, or of no type said under a name ending in .gz, is read as the text it holds; unasked, it is no text.</summary>
+    [Theory]
+    [InlineData("application/gzip", "https://example.com/sitemap.xml.gz")]
+    [InlineData("application/x-gzip", "https://example.com/sitemap")]
+    [InlineData("application/octet-stream", "https://example.com/sitemap.xml.GZ")]
+    public async Task AGzip_IsReadAsItsText_WhereAsked(string type, string address)
+    {
+        using var fetch = Fetch(new WebEndpoint(_ => Gzipped(Encoding.UTF8.GetBytes("<urlset/>"), type)));
+
+        var read = await fetch.FetchAsync(address, new WebFetchAsk { Gzip = true }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        var unasked = (await FetchAsync(fetch, address)).Fetched;
+
+        Assert.Equal("<urlset/>", read.Text);
+        Assert.Null(read.Failure);
+        Assert.Null(unasked.Text);
+        Assert.StartsWith("its type is", unasked.Failure, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A gzip that holds more than the fetch reads is refused once decompressed past it, read no further; one whose gzip is
+    /// broken, said so; and one said to be a gzip whose bytes are none - the transport's own decompressed - is its text.
+    /// </summary>
+    [Fact]
+    public async Task AGzipPastTheBound_IsRefused()
+    {
+        using var big = Fetch(new WebEndpoint(_ => Gzipped(new byte[HarnessFetch.MostBytes + 10], "application/gzip")));
+        using var broken = Fetch(new WebEndpoint(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([0x1F, 0x8B, 1, 2, 3]) { Headers = { ContentType = new MediaTypeHeaderValue("application/gzip") } } }));
+        using var plain = Fetch(new WebEndpoint(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent("<urlset/>"u8.ToArray()) { Headers = { ContentType = new MediaTypeHeaderValue("application/x-gzip") } } }));
+
+        var past = await big.FetchAsync("https://example.com/s.gz", new WebFetchAsk { Gzip = true }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        var none = await broken.FetchAsync("https://example.com/s.gz", new WebFetchAsk { Gzip = true }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        var text = await plain.FetchAsync("https://example.com/s.gz", new WebFetchAsk { Gzip = true }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.Equal("more than the 5 MiB this tool's fetch reads once decompressed", past.Failure);
+        Assert.StartsWith("its body could not be read: ", none.Failure, StringComparison.Ordinal);
+        Assert.Equal(("<urlset/>", (string?)null), (text.Text, text.Failure));
+    }
+
+    /// <summary>A gzip is known by its bytes: one said to be bytes of any name, or XML, is read as the text it holds where any type is asked.</summary>
+    [Theory]
+    [InlineData("binary/octet-stream", "https://example.com/sitemap.xml.gz")]
+    [InlineData("application/xml", "https://example.com/sitemap.xml")]
+    public async Task AGzip_IsKnownByItsBytes(string type, string address)
+    {
+        using var fetch = Fetch(new WebEndpoint(_ => Gzipped(Encoding.UTF8.GetBytes("<urlset/>"), type)));
+
+        var read = await fetch.FetchAsync(address, new WebFetchAsk { Gzip = true, AnyType = true }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        var unasked = await fetch.FetchAsync(address, new WebFetchAsk { AnyType = true }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.Equal(("<urlset/>", (string?)null), (read.Text, read.Failure));
+        Assert.NotEqual("<urlset/>", unasked.Text);
+    }
+
+    /// <summary>An asker's own most is read to, past the fetch's; and where its head is asked, an answer past the most is kept to it, not refused.</summary>
+    [Fact]
+    public async Task AnAskersMost_AndAHead_AreReadTo()
+    {
+        var body = new string('a', (int)HarnessFetch.MostBytes + 10);
+        using var fetch = Fetch(new WebEndpoint(_ => WebEndpoint.Page(body, "text/plain")));
+
+        var refused = await fetch.FetchAsync("https://example.com/big", new WebFetchAsk(), WebFetchGate.Open, TestContext.Current.CancellationToken);
+        var most = await fetch.FetchAsync("https://example.com/big", new WebFetchAsk { Most = HarnessFetch.MostBytes * 2 }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        var head = await fetch.FetchAsync("https://example.com/big", new WebFetchAsk { Head = true }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(refused.Failure);
+        Assert.Equal((body.Length, (string?)null), (most.Text?.Length, most.Failure));
+        Assert.Equal(((int?)HarnessFetch.MostBytes, (string?)null), (head.Text?.Length, head.Failure));
+    }
+
+    /// <summary>What an address was answered keeps its headers, the content's among them, by name in any case - a failure's too.</summary>
+    [Fact]
+    public async Task AnAnswer_KeepsItsHeaders()
+    {
+        using var fetch = Fetch(new WebEndpoint(request => request.RequestUri!.AbsolutePath == "/limited"
+            ? new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Headers = { RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(30)) }, Content = new ByteArrayContent([1, 2]) { Headers = { ContentType = new MediaTypeHeaderValue("image/png") } } }
+            : WebEndpoint.Page("ok", "text/plain")));
+
+        var (read, _, hops) = await FetchAsync(fetch, "https://example.com/");
+        var (limited, _, _) = await FetchAsync(fetch, "https://example.com/limited");
+
+        Assert.Equal("text/plain; charset=utf-8", read.Headers["content-type"]);
+        Assert.Equal("text/plain; charset=utf-8", Assert.Single(hops).Headers["Content-Type"]);
+        Assert.Equal((429, "30"), (limited.Status, limited.Headers["retry-after"]));
+        Assert.NotNull(limited.Failure);
+    }
+
+    private static HttpResponseMessage Gzipped(byte[] bytes, string type)
+    {
+        using var held = new MemoryStream();
+
+        using (var gzip = new System.IO.Compression.GZipStream(held, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true))
+        {
+            gzip.Write(bytes);
+        }
+
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(held.ToArray()) { Headers = { ContentType = new MediaTypeHeaderValue(type) } } };
+    }
+
     private static async Task<(WebFetched Fetched, List<string> Decided, List<WebHop> Hops)> FetchAsync(
         HarnessFetch fetch,
         string address,
@@ -374,22 +609,22 @@ public sealed class HarnessFetchTests
 
         var fetched = await fetch.FetchAsync(
             address,
-            asked =>
-            {
-                decided.Add(asked);
-                return Task.FromResult(decide?.Invoke(asked) ?? AgentPolicyAnswer.Allow);
-            },
-            hop =>
-            {
-                hops.Add(hop);
-                return Task.CompletedTask;
-            },
+            new WebFetchGate(
+                asked =>
+                {
+                    decided.Add(asked);
+                    return Task.FromResult(decide?.Invoke(asked) ?? AgentPolicyAnswer.Allow);
+                },
+                hop =>
+                {
+                    hops.Add(hop);
+                    return Task.CompletedTask;
+                }),
             TestContext.Current.CancellationToken);
 
         return (fetched, decided, hops);
     }
 
-    /// <summary>A body whose encoding does not decode, as a broken gzip's stream throws.</summary>
     /// <summary>A body that does not decode, raising what gzip's decoder raises, or brotli's.</summary>
     private sealed class Undecodable(bool brotli) : Stream
     {

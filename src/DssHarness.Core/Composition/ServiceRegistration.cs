@@ -195,11 +195,7 @@ public static class ServiceRegistration
 
         // The codebase graph: every implementation of its contract the core holds, found by the one scan, so a new language
         // is registered by being written; the registry built from them refuses two that would claim one file by order.
-        foreach (var extractor in Codebase.CodeGraphExtractors.Implementations)
-        {
-            services.AddSingleton(typeof(Codebase.ICodeGraphExtractor), extractor);
-        }
-
+        services.AddCoreImplementationsOf<Codebase.ICodeGraphExtractor>();
         services.AddSingleton<Codebase.CodeGraphExtractors>();
         services.AddSingleton<Codebase.ICodebaseGraphService, Codebase.CodebaseGraphService>();
 
@@ -217,6 +213,18 @@ public static class ServiceRegistration
         // of the process, the system's own lookup of a name, and the host a runtime is opened from for each run.
         services.AddSingleton<Web.IWebNames, Web.SystemWebNames>();
         services.AddSingleton(provider => new Web.HarnessFetch(provider.GetRequiredService<IToolIdentityProvider>(), provider.GetRequiredService<Web.IWebNames>()));
+
+        // The harness's web search: every kind of source the core holds, found by the one scan, so a new kind is registered
+        // by being written, and the registry built from them refuses two of one name; and the indexes of the sites a
+        // sitemap source searches, each filled in the background through the harness's fetch at the site's pace.
+        services.AddCoreImplementationsOf<Web.Search.IWebSearchKind>();
+        services.AddSingleton<Web.Search.WebSearchKinds>();
+        services.AddSingleton(provider =>
+        {
+            var clock = provider.GetRequiredService<TimeProvider>();
+            return new Web.Index.SitemapFill(provider.GetRequiredService<IFileSystem>(), provider.GetRequiredService<Web.HarnessFetch>(), clock, (wait, cancellationToken) => Task.Delay(wait, clock, cancellationToken));
+        });
+        services.AddSingleton<Web.Index.WebIndexes>();
         services.AddSingleton(provider => new Agents.Runtime.AgentToolHost(
             provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IHostPlatform>(),

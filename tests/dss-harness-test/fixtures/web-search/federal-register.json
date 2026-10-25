@@ -1,0 +1,9 @@
+{
+  "count": 2,
+  "description": "Documents matching 'accessibility'",
+  "total_pages": 1,
+  "results": [
+    { "title": "Accessibility of web content", "type": "Rule", "abstract": "This rule sets the standard for web content.", "document_number": "2026-00001", "html_url": "https://www.example-register.test/documents/2026/01/01/2026-00001/accessibility" },
+    { "title": "Notice on mobile apps", "type": "Notice", "abstract": null, "document_number": "2026-00002", "html_url": "https://www.example-register.test/documents/2026/01/02/2026-00002/mobile" }
+  ]
+}

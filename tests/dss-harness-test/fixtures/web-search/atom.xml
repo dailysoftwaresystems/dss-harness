@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <title>Example search</title>
+  <id>urn:example:search</id>
+  <updated>2026-10-25T10:00:00Z</updated>
+  <opensearch:totalResults>2</opensearch:totalResults>
+  <entry>
+    <title type="html">Tokens &amp;amp; &lt;i&gt;lexers&lt;/i&gt;</title>
+    <link rel="self" href="https://atom.example.test/entries/1.xml"/>
+    <link rel="alternate" href="https://atom.example.test/entries/1"/>
+    <id>urn:example:1</id>
+    <updated>2026-10-25T10:00:00Z</updated>
+    <summary type="text">Splitting text into tokens.</summary>
+  </entry>
+  <entry>
+    <title type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">Grammars <b>explained</b></div></title>
+    <link href="https://atom.example.test/entries/2"/>
+    <id>urn:example:2</id>
+    <updated>2026-10-25T10:00:00Z</updated>
+    <content type="html">&lt;p&gt;What a grammar is.&lt;/p&gt;</content>
+  </entry>
+</feed>

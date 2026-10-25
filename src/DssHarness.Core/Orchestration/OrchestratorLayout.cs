@@ -50,6 +50,7 @@ namespace DssHarness.Core.Orchestration;
 /// graph/sync.jsonl            one line for each sync of the graph
 /// graph/views/&lt;agent&gt;.json    an agent's view of the graph: what its worktree holds that the base does not
 /// ../&lt;run&gt;.owner.json        beside the run's directory: the process whose engine holds the run
+/// ../.web-index/&lt;source&gt;/    beside every orchestrator: the harness's index of a sitemap source's site, its state, pages and fill's record
 /// </code>
 /// The orchestrator's name and each agent's are the directories they are kept in, and an agent is never named as its
 /// orchestrator, since the two would share a log and a plans directory.
@@ -207,6 +208,28 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The extension of a file's extract.</summary>
     public const string GraphExtractExtension = ".json";
+
+    /// <summary>The directory, beside every orchestrator, of the harness's indexes of sites: a name no orchestrator has, for none begins with a dot.</summary>
+    public const string WebIndexesDirectoryName = ".web-index";
+
+    /// <summary>
+    /// Where the harness's index of the site of the web-search source named <paramref name="source"/> is kept: under the
+    /// repository's orchestrators, so every run of the repository searches it and a later run starts from it.
+    /// </summary>
+    /// <param name="layout">The repository.</param>
+    /// <param name="source">The source's name.</param>
+    /// <exception cref="ArgumentException"><paramref name="source"/> is no source's name, which a directory is named by.</exception>
+    public static string WebIndexDirectory(HarnessLayout layout, string source)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
+        if (!Web.Search.WebSearchSource.IsName(source))
+        {
+            throw new ArgumentException($"'{source}' is no web-search source's name: {Web.Search.WebSearchSource.NameRule}.", nameof(source));
+        }
+
+        return Path.Combine(layout.OrchestratorsDirectory, WebIndexesDirectoryName, source);
+    }
 
     /// <summary>Where the orchestrator named <paramref name="name"/> of the repository at <paramref name="layout"/> is kept.</summary>
     /// <param name="layout">The repository.</param>

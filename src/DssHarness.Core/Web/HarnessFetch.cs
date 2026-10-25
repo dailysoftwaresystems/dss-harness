@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Globalization;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
@@ -9,12 +11,15 @@ using DssHarness.Core.Hosts;
 namespace DssHarness.Core.Web;
 
 /// <summary>
-/// The harness's own fetch, which makes every page an agent reads: <c>http</c> and <c>https</c> alone; each address -
-/// the first and each redirect, at most <see cref="MostRedirects"/> - decided before anything is sent; a host that resolves
-/// to any address no public host holds refused, and a connection made only to an address that was checked, and checked
-/// again once made; <see cref="Bound"/> for the whole; <see cref="MostBytes"/> at most; text alone - <c>text/*</c>, JSON and
-/// XML - a page's HTML reduced to its text; no cookie, no credential, no proxy and nothing of the tool's environment sent,
-/// under a fixed <c>User-Agent</c> that names the tool.
+/// The harness's own fetch, which makes every request a reader of the web sends - every page an agent reads, every
+/// request a site's index is filled by: <c>http</c> and <c>https</c> alone; each address - the first and each redirect,
+/// at most <see cref="MostRedirects"/> - decided before anything is sent, then given its turn by the reader's pace, where
+/// it has one (<see cref="WebFetchGate"/>); a host that resolves to any address no public host holds refused, and a
+/// connection made only to an address that was checked, and checked again once made; <see cref="Bound"/> for the asking
+/// of them all, a decision and a turn waited for apart; <see cref="MostBytes"/> at most; text alone - <c>text/*</c>, JSON
+/// and XML, and a gzip of text where the reader asks - read as the reader asks (<see cref="WebFetchAsk"/>): a page's HTML
+/// reduced to its text, read into its parts or kept as its markup, within the bound; no cookie, no credential, no proxy and nothing of the tool's environment
+/// sent, under a fixed <c>User-Agent</c> that names the tool.
 /// </summary>
 public sealed class HarnessFetch : IDisposable
 {
@@ -24,7 +29,7 @@ public sealed class HarnessFetch : IDisposable
     /// <summary>The most bytes a page may hold: more is refused, read no further.</summary>
     public const long MostBytes = 5 * 1024 * 1024;
 
-    /// <summary>How long one fetch may take, its redirects and its reading among it.</summary>
+    /// <summary>How long the asking of one fetch may take, its redirects and its reading among it: a decision or a turn waited for is not.</summary>
     public static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     /// <summary>The types of what a fetch reads, beside every <c>text/</c> one and every <c>+json</c> and <c>+xml</c> one.</summary>
@@ -122,31 +127,45 @@ public sealed class HarnessFetch : IDisposable
     }
 
     /// <summary>
-    /// Fetches <paramref name="address"/>: each address - the first and each redirect - asked of <paramref name="decide"/>
-    /// before anything is sent, and each answer told to <paramref name="answered"/>; the page's text, or why there is none.
+    /// Fetches <paramref name="address"/> as a page: each address - the first and each redirect - decided by
+    /// <paramref name="gate"/> and given its turn before anything is sent, and each answer told to it; the page's text, or
+    /// why there is none.
     /// </summary>
     /// <param name="address">The address an agent asked for.</param>
-    /// <param name="decide">Decides each address, before it is asked: a denial ends the fetch, nothing sent.</param>
-    /// <param name="answered">Told what each address was answered, or why it failed, once it was asked.</param>
+    /// <param name="gate">
+    /// Decides each address before it is asked - a denial ends the fetch, nothing sent - gives it its turn, and is told what
+    /// each was answered.
+    /// </param>
     /// <param name="cancellationToken">Stops the fetch.</param>
-    public async Task<WebFetched> FetchAsync(
-        string address,
-        Func<string, Task<AgentPolicyAnswer>> decide,
-        Func<WebHop, Task> answered,
-        CancellationToken cancellationToken)
+    public Task<WebFetched> FetchAsync(string address, WebFetchGate gate, CancellationToken cancellationToken)
+        => FetchAsync(address, WebFetchAsk.Page, gate, cancellationToken);
+
+    /// <summary>
+    /// Fetches <paramref name="address"/> as <paramref name="ask"/> says - a page's parts read or its markup kept, a gzip of text read - each
+    /// address decided by <paramref name="gate"/> first and each answer told to it, as
+    /// <see cref="FetchAsync(string, WebFetchGate, CancellationToken)"/> does.
+    /// </summary>
+    /// <param name="address">The address.</param>
+    /// <param name="ask">What is read, and how.</param>
+    /// <param name="gate">
+    /// Decides each address before it is asked - a denial ends the fetch, nothing sent - gives it its turn, and is told what
+    /// each was answered.
+    /// </param>
+    /// <param name="cancellationToken">Stops the fetch.</param>
+    public async Task<WebFetched> FetchAsync(string address, WebFetchAsk ask, WebFetchGate gate, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(address);
-        ArgumentNullException.ThrowIfNull(decide);
-        ArgumentNullException.ThrowIfNull(answered);
+        ArgumentNullException.ThrowIfNull(ask);
+        ArgumentNullException.ThrowIfNull(gate);
 
-        using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        bound.CancelAfter(_bound);
-
+        // The bound is the asking's alone: a decision and a turn are waited for apart, so a slow pace never takes a
+        // request's time.
+        var left = _bound;
         var current = address;
 
         for (var hop = 0; ; hop++)
         {
-            if (!Uri.TryCreate(current, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+            if (!WebAddresses.IsWeb(current, out var uri))
             {
                 return WebFetched.Refused(current, $"'{current}' is no http or https address, and this tool's fetch asks no other");
             }
@@ -160,34 +179,48 @@ public sealed class HarnessFetch : IDisposable
                 return WebFetched.Refused(current, $"'{address}' redirects more than {MostRedirects} times, and no more are followed");
             }
 
-            if (await decide(current).ConfigureAwait(false) is AgentPolicyAnswer.Denied denied)
+            if (await gate.Decide(current).ConfigureAwait(false) is AgentPolicyAnswer.Denied denied)
             {
                 return WebFetched.Denied(current, denied);
             }
 
+            // Its turn, once it is allowed: a turn refused is no request, so nothing is answered for it.
+            if (gate.Pace is { } pace && await pace(cancellationToken).ConfigureAwait(false) is { } until)
+            {
+                return WebFetched.Held(current, until);
+            }
+
             WebHop told;
+            var asked = Stopwatch.GetTimestamp();
 
-            try
+            using (var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
-                told = await AskAsync(uri, bound.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (bound.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-            {
-                told = WebHop.Failed(current, $"no answer read within {_bound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s");
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // What no answer here foresaw still leaves the address its line, for the request may have left the machine;
-                // the defect is raised all the same.
-                await answered(WebHop.Failed(current, ex.Message)).ConfigureAwait(false);
-                throw;
+                bound.CancelAfter(left > TimeSpan.Zero ? left : TimeSpan.Zero);
+
+                try
+                {
+                    told = await AskAsync(uri, ask, bound.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (bound.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    told = WebHop.Failed(current, $"no answer read within {_bound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s");
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // What no answer here foresaw still leaves the address its line, for the request may have left the machine;
+                    // the defect is raised all the same.
+                    await gate.Answered(WebHop.Failed(current, ex.Message)).ConfigureAwait(false);
+                    throw;
+                }
             }
 
-            await answered(told).ConfigureAwait(false);
+            left -= Stopwatch.GetElapsedTime(asked);
+
+            await gate.Answered(told).ConfigureAwait(false);
 
             if (told.Failure is { } failure)
             {
-                return WebFetched.Refused(current, failure);
+                return WebFetched.Refused(current, failure) with { Status = told.Status, Headers = told.Headers };
             }
 
             if (told.Location is { } next)
@@ -196,7 +229,7 @@ public sealed class HarnessFetch : IDisposable
                 continue;
             }
 
-            return new WebFetched(current, told.Status, told.Type, told.Text, Failure: null, Denial: null);
+            return new WebFetched(current, told.Status, told.Type, told.Text, Failure: null, Denial: null) { Headers = told.Headers, Parts = told.Parts };
         }
     }
 
@@ -210,7 +243,7 @@ public sealed class HarnessFetch : IDisposable
     }
 
     /// <summary>Asks one address: its answer, a redirect's next address, or why it failed.</summary>
-    private async Task<WebHop> AskAsync(Uri uri, CancellationToken cancellationToken)
+    private async Task<WebHop> AskAsync(Uri uri, WebFetchAsk ask, CancellationToken cancellationToken)
     {
         var said = uri.AbsoluteUri;
 
@@ -226,7 +259,7 @@ public sealed class HarnessFetch : IDisposable
 
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
         request.Headers.UserAgent.ParseAdd(_userAgent);
-        request.Headers.Accept.ParseAdd("text/html, text/plain;q=0.9, application/json;q=0.9, application/xml;q=0.8, text/*;q=0.7");
+        request.Headers.Accept.ParseAdd(ask.Accept ?? "text/html, text/plain;q=0.9, application/json;q=0.9, application/xml;q=0.8, text/*;q=0.7");
 
         HttpResponseMessage response;
 
@@ -244,52 +277,129 @@ public sealed class HarnessFetch : IDisposable
 
         using (response)
         {
-            var status = (int)response.StatusCode;
-            var type = response.Content.Headers.ContentType?.MediaType;
+            var headers = HeadersOf(response);
 
-            if (status is 301 or 302 or 303 or 307 or 308)
-            {
-                return response.Headers.Location is not { } location
-                    ? WebHop.Failed(said, $"a redirect ({status.ToString(CultureInfo.InvariantCulture)}) that names no address", status)
-                    : Uri.TryCreate(uri, location, out var next)
-                        ? WebHop.Redirected(said, status, next.AbsoluteUri)
-                        : WebHop.Failed(said, $"a redirect ({status.ToString(CultureInfo.InvariantCulture)}) to '{location.OriginalString}', which reads as no address", status);
-            }
-
-            // Refused unread: the size is the answer's word for it, said in why, and no byte came back.
-            if (response.Content.Headers.ContentLength is > MostBytes and var length)
-            {
-                return WebHop.Failed(said, $"{length.ToString("N0", CultureInfo.InvariantCulture)} bytes, past the {FileSystem.DiskSpace.Size(MostBytes)} this tool's fetch reads", status, type);
-            }
-
-            if (!IsText(type))
-            {
-                return WebHop.Failed(said, $"its type is {(type is null ? "not said" : $"'{type}'")}, and this tool's fetch reads text alone: {TextTypesSaid}", status, type);
-            }
-
-            byte[] bytes;
-            bool over;
-
-            try
-            {
-                (bytes, over) = await ReadAsync(response.Content, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or HttpRequestException)
-            {
-                // A body that ends early, or that its encoding does not decode: gzip said of a plain page raises
-                // InvalidDataException, a broken brotli InvalidOperationException, as the runtime's decoders do.
-                return WebHop.Failed(said, $"its body could not be read: {ex.Message.TrimEnd('.')}", status, type);
-            }
-
-            if (over)
-            {
-                return WebHop.Failed(said, $"more than the {FileSystem.DiskSpace.Size(MostBytes)} this tool's fetch reads", status, type, bytes.Length);
-            }
-
-            var text = Decoded(bytes, response.Content.Headers.ContentType?.CharSet);
-
-            return WebHop.Read(said, status, type!, bytes.Length, IsHtml(type) ? await WebPageText.OfAsync(text, cancellationToken).ConfigureAwait(false) : text);
+            return await AnsweredAsync(said, uri, ask, response, cancellationToken).ConfigureAwait(false) with { Headers = headers };
         }
+    }
+
+    /// <summary>Reads one answer: a redirect's next address, its text, or why it is none.</summary>
+    private static async Task<WebHop> AnsweredAsync(string said, Uri uri, WebFetchAsk ask, HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        var status = (int)response.StatusCode;
+        var type = response.Content.Headers.ContentType?.MediaType;
+
+        if (status is 301 or 302 or 303 or 307 or 308)
+        {
+            return response.Headers.Location is not { } location
+                ? WebHop.Failed(said, $"a redirect ({status.ToString(CultureInfo.InvariantCulture)}) that names no address", status)
+                : Uri.TryCreate(uri, location, out var next)
+                    ? WebHop.Redirected(said, status, next.AbsoluteUri)
+                    : WebHop.Failed(said, $"a redirect ({status.ToString(CultureInfo.InvariantCulture)}) to '{location.OriginalString}', which reads as no address", status);
+        }
+
+        var most = ask.Most ?? MostBytes;
+
+        // Refused unread: the size is the answer's word for it, said in why, and no byte came back - unless its head is asked.
+        if (!ask.Head && response.Content.Headers.ContentLength is { } length && length > most)
+        {
+            return WebHop.Failed(said, $"{length.ToString("N0", CultureInfo.InvariantCulture)} bytes, past the {FileSystem.DiskSpace.Size(most)} this tool's fetch reads", status, type);
+        }
+
+        if (!(ask.Gzip && IsGzip(type, uri)) && !ask.AnyType && !IsText(type))
+        {
+            return WebHop.Failed(said, $"its type is {(type is null ? "not said" : $"'{type}'")}, and this tool's fetch reads text alone: {TextTypesSaid}", status, type);
+        }
+
+        byte[] bytes;
+        bool over;
+        var gzip = false;
+
+        try
+        {
+            (bytes, over) = await ReadAsync(response.Content, most, cancellationToken).ConfigureAwait(false);
+
+            // A gzip is known by its bytes, never by what it is said to be: one said to be bytes or XML is a gzip all the
+            // same, and one the transport already decompressed, still said to be a gzip, is the text it holds.
+            gzip = ask.Gzip && !over && bytes is [0x1F, 0x8B, ..];
+
+            if (gzip)
+            {
+                (bytes, over) = await GunzipAsync(bytes, most, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (over && ask.Head)
+            {
+                (bytes, over) = (bytes[..(int)most], false);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or HttpRequestException)
+        {
+            // A body that ends early, or that its encoding does not decode: gzip said of a plain page raises
+            // InvalidDataException, a broken brotli InvalidOperationException, as the runtime's decoders do.
+            return WebHop.Failed(said, $"its body could not be read: {ex.Message.TrimEnd('.')}", status, type);
+        }
+
+        if (over)
+        {
+            return WebHop.Failed(said, $"more than the {FileSystem.DiskSpace.Size(most)} this tool's fetch reads{(gzip ? " once decompressed" : string.Empty)}", status, type, bytes.Length);
+        }
+
+        var text = Decoded(bytes, gzip ? null : response.Content.Headers.ContentType?.CharSet);
+        var read = WebHop.Read(said, status, type ?? (gzip ? "application/gzip" : null), bytes.Length, text);
+
+        // A page's markup is read within the bound, as its bytes are: markup nested deep makes the reading long.
+        if (!IsHtml(type) || ask.Html == WebFetchHtml.Markup)
+        {
+            return read;
+        }
+
+        if (ask.Html == WebFetchHtml.Parts)
+        {
+            var parts = await WebPageText.PartsAsync(text, cancellationToken).ConfigureAwait(false);
+            return read with { Text = parts.Text, Parts = parts };
+        }
+
+        return read with { Text = await WebPageText.OfAsync(text, cancellationToken).ConfigureAwait(false) };
+    }
+
+    /// <summary>Whether an answer of <paramref name="type"/> from <paramref name="uri"/> is a gzip: said so, or bytes of no type said under a name ending in <c>.gz</c>.</summary>
+    private static bool IsGzip(string? type, Uri uri)
+        => type is not null && (type.Equals("application/gzip", StringComparison.OrdinalIgnoreCase) || type.Equals("application/x-gzip", StringComparison.OrdinalIgnoreCase))
+            || ((type is null || type.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase)) && uri.AbsolutePath.EndsWith(".gz", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>What the gzip <paramref name="bytes"/> holds, read no further than one byte past <paramref name="most"/>, and whether it held more.</summary>
+    /// <exception cref="InvalidDataException">The bytes are no gzip.</exception>
+    private static async Task<(byte[] Bytes, bool Over)> GunzipAsync(byte[] bytes, long most, CancellationToken cancellationToken)
+    {
+        await using var gzip = new GZipStream(new MemoryStream(bytes), CompressionMode.Decompress);
+        using var held = new MemoryStream();
+        var buffer = new byte[81920];
+
+        while (await gzip.ReadAsync(buffer, cancellationToken).ConfigureAwait(false) is var read and > 0)
+        {
+            held.Write(buffer, 0, read);
+
+            if (held.Length > most)
+            {
+                return (held.ToArray(), true);
+            }
+        }
+
+        return (held.ToArray(), false);
+    }
+
+    /// <summary>An answer's headers by name in any case, the content's among them, each one's values joined by commas.</summary>
+    private static IReadOnlyDictionary<string, string> HeadersOf(HttpResponseMessage response)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (name, values) in response.Headers.Concat(response.Content.Headers))
+        {
+            headers[name] = string.Join(", ", values);
+        }
+
+        return headers;
     }
 
     /// <summary>Whether <paramref name="type"/> is one a fetch reads: every <c>text/</c> type, <see cref="TextTypes"/>, and every JSON and XML type.</summary>
@@ -300,12 +410,13 @@ public sealed class HarnessFetch : IDisposable
                 || type.EndsWith("+json", StringComparison.OrdinalIgnoreCase)
                 || type.EndsWith("+xml", StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>Whether <paramref name="type"/> is a page's markup, which is read as its text: HTML or XHTML, in any case.</summary>
-    private static bool IsHtml(string? type)
+    /// <summary>Whether <paramref name="type"/> is a page's markup, which is read as the ask says (<see cref="WebFetchHtml"/>): HTML or XHTML, in any case.</summary>
+    /// <param name="type">A type an answer said.</param>
+    internal static bool IsHtml(string? type)
         => string.Equals(type, "text/html", StringComparison.OrdinalIgnoreCase) || string.Equals(type, "application/xhtml+xml", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>What <paramref name="content"/> holds, read no further than one byte past <see cref="MostBytes"/>, and whether it held more.</summary>
-    private static async Task<(byte[] Bytes, bool Over)> ReadAsync(HttpContent content, CancellationToken cancellationToken)
+    /// <summary>What <paramref name="content"/> holds, read no further than one byte past <paramref name="most"/>, and whether it held more.</summary>
+    private static async Task<(byte[] Bytes, bool Over)> ReadAsync(HttpContent content, long most, CancellationToken cancellationToken)
     {
         await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var held = new MemoryStream();
@@ -315,7 +426,7 @@ public sealed class HarnessFetch : IDisposable
         {
             held.Write(buffer, 0, read);
 
-            if (held.Length > MostBytes)
+            if (held.Length > most)
             {
                 return (held.ToArray(), true);
             }
@@ -395,13 +506,19 @@ public sealed class HarnessFetch : IDisposable
 /// <param name="Status">The status the server answered; null where none was read.</param>
 /// <param name="Type">The type of what came back; null where none was said or read.</param>
 /// <param name="Bytes">How many bytes came back; null where none were read.</param>
-/// <param name="Text">The text read, a page's HTML reduced to its text; null but where it was read.</param>
+/// <param name="Text">The text read, as the fetch was asked to read it (<see cref="WebFetchAsk"/>); null but where it was read.</param>
 /// <param name="Location">The address a redirect named; null for any other answer.</param>
 /// <param name="Failure">Why it failed; null where it did not.</param>
 public sealed record WebHop(string Address, int? Status, string? Type, long? Bytes, string? Text, string? Location, string? Failure)
 {
+    /// <summary>The headers it was answered with, by name in any case; none where nothing was answered.</summary>
+    public IReadOnlyDictionary<string, string> Headers { get; init; } = WebFetchAsk.NoHeaders;
+
+    /// <summary>The parts of the page it read, where its parts were asked (<see cref="WebFetchHtml.Parts"/>) and it was HTML; null otherwise.</summary>
+    public WebPageParts? Parts { get; init; }
+
     /// <summary>An address read: its text.</summary>
-    internal static WebHop Read(string address, int status, string type, long bytes, string text) => new(address, status, type, bytes, text, null, null);
+    internal static WebHop Read(string address, int status, string? type, long bytes, string text) => new(address, status, type, bytes, text, null, null);
 
     /// <summary>An address that redirected to <paramref name="location"/>.</summary>
     internal static WebHop Redirected(string address, int status, string location) => new(address, status, null, null, null, location, null);
@@ -410,18 +527,105 @@ public sealed record WebHop(string Address, int? Status, string? Type, long? Byt
     internal static WebHop Failed(string address, string why, int? status = null, string? type = null, long? bytes = null) => new(address, status, type, bytes, null, null, why);
 }
 
-/// <summary>What a fetch ended with: the text of the page it read, why it read none, or the denial that stopped it.</summary>
+/// <summary>What a fetch ended with: the text it read, why it read none, the denial that stopped it, or the turn it was refused.</summary>
 /// <param name="Address">The address it ended at, its redirects followed.</param>
 /// <param name="Status">The status the last address answered; null where none answered.</param>
 /// <param name="Type">The type of what it read; null where it read nothing.</param>
-/// <param name="Text">The page's text; null where none was read.</param>
+/// <param name="Text">The text read, as the fetch was asked to read it; null where none was read.</param>
 /// <param name="Failure">Why none was read; null where one was, or the policy denied it.</param>
 /// <param name="Denial">The denial that stopped it before an address was asked; null where none did.</param>
 public sealed record WebFetched(string Address, int? Status, string? Type, string? Text, string? Failure, AgentPolicyAnswer.Denied? Denial)
 {
+    /// <summary>The headers its last address was answered with, by name in any case; none where nothing was answered.</summary>
+    public IReadOnlyDictionary<string, string> Headers { get; init; } = WebFetchAsk.NoHeaders;
+
+    /// <summary>When its source may be asked again, where the reader's pace refused an address its turn; null where none did.</summary>
+    public DateTimeOffset? Until { get; init; }
+
+    /// <summary>The parts of the page it read, where its parts were asked (<see cref="WebFetchHtml.Parts"/>) and it was HTML; null otherwise.</summary>
+    public WebPageParts? Parts { get; init; }
+
+    /// <summary>A fetch whose address the reader's pace refused its turn until <paramref name="until"/>: nothing was sent.</summary>
+    internal static WebFetched Held(string address, DateTimeOffset until)
+        => new(address, null, null, null, $"its turn is spent until {WebRateLimit.Said(until)}, and nothing was sent", null) { Until = until };
+
     /// <summary>A fetch that read nothing, for <paramref name="why"/>.</summary>
     internal static WebFetched Refused(string address, string why) => new(address, null, null, null, why, null);
 
     /// <summary>A fetch the policy stopped at <paramref name="address"/>.</summary>
     internal static WebFetched Denied(string address, AgentPolicyAnswer.Denied denied) => new(address, null, null, null, null, denied);
+}
+
+/// <summary>
+/// What decides, records and paces each address a reader of the web asks through the harness's fetch: the policy's
+/// <c>Web(...)</c> rules and the mask before an address is asked, the record of what it was answered, and - for a reader
+/// that asks a source many times, as a site's index is filled and a search's sources are asked - the source's turn on
+/// this machine, which the fetch waits for after the decision and before each request, a redirect's too.
+/// </summary>
+/// <param name="Decide">Decides an address before it is asked: a denial and nothing is sent.</param>
+/// <param name="Answered">Told what each address was answered, or why it failed.</param>
+public sealed record WebFetchGate(Func<string, Task<AgentPolicyAnswer>> Decide, Func<WebHop, Task> Answered)
+{
+    /// <summary>A gate that allows every address, records none and paces nothing: for what a test reads alone, never a reader's.</summary>
+    internal static WebFetchGate Open { get; } = new(_ => Task.FromResult(AgentPolicyAnswer.Allow), _ => Task.CompletedTask);
+
+    /// <summary>
+    /// Waits for the source's turn on this machine before each request, and answers when it may be asked again where its
+    /// pace is spent for longer than a wait - its day's - or <see langword="null"/> to ask now; none where the reader asks
+    /// once, as an agent's page is read.
+    /// </summary>
+    public Func<CancellationToken, Task<DateTimeOffset?>>? Pace { get; init; }
+}
+
+/// <summary>What a fetch reads and how: a page as an agent reads it, or what a reader of its own takes - markup, a page's parts, a gzip.</summary>
+public sealed record WebFetchAsk
+{
+    /// <summary>A page as an agent reads it: its HTML reduced to its text, no gzip read.</summary>
+    public static WebFetchAsk Page { get; } = new();
+
+    /// <summary>No headers: what an address that was never answered was answered with.</summary>
+    public static IReadOnlyDictionary<string, string> NoHeaders { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>How a page's HTML is read: reduced to its text, as an agent reads it, where none is said.</summary>
+    public WebFetchHtml Html { get; init; }
+
+    /// <summary>
+    /// Whether a gzip of text - its type <c>application/gzip</c>, or none said under a name ending in <c>.gz</c>, as a
+    /// sitemap's - is read as the UTF-8 text it holds, no more of it than the fetch reads of any answer.
+    /// </summary>
+    public bool Gzip { get; init; }
+
+    /// <summary>The types the request asks for (<c>Accept</c>); a page's where none is said.</summary>
+    public string? Accept { get; init; }
+
+    /// <summary>
+    /// Whether an answer is read as text whatever type it says it is, or where it says none: a file that is text by its
+    /// name - a robots.txt (RFC 9309, 2.3), a sitemap - whose server may call it anything, read by a reader of its own.
+    /// </summary>
+    public bool AnyType { get; init; }
+
+    /// <summary>
+    /// The most bytes read of the answer - once decompressed, where it is a gzip - where it is not the fetch's own
+    /// <see cref="HarnessFetch.MostBytes"/>: a sitemap's, which its protocol lets be 50 MiB.
+    /// </summary>
+    public long? Most { get; init; }
+
+    /// <summary>
+    /// Whether an answer longer than the most read is kept to its head, the rest unread, rather than refused: a robots.txt,
+    /// of which only the first 500 KiB are parsed (RFC 9309, 2.5), its reader leaving the line its cut ends in unread.
+    /// </summary>
+    public bool Head { get; init; }
+}
+
+/// <summary>How a fetch reads an answer that is HTML - within its bound, as it reads the answer's bytes.</summary>
+public enum WebFetchHtml
+{
+    /// <summary>Reduced to its text, as an agent reads a page (<see cref="WebPageText.OfAsync"/>).</summary>
+    Text,
+
+    /// <summary>Kept as its markup, for a reader that reads it itself: a robots.txt or a sitemap said to be HTML.</summary>
+    Markup,
+
+    /// <summary>Read into the parts a site's index keeps (<see cref="WebPageText.PartsAsync"/>), its text among them.</summary>
+    Parts,
 }

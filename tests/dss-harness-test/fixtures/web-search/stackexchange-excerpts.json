@@ -1,0 +1,41 @@
+{
+  "items": [
+    {
+      "tags": ["c#", "linq"],
+      "question_score": 42,
+      "is_accepted": false,
+      "has_accepted_answer": true,
+      "answer_count": 3,
+      "is_answered": true,
+      "question_id": 1010101,
+      "item_type": "question",
+      "score": 42,
+      "last_activity_date": 1760000000,
+      "creation_date": 1700000000,
+      "body": "How do I group a <span class=\"highlight\">List&lt;T&gt;</span> by a key?",
+      "excerpt": "How do I group a <span class=\"highlight\">List&lt;T&gt;</span> by a key and count each group &amp; keep the order?",
+      "title": "Grouping a List&lt;T&gt; by key with LINQ"
+    },
+    {
+      "tags": ["c#"],
+      "question_score": 7,
+      "is_accepted": true,
+      "has_accepted_answer": true,
+      "answer_count": 1,
+      "is_answered": true,
+      "question_id": 2020202,
+      "answer_id": 2020303,
+      "item_type": "answer",
+      "score": 9,
+      "last_activity_date": 1760000100,
+      "creation_date": 1700000100,
+      "body": "Use <code>GroupBy</code>.",
+      "excerpt": "Use <span class=\"highlight\">GroupBy</span> and then <code>Count()</code>.",
+      "title": "Counting groups"
+    }
+  ],
+  "has_more": true,
+  "quota_max": 300,
+  "quota_remaining": 297,
+  "backoff": 10
+}

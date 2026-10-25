@@ -217,56 +217,35 @@ public sealed class GlobPattern
 
         // A directory the pattern matches is matched all the way down, so each directory above the
         // path is tried as the match itself: 'src/cache/x.tmp' is covered by '**/cache' as
-        // gitignore covers it, through the 'src/cache' the pattern matches.
-        for (var depth = 1; depth <= deepest; depth++)
+        // gitignore covers it, through the 'src/cache' the pattern matches. Every depth at once, each
+        // place in the pattern against each place in the path decided once, in one pass from their
+        // ends: the ways a pattern of many '**' splits a path among them are past counting, the places
+        // are not.
+        var covers = new bool[_segments.Length + 1, deepest + 1];
+
+        for (var candidateIndex = 1; candidateIndex <= deepest; candidateIndex++)
         {
-            // Each place in the pattern against each place in the path is decided once: the ways a pattern of many '**'
-            // splits a path among them are past counting, the places are not.
-            if (Covers(0, 0, segments, depth, comparison, new bool?[_segments.Length + 1, depth + 1]))
+            covers[_segments.Length, candidateIndex] = true;
+        }
+
+        for (var patternIndex = _segments.Length - 1; patternIndex >= 0; patternIndex--)
+        {
+            for (var candidateIndex = deepest; candidateIndex >= 0; candidateIndex--)
             {
-                return true;
+                covers[patternIndex, candidateIndex] = _segments[patternIndex] == "**"
+
+                    // A trailing '**' stands for one segment or more, never for the path itself: see the
+                    // class remarks. A '**' anywhere else stands for any number of segments, none included.
+                    ? patternIndex == _segments.Length - 1
+                        ? candidateIndex < deepest
+                        : covers[patternIndex + 1, candidateIndex] || (candidateIndex < deepest && covers[patternIndex, candidateIndex + 1])
+                    : candidateIndex < deepest
+                        && SegmentMatches(_segments[patternIndex], segments[candidateIndex], comparison)
+                        && covers[patternIndex + 1, candidateIndex + 1];
             }
         }
 
-        return false;
-    }
-
-    /// <summary>
-    /// Whether <paramref name="candidate"/>'s segments from <paramref name="candidateIndex"/> up to
-    /// <paramref name="depth"/> match the pattern's from <paramref name="patternIndex"/> to their
-    /// ends, each pair of places decided once in <paramref name="seen"/>.
-    /// </summary>
-    private bool Covers(int patternIndex, int candidateIndex, string[] candidate, int depth, StringComparison comparison, bool?[,] seen)
-    {
-        if (seen[patternIndex, candidateIndex] is { } known)
-        {
-            return known;
-        }
-
-        bool covers;
-
-        if (patternIndex == _segments.Length)
-        {
-            covers = candidateIndex == depth;
-        }
-        else if (_segments[patternIndex] == "**")
-        {
-            // A trailing '**' stands for one segment or more, never for the path itself: see the
-            // class remarks. A '**' anywhere else stands for any number of segments, none included.
-            covers = patternIndex == _segments.Length - 1
-                ? candidateIndex < depth
-                : Enumerable.Range(candidateIndex, depth - candidateIndex + 1).Any(taken => Covers(patternIndex + 1, taken, candidate, depth, comparison, seen));
-        }
-        else
-        {
-            covers = candidateIndex < depth
-                && SegmentMatches(_segments[patternIndex], candidate[candidateIndex], comparison)
-                && Covers(patternIndex + 1, candidateIndex + 1, candidate, depth, comparison, seen);
-        }
-
-        seen[patternIndex, candidateIndex] = covers;
-
-        return covers;
+        return covers[0, 0];
     }
 
     /// <summary>

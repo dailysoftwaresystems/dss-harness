@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Example search: parsers</title>
+    <link>https://feeds.example.test/</link>
+    <description>Results</description>
+    <opensearch:totalResults>87</opensearch:totalResults>
+    <item>
+      <title>Writing a &lt;b&gt;recursive&lt;/b&gt; descent parser</title>
+      <link>https://feeds.example.test/posts/parser</link>
+      <description>&lt;p&gt;How to write one &amp;amp; test it.&lt;/p&gt;</description>
+    </item>
+    <item>
+      <title>Parser combinators</title>
+      <guid>https://feeds.example.test/posts/combinators</guid>
+      <content:encoded><![CDATA[<p>Combinators <em>compose</em>.</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Relative link</title>
+      <link>/posts/relative</link>
+    </item>
+    <item>
+      <title>No address</title>
+      <guid isPermaLink="false">tag:example,2026:1</guid>
+    </item>
+  </channel>
+</rss>

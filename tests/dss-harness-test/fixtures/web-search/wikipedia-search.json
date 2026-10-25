@@ -1,0 +1,12 @@
+{
+  "pages": [
+    {
+      "id": 15,
+      "key": "Binary_search",
+      "title": "Binary search",
+      "excerpt": "In computer science, <span class=\"searchmatch\">binary</span> <span class=\"searchmatch\">search</span> finds a target in a sorted array",
+      "matched_title": null,
+      "description": "Search algorithm"
+    }
+  ]
+}

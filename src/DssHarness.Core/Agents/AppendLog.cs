@@ -89,6 +89,27 @@ internal sealed class AppendLog : IDisposable
         }
     }
 
+    /// <summary>How many bytes the log holds, its last line whole.</summary>
+    public long Length
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _file.Length;
+            }
+        }
+    }
+
+    /// <summary>Empties the log, for a log kept to a most: what it held is gone, and the next line is its first.</summary>
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            _file.TruncateTo(0);
+        }
+    }
+
     /// <summary>Closes the log. Its last line is whole, and the next open begins after it.</summary>
     public void Dispose() => _file.Dispose();
 
