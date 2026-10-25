@@ -16,6 +16,7 @@ using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
@@ -1747,11 +1748,13 @@ public static class HelpTopics
         builder.AppendLine("and which steps build and test it are what config.json's ci section declares, and");
         builder.AppendLine($"until they are, it refuses ({HarnessExit.Refused}) and names what to set.");
         builder.AppendLine();
-        builder.AppendLine("Every call of gh, whoever makes it, is started so that it cannot ask anything");
-        builder.AppendLine("(GH_PROMPT_DISABLED, GCM_INTERACTIVE, GIT_TERMINAL_PROMPT) and is ended where it has");
-        builder.AppendLine($"not answered within {GhProcess.Limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, or with the workflow step that made it, where that");
-        builder.AppendLine("step passes its timeoutMinutes first: a read that did not answer in time is not done");
-        builder.AppendLine($"({HarnessExit.Incomplete}), and asked again it may answer.");
+        AppendWrapped(
+            builder,
+            "Every call of gh, whoever makes it, and every git command is started so that it cannot ask anything "
+            + $"({string.Join(", ", UnattendedCommands.Variables.Keys)}), and a call of gh is ended where it has not answered within the "
+            + "timeoutMinutes of the workflow step that made it, where the step says one, else within "
+            + $"{ReportText.Limit(GhProcess.Limit)}: a call that did not answer in time is not done "
+            + $"({HarnessExit.Incomplete}), and asked again it may answer.");
         builder.AppendLine();
         builder.AppendLine("""  "ci": {""");
         builder.AppendLine("""    "workflows": [".github/workflows/ci.yml"],""");
@@ -2931,6 +2934,7 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.QuestionsFileName}", "every question the run raised, its answers, and who gave each"),
                 ($"  {OrchestratorLayout.FoldsFileName}", "the ledger of the run's folds: each path a fold means to write, what the main tree held there before it and what it left, and each commit a commit step staged of them and what became of it"),
                 ($"  <step>/{OrchestratorLayout.StepCommitMessageFileName}", "a commit step: the message it commits with"),
+                ($"  <step>/{OrchestratorLayout.StepPullRequestBodyFileName}", "a pull-request step that opened one: the body it opened it with"),
                 ($"  <step>/{OrchestratorLayout.StepFoldFileName}", "a fold, delete-agent, refresh or rebase step: what its dry run named and stood, the question it asked, each consent given by name, how its apply ended"),
                 ($"  <step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/", "a refresh or a rebase of others: what it did to each target, as above"),
                 ($"  <step>/{OrchestratorLayout.StepGraphFileName}", "a reason step that has a codebase graph: one line for each call of the graph tool - what it asked about, served and edited; the API clients will write it"),
@@ -3776,12 +3780,11 @@ public static class HelpTopics
             + "checks as they are, its passed true only where they are green. A check that finds red is red: under failOn red - every check's default but "
             + "ci-read's, never - it fails with its check's code "
             + $"(an anchor finding {AnchorExit.Findings}, a red CI leg {CiExit.LegRed} and no matrix run {CiExit.MatrixDidNotRun}, a red "
-            + $"check {CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given "
-            + $"{GhProcess.Limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - the step's timeoutMinutes bounds "
-            + "its attempt, and a read in flight ends with it - and one past "
-            + $"it ends the step incomplete ({HarnessExit.Incomplete}), which runs it again; a ci-wait reads again at its next poll where "
-            + $"a read failed or passed it, saying each, and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running "
-            + "or its wait is spent.");
+            + $"check {CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given the "
+            + $"step's timeoutMinutes where it says one, else {ReportText.Limit(GhProcess.Limit)}, and never outlasts the step's attempt, "
+            + $"which ends a read in flight with it: a ci-read's read past its limit ends the step incomplete ({HarnessExit.Incomplete}), "
+            + "which runs it again; a ci-wait reads again at its next poll where a read failed or passed its limit, saying each, "
+            + $"and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running or its wait is spent.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -3844,7 +3847,36 @@ public static class HelpTopics
             + $"{string.Join(", ", WorkflowStepTypes.All.Where(type => type.Checks).Select(type => type.Type))} and a reason step "
             + "marked independent, whatever each is named. A commit's message and variables read {carried.ran}, "
             + "{carried.notRun} and {carried.red} besides: the same three of the checks upstream of it that ended since the "
-            + "newest commit upstream of it was done, a check whose failure was passed over among those that did not check.");
+            + "newest commit upstream of it was done, a check whose failure was passed over among those that did not check. "
+            + "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (no "
+            + "step records an assumption yet) and the issues it found there before - say 'none' alike where they name nothing.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "push pushes the commit the main checkout's HEAD names to the branch of its name on a remote - the step's remote, "
+            + "else the one the run's branch goes to (the push step's, else the one the branch tracks, else origin, else the only "
+            + "one) - as a fast-forward and never forced, and answers pushed - false where the remote's branch named that commit "
+            + "already, so a push run again is done - remote, branch and sha, the commit a ci-wait that names none waits for. HEAD "
+            + "detached, a branch with no commit yet, no remote it can name and one the repository does not have each refuse it "
+            + $"({HarnessExit.Refused}), nothing pushed; the remote refusing the push - its branch moved on since - fails it "
+            + $"({HarnessExit.CommandFailed}) in git's words. A checkpoint push runs only where the workflow says pushCheckpoints, "
+            + "and is skipped otherwise. pull-request opens the pull request of the branch the main checkout is on, on the "
+            + "repository the address of the remote the run's branch goes to names - its host, owner and name, the host of one "
+            + "over ssh as ssh's configuration names it (ssh -G, an alias for one account among several), an address of no forge "
+            + "or a host ssh cannot name leaving gh to read the remotes itself - against its base, filled from the run's inputs "
+            + "and its name, else "
+            + "the remote's default branch, with its title filled and its body the file it names in the workflow's directory, "
+            + "read and filled where the step starts as a template is and written to the step's directory "
+            + $"({OrchestratorLayout.StepPullRequestBodyFileName}) for gh to read. One already open from that branch to that base "
+            + "is answered as it is, created false, and never edited: a step run again opens no second. It answers number, url "
+            + $"and created. A title blank once filled fails it ({HarnessExit.ConfigInvalid}), as a body that cannot be read or reads "
+            + "nothing does; HEAD detached, no remote, no base it can tell and a base that is its own branch each refuse it "
+            + $"({HarnessExit.Refused}), nothing opened; gh not there fails it {HarnessExit.ToolMissing}, and gh saying no "
+            + $"{HarnessExit.CommandFailed}. The run never merges a pull request: each one it opened or found is left for a person, "
+            + "by its address, in what the run's end says (leftForAPerson). The commands commit, push and pull-request run are a "
+            + $"closed list - {string.Join("; ", PublisherCommands.All.Select(command => $"{command.Shown} ({ReportText.Limit(command.Limit)})"))} - "
+            + "each given the step's timeoutMinutes where it says one, else its own; one past it is not done "
+            + $"({HarnessExit.Incomplete}), and the step runs again, a commit's set left staged settled by its next attempt.");
         builder.AppendLine();
         AppendWrapped(
             builder,

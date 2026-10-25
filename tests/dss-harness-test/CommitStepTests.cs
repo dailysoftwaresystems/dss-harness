@@ -558,7 +558,84 @@ public sealed class CommitStepTests
 
     private static WorkflowStep Step() => new() { Name = "commit", Type = "commit", Message = "checkpoint" };
 
+    /// <summary>
+    /// Each git command a commit runs - its staging and its commit - is given the step's time limit where it says one, and
+    /// its own where it does not.
+    /// </summary>
+    [Fact]
+    public async Task EveryCommandOfACommit_IsGivenTheStepsLimit_ElseItsOwn()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        _ = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        var limits = new List<TimeSpan?>();
+        var publisher = new Limits(kit.Harness.GitPublisher, limits);
+
+        var limited = await Runner(kit, publisher: publisher).RunAsync(Run(kit, Step() with { TimeoutMinutes = 4 }, "fold"), Token);
+        _ = await FoldedAsync(kit, "again", ("b.txt", "folded\n"));
+        var own = limits.Count;
+        var unlimited = await Runner(kit, publisher: publisher).RunAsync(Run(kit, Step() with { Name = "save" }, "again"), Token);
+
+        Assert.True(limited.Passed, limited.Error);
+        Assert.True(unlimited.Passed, unlimited.Error);
+        Assert.Equal([TimeSpan.FromMinutes(4), TimeSpan.FromMinutes(4)], limits.Take(own));
+        Assert.Equal([null, null], limits.Skip(own));
+    }
+
+    /// <summary>
+    /// git refusing the commit and its unstaging then not finishing in time fails the step with git's refusal and the
+    /// unstaging's both (20): the set stays staged for the next attempt to settle, and what git said is never lost.
+    /// </summary>
+    [Fact]
+    public async Task ARefusedCommitWhoseUnstagingIsLate_FailsWithGitsRefusal_TheSetLeftStaged()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        _ = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        var publisher = Substitute.For<IGitPublisher>();
+        publisher.CommitAsync(default!, default!, default, default, Token).ReturnsForAnyArgs(Task.FromException<string>(new HarnessException(HarnessExit.CommandFailed, "git did not commit: the hook says no")));
+        publisher.UnstageAsync(default!, default!, default, Token).ReturnsForAnyArgs(Task.FromException(new HarnessException(HarnessExit.Incomplete, "git reset did not finish within 15 minutes")));
+
+        var refused = await Runner(kit, publisher: publisher).RunAsync(Run(kit, Step(), "fold"), Token);
+
+        Assert.Equal(
+            (HarnessExit.CommandFailed, "'commit': git did not commit: the hook says no; and what it staged could not be unstaged (git reset did not finish within 15 minutes): fix what git reported, then resume, which settles it."),
+            (refused.Exit, refused.Error));
+        Assert.Equal(FlowCommitEntry.Staged, kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits[0].State);
+    }
+
     private static FoldLedger Ledger(OrchestrationKit kit) => new(kit.Harness.OrchestrationStore, kit.Harness.FileSystem, TimeProvider.System);
+
+    /// <summary>A publisher that records the limit each command it is asked for is given, then runs it.</summary>
+    private sealed class Limits(IGitPublisher inner, List<TimeSpan?> limits) : IGitPublisher
+    {
+        public Task StageAsync(string tree, IReadOnlyList<string> present, IReadOnlyList<string> deleted, TimeSpan? limit, CancellationToken cancellationToken)
+        {
+            limits.Add(limit);
+            return inner.StageAsync(tree, present, deleted, limit, cancellationToken);
+        }
+
+        public Task<string> CommitAsync(string tree, string messageFile, bool signOff, TimeSpan? limit, CancellationToken cancellationToken)
+        {
+            limits.Add(limit);
+            return inner.CommitAsync(tree, messageFile, signOff, limit, cancellationToken);
+        }
+
+        public Task UnstageAsync(string tree, IReadOnlyList<string> paths, TimeSpan? limit, CancellationToken cancellationToken)
+        {
+            limits.Add(limit);
+            return inner.UnstageAsync(tree, paths, limit, cancellationToken);
+        }
+
+        public Task<bool> PushAsync(string tree, string remote, string commit, string branch, TimeSpan? limit, CancellationToken cancellationToken)
+            => throw new NotSupportedException("a commit pushes nothing");
+
+        public Task<GitPullRequest?> FindPullRequestAsync(string tree, GitPullRequestTarget target, TimeSpan? limit, CancellationToken cancellationToken)
+            => throw new NotSupportedException("a commit opens nothing");
+
+        public Task<GitPullRequest> OpenPullRequestAsync(string tree, GitPullRequestTarget target, string title, string bodyFile, bool draft, TimeSpan? limit, CancellationToken cancellationToken)
+            => throw new NotSupportedException("a commit opens nothing");
+    }
 
     private static CommitStepRunner Runner(OrchestrationKit kit, IGitClient? git = null, IGitPublisher? publisher = null)
         => new(
@@ -567,7 +644,7 @@ public sealed class CommitStepTests
             kit.Harness.OrchestrationStore,
             Ledger(kit),
             git ?? kit.Harness.GitClient,
-            publisher ?? new GitPublisher(kit.Harness.GitClient),
+            publisher ?? kit.Harness.GitPublisher,
             kit.Harness.FileSystem);
 
     /// <summary>One run of <paramref name="step"/> on <paramref name="kit"/>'s orchestrator, the engine having read <paramref name="folds"/> upstream of it; its instance is the step's name.</summary>

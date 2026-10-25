@@ -14,7 +14,9 @@ using DssHarness.Core.Legs;
 using DssHarness.Core.Mutations;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
@@ -2612,13 +2614,13 @@ public sealed partial class HelpTests
         Assert.Contains("with {leg} standing for the leg's", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("A green leg past 80% of its", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains(
-            "Every call of gh, whoever makes it, is started so that it cannot ask anything (GH_PROMPT_DISABLED, GCM_INTERACTIVE, "
-                + $"GIT_TERMINAL_PROMPT) and is ended where it has not answered within {GhProcess.Limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, "
-                + $"or with the workflow step that made it, where that step passes its timeoutMinutes first: a read that did not answer in time is not done ({HarnessExit.Incomplete}), "
-                + "and asked again it may answer.",
+            "Every call of gh, whoever makes it, and every git command is started so that it cannot ask anything (GH_PROMPT_DISABLED, "
+                + "GCM_INTERACTIVE, GIT_TERMINAL_PROMPT), and a call of gh is ended where it has not answered within the timeoutMinutes of "
+                + $"the workflow step that made it, where the step says one, else within {ReportText.Limit(GhProcess.Limit)}: "
+                + $"a call that did not answer in time is not done ({HarnessExit.Incomplete}), and asked again it may answer.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
-        Assert.Equal(GhProcess.NeverAsks.Keys.Order(StringComparer.Ordinal), ["GCM_INTERACTIVE", "GH_PROMPT_DISABLED", "GIT_TERMINAL_PROMPT"]);
+        Assert.Equal(UnattendedCommands.Variables.Keys.Order(StringComparer.Ordinal), ["GCM_INTERACTIVE", "GH_PROMPT_DISABLED", "GIT_TERMINAL_PROMPT"]);
 
         // The example reads what it says it reads: a leg and its budget from a whole job name, and the leg from one
         // the forge cut short, which it would otherwise not read at all.
@@ -2974,7 +2976,7 @@ public sealed partial class HelpTests
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase, commit ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
+            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase, commit, push, pull-request ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
             orchestrators,
             StringComparison.Ordinal);
     }
@@ -3415,6 +3417,47 @@ public sealed partial class HelpTests
         Assert.Contains($"{OrchestratorLayout.FoldsFileName} the ledger of the run's folds:", orchestrators, StringComparison.Ordinal);
         Assert.Contains("and each commit a commit step staged of them and what became of it", orchestrators, StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepCommitMessageFileName} a commit step: the message it commits with", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepPullRequestBodyFileName} a pull-request step that opened one: the body it opened it with", orchestrators, StringComparison.Ordinal);
+
+        // What push and pull-request do, held to the codes they end with, the file one writes and the closed list of
+        // commands the publishing steps run, each with its own limit.
+        Assert.Contains(
+            "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (no step "
+                + "records an assumption yet) and the issues it found there before - say 'none' alike where they name nothing.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Equal(WorkflowExpressions.RunTexts.Order(StringComparer.Ordinal), ["assumptions", "leftover", "notRun", "preExisting", "ran", "red"]);
+        Assert.Contains(
+            "push pushes the commit the main checkout's HEAD names to the branch of its name on a remote - the step's remote, else "
+                + "the one the run's branch goes to (the push step's, else the one the branch tracks, else origin, else the only one) - "
+                + "as a fast-forward and never forced, and answers pushed",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"each refuse it ({HarnessExit.Refused}), nothing pushed; the remote refusing the push - its branch moved on since - fails it "
+                + $"({HarnessExit.CommandFailed}) in git's words. A checkpoint push runs only where the workflow says pushCheckpoints, and is skipped otherwise.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"written to the step's directory ({OrchestratorLayout.StepPullRequestBodyFileName}) for gh to read. One already open from "
+                + "that branch to that base is answered as it is, created false, and never edited: a step run again opens no second.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"A title blank once filled fails it ({HarnessExit.ConfigInvalid}), as a body that cannot be read or reads nothing does; "
+                + "HEAD detached, no remote, no base it can tell and a base that is its own branch each refuse it "
+                + $"({HarnessExit.Refused}), nothing opened; gh not there fails it {HarnessExit.ToolMissing}, and gh saying no {HarnessExit.CommandFailed}.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The commands commit, push and pull-request run are a closed list - git --literal-pathspecs add -- (15 minutes); "
+                + "git --literal-pathspecs rm --cached --ignore-unmatch -q -- (15 minutes); git --literal-pathspecs reset -q -- (15 minutes); "
+                + "git commit --cleanup=whitespace -F (15 minutes); git push --porcelain (5 minutes); "
+                + "gh pr list --state open --json number,url --limit 1 (5 minutes); gh pr create (5 minutes) - each given the step's "
+                + $"timeoutMinutes where it says one, else its own; one past it is not done ({HarnessExit.Incomplete}), and the step runs "
+                + "again, a commit's set left staged settled by its next attempt.",
+            workflows,
+            StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepFoldFileName} a fold, delete-agent, refresh or rebase step:", orchestrators, StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/ a refresh or a rebase of others:", orchestrators, StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepGraphFileName} a reason step that has a codebase graph: one line for each call of the graph tool", orchestrators, StringComparison.Ordinal);
@@ -3441,7 +3484,7 @@ public sealed partial class HelpTests
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
                 + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, graphify-codebase, validate-plan, "
                 + "create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, "
-                + "refresh, rebase, commit, each below; a step of "
+                + "refresh, rebase, commit, push, pull-request, each below; a step of "
                 + "any other type fails, saying no runner serves its type.",
             prose,
             StringComparison.Ordinal);
@@ -3537,11 +3580,11 @@ public sealed partial class HelpTests
                 + "A check that finds red is "
                 + "red: under failOn red - every check's default but ci-read's, never - it fails with its check's code "
                 + $"(an anchor finding {AnchorExit.Findings}, a red CI leg {CiExit.LegRed} and no matrix run {CiExit.MatrixDidNotRun}, a red check "
-                + $"{CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given "
-                + $"{GhProcess.Limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - the step's timeoutMinutes bounds its "
-                + "attempt, and a read in flight ends with it - and one past it ends the step incomplete "
-                + $"({HarnessExit.Incomplete}), which runs it again; a ci-wait reads again at its next poll where a read failed or passed it, "
-                + $"saying each, and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running or its wait is spent.",
+                + $"{CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given the step's "
+                + $"timeoutMinutes where it says one, else {ReportText.Limit(GhProcess.Limit)}, and never outlasts the step's attempt, which "
+                + $"ends a read in flight with it: a ci-read's read past its limit ends the step incomplete ({HarnessExit.Incomplete}), which "
+                + "runs it again; a ci-wait reads again at its next poll where a read failed or passed its limit, saying each, and ends with "
+                + $"that read's code only where {CiChecksService.FailedReadsInARow} did running or its wait is spent.",
             prose,
             StringComparison.Ordinal);
 

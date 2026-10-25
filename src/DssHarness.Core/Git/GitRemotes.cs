@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Git;
@@ -10,14 +11,128 @@ namespace DssHarness.Core.Git;
 /// <param name="Named">What the remote's own HEAD names, where it names a branch at all - here or not; null where it names none.</param>
 public sealed record GitDefaultBranch(string? Reference, string? Named);
 
-/// <summary>What a repository's remotes say: their names, the one a branch tracks, and the branch each names its default.</summary>
-public static class GitRemotes
+/// <summary>The repository on a forge a remote's address names (<see cref="GitRemotes.ForgeAddress"/>).</summary>
+/// <param name="Host">The host, as the address names it - with the web address's port, where it gives one.</param>
+/// <param name="Owner">Who owns the repository on the forge.</param>
+/// <param name="Name">The repository's name, <c>.git</c> left out.</param>
+/// <param name="OverSsh">
+/// Whether the address reaches the host over ssh, whose own configuration may name the host otherwise - an alias for one
+/// of several accounts (<see cref="SshHostNames"/>).
+/// </param>
+public sealed record GitForgeAddress(string Host, string Owner, string Name, bool OverSsh)
+{
+    /// <summary>The repository as the forge's tool takes it: <c>host/owner/name</c>.</summary>
+    public string Repository => $"{Host}/{Owner}/{Name}";
+}
+
+/// <summary>
+/// What a repository's remotes say: their names, the one a branch tracks, the branch each names its default, the address
+/// each fetches from, and the repository on a forge that address names.
+/// </summary>
+public static partial class GitRemotes
 {
     /// <summary>The branch names tried, in order, where a remote's own HEAD names no branch here.</summary>
     public static IReadOnlyList<string> ConventionalBranches { get; } = ["main", "master"];
 
     /// <summary>The remote looked for where nothing names one: the one git's own clone names.</summary>
     public const string ConventionalRemote = "origin";
+
+    /// <summary>The address <paramref name="remote"/> fetches from, as git's configuration says it.</summary>
+    /// <param name="gitClient">Git.</param>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="remote">The remote's name.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">Git could not read it (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    public static async Task<string> UrlAsync(this IGitClient gitClient, string directory, string remote, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(gitClient);
+        ArgumentException.ThrowIfNullOrWhiteSpace(remote);
+
+        var read = await gitClient.RunAsync(directory, ["remote", "get-url", remote], cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        return read.Succeeded && read.StandardOutput.Trim() is { Length: > 0 } url
+            ? url
+            : throw new HarnessException(HarnessExit.CommandFailed, $"git could not read the address of remote '{remote}': {read.FailureMessage}");
+    }
+
+    /// <summary>
+    /// The repository on a forge an address names: its host, owner and name, of <c>https://host/owner/name.git</c>,
+    /// <c>ssh://user@host:port/owner/name</c> and <c>user@host:owner/name.git</c> alike - the user left out, and the port
+    /// but where the address is the forge's web one, whose port is its own. Null where the address names none: a path on
+    /// this machine, a <c>file://</c> address, an absolute path on an ssh server, one of more or fewer parts than an owner
+    /// and a name.
+    /// </summary>
+    /// <param name="url">The remote's address.</param>
+    public static GitForgeAddress? ForgeAddress(string url)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+
+        string authority;
+        string path;
+        bool overSsh;
+        bool web;
+        var scheme = url.IndexOf("://", StringComparison.Ordinal);
+
+        if (scheme > 0)
+        {
+            if (url[..scheme] is not ("https" or "http" or "ssh" or "git"))
+            {
+                return null;
+            }
+
+            var rest = url[(scheme + 3)..];
+            var slash = rest.IndexOf('/', StringComparison.Ordinal);
+
+            if (slash <= 0)
+            {
+                return null;
+            }
+
+            authority = rest[..slash];
+            path = rest[(slash + 1)..];
+            overSsh = url[..scheme] == "ssh";
+            web = url[..scheme] is "https" or "http";
+        }
+        else
+        {
+            // The scp-like form, [user@]host:path, as git reads it: a colon before any slash, and no drive letter (C:\x).
+            var colon = url.IndexOf(':', StringComparison.Ordinal);
+
+            if (colon <= 1 || url.IndexOf('/', StringComparison.Ordinal) is var slash && slash >= 0 && slash < colon)
+            {
+                return null;
+            }
+
+            authority = url[..colon];
+            path = url[(colon + 1)..];
+            overSsh = true;
+            web = false;
+
+            // A path from the server's root is a repository on that machine, no owner and name on a forge.
+            if (path.StartsWith('/'))
+            {
+                return null;
+            }
+        }
+
+        var parts = path.Trim('/').Split('/');
+
+        if (Authority().Match(authority) is not { Success: true } reached || parts.Length != 2 || parts.Any(part => part.Length == 0))
+        {
+            return null;
+        }
+
+        var host = reached.Groups["host"].Value;
+        var port = reached.Groups["port"].Value;
+
+        var name = parts[1].EndsWith(".git", StringComparison.Ordinal) ? parts[1][..^4] : parts[1];
+
+        return name.Length == 0 ? null : new GitForgeAddress(web && port.Length > 0 ? $"{host}:{port}" : host, parts[0], name, overSsh);
+    }
+
+    /// <summary>An address's authority: a user up to its last '@', the host - an IPv6 one in brackets - and a port after a colon.</summary>
+    [GeneratedRegex(@"^(?:.*@)?(?<host>\[[^\]]*\]|[^@:\[\]]+)(?::(?<port>[0-9]*))?$", RegexOptions.CultureInvariant)]
+    private static partial Regex Authority();
 
     /// <summary>The names of the repository's remotes, as git lists them.</summary>
     /// <param name="gitClient">Git.</param>

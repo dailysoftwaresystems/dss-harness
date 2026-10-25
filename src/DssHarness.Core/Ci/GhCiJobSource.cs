@@ -8,8 +8,8 @@ namespace DssHarness.Core.Ci;
 
 /// <summary>Reads CI run and job metadata, and the checks of a commit, for the repository a command is standing in.</summary>
 /// <remarks>
-/// Every read may take <see cref="GhProcess.Limit"/>, and a read past it is not done (21), which a caller may ask
-/// again.
+/// Every read may take the limit the source was given (<see cref="Within"/>) - a step's <c>timeoutMinutes</c> - else
+/// <see cref="GhProcess.Limit"/>, and a read past it is not done (21), which a caller may ask again.
 /// </remarks>
 public interface ICiJobSource
 {
@@ -54,6 +54,13 @@ public interface ICiJobSource
     /// <param name="cancellationToken">Stops the child process.</param>
     /// <exception cref="HarnessException">The log could not be read.</exception>
     Task<string> ReadJobLogAsync(string repositoryRoot, long jobId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// This source with each of its reads given <paramref name="limit"/> - a step's <c>timeoutMinutes</c>, which its
+    /// reads take where it says one - or, where null, the forge tool's own.
+    /// </summary>
+    /// <param name="limit">How long each read may take; null for the tool's own.</param>
+    ICiJobSource Within(TimeSpan? limit);
 }
 
 /// <inheritdoc cref="ICiJobSource"/>
@@ -63,7 +70,8 @@ public interface ICiJobSource
 /// person's call and a leg reported red is a stop to read rather than something to retry until it passes.
 /// </remarks>
 /// <param name="gh">Runs the forge's tool.</param>
-public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
+/// <param name="limit">How long each read may take; null for the tool's own (<see cref="GhProcess.Limit"/>).</param>
+public sealed class GhCiJobSource(GhProcess gh, TimeSpan? limit = null) : ICiJobSource
 {
     /// <summary>What a read that did not answer leaves undone, as each of its refusals ends.</summary>
     private const string NotRead = "so CI was NOT read (this is not a pass)";
@@ -75,6 +83,10 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
     private static readonly Regex JobAddress = new(@"/actions/runs/(?<run>\d+)/job/(?<job>\d+)", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
     private readonly GhProcess _gh = gh;
+    private readonly TimeSpan? _limit = limit;
+
+    /// <inheritdoc/>
+    public ICiJobSource Within(TimeSpan? limit) => new GhCiJobSource(_gh, limit);
 
     public async Task<IReadOnlyList<long>> ListRunsAsync(
         string repositoryRoot,
@@ -172,6 +184,7 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
             repositoryRoot,
             ["api", $"repos/:owner/:repo/actions/jobs/{jobId.ToString(CultureInfo.InvariantCulture)}/logs"],
             $"so the log of job {jobId.ToString(CultureInfo.InvariantCulture)} was NOT read",
+            _limit,
             cancellationToken);
 
     /// <summary>
@@ -321,5 +334,5 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
     }
 
     private Task<string> RunAsync(string repositoryRoot, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
-        => _gh.RunAsync(repositoryRoot, arguments, NotRead, cancellationToken);
+        => _gh.RunAsync(repositoryRoot, arguments, NotRead, _limit, cancellationToken);
 }

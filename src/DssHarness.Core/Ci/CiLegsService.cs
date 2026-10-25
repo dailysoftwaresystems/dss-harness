@@ -21,6 +21,9 @@ public sealed record CiLegsRequest(string? Branch, int Limit, IReadOnlyList<long
     /// <summary>Runs read when nothing says otherwise: the newest one.</summary>
     public const int DefaultLimit = 1;
 
+    /// <summary>How long each read of the forge may take: a step's <c>timeoutMinutes</c>, where it says one; null for the tool's own.</summary>
+    public TimeSpan? ReadTimeLimit { get; init; }
+
 }
 
 /// <summary>Reads the CI verdict of each leg, and separates a real failure from a budget overrun.</summary>
@@ -48,6 +51,7 @@ public interface ICiLegsService
     /// </summary>
     /// <param name="startDirectory">A directory inside the repository.</param>
     /// <param name="runId">The run.</param>
+    /// <param name="readTimeLimit">How long each read of the forge may take: a step's <c>timeoutMinutes</c>; null for the tool's own.</param>
     /// <param name="cancellationToken">Stops the child processes.</param>
     /// <exception cref="HarnessException">
     /// The run could not be read; or a pattern ran out of time, or a budget group captured something that is not a whole
@@ -56,6 +60,7 @@ public interface ICiLegsService
     Task<CiRunReport> ClassifyRunAsync(
         string startDirectory,
         long runId,
+        TimeSpan? readTimeLimit = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -114,6 +119,7 @@ public sealed class CiLegsService(
         var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
         var root = context.Layout.RepositoryRoot;
         var conventions = Conventions.From(context.Config.Ci);
+        var source = _jobSource.Within(request.ReadTimeLimit);
 
         var workflows = ReadWorkflows(root, context.Config.Ci);
         var branch = await ResolveBranchAsync(root, request.Branch, cancellationToken).ConfigureAwait(false);
@@ -126,7 +132,7 @@ public sealed class CiLegsService(
 
             var runs = request.Runs.Count > 0
                 ? request.Runs
-                : await _jobSource
+                : await source
                     .ListRunsAsync(root, workflow.Identifier, branch, request.Limit, cancellationToken)
                     .ConfigureAwait(false);
 
@@ -140,7 +146,7 @@ public sealed class CiLegsService(
 
             foreach (var runId in runs)
             {
-                var run = await _jobSource.ReadRunAsync(root, runId, cancellationToken).ConfigureAwait(false);
+                var run = await source.ReadRunAsync(root, runId, cancellationToken).ConfigureAwait(false);
 
                 if (run.Jobs.Count == 0)
                 {
@@ -167,12 +173,13 @@ public sealed class CiLegsService(
     public async Task<CiRunReport> ClassifyRunAsync(
         string startDirectory,
         long runId,
+        TimeSpan? readTimeLimit = null,
         CancellationToken cancellationToken = default)
     {
         var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
         var root = context.Layout.RepositoryRoot;
         var settings = context.Config.Ci;
-        var run = await _jobSource.ReadRunAsync(root, runId, cancellationToken).ConfigureAwait(false);
+        var run = await _jobSource.Within(readTimeLimit).ReadRunAsync(root, runId, cancellationToken).ConfigureAwait(false);
         var name = run.Workflow ?? run.WorkflowPath ?? $"run {runId.ToString(CultureInfo.InvariantCulture)}";
 
         // Which jobs are legs is the repository's to say; where it says it in part or not at all, no job is one.

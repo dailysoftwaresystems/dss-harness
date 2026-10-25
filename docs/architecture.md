@@ -16,7 +16,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `query-codebase-graph`, `clean`, `up`,
@@ -1702,9 +1702,10 @@ checks print (`AnchorReports.BalanceFindings`, `AnchorCitationReports.Line`); `C
 `ICiLegsService.CheckAsync`; and `CiWaitStepRunner` over `ICiChecksService`, which reads a commit's check runs and
 statuses through `ICiJobSource` until one is red - classified by `ICiLegsService.ClassifyRunAsync`, its job's log read
 whole - every one has ended, none appeared, or its time is spent, with `CiConclusions` the one place that says what a
-conclusion came to. Every call of `gh` goes through `GhProcess`: the repository it answers for, never asking, ended at its
-limit (21) - a step's read at `GhProcess.Limit`, never at the step's time limit, which bounds the attempt and ends
-a read in flight with it, so a `ci-wait` whose read stalls reads again at its next poll. The fold family - `FoldStepRunner`, `DeleteAgentStepRunner`, `RefreshStepRunner` and `RebaseStepRunner`, over
+conclusion came to. Every call of `gh` goes through `GhProcess`: the repository it answers for, never asking
+(`UnattendedCommands`, which every git command is started with too), ended at its limit (21) - its caller's, a step's
+`timeoutMinutes` (`WorkflowStepTypes.CommandLimitOf`, handed on as `CiLegsRequest.ReadTimeLimit`,
+`CiChecksRequest.ReadTimeLimit` and `ICiJobSource.Within`), else `GhProcess.Limit`. The fold family - `FoldStepRunner`, `DeleteAgentStepRunner`, `RefreshStepRunner` and `RebaseStepRunner`, over
 `FoldFamilyStepRunner` - calls the verbs' typed use cases and reads their `AgentVerbFacts`, never an exit code:
 `FoldStandings.Read` says whether a dry run ends the step, asks or applies; `FlowQuestions.FoldQuestionOf` is the one rule
 of the question it raises - `foldConflicts` for conflicting merges alone, `foldOutside` for paths `FoldWithin` finds
@@ -1735,7 +1736,16 @@ again whose agent its record says deleted - its ending cut off by a stop's drain
 (`FoldFamilyStepRunner.DoneAlreadyAsync`), its output what `fold.json` kept of the apply. A
 refresh or a rebase of `others` is one turn for each target (`FlowInstance.Targets`, `FlowTargetRecord`), in
 `OrchestrationRules.AgentNameOrder`, each claimed on its own tree (`FlowClaims.Of`), retried by its own count and ended
-on its own. The other step runners - the agents, the rest of the steps over the services the tool already has - are
+on its own. `PushStepRunner` and `PullRequestStepRunner` read the main checkout as a run's start does (`FlowCheckout`):
+the push sends HEAD to its branch on the step's remote, else `FlowCheckout.Remote`, through `IGitPublisher.PushAsync` -
+`<sha>:refs/heads/<branch>` with `--porcelain`, never forced, its line read for whether the branch moved; the pull
+request is found or opened through `GhProcess` on the repository `GitRemotes.ForgeAddress` reads from the remote's
+address - its host as ssh's configuration names it where the address is over ssh (`SshHostNames`, `ssh -G`), and none,
+leaving gh to read the remotes itself, where it cannot be told - against `FlowCheckout.BaseBranch`, its body the workflow's file the coordinator read and filled where the step
+started (`WorkflowNamedFiles.ReadText`, the one rule the definition's check holds a named file to) and the runner wrote
+to the step's directory; `FlowReports.LeftForAPerson` names each pull request the run opened or found. Every command a
+publishing step runs is one of `PublisherCommands.All`, over `IGitClient.RunWithinAsync` and `GhProcess`, given the
+step's `timeoutMinutes` else the command's own limit. The other step runners - the agents, the rest of the steps over the services the tool already has - are
 the next thing the tool grows.
 
 A definition is held to the `config.json` it is checked under as well: a `run` step whose runner -

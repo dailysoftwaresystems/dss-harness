@@ -745,7 +745,7 @@ update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`
 rest), which a template reads and an expression does not. The engine starts and drives a run of a workflow
 (`run-orchestrator`, `dssharness help orchestrators`), from the main checkout's HEAD on a branch of its own: a start is
 refused where HEAD is detached, where the checkout is on the branch the run's pull request goes to, where a merge is under
-way and where changes are staged. Seventeen steps are served so far: `orient`, which reads what the repository is and has once
+way and where changes are staged. Nineteen steps are served so far: `orient`, which reads what the repository is and has once
 (its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
 CI, mutation arms, what is dirty, the open agents and who holds the tree); `graphify-codebase`, which syncs the run's one map
 of the repository - every file a node, each declaration a language's implementation reads with its lines, its header and
@@ -778,11 +778,19 @@ its fold left there (a path edited or restored since, or a fold upstream whose i
 nothing is staged), on an empty index, by explicit
 path, with the configuration's `commit.template` filled or the step's own message - and with nothing owed is done and runs
 no git; any template reads what the run checked (`{run.ran}`, `{run.notRun}`, `{run.red}`), and a commit's message what
-checked what it carries (`{carried.ran}`, `{carried.notRun}`, `{carried.red}`). A check that finds red
+checked what it carries (`{carried.ran}`, `{carried.notRun}`, `{carried.red}`); `push`, which pushes the main checkout's
+HEAD to its branch on the remote the run's branch goes to (or the step's), a fast-forward never forced, and answers
+whether the branch moved (a detached HEAD or no remote it can name refuses it, 13; the remote refusing fails it, 20); and
+`pull-request`, which opens the run's branch's pull request against its base - the step's, else the remote's default -
+on the repository the remote's address names, its body the workflow's file filled where the step starts, and answers an
+open one as it is (`created` false) so a step run again opens no second; the run never merges it, and its end leaves
+each pull request for a person. A check that finds red
 fails its step under `failOn: red`, every check's default but `ci-read`'s. Every text a step hands on is filled where it
-starts, and one that reads nothing fails the step (12). Every call of `gh` is started so it cannot ask, and ended after
-five minutes, or with its step where the step passes its `timeoutMinutes` first (21). A step of any other type fails,
-saying no runner serves its type; the rest are the next thing the tool grows. A step that works in or on an agent
+starts, and one that reads nothing fails the step (12). Every call of `gh` and every git command is started so it
+cannot ask, and each command a step runs on the forge or to publish - a read of CI, a commit's, a push, a pull
+request's - is ended after its step's `timeoutMinutes` where the step says one, else its own (5 minutes for `gh` and
+a push, 15 minutes for a commit's), and is not done (21). A step of any other type fails, saying no runner serves its type;
+the rest are the next thing the tool grows. A step that works in or on an agent
 waits for the create-agent step that makes it, and is not run where that step did not make it. Run
 `dssharness help workflows` for the whole of it.
 

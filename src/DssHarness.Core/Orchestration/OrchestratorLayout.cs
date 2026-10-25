@@ -29,6 +29,7 @@ namespace DssHarness.Core.Orchestration;
 /// &lt;step&gt;/logs/                a leg step in an agent's worktree: each red leg's phase log that did not pass; a ci-wait: each red job's log
 /// &lt;step&gt;/fold.json            a fold family step: what its dry run named and stood, its question, each consent given, how its apply ended
 /// &lt;step&gt;/commit-message.txt   a commit step: the message it commits with
+/// &lt;step&gt;/pull-request-body.md  a pull-request step: the body it opens the pull request with, its file filled
 /// &lt;step&gt;/graph.jsonl          a reason step that has a codebase graph: one line for each call of the graph tool; nothing writes it yet
 /// &lt;step&gt;/working-set.json     a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it; nothing writes it yet
 /// &lt;step&gt;/targets/&lt;agent&gt;/     a refresh or a rebase of others: one target's fold.json
@@ -164,6 +165,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The name of the file a <c>commit</c> step writes the message it commits with to, in its directory, as <c>git commit -F</c> reads it.</summary>
     public const string StepCommitMessageFileName = "commit-message.txt";
+
+    /// <summary>The name of the file a <c>pull-request</c> step writes its body to, filled, in its directory, as the forge's tool reads it.</summary>
+    public const string StepPullRequestBodyFileName = "pull-request-body.md";
 
     /// <summary>
     /// The name of the file a fold family step keeps in its directory - or in its target's, for a step of <c>others</c>:
@@ -447,6 +451,10 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The message a <c>commit</c> step commits with, in its own directory: a commit step names no agent.</summary>
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
     public string InstanceCommitMessageFile(string instance) => Path.Combine(InstanceDirectory(instance, null), StepCommitMessageFileName);
+
+    /// <summary>The body a <c>pull-request</c> step opens its pull request with, in its own directory: the step names no agent.</summary>
+    /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
+    public string InstancePullRequestBodyFile(string instance) => Path.Combine(InstanceDirectory(instance, null), StepPullRequestBodyFileName);
 
     /// <summary>The handoff of one step instance, in its own directory (<see cref="InstanceDirectory"/>).</summary>
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>

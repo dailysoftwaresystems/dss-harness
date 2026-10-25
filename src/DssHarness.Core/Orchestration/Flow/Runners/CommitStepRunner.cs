@@ -146,12 +146,14 @@ public sealed class CommitStepRunner(
 
         var id = ledger.Staging(layout, run.Instance, run.Attempt, head, CommitPathsOf(staging), FoldsOf(staging));
         var paths = staging.Select(path => path.Path.Path).ToList();
+        var limit = WorkflowStepTypes.CommandLimitOf(run.Step);
         string sha;
 
+        // A command that did not finish in time (21) leaves the set staged as it stands, for the next attempt to settle.
         try
         {
-            await publisher.StageAsync(main, [.. staging.Where(path => path.Holds is not null).Select(path => path.Path.Path)], [.. staging.Where(path => path.Holds is null).Select(path => path.Path.Path)], cancellationToken).ConfigureAwait(false);
-            sha = await publisher.CommitAsync(main, messageFile, context.Config.Commit.SignOff, cancellationToken).ConfigureAwait(false);
+            await publisher.StageAsync(main, [.. staging.Where(path => path.Holds is not null).Select(path => path.Path.Path)], [.. staging.Where(path => path.Holds is null).Select(path => path.Path.Path)], limit, cancellationToken).ConfigureAwait(false);
+            sha = await publisher.CommitAsync(main, messageFile, context.Config.Commit.SignOff, limit, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException refused) when (refused.ExitCode == HarnessExit.CommandFailed)
         {
@@ -160,9 +162,9 @@ public sealed class CommitStepRunner(
             // settle, as a cancelled attempt's does.
             try
             {
-                await publisher.UnstageAsync(main, paths, CancellationToken.None).ConfigureAwait(false);
+                await publisher.UnstageAsync(main, paths, limit, CancellationToken.None).ConfigureAwait(false);
             }
-            catch (HarnessException unstaging) when (unstaging.ExitCode == HarnessExit.CommandFailed)
+            catch (HarnessException unstaging) when (unstaging.ExitCode is HarnessExit.CommandFailed or HarnessExit.Incomplete)
             {
                 return FlowStepResult.Ended(
                     passed: false,
@@ -200,7 +202,7 @@ public sealed class CommitStepRunner(
 
             if (FoldLedger.DifferingOf(status.Where(entry => entry.IsStaged)).Intersect(paths, StringComparer.Ordinal).ToList() is { Count: > 0 } held)
             {
-                await publisher.UnstageAsync(main, held, cancellationToken).ConfigureAwait(false);
+                await publisher.UnstageAsync(main, held, WorkflowStepTypes.CommandLimitOf(run.Step), cancellationToken).ConfigureAwait(false);
             }
 
             ledger.Unstaged(layout, left.Id);

@@ -357,6 +357,9 @@ public sealed class FlowCoordinator
     private readonly FlowRunPlace? _place;
     private readonly IReadOnlyDictionary<string, string> _agentModels;
 
+    /// <summary>Reads the text of a file the run's workflow names, by its name in the definition; null where the run reads none.</summary>
+    private readonly Func<string, string>? _workflowFile;
+
     /// <summary>Every agent name the session gave, a spent one's among them: never given again, though no step holds it any more.</summary>
     private readonly HashSet<string> _agentNamesGiven = new(StringComparer.Ordinal);
 
@@ -494,6 +497,11 @@ public sealed class FlowCoordinator
     /// The model each create-agent step makes its agent for, by the step's path (<see cref="WorkflowValidator.AgentModels"/>);
     /// a step it names none for is handed none, which its runner refuses.
     /// </param>
+    /// <param name="workflowFile">
+    /// Reads the text of a file the run's workflow names, by its name in the definition, throwing with why where it cannot
+    /// (<see cref="WorkflowNamedFiles.ReadText"/>): a pull request's body. Null where the run reads none, and a step that
+    /// needs one then fails 12, saying so.
+    /// </param>
     /// <exception cref="HarnessException">An input the run needs is missing, or a value is outside the ones its input takes.</exception>
     public FlowCoordinator(
         WorkflowDefinition definition,
@@ -505,7 +513,8 @@ public sealed class FlowCoordinator
         FlowResumeState? resume = null,
         string? runName = null,
         FlowRunPlace? place = null,
-        IReadOnlyDictionary<string, string>? agentModels = null)
+        IReadOnlyDictionary<string, string>? agentModels = null,
+        Func<string, string>? workflowFile = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(runner);
@@ -520,6 +529,7 @@ public sealed class FlowCoordinator
         _runName = runName;
         _place = place;
         _agentModels = agentModels ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        _workflowFile = workflowFile;
 
         foreach (var (path, _) in FlowScope.Declared(definition))
         {
@@ -5663,10 +5673,11 @@ public sealed class FlowCoordinator
         var main = _created.Where(instance => !instance.IsAlways).ToList();
         var failed = Standing(FlowFailure.EndedRun).Any(instance => !instance.IsAlways);
         var paused = _open.Count > 0 || main.Any(instance => instance.State is FlowInstanceState.Paused);
-        var leftover = string.Join("; ", _created
+        var leftover = _created
             .Where(instance => instance.Step.Repeat?.Leftover is not null && instance.Leftover is not null)
-            .Select(instance => $"'{instance.Id}' left {FlowValue.Of(instance.Leftover!.DeepClone()).AsTemplateText()}"));
-        var preExisting = string.Join("; ", _tally.Select(entry => $"{entry.State} - {entry.Line}"));
+            .Select(instance => $"'{instance.Id}' left {FlowValue.Of(instance.Leftover!.DeepClone()).AsTemplateText()}")
+            .ToList();
+        var preExisting = _tally.Select(entry => $"{entry.State} - {entry.Line}").ToList();
 
         return new JsonObject
         {
@@ -5677,8 +5688,10 @@ public sealed class FlowCoordinator
             ["paused"] = paused,
             ["stopped"] = _stopping,
             ["passedOver"] = main.Count(instance => instance.PassedOver),
-            ["leftover"] = leftover,
-            ["preExisting"] = preExisting,
+            ["leftover"] = leftover.Count > 0 ? string.Join("; ", leftover) : FlowChecks.None,
+            ["preExisting"] = preExisting.Count > 0 ? string.Join("; ", preExisting) : FlowChecks.None,
+            // What the run's agents assumed without asking: a reason step records its own (slice 31), and none does yet.
+            ["assumptions"] = FlowChecks.None,
             ["ran"] = FlowChecks.Ran(checks.Select(CheckOf)),
             ["notRun"] = FlowChecks.NotRun(checks.Select(CheckOf), PendingChecks(path => true, checks), passedOver: false),
             ["red"] = FlowChecks.Red(checks.Select(CheckOf)),
@@ -6026,6 +6039,30 @@ public sealed class FlowCoordinator
             read["folds"] = FlowValue.Of(new JsonArray([.. _created
                 .Where(other => WorkflowStepTypes.Folds(other.Step) && Upstream(other, instance))
                 .Select(other => (JsonNode?)other.Id)]));
+        }
+
+        if (step.Type == "pull-request" && step.Body is { } body)
+        {
+            // The body's file is read as the step starts, live as every file a workflow names is, and filled by the one
+            // grammar as a template key is: its reads are the step's.
+            string text;
+
+            try
+            {
+                text = _workflowFile?.Invoke(body)
+                    ?? throw new HarnessException(HarnessExit.ConfigInvalid, $"'{body}', its body, is a file of the workflow, and this run reads none");
+            }
+            catch (HarnessException unread)
+            {
+                return Unreadable("body", instance.Id, unread.Message);
+            }
+
+            if (Filled(instance, text, out var unfilled) is not { } filled)
+            {
+                return Unreadable("body", instance.Id, unfilled!);
+            }
+
+            read["body"] = FlowValue.Of(filled);
         }
 
         if (step.Type == "orient")

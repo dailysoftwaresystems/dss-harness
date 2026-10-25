@@ -18,6 +18,13 @@ public static class ReportText
     /// <summary>The endings, each a hiss, that a plural adds <c>es</c> to: <c>process(es)</c>.</summary>
     private static readonly string[] Hisses = ["s", "x", "z", "ch", "sh"];
 
+    /// <summary>A time limit as a message says it: whole minutes as such (<c>5 minutes</c>), anything else in seconds (<c>90 s</c>).</summary>
+    /// <param name="limit">The limit.</param>
+    public static string Limit(TimeSpan limit)
+        => limit.TotalMinutes >= 1 && limit.TotalMinutes == Math.Floor(limit.TotalMinutes)
+            ? $"{limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minute{(limit.TotalMinutes == 1 ? string.Empty : "s")}"
+            : $"{limit.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s";
+
     /// <summary>At most <see cref="NamedLimit"/> of <paramref name="items"/>, each printable, and how many more there are.</summary>
     /// <param name="items">What to name.</param>
     public static string Listed(IReadOnlyList<string> items)

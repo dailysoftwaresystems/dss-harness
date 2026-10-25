@@ -303,16 +303,16 @@ public static class WorkflowStepTypes
             [new("message", "the commit message it writes; required where the config declares no commit.template, and not used where it declares one"), new("variables", "the values the message template reads")],
             ["message", "variables"],
             null,
-            "CommitStepRunner: FoldLedger.Owed, CommitTemplate, IGitPublisher over IGitClient.RunAsync",
+            "CommitStepRunner: FoldLedger.Owed, CommitTemplate, IGitPublisher over IGitClient.RunWithinAsync",
             ["write main"],
             null,
             ObjectOf(("committed", Flag), ("sha", TextOrNull), ("paths", ListOf(Text)))),
         new(
             "push",
-            [new("remote", "the remote it pushes to; absent, the tracked one"), new("checkpoint", "push a checkpoint commit")],
+            [new("remote", "the remote it pushes to; absent, the one the run's branch goes to"), new("checkpoint", "a push made before the run's end, which runs only where the workflow says pushCheckpoints")],
             [],
             null,
-            "IGitPublisher",
+            "PushStepRunner: FlowCheckout, IGitPublisher.PushAsync over IGitClient.RunWithinAsync",
             ["the remote resource"],
             null,
             ObjectOf(("pushed", Flag), ("remote", Text), ("branch", Text), ("sha", Text))),
@@ -326,7 +326,7 @@ public static class WorkflowStepTypes
            ],
             ["title", "base"],
             null,
-            "IGitPublisher",
+            "PullRequestStepRunner: FlowCheckout, IGitPublisher over GhProcess",
             ["the remote resource"],
             null,
             ObjectOf(("number", WholeNumber), ("url", Text), ("created", Flag))),
@@ -379,6 +379,15 @@ public static class WorkflowStepTypes
         ArgumentNullException.ThrowIfNull(step);
         return step.TimeoutMinutes ?? (step.Type is { } type ? Find(type)?.DefaultTimeoutMinutes : null);
     }
+
+    /// <summary>
+    /// The time limit each git or <c>gh</c> command of <paramref name="step"/> is given: the step's own
+    /// (<see cref="TimeLimitOf"/>) where it has one; <see langword="null"/> where it has none, and each command then takes
+    /// its own (<see cref="Git.PublisherCommands"/>, <see cref="Ci.GhProcess.Limit"/>).
+    /// </summary>
+    /// <param name="step">A step of a workflow.</param>
+    public static TimeSpan? CommandLimitOf(WorkflowStep step)
+        => TimeLimitOf(step) is { } minutes ? TimeSpan.FromMinutes(minutes) : null;
 
     /// <summary>The type <paramref name="type"/> names, or <see langword="null"/> where none does.</summary>
     /// <param name="type">The value of a step's <c>type</c> key.</param>

@@ -1844,6 +1844,14 @@ public sealed partial class GitClient(
         CancellationToken cancellationToken = default)
         => RunCoreAsync(directory, arguments, echoOutput, untranslated: false, cancellationToken);
 
+    /// <inheritdoc/>
+    public Task<GitCommandResult> RunWithinAsync(
+        string directory,
+        IReadOnlyList<string> arguments,
+        TimeSpan limit,
+        CancellationToken cancellationToken = default)
+        => RunCoreAsync(directory, arguments, echoOutput: false, untranslated: false, indexFile: null, standardInput: null, cancellationToken, limit: limit);
+
     /// <summary>
     /// Runs a read-only query whose failure message is inspected, with git's messages
     /// untranslated.
@@ -1890,17 +1898,16 @@ public sealed partial class GitClient(
         ChildInput? standardInput,
         CancellationToken cancellationToken,
         Encoding? outputEncoding = null,
-        ObjectStore? objects = null)
+        ObjectStore? objects = null,
+        TimeSpan? limit = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
-        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
-        {
-            // Without this, an operation that decides to ask for credentials blocks
-            // forever with no output. A hang is the one failure this tool cannot
-            // report, so git is told up front that nobody is watching.
-            ["GIT_TERMINAL_PROMPT"] = "0",
-        };
+        // Without these, an operation that decides to ask for credentials - git's own prompt, or a credential manager's
+        // window - blocks forever with no output. A hang is the one failure this tool cannot report, so git is told up
+        // front that nobody is watching.
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+        UnattendedCommands.Apply(environment);
 
         // Cleared before every question, not only before every change. Each outranks the repository,
         // the working tree or the index that `-C <directory>` would otherwise select, so a hook, or a
@@ -1940,6 +1947,7 @@ public sealed partial class GitClient(
             Environment = environment,
             StandardInput = standardInput,
             StandardOutputEncoding = outputEncoding,
+            Timeout = limit,
         };
 
         var result = await _processRunner.RunAsync(request, cancellationToken).ConfigureAwait(false);

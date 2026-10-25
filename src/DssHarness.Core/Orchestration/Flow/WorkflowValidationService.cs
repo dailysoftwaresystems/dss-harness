@@ -94,6 +94,9 @@ public sealed class WorkflowValidationService(
     private readonly IHostPlatform _platform = platform;
     private readonly DssHarness.Core.Secrets.AgentKeyStore _keys = keys;
 
+    /// <summary>The rule every file a definition names is held to, which a run reads its files by too.</summary>
+    private readonly WorkflowNamedFiles _named = new(fileSystem, platform.PathComparison);
+
     /// <summary>The implementations of the codebase graph's contract, whose names V52 holds <c>codebaseGraph.languages</c> to.</summary>
     private readonly Codebase.CodeGraphExtractors _extractors = extractors;
 
@@ -127,7 +130,7 @@ public sealed class WorkflowValidationService(
     {
         var file = context.Layout.WorkflowFile(name);
 
-        if (!IsFile(file, out var unlooked))
+        if (!_named.IsFile(file, out var unlooked))
         {
             return new WorkflowCheck(name, [unlooked is null
                 ? $"{Shown(name)} is not there; a workflow is defined by that file, written by 'dssharness init' where it is the implementation one"
@@ -264,7 +267,7 @@ public sealed class WorkflowValidationService(
             // The workflows directory is resolved the same way as the rest, so a repository reached through a link of its
             // own compares against the same real path, as the actions directory is.
             workflows = Path.TrimEndingDirectorySeparator(_fileSystem.ResolveLinks(Path.GetFullPath(layout.WorkflowsDirectory)));
-            directory = Path.TrimEndingDirectorySeparator(_fileSystem.ResolveLinks(Path.GetFullPath(layout.WorkflowDirectory(name))));
+            directory = _named.Directory(layout, name);
             file = _fileSystem.ResolveLinks(Path.GetFullPath(layout.WorkflowFile(name)));
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
@@ -449,87 +452,8 @@ public sealed class WorkflowValidationService(
         }
 
         var problems = new List<string>();
-        Add(problems, NamedFile(named.File, directory, name, named.What, out _));
+        Add(problems, _named.Problem(named.File, directory, name, named.What, out _));
         return problems;
-    }
-
-    /// <summary>
-    /// The one problem with one file the definition names: that it is spelt as a path inside the
-    /// workflow's own directory, that it stays there once every link along it is followed, and that
-    /// it is there. What a reviewer reads there is what the workflow runs, as an action's files are
-    /// to its own directory.
-    /// </summary>
-    /// <param name="named">The file, as the definition names it.</param>
-    /// <param name="directory">The workflow's directory, every link along it followed.</param>
-    /// <param name="name">The workflow.</param>
-    /// <param name="what">What names the file, as a problem says it.</param>
-    /// <param name="path">The file with every link along it followed, where it could be resolved.</param>
-    private string? NamedFile(string named, string directory, string name, string what, out string path)
-    {
-        path = string.Empty;
-        var relative = $"{HarnessLayout.WorkflowDirectoryRelative(name)}/";
-
-        // Rooted by every platform's rules, as an action's path is: a drive written on Linux would otherwise read as a
-        // directory's name, and a definition would mean two things on two machines.
-        if (PlatformPaths.IsRootedOnAnyPlatform(named))
-        {
-            return $"'{named}', {what}, is an absolute path; every file a workflow names is relative to '{relative}', as an action's are to its own directory";
-        }
-
-        if (named.Split('/', '\\').Any(segment => segment is ".." or "." or ""))
-        {
-            return $"'{named}', {what}, does not name a file inside the workflow's directory; every file a workflow names is relative to '{relative}', without '.', '..' or an empty part, as an action's are to its own directory";
-        }
-
-        try
-        {
-            path = _fileSystem.ResolveLinks(Path.GetFullPath(Path.Combine(directory, named)));
-        }
-        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
-        {
-            return $"'{named}', {what}, could not be resolved inside '{directory}': {exception.Message}";
-        }
-
-        if (!PathContainment.IsStrictlyInside(directory, path, _platform.PathComparison))
-        {
-            return $"'{named}', {what}, leads to '{path}', which is outside '{directory}'; every file a workflow names is relative to '{relative}', as an action's are to its own directory";
-        }
-
-        if (IsFile(path, out var unlooked))
-        {
-            return null;
-        }
-
-        return unlooked is null
-            ? $"'{named}', {what}, is not at '{relative}{named.Replace('\\', '/')}'; write it there, beside the definition that names it"
-            : $"'{named}', {what}, could not be looked at: {unlooked}";
-    }
-
-    /// <summary>
-    /// Whether a file is at <paramref name="path"/>; where none is, <paramref name="unlooked"/> says why the file system
-    /// would not look, or is <see langword="null"/> where it looked and found nothing - a file that could not be looked
-    /// at is never reported as missing, and the person is not sent to write one that may be there.
-    /// </summary>
-    private bool IsFile(string path, out string? unlooked)
-    {
-        unlooked = null;
-
-        if (_fileSystem.FileExists(path))
-        {
-            return true;
-        }
-
-        // FileExists answers false where it could not look; the kind of what is there raises instead.
-        try
-        {
-            _ = _fileSystem.KindOf(path);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            unlooked = exception.Message.TrimEnd('.');
-        }
-
-        return false;
     }
 
     /// <summary>
@@ -539,7 +463,7 @@ public sealed class WorkflowValidationService(
     /// </summary>
     private string? Text(string named, string directory, string name)
     {
-        if (NamedFile(named, directory, name, string.Empty, out var path) is not null)
+        if (_named.Problem(named, directory, name, string.Empty, out var path) is not null)
         {
             return null;
         }
@@ -557,7 +481,7 @@ public sealed class WorkflowValidationService(
     /// <summary>That a schema file is there, can be read, and holds a JSON object.</summary>
     private IReadOnlyList<string> Schema(string named, string directory, string name, string what)
     {
-        if (NamedFile(named, directory, name, what, out var path) is { } problem)
+        if (_named.Problem(named, directory, name, what, out var path) is { } problem)
         {
             return [problem];
         }

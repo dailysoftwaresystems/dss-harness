@@ -39,7 +39,7 @@ public sealed record FlowCheck(
 /// </summary>
 public static class FlowChecks
 {
-    /// <summary>What a text says where it names nothing.</summary>
+    /// <summary>What a run's text for a template says where it names nothing: each of these, and what its loops left, the issues it found there before and what its agents assumed.</summary>
     public const string None = "none";
 
     /// <summary>What a reason step that checks is called in the texts: its type says only that it reasons.</summary>

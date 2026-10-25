@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
@@ -47,7 +48,7 @@ public sealed record FlowRecordPath(string What, string Path);
 /// <param name="Answered">The questions this command answered, each with who answered and what the engine did.</param>
 /// <param name="PassedOver">The instances whose failures the run passed over, in the order they ended.</param>
 /// <param name="Handoffs">The handoffs a safe pause wrote, each by its step, who wrote it and its file.</param>
-/// <param name="LeftForAPerson">What is left for a person, tied to no step's name: each question still open with its recommendation, and what each of the run's loops left.</param>
+/// <param name="LeftForAPerson">What is left for a person, tied to no step's name: each pull request the run opened or found open, to merge, each question still open with its recommendation, and what each of the run's loops left.</param>
 /// <param name="Spent">What the run has spent of its budget: usd, tokens and minutes; null where the command did not reach a run's state.</param>
 /// <param name="ExitCode">The command's exit code.</param>
 /// <param name="Records">Every record the command wrote or took, by what it is and where it is.</param>
@@ -195,8 +196,9 @@ public static class FlowReports
     }
 
     /// <summary>
-    /// What is left for a person, tied to no step's name: each question still open, with its recommendation and the way
-    /// to answer it, and what each of the run's loops left.
+    /// What is left for a person, tied to no step's name: each pull request a <c>pull-request</c> step opened or found
+    /// open, by its address, which the run did not merge and will not; each question still open, with its
+    /// recommendation and the way to answer it; and what each of the run's loops left.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="flow">The run's state in one file.</param>
@@ -207,6 +209,17 @@ public static class FlowReports
         ArgumentNullException.ThrowIfNull(flow);
 
         var left = new List<string>();
+
+        foreach (var url in flow.Steps
+            .Where(step => step.Type == "pull-request")
+            .Select(step => step.Output?["url"])
+            .OfType<JsonValue>()
+            .Where(url => url.GetValueKind() == JsonValueKind.String)
+            .Select(url => url.GetValue<string>())
+            .Distinct(StringComparer.Ordinal))
+        {
+            left.Add($"pull request {url} is open: the run did not merge it and will not - merging it is a person's");
+        }
 
         foreach (var question in questions?.Open ?? [])
         {

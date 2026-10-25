@@ -34,6 +34,25 @@ public sealed record FlowCheckout(
     public bool HasRemote => Remotes.Count > 0;
 
     /// <summary>
+    /// Why no remote is the one the run's branch goes to, ending a sentence: the repository has none, or none is that
+    /// one - what was looked for said.
+    /// </summary>
+    public string NoRemote => HasRemote ? $"none is that one {Sought}" : "the repository has no remote";
+
+    /// <summary>What was looked for where no remote is the one the run's branch goes to, as a parenthesis.</summary>
+    private static string Sought => $"(the push step names none, the branch tracks none, and none is {GitRemotes.ConventionalRemote})";
+
+    /// <summary>
+    /// Why <paramref name="remote"/> cannot be pushed to or opened on, ending a sentence - it is not a remote of this
+    /// repository, those it has named; null where it is one. A push step may name one the repository does not have.
+    /// </summary>
+    /// <param name="remote">The remote, by name.</param>
+    public string? NotARemote(string remote)
+        => Remotes.Contains(remote, StringComparer.Ordinal)
+            ? null
+            : $"'{remote}', which is not a remote of this repository ({(HasRemote ? ReportText.Listed(Remotes) : "it has none")})";
+
+    /// <summary>
     /// The branch the run's pull request is opened against (<c>orient.baseBranch</c>): the flow's <c>pull-request</c>
     /// step's base where it names one, else the remote's default branch, and null where there is neither.
     /// </summary>
@@ -69,10 +88,14 @@ public sealed record FlowCheckout(
             ? null
             : "the branch the run's pull request is opened against cannot be told here - no pull-request step names a base, and "
                 + (Remote is null
-                    ? $"no remote is the one the run's branch goes to (the push step names none, the branch tracks none, and none is {GitRemotes.ConventionalRemote})"
-                    : $"remote '{Remote}' names no default branch here")
+                    ? $"no remote is the one the run's branch goes to {Sought}"
+                    : NotARemote(Remote) is { } unknown
+                        ? $"the push step names remote {unknown}"
+                        : $"remote '{Remote}' names no default branch here")
                 + $" - so the main checkout's branch '{Branch}' was held to none: name the base on the pull-request step"
-                + (Remote is null ? ", or the remote on the push step" : $", or read the remote's own with git remote set-head {Remote} --auto");
+                + (Remote is null ? ", or the remote on the push step"
+                    : NotARemote(Remote) is not null ? ", or one of the repository's remotes on the push step"
+                    : $", or read the remote's own with git remote set-head {Remote} --auto");
 
     /// <summary>Reads the checkout at <paramref name="root"/>, its remote chosen as <paramref name="definition"/>'s push step names it.</summary>
     /// <param name="gitClient">Git.</param>

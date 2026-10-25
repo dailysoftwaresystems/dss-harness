@@ -386,8 +386,8 @@ public sealed class CiLegsServiceTests
     }
 
     /// <summary>
-    /// CI is read on the branch checked out where none is named and on the one named where one is; a detached HEAD, on no
-    /// branch, is refused - not a pass.
+    /// CI is read on the branch checked out where none is named and on the one named where one is, each read given the
+    /// caller's limit where it gives one; a detached HEAD, on no branch, is refused - not a pass.
     /// </summary>
     [Fact]
     public async Task CiIsReadOnTheBranchCheckedOut_OrTheOneNamed()
@@ -402,9 +402,13 @@ public sealed class CiLegsServiceTests
         var service = new CiLegsService(harness.ContextLoader, source, harness.GitClient, harness.FileSystem);
 
         _ = await service.CheckAsync(temp.Path, Request(), cancellationToken);
-        _ = await service.CheckAsync(temp.Path, Request() with { Branch = "release" }, cancellationToken);
+        var unlimited = source.Limits.Count;
+        _ = await service.CheckAsync(temp.Path, Request() with { Branch = "release", ReadTimeLimit = TimeSpan.FromMinutes(7) }, cancellationToken);
 
         Assert.Equal(["work", "release"], source.Branches);
+        Assert.Equal(source.Limits.Count, unlimited * 2);
+        Assert.All(source.Limits.Take(unlimited), limit => Assert.Null(limit));
+        Assert.All(source.Limits.Skip(unlimited), limit => Assert.Equal(TimeSpan.FromMinutes(7), limit));
 
         await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "--detach"], cancellationToken);
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.CheckAsync(temp.Path, Request(), cancellationToken));
@@ -429,11 +433,12 @@ public sealed class CiLegsServiceTests
         var jobs = new StubCiJobSource([Run(new CiJob("unit (mac-arm)", CiConclusions.Failure, [new CiStep("Test", CiConclusions.Failure, Moment(0), Moment(200))]) { Id = 9 }) with { Workflow = "Pipeline", WorkflowPath = workflowPath }]);
 
         var report = await new CiLegsService(harness.ContextLoader, jobs, harness.GitClient, harness.FileSystem)
-            .ClassifyRunAsync(temp.Path, 4242, cancellationToken);
+            .ClassifyRunAsync(temp.Path, 4242, TimeSpan.FromMinutes(9), cancellationToken);
 
         var leg = Assert.Single(report.Legs);
         Assert.Equal(("mac-arm", budget, source), (leg.Leg, leg.BudgetSeconds, leg.BudgetSource));
         Assert.Equal([4242L], jobs.RunsRead);
+        Assert.Equal([TimeSpan.FromMinutes(9)], jobs.Limits);
     }
 
     /// <summary>A repository whose ci settings do not say which jobs are legs has none to classify: the run's jobs are all there is, and nothing is refused.</summary>
@@ -446,7 +451,7 @@ public sealed class CiLegsServiceTests
         var jobs = new StubCiJobSource([Run(new CiJob("unit (mac-arm)", CiConclusions.Failure, []))]);
 
         var report = await new CiLegsService(harness.ContextLoader, jobs, harness.GitClient, harness.FileSystem)
-            .ClassifyRunAsync(temp.Path, 4242, cancellationToken);
+            .ClassifyRunAsync(temp.Path, 4242, null, cancellationToken);
 
         Assert.Empty(report.Legs);
         Assert.False(report.MatrixRan);

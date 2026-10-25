@@ -663,4 +663,19 @@ public interface IGitClient
         IReadOnlyList<string> arguments,
         bool echoOutput = false,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs a git subcommand as <see cref="RunAsync"/> does, ended where it has not finished within
+    /// <paramref name="limit"/>: what it was asked is then not done, and the result says it timed out
+    /// (<see cref="GitCommandResult.TimedOut"/>).
+    /// </summary>
+    /// <param name="directory">The directory git runs in.</param>
+    /// <param name="arguments">Its arguments.</param>
+    /// <param name="limit">How long it may take.</param>
+    /// <param name="cancellationToken">Stops git.</param>
+    Task<GitCommandResult> RunWithinAsync(
+        string directory,
+        IReadOnlyList<string> arguments,
+        TimeSpan limit,
+        CancellationToken cancellationToken = default);
 }

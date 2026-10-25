@@ -1,5 +1,6 @@
 using NSubstitute;
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Ci;
 using DssHarness.Core.Commands;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
@@ -182,6 +183,9 @@ public sealed class HarnessFactory
     public IProcessTable ProcessTable { get; }
 
     public IGitClient GitClient { get; }
+
+    /// <summary>The git and gh writes a step publishes with, over this harness's git and its gh.</summary>
+    public GitPublisher GitPublisher => new(GitClient, new GhProcess(ProcessRunner, LocalVariables));
 
     /// <summary>
     /// Which variables git reads a repository from, asked of git once for the whole test run, as a command

@@ -3,8 +3,10 @@ using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Help;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
+using NSubstitute;
 
 namespace DssHarness.Tests;
 
@@ -15,6 +17,39 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class WorkflowValidationServiceTests
 {
+    /// <summary>
+    /// A run reads a file its workflow names by the rule the definition's check holds it to: the text of one inside the
+    /// workflow's directory, and a refusal (12) saying why for one not there and one spelt as a path out of it.
+    /// </summary>
+    [Fact]
+    public void AFileTheWorkflowNames_IsReadByTheRuleTheCheckHoldsItTo()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        Directory.CreateDirectory(layout.WorkflowDirectory("flow"));
+        File.WriteAllText(Path.Combine(layout.WorkflowDirectory("flow"), "body.md"), "the body\n");
+        var named = new WorkflowNamedFiles(harness.FileSystem, harness.Platform.PathComparison);
+
+        var missing = Assert.Throws<HarnessException>(() => named.ReadText(layout, "flow", "absent.md", "a pull request's body"));
+        var outside = Assert.Throws<HarnessException>(() => named.ReadText(layout, "flow", "../flow.yml", "a pull request's body"));
+
+        Assert.Equal("the body\n", named.ReadText(layout, "flow", "body.md", "a pull request's body"));
+        Assert.Equal(
+            (HarnessExit.ConfigInvalid, $"'absent.md', a pull request's body, is not at '{HarnessLayout.WorkflowDirectoryRelative("flow")}/absent.md'; write it there, beside the definition that names it"),
+            (missing.ExitCode, missing.Message));
+        Assert.Equal(HarnessExit.ConfigInvalid, outside.ExitCode);
+        Assert.StartsWith("'../flow.yml', a pull request's body, does not name a file inside the workflow's directory", outside.Message, StringComparison.Ordinal);
+
+        // A workflow's directory the file system cannot resolve - a loop of links - is the definition's problem too.
+        var looping = Substitute.For<IFileSystem>();
+        looping.ResolveLinks(Arg.Any<string>()).Returns(_ => throw new IOException("too many levels of links"));
+        var unresolved = Assert.Throws<HarnessException>(() => new WorkflowNamedFiles(looping, harness.Platform.PathComparison).ReadText(layout, "flow", "body.md", "a pull request's body"));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, unresolved.ExitCode);
+        Assert.EndsWith("could not be resolved: too many levels of links", unresolved.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// The implementation workflow, initialized into a repository and declared in its config, passes its check: the one
     /// line says what it is, and under it each reason step's models and the level each runs at - the plan's own among

@@ -229,8 +229,9 @@ public sealed class FlowCheckoutTests : IDisposable
 
     /// <summary>
     /// A start whose base cannot be told, where the repository has a remote - no pull-request base, and the remote names
-    /// no default here, or no remote is the run's - says so, naming the branch it held to none and the way to tell it;
-    /// a base told, a detached HEAD, which refuses, and no remote at all say nothing.
+    /// no default here, no remote is the run's, or the push step names one the repository does not have - says so,
+    /// naming the branch it held to none and the way to tell it; a base told, a detached HEAD, which refuses, and no
+    /// remote at all say nothing.
     /// </summary>
     [Fact]
     public void AStartWhoseBaseCannotBeTold_SaysSo()
@@ -247,6 +248,11 @@ public sealed class FlowCheckoutTests : IDisposable
                 + "is the one the run's branch goes to (the push step names none, the branch tracks none, and none is origin) - so the main "
                 + "checkout's branch 'work' was held to none: name the base on the pull-request step, or the remote on the push step",
             (unknown with { Remotes = ["upstream", "fork"], Remote = null }).BaseUnknown(null));
+        Assert.Equal(
+            "the branch the run's pull request is opened against cannot be told here - no pull-request step names a base, and the push "
+                + "step names remote 'elsewhere', which is not a remote of this repository (origin) - so the main checkout's branch 'work' "
+                + "was held to none: name the base on the pull-request step, or one of the repository's remotes on the push step",
+            (unknown with { Remote = "elsewhere" }).BaseUnknown(null));
         Assert.Null(unknown.BaseUnknown("release"));
         Assert.Null((unknown with { RemoteDefault = "main" }).BaseUnknown(null));
         Assert.Null((unknown with { Branch = null }).BaseUnknown(null));

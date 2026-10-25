@@ -126,11 +126,11 @@ public sealed class CiReadStepRunner(IHarnessContextLoader contextLoader, IHostP
         var (place, _) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
         var tree = place.Repository;
 
-        // Each read of the forge is bounded by gh's own limit, and the attempt's by the step's time limit, which ends a read
-        // in flight with it.
+        // Each read of the forge is given the step's time limit where it says one, else gh's own; a read past it ends the
+        // attempt incomplete, which runs it again.
         var report = await legs.CheckAsync(
             tree,
-            new CiLegsRequest(run.Step.Branch, run.Step.Limit ?? CiLegsRequest.DefaultLimit, []),
+            new CiLegsRequest(run.Step.Branch, run.Step.Limit ?? CiLegsRequest.DefaultLimit, []) { ReadTimeLimit = WorkflowStepTypes.CommandLimitOf(run.Step) },
             cancellationToken).ConfigureAwait(false);
         var passed = !report.MatrixNeverRan && report.Red.Count == 0;
 
@@ -190,11 +190,13 @@ public sealed class CiWaitStepRunner(
         // the checks are read once more, waiting for none, and the step is done with what they are now, its passed true
         // only where they are green; a red one is red all the same.
         var accepted = run.Answers.Count > 0 && run.Answers[^1].Answer == "accept";
-        // Each read of the forge is bounded by gh's own limit, never by the step's time limit: a read that stalls is ended
-        // and read again at the next poll, while the wait goes on, and the attempt's own limit ends a read in flight with it.
+        // Each read of the forge is given the step's time limit where it says one, else gh's own: one past it is read
+        // again at the next poll, until CiChecksService.FailedReadsInARow fail running or the wait is spent; and a read
+        // never outlasts the attempt, whose limit ends one in flight with it.
         var step = run.Step;
         var request = new CiChecksRequest(commit, Type)
         {
+            ReadTimeLimit = WorkflowStepTypes.CommandLimitOf(step),
             Once = accepted,
             Appear = TimeSpan.FromSeconds(step.AppearSeconds ?? CiChecksRequest.DefaultAppearSeconds),
             Wait = TimeSpan.FromMinutes(step.WaitMinutes ?? CiChecksRequest.DefaultWaitMinutes),
