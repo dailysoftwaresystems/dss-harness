@@ -64,6 +64,18 @@ public static class WorkflowStepTypes
         /// <summary>Whether the type checks something, so that its verdicts can be red.</summary>
         public bool IsCheck => FailOnDefault is not null;
 
+        /// <summary>
+        /// Whether the type checks something it answers in its output and never as a failure, so it takes no <c>failOn</c>:
+        /// <c>validate-plan</c>. A check all the same, which <see cref="Checks"/> counts.
+        /// </summary>
+        public bool ChecksAsOutput { get; init; }
+
+        /// <summary>
+        /// Whether the type is one the plan's <c>Checks</c> column marks: what a run's texts of what it checked, did not
+        /// check and knows to be red count (<see cref="FlowChecks"/>), whatever a step of it is named.
+        /// </summary>
+        public bool Checks => IsCheck || ChecksAsOutput;
+
         /// <summary>Which of the type's own keys the step must name: those <see cref="Keys"/> marks required.</summary>
         public IReadOnlyList<string> Required => [.. Keys.Where(key => key.Required).Select(key => key.Name)];
 
@@ -242,7 +254,7 @@ public static class WorkflowStepTypes
             "PlanCheckRunner: PlanValidator with FlowRunPaths over IPathBudget.Check and CopyPathBudget",
             ["read main"],
             null,
-            ObjectOf(("ok", Flag), ("problems", ListOf(Text)), ("items", UntypedList))),
+            ObjectOf(("ok", Flag), ("problems", ListOf(Text)), ("items", UntypedList))) { ChecksAsOutput = true },
         new(
             "anchor-balance",
             [new("base", "the commit it measures from"), new("rows", "the row ids it is held to; absent, the whole tree"), new("failOn", "what a red finding does: red (the default) or never")],
@@ -291,7 +303,7 @@ public static class WorkflowStepTypes
             [new("message", "the commit message it writes; required where the config declares no commit.template, and not used where it declares one"), new("variables", "the values the message template reads")],
             ["message", "variables"],
             null,
-            "IGitPublisher",
+            "CommitStepRunner: FoldLedger.Owed, CommitTemplate, IGitPublisher over IGitClient.RunAsync",
             ["write main"],
             null,
             ObjectOf(("committed", Flag), ("sha", TextOrNull), ("paths", ListOf(Text)))),

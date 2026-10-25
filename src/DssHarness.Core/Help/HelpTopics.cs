@@ -2929,7 +2929,8 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.WorkflowStatusFileName}", "a run's status for a person: each step of its definition, its instances, progress and what it waits on"),
                 ($"  {OrchestratorLayout.DefinitionFileName}", "the workflow's definition as the run began with it"),
                 ($"  {OrchestratorLayout.QuestionsFileName}", "every question the run raised, its answers, and who gave each"),
-                ($"  {OrchestratorLayout.FoldsFileName}", "the ledger of the run's folds: each path a fold means to write, what the main tree held there before it and what it left"),
+                ($"  {OrchestratorLayout.FoldsFileName}", "the ledger of the run's folds: each path a fold means to write, what the main tree held there before it and what it left, and each commit a commit step staged of them and what became of it"),
+                ($"  <step>/{OrchestratorLayout.StepCommitMessageFileName}", "a commit step: the message it commits with"),
                 ($"  <step>/{OrchestratorLayout.StepFoldFileName}", "a fold, delete-agent, refresh or rebase step: what its dry run named and stood, the question it asked, each consent given by name, how its apply ended"),
                 ($"  <step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/", "a refresh or a rebase of others: what it did to each target, as above"),
                 ($"  <step>/{OrchestratorLayout.StepGraphFileName}", "a reason step that has a codebase graph: one line for each call of the graph tool - what it asked about, served and edited; the API clients will write it"),
@@ -3687,7 +3688,8 @@ public static class HelpTopics
             // orient takes nothing beyond the common keys: its line stands alone.
             var said = new[]
             {
-                type.IsCheck ? $"a check; failOn {type.FailOnDefault} by default" : null,
+                type.IsCheck ? $"a check; failOn {type.FailOnDefault} by default"
+                    : type.ChecksAsOutput ? "a check, which answers in its output and never fails" : null,
                 type.DefaultTimeoutMinutes is { } minutes ? $"timeoutMinutes {minutes.ToString(CultureInfo.InvariantCulture)} by default" : null,
             }.OfType<string>().ToList();
 
@@ -3801,8 +3803,9 @@ public static class HelpTopics
             + $"path they mean to write, with what the main tree holds there, to the run's ledger ({OrchestratorLayout.FoldsFileName}) "
             + "before the verb is called, and what they left after - an intent a crash cut off is settled from the tree by the "
             + "next attempt - and answer written, deleted, registries and rows; a run stopped with a fold in its ledger whose "
-            + "change no commit took yet - a path it changed that the main tree still holds otherwise than its HEAD, whoever "
-            + "commits it - is unfinished, as one with an agent open is. A deletion run again once its agent is deleted - its "
+            + "change no commit took yet - a path it changed that no commit step of the run took, that git does not ignore and "
+            + "that the main tree still holds otherwise than its HEAD, whoever commits it - is unfinished, as one with an agent "
+            + "open is. A deletion run again once its agent is deleted - its "
             + "ending cut off before it was recorded - is done, with what its directory kept of its apply. A refresh refused for conflicting merges alone hands every "
             + "other path first, then asks foldConflicts of those it left; its paths expression yielding none, it is done, having "
             + "weighed nothing. A rebase moves the base whole or not at all. A refresh or a rebase of others works on every "
@@ -3811,6 +3814,37 @@ public static class HelpTopics
             + $"({OrchestratorLayout.StepTargetsDirectoryName}/<agent>/), one closed before its turn passed over; a target that "
             + "fails ends its own turn, and the step ends done, or failed with the code of the first that failed, once each has "
             + $"had its turn. Each step keeps what its dry run named and how its apply ended in its directory ({OrchestratorLayout.StepFoldFileName}).");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "commit commits the folds upstream of it in the flow - every visit and iteration of them, never another work item's - "
+            + "and no other work: each path one of them changed that no commit of the run took yet, holding what the newest fold "
+            + "that names it left there, so a registry two items' folds wrote is taken whole. A fold upstream whose intent "
+            + "nobody settled - a crash cut it off, and its step has not run again - leaves what it wrote untold, and fails the "
+            + $"step ({HarnessExit.Refused}) naming it, nothing staged. With none owed it is done, "
+            + "committed false, and runs no git at all. Otherwise the index must be empty and each path hold what its fold left "
+            + $"there, and where either does not - a path edited and not committed, or its fold's change undone - the step fails ({HarnessExit.Refused}) "
+            + "naming each, nothing staged, for a commit of the rest would be half a fold. A path git ignores is left out and marked "
+            + "so in the ledger, git asked again each time, and one that holds as HEAD does - what its fold left, or a person's "
+            + "later change of it - was committed by hand, and is marked taken by HEAD. With anything left, its message is the "
+            + "configuration's commit.template, read by the one brace grammar, each {variable} filled with the step's value for "
+            + "it, else its default, where one is declared, and else the step's own message - none, or a blank one, fails it "
+            + $"({HarnessExit.ConfigInvalid}) - and the rest is written to the ledger "
+            + "as one staged set before the first git add, staged by explicit path, never with -A, committed once - the message "
+            + $"written to the step's directory ({OrchestratorLayout.StepCommitMessageFileName}), with -s where commit.signOff - "
+            + "and marked committed with each fold path it took; git refusing, a hook among the reasons, unstages it and fails "
+            + $"the step ({HarnessExit.CommandFailed}). A set an attempt before left staged is settled first: committed where HEAD "
+            + "moved and holds it, else unstaged and staged again whole. It answers committed, sha and paths - run again once it "
+            + "has committed, the commit it made. What a run checked "
+            + "is text any template reads: {run.ran}, every check that ended so far, a line each with where it ran and its "
+            + "verdict, each leg's for a step that runs legs; {run.notRun}, each check not run yet, by its step's name, and each "
+            + "skipped or never reached, with why; and {run.red}, each red result not seen green since by a later visit of the "
+            + "same step - a red leg, a red check of CI, an anchor check's findings, a plan's problems, a failure - each 'none' "
+            + "where it names nothing. The checks are the steps of type "
+            + $"{string.Join(", ", WorkflowStepTypes.All.Where(type => type.Checks).Select(type => type.Type))} and a reason step "
+            + "marked independent, whatever each is named. A commit's message and variables read {carried.ran}, "
+            + "{carried.notRun} and {carried.red} besides: the same three of the checks upstream of it that ended since the "
+            + "newest commit upstream of it was done, a check whose failure was passed over among those that did not check.");
         builder.AppendLine();
         AppendWrapped(
             builder,

@@ -26,10 +26,19 @@ internal static class FlowStepKeys
             return null;
         }
 
-        if (list.Expression is null)
-        {
-            return list.Written;
-        }
+        return list.Expression is null ? list.Written : ReadAtStart(run, key);
+    }
+
+    /// <summary>The names the engine read for <paramref name="key"/> where the step started - a fold's, an anchor check's, a commit's folds upstream of it.</summary>
+    /// <param name="run">The step's run, with what the engine read where it started.</param>
+    /// <param name="key">The key the engine read them under.</param>
+    /// <exception cref="HarnessException">
+    /// The engine handed on no list of names: its own fault (70), never read as naming nothing, which would judge nothing
+    /// and pass.
+    /// </exception>
+    public static IReadOnlyList<string> ReadAtStart(FlowStepRun run, string key)
+    {
+        ArgumentNullException.ThrowIfNull(run);
 
         return run.Read is not null
             && run.Read.TryGetValue(key, out var value)

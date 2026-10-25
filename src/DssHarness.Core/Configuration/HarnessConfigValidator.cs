@@ -1787,9 +1787,9 @@ public static partial class HarnessConfigValidator
     }
 
     /// <summary>
-    /// Checks that the commit template and its variables agree. A placeholder nobody declared is
-    /// written into a message literally, and a variable the template never uses is a value asked
-    /// for and then dropped; both are found here instead of in a commit someone has already pushed.
+    /// Checks that the commit template and its variables agree. A placeholder nobody declared leaves
+    /// a commit step no message it can fill, and a variable the template never uses is a value asked
+    /// for and then dropped; both are found here instead of when a run commits.
     /// </summary>
     private static void ValidateCommit(CommitConfig commit, List<string> problems)
     {
@@ -1825,14 +1825,17 @@ public static partial class HarnessConfigValidator
             return;
         }
 
-        var used = Regex.Matches(template, @"\{(?<name>[^{}]*)\}", RegexOptions.CultureInvariant)
-            .Select(match => match.Groups["name"].Value)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        if (CommitTemplate.GrammarProblem(template) is { } broken)
+        {
+            problems.Add(broken);
+            return;
+        }
+
+        var used = CommitTemplate.Placeholders(template);
 
         foreach (var placeholder in used.Where(placeholder => !commit.Variables.ContainsKey(placeholder)))
         {
-            problems.Add($"commit.template uses {{{placeholder}}}, which is not declared in commit.variables");
+            problems.Add(CommitTemplate.Undeclared(placeholder));
         }
 
         foreach (var name in commit.Variables.Keys.Where(name => !used.Contains(name, StringComparer.OrdinalIgnoreCase)))

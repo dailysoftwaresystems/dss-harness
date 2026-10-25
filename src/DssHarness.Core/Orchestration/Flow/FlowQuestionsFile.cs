@@ -167,11 +167,10 @@ public sealed record FlowQuestionEntry(
 public static class FlowQuestionIds
 {
     /// <summary>Whether <paramref name="id"/> is a question's id as this build spells it.</summary>
-    public static bool IsWellFormed(string? id)
-        => id is { Length: > 1 } && id[0] == 'q' && int.TryParse(id[1..], NumberStyles.None, CultureInfo.InvariantCulture, out var n) && n > 0;
+    public static bool IsWellFormed(string? id) => OrchestrationRules.IsNumbered(id, 'q');
 
     /// <summary>The id the <paramref name="n"/>-th question of a run takes.</summary>
-    public static string Of(int n) => $"q{n.ToString(CultureInfo.InvariantCulture)}";
+    public static string Of(int n) => OrchestrationRules.Numbered('q', n);
 }
 
 /// <summary>

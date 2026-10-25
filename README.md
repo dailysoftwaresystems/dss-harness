@@ -745,7 +745,7 @@ update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`
 rest), which a template reads and an expression does not. The engine starts and drives a run of a workflow
 (`run-orchestrator`, `dssharness help orchestrators`), from the main checkout's HEAD on a branch of its own: a start is
 refused where HEAD is detached, where the checkout is on the branch the run's pull request goes to, where a merge is under
-way and where changes are staged. Sixteen steps are served so far: `orient`, which reads what the repository is and has once
+way and where changes are staged. Seventeen steps are served so far: `orient`, which reads what the repository is and has once
 (its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
 CI, mutation arms, what is dirty, the open agents and who holds the tree); `graphify-codebase`, which syncs the run's one map
 of the repository - every file a node, each declaration a language's implementation reads with its lines, its header and
@@ -772,7 +772,13 @@ none appeared, some are still running, or one ended neither green nor red; and t
 `refresh` and `rebase` - which make their verb's dry run first, read what it stood, typed, and ask what it lacks - a
 consent, a path outside a fold's `within`, conflicting merges - with what it is about, a fold and a deletion applying
 only what it named, write each path a fold means to write to the run's ledger of its folds (`folds.json`) before the
-verb and what it left after, and, of `others`, work on each other open agent of the run in turn. A check that finds red
+verb and what it left after, and, of `others`, work on each other open agent of the run in turn; and `commit`, which
+commits the folds upstream of it and no other work - each path they changed that no commit of the run took, held to what
+its fold left there (a path edited or restored since, or a fold upstream whose intent nobody settled, fails it, and
+nothing is staged), on an empty index, by explicit
+path, with the configuration's `commit.template` filled or the step's own message - and with nothing owed is done and runs
+no git; any template reads what the run checked (`{run.ran}`, `{run.notRun}`, `{run.red}`), and a commit's message what
+checked what it carries (`{carried.ran}`, `{carried.notRun}`, `{carried.red}`). A check that finds red
 fails its step under `failOn: red`, every check's default but `ci-read`'s. Every text a step hands on is filled where it
 starts, and one that reads nothing fails the step (12). Every call of `gh` is started so it cannot ask, and ended after
 five minutes, or with its step where the step passes its `timeoutMinutes` first (21). A step of any other type fails,

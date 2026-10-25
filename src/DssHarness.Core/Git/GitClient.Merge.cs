@@ -757,7 +757,7 @@ public sealed partial class GitClient
     }
 
     /// <summary>Groups paths into invocations neither too many nor too long for one command line.</summary>
-    private static IEnumerable<List<string>> CommandLineBatches(IReadOnlyList<string> paths)
+    internal static IEnumerable<List<string>> CommandLineBatches(IReadOnlyList<string> paths)
     {
         var batch = new List<string>();
         var characters = 0;

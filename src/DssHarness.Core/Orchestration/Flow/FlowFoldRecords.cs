@@ -9,13 +9,17 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// The run's write-ahead ledger of its folds, <c>folds.json</c>: each fold a <c>fold</c> or a <c>delete-agent</c> step
 /// made, every path it meant to write with the digest the main tree held there before, written before the verb is called,
 /// and the digest it left there after - so nothing reaches the main tree unrecorded, and a crash between the two leaves an
-/// intent the next attempt settles. Written whole each time, inside the run's own section.
+/// intent the next attempt settles - and each commit a <c>commit</c> step made of them, its staged set written before the
+/// first <c>git add</c> and marked committed after. Written whole each time, inside the run's own section.
 /// </summary>
 /// <param name="Schema">The file's schema, 1.</param>
 /// <param name="Run">The run's name.</param>
 /// <param name="Folds">Every fold the run made or meant to make, in the order intended.</param>
 public sealed record FlowFoldLedgerFile(int Schema, string Run, IReadOnlyList<FlowFoldEntry> Folds)
 {
+    /// <summary>Every commit a <c>commit</c> step of the run staged, in the order staged; none in a ledger written before there were any.</summary>
+    public IReadOnlyList<FlowCommitEntry> Commits { get; init; } = [];
+
     /// <summary>What is wrong with this file; null when nothing is.</summary>
     public string? Problem()
         => Schema != 1 ? $"its schema is {Schema.ToString(CultureInfo.InvariantCulture)}, and this build reads 1"
@@ -23,11 +27,92 @@ public sealed record FlowFoldLedgerFile(int Schema, string Run, IReadOnlyList<Fl
             : Folds.FirstOrDefault(fold => fold.Problem() is not null) is { } wrong ? $"its fold '{wrong.Id}': {wrong.Problem()}"
             : Folds.Select((fold, at) => (fold, at)).FirstOrDefault(pair => !string.Equals(pair.fold.Id, FlowFoldEntry.IdOf(pair.at + 1), StringComparison.Ordinal)) is { fold: { } misnumbered }
                 ? $"its fold '{misnumbered.Id}' is out of order: ids are f<n>, in the order intended"
-                : null;
+            : Commits.FirstOrDefault(commit => commit.Problem() is not null) is { } faulty ? $"its commit '{faulty.Id}': {faulty.Problem()}"
+            : Commits.Select((commit, at) => (commit, at)).FirstOrDefault(pair => !string.Equals(pair.commit.Id, FlowCommitEntry.IdOf(pair.at + 1), StringComparison.Ordinal)) is { commit: { } outOfOrder }
+                ? $"its commit '{outOfOrder.Id}' is out of order: ids are c<n>, in the order staged"
+            : Commits.SelectMany(commit => commit.Folds.Select(fold => (commit, fold))).FirstOrDefault(pair => Of(pair.fold) is null) is { commit: { } naming } unknown
+                ? $"its commit '{naming.Id}' names the fold '{unknown.fold}', which it holds none of"
+            : Folds.SelectMany(fold => fold.Paths.Select(path => (fold, path))).FirstOrDefault(pair => pair.path.Committed is { } id && Commits.FirstOrDefault(commit => commit.Id == id) is not { State: FlowCommitEntry.Committed }) is { fold: { } marked } untaken
+                ? $"its fold '{marked.Id}' says '{untaken.path.Path}' was committed by '{untaken.path.Committed}', which it holds as no commit made"
+            : null;
 
     /// <summary>The entry named, or null where the ledger holds none.</summary>
     /// <param name="id">The entry's id.</param>
     public FlowFoldEntry? Of(string id) => Folds.FirstOrDefault(fold => string.Equals(fold.Id, id, StringComparison.Ordinal));
+}
+
+/// <summary>
+/// One commit a <c>commit</c> step made of the folds upstream of it: the paths it stages with what each holds, the folds
+/// they settle and the HEAD it commits on, written before the first <c>git add</c>; then committed, with the commit's id,
+/// or unstaged, where git refused the commit or a later attempt found no commit took it.
+/// </summary>
+/// <param name="Id">The entry's id: <c>c&lt;n&gt;</c>, in the order staged.</param>
+/// <param name="Instance">The commit step's instance.</param>
+/// <param name="Attempt">The attempt of that instance that staged it.</param>
+/// <param name="State"><c>staged</c> (written before the first <c>git add</c>, nothing after yet), <c>committed</c> or <c>unstaged</c> - its paths owed still.</param>
+/// <param name="Head">The commit HEAD named when it was staged; null where the branch had none yet.</param>
+/// <param name="Paths">Each path it stages, with what the main tree holds there, in order.</param>
+/// <param name="Folds">The ledger's folds those paths settle, by id, in order.</param>
+/// <param name="StagedAt">When it was written.</param>
+/// <param name="SettledAt">When it was committed or unstaged; null while it is staged.</param>
+/// <param name="Sha">The commit that took its paths - the one it made, or HEAD where an earlier commit had taken them all; null unless it is committed.</param>
+public sealed record FlowCommitEntry(
+    string Id,
+    string Instance,
+    int Attempt,
+    string State,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Head,
+    IReadOnlyList<FlowCommitPath> Paths,
+    IReadOnlyList<string> Folds,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset StagedAt,
+    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? SettledAt = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Sha = null)
+{
+    /// <summary>The state an entry is written in before its first <c>git add</c>.</summary>
+    public const string Staged = "staged";
+
+    /// <summary>The state of an entry whose paths a commit took.</summary>
+    public const string Committed = "committed";
+
+    /// <summary>The state of an entry no commit took - git refused it, or a later attempt found none had - its paths unstaged and owed still.</summary>
+    public const string Unstaged = "unstaged";
+
+    /// <summary>The states an entry stands in.</summary>
+    public static readonly IReadOnlyList<string> States = [Staged, Committed, Unstaged];
+
+    /// <summary>The id the <paramref name="n"/>-th commit of a run takes.</summary>
+    /// <param name="n">Its place, from 1.</param>
+    public static string IdOf(int n) => OrchestrationRules.Numbered('c', n);
+
+    /// <summary>Whether <paramref name="id"/> is a commit's id, <c>c&lt;n&gt;</c> from 1.</summary>
+    /// <param name="id">The id, as a ledger writes it.</param>
+    public static bool IsId(string? id) => OrchestrationRules.IsNumbered(id, 'c');
+
+    /// <summary>What is wrong with this entry; null when nothing is.</summary>
+    public string? Problem()
+        => !IsId(Id) ? $"'{Id}' is not a commit's id"
+            : !FlowInstanceId.IsWellFormed(Instance) ? $"'{Instance}' is not an instance id"
+            : Attempt < 1 ? $"its attempt is {Attempt.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
+            : !States.Contains(State, StringComparer.Ordinal) ? $"'{State}' is not a state a commit stands in"
+            : (OrchestrationRules.CommitProblem(Head, "head") ?? OrchestrationRules.CommitProblem(Sha, "commit")) is { } commit ? commit
+            : (State == Staged) != (SettledAt is null) ? "it is settled exactly when it is no longer staged"
+            : (State == Committed) != (Sha is not null) ? "it names the commit that took its paths exactly where it is committed"
+            : Paths.Count == 0 ? "it stages no path"
+            : Paths.FirstOrDefault(path => path.Problem() is not null) is { } wrong ? wrong.Problem()
+            : Paths.GroupBy(path => path.Path, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice ? $"'{twice.Key}' is named twice"
+            : Folds.Count == 0 || !Folds.All(FlowFoldEntry.IsId) ? "it names the folds its paths settle, by id"
+            : Folds.Distinct(StringComparer.Ordinal).Count() != Folds.Count ? "it names a fold twice"
+            : null;
+}
+
+/// <summary>One path a commit stages, with what the main tree holds there as it is staged.</summary>
+/// <param name="Path">The path, relative to the tree and spelt with forward slashes.</param>
+/// <param name="Digest">The SHA-256 the main tree holds there; null where it holds no file - a deletion staged.</param>
+public sealed record FlowCommitPath(string Path, [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Digest)
+{
+    /// <summary>What is wrong with this path; null when nothing is.</summary>
+    public string? Problem()
+        => OrchestrationRules.RelativePathProblem(Path, "a committed path") ?? OrchestrationRules.DigestProblem(Digest, Path, allowNone: true);
 }
 
 /// <summary>One fold of the run's ledger: who made it, what it meant to write, and what became of it.</summary>
@@ -84,11 +169,15 @@ public sealed record FlowFoldEntry(
 
     /// <summary>The id the <paramref name="n"/>-th fold of a run takes.</summary>
     /// <param name="n">Its place, from 1.</param>
-    public static string IdOf(int n) => $"f{n.ToString(CultureInfo.InvariantCulture)}";
+    public static string IdOf(int n) => OrchestrationRules.Numbered('f', n);
+
+    /// <summary>Whether <paramref name="id"/> is a fold's id, <c>f&lt;n&gt;</c> from 1.</summary>
+    /// <param name="id">The id, as a ledger writes it.</param>
+    public static bool IsId(string? id) => OrchestrationRules.IsNumbered(id, 'f');
 
     /// <summary>What is wrong with this entry; null when nothing is.</summary>
     public string? Problem()
-        => string.IsNullOrWhiteSpace(Id) || Id[0] != 'f' || !int.TryParse(Id.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out var n) || n < 1 ? $"'{Id}' is not a fold's id"
+        => !IsId(Id) ? $"'{Id}' is not a fold's id"
             : !FlowInstanceId.IsWellFormed(Instance) ? $"'{Instance}' is not an instance id"
             : Attempt < 1 ? $"its attempt is {Attempt.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
             : !Types.Contains(Type, StringComparer.Ordinal) ? $"'{Type}' is not a step that folds"
@@ -105,22 +194,36 @@ public sealed record FlowFoldEntry(
 }
 
 /// <summary>
-/// One path a fold meant to write, with the digest the main tree held there before and the one it left. Whether what it
-/// left is committed is never written here: it is read from the main tree (<see cref="FoldLedger.Uncommitted"/>), so a
-/// commit by a step of the run and one made by hand count alike.
+/// One path a fold meant to write, with the digest the main tree held there before, the one it left, and - where it
+/// changed it - the run's commit that took it, or that git ignores it, so the run's commits leave it out until git, asked
+/// again, no longer does. Whether a run is unfinished
+/// is still read from the main tree as well (<see cref="FoldLedger.Uncommitted"/>), so a commit made by hand counts as a
+/// step's does.
 /// </summary>
 /// <param name="Path">The path, relative to the tree and spelt with forward slashes.</param>
 /// <param name="What">What the fold does to it: <c>written</c>, <c>deleted</c>, <c>merged</c>, or <c>registry</c> for a registry file its rows change.</param>
 /// <param name="Before">The SHA-256 the main tree held there when the intent was written; null where it held no file.</param>
 /// <param name="Left">The SHA-256 it held once the fold was settled; null where it holds no file, and while nothing was read.</param>
 /// <param name="Changed">Whether what it left is not what it held before; null while nothing was read.</param>
+/// <param name="Committed">The id of the run's commit (<see cref="FlowCommitEntry"/>) that took what it left; null while none has.</param>
+/// <param name="Ignored">True where git ignores the path, so the run's commits leave it out; null otherwise.</param>
 public sealed record FlowFoldPath(
     string Path,
     string What,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Before,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Left = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] bool? Changed = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] bool? Changed = null,
+    string? Committed = null,
+    bool? Ignored = null)
 {
+    /// <summary>Whether what the fold left here is uncommitted: it changed the path, and no commit of the run took it - git may ignore it.</summary>
+    [JsonIgnore]
+    public bool Uncommitted => Changed == true && Committed is null;
+
+    /// <summary>Whether a commit owes what the fold left here: it is uncommitted, and git did not ignore it when last asked.</summary>
+    [JsonIgnore]
+    public bool Owed => Uncommitted && Ignored != true;
+
     /// <summary>What a fold does to a path, as the ledger names it.</summary>
     public static readonly IReadOnlyList<string> Whats = ["written", "deleted", "merged", "registry"];
 
@@ -131,6 +234,10 @@ public sealed record FlowFoldPath(
             : (OrchestrationRules.DigestProblem(Before, Path, allowNone: true) ?? OrchestrationRules.DigestProblem(Left, Path, allowNone: true)) is { } digest ? digest
             : Changed is { } changed && changed == string.Equals(Before, Left, StringComparison.Ordinal) ? $"'{Path}' says it changed where what it left is {(changed ? "what it held" : "not what it held")}"
             : Changed is null && Left is not null ? $"'{Path}' names what the fold left and not whether it changed"
+            : (Committed is not null || Ignored is not null) && Changed != true ? $"'{Path}' says a commit took it, or that git ignores it, where the fold changed nothing there"
+            : Committed is not null && Ignored is not null ? $"'{Path}' says both that a commit took it and that git ignores it"
+            : Ignored == false ? $"'{Path}' says git does not ignore it: only that it does is written"
+            : Committed is { } id && !FlowCommitEntry.IsId(id) ? $"'{Path}' says '{id}' took it, which is not a commit's id"
             : null;
 }
 

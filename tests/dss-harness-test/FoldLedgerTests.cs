@@ -1,4 +1,5 @@
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Repository;
@@ -59,8 +60,9 @@ public sealed class FoldLedgerTests
         // An intent nobody settled holds what cannot be told, whatever the main tree holds.
         Assert.Equal([first, second], FoldLedger.Uncommitted(harness.OrchestrationStore.ReadFolds(layout), new HashSet<string>(StringComparer.Ordinal)).Select(fold => fold.Id));
 
-        // Whether a fold holds what no commit took is read from the main tree, never written beside its paths.
-        Assert.DoesNotContain("commit", File.ReadAllText(layout.FoldsFile), StringComparison.OrdinalIgnoreCase);
+        // An intent marks nothing committed, and no commit is written before one stages.
+        Assert.All(entry.Paths, path => Assert.Null(path.Committed));
+        Assert.Empty(harness.OrchestrationStore.ReadFolds(layout)!.Commits);
     }
 
     /// <summary>
@@ -105,7 +107,10 @@ public sealed class FoldLedgerTests
 
         // The main tree unread, every fold that changed a path is counted; a refusal changed none.
         Assert.Equal([applied, stopped], FoldLedger.Uncommitted(file, differing: null).Select(entry => entry.Id));
-        Assert.True(FoldLedger.ChangedAny(file));
+        Assert.True(FoldLedger.OwesAny(file));
+
+        // A path git ignores holds no run unfinished, though no commit took it.
+        Assert.False(FoldLedger.OwesAny(file with { Folds = [.. file.Folds.Select(fold => fold with { Paths = [.. fold.Paths.Select(path => path.Changed == true ? path with { Ignored = true } : path)] })] }));
 
         // Read, a fold holds what a commit would take where a path it changed differs from HEAD there - and nothing where
         // every one is committed, by hand or otherwise, or put back as HEAD holds it.
@@ -138,6 +143,232 @@ public sealed class FoldLedgerTests
         Assert.Equal([failed], FoldLedger.Uncommitted(file, differing: null).Select(entry => entry.Id));
         Assert.Equal([failed], FoldLedger.Ungraphed(file).Select(entry => entry.Id));
         Assert.Null(file.Problem());
+    }
+
+    /// <summary>
+    /// What a commit owes is each path a settled fold upstream of it changed - once, in the order the ledger first names
+    /// it - with what the newest settled fold of any step left there, the step that left it, and every fold of any step
+    /// that owes it; never a path no upstream fold changed, one a refusal or an intent names, or one a commit of the run
+    /// took - one marked ignored is owed still, for git is asked again at each commit, and asked, the mark is set or
+    /// cleared; and an intent of an upstream fold nobody settled is named apart.
+    /// </summary>
+    [Fact]
+    public async Task WhatACommitOwes_IsEachPathItsUpstreamFoldsChanged_AsTheNewestFoldLeftIt()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, ledger) = Ledger(temp);
+        File.WriteAllText(Path.Combine(temp.Path, "same.txt"), "same\n");
+
+        var mine = await FoldedAsync(ledger, layout, temp.Path, "items[0].fold", ("a.txt", "mine\n"), ("r.md", "row one\n"), ("same.txt", "same\n"));
+        var theirs = await FoldedAsync(ledger, layout, temp.Path, "items[1].fold", ("b.txt", "theirs\n"), ("r.md", "row one\nrow two\n"));
+        var refused = await ledger.IntendAsync(layout, temp.Path, "items[0].fold", 2, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = ["c.txt"] }, Token);
+        await ledger.SettleAsync(layout, temp.Path, refused, HarnessExit.Refused);
+
+        var owed = FoldLedger.Owed(harness.OrchestrationStore.ReadFolds(layout), ["items[0].fold"]);
+
+        Assert.Equal(
+            [("a.txt", FileContentHash.Of("mine\n"u8), "items[0].fold"), ("r.md", FileContentHash.Of("row one\nrow two\n"u8), "items[1].fold")],
+            owed.Paths.Select(path => (path.Path, path.Digest, path.LeftBy)));
+        Assert.Equal([mine], owed.Paths[0].Folds);
+        Assert.Equal([mine, theirs], owed.Paths[1].Folds);
+
+        // What the tree held there before the oldest fold that owes it: none for a file a fold made.
+        Assert.Equal(((string?)null, (string?)null), (owed.Paths[0].Before, owed.Paths[1].Before));
+        Assert.Empty(owed.Unsettled);
+        Assert.Empty(FoldLedger.Owed(null, ["items[0].fold"]).Paths);
+        Assert.Empty(FoldLedger.Owed(harness.OrchestrationStore.ReadFolds(layout), ["elsewhere"]).Paths);
+
+        // A path a commit of the run took is owed no more - by any fold; one git ignores is owed still, marked so.
+        var staged = ledger.Staging(layout, "items[1].commit", 1, Head, [new FlowCommitPath("r.md", owed.Paths[1].Digest)], [mine, theirs]);
+        ledger.Committed(layout, staged, Head);
+        ledger.Ignored(layout, ["a.txt"], new HashSet<string>(["a.txt"], StringComparer.Ordinal));
+
+        Assert.Equal(["a.txt"], FoldLedger.Owed(harness.OrchestrationStore.ReadFolds(layout), ["items[0].fold"]).Paths.Select(path => path.Path));
+        Assert.Equal(["b.txt"], FoldLedger.Owed(harness.OrchestrationStore.ReadFolds(layout), ["items[1].fold"]).Paths.Select(path => path.Path));
+        Assert.True(harness.OrchestrationStore.ReadFolds(layout)!.Of(mine)!.Paths[0].Ignored);
+
+        // Asked again where git no longer ignores it, the mark is cleared.
+        ledger.Ignored(layout, ["a.txt"], new HashSet<string>(StringComparer.Ordinal));
+
+        Assert.Null(harness.OrchestrationStore.ReadFolds(layout)!.Of(mine)!.Paths[0].Ignored);
+
+        // An intent of an upstream fold nobody settled is named, its paths owed by nobody yet.
+        _ = await ledger.IntendAsync(layout, temp.Path, "items[0].fold", 3, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = ["d.txt"] }, Token);
+
+        Assert.Equal(["f4"], FoldLedger.Owed(harness.OrchestrationStore.ReadFolds(layout), ["items[0].fold"]).Unsettled.Select(fold => fold.Id));
+    }
+
+    /// <summary>
+    /// A fold that settled after a commit staged its set, writing a path of it again, is not marked taken by that commit:
+    /// the commit took what the folds it names left, and the newer fold's path is owed still.
+    /// </summary>
+    [Fact]
+    public async Task AFoldSettledAfterTheSetWasStaged_IsNotMarkedTakenByIt()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, ledger) = Ledger(temp);
+        var first = await FoldedAsync(ledger, layout, temp.Path, "fold", ("a.txt", "one\n"));
+        var staged = ledger.Staging(layout, "commit", 1, Head, [new FlowCommitPath("a.txt", FileContentHash.Of("one\n"u8))], [first]);
+        var later = await FoldedAsync(ledger, layout, temp.Path, "again", ("a.txt", "two\n"));
+
+        ledger.Committed(layout, staged, Other);
+        var file = harness.OrchestrationStore.ReadFolds(layout)!;
+
+        Assert.Equal(("c1", (string?)null), (file.Of(first)!.Paths[0].Committed, file.Of(later)!.Paths[0].Committed));
+        Assert.Equal(["a.txt"], FoldLedger.Owed(file, ["again"]).Paths.Select(path => path.Path));
+    }
+
+    /// <summary>
+    /// What the main tree holds otherwise than its HEAD is every path git's status names - both of a rename's - each once;
+    /// a name that is not UTF-8 names no file this tool can ask about, and is not among them.
+    /// </summary>
+    [Fact]
+    public void WhatDiffers_IsEveryPathTheStatusNames_BothOfARenames()
+        => Assert.Equal(
+            ["a.txt", "new.txt", "old.txt"],
+            FoldLedger.DifferingOf(
+            [
+                new GitStatusEntry('R', ' ', new GitName("new.txt", IsUtf8: true), new GitName("old.txt", IsUtf8: true)),
+                new GitStatusEntry(' ', 'M', new GitName("a.txt", IsUtf8: true), null),
+                new GitStatusEntry('A', 'M', new GitName("a.txt", IsUtf8: true), null),
+                new GitStatusEntry('?', '?', GitName.FromBytes("caf\u00e9.txt"), null),
+            ]).Order(StringComparer.Ordinal));
+
+    /// <summary>
+    /// A commit's staged set is written before anything is staged, then marked committed with the commit that took it -
+    /// each of its paths marked taken in every fold it names that owes it, and no other path - or unstaged, its paths owed
+    /// still; a path git ignores is marked so in every fold that owes it, one a commit took left as it is. Taken or ignored, a path holds a run unfinished
+    /// no more, whatever the main tree says; each set is settled once.
+    /// </summary>
+    [Fact]
+    public async Task AStagedSet_IsMarkedCommittedOrUnstaged_AndWhatItTookIsOwedNoMore()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, ledger) = Ledger(temp);
+        var fold = await FoldedAsync(ledger, layout, temp.Path, "fold", ("a.txt", "a\n"), ("b.txt", "b\n"), ("e.txt", "e\n"));
+
+        var unstaged = ledger.Staging(layout, "commit", 1, null, [new FlowCommitPath("a.txt", FileContentHash.Of("a\n"u8))], [fold]);
+        var file = harness.OrchestrationStore.ReadFolds(layout)!;
+
+        Assert.Equal(("c1", FlowCommitEntry.Staged, (string?)null, (DateTimeOffset?)null, At), (unstaged, file.Commits[0].State, file.Commits[0].Head, file.Commits[0].SettledAt, file.Commits[0].StagedAt));
+        Assert.Equal([fold], file.Commits[0].Folds);
+
+        ledger.Unstaged(layout, unstaged);
+        var committed = ledger.Staging(layout, "commit", 2, Head, [new FlowCommitPath("a.txt", FileContentHash.Of("a\n"u8))], [fold]);
+        ledger.Committed(layout, committed, Other);
+        ledger.Ignored(layout, ["a.txt", "e.txt", "elsewhere.txt"], new HashSet<string>(["a.txt", "e.txt", "elsewhere.txt"], StringComparer.Ordinal));
+        file = harness.OrchestrationStore.ReadFolds(layout)!;
+
+        Assert.Equal((FlowCommitEntry.Unstaged, (string?)null), (file.Commits[0].State, file.Commits[0].Sha));
+        Assert.Equal(("c2", FlowCommitEntry.Committed, Other, Head), (file.Commits[1].Id, file.Commits[1].State, file.Commits[1].Sha, file.Commits[1].Head));
+        Assert.NotNull(file.Commits[1].SettledAt);
+        Assert.Equal([("a.txt", "c2", (bool?)null), ("b.txt", null, null), ("e.txt", null, true)], file.Of(fold)!.Paths.Select(path => (path.Path, path.Committed, path.Ignored)));
+        Assert.Null(file.Problem());
+
+        // What is left owed is b.txt alone: a commit by hand of it ends the run's hold, and the main tree unread holds it.
+        Assert.Equal([fold], FoldLedger.Uncommitted(file, differing: null).Select(entry => entry.Id));
+        Assert.Empty(FoldLedger.Uncommitted(file, new HashSet<string>(["a.txt", "e.txt"], StringComparer.Ordinal)));
+
+        var settledTwice = Assert.Throws<HarnessException>(() => ledger.Committed(layout, committed, Other));
+
+        Assert.Equal((HarnessExit.InternalError, "the run's ledger of its folds holds no staged commit 'c2' to settle"), (settledTwice.ExitCode, settledTwice.Message));
+        Assert.Throws<HarnessException>(() => ledger.Unstaged(layout, "c9"));
+    }
+
+    /// <summary>
+    /// The ledger's commits are read strictly: ids c&lt;n&gt; in the order staged; a state the engine has, settled exactly when
+    /// it is no longer staged and naming its commit exactly where it is committed; commits' ids where it names any; a path
+    /// once, relative, with a digest or none for a deletion; the folds it settles, each a fold the ledger holds; and a fold
+    /// path marked taken by a commit the ledger holds as committed, or ignored, only where its fold changed it - never both.
+    /// </summary>
+    [Theory]
+    [InlineData("misnumbered", "its commit 'c3' is out of order: ids are c<n>, in the order staged")]
+    [InlineData("id", "its commit 'x1': 'x1' is not a commit's id")]
+    [InlineData("instance", "its commit 'c1': 'a..b' is not an instance id")]
+    [InlineData("attempt", "its commit 'c1': its attempt is 0, and the first is 1")]
+    [InlineData("state", "its commit 'c1': 'done' is not a state a commit stands in")]
+    [InlineData("head", "its commit 'c1': its head, 'HEAD', is not a commit's id")]
+    [InlineData("sha", "its commit 'c1': its commit, 'HEAD', is not a commit's id")]
+    [InlineData("digest", "its commit 'c1': 'a.txt' has 'xyz', which is not a SHA-256 digest")]
+    [InlineData("stagedSettled", "its commit 'c1': it is settled exactly when it is no longer staged")]
+    [InlineData("committedNoSha", "its commit 'c1': it names the commit that took its paths exactly where it is committed")]
+    [InlineData("unstagedSha", "its commit 'c1': it names the commit that took its paths exactly where it is committed")]
+    [InlineData("noPaths", "its commit 'c1': it stages no path")]
+    [InlineData("pathTwice", "its commit 'c1': 'a.txt' is named twice")]
+    [InlineData("rooted", "its commit 'c1': a committed path, '/a.txt', is not a path relative to the tree, spelt with forward slashes")]
+    [InlineData("noFolds", "its commit 'c1': it names the folds its paths settle, by id")]
+    [InlineData("foldTwice", "its commit 'c1': it names a fold twice")]
+    [InlineData("notAFold", "its commit 'c1': it names the folds its paths settle, by id")]
+    [InlineData("unknownFold", "its commit 'c1' names the fold 'f9', which it holds none of")]
+    [InlineData("takenByNone", "its fold 'f1' says 'a.txt' was committed by 'c2', which it holds as no commit made")]
+    [InlineData("takenByStaged", "its fold 'f1' says 'a.txt' was committed by 'c1', which it holds as no commit made")]
+    [InlineData("takenUnchanged", "its fold 'f1': 'a.txt' says a commit took it, or that git ignores it, where the fold changed nothing there")]
+    [InlineData("ignoredUnchanged", "its fold 'f1': 'a.txt' says a commit took it, or that git ignores it, where the fold changed nothing there")]
+    [InlineData("both", "its fold 'f1': 'a.txt' says both that a commit took it and that git ignores it")]
+    [InlineData("notIgnored", "its fold 'f1': 'a.txt' says git does not ignore it: only that it does is written")]
+    [InlineData("takenById", "its fold 'f1': 'a.txt' says 'c' took it, which is not a commit's id")]
+    public void TheLedgersCommits_AreStrict(string wrong, string problem)
+    {
+        var path = new FlowFoldPath("a.txt", "written", Digest, Left: null, Changed: true, Committed: "c1");
+        var fold = new FlowFoldEntry("f1", "fold", 1, "fold", "a1", "applied", At, [path], [], SettledAt: At);
+        var commit = new FlowCommitEntry("c1", "commit", 1, FlowCommitEntry.Committed, Head, [new FlowCommitPath("a.txt", null)], ["f1"], At, At, Other);
+        var ledger = new FlowFoldLedgerFile(1, "r1", [fold]) { Commits = [commit] };
+
+        Assert.Null(ledger.Problem());
+
+        var broken = wrong switch
+        {
+            "misnumbered" => ledger with { Commits = [commit, commit with { Id = "c3" }] },
+            "id" => ledger with { Commits = [commit with { Id = "x1" }] },
+            "instance" => ledger with { Commits = [commit with { Instance = "a..b" }] },
+            "attempt" => ledger with { Commits = [commit with { Attempt = 0 }] },
+            "state" => ledger with { Commits = [commit with { State = "done" }] },
+            "head" => ledger with { Commits = [commit with { Head = "HEAD" }] },
+            "sha" => ledger with { Commits = [commit with { Sha = "HEAD" }] },
+            "digest" => ledger with { Commits = [commit with { Paths = [new FlowCommitPath("a.txt", "xyz")] }] },
+            "stagedSettled" => ledger with { Folds = [fold with { Paths = [path with { Committed = null }] }], Commits = [commit with { State = FlowCommitEntry.Staged, Sha = null }] },
+            "committedNoSha" => ledger with { Commits = [commit with { Sha = null }] },
+            "unstagedSha" => ledger with { Folds = [fold with { Paths = [path with { Committed = null }] }], Commits = [commit with { State = FlowCommitEntry.Unstaged }] },
+            "noPaths" => ledger with { Commits = [commit with { Paths = [] }] },
+            "pathTwice" => ledger with { Commits = [commit with { Paths = [.. commit.Paths, .. commit.Paths] }] },
+            "rooted" => ledger with { Commits = [commit with { Paths = [new FlowCommitPath("/a.txt", Digest)] }] },
+            "noFolds" => ledger with { Commits = [commit with { Folds = [] }] },
+            "foldTwice" => ledger with { Commits = [commit with { Folds = ["f1", "f1"] }] },
+            "notAFold" => ledger with { Commits = [commit with { Folds = ["f1", "fx"] }] },
+            "unknownFold" => ledger with { Commits = [commit with { Folds = ["f1", "f9"] }] },
+            "takenByNone" => ledger with { Folds = [fold with { Paths = [path with { Committed = "c2" }] }] },
+            "takenByStaged" => ledger with { Commits = [commit with { State = FlowCommitEntry.Staged, SettledAt = null, Sha = null }] },
+            "takenUnchanged" => ledger with { Folds = [fold with { Paths = [path with { Left = Digest, Changed = false }] }] },
+            "ignoredUnchanged" => ledger with { Folds = [fold with { Paths = [path with { Left = Digest, Changed = false, Committed = null, Ignored = true }] }] },
+            "both" => ledger with { Folds = [fold with { Paths = [path with { Ignored = true }] }] },
+            "notIgnored" => ledger with { Folds = [fold with { Paths = [path with { Committed = null, Ignored = false }] }] },
+            "takenById" => ledger with { Folds = [fold with { Paths = [path with { Committed = "c" }] }] },
+            _ => throw new ArgumentOutOfRangeException(nameof(wrong), wrong, "no such case"),
+        };
+
+        Assert.Equal(problem, broken.Problem());
+    }
+
+    /// <summary>A ledger written before there were commits reads as one with none, and one with commits reads back whole.</summary>
+    [Fact]
+    public async Task TheLedgersCommits_ReadBackWhole_AndALedgerWithoutThemReadsAsNone()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, ledger) = Ledger(temp);
+        var fold = await FoldedAsync(ledger, layout, temp.Path, "fold", ("a.txt", "a\n"));
+        var text = File.ReadAllText(layout.FoldsFile);
+
+        File.WriteAllText(layout.FoldsFile, text.Replace(",\n  \"commits\": []", string.Empty, StringComparison.Ordinal));
+
+        Assert.DoesNotContain("commits", File.ReadAllText(layout.FoldsFile), StringComparison.Ordinal);
+        Assert.Empty(harness.OrchestrationStore.ReadFolds(layout)!.Commits);
+
+        ledger.Committed(layout, ledger.Staging(layout, "commit", 1, Head, [new FlowCommitPath("a.txt", FileContentHash.Of("a\n"u8)), new FlowCommitPath("gone.txt", null)], [fold]), Other);
+        var read = harness.OrchestrationStore.ReadFolds(layout)!;
+
+        Assert.Equal([new FlowCommitPath("a.txt", FileContentHash.Of("a\n"u8)), new FlowCommitPath("gone.txt", null)], read.Commits[0].Paths);
+        Assert.Equal(("commit", 1, Head, Other), (read.Commits[0].Instance, read.Commits[0].Attempt, read.Commits[0].Head, read.Commits[0].Sha));
+        Assert.Contains("\"digest\": null", File.ReadAllText(layout.FoldsFile), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -415,7 +646,25 @@ public sealed class FoldLedgerTests
         Assert.Equal("second", (await sessions.CreateAsync(layout, definition, wantedName: "second", cancellationToken: Token)).Run.Name);
     }
 
+    private const string Head = "1111111111111111111111111111111111111111";
+
+    private const string Other = "2222222222222222222222222222222222222222";
+
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    /// <summary>A fold of <paramref name="instance"/> that wrote each of <paramref name="writes"/> into the tree at <paramref name="main"/>, settled applied.</summary>
+    private static async Task<string> FoldedAsync(FoldLedger ledger, OrchestratorLayout layout, string main, string instance, params (string Path, string Text)[] writes)
+    {
+        var id = await ledger.IntendAsync(layout, main, instance, 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = [.. writes.Select(write => write.Path)] }, Token);
+
+        foreach (var (path, text) in writes)
+        {
+            File.WriteAllText(Path.Combine(main, path), text);
+        }
+
+        await ledger.SettleAsync(layout, main, id, HarnessExit.Success);
+        return id;
+    }
 
     /// <summary>A ledger over a run of the repository at <paramref name="temp"/>, with the clock at <see cref="At"/>.</summary>
     private static (HarnessFactory Harness, OrchestratorLayout Layout, FoldLedger Ledger) Ledger(TempDirectory temp)

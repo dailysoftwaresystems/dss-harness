@@ -186,6 +186,8 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowStepTypeRunner, DeleteAgentStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, RefreshStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, RebaseStepRunner>();
+        services.AddSingleton<IGitPublisher, GitPublisher>();
+        services.AddSingleton<IFlowStepTypeRunner, CommitStepRunner>();
         services.AddSingleton<IFlowStepRunner, FlowStepRunners>();
 
         // The codebase graph: every implementation of its contract the core holds, found by the one scan, so a new language

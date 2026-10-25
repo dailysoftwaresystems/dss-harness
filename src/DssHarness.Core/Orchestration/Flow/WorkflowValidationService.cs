@@ -397,11 +397,11 @@ public sealed class WorkflowValidationService(
             yield break;
         }
 
-        foreach (var (name, _) in commit.Variables.Where(variable => variable.Value.Required))
+        foreach (var (name, variable) in commit.Variables.Where(variable => variable.Value.Required))
         {
             if (DeclaredName.In(step.Variables.Keys, name) is null)
             {
-                yield return $"{where} is a commit step and gives no value for '{name}', which commit.template requires: add it under the step's variables";
+                yield return $"{where} is a commit step and {CommitTemplate.NoValue(name, variable)}";
             }
         }
 

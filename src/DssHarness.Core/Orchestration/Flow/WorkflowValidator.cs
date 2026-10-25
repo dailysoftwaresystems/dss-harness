@@ -634,7 +634,7 @@ public static class WorkflowValidator
                         // not used: one definition then holds under a configuration with a template and one without.
                         if (entry.Step.Message is null && !_hasCommitTemplate)
                         {
-                            _problems.Add($"{where} names no message and the configuration declares no commit.template; one of the two writes the commit's message");
+                            _problems.Add($"{where} {Configuration.CommitTemplate.NoMessage}");
                         }
 
                         CommitVariablesWithoutATemplate(entry);

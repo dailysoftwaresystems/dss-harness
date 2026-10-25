@@ -16,7 +16,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `query-codebase-graph`, `clean`, `up`,
@@ -1682,7 +1682,8 @@ holds is waited out as a held lock is; and `IAgentService.CreateAsync(new AgentC
 makes a read-only reason step's agent the same way. Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`
-- a `ci-wait`'s commit where it names none - the one the run last pushed), the agent it works in (`FlowStepRun.WorksIn`)
+- a `ci-wait`'s commit where it names none - the one the run last pushed - a commit's `folds`, the instances of the
+steps that fold upstream of it), the agent it works in (`FlowStepRun.WorksIn`)
 or, of `others`, the target whose turn it is (`FlowStepRun.Target`), and its keys' templates filled (`FlowStepTemplates`, the one
 reader of which text each template key holds, the definition's check its other caller). The leg steps - `build`, `test`,
 `run`, `check-mutations` - share `LegStepRunner`: the use case of each command (`IBuildLegs`, `ITestLegs`,
@@ -1717,9 +1718,19 @@ definition's check and the runner alike. `FoldLedger` writes a fold's intent to 
 and what it left after (`FlowFoldLedgerFile`) - applied, stopped, failed with what the tree holds read, or refused
 having read nothing - an intent a crash cut off settled from the tree by the next attempt; the step's `fold.json` takes
 what the apply answered before the ledger's settle, and an apply that threw goes on with its own exception, its intent
-left for the next attempt where reading the tree fails too. Whether a fold is committed is never written: it is read
-from the main tree (`FoldLedger.Uncommitted`, over git's status, read before the repository's section where another
-run's ledger changed a path), so a commit made by hand ends a stopped run's hold as the run's own does. A deletion run
+left for the next attempt where reading the tree fails too. `CommitStepRunner` commits the folds upstream of it
+(`FoldLedger.Owed`, over the instances the coordinator read where it started - `FlowInstanceId.Precedes`, then
+`FlowGraph.Waits`, so another item of a `forEach` is never upstream): its message from `CommitTemplate`, the one owner
+of `commit.template`'s grammar and of its refusals, which `ValidateCommit` and V30 read too; every fold upstream settled
+(`FoldOwed.Unsettled`), an empty index and each path's digest checked before anything is
+staged; the staged set written to the ledger (`FlowCommitEntry`) before `IGitPublisher` stages it by explicit path and
+commits once, then marked committed in it and in each fold path it took (`FlowFoldPath.Committed`); a path git ignores
+marked `Ignored`; and a set an attempt before left staged settled first. Whether a fold is committed is read from the
+main tree as well (`FoldLedger.Uncommitted`, over git's status, read before the repository's section where another run's
+ledger owes a path), so a commit made by hand ends a stopped run's hold as the run's own does. The texts of what a run
+checked - `{run.ran}`, `{run.notRun}`, `{run.red}`, and `{carried.*}` of one commit - are `FlowChecks`', over the
+step records the coordinator hands it; a check is a type `WorkflowStepTypes.StepType.Checks` marks or an independent
+reason step. A deletion run
 again whose agent its record says deleted - its ending cut off by a stop's drain, a time limit or a crash - is done
 (`FoldFamilyStepRunner.DoneAlreadyAsync`), its output what `fold.json` kept of the apply. A
 refresh or a rebase of `others` is one turn for each target (`FlowInstance.Targets`, `FlowTargetRecord`), in

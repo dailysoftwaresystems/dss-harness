@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Platform;
@@ -573,6 +574,23 @@ public static partial class OrchestrationRules
     /// <summary>Whether <paramref name="digest"/> is a SHA-256 digest: sixty-four lower-case hexadecimal characters.</summary>
     /// <param name="digest">The digest.</param>
     public static bool IsDigest(string? digest) => digest is not null && DigestPattern().IsMatch(digest);
+
+    /// <summary>
+    /// Whether <paramref name="id"/> is a record's id a run numbers - a letter, then a count from 1, written plain: a
+    /// question's <c>q&lt;n&gt;</c>, a fold's <c>f&lt;n&gt;</c>, a commit's <c>c&lt;n&gt;</c>.
+    /// </summary>
+    /// <param name="id">The id.</param>
+    /// <param name="letter">The letter the kind's ids begin with.</param>
+    public static bool IsNumbered(string? id, char letter)
+        => id is { Length: > 1 }
+            && int.TryParse(id.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out var n)
+            && n > 0
+            && string.Equals(id, Numbered(letter, n), StringComparison.Ordinal);
+
+    /// <summary>The <paramref name="n"/>-th id of the kind whose ids begin with <paramref name="letter"/>, as <see cref="IsNumbered"/> reads one.</summary>
+    /// <param name="letter">The letter the kind's ids begin with.</param>
+    /// <param name="n">Its place, from 1.</param>
+    public static string Numbered(char letter, int n) => $"{letter}{n.ToString(CultureInfo.InvariantCulture)}";
 
     /// <summary>What is wrong with a commit's id; null where it is one, or where none is recorded.</summary>
     /// <param name="commit">The id.</param>

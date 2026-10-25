@@ -7,6 +7,9 @@ namespace DssHarness.Core.Git;
 /// <param name="Source">The path a rename or a copy was made from; <see langword="null"/> for any other change.</param>
 public sealed record GitStatusEntry(char Index, char WorkTree, GitName Path, GitName? Source)
 {
+    /// <summary>Whether the index holds this change against HEAD - something staged - rather than the work tree alone, an untracked or an ignored file.</summary>
+    public bool IsStaged => Index is not (' ' or '?' or '!');
+
     /// <summary>Whether this is a rename or a copy, marked in either column.</summary>
     public bool IsRenameOrCopy => Index is 'R' or 'C' || WorkTree is 'R' or 'C';
 

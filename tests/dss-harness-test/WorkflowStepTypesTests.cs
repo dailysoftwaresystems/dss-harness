@@ -39,7 +39,7 @@ public sealed class WorkflowStepTypesTests
                 ("anchor-citations", "AnchorCitationsStepRunner: IAnchorCitationService.CheckAsync, AnchorCitationReport.HeldTo, AnchorCitationReports.Line"),
                 ("ci-read", "CiReadStepRunner: ICiLegsService.CheckAsync over GhCiJobSource and GhProcess"),
                 ("ci-wait", "CiWaitStepRunner: ICiChecksService over GhCiJobSource and GhProcess, ICiLegsService.ClassifyRunAsync"),
-                ("commit", "IGitPublisher"),
+                ("commit", "CommitStepRunner: FoldLedger.Owed, CommitTemplate, IGitPublisher over IGitClient.RunAsync"),
                 ("push", "IGitPublisher"),
                 ("pull-request", "IGitPublisher"),
                 ("pause", "the engine itself"),

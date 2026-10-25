@@ -311,6 +311,7 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(
             (FlowInstanceState.Failed, HarnessExit.ConfigInvalid, $"expression 'when' of 'drawn': {Neither}"),
             (coordinator.Instances["drawn"].State, coordinator.Instances["drawn"].Exit, coordinator.Instances["drawn"].Error));
+        Assert.NotNull(coordinator.Instances["drawn"].FinishedAt);
         Assert.Equal((FlowInstanceState.Failed, HarnessExit.ConfigInvalid), (coordinator.Instances["loop"].State, coordinator.Instances["loop"].Exit));
         Assert.Equal(["loop#1.attempt"], runner.Started);
     }

@@ -209,7 +209,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <summary>
     /// What the main tree holds otherwise than its HEAD (<see cref="FoldLedger.DifferingAsync"/>), read before the
     /// repository's section, which is synchronous - and read only where a run but <paramref name="leavingOut"/> has a
-    /// ledger holding a path a fold changed, the one question it answers; null where none does, or where a ledger cannot
+    /// ledger holding a path a commit owes, the one question it answers; null where none does, or where a ledger cannot
     /// be read, which the section says. A commit made between the read and the section only counts a fold uncommitted
     /// that is committed by then, never the other way round: a run that folds meanwhile has a live owner, which the
     /// section refuses.
@@ -230,7 +230,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
                 continue;
             }
 
-            if (FoldLedger.ChangedAny(ledger))
+            if (FoldLedger.OwesAny(ledger))
             {
                 return await FoldLedger.DifferingAsync(_git, layout.MainCheckoutRoot, cancellationToken).ConfigureAwait(false);
             }

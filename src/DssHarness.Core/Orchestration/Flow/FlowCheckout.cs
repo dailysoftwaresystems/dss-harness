@@ -111,7 +111,7 @@ public sealed record FlowCheckout(
             branch,
             head,
             merging,
-            [.. status.Where(entry => entry.Index is not (' ' or '?' or '!')).Select(entry => entry.Path.Text).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
+            [.. status.Where(entry => entry.IsStaged).Select(entry => entry.Path.Text).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
             [.. status.SelectMany(entry => entry.Paths).Select(path => path.Text).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
             remotes,
             remote,

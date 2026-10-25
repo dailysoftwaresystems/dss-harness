@@ -114,4 +114,28 @@ public sealed class FlowInstanceIdTests
         => Assert.Equal(
             "'verify\n': a segment of an id is a step's name, then at most a visit (+n) and an iteration (#n) or an item ([n]), in that order",
             FlowInstanceId.Problem("verify\n"));
+
+    /// <summary>
+    /// Two instances are ordered by the first group instance around them they differ in: an earlier visit, then an
+    /// earlier iteration, comes first - whatever item or step it holds - and another item of a forEach never does; two
+    /// visits of one step by their visits; two steps in the same group instances are left to their declarations.
+    /// </summary>
+    [Theory]
+    [InlineData("fix#1.gate", "fix#2.commit", true)]
+    [InlineData("fix#2.gate", "fix#1.commit", false)]
+    [InlineData("rounds#1.items[1].fold", "rounds#2.items[0].commit", true)]
+    [InlineData("rounds+2#1.fold", "rounds#3.commit", false)]
+    [InlineData("rounds#3.fold", "rounds+2#1.commit", true)]
+    [InlineData("items[0].fold", "items[1].commit", false)]
+    [InlineData("items[1].fold", "items[0].commit", false)]
+    [InlineData("items+2[1].fold", "items+3[0].commit", true)]
+    [InlineData("commit", "commit+2", true)]
+    [InlineData("commit+3", "commit+2", false)]
+    [InlineData("commit", "commit", false)]
+    [InlineData("items[0].fix#2.check", "items[0].fix#10.commit", true)]
+    [InlineData("gate", "commit", null)]
+    [InlineData("items[0].fold", "items[0].commit", null)]
+    [InlineData("prep", "items[0].commit", null)]
+    public void TwoInstances_AreOrderedByTheGroupInstancesAroundThem(string earlier, string later, bool? precedes)
+        => Assert.Equal(precedes, FlowInstanceId.Precedes(earlier, later));
 }

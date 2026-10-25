@@ -2974,7 +2974,7 @@ public sealed partial class HelpTests
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
+            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase, commit ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
             orchestrators,
             StringComparison.Ordinal);
     }
@@ -3369,10 +3369,11 @@ public sealed partial class HelpTests
         Assert.Null(typeof(RebaseAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
         Assert.NotNull(typeof(DeleteAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
 
-        // Whether a fold is committed is the main tree's to say, whoever committed it.
+        // Whether a fold is committed is the run's commits' and the main tree's to say, whoever committed it.
         Assert.Contains(
-            "a run stopped with a fold in its ledger whose change no commit took yet - a path it changed that the main tree still "
-                + "holds otherwise than its HEAD, whoever commits it - is unfinished, as one with an agent open is. A deletion run again "
+            "a run stopped with a fold in its ledger whose change no commit took yet - a path it changed that no commit step of the "
+                + "run took, that git does not ignore and that the main tree still holds otherwise than its HEAD, whoever commits it - "
+                + "is unfinished, as one with an agent open is. A deletion run again "
                 + "once its agent is deleted - its ending cut off before it was recorded - is done, with what its directory kept of its apply.",
             workflows,
             StringComparison.Ordinal);
@@ -3383,7 +3384,37 @@ public sealed partial class HelpTests
                 + $"directory ({OrchestratorLayout.StepFoldFileName}).",
             workflows,
             StringComparison.Ordinal);
+        // What a commit step does, held to the codes it ends with, the file it writes and the types that are checks.
+        Assert.Contains(
+            "commit commits the folds upstream of it in the flow - every visit and iteration of them, never another work item's - "
+                + "and no other work: each path one of them changed that no commit of the run took yet, holding what the newest fold "
+                + "that names it left there, so a registry two items' folds wrote is taken whole. A fold upstream whose intent "
+                + "nobody settled - a crash cut it off, and its step has not run again - leaves what it wrote untold, and fails the "
+                + $"step ({HarnessExit.Refused}) naming it, nothing staged. With none owed it is done, "
+                + "committed false, and runs no git at all.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Otherwise the index must be empty and each path hold what its fold left there, and where either does not - a path edited "
+                + $"and not committed, or its fold's change undone - the step fails ({HarnessExit.Refused}) naming each, nothing staged",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"else the step's own message - none, or a blank one, fails it ({HarnessExit.ConfigInvalid}) - and the rest is written to the ledger",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"the message written to the step's directory ({OrchestratorLayout.StepCommitMessageFileName}), with -s where commit.signOff - "
+                + $"and marked committed with each fold path it took; git refusing, a hook among the reasons, unstages it and fails the step ({HarnessExit.CommandFailed}).",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"The checks are the steps of type {string.Join(", ", WorkflowStepTypes.All.Where(type => type.Checks).Select(type => type.Type))} and a reason step marked independent, whatever each is named.",
+            workflows,
+            StringComparison.Ordinal);
         Assert.Contains($"{OrchestratorLayout.FoldsFileName} the ledger of the run's folds:", orchestrators, StringComparison.Ordinal);
+        Assert.Contains("and each commit a commit step staged of them and what became of it", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepCommitMessageFileName} a commit step: the message it commits with", orchestrators, StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepFoldFileName} a fold, delete-agent, refresh or rebase step:", orchestrators, StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/ a refresh or a rebase of others:", orchestrators, StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepGraphFileName} a reason step that has a codebase graph: one line for each call of the graph tool", orchestrators, StringComparison.Ordinal);
@@ -3410,7 +3441,7 @@ public sealed partial class HelpTests
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
                 + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, graphify-codebase, validate-plan, "
                 + "create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, "
-                + "refresh, rebase, each below; a step of "
+                + "refresh, rebase, commit, each below; a step of "
                 + "any other type fails, saying no runner serves its type.",
             prose,
             StringComparison.Ordinal);

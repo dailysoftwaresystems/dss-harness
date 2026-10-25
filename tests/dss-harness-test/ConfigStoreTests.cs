@@ -634,6 +634,7 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "commit": { "template": "{area}", "variables": { "area": { "required": true, "default": "core" } } } }""", "is required and has a default")]
     [InlineData("""{ "commit": { "template": "{1area}", "variables": { "1area": {} } } }""", "commit.variables '1area' must be letters")]
     [InlineData("""{ "commit": { "template": " " } }""", "commit.template is blank")]
+    [InlineData("""{ "commit": { "template": "{area: fix", "variables": { "area": {} } } }""", "commit.template is not written whole: the placeholder at column 1 of line 1 is never closed")]
     public void Load_RejectsACommitPolicyThatCannotWork(string json, string expected)
     {
         var exception = LoadInvalid(json);

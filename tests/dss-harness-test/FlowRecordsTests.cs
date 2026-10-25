@@ -13,6 +13,33 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class FlowRecordsTests
 {
+    /// <summary>
+    /// A numbered id is its kind's letter and a place from 1, written plainly - no sign, no leading zero, nothing a number
+    /// would not be written back as - so each id is written one way only.
+    /// </summary>
+    [Theory]
+    [InlineData("c1", true)]
+    [InlineData("c12", true)]
+    [InlineData("f1", false)]
+    [InlineData("c", false)]
+    [InlineData("c0", false)]
+    [InlineData("c01", false)]
+    [InlineData("c+1", false)]
+    [InlineData("c-1", false)]
+    [InlineData("c 1", false)]
+    [InlineData("C1", false)]
+    [InlineData("c99999999999", false)]
+    [InlineData(null, false)]
+    public void ANumberedId_IsItsLetterAndAPlaceWrittenPlainly(string? id, bool numbered)
+    {
+        Assert.Equal(numbered, OrchestrationRules.IsNumbered(id, 'c'));
+
+        if (numbered)
+        {
+            Assert.Equal(id, OrchestrationRules.Numbered('c', int.Parse(id![1..], System.Globalization.CultureInfo.InvariantCulture)));
+        }
+    }
+
     private static WorkflowDefinition Parse(string text)
         => WorkflowFileParser.Parse("workflows/flow/flow.yml", text);
 

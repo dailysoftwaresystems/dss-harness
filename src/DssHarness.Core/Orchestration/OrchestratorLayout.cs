@@ -28,6 +28,7 @@ namespace DssHarness.Core.Orchestration;
 /// &lt;step&gt;/ledger.json          a leg step: its legs' ledger, as --json gives it
 /// &lt;step&gt;/logs/                a leg step in an agent's worktree: each red leg's phase log that did not pass; a ci-wait: each red job's log
 /// &lt;step&gt;/fold.json            a fold family step: what its dry run named and stood, its question, each consent given, how its apply ended
+/// &lt;step&gt;/commit-message.txt   a commit step: the message it commits with
 /// &lt;step&gt;/graph.jsonl          a reason step that has a codebase graph: one line for each call of the graph tool; nothing writes it yet
 /// &lt;step&gt;/working-set.json     a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it; nothing writes it yet
 /// &lt;step&gt;/targets/&lt;agent&gt;/     a refresh or a rebase of others: one target's fold.json
@@ -36,7 +37,7 @@ namespace DssHarness.Core.Orchestration;
 /// workflow.json               a run's status, for a person and a client to read
 /// definition.json             the workflow's definition, frozen as the run began with it
 /// questions.json              every question the run raised and every answer it was given
-/// folds.json                  the run's write-ahead ledger of its folds
+/// folds.json                  the run's write-ahead ledger of its folds, and of each commit a commit step staged of them
 /// pre-existing-issues.json    each pre-existing issue the run listed
 /// events.jsonl                the run's events, one JSON object to a line
 /// report.md, report.json      the report of the run's last session
@@ -158,8 +159,11 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// </summary>
     public const string StepLogsDirectoryName = "logs";
 
-    /// <summary>The name of the run's write-ahead ledger of its folds.</summary>
+    /// <summary>The name of the run's write-ahead ledger of its folds, and of each commit a commit step staged of them.</summary>
     public const string FoldsFileName = "folds.json";
+
+    /// <summary>The name of the file a <c>commit</c> step writes the message it commits with to, in its directory, as <c>git commit -F</c> reads it.</summary>
+    public const string StepCommitMessageFileName = "commit-message.txt";
 
     /// <summary>
     /// The name of the file a fold family step keeps in its directory - or in its target's, for a step of <c>others</c>:
@@ -360,7 +364,10 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>Every question the run raised and every answer it was given, the open ones among them: the one owner of what a question said.</summary>
     public string QuestionsFile => Path.Combine(Directory, QuestionsFileName);
 
-    /// <summary>The run's write-ahead ledger of its folds: each path a fold means to write, the digest it held before and the one the fold left.</summary>
+    /// <summary>
+    /// The run's write-ahead ledger of its folds: each path a fold means to write, the digest it held before and the one
+    /// the fold left; and of each commit a commit step staged of them, and what became of it.
+    /// </summary>
     public string FoldsFile => Path.Combine(Directory, FoldsFileName);
 
     /// <summary>The run's codebase graph: derived from the tree, so removed with the run and kept by nothing else.</summary>
@@ -436,6 +443,10 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <param name="stepDirectory">The step's own directory.</param>
     /// <param name="agent">The target's name.</param>
     public static string TargetDirectory(string stepDirectory, string agent) => Path.Combine(stepDirectory, StepTargetsDirectoryName, agent);
+
+    /// <summary>The message a <c>commit</c> step commits with, in its own directory: a commit step names no agent.</summary>
+    /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
+    public string InstanceCommitMessageFile(string instance) => Path.Combine(InstanceDirectory(instance, null), StepCommitMessageFileName);
 
     /// <summary>The handoff of one step instance, in its own directory (<see cref="InstanceDirectory"/>).</summary>
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
