@@ -211,7 +211,7 @@ public sealed class AgentCallRecords : IDisposable
         ArgumentNullException.ThrowIfNull(answer);
 
         var masked = _run.Mask.RedactUnescaped(address);
-        var denied = answer as AgentPolicyAnswer.Denied;
+        var denied = answer.Refusal();
 
         _web.Value.Append(JsonSerializer.Serialize(new
         {

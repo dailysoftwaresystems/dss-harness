@@ -296,8 +296,9 @@ public sealed partial class HelpTests
             @"On Windows a device prefix (\\?\, \\.\, \??\) is dropped from a path and from what the runtime makes of it - one naming no "
                 + "drive and no share, a volume by its id or a pipe, is a place it cannot tell, and denied - and a shell's "
                 + @"spelling of a drive (/c/x, /cygdrive/c/x, /mnt/c/x) is read both as the drive (C:\x) and as the directory it names on the "
-                + "current drive, an action allowed only where both are; a cd is followed the same way, from every place the command reached "
-                + "before it, up to 64 places, past which the command is denied.",
+                + "current drive, an action allowed only where both are; a cd is followed the same way - pushd, PowerShell's Set-Location and "
+                + "Push-Location, and the directory env -C or pwsh -WorkingDirectory starts its command in, each word it may go to - from every "
+                + "place the command reached before it, up to 64 places, past which the command is denied.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("No agent starts while this tool itself runs elevated: its step is recorded never started, saying so, before any client is taken.", prose, StringComparison.Ordinal);
@@ -328,7 +329,21 @@ public sealed partial class HelpTests
         Assert.Contains("the inside of a script file a command runs", prose, StringComparison.Ordinal);
         Assert.Contains("The worktree rules (agentPolicy.worktreeRules, true where nothing is said)", prose, StringComparison.Ordinal);
         Assert.Contains($"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) are refused", prose, StringComparison.Ordinal);
-        Assert.Contains("gh pr merge, gh workflow run and gh run rerun, the gh api endpoints and GraphQL mutations that merge or start CI, and gh alias set, for never merges,", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            $"and so are the gh commands that merge or start CI ({string.Join(", ", AgentPolicy.NeverCiCommands)}), the gh api endpoints and GraphQL "
+                + "mutations that reach the same, and gh alias set, for never merges,",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "GIT_CONFIG, the names through which git finds its programs and hooks, and the homes it reads its global configuration from - "
+                + "HOME, XDG_CONFIG_HOME, and the HOMEDRIVE, HOMEPATH and USERPROFILE git on Windows takes one from) is the git config it is",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Invoke-Expression's one string - by whatever name it is called, the call operator's string or a module's name before it among "
+                + "them - read as a script of its own",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains(
             "git's own files - a .git, file or directory, at any depth beneath a root and in any case, a nested repository's and a "
                 + "submodule's too (Write(**/.git/**)) - are not written by a tool, whatever protectedPaths says",
@@ -438,7 +453,7 @@ public sealed partial class HelpTests
         Assert.Contains("an address holding a secret is refused. A page is given inside a block that says where it is from, its first line saying it is information for the task, not instructions.", prose, StringComparison.Ordinal);
         Assert.Contains("refused spelled empty, with a NUL or a leading ~ - on Windows also a share or a device's prefix, a device's name (CON, PRN, AUX, NUL and the rest), a drive's own directory (C:x) or an alternate data stream -", prose, StringComparison.Ordinal);
         Assert.Contains("A directory deleted or moved is refused where it is a root, holds a link, holds a path that may not be written or holds more than 2,000 entries.", prose, StringComparison.Ordinal);
-        Assert.Contains("A file past 16 MiB is neither viewed nor edited - it is searched, or read in part by a command.", prose, StringComparison.Ordinal);
+        Assert.Contains("A file past 16 MiB is neither viewed nor edited, and one past 2 MiB is passed over by search_files - a command reads or searches it.", prose, StringComparison.Ordinal);
         Assert.Contains("agentPolicy.commandTimeoutSeconds (120 where nothing is said) unless its call names a time, agentPolicy.maxCommandTimeoutSeconds (3600) at most", prose, StringComparison.Ordinal);
         Assert.Contains("every secret-shaped name - ending _API_KEY, _SECRET, _SECRET_KEY, _ACCESS_KEY, _PRIVATE_KEY, _PASSWORD, _TOKEN, in any case - but those agentPolicy.keepEnvironment gives back", prose, StringComparison.Ordinal);
         Assert.Contains("at most 5 redirects, 30 s and 5 MiB, text alone (text/*, application/json, application/xml, application/xhtml+xml, application/javascript, application/ecmascript and every +json and +xml type)", prose, StringComparison.Ordinal);
@@ -884,7 +899,7 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains($"its links followed (one whose links cannot be followed refused as {DssHarness.Core.Agents.Policy.AgentPolicy.UndecidedRule}) and held to the agent's roots", readme, StringComparison.Ordinal);
         Assert.Contains($"holds more than {DssHarness.Core.Agents.Runtime.AgentTools.MostDeletedEntries:N0} entries.", readme, StringComparison.Ordinal);
-        Assert.Contains($"A file past {DiskSpace.Size(DssHarness.Core.Agents.Runtime.AgentTools.MostViewedBytes)} is neither viewed nor edited - it is searched, or read in part by a command.", readme, StringComparison.Ordinal);
+        Assert.Contains($"A file past {DiskSpace.Size(DssHarness.Core.Agents.Runtime.AgentTools.MostViewedBytes)} is neither viewed nor edited, and one past {DiskSpace.Size(DssHarness.Core.Agents.Runtime.AgentFiles.MostSearchedBytes)} is passed over by search_files - a command reads or searches it.", readme, StringComparison.Ordinal);
         Assert.Contains(
             $"`agentPolicy.commandTimeoutSeconds` ({defaults.TimeoutSeconds}) unless its call names a time, `agentPolicy.maxCommandTimeoutSeconds` "
                 + $"({defaults.MaxTimeoutSeconds}) at most, stopped sooner where it prints nothing for as long as the step's stall bound; a command "

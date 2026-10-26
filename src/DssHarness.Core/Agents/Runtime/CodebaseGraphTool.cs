@@ -626,7 +626,7 @@ public sealed class CodebaseGraphTool(
             return Answered($"'{card.Qualified}' is a whole file, and no declaration an edit replaces: edit a declaration in it");
         }
 
-        if ((mayWrite?.Invoke(card.Path) ?? new AgentPolicyAnswer.Denied("graph", AgentPolicySource.Builtin, "edit is not given to this step")) is AgentPolicyAnswer.Denied denied)
+        if ((mayWrite?.Invoke(card.Path) ?? new AgentPolicyAnswer.Denied("graph", AgentPolicySource.Builtin, "edit is not given to this step")).Refusal() is { } denied)
         {
             return new GraphToolAnswer(denied.Reason, GraphToolOutcome.Refused, card.Path, denied);
         }

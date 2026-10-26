@@ -157,7 +157,7 @@ public sealed partial class AgentToolRuntime
     /// </summary>
     private string? TooLarge(string full)
         => _host.FileSystem.StandingOf(full) is { Length: > AgentTools.MostViewedBytes } standing
-            ? $"'{Said(full)}' holds {DiskSpace.Size(standing.Length)}, past the {DiskSpace.Size(AgentTools.MostViewedBytes)} a view or an edit holds whole: search it, or read a part of it with a command"
+            ? $"'{Said(full)}' holds {DiskSpace.Size(standing.Length)}, past the {DiskSpace.Size(AgentTools.MostViewedBytes)} a view or an edit holds whole: read or search it with a command"
             : null;
 
     /// <summary>A directory's entries, a directory's name ending with a separator, in ordinal order.</summary>

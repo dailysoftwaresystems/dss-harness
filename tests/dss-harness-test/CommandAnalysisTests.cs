@@ -78,7 +78,7 @@ public sealed class CommandAnalysisTests
         Assert.Equal([["command", "-v", "git", "push"]], Commands("command -v git push"));
         Assert.Equal([["command", "-v", "bash"]], Commands("command -v bash"));
         Assert.Equal([["git", "push"]], Commands("env -v git push"));
-        Assert.Equal([["git", "push"]], Commands("env -C dir -a name git push"));
+        Assert.Equal([["cd", "--", "dir"], ["git", "push"]], Commands("env -C dir -a name git push"));
         Assert.Equal([["sudo", "x"]], Commands("exec sudo x"));
         Assert.Equal([["sudo", "x"]], Commands("eval \"sudo x\""));
         Assert.Equal([["A=1", "sudo", "x"]], Commands("nohup env A=1 timeout 5 sudo x"));
@@ -635,7 +635,7 @@ public sealed class CommandAnalysisTests
         Assert.Equal([["git", "push", "a b"]], Commands("env -S 'git push \"a b\"'"));
         Assert.Equal([["git", "push"]], Commands("env -S 'git push #x'"));
         Assert.Equal([["git", "push"]], Commands("env -v -S 'git push'"));
-        Assert.Equal([["git", "push"]], Commands("env -C dir -S 'git push'"));
+        Assert.Equal([["cd", "--", "dir"], ["git", "push"]], Commands("env -C dir -S 'git push'"));
         Assert.Equal([["git", "push"]], Commands("env -iS 'git push'"));
         Assert.Equal([["git", "push"]], Commands("env -u X -S'git push'"));
         Assert.Contains(["git", "push;"], Commands("find . -exec env -S 'git push;' ';'"));
@@ -794,6 +794,65 @@ public sealed class CommandAnalysisTests
         Assert.Equal([], CommandAnalysis.WebAddresses(["git", "clone", "https://example.com/x.git"]));
         Assert.Equal([], CommandAnalysis.WebAddresses(["dotnet", "restore"]));
         Assert.Equal([], CommandAnalysis.WebAddresses(["curl.tar.gz"]));
+    }
+
+    /// <summary>A home git reads its global configuration from, set or declared, configures git as GIT_CONFIG_GLOBAL does: the git config it is.</summary>
+    [Fact]
+    public void ForRules_AHomeGitReadsItsConfigurationFrom_IsTheGitConfigItIs()
+    {
+        foreach (var name in new[] { "HOME", "XDG_CONFIG_HOME", "HOMEDRIVE", "HOMEPATH", "USERPROFILE" })
+        {
+            Assert.Equal([["git", "config", name, "git", "st"], ["git", "st"]], CommandAnalysis.ForRules([$"{name}=/tmp/evil", "git", "st"]));
+        }
+
+        Assert.Equal([["git", "config", "HOME", "export", "HOME=/tmp/evil"], ["export", "HOME=/tmp/evil"]], CommandAnalysis.ForRules(["export", "HOME=/tmp/evil"]));
+        Assert.Equal([["git", "st"]], CommandAnalysis.ForRules(["HOMEBREW_NO_AUTO_UPDATE=1", "git", "st"]));
+    }
+
+    /// <summary>
+    /// A program that starts what it runs in another directory - env's -C and --chdir, pwsh's -WorkingDirectory - is read as
+    /// the cd before its command it is, wherever it stands among a command's words; pwsh's -w is its window's style, no move.
+    /// </summary>
+    [Fact]
+    public void AProgramThatStartsItsCommandElsewhere_IsReadAsTheCdBeforeIt()
+    {
+        Assert.Equal([["cd", "--", "~"], ["cat", "x"]], Commands("env -C ~ cat x"));
+        Assert.Equal([["cd", "--", "/a"], ["cd", "--", "/b"], ["cat", "x"]], Commands("env --chdir=/a -iC/b cat x"));
+        Assert.Equal([["cd", "--", "dir"], ["cat", "x"]], Commands("env -S '-C dir cat x'"));
+        Assert.Equal([["cd", "--", "dir"], ["cat", "x"]], Commands("nohup env --chdir dir cat x"));
+        Assert.Equal([["cd", "--", "dir"], ["stdbuf", "-o0", "env", "-C", "dir", "cat", "x"]], Commands("stdbuf -o0 env -C dir cat x"));
+        Assert.Equal([["cd", "--", "dir"], ["gc", "x"]], Commands((IReadOnlyList<string>)["pwsh", "-wd", "dir", "-c", "gc x"]));
+        Assert.Equal([["cd", "--", "dir"], ["gc", "x"]], Commands((IReadOnlyList<string>)["pwsh", "-WorkingDir:dir", "-c", "gc x"]));
+        Assert.Equal([["gc", "x"]], Commands((IReadOnlyList<string>)["pwsh", "-w", "Hidden", "-c", "gc x"]));
+    }
+
+    /// <summary>
+    /// Invoke-Expression is the program a command names however it names it - the call operator's string, a module's name
+    /// before it, an escape inside it - and its one string is read as the script it runs.
+    /// </summary>
+    [Fact]
+    public void InvokeExpressionByAnyName_IsGoneInto()
+    {
+        foreach (var script in new[] { "& 'iex' 'sudo x'", "& \"Invoke-Expression\" 'sudo x'", "Microsoft.PowerShell.Utility\\Invoke-Expression 'sudo x'", "ie`x 'sudo x'" })
+        {
+            Assert.Equal([["sudo", "x"], ["echo", "$(\n'sudo' 'x'\n)"]], Commands((IReadOnlyList<string>)["pwsh", "-c", script]));
+        }
+
+        Assert.Equal([["iexplore", "sudo x"]], Commands((IReadOnlyList<string>)["pwsh", "-c", "& 'iexplore' 'sudo x'"]));
+        Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", "iex('sudo x')"]));
+    }
+
+    /// <summary>
+    /// pwsh's valued parameters pass their value, so the script it reads from its input is read rather than the value taken
+    /// for its script file; and a parameter spelled with '--' is the one spelled with '-'.
+    /// </summary>
+    [Fact]
+    public void PwshsValuedParameters_PassTheirValue_AndADoubleDashIsADash()
+    {
+        Assert.Contains(["sudo", "x"], Commands("pwsh -ExecutionPolicy Bypass <<< 'sudo x'"));
+        Assert.Contains(["sudo", "x"], Commands("pwsh -ConfigurationName x -OutputFormat Text <<< 'sudo x'"));
+        Assert.Contains(["sudo", "x"], Commands("pwsh --command 'sudo x'"));
+        Assert.Contains(["sudo", "x"], Commands("pwsh -wd -c 'sudo x'"));
     }
 
     /// <summary>The commands a shell string runs, each whole: its words, then its redirects as they are spelled.</summary>

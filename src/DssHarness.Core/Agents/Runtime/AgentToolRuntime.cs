@@ -477,9 +477,16 @@ public sealed partial class AgentToolRuntime : IDisposable
             $"{member.Key}{(required.Contains(member.Key) ? string.Empty : "?")} ({member.Value!["type"]!.GetValue<string>()})"));
     }
 
-    /// <summary>Whether a tool's fault is told the model as its answer: a file system's, a process's, a bound's and git's, never a defect of this tool's own.</summary>
+    /// <summary>
+    /// Whether a tool's fault is told the model as its answer: a file system's, a process's, a bound's and git's - never a
+    /// defect of this tool's own, which is raised: a guard's refusal of a null or of a value out of its range, a record's
+    /// line holding a line break among them (<see cref="AppendLog.Append"/>). A path spelled as no place is refused before
+    /// any tool acts on it (<see cref="ConfinedPaths"/>), never told as a fault.
+    /// </summary>
     private static bool Faulted(Exception ex)
-        => ex is IOException or UnauthorizedAccessException or HarnessException or ProgramStartException or ArgumentException or NotSupportedException or System.Text.DecoderFallbackException or System.Text.EncoderFallbackException;
+        => ex is IOException or UnauthorizedAccessException or HarnessException or ProgramStartException or NotSupportedException
+            or System.Text.DecoderFallbackException or System.Text.EncoderFallbackException
+            or (ArgumentException and not (ArgumentNullException or ArgumentOutOfRangeException));
 
     /// <summary>A place a read reaches, decided: held to the roots, then asked of the policy.</summary>
     private Decided ReadPlace(string path) => Decide(_paths.Read(path), full => _policy.Read(full));
@@ -490,10 +497,10 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// <summary>A place a write reaches, decided: held to the writable roots and through no link, then asked of the policy.</summary>
     private Decided WritePlace(string path) => Decide(_paths.Write(path), full => _policy.Write(full));
 
-    /// <summary>A place decided: refused where it is not confined to the roots, else as <paramref name="policy"/> answers it.</summary>
+    /// <summary>A place decided: refused where it is not confined to the roots, else as <paramref name="policy"/> answers it - reached only where it allows.</summary>
     private static Decided Decide(ConfinedPath confined, Func<string, AgentPolicyAnswer> policy)
         => confined.Full is not { } full ? new Decided(null, confined.Denied)
-            : policy(full) is AgentPolicyAnswer.Denied denied ? new Decided(null, denied)
+            : policy(full).Refusal() is { } denied ? new Decided(null, denied)
             : new Decided(full, null);
 
     /// <summary>A member's text, or null where the input leaves it out.</summary>

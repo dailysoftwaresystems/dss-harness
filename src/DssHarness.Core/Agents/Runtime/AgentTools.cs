@@ -74,8 +74,9 @@ public static class AgentTools
     public static int MostViewedCharacters => AgentCallRecords.ResultCap - AgentToolRuntime.ViewNotesRoom;
 
     /// <summary>
-    /// The most bytes a file a view reads, or an edit rewrites, may hold: one larger is held whole by neither - it is
-    /// searched, or read in part by a command.
+    /// The most bytes a file a view reads, or an edit rewrites, may hold: one larger is held whole by neither, nor searched
+    /// by <c>search_files</c>, which passes over any past <see cref="AgentFiles.MostSearchedBytes"/> - a command reads or
+    /// searches it.
     /// </summary>
     public const long MostViewedBytes = 16 * 1024 * 1024;
 

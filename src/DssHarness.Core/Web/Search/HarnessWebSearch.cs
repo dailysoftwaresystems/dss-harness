@@ -272,7 +272,7 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
             return (told, 0);
         }
 
-        var kept = told.Results.Where(result => step.Rules.Result(result.Link) is not AgentPolicyAnswer.Denied).ToList();
+        var kept = told.Results.Where(result => step.Rules.Result(result.Link) is AgentPolicyAnswer.Allowed).ToList();
 
         return (WebSearchAnswer.Read([.. kept.Take(step.ResultsPerSource)]) with { Total = told.Total, Held = told.Held, LeftOut = told.LeftOut }, told.Results.Count - kept.Count);
     }
@@ -428,21 +428,22 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
                 // An address the step's rules refuse is no request, and is not counted; one they allow is, while any is left.
                 var answer = Decided(step, asked);
 
-                if (answer is not AgentPolicyAnswer.Denied && !step.Take())
+                if (answer is AgentPolicyAnswer.Allowed && !step.Take())
                 {
                     answer = new AgentPolicyAnswer.Denied(BudgetRule, AgentPolicySource.Config, Spent(step));
                 }
 
-                if (answer is AgentPolicyAnswer.Denied)
+                // Whatever the rules do not allow is refused as the denial it reads as, which the fetch is handed in its place.
+                if (answer.Refusal() is { } denied)
                 {
-                    refused = answer;
-                    await step.Records.DecidedAsync(source.Name, asked, answer).ConfigureAwait(false);
+                    refused = denied;
+                    await step.Records.DecidedAsync(source.Name, asked, denied).ConfigureAwait(false);
+
+                    return denied;
                 }
-                else
-                {
-                    allowed.Add(asked);
-                    turning = (asked, answer);
-                }
+
+                allowed.Add(asked);
+                turning = (asked, answer);
 
                 return answer;
             },

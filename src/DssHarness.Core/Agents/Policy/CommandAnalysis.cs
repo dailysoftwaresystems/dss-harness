@@ -17,8 +17,10 @@ namespace DssHarness.Core.Agents.Policy;
 /// a word with its operator before it (<c>&gt;out.txt</c>). The <c>NAME=value</c> words before a
 /// program stay the command's own, its environment, and <c>env</c>'s pairs become them; wrappers
 /// (<c>env</c>, <c>nohup</c>, <c>time</c>, <c>timeout</c>, <c>nice</c>, <c>xargs</c>,
-/// <c>command</c>, <c>builtin</c>, <c>exec</c> and <c>eval</c>) are stripped with their own
-/// options; it goes into
+/// <c>command</c>, <c>builtin</c>, <c>exec</c> and <c>busybox</c>) are stripped with their own
+/// options, a directory one starts its command in - <c>env -C</c>, as pwsh's
+/// <c>-WorkingDirectory</c> - read as the <c>cd</c> before the command it is; <c>eval</c>'s words
+/// are joined into the one script it runs, read as a script is; it goes into
 /// <c>sh</c>/<c>bash</c>/<c>zsh -c</c> - and reads the words after the script as scripts too, for
 /// the script may run them - into <c>cmd /c</c> and <c>/k</c> by cmd's own quoting, and into
 /// <c>powershell</c>/<c>pwsh</c>'s <c>-Command</c> and a decoded <c>-EncodedCommand</c>, each by
@@ -126,8 +128,9 @@ public static partial class CommandAnalysis
     /// The assignments a command makes for what runs with it and after it, each as <c>NAME=value</c>: its own
     /// environment's, and what its program declares - an export or a declaration of its kind, cmd's <c>set</c> (its
     /// value the rest of its line), fish's <c>set</c>, csh's <c>setenv</c> and <c>setx</c> (a name, then its value),
-    /// and PowerShell's <c>Set-Item</c>, <c>New-Item</c>, <c>Set-Content</c> and <c>Add-Content</c> of an <c>env:</c>
-    /// item.
+    /// PowerShell's <c>Set-Item</c>, <c>New-Item</c>, <c>Set-Content</c> and <c>Add-Content</c> of an <c>env:</c>
+    /// item, and its <c>Copy-Item</c>, <c>Move-Item</c> and <c>Rename-Item</c> onto one (<see cref="ItemMovers"/>),
+    /// whose value this cannot see.
     /// </summary>
     internal static IReadOnlyList<string> Declarations(IReadOnlyList<string> words)
     {
@@ -210,6 +213,57 @@ public static partial class CommandAnalysis
 
     /// <summary>Windows PowerShell's switches.</summary>
     private static readonly string[] WindowsPowerShellSwitches = ["nologo", "noexit", "sta", "mta", "noprofile", "noninteractive"];
+
+    /// <summary>
+    /// pwsh's parameters that take a value, by any prefix of them - but its command's, its file's, its version's and its
+    /// working directory's, which are read apart - each with the short names pwsh gives it.
+    /// </summary>
+    private static readonly string[] PwshValued =
+        ["configurationname", "configurationfile", "custompipename", "executionpolicy", "ep", "inputformat", "if", "outputformat", "of",
+         "settingsfile", "windowstyle", "encodedarguments", "ea"];
+
+    /// <summary>Whether <paramref name="parameter"/>, as <see cref="PowerShellParameter"/> reads it, is pwsh's <c>-WorkingDirectory</c>: <c>wd</c>, or a prefix of it from <c>wo</c>.</summary>
+    private static bool IsWorkingDirectory(string parameter)
+        => parameter == "wd" || (parameter.Length >= 2 && "workingdirectory".StartsWith(parameter, StringComparison.Ordinal));
+
+    /// <summary>
+    /// The name of the PowerShell parameter <paramref name="word"/> gives, in lower case, as powershell and pwsh read one:
+    /// after its <c>-</c>, its <c>/</c> or its <c>--</c>; null where the word is no parameter.
+    /// </summary>
+    private static string? PowerShellParameter(string word)
+        => word.StartsWith("--", StringComparison.Ordinal) ? word[2..].ToLowerInvariant()
+            : word.StartsWith('-') || word.StartsWith('/') ? word[1..].ToLowerInvariant()
+            : null;
+
+    /// <summary>
+    /// The directories powershell's or pwsh's <c>-WorkingDirectory</c> names among <paramref name="words"/> (<c>-wd</c>, any
+    /// prefix of it from <c>-wo</c>, its value the next word or glued after a <c>:</c>): sought among every word, past where
+    /// its command begins too, so a place it may start in is never missed.
+    /// </summary>
+    private static List<string> PowerShellDirectories(IReadOnlyList<string> words)
+    {
+        var directories = new List<string>();
+
+        for (var at = 1; at < words.Count; at++)
+        {
+            if (PowerShellParameter(words[at]) is not { } parameter)
+            {
+                continue;
+            }
+
+            var named = parameter.Split(':', 2);
+
+            if (IsWorkingDirectory(named[0]))
+            {
+                if ((named.Length == 2 ? words[at].Split(':', 2)[1] : words.ElementAtOrDefault(at + 1)) is { } directory)
+                {
+                    directories.Add(directory);
+                }
+            }
+        }
+
+        return directories;
+    }
 
     /// <summary>PowerShell's cmdlets that copy, move or rename an item, with their aliases.</summary>
     private static readonly string[] ItemMovers = ["Copy-Item", "cpi", "copy", "Move-Item", "mi", "move", "Rename-Item", "rni", "ren"];
@@ -553,12 +607,19 @@ public static partial class CommandAnalysis
 
     /// <summary>
     /// The environment names through which git reads its configuration (every <c>GIT_CONFIG</c>
-    /// name - the count and its keys and values, the parameters, the files it reads), the directory
-    /// it finds its programs in, and the template it copies hooks from: set for a command, each is a
-    /// <c>git -c</c> of the setter's choosing. A name whose value is a program git runs is read as
-    /// that program's command line instead (<see cref="ProgramValued"/>).
+    /// name - the count and its keys and values, the parameters, the files it reads), the homes it
+    /// reads its global configuration from (<c>HOME</c>'s <c>.gitconfig</c>, <c>XDG_CONFIG_HOME</c>'s
+    /// <c>git/config</c>, and the one git on Windows takes from <c>HOMEDRIVE</c> and <c>HOMEPATH</c> or
+    /// <c>USERPROFILE</c> where <c>HOME</c> is not set - read so on every system, as every name here
+    /// is), the directory it finds its programs in, and the template it copies hooks from: set for a
+    /// command, each is a <c>git -c</c> of the setter's choosing - an alias or a pager in a home's
+    /// configuration is one. A name whose value is a program git runs is read as that program's
+    /// command line instead (<see cref="ProgramValued"/>).
+    /// <c>GIT_CONFIG_NOSYSTEM</c>, which only takes the system's configuration away, is one of the
+    /// <c>GIT_CONFIG</c> names all the same: a setting the system holds - a hooks path, a protocol
+    /// refused - is configuration too, and taking it away configures git as surely as adding one.
     /// </summary>
-    private static readonly string[] GitConfigurationNames = ["GIT_EXEC_PATH", "GIT_TEMPLATE_DIR"];
+    private static readonly string[] GitConfigurationNames = ["GIT_EXEC_PATH", "GIT_TEMPLATE_DIR", "HOME", "XDG_CONFIG_HOME", "HOMEDRIVE", "HOMEPATH", "USERPROFILE"];
 
     /// <summary>
     /// Whether <paramref name="word"/> sets git's configuration through the environment: <c>NAME=value</c> of such a
@@ -740,6 +801,13 @@ public static partial class CommandAnalysis
 
             var name = Name(words[0]);
 
+            // A program that starts what it runs in another directory - env -C, pwsh -WorkingDirectory - moves it there
+            // first, as a cd before it would.
+            foreach (var directory in MovesOf(words))
+            {
+                yield return Moved(directory);
+            }
+
             // A script the command names, gone into: sh -c 'a && b' and the words after its script, a
             // here-string or here-document a shell reads, cmd /c a & b, powershell -Command and a
             // decoded -EncodedCommand, trap's, watch's, script's and flock's command line.
@@ -764,7 +832,7 @@ public static partial class CommandAnalysis
             }
 
             // env -S takes a command line of its own, which it splits into the words of the command it
-            // runs, the words after it among them.
+            // runs, the words after it among them - its own options among them, read as env reads them.
             if (Is(name, "env") && SplitString(words) is { } split)
             {
                 if (depth > Depth)
@@ -772,7 +840,7 @@ public static partial class CommandAnalysis
                     throw Nested(words);
                 }
 
-                foreach (var command in FromWords([.. split.Pairs, .. SplitWords(split.Script), .. split.Tail], redirects, depth + 1, environment))
+                foreach (var command in FromWords(SplitInto(split), redirects, depth + 1, environment))
                 {
                     yield return command;
                 }
@@ -820,6 +888,19 @@ public static partial class CommandAnalysis
             || (Is(Name(words[0]), "Set-Alias", "New-Alias", "sal", "nal") && words.Count > 1))
         {
             throw new NotSupportedException($"'{string.Join(' ', words)}' gives a name a command run in its place, which this does not read");
+        }
+
+        // A program among its words that starts what it runs in another directory - stdbuf's env -C - moves the command's
+        // paths there, before the command is read.
+        for (var at = 1; at < words.Count; at++)
+        {
+            if (MayMove(words[at]))
+            {
+                foreach (var directory in MovesOf([.. words.Skip(at)]))
+                {
+                    yield return Moved(directory);
+                }
+            }
         }
 
         yield return new AnalyzedCommand(environment.Count == 0 ? words : [.. environment, .. words], redirects);
@@ -876,7 +957,7 @@ public static partial class CommandAnalysis
                     throw Nested(rest);
                 }
 
-                foreach (var command in FromWords([.. innerSplit.Pairs, .. SplitWords(innerSplit.Script), .. innerSplit.Tail], redirects, depth + 1, environment))
+                foreach (var command in FromWords(SplitInto(innerSplit), redirects, depth + 1, environment))
                 {
                     yield return command;
                 }
@@ -1092,7 +1173,8 @@ public static partial class CommandAnalysis
     /// <c>-execdir</c>, <c>-ok</c> and <c>-okdir</c> to their <c>;</c> (or the <c>+</c> after a <c>{}</c>), fd's
     /// <c>-x</c> and <c>-X</c> to theirs, rg's <c>--pre</c>, and parallel's command before its <c>:::</c> - each word it
     /// fills in (find's <c>{}</c>; fd's and parallel's <c>{}</c>, <c>{/}</c>, <c>{.}</c> and their kind) read as
-    /// <see cref="InputWord"/>, and the one fd, rg and parallel add after the words where they name none.
+    /// <see cref="InputWord"/>, and the one fd, rg and parallel add after the words where they name none - and the program
+    /// rg's <c>--hostname-bin</c> names, which it runs with no word of its own.
     /// </summary>
     private static IEnumerable<IReadOnlyList<string>> Executed(IReadOnlyList<string> words)
     {
@@ -1262,15 +1344,25 @@ public static partial class CommandAnalysis
         => EnvWords(words) is { Split: { } split } read ? (read.Pairs, split, [.. words.Skip(read.At)]) : null;
 
     /// <summary>
+    /// The words env runs once it splits <c>-S</c>'s string: env again, the pairs before the string, the string's own
+    /// words and the words after it - for env reads its options on into the words it split, as a <c>-C</c> or an
+    /// <c>-i</c> a string holds is env's own (<c>#!/usr/bin/env -S -i bash</c>).
+    /// </summary>
+    private static IReadOnlyList<string> SplitInto((IReadOnlyList<string> Pairs, string Script, IReadOnlyList<string> Tail) split)
+        => ["env", .. split.Pairs, .. SplitWords(split.Script), .. split.Tail];
+
+    /// <summary>
     /// env's own words before its command, as GNU env reads them: its NAME=value pairs; its options - <c>-i</c>,
     /// <c>-0</c>, <c>-v</c> and their long names, the signal ones, and <c>-u</c>, <c>-C</c> and <c>-a</c> with their
     /// values, glued or the next word's, in a short cluster too; and <c>-S</c>'s command line, the split string. At is
     /// where its command begins - after the split string where one is given, or past every word where a help or a
-    /// version runs nothing. An option it does not know is where its command begins, as a word this reads.
+    /// version runs nothing. An option it does not know is where its command begins, as a word this reads. Directories
+    /// are those <c>-C</c> and <c>--chdir</c> start its command in, each in the order given.
     /// </summary>
-    private static (List<string> Pairs, int At, string? Split) EnvWords(IReadOnlyList<string> words)
+    private static (List<string> Pairs, int At, string? Split, List<string> Directories) EnvWords(IReadOnlyList<string> words)
     {
         var pairs = new List<string>();
+        var directories = new List<string>();
 
         for (var at = 1; at < words.Count; at++)
         {
@@ -1284,7 +1376,7 @@ public static partial class CommandAnalysis
 
             if (option == "--")
             {
-                return (pairs, at + 1, null);
+                return (pairs, at + 1, null, directories);
             }
 
             if (option.StartsWith("--", StringComparison.Ordinal))
@@ -1294,18 +1386,23 @@ public static partial class CommandAnalysis
 
                 if (named == "--split-string")
                 {
-                    return equals > 0 ? (pairs, at + 1, option[(equals + 1)..])
-                        : at + 1 < words.Count ? (pairs, at + 2, words[at + 1])
-                        : (pairs, words.Count, null);
+                    return equals > 0 ? (pairs, at + 1, option[(equals + 1)..], directories)
+                        : at + 1 < words.Count ? (pairs, at + 2, words[at + 1], directories)
+                        : (pairs, words.Count, null, directories);
                 }
 
                 if (named is "--help" or "--version")
                 {
-                    return (pairs, words.Count, null);
+                    return (pairs, words.Count, null, directories);
                 }
 
                 if (named is "--unset" or "--chdir" or "--argv0")
                 {
+                    if (named == "--chdir" && (equals > 0 ? option[(equals + 1)..] : words.ElementAtOrDefault(at + 1)) is { } directory)
+                    {
+                        directories.Add(directory);
+                    }
+
                     at += equals > 0 ? 0 : 1;
                     continue;
                 }
@@ -1315,12 +1412,12 @@ public static partial class CommandAnalysis
                     continue;
                 }
 
-                return (pairs, at, null);
+                return (pairs, at, null, directories);
             }
 
             if (option.Length < 2 || option[0] != '-')
             {
-                return (pairs, at, null);
+                return (pairs, at, null, directories);
             }
 
             for (var letter = 1; letter < option.Length; letter++)
@@ -1330,21 +1427,49 @@ public static partial class CommandAnalysis
                     case 'i' or '0' or 'v':
                         continue;
                     case 'S':
-                        return letter + 1 < option.Length ? (pairs, at + 1, option[(letter + 1)..])
-                            : at + 1 < words.Count ? (pairs, at + 2, words[at + 1])
-                            : (pairs, words.Count, null);
+                        return letter + 1 < option.Length ? (pairs, at + 1, option[(letter + 1)..], directories)
+                            : at + 1 < words.Count ? (pairs, at + 2, words[at + 1], directories)
+                            : (pairs, words.Count, null, directories);
                     case 'u' or 'C' or 'a':
+                        if (option[letter] == 'C' && (letter + 1 < option.Length ? option[(letter + 1)..] : words.ElementAtOrDefault(at + 1)) is { } directory)
+                        {
+                            directories.Add(directory);
+                        }
+
                         at += letter + 1 < option.Length ? 0 : 1;
                         letter = option.Length;
                         continue;
                     default:
-                        return (pairs, at, null);
+                        return (pairs, at, null, directories);
                 }
             }
         }
 
-        return (pairs, words.Count, null);
+        return (pairs, words.Count, null, directories);
     }
+
+    /// <summary>
+    /// The directories the program <paramref name="words"/> begin with starts what it runs in - env's <c>-C</c> and
+    /// <c>--chdir</c>, PowerShell's <c>-WorkingDirectory</c> - each a move the policy follows as it follows a <c>cd</c>
+    /// (<see cref="Moved"/>); none where the program moves nothing.
+    /// </summary>
+    private static IReadOnlyList<string> MovesOf(IReadOnlyList<string> words)
+        => words.Count == 0 ? []
+            : Is(Name(words[0]), "env") ? EnvWords(words).Directories
+            : Is(Name(words[0]), "powershell", "pwsh") ? PowerShellDirectories(words)
+            : [];
+
+    /// <summary>
+    /// Whether <paramref name="word"/> names a program that may start what it runs in another directory (<see cref="MovesOf"/>):
+    /// asked before the words after it are copied for that question, so a long command is not copied at each of its words.
+    /// </summary>
+    private static bool MayMove(string word) => Is(Name(word), "env", "powershell", "pwsh");
+
+    /// <summary>
+    /// A move to <paramref name="directory"/>, as the command it is - <c>cd -- directory</c>, before the command it starts
+    /// there - so every path after it is read where it lands, as after the shell's own cd, by the one reader of moves.
+    /// </summary>
+    private static AnalyzedCommand Moved(string directory) => new(["cd", "--", directory], []);
 
     /// <summary>
     /// The scripts <paramref name="name"/> would run with <paramref name="words"/>, each ready for
@@ -1467,7 +1592,7 @@ public static partial class CommandAnalysis
                     return Input(name, redirects, program, PowerShellAsPosix);
                 }
 
-                if (!option.StartsWith('-') && !option.StartsWith('/'))
+                if (PowerShellParameter(option) is not { } parameter)
                 {
                     if (Is(name, "powershell"))
                     {
@@ -1477,8 +1602,6 @@ public static partial class CommandAnalysis
                     file ??= option;
                     continue;
                 }
-
-                var parameter = option[1..].ToLowerInvariant();
 
                 if (parameter.Length == 0)
                 {
@@ -1532,6 +1655,14 @@ public static partial class CommandAnalysis
                             ? throw new NotSupportedException($"'{option}' is an option of Windows PowerShell's own this does not know, which may take the word after it as its value")
                             : null;
                     }
+                }
+                else if ((IsWorkingDirectory(parameter) || PwshValued.Any(valued => valued.StartsWith(parameter, StringComparison.Ordinal)))
+                    && at + 1 < words.Count && PowerShellParameter(words[at + 1]) is null)
+                {
+                    // pwsh's valued parameters - its working directory, its execution policy - pass their value, which is no
+                    // script file: taken for one, the script pwsh reads from its input would go unread. A word that is
+                    // itself a parameter is read as one, never passed as a value, so the command it may begin is read.
+                    at++;
                 }
             }
 

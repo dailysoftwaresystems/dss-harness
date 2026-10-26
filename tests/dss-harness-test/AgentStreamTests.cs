@@ -206,7 +206,8 @@ public sealed class AgentStreamTests
 
     /// <summary>
     /// A line that holds a line break of its own is refused before anything is written: cut after the inner break by a
-    /// kill, it would be taken back as half a record that looks whole.
+    /// kill, it would be taken back as half a record that looks whole. No writer here makes one, so the log's refusal is a
+    /// guard against its writer's defect, raised as a value out of its range, which no tool tells its model as its fault.
     /// </summary>
     [Fact]
     public void ALineWithALineBreakOfItsOwn_IsRefused_AndNothingIsWritten()
@@ -218,8 +219,8 @@ public sealed class AgentStreamTests
 
         conversation.Append(["{\"turn\": 1}"]);
 
-        var broken = Assert.Throws<ArgumentException>(() => conversation.Append(["{\"turn\":\n 2}"]));
-        var returned = Assert.Throws<ArgumentException>(() => conversation.Append(["{\"turn\":\r 3}"]));
+        var broken = Assert.Throws<ArgumentOutOfRangeException>(() => conversation.Append(["{\"turn\":\n 2}"]));
+        var returned = Assert.Throws<ArgumentOutOfRangeException>(() => conversation.Append(["{\"turn\":\r 3}"]));
         var unread = Assert.Throws<ArgumentException>(() => conversation.Append(["{\"turn\": 4}, {\"turn\": 5}"]));
         var empty = Assert.Throws<ArgumentException>(() => conversation.Append([]));
 
@@ -469,7 +470,7 @@ public sealed class AgentStreamTests
         var conversation = StoredConversation.Open(Disk(), directory, "the system prompt", "[]");
         conversation.Append(["{\"role\": \"user\"}"]);
 
-        Assert.Throws<ArgumentException>(() => conversation.Append(message == "none" ? [] : ["{\"ok\": true}", message]));
+        Assert.ThrowsAny<ArgumentException>(() => conversation.Append(message == "none" ? [] : ["{\"ok\": true}", message]));
 
         Assert.Equal(["{\"role\": \"user\"}"], conversation.Messages());
         conversation.Dispose();

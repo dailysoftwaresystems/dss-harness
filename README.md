@@ -558,8 +558,10 @@ any case on every system, a Windows short name read as its long one. On Windows 
 no drive and no share, a volume by its id or a pipe, is a place it cannot tell, and denied - and a
 shell's spelling of a drive (`/c/x`, `/cygdrive/c/x`, `/mnt/c/x`) is read both as the drive (`C:\x`)
 and as the directory it names on the current drive, an action allowed only where both are; a `cd`
-is followed the same way, from every place the command reached before it, up to 64 places, past
-which the command is denied. A
+is followed the same way - `pushd`, PowerShell's `Set-Location` and `Push-Location`, and the
+directory `env -C` or `pwsh -WorkingDirectory` starts its command in, each word it may go to -
+from every place the command reached before it, up to 64 places, past which the command is
+denied. A
 shell command is read whole before it is matched, as the shell's own parser reads it - split on
 `;`, `&&`, `||`, `|`, `&` and line ends, a comment and a here-document's lines never commands, the
 bodies of `$(...)`, backticks, `<(...)`, subshells, functions, loops and branches read as commands
@@ -579,7 +581,8 @@ decoded `-EncodedCommand`, and what `trap`, `watch`, `script` and `flock` run, b
 quoting - PowerShell by a reader of its own grammar: its commands, pipelines, strings, here-strings,
 variables, `$(...)`, `@(...)`, `(...)`, script blocks, hashtables, assignments and keywords'
 conditions and blocks, each statement a block holds read as one that may run, `Invoke-Expression`'s
-one string read as a script of its own - to four levels, and into a shell another program runs with its script
+one string - by whatever name it is called, the call operator's string or a module's name before
+it among them - read as a script of its own - to four levels, and into a shell another program runs with its script
 (`find -exec sh -c`, find's words read to their `;`), a command `find -exec`, `fd -x`,
 `rg --pre` or `--hostname-bin` or `parallel` runs read as its own, each word it fills in an expansion, `env -S`'s
 string split by env's own rules, and `$((...))`, `((...))` and `$[...]` read as arithmetic, their
@@ -604,10 +607,12 @@ what it does not see is the inside of a script file a command runs. The worktree
 (`agentPolicy.worktreeRules`, on unless turned off) keep an agent's worktree a thing the engine
 can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
 `help agent-clients`) - a git configured where it runs, by `-c` or `--config-env` of any key but
-the ones that only shape what git prints, or by its environment, the `git config` it is and
-still the command it runs -
-and `gh pr merge`, `gh workflow run`, `gh run rerun`, the `gh api` endpoints and GraphQL mutations
-that merge or start CI and `gh alias set` are refused (reading git stays allowed), git's own
+the ones that only shape what git prints, or by its environment - a home it reads its global
+configuration from (`HOME`, `XDG_CONFIG_HOME`, Windows' `USERPROFILE`) among it - the `git config`
+it is and still the command it runs -
+and the `gh` commands that merge or start CI (`gh pr merge`, `gh pr update-branch`, `gh repo sync`,
+`gh workflow run`, `gh run rerun`), the `gh api` endpoints and GraphQL mutations that reach the
+same and `gh alias set` are refused (reading git stays allowed), git's own
 files - a `.git`, file or directory, at any depth beneath a root and in any case, a nested
 repository's and a submodule's too (`Write(**/.git/**)`) - are not written by a tool whatever
 `protectedPaths` says, and an agent does not edit its own policy
@@ -698,7 +703,7 @@ writable one and through no link below it (a link put in place between the check
 the known limit); then the policy is asked of it, a deleting or moving tool a write to every path it
 touches, at both ends of a move. A directory deleted or moved is refused where it is a root, holds a link,
 holds a path that may not be written or holds more than 2,000 entries. A file past 16 MiB is
-neither viewed nor edited - it is searched, or read in part by a command. A replace or an insert needs
+neither viewed nor edited, and one past 2 MiB is passed over by search_files - a command reads or searches it. A replace or an insert needs
 its file viewed first, by its content - one that changed since is refused, nothing written - and an
 edit keeps the file's encoding, its line endings and whether it ends with a newline. A command is
 an argument list, never a shell string, decided whole where it starts and run as a phase is -

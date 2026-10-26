@@ -1496,6 +1496,9 @@ and no share undecided, and a shell's spelling of a drive (`/c/x`, `/cygdrive/c/
 read both as the drive and as the directory it names on the current drive, each decided and the
 action allowed only where both are (`AgentPolicy.Spelled`, `AgentPolicy.Plain`); where a link
 resolves, where a `cd` moves to and the ground's own directories are spelled the same way, a `cd`
+(`AgentPolicy.Movers`: `pushd`, `Set-Location` and `Push-Location` too, each word it may go to; and
+the directory `env -C` or `pwsh -WorkingDirectory` starts its command in, which `CommandAnalysis`
+reads as the `cd` before it, so `AgentPolicy.MovedTo` is the one reader of every move)
 from every place the command reached before it, up to `AgentPolicy.MaxPlaces`, past which the
 command is undecided - and a refusal's places compare in any
 case on every system, each Windows short name read as its long one (as `Path.GetFullPath` spells it); what a
@@ -1541,7 +1544,8 @@ block and a hashtable a substitution whose statements are read, an expression's 
 data, an assignment's right side a statement (`$env:NAME = value` the assignment it is), keywords'
 conditions and blocks read, `%` and `?` the cmdlets they are, and `Invoke-Expression`'s one string
 read as a script of its own (`CommandAnalysis.PowerShellReader.InvokeExpression`, to four levels as a
-script gone into is); a static method, an instance method off `CommandAnalysis.PowerShellMethods`, a member a string,
+script gone into is), a command's program read as any word is and then known by its name, so the
+call operator's string, a module's name before it or an escape inside it is `Invoke-Expression` too; a static method, an instance method off `CommandAnalysis.PowerShellMethods`, a member a string,
 a variable or an expression names, a null-conditional one alike, a function's or an alias's text
 (a foreach's variable and every target of an assignment among them), a class or `using`, its
 stop-parsing `--%`, a script `Invoke-Expression` is handed by no one string and what PowerShell
@@ -1582,8 +1586,9 @@ a cmd line's `@` dropped, `git-push` read as `git push`), so a command another p
 denies as what the rule may be; git's own options, valued ones with their values, are dropped
 before its subcommand, gh's flags before its command's path (`gh pr -R o/r merge` is
 `gh pr merge`), and a git configured where it runs - a `-c` or `--config-env` of any key but the
-ones that only shape what git prints, `--exec-path`, the `GIT_CONFIG` names, `GIT_EXEC_PATH` and
-`GIT_TEMPLATE_DIR` its assignments set, never a word of data that spells one - is the `git config` it is, and still the command it runs,
+ones that only shape what git prints, `--exec-path`, the `GIT_CONFIG` names, `GIT_EXEC_PATH`,
+`GIT_TEMPLATE_DIR` and the homes git reads its global configuration from (`HOME`, `XDG_CONFIG_HOME`,
+`HOMEDRIVE`, `HOMEPATH`, `USERPROFILE`) its assignments set, never a word of data that spells one - is the `git config` it is, and still the command it runs,
 each reading met by the rules. A word that names a path is read
 as each candidate it may be - the word, a redirect's file, an option's value, the words a script in
 it names, each word its braces spell and the path a `file://` address names - and a pattern the
@@ -1597,9 +1602,10 @@ refused where the step has no web, and refused where
 the web is held to any rule when it reads what it reaches from a file. What it does not see is said
 in help: the inside of a script file a command runs. The worktree rules
 (`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs and the merges
-and CI starts of `gh` - `gh pr merge`, `gh workflow run`, `gh run rerun`, the `gh api` endpoints and
-GraphQL mutations of the same (`AgentPolicy.GhApiEndpoints`, `AgentPolicy.GhApiMutations`) and `gh
-alias set` - keep git's own files unwritten whatever `protectedPaths` says (`AgentPolicy.GitsOwnRule`:
+and CI starts of `gh` - each endpoint and GraphQL mutation that merges or starts CI with the `gh`
+commands that reach it, one list (`AgentPolicy.GhCiReaches`) that `AgentPolicy.NeverCiCommands`
+(`gh pr merge`, `gh pr update-branch`, `gh repo sync`, `gh workflow run`, `gh run rerun`),
+`AgentPolicy.GhApiEndpoints` and `AgentPolicy.GhApiMutations` are read from, and `gh alias set` - keep git's own files unwritten whatever `protectedPaths` says (`AgentPolicy.GitsOwnRule`:
 a `.git` segment at any depth beneath a root, in any case, so a nested repository's hooks are as
 safe as the root's), and hold the tool's own
 policy and what the next launch loads unwritten by any agent; its own state

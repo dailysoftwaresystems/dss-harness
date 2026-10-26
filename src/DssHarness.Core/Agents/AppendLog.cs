@@ -69,16 +69,19 @@ internal sealed class AppendLog : IDisposable
 
     /// <summary>Appends one line, whole, and has it on the disk before any other line may be written.</summary>
     /// <param name="line">The line, without its newline, and holding none.</param>
-    /// <exception cref="ArgumentException">The line holds a line break of its own; nothing was written.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The line holds a line break of its own, which no line a writer here makes holds - a guard against its writer's
+    /// defect, raised as one; nothing was written.
+    /// </exception>
     public void Append(string line)
     {
         ArgumentNullException.ThrowIfNull(line);
 
         if (line.AsSpan().IndexOfAny('\n', '\r') is var at and >= 0)
         {
-            throw new ArgumentException(
-                $"A line of '{FilePath}' holds a line break at character {at}, and would be read back as two; nothing was written.",
-                nameof(line));
+            throw new ArgumentOutOfRangeException(
+                nameof(line),
+                $"A line of '{FilePath}' holds a line break at character {at}, and would be read back as two; nothing was written.");
         }
 
         var bytes = Encoding.UTF8.GetBytes(line + "\n");

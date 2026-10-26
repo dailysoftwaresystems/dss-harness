@@ -40,7 +40,7 @@ namespace DssHarness.Core.Agents.Policy;
 /// itself, in any root.
 /// </para>
 /// </remarks>
-public sealed partial class AgentPolicy
+public sealed class AgentPolicy
 {
     /// <summary>
     /// The programs that would act as root, refused wherever a command names one, at any position
@@ -62,24 +62,44 @@ public sealed partial class AgentPolicy
          "bisect", "symbolic-ref", "filter-branch", "fast-import", "replace", "notes", "reflog", "remote", "submodule", "sparse-checkout", "read-tree", "prune", "repack", "pack-refs", "maintenance"];
 
     /// <summary>
-    /// The <c>gh</c> commands that merge or start CI, refused by the worktree rules: never merges,
-    /// never starts CI binds the agents too, not only the engine's own steps. <c>gh api</c> reaching
-    /// the same endpoints, and <c>gh alias</c> making a name for any command, are refused beside
-    /// them (<see cref="GhApiEndpoints"/>, <see cref="GhApiMutations"/>).
+    /// Every way <c>gh</c> merges or starts CI, refused by the worktree rules - never merges, never
+    /// starts CI binds the agents too, not only the engine's own steps: each REST endpoint and GraphQL
+    /// mutation that does it, with the <c>gh</c> commands that reach it. The one list the three below
+    /// are read from, so a command that reaches a refused endpoint is refused with it: a pull request's
+    /// merge, its auto-merge and its queue, the update of its branch, a branch's merge, a fork's sync, a
+    /// workflow's dispatch, approval and reruns, and a check asked again.
     /// </summary>
-    public static IReadOnlyList<string> NeverCiCommands { get; } = ["gh pr merge", "gh workflow run", "gh run rerun"];
+    public static IReadOnlyList<GhCiReach> GhCiReaches { get; } =
+    [
+        new("pulls/<n>/merge", Mutation: false, ["gh pr merge"]),
+        new("pulls/<n>/update-branch", Mutation: false, ["gh pr update-branch"]),
+        new("merges", Mutation: false, []),
+        new("merge-upstream", Mutation: false, ["gh repo sync"]),
+        new("dispatches", Mutation: false, ["gh workflow run"]),
+        new("approve", Mutation: false, []),
+        new("rerun", Mutation: false, ["gh run rerun"]),
+        new("rerun-failed-jobs", Mutation: false, ["gh run rerun"]),
+        new("rerequest", Mutation: false, []),
+        new("mergePullRequest", Mutation: true, ["gh pr merge"]),
+        new("enablePullRequestAutoMerge", Mutation: true, ["gh pr merge"]),
+        new("enqueuePullRequest", Mutation: true, ["gh pr merge"]),
+        new("mergeBranch", Mutation: true, []),
+        new("updatePullRequestBranch", Mutation: true, ["gh pr update-branch"]),
+        new("rerequestCheckSuite", Mutation: true, []),
+    ];
 
     /// <summary>
-    /// The REST endpoints through which <c>gh api</c> merges or starts CI, refused by the worktree
-    /// rules at a path's end: a pull request's merge and the update of its branch, a branch's merge,
-    /// a fork's sync, a workflow's dispatch, approval and reruns, and a check asked again.
+    /// The <c>gh</c> commands that merge or start CI (<see cref="GhCiReaches"/>), each once, refused by
+    /// the worktree rules. <c>gh api</c> reaching the same endpoints, and <c>gh alias</c> making a name
+    /// for any command, are refused beside them (<see cref="GhApiEndpoints"/>, <see cref="GhApiMutations"/>).
     /// </summary>
-    public static IReadOnlyList<string> GhApiEndpoints { get; } =
-        ["pulls/<n>/merge", "pulls/<n>/update-branch", "merges", "merge-upstream", "dispatches", "approve", "rerun", "rerun-failed-jobs", "rerequest"];
+    public static IReadOnlyList<string> NeverCiCommands { get; } = [.. GhCiReaches.SelectMany(reach => reach.Commands).Distinct(StringComparer.Ordinal)];
 
-    /// <summary>The GraphQL mutations through which <c>gh api graphql</c> merges or starts CI, refused by the worktree rules wherever a word names one.</summary>
-    public static IReadOnlyList<string> GhApiMutations { get; } =
-        ["mergePullRequest", "enablePullRequestAutoMerge", "enqueuePullRequest", "mergeBranch", "updatePullRequestBranch", "rerequestCheckSuite"];
+    /// <summary>The REST endpoints through which <c>gh api</c> merges or starts CI (<see cref="GhCiReaches"/>), refused by the worktree rules at a path's end.</summary>
+    public static IReadOnlyList<string> GhApiEndpoints { get; } = [.. GhCiReaches.Where(reach => !reach.Mutation).Select(reach => reach.Reached)];
+
+    /// <summary>The GraphQL mutations through which <c>gh api graphql</c> merges or starts CI (<see cref="GhCiReaches"/>), refused by the worktree rules wherever a word names one.</summary>
+    public static IReadOnlyList<string> GhApiMutations { get; } = [.. GhCiReaches.Where(reach => reach.Mutation).Select(reach => reach.Reached)];
 
     /// <summary>
     /// This tool's own orchestrator and agent verbs, and the stop of a run of legs, refused whatever
@@ -326,7 +346,7 @@ public sealed partial class AgentPolicy
     {
         ArgumentNullException.ThrowIfNull(path);
 
-        return Decide(path, (asked, resolved) => ReadDecision(asked, resolved) is AgentPolicyAnswer.Denied denied ? denied : SearchedPast(asked, resolved));
+        return Decide(path, (asked, resolved) => ReadDecision(asked, resolved).Refusal() is { } denied ? denied : SearchedPast(asked, resolved));
     }
 
     /// <summary>
@@ -417,12 +437,12 @@ public sealed partial class AgentPolicy
     /// <summary>A read, decided: a slot and a Claude Code directory never, then the reporter's one root, then the <c>Read</c> rules on the path as asked and as resolved.</summary>
     private AgentPolicyAnswer ReadDecision(string asked, string resolved)
     {
-        if (Unreached(asked, resolved) is AgentPolicyAnswer.Denied unreached)
+        if (Unreached(asked, resolved) is { } unreached)
         {
             return unreached;
         }
 
-        if (OutsideReporterRoot(asked, resolved) is AgentPolicyAnswer.Denied outside)
+        if (OutsideReporterRoot(asked, resolved) is { } outside)
         {
             return outside;
         }
@@ -458,7 +478,7 @@ public sealed partial class AgentPolicy
     /// <summary>A write, decided: a slot and a Claude Code directory never, then the worktree rules, protected paths and the tool's own state, then the step's <c>writes</c>, the writable roots and the <c>Write</c> rules.</summary>
     private AgentPolicyAnswer WriteDecision(string asked, string resolved)
     {
-        if (Unreached(asked, resolved) is AgentPolicyAnswer.Denied unreached)
+        if (Unreached(asked, resolved) is { } unreached)
         {
             return unreached;
         }
@@ -471,12 +491,12 @@ public sealed partial class AgentPolicy
                 "this agent reads and nothing else: it is the run's reporter, offered the tools that read and no other");
         }
 
-        if (BuiltinWriteRefusal(asked, resolved) is AgentPolicyAnswer.Denied refused)
+        if (BuiltinWriteRefusal(asked, resolved) is { } refused)
         {
             return refused;
         }
 
-        if (OutsideStepWrites(asked, resolved) is AgentPolicyAnswer.Denied outside)
+        if (OutsideStepWrites(asked, resolved) is { } outside)
         {
             return outside;
         }
@@ -498,7 +518,7 @@ public sealed partial class AgentPolicy
     /// switches say - a place of the agent's own within it excepted, a writable root that stands
     /// inside the state, as its work directory does inside the run's.
     /// </summary>
-    private AgentPolicyAnswer? BuiltinWriteRefusal(string asked, string resolved)
+    private AgentPolicyAnswer.Denied? BuiltinWriteRefusal(string asked, string resolved)
     {
         foreach (var root in _allRoots)
         {
@@ -607,7 +627,7 @@ public sealed partial class AgentPolicy
     /// its worktree that matches none of their patterns is denied. What a command the agent ran
     /// writes is not seen here, and is measured where it cannot be missed: at the fold.
     /// </summary>
-    private AgentPolicyAnswer? OutsideStepWrites(string asked, string resolved)
+    private AgentPolicyAnswer.Denied? OutsideStepWrites(string asked, string resolved)
     {
         if (_writes.Count == 0)
         {
@@ -631,7 +651,7 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>Whether the path stands inside the reporter's one root, where this agent is the run's reporter.</summary>
-    private AgentPolicyAnswer? OutsideReporterRoot(string asked, string resolved)
+    private AgentPolicyAnswer.Denied? OutsideReporterRoot(string asked, string resolved)
     {
         if (_reporterRoot is not { } root || _resolvedReporterRoot is not { } resolvedRoot)
         {
@@ -696,7 +716,7 @@ public sealed partial class AgentPolicy
                         $"'{action}' is a root action: no agent of this tool acts as root");
                 }
 
-                if (Named(word, places, braces) is AgentPolicyAnswer.Denied named)
+                if (Named(word, places, braces) is { } named)
                 {
                     return named;
                 }
@@ -728,7 +748,7 @@ public sealed partial class AgentPolicy
             {
                 IReadOnlyList<string> words = [.. command.Take(environment), .. command.Skip(start)];
 
-                if (Decided(analyzed, start, words, comparison) is AgentPolicyAnswer.Denied denied)
+                if (Decided(analyzed, start, words, comparison).Refusal() is { } denied)
                 {
                     return denied;
                 }
@@ -847,7 +867,7 @@ public sealed partial class AgentPolicy
         // are in a file this does not read is denied.
         foreach (var address in CommandAnalysis.WebAddresses(words))
         {
-            if (WebDecided(address, whole, domains: true, agentRules: true) is AgentPolicyAnswer.Denied denied)
+            if (WebDecided(address, whole, domains: true, agentRules: true).Refusal() is { } denied)
             {
                 return denied;
             }
@@ -1017,7 +1037,7 @@ public sealed partial class AgentPolicy
 
         foreach (var word in words.Skip(2))
         {
-            if (CiEndpoint().IsMatch(word.Split('?', 2)[0].TrimEnd('/')))
+            if (CiEndpoint.IsMatch(word.Split('?', 2)[0].TrimEnd('/')))
             {
                 return $"the endpoint '{word}'";
             }
@@ -1054,9 +1074,10 @@ public sealed partial class AgentPolicy
         return null;
     }
 
-    /// <summary>A REST path that merges or starts CI: the endpoints of <see cref="GhApiEndpoints"/>, at a path's end.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"(^|/)(pulls/[^/]+/(merge|update-branch)|merges|merge-upstream|dispatches|rerun|rerun-failed-jobs|approve|rerequest)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
-    private static partial System.Text.RegularExpressions.Regex CiEndpoint();
+    /// <summary>A REST path that merges or starts CI: an endpoint of <see cref="GhApiEndpoints"/> at a path's end, its <c>&lt;n&gt;</c> any one segment.</summary>
+    private static readonly System.Text.RegularExpressions.Regex CiEndpoint = new(
+        $"(^|/)({string.Join('|', GhApiEndpoints.Select(endpoint => System.Text.RegularExpressions.Regex.Escape(endpoint).Replace("<n>", "[^/]+", StringComparison.Ordinal)))})$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.NonBacktracking);
 
     /// <summary>
     /// The root action <paramref name="word"/> names, in the list's own spelling: the word itself,
@@ -1197,7 +1218,7 @@ public sealed partial class AgentPolicy
     public static IReadOnlyList<string> SlashedSchemes { get; } = ["http", "https", "ws", "wss", "ftp"];
 
     /// <summary>Whether the path, as asked or as resolved, is a credential slot of this tool or lies in a Claude Code directory: no file tool of an agent reads or writes either.</summary>
-    private AgentPolicyAnswer? Unreached(string asked, string resolved)
+    private AgentPolicyAnswer.Denied? Unreached(string asked, string resolved)
     {
         foreach (var form in new[] { asked, resolved })
         {
@@ -1216,43 +1237,72 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>
-    /// Every directory a command moves the commands after it to - <c>cd</c>, <c>pushd</c>,
-    /// <c>chdir</c>, PowerShell's <c>Set-Location</c> - spelled as a path asked is, against every
-    /// place already reached, for a subshell's <c>cd</c> ends with it and a drive's two readings are
-    /// both places a <c>cd</c> may have gone: each place a spelling of it may reach, the home where it
-    /// names none, and none where it is no such command or names a place this cannot tell.
+    /// The commands that move the commands after them to another directory, by their names in any case: the shell's
+    /// <c>cd</c>, <c>pushd</c> and <c>chdir</c>, and PowerShell's <c>Set-Location</c> and <c>Push-Location</c> with their
+    /// aliases - <c>sl</c>, and the shell's three names, which PowerShell gives them too. A program that starts what it
+    /// runs elsewhere - env's <c>-C</c>, pwsh's <c>-WorkingDirectory</c> - is read as a <c>cd</c> before it by
+    /// <see cref="CommandAnalysis"/>, so this is the one reader of every move.
+    /// </summary>
+    public static IReadOnlyList<string> Movers { get; } = ["cd", "pushd", "chdir", "Set-Location", "sl", "Push-Location"];
+
+    /// <summary>
+    /// Every directory a command moves the commands after it to (<see cref="Movers"/>), spelled as a path asked is, against
+    /// every place already reached, for a subshell's <c>cd</c> ends with it and a drive's two readings are both places a
+    /// <c>cd</c> may have gone: each place a spelling of each word it may go to may reach - every word no option, every
+    /// word after a <c>--</c>, and a PowerShell parameter's value glued after its <c>:</c> (<c>-Path:x</c>), so a
+    /// <c>-StackName</c>'s value is one more place rather than its target none - the home where it names none, and none
+    /// where it is no such command, goes back (<c>-</c>), or names a place this cannot tell.
     /// </summary>
     /// <exception cref="NotSupportedException">The command's moves reach more places than <see cref="MaxPlaces"/>, which this does not follow, so no decision is made on it.</exception>
     private IReadOnlyList<string> MovedTo(IReadOnlyList<string> command, IReadOnlyList<string> places)
     {
         var environment = CommandAnalysis.EnvironmentOf(command);
 
-        if (environment == command.Count
-            || !new[] { "cd", "pushd", "chdir", "Set-Location", "sl" }.Contains(CommandAnalysis.Name(command[environment]), StringComparer.OrdinalIgnoreCase))
+        if (environment == command.Count || !Movers.Contains(CommandAnalysis.Name(command[environment]), StringComparer.OrdinalIgnoreCase))
         {
             return [];
         }
 
-        var target = command.Skip(environment + 1).FirstOrDefault(word => !word.StartsWith('-') || word == "-");
+        var targets = new List<string>();
+        var ended = false;
 
-        if (target == "-")
+        foreach (var word in command.Skip(environment + 1))
         {
-            return [];
+            if (!ended && word == "--")
+            {
+                ended = true;
+            }
+            else if (ended || word == "-" || !word.StartsWith('-'))
+            {
+                targets.Add(word);
+            }
+            else if (word.IndexOf(':', StringComparison.Ordinal) is var colon and > 1 && colon + 1 < word.Length)
+            {
+                targets.Add(word[(colon + 1)..]);
+            }
         }
 
-        IReadOnlyList<string> moved;
+        var moved = new List<string>();
 
-        try
+        // '-' goes back to a place reached before, which is one already.
+        IEnumerable<string> going = targets.Count == 0 ? ["~"] : targets.Where(target => target != "-");
+
+        foreach (var target in going)
         {
-            moved = [.. places.SelectMany(place => Spelled(target ?? "~", place)).Except(places, StringComparer.OrdinalIgnoreCase).Distinct(StringComparer.OrdinalIgnoreCase)];
-        }
-        catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
-        {
-            return [];
+            try
+            {
+                moved.AddRange(places.SelectMany(place => Spelled(target, place)));
+            }
+            catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
+            {
+                // A word no place can be told by moves nowhere this reads.
+            }
         }
 
-        return places.Count + moved.Count <= MaxPlaces
-            ? moved
+        IReadOnlyList<string> reached = [.. moved.Except(places, StringComparer.OrdinalIgnoreCase).Distinct(StringComparer.OrdinalIgnoreCase)];
+
+        return places.Count + reached.Count <= MaxPlaces
+            ? reached
             : throw new NotSupportedException($"its moves reach more than {MaxPlaces} places, which this does not follow");
     }
 
@@ -1263,16 +1313,23 @@ public sealed partial class AgentPolicy
     /// Whether <paramref name="word"/> names a path into a credential slot or a Claude Code
     /// directory, resolved as a tool's path resolves against each place the command may stand in:
     /// the word itself - a redirect's file or text among them - the value after an <c>=</c>
-    /// (<c>--file=...</c>, an assignment's), and each word a script inside it would name, a home
-    /// expanded in each; its braces' words where <paramref name="braces"/> says the shell expands them.
+    /// (<c>--file=...</c>, an assignment's) and a PowerShell parameter's after its <c>:</c>
+    /// (<c>-Path:...</c>), and each word a script inside it would name, a home expanded in each; its
+    /// braces' words where <paramref name="braces"/> says the shell expands them.
     /// </summary>
-    private AgentPolicyAnswer? Named(string word, IReadOnlyList<string> places, bool braces)
+    private AgentPolicyAnswer.Denied? Named(string word, IReadOnlyList<string> places, bool braces)
     {
         var candidates = new List<string> { word };
 
         if (word.IndexOf('=', StringComparison.Ordinal) is var equals and >= 0 && equals + 1 < word.Length)
         {
             candidates.Add(word[(equals + 1)..]);
+        }
+
+        // A PowerShell parameter's value glued after its ':' (-Path:~/x), as an option's after its '='.
+        if (word.StartsWith('-') && word.IndexOf(':', StringComparison.Ordinal) is var colon and > 1 && colon + 1 < word.Length)
+        {
+            candidates.Add(word[(colon + 1)..]);
         }
 
         if (word.Any(char.IsWhiteSpace))
@@ -1408,7 +1465,7 @@ public sealed partial class AgentPolicy
 
             foreach (var asked in Spelled(path, _ground.WorkingDirectory))
             {
-                if (decide(asked, Resolved(asked)) is AgentPolicyAnswer.Denied denied)
+                if (decide(asked, Resolved(asked)).Refusal() is { } denied)
                 {
                     return denied;
                 }

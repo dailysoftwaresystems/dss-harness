@@ -7,8 +7,9 @@ namespace DssHarness.Core.Agents.Runtime;
 
 /// <summary>
 /// The tools that write: a file created, a string replaced, lines inserted, a directory made, a file or a directory
-/// deleted, a path moved. Each is a write to every path it touches - each directory it makes, each entry it deletes or
-/// moves, at both ends of a move - held to the writable roots and asked of the policy.
+/// deleted, a path moved. Each is a write to every path it touches - each entry it deletes or moves, at both ends of a
+/// move - held to the writable roots and asked of the policy; the directories made on a path's way are part of the write
+/// to that path, decided with it and never asked apart (<see cref="MakeTheWay"/>).
 /// </summary>
 public sealed partial class AgentToolRuntime
 {
@@ -371,7 +372,7 @@ public sealed partial class AgentToolRuntime
             {
                 var landed = Path.Combine(destination, Path.GetRelativePath(source, entry));
 
-                if (_policy.Write(landed) is AgentPolicyAnswer.Denied landing)
+                if (_policy.Write(landed).Refusal() is { } landing)
                 {
                     return Answer.Refused(toPath, landing with { Reason = $"'{Said(landed)}', where '{Said(entry)}' would land, is refused: {landing.Reason}" });
                 }
@@ -468,7 +469,7 @@ public sealed partial class AgentToolRuntime
                         break;
                 }
 
-                if (_policy.Write(entry) is AgentPolicyAnswer.Denied denied)
+                if (_policy.Write(entry).Refusal() is { } denied)
                 {
                     return new Contents(entries, held, denied with { Reason = $"'{directory}' holds '{entry}', which may not be written: {denied.Reason}" });
                 }

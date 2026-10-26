@@ -80,6 +80,37 @@ public sealed class ConfinedPathsTests : IDisposable
         Assert.Contains($"leads to '{Path.Combine(_outside, "c.cs")}', outside the roots of this agent", denied!.Reason, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A file link inside a root that leads to a file out of every root - a tracked notes.md leading to a key under the home -
+    /// reaches nothing: a read and a write of it are refused by where it leads. One that leads to a file inside a writable
+    /// root is read, and written through by no tool.
+    /// </summary>
+    [Fact]
+    public void AFileLink_IsRefused_ByWhereItLeads()
+    {
+        var key = Path.Combine(_outside, "id_rsa");
+        var notes = Path.Combine(_worktree, "notes.md");
+        var real = Path.Combine(_worktree, "real.md");
+        var alias = Path.Combine(_worktree, "alias.md");
+        File.WriteAllText(key, "secret");
+        File.WriteAllText(real, "real");
+        TestLinks.OrSkip(() =>
+        {
+            File.CreateSymbolicLink(notes, key);
+            File.CreateSymbolicLink(alias, real);
+        });
+
+        var paths = Paths();
+        var read = paths.Read("notes.md").Denied;
+        var written = paths.Write("notes.md").Denied;
+        var through = paths.Write("alias.md").Denied;
+
+        Assert.Equal((ConfinedPaths.RootsRule, $"'{notes}' leads to '{key}', outside the roots of this agent: {_worktree}, {_main}"), (read?.Rule, read?.Reason));
+        Assert.Equal((ConfinedPaths.RootsRule, $"'{notes}' leads to '{key}', outside the writable roots of this agent: {_worktree}"), (written?.Rule, written?.Reason));
+        Assert.Equal(alias, paths.Read("alias.md").Full);
+        Assert.Equal((ConfinedPaths.LinksRule, $"'{alias}' leads to '{real}' through a link: no tool writes through a link below its root"), (through?.Rule, through?.Reason));
+    }
+
     /// <summary>A write through a link below its root is refused even where the link leads inside a writable root.</summary>
     [Fact]
     public void AWriteThroughALink_IsRefused_WhereverItLeads()

@@ -35,9 +35,11 @@ public static partial class CommandAnalysis
     /// hands it: a quoted string that begins it ends it, a comma joins what follows it unspaced, a backtick escapes, a
     /// <c>#</c> where a token begins is a comment to its line's end and <c>&lt;#</c> one to its <c>#&gt;</c>, a here-string's
     /// footer stands where its line begins, and PowerShell's own blanks, typographic quotes and dashes are its own.
-    /// Invoke-Expression's one string is read as a script of its own. What runs code no word spells - a static method, an
-    /// instance method off <see cref="PowerShellMethods"/>, a class, a <c>using</c>, the stop-parsing <c>--%</c>, a script
-    /// Invoke-Expression is handed by no one string - and what PowerShell refuses to read, are refused.
+    /// A command's program is read as any word is, then known by its name: Invoke-Expression - a bareword, the call
+    /// operator's string, a module's name before it, an escape inside it - has its one string read as a script of its own,
+    /// and one an expansion names is refused by the analysis as any program so named is. What runs code no word spells - a
+    /// static method, an instance method off <see cref="PowerShellMethods"/>, a class, a <c>using</c>, the stop-parsing
+    /// <c>--%</c>, a script Invoke-Expression is handed by no one string - and what PowerShell refuses to read, are refused.
     /// </summary>
     private sealed partial class PowerShellReader
     {
@@ -446,7 +448,10 @@ public static partial class CommandAnalysis
             return end == length || !IsNameChar(_script[end]);
         }
 
-        /// <summary>A command: its program - a bareword, or the call operator's or dot-sourcing's value - its words and redirects.</summary>
+        /// <summary>
+        /// A command: its program - a bareword, or the call operator's or dot-sourcing's value - its words and redirects;
+        /// Invoke-Expression's, by whatever name it is called, its script read (<see cref="InvokeExpression"/>).
+        /// </summary>
         private string Command()
         {
             var words = new List<string>();
@@ -463,11 +468,6 @@ public static partial class CommandAnalysis
                 {
                     words.Add($"'echo' {Block()}");
                 }
-            }
-
-            if (words.Count == 0 && InvokeExpression() is { } invoked)
-            {
-                return invoked;
             }
 
             while (true)
@@ -498,6 +498,13 @@ public static partial class CommandAnalysis
                 {
                     throw new NotSupportedException($"PowerShell's '{character}' among a command's words, which this does not read");
                 }
+
+                // The program read as any word is, then by its name: Invoke-Expression however it is named - a bareword,
+                // the call operator's string, a module's name before it, an escape inside it - runs its one string.
+                if (words.Count == 1 && NamesInvokeExpression(words[0]))
+                {
+                    return string.Join(' ', [InvokeExpression(), .. redirects]);
+                }
             }
 
             if (words.Count == 0)
@@ -517,29 +524,53 @@ public static partial class CommandAnalysis
         }
 
         /// <summary>
-        /// Invoke-Expression's command where one begins, passed: the script it runs - its -Command's value, else its one
-        /// argument - a single string's text read as a script of its own, its statements a substitution the shell reader
-        /// reads. A value this cannot see (a variable's, an expression's, the pipeline's), more than one, and none at all
-        /// are refused. Null where no Invoke-Expression begins here.
+        /// Whether a command's program word, as this reads it (<see cref="Word"/>), names Invoke-Expression: its literal
+        /// text, by its last segment as a module-qualified name ends (<c>Microsoft.PowerShell.Utility\Invoke-Expression</c>),
+        /// is <c>iex</c> or <c>Invoke-Expression</c> in any case and with any of PowerShell's dashes. A program word an
+        /// expansion names is no literal, and the analysis refuses it as it refuses any program an expansion names.
         /// </summary>
-        private string? InvokeExpression()
+        private static bool NamesInvokeExpression(string word)
+            => LiteralText(word) is { } text
+                && text.Replace('\\', '/').Split('/')[^1] is var name
+                && string.Concat(name.Select(character => IsDash(character) ? '-' : character)) is var dashed
+                && (dashed.Equals("iex", StringComparison.OrdinalIgnoreCase) || dashed.Equals("Invoke-Expression", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// The text a word is, where it is literal text alone - one or more of <see cref="Literal"/>'s quoted runs and
+        /// escaped quotes, glued - as the shell reader would hand it a program; null where any of it is an expansion.
+        /// </summary>
+        private static string? LiteralText(string word)
         {
-            var end = _at;
-
-            while (end < _script.Length && (char.IsAsciiLetter(_script[end]) || _script[end] == '-'))
-            {
-                end++;
-            }
-
-            var after = end < _script.Length ? Plain(_script[end]) : '\0';
-
-            if (!(_script[_at..end].Equals("iex", StringComparison.OrdinalIgnoreCase) || _script[_at..end].Equals("Invoke-Expression", StringComparison.OrdinalIgnoreCase))
-                || !(after == '\0' || IsBlank(after) || IsNewline(after) || after is ';' or '|' or '&' or ')' or '}'))
+            if (!LiteralRuns().IsMatch(word))
             {
                 return null;
             }
 
-            _at = end;
+            var text = new StringBuilder();
+
+            foreach (System.Text.RegularExpressions.Match run in LiteralRun().Matches(word))
+            {
+                text.Append(run.Value == "\\'" ? "'" : run.Value[1..^1]);
+            }
+
+            return text.ToString();
+        }
+
+        /// <summary>A word that is quoted literal runs and escaped quotes alone, as <see cref="Literal"/> writes them.</summary>
+        [System.Text.RegularExpressions.GeneratedRegex(@"^(?:'[^']*'|\\')+$")]
+        private static partial System.Text.RegularExpressions.Regex LiteralRuns();
+
+        /// <summary>One quoted literal run, or one escaped quote, of a word <see cref="LiteralRuns"/> matches.</summary>
+        [System.Text.RegularExpressions.GeneratedRegex(@"'[^']*'|\\'")]
+        private static partial System.Text.RegularExpressions.Regex LiteralRun();
+
+        /// <summary>
+        /// Invoke-Expression's command, its name passed: the script it runs - its -Command's value, else its one argument -
+        /// a single string's text read as a script of its own, its statements a substitution the shell reader reads. A
+        /// value this cannot see (a variable's, an expression's, the pipeline's), more than one, and none at all are refused.
+        /// </summary>
+        private string InvokeExpression()
+        {
             var scripts = new List<string>();
 
             while (true)

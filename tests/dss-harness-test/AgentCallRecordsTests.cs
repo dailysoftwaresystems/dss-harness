@@ -137,6 +137,29 @@ public sealed class AgentCallRecordsTests : IDisposable
     }
 
     /// <summary>
+    /// A request of the web decided by an answer that neither allows nor denies is recorded refused, as an undecided denial
+    /// and its event: a record never says allowed of what the policy did not allow.
+    /// </summary>
+    [Fact]
+    public async Task ARequestDecidedByNoAnswerThePolicyHas_IsRecordedRefused()
+    {
+        var records = Records(out var events, out var run);
+
+        using (records)
+        {
+            await records.WebDecidedAsync("web_fetch", "fetch", "https://example.com/", ThirdAnswer.Made());
+        }
+
+        var line = JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(run.StepDirectory, AgentCallRecords.WebFileName))))!;
+        Assert.False(line["allowed"]!.GetValue<bool>());
+        Assert.Equal(AgentPolicy.UndecidedRule, line["rule"]!.GetValue<string>());
+        Assert.Equal("this tool answered 'ThirdAnswer', which neither allows nor denies: it denies what it cannot read", line["reason"]!.GetValue<string>());
+        Assert.Equal(
+            [new WebRequested("https://example.com/", AgentToolRunner.Harness, false)],
+            events.All.Cast<WebRequested>().Select(@event => @event with { At = default, Seq = 0 }));
+    }
+
+    /// <summary>
     /// An address that holds a secret behind its escapes - carried in another address's parameter, escaped once more - is
     /// recorded masked at the reading that undoes them, decided, answered or refused; one that holds none as it was asked.
     /// </summary>

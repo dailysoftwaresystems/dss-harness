@@ -22,12 +22,52 @@ public enum AgentPolicySource
 /// asked, or deny, with the rule that refused it and the reason, which the model reads.
 /// </summary>
 /// <remarks>
+/// <para>
 /// There is no third answer, and no answer but deny where the evaluator cannot decide: a call the
 /// engine cannot decide never runs, so the client that waits for this answer - Claude Code's host
 /// ask, the tool runtime before a tool runs - holds every action behind it.
+/// </para>
+/// <para>
+/// The two kinds are the only ones: no constructor but a private one makes an answer, and the copy a
+/// record's <c>with</c> makes - which C# keeps open to a record derived anywhere - refuses to make one
+/// of any other kind. Every reader asks what an answer allows the one way, <see cref="Refusal"/> or
+/// <c>is Allowed</c>, so an answer of any other kind would still refuse.
+/// </para>
 /// </remarks>
 public abstract record AgentPolicyAnswer
 {
+    private AgentPolicyAnswer()
+    {
+    }
+
+    /// <summary>The copy a <c>with</c> makes of <paramref name="original"/>: of an allowed or a denied answer alone.</summary>
+    /// <param name="original">The answer copied.</param>
+    /// <exception cref="InvalidOperationException">The copy is of a kind of answer this tool does not have.</exception>
+    protected AgentPolicyAnswer(AgentPolicyAnswer original)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+
+        if (this is not (Allowed or Denied))
+        {
+            throw new InvalidOperationException($"'{GetType().Name}' is no answer of the policy's: an answer allows or denies, and there is no third");
+        }
+    }
+
+    /// <summary>
+    /// The denial a reader of this answer acts on: none where it is <see cref="Allowed"/>, the answer itself where it is
+    /// <see cref="Denied"/>, and an undecided one for any other kind - so a reader that asks this, as every reader does,
+    /// refuses whatever is not allowed. A method, not a property, so a record's printing of its members never prints it.
+    /// </summary>
+    public Denied? Refusal() => this switch
+    {
+        Allowed => null,
+        Denied denied => denied,
+        _ => new Denied(
+            AgentPolicy.UndecidedRule,
+            AgentPolicySource.Builtin,
+            $"this tool answered '{GetType().Name}', which neither allows nor denies: it denies what it cannot read"),
+    };
+
     /// <summary>The action runs, with the input as asked.</summary>
     public sealed record Allowed : AgentPolicyAnswer;
 
@@ -40,6 +80,12 @@ public abstract record AgentPolicyAnswer
     /// <summary>The one allowed answer, shared: it carries nothing to say.</summary>
     public static readonly AgentPolicyAnswer Allow = new Allowed();
 }
+
+/// <summary>One way <c>gh</c> merges or starts CI, refused by the worktree rules (<see cref="AgentPolicy.GhCiReaches"/>).</summary>
+/// <param name="Reached">The REST endpoint, as it ends a path - <c>&lt;n&gt;</c> standing for any one segment - or the GraphQL mutation's name.</param>
+/// <param name="Mutation">Whether <paramref name="Reached"/> is a GraphQL mutation rather than a REST endpoint.</param>
+/// <param name="Commands">The <c>gh</c> commands that reach it, each by its command's path; none where only <c>gh api</c> does.</param>
+public sealed record GhCiReach(string Reached, bool Mutation, IReadOnlyList<string> Commands);
 
 /// <summary>One restriction, as the policy holds it: the rule's whole string, and where it comes from.</summary>
 /// <param name="Text">The rule, one string: <c>Run(git push *)</c>, <c>Write(.github/**)</c>, <c>Read(secrets/**)</c>.</param>

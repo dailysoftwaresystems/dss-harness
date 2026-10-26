@@ -2516,9 +2516,10 @@ public static class HelpTopics
         builder.AppendLine("the runtime makes of it - one naming no drive and no share, a volume by its id or a pipe, is");
         builder.AppendLine("a place it cannot tell, and denied - and a shell's spelling of a drive (/c/x, /cygdrive/c/x,");
         builder.AppendLine("/mnt/c/x) is read both as the drive (C:\\x) and as the directory it names on the current");
-        builder.AppendLine("drive, an action allowed only where both are; a cd is followed the same way, from every");
-        builder.AppendLine($"place the command reached before it, up to {Agents.Policy.AgentPolicy.MaxPlaces} places, past which the command is");
-        builder.AppendLine("denied.");
+        builder.AppendLine("drive, an action allowed only where both are; a cd is followed the same way - pushd,");
+        builder.AppendLine("PowerShell's Set-Location and Push-Location, and the directory env -C or pwsh");
+        builder.AppendLine("-WorkingDirectory starts its command in, each word it may go to - from every place the");
+        builder.AppendLine($"command reached before it, up to {Agents.Policy.AgentPolicy.MaxPlaces} places, past which the command is denied.");
         AppendWrapped(builder, ShellReadingProse());
         builder.AppendLine("The protected paths (agentPolicy.protectedPaths, true where nothing is said) are the");
         builder.AppendLine("writes Claude Code guards, refused on every client so a role is not stopped on one where");
@@ -2593,7 +2594,8 @@ public static class HelpTopics
             + "powershell -Command and a decoded -EncodedCommand, and the command lines trap, watch, script and flock run, "
             + "by each shell's own quoting - PowerShell by a reader of its own grammar: its commands, pipelines, strings, "
             + "here-strings, variables, $(...), @(...), (...), script blocks, hashtables, assignments and keywords' "
-            + "conditions and blocks, each statement a block holds read as one that may run, Invoke-Expression's one string "
+            + "conditions and blocks, each statement a block holds read as one that may run, Invoke-Expression's one string - "
+            + "by whatever name it is called, the call operator's string or a module's name before it among them - "
             + "read as a script of its own - to four levels, and into a shell another program runs with its script "
             + "(find -exec sh -c, find's words read to their ';'), a command find -exec, fd -x, rg --pre or --hostname-bin or parallel runs "
             + "read as its own, each word it fills in an expansion, env -S's string split by env's own rules, and "
@@ -2617,9 +2619,12 @@ public static class HelpTopics
             + $"measure: git's state-writing verbs ({string.Join(", ", Agents.Policy.AgentPolicy.GitStateVerbs)}) are "
             + "refused - reading git (status, diff, log, show, blame, grep) stays allowed, and a git configured where it "
             + "runs (a -c or --config-env of any key but the ones that only shape what git prints, --exec-path, "
-            + "GIT_CONFIG and the names through which git finds its programs and hooks) is the git config it is - and so "
-            + "are gh pr merge, gh workflow run and gh run rerun, the gh api endpoints and GraphQL mutations that merge "
-            + "or start CI, and gh alias set, for never merges, never starts CI binds the agents too; git's own files - a "
+            + "GIT_CONFIG, the names through which git finds its programs and hooks, and the homes it reads its global "
+            + "configuration from - HOME, XDG_CONFIG_HOME, and the HOMEDRIVE, HOMEPATH and USERPROFILE git on Windows takes "
+            + "one from) is the git "
+            + "config it is - and so are the gh commands that merge or start CI "
+            + $"({string.Join(", ", Agents.Policy.AgentPolicy.NeverCiCommands)}), the gh api endpoints and GraphQL "
+            + "mutations that reach the same, and gh alias set, for never merges, never starts CI binds the agents too; git's own files - a "
             + ".git, file or directory, at any depth beneath a root and in any case, a nested repository's and a "
             + $"submodule's too ({Agents.Policy.AgentPolicy.GitsOwnRule}) - are not written by a tool, whatever "
             + "protectedPaths says; and an agent does not edit its own policy or what the next launch loads: "
@@ -2727,7 +2732,7 @@ public static class HelpTopics
             + "a deleting or moving tool is a write to every path it touches, at both ends of a move. A directory deleted or "
             + $"moved is refused where it is a root, holds a link, holds a path that may not be written or holds more than "
             + $"{Agents.Runtime.AgentTools.MostDeletedEntries:N0} entries. A file past {DiskSpace.Size(Agents.Runtime.AgentTools.MostViewedBytes)} is "
-            + "neither viewed nor edited - it is searched, or read in part by a command. A replace or an insert needs its file viewed "
+            + $"neither viewed nor edited, and one past {DiskSpace.Size(Agents.Runtime.AgentFiles.MostSearchedBytes)} is passed over by search_files - a command reads or searches it. A replace or an insert needs its file viewed "
             + "first, by its content: one that changed since is refused, nothing written, and an edit keeps the file's "
             + "encoding (UTF-8 with or without its mark, UTF-16 by its mark), its line endings and whether it ends with a "
             + "newline. A command is an argument list, never a shell string, decided whole where it starts, run as a phase "

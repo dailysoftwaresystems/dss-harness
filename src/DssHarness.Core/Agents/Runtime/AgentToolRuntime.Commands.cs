@@ -8,8 +8,9 @@ using DssHarness.Core.Web;
 namespace DssHarness.Core.Agents.Runtime;
 
 /// <summary>
-/// The tools that reach past the files: a command run, contained, as a phase runs; and a page fetched by the harness's own
-/// fetch, each address decided and recorded before anything leaves the machine.
+/// The tools that reach past the files: a command run, contained, as a phase runs; a page fetched by the harness's own
+/// fetch; and a query searched by the harness's own search - each address decided and recorded before anything leaves
+/// the machine.
 /// </summary>
 public sealed partial class AgentToolRuntime
 {
@@ -69,7 +70,7 @@ public sealed partial class AgentToolRuntime
             return Answer.Failed($"there is no directory at '{Said(directory)}' to start in");
         }
 
-        if (_policy.Run([program, .. arguments], directory) is AgentPolicyAnswer.Denied denied)
+        if (_policy.Run([program, .. arguments], directory).Refusal() is { } denied)
         {
             return Answer.Refused(command, denied);
         }

@@ -300,12 +300,65 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         // A file past the bound is held whole by neither: refused before it is read, a view of it and an edit of one grown past it.
         var past = new string('x', (int)AgentTools.MostViewedBytes + 1);
-        var refused = $"'a.txt' holds {DiskSpace.Size(AgentTools.MostViewedBytes + 1)}, past the 16 MiB a view or an edit holds whole: search it, or read a part of it with a command";
+        var refused = $"'a.txt' holds {DiskSpace.Size(AgentTools.MostViewedBytes + 1)}, past the 16 MiB a view or an edit holds whole: read or search it with a command";
         await View(runtime, "a.txt");
         Write("a.txt", past);
         Assert.Equal(refused, (await Replace(runtime, "a.txt", "x", "y")).Text);
         Assert.Equal(refused, (await View(runtime, "a.txt")).Text);
         Assert.Equal(past.Length, new FileInfo(Path.Combine(_worktree, "a.txt")).Length);
+    }
+
+    /// <summary>
+    /// A file link out of the roots - a tracked notes.md leading to a key under the home - is read, written and searched by
+    /// no tool: a view, a replace, an insert and an overwrite refuse it by where it leads, nothing written, and a search and
+    /// a find never list a link, so the text it leads to is in no answer.
+    /// </summary>
+    [Fact]
+    public async Task AFileLinkOutOfTheRoots_IsReachedByNoTool()
+    {
+        var key = Path.Combine(_outside, "id_rsa");
+        var notes = Path.Combine(_worktree, "notes.md");
+        File.WriteAllText(key, "BEGIN PRIVATE KEY");
+        Write("plain.md", "BEGIN nothing");
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(notes, key));
+        var runtime = Open();
+        var unread = $"'{notes}' leads to '{key}', outside the roots of this agent: {_worktree}, {_main}";
+        var unwritten = $"'{notes}' leads to '{key}', outside the writable roots of this agent: {_worktree}";
+
+        foreach (var (answer, refused) in new[]
+        {
+            (await View(runtime, "notes.md"), unread),
+            (await Replace(runtime, "notes.md", "BEGIN", "END"), unwritten),
+            (await Call(runtime, AgentTools.InsertInFile, ("path", "notes.md"), ("line", 1), ("text", "x")), unwritten),
+            (await Call(runtime, AgentTools.CreateFile, ("path", "notes.md"), ("content", "x"), ("overwrite", true)), unwritten),
+        })
+        {
+            Assert.Equal((false, refused), (answer.Ok, answer.Text));
+        }
+
+        Assert.Equal("plain.md:1: BEGIN nothing", (await Call(runtime, AgentTools.SearchFiles, ("pattern", "BEGIN"))).Text);
+        Assert.Equal("plain.md", (await Call(runtime, AgentTools.FindFiles, ("pattern", "*.md"))).Text);
+        Assert.Equal("BEGIN PRIVATE KEY", File.ReadAllText(key));
+        Assert.Equal([ConfinedPaths.RootsRule, ConfinedPaths.RootsRule, ConfinedPaths.RootsRule, ConfinedPaths.RootsRule], _events.All.OfType<PermissionDenied>().Select(denied => denied.Rule));
+    }
+
+    /// <summary>
+    /// A defect of the tool's own - a guard's refusal of a null or of a value out of its range, as a record's line holding a
+    /// line break is - is raised, never told the model as the tool's failure; a file system's fault is told it.
+    /// </summary>
+    [Fact]
+    public async Task ADefectOfTheToolsOwn_IsRaised_NeverToldTheModel()
+    {
+        Write("null.txt", "x");
+        Write("range.txt", "x");
+        Write("held.txt", "x");
+        var runtime = Open(fileSystem: new FaultingStandings(_harness.FileSystem));
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() => View(runtime, "null.txt"));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => View(runtime, "range.txt"));
+
+        var told = await View(runtime, "held.txt");
+        Assert.Equal((false, "view_file failed: it is held by another process"), (told.Ok, told.Text));
     }
 
     /// <summary>A replace says why it would not: text not there, there more than once, empty, or the same as its replacement.</summary>
@@ -1600,6 +1653,21 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         public override PathKind KindOf(string path)
             => Path.GetFileName(path) == "b.txt" ? throw new IOException("it could not be looked up.") : base.KindOf(path);
+    }
+
+    /// <summary>
+    /// A file system that cannot say how large three files are: 'null.txt' and 'range.txt' by a guard's refusal, as a defect
+    /// of the tool's own would refuse, and 'held.txt' by a file system's fault.
+    /// </summary>
+    private sealed class FaultingStandings(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public override FileStanding? StandingOf(string path) => Path.GetFileName(path) switch
+        {
+            "null.txt" => throw new ArgumentNullException(nameof(path)),
+            "range.txt" => throw new ArgumentOutOfRangeException(nameof(path)),
+            "held.txt" => throw new IOException("it is held by another process."),
+            _ => base.StandingOf(path),
+        };
     }
 
     /// <summary>A file system where the file named <paramref name="gone"/> is no longer there, and those named <paramref name="unread"/> cannot be read.</summary>

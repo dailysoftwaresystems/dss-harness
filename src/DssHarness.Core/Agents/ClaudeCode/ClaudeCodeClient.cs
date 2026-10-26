@@ -849,7 +849,7 @@ public sealed class ClaudeCodeClient(
 
             Asked(asked.CallId, tool, answer is AgentPolicyAnswer.Allowed);
 
-            if (answer is AgentPolicyAnswer.Denied denied)
+            if (answer.Refusal() is { } denied)
             {
                 totals.Denials++;
                 var subject = ClaudeToolDecider.SubjectOf(tool, asked.Input, run.Workspace.WorkingDirectory) ?? asked.Input?.ToJsonString() ?? string.Empty;
