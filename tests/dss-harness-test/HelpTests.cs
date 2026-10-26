@@ -2889,6 +2889,54 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The legs topic says a developer environment may hold its legs to one MSVC toolset with the optional toolsVersion -
+    /// what it names, that it is optional and only its form is read, with no toolset built in - and how the survey and
+    /// the setup hold a leg to it; the config topic names it beside developerEnvironments.
+    /// </summary>
+    [Fact]
+    public void LegsTopic_SaysADeveloperEnvironmentMayHoldItsLegsToOneToolset()
+    {
+        var legs = Prose.Words(HelpText.Of("legs").StandardOutput);
+
+        Assert.Contains(
+            @"toolsVersion, optional, holds an environment's legs to one MSVC toolset, named as VC\Tools\MSVC names its toolsets: "
+            + "by two numbers, for the newest of that line, or by all three, for that one - for a compiler such as a CUDA "
+            + "toolkit's nvcc, which refuses an MSVC newer than it knows. Left out, vcvarsall.bat sets up the instance's default "
+            + "toolset. Only its form is checked when the file is read: no toolset is built into this tool. The survey then "
+            + "takes the newest instance holding a toolset it names, with the newest of those, and a host with none turns the "
+            + "leg away as a tool missing, naming what each instance holds. vcvarsall.bat is run with -vcvars_ver= and that "
+            + "toolset, and one that sets up another fails the leg; the leg's line names the MSVC set up. Two environments of "
+            + "one kind keep two toolsets apart on one machine:",
+            legs,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"developerEnvironments\": { \"visualStudio\": { \"kind\": \"visualStudio\" }, \"cuda\": { \"kind\": \"visualStudio\", "
+            + "\"toolsVersion\": \"14.44\" } }",
+            legs,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "developerEnvironments what a toolchain's legs start in, set up on the host that runs them: visualStudio runs that "
+            + "instance's vcvarsall.bat, for the MSVC toolset an optional toolsVersion names ('help legs')",
+            Prose.Words(HelpText.Of("config").StandardOutput),
+            StringComparison.Ordinal);
+
+        // The README and the architecture say the same: optional, its form alone checked, and held to on both sides.
+        Assert.Contains(
+            "Left out, `vcvarsall.bat` sets up the instance's default toolset. Only its form is checked when `config.json` is "
+            + "read: no toolset is built into the tool.",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "**A developer environment may hold its legs to one MSVC toolset**, with the optional `toolsVersion`",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "and fails the leg where `VCToolsVersion` comes out as anything else.",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The legs topic says what a wake window retries and what it never does, with the delay the code uses.
     /// </summary>
     [Fact]

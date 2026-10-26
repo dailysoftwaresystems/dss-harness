@@ -3291,7 +3291,7 @@ public sealed partial class CliEndToEndTests
         var platform = harness.Platform;
         var token = TestContext.Current.CancellationToken;
         var visualStudio = new DeveloperEnvironmentConfig { Kind = DeveloperEnvironmentKinds.VisualStudio };
-        var probe = new DeveloperEnvironmentProbe(platform, harness.ProcessRunner);
+        var probe = new DeveloperEnvironmentProbe(platform, harness.ProcessRunner, harness.FileSystem);
 
         var found = await probe.CheckAsync(visualStudio, token);
 

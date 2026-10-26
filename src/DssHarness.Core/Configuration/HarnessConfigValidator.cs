@@ -867,6 +867,18 @@ public static partial class HarnessConfigValidator
             {
                 problems.Add($"developer environment '{name}' requiresComponent is blank; leave it out for the C++ build tools");
             }
+
+            // Its form alone: which toolset a build needs is the repository's to say, and whether a host
+            // holds it is the survey's to find.
+            if (environment.ToolsVersion is { } toolsVersion && !VisualStudioToolsets.IsToolsVersion(toolsVersion))
+            {
+                problems.Add(
+                    string.IsNullOrWhiteSpace(toolsVersion)
+                        ? $"developer environment '{name}' toolsVersion is blank; leave it out for the toolset vcvarsall.bat sets up by default"
+                        : $"developer environment '{name}' toolsVersion '{toolsVersion}' names no MSVC toolset; name one as "
+                            + @"VC\Tools\MSVC does, by its first two numbers or all three - such as 14.44 or 14.44.35207 - "
+                            + "or leave it out for the toolset vcvarsall.bat sets up by default");
+            }
         }
     }
 

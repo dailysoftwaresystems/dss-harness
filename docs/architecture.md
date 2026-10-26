@@ -382,7 +382,7 @@ at once, with the line it concerns where the parser knows it:
   defect in this tool; a copy starts nothing and asks nothing. The host that runs the leg sets it up from the
   instance its own survey found, never a second look: that instance's `vcvarsall.bat` for the leg's
   processor (`amd64`, or `amd64_arm64` to cross-compile), run once per environment, instance,
-  architecture and host environment by `cmd.exe` from a batch file the harness writes, reading
+  toolset, architecture and host environment by `cmd.exe` from a batch file the harness writes, reading
   `set` before and after it in UTF-16 and keeping only what changed; the batch file names its
   variables `%%NAME%%`, so only `call`'s own pass expands them, and a path holding `%`, `^` or `&`
   is used as it is. Its exit code, an `[ERROR` line in either encoding it prints, a
@@ -398,6 +398,24 @@ at once, with the line it concerns where the parser knows it:
   build. Each leg's line names it - `developer environment: visualStudio (Visual Studio
   18.0.11205.157, MSVC 14.50.35717, amd64)` - and `--json` carries it as `developerEnvironment`,
   beside the detail rather than inside it, like the compilers.
+- **A developer environment may hold its legs to one MSVC toolset**, with the optional
+  `toolsVersion`: two numbers, naming the newest toolset of that line, or three, naming one, as
+  `VC\Tools\MSVC` names its directories. Only that form is checked when the file is read - a blank
+  one, one number, a side-by-side component's four (`14.44.17.14`, from which `vcvarsall.bat` falls
+  back to another toolset with a warning) and anything else are refused - and nothing in the tool
+  names a toolset: left out, `vcvarsall.bat` is given the architecture alone and sets up its
+  instance's default. Named, the survey asks `vswhere -sort` for every instance with
+  `requiresComponent`, newest first, and takes the first whose `VC\Tools\MSVC` holds a toolset it
+  names, with the newest of those by their numbers (`VisualStudioToolsets`, the one owner of what a
+  `toolsVersion` names); a host whose instances hold none turns the leg away as
+  `skipped-tool-missing`, naming the toolset and what each instance holds, and one whose toolsets
+  could not be listed as `skipped-unavailable`. The toolset found travels with the instance in the
+  survey's answer, and the host that runs the leg runs `vcvarsall.bat` with `-vcvars_ver=` and
+  exactly that toolset - never the shorter form, which `vcvarsall.bat` matches anywhere inside a
+  directory's name, so `14.4` would take `14.44.35207` - and fails the leg where `VCToolsVersion`
+  comes out as anything else. The leg's line names the MSVC set up. Two environments of one kind,
+  one naming a toolset, keep two toolsets apart on one machine: a CUDA toolchain's legs on the
+  toolset its `nvcc` accepts, every other MSVC leg on the instance's default.
 - **A leg naming a toolchain that does not exist on its own operating system is refused**, by the
   toolchain's `platforms` list. Refused when read rather than skipped when placed, because nothing
   about it needs measuring: a leg's `os` is required, and a leg only ever runs on a host whose

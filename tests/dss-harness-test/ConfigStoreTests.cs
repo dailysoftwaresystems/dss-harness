@@ -1933,6 +1933,51 @@ public sealed class ConfigStoreTests
         Assert.Equal("vs", config.Toolchains["msvc"].DeveloperEnvironment);
         Assert.Equal(DeveloperEnvironmentKinds.VisualStudio, config.DeveloperEnvironments["VS"].Kind);
         Assert.Equal(DeveloperEnvironmentConfig.DefaultVisualStudioComponent, config.DeveloperEnvironments["vs"].RequiresComponent);
+
+        // Naming no toolset is the default, and the toolset is the one vcvarsall.bat sets up by default.
+        Assert.Null(config.DeveloperEnvironments["vs"].ToolsVersion);
+    }
+
+    /// <summary>
+    /// A developer environment may name the MSVC toolset its legs build with - by its line's two numbers or all three -
+    /// so two environments of one kind keep two toolsets apart on one machine; it is read as written, and a null is no
+    /// toolset named.
+    /// </summary>
+    [Theory]
+    [InlineData("\"14.44\"", "14.44")]
+    [InlineData("\"14.44.35207\"", "14.44.35207")]
+    [InlineData("null", null)]
+    public void ADeveloperEnvironment_MayNameTheToolsetItsLegsBuildWith(string toolsVersion, string? read)
+    {
+        var config = LoadValid(
+            $$"""{ "developerEnvironments": { "vs": { "kind": "visualStudio" }, "cuda": { "kind": "visualStudio", "toolsVersion": {{toolsVersion}} } } }""");
+
+        Assert.Equal(read, config.DeveloperEnvironments["cuda"].ToolsVersion);
+        Assert.Null(config.DeveloperEnvironments["vs"].ToolsVersion);
+    }
+
+    /// <summary>
+    /// A toolsVersion that names no toolset as VC\Tools\MSVC names them is refused when the file is read, whole: its form
+    /// alone is held, and never a particular toolset, which is the repository's to name and the survey's to find.
+    /// </summary>
+    [Theory]
+    [InlineData("14")]
+    [InlineData("14.44.17.14")]
+    [InlineData("v143")]
+    [InlineData("Preview")]
+    [InlineData("14.44 ")]
+    [InlineData("14..44")]
+    [InlineData("14.x")]
+    [InlineData("\u0661\u0664.\u0664\u0664")]
+    public void Load_RejectsAToolsVersionThatNamesNoToolset(string toolsVersion)
+    {
+        var exception = LoadInvalid($$"""{ "developerEnvironments": { "cuda": { "kind": "visualStudio", "toolsVersion": "{{toolsVersion}}" } } }""");
+
+        Assert.Contains(
+            $"developer environment 'cuda' toolsVersion '{toolsVersion}' names no MSVC toolset; name one as VC\\Tools\\MSVC does, by its "
+            + "first two numbers or all three - such as 14.44 or 14.44.35207 - or leave it out for the toolset vcvarsall.bat sets up by default",
+            exception.Message,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1947,6 +1992,12 @@ public sealed class ConfigStoreTests
     [InlineData(
         """{ "developerEnvironments": { "vs": { "kind": "visualStudio", "requiresComponent": " " } } }""",
         "developer environment 'vs' requiresComponent is blank; leave it out for the C++ build tools")]
+    [InlineData(
+        """{ "developerEnvironments": { "vs": { "kind": "visualStudio", "toolsVersion": " " } } }""",
+        "developer environment 'vs' toolsVersion is blank; leave it out for the toolset vcvarsall.bat sets up by default")]
+    [InlineData(
+        """{ "developerEnvironments": { "vs": { "kind": "visualStudio", "toolsVersion": "" } } }""",
+        "developer environment 'vs' toolsVersion is blank; leave it out for the toolset vcvarsall.bat sets up by default")]
     [InlineData(
         """{ "toolchains": { "msvc": { "platforms": ["windows"], "env": { "CC": "cl" }, "developerEnvironment": "vs" } } }""",
         "toolchain 'msvc' names developer environment 'vs', which is not declared under developerEnvironments")]

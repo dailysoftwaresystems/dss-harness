@@ -369,6 +369,26 @@ it starts. The leg's line names the environment -
 `developer environment: visualStudio (Visual Studio 18.0.11205.157, MSVC 14.50.35717, amd64)` - and
 `--json` carries it as `developerEnvironment`.
 
+A developer environment may also hold its legs to one MSVC toolset, with the optional
+`toolsVersion`, named as `VC\Tools\MSVC` names its toolsets: by two numbers (`14.44`), for the
+newest of that line, or by all three (`14.44.35207`), for that one - for a compiler that accepts
+only some MSVC releases, such as a CUDA toolkit's `nvcc`, which refuses one newer than it knows.
+Left out, `vcvarsall.bat` sets up the instance's default toolset. Only its form is checked when
+`config.json` is read: no toolset is built into the tool. The survey then takes the newest instance
+holding a toolset it names, with the newest of those, and a host with none turns the leg away as a
+tool missing, naming what each instance holds. `vcvarsall.bat` is run with `-vcvars_ver=` and that
+toolset, and one that sets up another fails the leg; the leg's line names the MSVC set up. Two
+environments of one kind keep two toolsets apart on one machine:
+
+```json
+{
+  "developerEnvironments": {
+    "visualStudio": { "kind": "visualStudio" },
+    "cuda": { "kind": "visualStudio", "toolsVersion": "14.44" }
+  }
+}
+```
+
 An ssh host's connection data lives in its own directory under `.harness-config/sshItems/`,
 which git ignores: an `.env` naming the address, the user and the port, a `.key`, and a
 `known_hosts`. `config.json` declares only the directory names, under `sshItems`, so the
