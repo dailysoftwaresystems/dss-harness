@@ -120,7 +120,7 @@ public sealed partial class AgentProviders
                 new(AgentClientSetting.ExecutableKey, ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable, "the program the claude-code client starts in place of npm's Claude Code"),
                 new(AgentClientSetting.ConfigDirKey, Orchestration.ClaudeTranscripts.ConfigDirectoryVariable, "the Claude Code directory the claude-code client signs in from and reads the user's settings in"),
             ]),
-        new("claude-api", "anthropic", ["low", "medium", "high", "xhigh", "max"], SignsIn: false, []),
+        new(ClaudeApi.ClaudeApiClient.ClientName, "anthropic", ["low", "medium", "high", "xhigh", "max"], SignsIn: false, []),
         new("glm", "zai", ["low", "high", "max"], SignsIn: false, []),
     ];
 
@@ -246,13 +246,18 @@ public sealed partial class AgentProviders
             problems.Add($"agentClients '{client}' is not a client this tool builds in: {string.Join(", ", ClientKinds.Select(kind => $"'{kind.Name}'"))}");
         }
 
-        foreach (var (client, entry) in config.AgentClients.Where(entry => entry.Value.Update is not null && entry.Key != ClaudeCode.ClaudeCodeClient.ClientName))
+        // The rules of each client's keys read the entries of the clients the tool builds in: an entry of any other name is
+        // refused above, whole, and nothing of it is said again.
+        List<KeyValuePair<string, AgentClientConfig>> builtIn = [.. config.AgentClients.Where(entry => KindOf(entry.Key) is not null)];
+
+        foreach (var (client, entry) in builtIn.Where(entry => entry.Value.Update is not null && entry.Key != ClaudeCode.ClaudeCodeClient.ClientName))
         {
             problems.Add($"agentClients '{client}' names update, a key of the claude-code client alone: whether the tool installs Claude Code with npm and brings one up to date");
         }
 
-        AuthRules(config, problems);
-        AppointedNameRules(config, providers, problems);
+        AuthRules(builtIn, problems);
+        RequestRules(builtIn, problems);
+        AppointedNameRules(builtIn, providers, problems);
 
         foreach (var (provider, at) in providers.Select((entry, at) => (entry, at)))
         {
@@ -343,9 +348,9 @@ public sealed partial class AgentProviders
     /// signs each request with its provider's key - <c>auth</c> one of its ways, and <c>token</c> read only by a way that
     /// reads one, and a variable's name. That it is appointed once is <see cref="AppointedNameRules"/>'.
     /// </summary>
-    private static void AuthRules(HarnessConfig config, List<string> problems)
+    private static void AuthRules(List<KeyValuePair<string, AgentClientConfig>> clients, List<string> problems)
     {
-        foreach (var (client, entry) in config.AgentClients)
+        foreach (var (client, entry) in clients)
         {
             var signsIn = KindOf(client) is { SignsIn: true };
 
@@ -378,22 +383,95 @@ public sealed partial class AgentProviders
     }
 
     /// <summary>
+    /// What the claude-api client's entry says of its requests - its tries, its longest wait, its cache's lifetime, the
+    /// fields and betas it adds - each a key of that client alone, so a key that loads is a key that is read: tries none or
+    /// more, a wait of a second or more, a lifetime of <see cref="ClaudeApi.ClaudeApiRequest.CacheTtls"/>, fields that set
+    /// nothing the tool sends itself, and betas each one word, named once, none the API's own fallback's.
+    /// </summary>
+    private static void RequestRules(List<KeyValuePair<string, AgentClientConfig>> clients, List<string> problems)
+    {
+        const string Api = ClaudeApi.ClaudeApiClient.ClientName;
+
+        foreach (var (client, entry) in clients)
+        {
+            var where = $"agentClients '{client}'";
+
+            if (!string.Equals(client, Api, StringComparison.Ordinal))
+            {
+                (string Key, bool Named, string What)[] keys =
+                [
+                    ("maxRetries", entry.MaxRetries is not null, "how many times a failed request is asked again"),
+                    ("maxRetryWaitSeconds", entry.MaxRetryWaitSeconds is not null, "the longest wait before a failed request is asked again"),
+                    ("cacheTtl", entry.CacheTtl is not null, "how long what a request caches is kept"),
+                    ("requestExtras", entry.RequestExtras is not null, "the fields merged into every request's body"),
+                    ("betas", entry.Betas is not null, "the beta headers sent beside the tool's own"),
+                ];
+
+                foreach (var (key, _, what) in keys.Where(key => key.Named))
+                {
+                    problems.Add($"{where} names {key}, a key of the {Api} client alone: {what}");
+                }
+
+                continue;
+            }
+
+            if (entry.MaxRetries is < 0)
+            {
+                problems.Add($"{where} maxRetries is {entry.MaxRetries.Value.ToString(CultureInfo.InvariantCulture)}; how many times a failed request is asked again is none or more");
+            }
+
+            if (entry.MaxRetryWaitSeconds is < 1)
+            {
+                problems.Add($"{where} maxRetryWaitSeconds is {entry.MaxRetryWaitSeconds.Value.ToString(CultureInfo.InvariantCulture)}; the longest wait before a failed request is asked again is a second or more");
+            }
+
+            if (entry.CacheTtl is { } ttl && !ClaudeApi.ClaudeApiRequest.CacheTtls.Contains(ttl, StringComparer.Ordinal))
+            {
+                problems.Add($"{where} cacheTtl '{ttl}' is none of: {string.Join(", ", ClaudeApi.ClaudeApiRequest.CacheTtls)}");
+            }
+
+            if (entry.RequestExtras is { } extras)
+            {
+                problems.AddRange(ClaudeApi.ClaudeApiRequest.ExtrasProblems(extras, $"{where} requestExtras"));
+            }
+
+            foreach (var beta in entry.Betas ?? [])
+            {
+                if (beta.Length == 0 || beta.Any(character => char.IsWhiteSpace(character) || character == ','))
+                {
+                    problems.Add($"{where} betas '{beta}' is no beta's name: one word, sent in a header beside the tool's own");
+                }
+                else if (beta.StartsWith(ClaudeApi.ClaudeApiRequest.ServerSideFallbackPrefix, StringComparison.Ordinal))
+                {
+                    problems.Add($"{where} betas '{beta}' is refused: the API's own fallback is never asked for, for the engine's fallback is the only one a step has");
+                }
+            }
+
+            foreach (var twice in (entry.Betas ?? []).GroupBy(beta => beta, StringComparer.Ordinal).Where(group => group.Count() > 1))
+            {
+                problems.Add($"{where} lists '{twice.Key}' twice in betas: each beta is listed once");
+            }
+        }
+    }
+
+    /// <summary>
     /// The names a client appoints in the slot - its token, where it signs in with one, and each setting it reads - each by
     /// the name its entry gives or its own where it gives none, and each appointed once, beside every provider's keys and
     /// the client's other names, for a name holds one value. A setting's key is one of the client that reads it alone,
     /// and the name it gives is a variable's name.
     /// </summary>
-    private static void AppointedNameRules(HarnessConfig config, List<AgentProviderConfig> providers, List<string> problems)
+    private static void AppointedNameRules(List<KeyValuePair<string, AgentClientConfig>> builtIn, List<AgentProviderConfig> providers, List<string> problems)
     {
         var keys = ClientKinds.SelectMany(kind => kind.Settings).Select(setting => setting.Key).Distinct(StringComparer.Ordinal).ToList();
-        var clients = config.AgentClients.Keys.Concat(Served(providers).Select(kind => kind.Name)).Distinct(StringComparer.OrdinalIgnoreCase);
+        var clients = builtIn.Select(entry => entry.Key).Concat(Served(providers).Select(kind => kind.Name)).Distinct(StringComparer.Ordinal);
 
         foreach (var client in clients)
         {
-            var entry = config.AgentClients.GetValueOrDefault(client);
-            var kind = KindOf(client);
+            // builtIn holds only entries named as a client exactly: one of another case is no client's, and is said once above.
+            var entry = builtIn.FirstOrDefault(each => each.Key == client).Value;
+            var kind = KindOf(client)!;
 
-            foreach (var key in keys.Where(key => kind?.Settings.Any(own => own.Key == key) is not true))
+            foreach (var key in keys.Where(key => !kind.Settings.Any(own => own.Key == key)))
             {
                 var owner = ClientKinds.First(other => other.Settings.Any(own => own.Key == key));
                 var setting = owner.Settings.First(own => own.Key == key);
@@ -402,11 +480,6 @@ public sealed partial class AgentProviders
                 {
                     problems.Add($"agentClients '{client}' names {key}, a key of the {owner.Name} client alone: the variable that holds {setting.What}");
                 }
-            }
-
-            if (kind is null)
-            {
-                continue;
             }
 
             var names = new List<(string For, string Name)>();

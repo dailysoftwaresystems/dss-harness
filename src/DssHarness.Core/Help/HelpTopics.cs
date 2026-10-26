@@ -2380,7 +2380,7 @@ public static class HelpTopics
     /// <summary>
     /// The agent sections of config.json: the companies whose models the tool reaches, their keys in the git-ignored
     /// slot, the tiers a step runs on and the effort forms, the agents' policy and the claude-code client - said where a
-    /// person reads them, before the API clients and the step runners are built (nothing here runs a step).
+    /// person reads them, before the step runners are built (nothing here runs a step).
     /// </summary>
     private static string RenderAgentClients()
     {
@@ -2552,14 +2552,16 @@ public static class HelpTopics
         builder.AppendLine("silent or gone. The policy is built and holds every action behind it; the claude-code");
         builder.AppendLine("client below asks it of every call, the tool runtime below decides by it each call it");
         builder.AppendLine("runs - the web's of the claude-code client, served through the engine's tool server, and");
-        builder.AppendLine("every call of the API clients, which are what comes next - and no command of this build");
-        builder.AppendLine("runs an agent yet.");
+        builder.AppendLine("every call of the API clients, the claude-api client below and glm, which comes next -");
+        builder.AppendLine("and no command of this build runs an agent yet.");
         builder.AppendLine();
         AppendWrapped(builder, ClaudeCodeClientProse());
         builder.AppendLine();
         AppendWrapped(builder, ToolRuntimeProse());
         builder.AppendLine();
         AppendWrapped(builder, ToolLoopProse());
+        builder.AppendLine();
+        AppendWrapped(builder, ClaudeApiClientProse());
 
         return builder.ToString();
     }
@@ -2708,8 +2710,8 @@ public static class HelpTopics
             "; ",
             Agents.Runtime.AgentTools.All(defaults).Select(tool => $"{tool.Name} ({tool.Needs.ToString().ToLowerInvariant()}{(tool.Barrier ? ", alone in its turn" : string.Empty)})"));
 
-        return "The tool runtime is the harness's own tools, built for the claude-api and glm clients to give their agents in "
-            + "place of a client's own - those clients are what comes next - and serving the claude-code client the web's through "
+        return "The tool runtime is the harness's own tools, built for the API clients to give their agents in place of a "
+            + "client's own - the claude-api client below, and glm, which comes next - and serving the claude-code client the web's through "
             + "the engine's tool server, each under the "
             + $"capability that gives it: {tools}. The run's reporter is given "
             + $"{string.Join(", ", Agents.Runtime.AgentTools.All(defaults).Where(tool => Agents.Policy.AgentPolicyGround.ReporterCapabilities.Contains(tool.Needs)).Select(tool => tool.Name))}, "
@@ -2752,17 +2754,20 @@ public static class HelpTopics
     }
 
     /// <summary>
-    /// The loop the API clients share, built ahead of them: what a turn is and what it is counted against, where the
+    /// The loop the API clients share: what a turn is and what it is counted against, where the
     /// conversation is kept, the two ways a turn is cut off, the provider's pause, the retries and their waits, and what a
     /// handoff and a message to an agent at work do to the turn under way - each number from its owner.
     /// </summary>
     private static string ToolLoopProse()
-        => "The loop the claude-api and glm clients share (ToolLoop) is built, over the provider each of them is to give it, and "
-            + "runs a step as those clients will. A turn is one answer of the agent's - a request the provider paused, or one "
+        => "The loop the claude-api and glm clients share (ToolLoop) runs a step of either over the provider each gives it - the "
+            + "Claude API's below, glm's next. A turn is one answer of the agent's - a request the provider paused, or one "
             + "thrown away and asked again, goes on as the same turn - counted against the step's maxTurns but a handoff "
-            + "turn; every request's usage is counted at the model's prices, no request but the handoff turn's is sent "
-            + "once the step's maxBudgetUsd is spent, and a step held to a budget on a model missing its input, cache-read or "
-            + "output price is never started, naming the key to fill. Each turn's calls run as the tool runtime below decides them; a turn whose request spent "
+            + "turn; every request's usage - one that ended without its turn, failed, silent or left, by what it said it used "
+            + "so far - is counted at the model's "
+            + "prices, no request but the handoff turn's is sent "
+            + "once the step's maxBudgetUsd is spent, and a step held to a budget on a model missing a price of what its "
+            + "provider's requests are billed by - input, cache reads and output, and the cache writes of a provider whose "
+            + "requests write one, in the model's large-prompt set too where it has one - is never started, naming the key to fill. Each turn's calls run as the tool runtime above decides them; a turn whose request spent "
             + "the budget runs none of them. The conversation is kept in the provider's own form under the agent's "
             + $"{OrchestratorLayout.SessionsDirectoryName}/<id>/, each message as it was sent and received and sent back so with "
             + "every later request, one line for each point where the history is whole - a turn that called tools stored with "
@@ -2777,13 +2782,63 @@ public static class HelpTopics
             + $"{Agents.Loop.ToolLoop.FirstWait.TotalSeconds:0} s to {Agents.Loop.ToolLoop.LongestDoubledWait.TotalSeconds:0} s, "
             + "or the one the provider names; a rate limit past them, or naming a wait past "
             + $"{Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds:0} s, is the account at its limit "
-            + $"({nameof(Agents.AgentRunStatus.RateLimited)}), a service failing past them, or naming such a wait, fails the "
-            + "step, and one silent past the stall bound stalls it; a key the provider refuses is passed over for the run's "
+            + $"({nameof(Agents.AgentRunStatus.RateLimited)}) - the model's on the key it was sent with, or the key's whole where its "
+            + "balance is spent, each named - a service failing past them, or naming such a wait, fails the "
+            + "step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
+            + "a model the provider does not serve the key never starts the "
+            + "step before its first answer and fails it after; a key the provider refuses is passed over for the run's "
             + "next, the same request sent again with it. A handoff asked abandons the request under way and cuts the calls "
             + $"running, each answered '{Agents.Runtime.AgentToolRuntime.Interrupted(Agents.Loop.ToolLoop.Pausing)}', then asks "
             + "the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn; "
             + "a message the engine gives an agent at work is given after "
             + "the results of the calls it is running, and an answer written while it was is not the step's.";
+
+    /// <summary>
+    /// The claude-api client: what each request is and carries - the version, the betas, the cache, what the tool sends
+    /// itself and what the client's own keys add - and what each of the API's failures is to a step, each name and number
+    /// from its owner.
+    /// </summary>
+    private static string ClaudeApiClientProse()
+    {
+        const string Client = Agents.ClaudeApi.ClaudeApiClient.ClientName;
+
+        return $"The {Client} client works a step through the Claude API by the loop above, every call run by the tool "
+            + $"runtime: each request is posted to its provider's api with /{Agents.ClaudeApi.ClaudeApiRequest.MessagesPath} "
+            + "after it, signed with a key of the provider's (x-api-key), under anthropic-version: "
+            + $"{Agents.ClaudeApi.ClaudeApiRequest.Version}, and its answer streamed. It is given the run's entries - its "
+            + "provider, its model and, where the configuration declares one, its own entry under agentClients, every key "
+            + "at its default where it declares none - and never starts without the first two, or on a provider "
+            + $"of a type but '{Agents.ClaudeApi.ClaudeApiClient.Descriptor.ProviderType}'. A request sends the model, the "
+            + "system prompt as one block, the tools - each streaming its input as it is written - and the messages as the "
+            + "conversation stored them; adaptive thinking, its summary shown; the step's effort as output_config.effort; "
+            + $"old tool uses cleared by the server as the context fills ({Agents.ClaudeApi.ClaudeApiRequest.ClearToolUses}, "
+            + $"under the {Agents.ClaudeApi.ClaudeApiRequest.ContextManagementBeta} beta), each clearing said in a notice; and "
+            + $"the system prompt and the conversation cached for agentClients.{Client}.cacheTtl "
+            + $"({string.Join(" or ", Agents.ClaudeApi.ClaudeApiRequest.CacheTtls)}, {Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes} "
+            + "where nothing is said), so a budget needs the model's price of that cache's writes too: priceCacheWrite, or "
+            + "priceCacheWrite1h for an hour. A step with a fallback that can go on here sends the "
+            + $"{Agents.ClaudeApi.ClaudeApiRequest.FallbackCreditBeta} beta, and a request the model declines ends the step "
+            + $"{nameof(Agents.AgentRunStatus.Refused)}, with its category and the credit the API gave for it on the result; "
+            + $"no request carries fallbacks or a {Agents.ClaudeApi.ClaudeApiRequest.ServerSideFallbackPrefix}* beta, for the "
+            + $"engine's fallback is the only one a step has. Five keys are {Client}'s alone: requestExtras, an object merged "
+            + "into every request's body - a member it adds sent as given, an object's members merged into the tool's own - "
+            + "refused where it sets what the tool sends itself or fallbacks; betas, sent beside the tool's own, each one "
+            + "word and never the API's fallback's; cacheTtl; and maxRetries and maxRetryWaitSeconds, the loop's tries and "
+            + $"longest wait ({Agents.Loop.ToolLoopTerms.DefaultMaxRetries} and "
+            + $"{Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds:0} where nothing is said). A spend limit reached "
+            + $"- the organization's monthly cap, a 429 whose error names {Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}, or one "
+            + "the organization or a workspace set, a 400 that says so - is the key's limit, the step "
+            + $"{nameof(Agents.AgentRunStatus.RateLimited)} at once until the date the API names; a 401 is a key "
+            + "refused, passed over for the next; a 402 the key's balance spent, the step "
+            + $"{nameof(Agents.AgentRunStatus.RateLimited)} at once; a 429 the model's limit on that key, waited out within "
+            + "those tries and the step RateLimited past them; a 413, a prompt too long or an answer the model's context could hold no more "
+            + $"of is the context exhausted ({nameof(Agents.AgentRunStatus.ContextExhausted)}); a 403, a 404, or a 400 "
+            + "answering a conversation's first request - a model the key's organization is not given, such as one that "
+            + "needs a data retention the organization does not keep - is a model the provider does not serve the key, "
+            + "naming it; an overload, a server's error, a request timed out, a conflict, a network that failed and a "
+            + "stream cut or ended before its message are asked again; and any other 400 fails the step, said in the "
+            + "API's own words with the request it names.";
+    }
 
     /// <summary>
     /// The sample file for the slot, from the names the providers the configuration init writes appoint: one comment
@@ -4291,6 +4346,10 @@ public static class HelpTopics
         builder.AppendLine($"                 {Agents.AgentClientSetting.ConfigDirKey} and {Agents.AgentClientSetting.ExecutableKey}, claude-code's alone, the variables");
         builder.AppendLine("                 that hold a specific login's Claude Code directory and the program");
         builder.AppendLine($"                 it starts ({Orchestration.ClaudeTranscripts.ConfigDirectoryVariable}, {Agents.ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable} where none is named);");
+        builder.AppendLine("                 maxRetries, maxRetryWaitSeconds, cacheTtl, requestExtras and");
+        builder.AppendLine("                 betas, claude-api's alone, its tries and longest wait, how long");
+        builder.AppendLine("                 its requests are cached, the fields merged into each one and the");
+        builder.AppendLine("                 betas sent beside the tool's own;");
         builder.AppendLine("                 a client holds no model, size or price - contextTokens and");
         builder.AppendLine("                 maxOutputTokens are a model's ('help agent-clients')");
         builder.AppendLine("  agentPolicy    what an agent may do beyond the rules built into the tool:");

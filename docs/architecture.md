@@ -1667,7 +1667,7 @@ that ran (`ClaudeLine.CallResult.Ran`) one the engine was asked about and allowe
 with an `AgentAccountLimit`. Each client's denials, requests of the web and answers too large for
 their events are recorded by the one `AgentCallRecords` (`denials.jsonl`, `web.jsonl`,
 `tool-results/`). The harness's own tools, `Agents\Runtime\AgentToolRuntime`, are built for the
-API clients - which are what comes next - each run's opened by `AgentToolHost.Open`, and serve
+API clients - `claude-api`, and `glm` next - each run's opened by `AgentToolHost.Open`, and serve
 the `claude-code` client the web's through the engine's tool server (`AgentToolServer`, opened by
 `AgentToolHost.Serve` for one launch: the server's tools alone, written to the launch's own
 `AgentCallRecords`, each call answered by `AgentToolRuntime.ServeAsync`, whose end the launch's
@@ -1688,9 +1688,11 @@ reader's pace, waited for outside the fetch's 30 s), asks only the `http` and `h
 `WebPageText` over AngleSharp. A turn runs its reads together, at most 4 at once, a
 write or a run alone between them.
 
-The loop the API clients share is `Agents\Loop\ToolLoop`, built ahead of them and driven in its tests by a fake
-provider: one request after another over an `IChatProvider` - the provider's own wire, its form of a conversation's
-messages and tools, and what each of its failures is (`ChatFailure`) - each turn's calls run by the run's
+The loop the API clients share is `Agents\Loop\ToolLoop`, driven in its own tests by a fake provider: one request
+after another over an `IChatProvider` - the provider's own wire, its form of a conversation's messages and tools, what
+each of its failures is (`ChatFailure`), what a request has used so far (`ChatPart.Used`, counted where it ends
+without its turn), what is heard of an answer that is none of its parts (`ChatPart.Heard`, which keeps the stall bound
+from a stream that is alive) and what its requests are billed by (`IChatProvider.Uses`) - each turn's calls run by the run's
 `AgentToolRuntime` (`AgentToolHost.Open`) through `AgentToolRuntime.RunTurnAsync`, which an `AgentTurnCut` cuts when
 the run pauses or the step runs past its time, every call it cut still answered (`AgentToolRuntime.Interrupted`,
 `AgentToolRuntime.NotRun`); a host that cannot serve the tools a run is offered says why before it starts
@@ -1707,6 +1709,19 @@ byte for byte. The first request asks for a quarter of the model's `maxOutputTok
 cut off while it called a tool, or before it wrote anything, doubling it. Every client ends a run in the same words, whatever its wire: a step that
 never began, a model nobody asked for, an answer outside its schema, a declined request and an account at its limit are
 each said by `AgentEndings`, and what a run used, by model, is counted by `AgentUsageTally`.
+
+The `claude-api` client is `Agents\ClaudeApi\ClaudeApiClient`: the loop over `ClaudeApiProvider`, built for each run
+from the run's entries (`AgentEntries`: the provider's, the model's and the client's own where the configuration
+declares one, which the runner copies from the step's request) and refusing a start without the provider's and the
+model's. `ClaudeApiRequest` is the one owner of a request - its body, its
+headers, the version, the betas, what the tool sends itself (`ClaudeApiRequest.Owned`, which a client's `requestExtras`
+may not set, `ExtrasProblems` refusing it when the configuration is read) and the cache's lifetimes; the provider
+streams each answer through `Agents\Http\ApiConnection` - one `HttpClient` for the process, its events read by
+`System.Net.ServerSentEvents`, a refusal, a network that failed and a stream cut each an `ApiEvent` of its own, never
+an exception - puts each block back together from its deltas, and keeps the answer's message as the API wrote it;
+`ClaudeApiFailures` is the one table of what each status and error type is to the loop. Its tests replay the answers
+under `tests/dss-harness-test/fixtures/claude-api/` through `ApiEndpoint`, a handler that stands in for the network
+and keeps every request as it was sent.
 
 The harness's own web search is built under `Web\Search`: each kind of source an implementation of `IWebSearchKind` -
 pure, asking and reading only what it is handed - found by the one scan of the core (`CoreImplementations<T>`, which

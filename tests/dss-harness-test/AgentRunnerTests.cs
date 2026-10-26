@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Application;
 using DssHarness.Core.Composition;
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
@@ -45,13 +46,15 @@ public sealed class AgentRunnerTests
         var seen = new List<AgentEvent>();
 
         var search = new AgentWebSearch([], 3, 4, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
-        var step = Step(temp, promptValues: new Dictionary<string, string> { ["item"] = "login form" }) with { WebSearch = search, Withheld = ["DEPLOY_TOKEN"] };
+        var entries = new AgentEntries(new AgentProviderConfig { Name = "anthropic" }, new AgentModelConfig { Code = "model-x" }, new AgentClientConfig { MaxRetries = 2 });
+        var step = Step(temp, promptValues: new Dictionary<string, string> { ["item"] = "login form" }) with { WebSearch = search, Withheld = ["DEPLOY_TOKEN"], Entries = entries };
 
         var result = await Runner(client).RunAsync(step, new Collecting(seen), TestContext.Current.CancellationToken);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.Equal("do the login form", client.Run!.UserPrompt);
         Assert.Same(search, client.Run.WebSearch);
+        Assert.Same(entries, client.Run.Entries);
         Assert.Equal(["DEPLOY_TOKEN"], client.Run.Withheld);
         Assert.Equal("be terse", client.Run.SystemPrompt);
         Assert.Equal(WorkDirectory(temp), client.Run.Workspace.WorkingDirectory);
@@ -1113,7 +1116,7 @@ public sealed class AgentRunnerTests
         Assert.Equal(Enumerable.Range(1, posted).Select(count => (long)count), seen);
     }
 
-    /// <summary>The runner is registered as the one way an agent's step is worked, with no client built in yet.</summary>
+    /// <summary>The runner is registered as the one way an agent's step is worked, with every client built in so far: claude-code, then claude-api.</summary>
     [Fact]
     public void TheRunnerIsRegistered_InAddDssHarness()
     {
@@ -1122,6 +1125,7 @@ public sealed class AgentRunnerTests
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
         Assert.IsType<AgentRunner>(provider.GetRequiredService<IAgentRunner>());
+        Assert.Equal(["claude-code", "claude-api"], provider.GetServices<IAgentClient>().Select(client => client.Name));
     }
 
     /// <summary>The scripted work: a launch, a message with its delta.</summary>

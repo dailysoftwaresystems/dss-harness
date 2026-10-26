@@ -33,7 +33,15 @@ public sealed class AgentEndingsTests
         Assert.Equal((AgentRunStatus.InvalidOutput, "the answer did not read against its schema after 2 repairs: one; two ***"), (invalid.Status, invalid.Error));
 
         var declined = AgentEndings.Declined("cyber", "no sk-1", Mask);
-        Assert.Equal((AgentRunStatus.Refused, "the model declined the request (cyber): no ***", "cyber"), (declined.Status, declined.Error, declined.DeclinedFor));
+        Assert.Equal((AgentRunStatus.Refused, "the model declined the request (cyber): no ***", "cyber", null), (declined.Status, declined.Error, declined.DeclinedFor, declined.Credit));
+
+        var credited = AgentEndings.Declined("cyber", "no", Mask, new AgentFallbackCredit("fct_1", PrefillClaim: true));
+        Assert.Equal(new AgentFallbackCredit("fct_1", true), credited.Credit);
+        Assert.Null(credited.Problem());
+        Assert.Equal(
+            "it ended Failed, and holds a declined request's credit, which only a run that ended Refused does",
+            (credited with { Status = AgentRunStatus.Failed, DeclinedFor = null }).Problem());
+        Assert.Null(credited.FailedFor("it stopped").Credit);
         Assert.Equal(("the model declined the request: no", null), (AgentEndings.Declined(null, "no", Mask).Error, AgentEndings.Declined(string.Empty, "no", Mask).DeclinedFor));
     }
 
@@ -51,6 +59,12 @@ public sealed class AgentEndingsTests
         Assert.Equal(
             "Claude Code reported the account at its limit, an allowance used up: five_hour",
             AgentEndings.AtLimit("Claude Code", new AgentAccountLimit(BalanceSpent: false), "five_hour", Mask).Error);
+        Assert.Equal(
+            "the provider reported the account at its limit for 'claude-opus-5-5' on WORK_KEY, an allowance used up: slow down",
+            AgentEndings.AtLimit("the provider", new AgentAccountLimit(BalanceSpent: false, Key: "WORK_KEY", Model: "claude-opus-5-5"), "slow down", Mask).Error);
+        Assert.Equal(
+            "the provider reported the account at its limit on WORK_KEY, its balance or included usage spent: no credit",
+            AgentEndings.AtLimit("the provider", new AgentAccountLimit(BalanceSpent: true, Key: "WORK_KEY"), "no credit", Mask).Error);
     }
 
     /// <summary>A run's usage is counted in all and by model, its first model serving from the turn it began on.</summary>

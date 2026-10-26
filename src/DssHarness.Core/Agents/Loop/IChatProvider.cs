@@ -14,6 +14,12 @@ namespace DssHarness.Core.Agents.Loop;
 /// </remarks>
 public interface IChatProvider
 {
+    /// <summary>
+    /// A token of each kind every request of this provider is billed by - its input, its output, the cache it reads and
+    /// the cache it writes - as one of each: what a step held to a budget needs a price for before it starts.
+    /// </summary>
+    AgentUsage Uses { get; }
+
     /// <summary>The tools a conversation begins with, in the provider's own form and in the order given: what every request of it sends.</summary>
     /// <param name="tools">The tools, as the runtime offers them: by name.</param>
     string Tools(IReadOnlyList<AgentToolDefinition> tools);
@@ -51,6 +57,10 @@ public interface IChatProvider
 /// <param name="MaxOutputTokens">The most the answer may hold.</param>
 /// <param name="Key">The key the request is signed with; null where the run was given none.</param>
 /// <param name="Output">The output the run is to produce, where its step names one.</param>
+/// <param name="Credit">
+/// Whether the step has a model after this one to go on with, so a request the model declines is to leave it a credit,
+/// where the provider gives one (<see cref="ChatTurn.Credit"/>).
+/// </param>
 public sealed record ChatRequest(
     string Model,
     string? Effort,
@@ -59,11 +69,26 @@ public sealed record ChatRequest(
     IReadOnlyList<string> Messages,
     long MaxOutputTokens,
     AgentKey? Key,
-    AgentOutput? Output);
+    AgentOutput? Output,
+    bool Credit = false);
 
 /// <summary>One part of what a request answers, in the order it came.</summary>
 public abstract record ChatPart
 {
+    /// <summary>
+    /// Something of the answer came that is none of its parts - the provider's keep-alive, a block's end, an event of no
+    /// part - so the answer is not silent: the stall bound starts again from it.
+    /// </summary>
+    public sealed record Heard : ChatPart;
+
+    /// <summary>
+    /// What the request has used so far, whole, as the provider last said it: an answer that began has read its input,
+    /// which is billed whether or not the request ends in a turn - so the loop counts it where the request ends without
+    /// one, failed, gone silent or left. A turn carries its own.
+    /// </summary>
+    /// <param name="SoFar">The usage, as it stands.</param>
+    public sealed record Used(AgentUsage SoFar) : ChatPart;
+
     /// <summary>The answer began, written by <paramref name="Model"/>: held to the model asked for at once.</summary>
     /// <param name="Model">The model the provider says writes it.</param>
     public sealed record Began(string Model) : ChatPart;
@@ -137,6 +162,7 @@ public enum ChatStop
 /// <param name="Usage">What the request used.</param>
 /// <param name="StopReason">Why it ended, in the provider's own word.</param>
 /// <param name="Category">What a declined request was of, where the provider names it; null otherwise.</param>
+/// <param name="Credit">The credit a declined request left the step's next model, where the request asked for one and the provider gave it; null otherwise.</param>
 public sealed record ChatTurn(
     ChatStop Stop,
     string Message,
@@ -146,7 +172,8 @@ public sealed record ChatTurn(
     IReadOnlyList<ChatCall> Calls,
     AgentUsage Usage,
     string StopReason,
-    string? Category = null);
+    string? Category = null,
+    AgentFallbackCredit? Credit = null);
 
 /// <summary>One call a turn made.</summary>
 /// <param name="Id">The call's id, as the provider named it.</param>
@@ -166,10 +193,13 @@ public enum ChatFailureKind
     /// <summary>The service failed for now - the network, a server's error, an overload, a stream cut - and is asked again.</summary>
     Transient,
 
-    /// <summary>A rate limit the client waits out, within its tries and its longest wait; past them, the account is at its limit.</summary>
+    /// <summary>
+    /// A rate limit the client waits out, within its tries and its longest wait; past them, the account is at its limit -
+    /// the limit of the request's model on the request's key.
+    /// </summary>
     RateLimited,
 
-    /// <summary>The account is at its limit at once: what it may use is used, or its balance is spent.</summary>
+    /// <summary>The account is at its limit at once: what it may use is used, or its balance is spent - the limit of the request's key, whatever model it signs.</summary>
     AccountLimit,
 
     /// <summary>The provider refused the key the request was signed with.</summary>
@@ -180,6 +210,13 @@ public enum ChatFailureKind
 
     /// <summary>The model's context could hold no more.</summary>
     ContextFull,
+
+    /// <summary>
+    /// The provider will not serve the request's model to the key's account - one it does not give that account, one the
+    /// account is not set up for - which no try mends and nothing of the request's would: where the run had no answer yet,
+    /// it never began.
+    /// </summary>
+    Unserved,
 
     /// <summary>A failure no try mends, said in the provider's own words: a plan that does not cover the call, a history the provider will not read, an answer this tool cannot put back together.</summary>
     Fatal,

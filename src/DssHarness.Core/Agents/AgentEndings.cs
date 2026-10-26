@@ -61,14 +61,16 @@ public static class AgentEndings
     public static AgentRunResult InvalidOutput(int repairs, IReadOnlyList<string> problems, ILineMask mask)
         => Ended(AgentRunStatus.InvalidOutput, $"the answer did not read against its schema after {repairs} repairs: {string.Join("; ", problems)}", mask);
 
-    /// <summary>A run the model declined, with what the request was of where the provider names it.</summary>
+    /// <summary>A run the model declined, with what the request was of where the provider names it, and the credit it left where it gave one.</summary>
     /// <param name="category">What the declined request was of; null or empty where the provider names nothing.</param>
     /// <param name="said">What was said of it.</param>
     /// <param name="mask">The run's mask.</param>
-    public static AgentRunResult Declined(string? category, string said, ILineMask mask)
+    /// <param name="credit">The credit the declined request left the step's next model; null where the provider gave none.</param>
+    public static AgentRunResult Declined(string? category, string said, ILineMask mask, AgentFallbackCredit? credit = null)
         => Ended(AgentRunStatus.Refused, $"the model declined the request{(category is { Length: > 0 } named ? $" ({named})" : string.Empty)}: {said}", mask) with
         {
             DeclinedFor = category is { Length: > 0 } of ? of : null,
+            Credit = credit,
         };
 
     /// <summary>A run handed off: the agent's answer, or why there is none, masked.</summary>
@@ -84,7 +86,7 @@ public static class AgentEndings
             Handoff: answer is null ? new AgentHandoff(WhyNone: whyNone is null ? null : mask.Redact(whyNone)) : new AgentHandoff(mask.Redact(answer)));
     }
 
-    /// <summary>A run that ended on its account's limit, carrying the limit.</summary>
+    /// <summary>A run that ended on its account's limit, carrying the limit: whose it is - a model's on a key, a key's whole - where a key is named.</summary>
     /// <param name="who">Who reported it: <c>Claude Code</c>, <c>the provider</c>.</param>
     /// <param name="limit">The limit.</param>
     /// <param name="said">What was said of it.</param>
@@ -93,9 +95,11 @@ public static class AgentEndings
     {
         ArgumentNullException.ThrowIfNull(limit);
 
+        var whose = limit.Key is not { } key ? string.Empty : limit.Model is { } model ? $" for '{model}' on {key}" : $" on {key}";
+
         return Ended(
             AgentRunStatus.RateLimited,
-            $"{who} reported the account at its limit, {(limit.BalanceSpent ? "its balance or included usage spent" : "an allowance used up")}{(limit.Lifts is { } lifts ? $" until {lifts:u}" : string.Empty)}: {said}",
+            $"{who} reported the account at its limit{whose}, {(limit.BalanceSpent ? "its balance or included usage spent" : "an allowance used up")}{(limit.Lifts is { } lifts ? $" until {lifts:u}" : string.Empty)}: {said}",
             mask) with
         {
             Limit = limit,

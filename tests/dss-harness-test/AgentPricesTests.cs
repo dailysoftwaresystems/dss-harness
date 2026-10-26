@@ -153,19 +153,31 @@ public sealed class AgentPricesTests
 
     /// <summary>
     /// A budget is charged with the cost counted from the prices every request is charged at - input missed and hit, and
-    /// output - in the budget's currency: a model missing any of them, or a provider pricing in another currency, refuses
-    /// a budget, naming what to fill.
+    /// output, and the cache write a provider's requests make - in the budget's currency: a model missing any of them, or
+    /// a provider pricing in another currency, refuses a budget, naming what to fill; a write no request makes needs no price.
     /// </summary>
     [Theory]
-    [InlineData("none", null)]
-    [InlineData("miss", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss), and a budget is charged with the cost counted from them")]
-    [InlineData("hit", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputHit), and a budget is charged with the cost counted from them")]
-    [InlineData("output", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceOutput), and a budget is charged with the cost counted from them")]
-    [InlineData("all", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss, priceInputHit, priceOutput), and a budget is charged with the cost counted from them")]
-    [InlineData("cacheWrite", null)]
-    [InlineData("currency", "providers 'zai' prices its models in EUR, and a budget is counted in USD")]
-    public void ABudget_NeedsThePricesEveryRequestIsChargedAt_InItsCurrency(string missing, string? refusal)
+    [InlineData("none", "none", null)]
+    [InlineData("miss", "none", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss), and a budget is charged with the cost counted from them")]
+    [InlineData("hit", "none", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputHit), and a budget is charged with the cost counted from them")]
+    [InlineData("output", "none", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceOutput), and a budget is charged with the cost counted from them")]
+    [InlineData("all", "none", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss, priceInputHit, priceOutput), and a budget is charged with the cost counted from them")]
+    [InlineData("cacheWrite", "none", null)]
+    [InlineData("cacheWrite", "5m", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceCacheWrite), and a budget is charged with the cost counted from them")]
+    [InlineData("cacheWrite", "1h", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceCacheWrite1h), and a budget is charged with the cost counted from them")]
+    [InlineData("currency", "none", "providers 'zai' prices its models in EUR, and a budget is counted in USD")]
+    [InlineData("largeHit", "none", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': largePrompt.priceInputHit), and a budget is charged with the cost counted from them")]
+    [InlineData("largeWhole", "none", null)]
+    [InlineData("largeWhole", "5m", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceCacheWrite, largePrompt.priceCacheWrite), and a budget is charged with the cost counted from them")]
+    public void ABudget_NeedsThePricesEveryRequestIsChargedAt_InItsCurrency(string missing, string writes, string? refusal)
     {
+        var uses = writes switch
+        {
+            "5m" => AgentPrices.EveryRequestUses with { CacheWriteTokens = 1 },
+            "1h" => AgentPrices.EveryRequestUses with { CacheWrite1hTokens = 1 },
+            _ => AgentPrices.EveryRequestUses,
+        };
+
         var model = new AgentModelConfig
         {
             Code = Glm.Code,
@@ -177,9 +189,15 @@ public sealed class AgentPricesTests
             PriceInputMiss = missing is "miss" or "all" ? null : Glm.PriceInputMiss,
             PriceInputHit = missing is "hit" or "all" ? null : Glm.PriceInputHit,
             PriceOutput = missing is "output" or "all" ? null : Glm.PriceOutput,
+            LargePrompt = missing switch
+            {
+                "largeHit" => new LargePromptPrices { OverTokens = 200_000, PriceInputMiss = 2.8, PriceOutput = 8.8 },
+                "largeWhole" => new LargePromptPrices { OverTokens = 200_000, PriceInputMiss = 2.8, PriceInputHit = 0.52, PriceOutput = 8.8 },
+                _ => null,
+            },
         };
 
-        Assert.Equal(refusal, AgentPrices.BudgetRefusal(Provider(model, currency: missing == "currency" ? "EUR" : "USD"), model));
+        Assert.Equal(refusal, AgentPrices.BudgetRefusal(Provider(model, currency: missing == "currency" ? "EUR" : "USD"), model, uses));
     }
 
     /// <summary>A kind the request did not use holds no price and decides nothing.</summary>

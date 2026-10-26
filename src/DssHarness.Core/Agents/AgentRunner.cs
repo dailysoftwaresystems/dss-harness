@@ -399,6 +399,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             Commands = step.Commands,
             WebSearch = step.WebSearch,
             SessionsDirectory = Layout(step).AgentSessionsDirectory(step.Agent),
+            Entries = step.Entries,
         };
 
     /// <summary>The step's own directory, as the one owner of the paths spells it.</summary>

@@ -307,6 +307,7 @@ public sealed class ToolLoopTests : IDisposable
     [InlineData("key", "Failed", 1)]
     [InlineData("declined", "Refused", 1)]
     [InlineData("context", "ContextExhausted", 1)]
+    [InlineData("unserved", "NotStarted", 1)]
     [InlineData("fatal", "Failed", 1)]
     public async Task AFailure_EndsTheRunAsItsKindSays(string kind, string status, int requests)
     {
@@ -319,6 +320,7 @@ public sealed class ToolLoopTests : IDisposable
             "key" => new ChatFailure(ChatFailureKind.KeyRefused, "invalid x-api-key"),
             "declined" => new ChatFailure(ChatFailureKind.Declined, "sensitive", Category: "cyber"),
             "context" => new ChatFailure(ChatFailureKind.ContextFull, "prompt is too long"),
+            "unserved" => new ChatFailure(ChatFailureKind.Unserved, "the model is not given this organization"),
             _ => new ChatFailure(ChatFailureKind.Fatal, "the plan does not cover the call"),
         };
 
@@ -345,12 +347,72 @@ public sealed class ToolLoopTests : IDisposable
                 Assert.NotNull(result.Limit!.Lifts);
                 break;
             case "limited":
-                Assert.Equal(new AgentAccountLimit(false, Lifts), result.Limit);
+                // A rate limit is the model's on the key; a limit at once is the key's whole.
+                Assert.Equal(new AgentAccountLimit(false, Lifts, "WORK_KEY", FakeChat.Model), result.Limit);
+                Assert.StartsWith($"the provider reported the account at its limit for '{FakeChat.Model}' on WORK_KEY, an allowance used up until ", result.Error);
                 break;
             case "account":
-                Assert.Equal(new AgentAccountLimit(true, Lifts), result.Limit);
+                Assert.Equal(new AgentAccountLimit(true, Lifts, "WORK_KEY"), result.Limit);
+                Assert.StartsWith("the provider reported the account at its limit on WORK_KEY, its balance or included usage spent until ", result.Error);
+                break;
+            case "unserved":
+                Assert.Equal((AgentNotStartedBecause.ConfigurationWrong, "client 'claude-api' was not started: the model is not given this organization"), (result.NotStartedBecause, result.Error));
                 break;
         }
+    }
+
+    /// <summary>A model the provider will not serve the account, met after the run had an answer, fails the step: the run began.</summary>
+    [Fact]
+    public async Task AModelUnservedAfterAnAnswer_FailsTheStep()
+    {
+        Write("a.txt", "alpha");
+        _chat.Answer(FakeChat.Calling(View("c1", "a.txt"))).Fail(new ChatFailure(ChatFailureKind.Unserved, "the model is not given this organization"));
+
+        var result = await Ran(Run());
+
+        Assert.Equal((AgentRunStatus.Failed, null, "the model is not given this organization"), (result.Status, result.NotStartedBecause, result.Error));
+    }
+
+    /// <summary>
+    /// A request of a step with a model after its own asks that a decline leave it a credit, and a declined turn's credit is
+    /// the run's, beside what it was of; a step with no model after its own asks none.
+    /// </summary>
+    [Fact]
+    public async Task ADeclinedTurnsCredit_IsTheRuns_WhereTheStepGoesOn()
+    {
+        var credit = new AgentFallbackCredit("tok-1", PrefillClaim: true);
+        _chat.Answer(FakeChat.Said(string.Empty, stop: ChatStop.Declined, category: "cyber") with { Credit = credit });
+
+        var result = await Ran(Run() with { Fallback = [new AgentFallbackModel("claude-opus-4-8", "anthropic", null, null, UsableHere: true)] });
+
+        Assert.Equal((AgentRunStatus.Refused, "cyber", credit), (result.Status, result.DeclinedFor, result.Credit));
+        Assert.Equal("the model declined the request (cyber): it wrote nothing before it declined", result.Error);
+        Assert.True(Assert.Single(_chat.Requests).Credit);
+
+        var alone = new FakeChat().Answer(FakeChat.Said("no", stop: ChatStop.Declined));
+        var unused = new FakeChat().Answer(FakeChat.Said("no", stop: ChatStop.Declined));
+
+        Assert.Null((await Ran(Run(), chat: alone)).Credit);
+        Assert.False(Assert.Single(alone.Requests).Credit);
+
+        await Ran(Run() with { Fallback = [new AgentFallbackModel("claude-opus-4-8", "anthropic", null, null, UsableHere: false)] }, chat: unused);
+        Assert.False(Assert.Single(unused.Requests).Credit);
+    }
+
+    /// <summary>
+    /// A step held to a budget is refused before it starts where its model lacks the price of a kind its provider's every
+    /// request is billed by - the cache write of a provider whose requests mark what they send - naming the key to fill.
+    /// </summary>
+    [Fact]
+    public async Task ABudgetOnAModelMissingThePriceOfWhatItsProviderBillsBy_NeverStarts()
+    {
+        var writes = new FakeChat { Uses = AgentPrices.EveryRequestUses with { CacheWriteTokens = 1 } };
+
+        var result = await Ran(Run(limits: Limits(budget: 5m)), chat: writes);
+
+        Assert.Equal(AgentRunStatus.NotStarted, result.Status);
+        Assert.Equal($"client 'claude-api' was not started: no price for '{FakeChat.Model}' (providers 'anthropic', model '{FakeChat.Model}': priceCacheWrite), and a budget is charged with the cost counted from them", result.Error);
+        Assert.Empty(writes.Requests);
     }
 
     /// <summary>A request whose answer goes silent past the step's bound on silence is asked again, and still silent past the tries ends the run stalled.</summary>
@@ -649,6 +711,15 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Equal(AgentRunStatus.WrongModel, late.Status);
         Assert.Equal("claude-sonnet-5-5", Assert.Single(finished.All.OfType<TurnFinished>()).Model);
         Assert.Equal(["claude-sonnet-5-5"], late.Usage!.PerModel.Select(part => part.Model));
+
+        // What a request of another model read before it was known as one is counted to that model all the same.
+        var read = new FakeChat();
+        read.Reply(new ChatPart.Used(FakeChat.Used(input: 700, output: 0)), new ChatPart.Began("claude-sonnet-5-5"), new ChatPart.Text("never read"));
+
+        var counted = await Ran(Run(), chat: read);
+
+        Assert.Equal(AgentRunStatus.WrongModel, counted.Status);
+        Assert.Equal(("claude-sonnet-5-5", 700), (Assert.Single(counted.Usage!.PerModel).Model, counted.Usage.Total.InputTokens));
     }
 
     /// <summary>A turn the model declined ends the run refused with what it was of; one its context could not hold ends it out of context.</summary>
@@ -839,6 +910,197 @@ public sealed class ToolLoopTests : IDisposable
 
         Assert.Equal((AgentRunStatus.BudgetSpent, "the step spent 0.00525 of its 0.001 USD budget"), (result.Status, result.Error));
         Assert.Single(_chat.Requests);
+    }
+
+    /// <summary>
+    /// What a request that ended without its turn said it used is counted as an answer's is - one that failed, one gone
+    /// silent past the stall bound, one the run left - in the run's usage and its cost, and once the budget is spent by
+    /// it no request is sent again, a refused key's next among them.
+    /// </summary>
+    [Fact]
+    public async Task WhatARequestWithoutItsTurnUsed_IsCounted_AndSpendsTheBudget()
+    {
+        _chat.Reply(Using(1000, new ChatPart.Failed(new ChatFailure(ChatFailureKind.Transient, "overloaded")))).Answer(FakeChat.Said("done"));
+
+        var counted = await Ran(Run());
+
+        Assert.Equal((AgentRunStatus.Completed, 1100, 10), (counted.Status, counted.Usage!.Total.InputTokens, counted.Usage.Total.OutputTokens));
+        Assert.Equal(2, _events.All.OfType<UsageReported>().Count());
+        Assert.Empty(_events.All.OfType<TurnRestarted>());
+
+        var silent = new FakeChat();
+        silent.Reply((_, cancellationToken) => Silent(null, cancellationToken)).Answer(FakeChat.Said("done"));
+
+        var stalled = await Ran(Run(limits: Limits(stallSeconds: 1)), chat: silent);
+
+        Assert.Equal((AgentRunStatus.Completed, 1100), (stalled.Status, stalled.Usage!.Total.InputTokens));
+
+        var pausing = Run();
+        var left = new FakeChat();
+        left.Reply((_, cancellationToken) => Silent(() => pausing.Handoff.Ask(), cancellationToken)).Answer(FakeChat.Said("handed"));
+
+        var handed = await Ran(pausing, chat: left);
+
+        Assert.Equal((AgentRunStatus.HandedOff, 1100), (handed.Status, handed.Usage!.Total.InputTokens));
+
+        var budgeted = new FakeChat();
+        budgeted.Reply(Using(1000, new ChatPart.Failed(new ChatFailure(ChatFailureKind.Transient, "overloaded")))).Answer(FakeChat.Said("done"));
+
+        var spent = await Ran(Run(limits: Limits(budget: 0.001m)), chat: budgeted);
+
+        Assert.Equal((AgentRunStatus.BudgetSpent, "the step spent 0.005 of its 0.001 USD budget"), (spent.Status, spent.Error));
+        Assert.Single(budgeted.Requests);
+
+        var refused = new FakeChat();
+        refused.Reply(Using(1000, new ChatPart.Failed(new ChatFailure(ChatFailureKind.KeyRefused, "invalid")))).Answer(FakeChat.Said("done"));
+
+        var twoKeys = Run(limits: Limits(budget: 0.001m)) with { Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", "sk-1"), new AgentKey("SPARE_KEY", "sk-2")]) };
+
+        Assert.Equal(AgentRunStatus.BudgetSpent, (await Ran(twoKeys, chat: refused)).Status);
+        Assert.Single(refused.Requests);
+        Assert.Empty(_events.All.OfType<FallbackStarted>());
+
+        // Begins, says what it used, then says nothing more - doing what then says once it has said it.
+        static async IAsyncEnumerable<ChatPart> Silent(Action? then, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return new ChatPart.Began(FakeChat.Model);
+            yield return new ChatPart.Used(FakeChat.Used(input: 1000, output: 0));
+            then?.Invoke();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// A request whose usage spent the budget leaves the end to the loop's own order - a pause asked meanwhile outranks
+    /// the budget - and the handoff turn's requests are sent whatever the budget says.
+    /// </summary>
+    [Fact]
+    public async Task ABudgetSpentByAFailedRequest_KeepsTheLoopsOrder_AndTheHandoffTurnGoesOn()
+    {
+        var run = Run(limits: Limits(budget: 0.001m));
+        _chat.Reply(Using(1000, new ChatPart.Failed(new ChatFailure(ChatFailureKind.Transient, "overloaded")))).Answer(FakeChat.Said("handed"));
+
+        var paused = await Ran(run, sink: new Reacting(_events, @event => @event is UsageReported, () => run.Handoff.Ask()));
+
+        Assert.Equal((AgentRunStatus.HandedOff, "handed"), (paused.Status, paused.Handoff!.Answer));
+
+        var handing = Run(limits: Limits(budget: 0.001m));
+        var chat = new FakeChat();
+        chat.Answer(FakeChat.Calling(FakeChat.Used(input: 1000), View("c1", "a.txt")))
+            .Reply(Using(1000, new ChatPart.Failed(new ChatFailure(ChatFailureKind.Transient, "overloaded"))))
+            .Answer(FakeChat.Said("handed too"));
+
+        var handed = await Ran(handing, chat: chat, sink: new Reacting(_events, @event => @event is UsageReported, () => handing.Handoff.Ask()));
+
+        Assert.Equal((AgentRunStatus.HandedOff, "handed too", 3), (handed.Status, handed.Handoff!.Answer, chat.Requests.Count));
+
+        // A key refused by the request whose usage spent the budget is never asked again, the handoff turn's among them.
+        var refusing = Run(limits: Limits(budget: 0.001m)) with { Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", "sk-1"), new AgentKey("SPARE_KEY", "sk-2")]) };
+        var refused = new FakeChat();
+        refused.Reply(Using(1000, new ChatPart.Failed(new ChatFailure(ChatFailureKind.KeyRefused, "invalid")))).Answer(FakeChat.Said("handed with the next"));
+
+        var next = await Ran(refusing, chat: refused, sink: new Reacting(new RecordedEvents(), @event => @event is UsageReported, () => refusing.Handoff.Ask()));
+
+        Assert.Equal((AgentRunStatus.HandedOff, "SPARE_KEY"), (next.Status, refused.Requests[1].Key!.Name));
+        Assert.Equal(["WORK_KEY"], next.KeysRefused);
+    }
+
+    /// <summary>
+    /// A failed request's usage that cannot be priced under a budget ends the run saying so, unless the failure ends it
+    /// otherwise: the failure's own end outranks it.
+    /// </summary>
+    [Fact]
+    public async Task AFailedRequestsUncountableUsage_EndsTheRun_UnlessItsFailureDoes()
+    {
+        var searched = new AgentUsage(100, 0, 0, 0, 0, 1);
+        _chat.Reply(Used(searched, new ChatPart.Failed(new ChatFailure(ChatFailureKind.Transient, "overloaded"))));
+
+        var uncounted = await Ran(Run(limits: Limits(budget: 5m)));
+
+        Assert.Equal(AgentRunStatus.Failed, uncounted.Status);
+        Assert.StartsWith("the step's cost cannot be counted against its budget:", uncounted.Error, StringComparison.Ordinal);
+
+        var full = new FakeChat();
+        full.Reply(Used(searched, new ChatPart.Failed(new ChatFailure(ChatFailureKind.ContextFull, "prompt is too long"))));
+
+        var exhausted = await Ran(Run(limits: Limits(budget: 5m)), chat: full);
+
+        Assert.Equal((AgentRunStatus.ContextExhausted, 100), (exhausted.Status, exhausted.Usage!.Total.InputTokens));
+
+        var fatal = new FakeChat();
+        fatal.Reply(Used(FakeChat.Used(input: 300, output: 0), new ChatPart.Failed(new ChatFailure(ChatFailureKind.Fatal, "no"))));
+
+        var failed = await Ran(Run(), chat: fatal);
+
+        Assert.Equal((AgentRunStatus.Failed, 300), (failed.Status, failed.Usage!.Total.InputTokens));
+
+        // A request the run left is left whatever its cost: the handoff goes on, its cost said missing where the run ends.
+        var pausing = Run(limits: Limits(budget: 5m));
+        var left = new FakeChat();
+        left.Reply((_, cancellationToken) => SaidThenSilent(searched, () => pausing.Handoff.Ask(), cancellationToken)).Answer(FakeChat.Said("handed"));
+
+        var handed = await Ran(pausing, chat: left);
+
+        Assert.Equal((AgentRunStatus.HandedOff, "handed"), (handed.Status, handed.Handoff!.Answer));
+        Assert.NotNull(handed.Usage!.Cost!.MissingPrice);
+
+        static async IAsyncEnumerable<ChatPart> SaidThenSilent(AgentUsage usage, Action then, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return new ChatPart.Began(FakeChat.Model);
+            yield return new ChatPart.Used(usage);
+            then();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+    }
+
+    /// <summary>A step whose time and budget have both run out ends past its time: the time is said before the budget.</summary>
+    [Fact]
+    public async Task TheStepsTime_OutranksItsBudget()
+    {
+        _chat.Answer(FakeChat.Calling(FakeChat.Used(input: 1000), View("c1", "a.txt")));
+        Write("a.txt", "alpha");
+
+        var result = await Ran(
+            Run(limits: Limits(budget: 0.001m, maxDuration: TimeSpan.FromMilliseconds(200))),
+            sink: new Reacting(_events, @event => @event is UsageReported, () => Thread.Sleep(600)));
+
+        Assert.Equal(AgentRunStatus.TimedOut, result.Status);
+        Assert.Single(_chat.Requests);
+    }
+
+    /// <summary>A reply that begins, says it used <paramref name="input"/> tokens in, and then ends as <paramref name="last"/> says.</summary>
+    private static ChatPart[] Using(long input, ChatPart last) => Used(FakeChat.Used(input: input, output: 0), last);
+
+    /// <summary>A reply that begins, says it used <paramref name="usage"/>, and then ends as <paramref name="last"/> says.</summary>
+    private static ChatPart[] Used(AgentUsage usage, ChatPart last) => [new ChatPart.Began(FakeChat.Model), new ChatPart.Used(usage), last];
+
+    /// <summary>
+    /// An answer heard of within the stall bound is never stalled, however long it takes: what the provider says of no
+    /// part - its keep-alive among it - is the answer heard.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerHeardOf_IsNeverStalled()
+    {
+        _chat.Reply((_, cancellationToken) => Heard(FakeChat.Said("done"), cancellationToken));
+
+        var result = await Ran(Run(limits: Limits(stallSeconds: 1)));
+
+        Assert.Equal((AgentRunStatus.Completed, "done"), (result.Status, result.FinalText));
+        Assert.Single(_chat.Requests);
+        Assert.Empty(_events.All.OfType<WaitingToRetry>());
+
+        static async IAsyncEnumerable<ChatPart> Heard(ChatTurn turn, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return new ChatPart.Began(turn.Model);
+
+            for (var at = 0; at < 5; at++)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(400), cancellationToken);
+                yield return new ChatPart.Heard();
+            }
+
+            yield return new ChatPart.Answered(turn);
+        }
     }
 
     /// <summary>An answer to a schema cut off at its length is read whole: its pieces, gone on from, are the JSON.</summary>

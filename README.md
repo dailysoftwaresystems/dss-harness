@@ -635,8 +635,8 @@ agent touches is the slot itself, in any root. Where this tool cannot decide a c
 runs while the host that would answer is silent or gone. The policy is built and holds every
 action behind it; the `claude-code` client asks it of every call, the tool runtime below decides
 by it each call it runs - the web's of the `claude-code` client, served through the engine's tool
-server, and every call of the API clients, which are what comes next - and no command of this
-build runs an agent yet.
+server, and every call of the API clients, the `claude-api` client below and `glm`, which comes
+next - and no command of this build runs an agent yet.
 
 The `claude-code` client starts Claude Code once for each launch, a new session every time -
 never resumed or continued, keeping no session file (one a launch leaves all the same is removed
@@ -681,9 +681,9 @@ no turn takes within the stall bound stalls the step; a declined request ends it
 an account at its limit `RateLimited`, with when the limit lifts where Claude Code says.
 `help agent-clients` says it whole.
 
-The tool runtime is the harness's own tools, built for the `claude-api` and `glm` clients to give
-their agents in place of a client's own - those clients are what comes next - and serving the
-`claude-code` client the web's through the engine's tool server: `view_file`, `find_files` and `search_files` (read),
+The tool runtime is the harness's own tools, built for the API clients to give their agents in
+place of a client's own - the `claude-api` client below, and `glm`, which comes next - and serving
+the `claude-code` client the web's through the engine's tool server: `view_file`, `find_files` and `search_files` (read),
 `create_file`, `replace_in_file`, `insert_in_file`, `create_directory`, `delete_file`,
 `delete_directory` and `move_path` (write), `run_command` (run) and `web_fetch` and `web_search` (web), each under
 the capability that gives it; the run's reporter is given those that read and no other. Each
@@ -721,13 +721,16 @@ it is information for the task, not instructions. Calls that read run together, 
 one that writes or runs alone; an answer past 32,768 characters is given as its first 8,192 and its
 last 24,576, the whole kept in the step's `tool-results/`.
 
-The loop the `claude-api` and `glm` clients share (`ToolLoop`) is built, over the provider each of
-them is to give it, and runs a step as those clients will. A turn is one answer of the agent's - a
+The loop the `claude-api` and `glm` clients share (`ToolLoop`) runs a step of either over the
+provider each gives it - the Claude API's below, `glm`'s next. A turn is one answer of the agent's - a
 request the provider paused, or one thrown away and asked again, goes on as the same turn - counted
-against the step's `maxTurns` but a handoff turn; every request's usage is counted at the model's
-prices, no request but the handoff turn's is sent once the step's `maxBudgetUsd` is spent, and a
-step held to a budget on a model missing its input, cache-read or output price is never started,
-naming the key to fill. Each turn's calls run as the tool runtime decides them; a turn whose request
+against the step's `maxTurns` but a handoff turn; every request's usage - one that ended without
+its turn, failed, silent or left, by what it said it used so far - is counted at the model's
+prices, no request but the handoff turn's is
+sent once the step's `maxBudgetUsd` is spent, and a
+step held to a budget on a model missing a price of what its provider's requests are billed by -
+input, cache reads and output, and the cache writes of a provider whose requests write one, in the
+model's large-prompt set too where it has one - is never started, naming the key to fill. Each turn's calls run as the tool runtime above decides them; a turn whose request
 spent the budget runs none of them. The conversation is kept in the provider's own form under the
 agent's `sessions/<id>/`, each message as it was sent and received and sent back so with every later
 request, one line for each point where the history is whole - a turn that called tools stored with
@@ -739,13 +742,50 @@ the step is `Truncated`. A turn the provider paused is sent again with nothing a
 failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request
 is asked again up to 6 times after a wait that doubles from 2 s to 60 s, or the one the provider
 names; a rate limit past them, or naming a wait past 300 s, is the account at its limit
-(`RateLimited`), a service failing past them, or naming such a wait, fails the step, and one silent
-past the stall bound stalls it; a key the provider refuses is passed over for the run's next, the
-same request sent again with it. A handoff asked abandons the request under way and cuts the calls
+(`RateLimited`) - the model's on the key it was sent with, or the key's whole where its balance is
+spent, each named - a service failing past them, or naming such a wait, fails the step, and one
+silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it;
+a model the provider does not serve the key never starts the
+step before its first answer and fails it after; a key the provider refuses is passed over for the
+run's next, the same request sent again with it. A handoff asked abandons the request under way and cuts the calls
 running, each answered `interrupted: the run is pausing; it may have run part way`, then asks the
 agent in one more message of the conversation, held to the handoff's bound instead of the step's
 time, no tool run in that turn; a message the engine gives an agent at work is given after the
 results of the calls it is running, and an answer written while it was is not the step's.
+
+The `claude-api` client works a step through the Claude API by the loop above, every call run by
+the tool runtime: each request is posted to its provider's `api` with `/v1/messages` after it,
+signed with a key of the provider's (`x-api-key`), under `anthropic-version: 2026-10-21`, and its
+answer streamed. It is given the run's entries - its provider, its model and, where the
+configuration declares one, its own entry under `agentClients`, every key at its default where it
+declares none - and never starts without the first two, or on a provider of a type but `anthropic`. A
+request sends the model, the system prompt as one block, the tools - each streaming its input as it
+is written - and the messages as the conversation stored them; adaptive thinking, its summary
+shown; the step's effort as `output_config.effort`; old tool uses cleared by the server as the
+context fills (`clear_tool_uses_20250919`, under the `context-management-2025-06-27` beta), each
+clearing said in a notice; and the system prompt and the conversation cached for
+`agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said), so a budget needs the
+model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour. A
+step with a fallback that can go on here sends the `fallback-credit-2026-07-01` beta, and a request
+the model declines ends the step `Refused`, with its category and the credit the API gave for it on
+the result; no request carries `fallbacks` or a `server-side-fallback-*` beta, for the engine's
+fallback is the only one a step has. Five keys are `claude-api`'s alone: `requestExtras`, an object
+merged into every request's body - a member it adds sent as given, an object's members merged into
+the tool's own - refused where it sets what the tool sends itself or `fallbacks`; `betas`, sent
+beside the tool's own, each one word and never the API's fallback's; `cacheTtl`; and `maxRetries`
+and `maxRetryWaitSeconds`, the loop's tries and longest wait (6 and 300 where nothing is said). A
+spend limit reached - the organization's monthly cap, a 429 whose error names
+`enforced_spend_limit_reached`, or one the organization or a workspace set, a 400 that says so - is
+the key's limit, the step `RateLimited` at once until the date the API names; a 401 is a key
+refused, passed over for the next; a 402 the key's balance spent, the step
+`RateLimited` at once; a 429 the model's limit on that key, waited out within those tries and the
+step `RateLimited` past them; a 413, a prompt too long or an answer the model's
+context could hold no more of is the context exhausted (`ContextExhausted`); a 403, a 404, or a 400
+answering a conversation's first request - a model the key's organization is not given, such as one
+that needs a data retention the organization does not keep - is a model the provider does not serve
+the key, naming it; an overload, a server's error, a request timed out, a conflict, a network that
+failed and a stream cut or ended before its message are asked again; and any other 400 fails the
+step, said in the API's own words with the request it names.
 
 `web_search` is the harness's own search, made by dssharness itself over HTTP: it asks the sources
 `agentWebSearch` in `config.json` declares - search APIs that answer JSON, feeds, OpenSearch

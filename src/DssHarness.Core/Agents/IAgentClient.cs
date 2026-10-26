@@ -453,6 +453,9 @@ public sealed record AgentStepRequest(
 
     /// <summary>What the engine tells the agent while it works; one of the runner's own where the engine gives none.</summary>
     public AgentMessages? Messages { get; init; }
+
+    /// <summary>The configuration's entries the step's model is reached by, as the engine resolved them; null where it gave none.</summary>
+    public AgentEntries? Entries { get; init; }
 }
 
 /// <summary>
@@ -530,4 +533,19 @@ public sealed record AgentRun(
     /// given none, and such a client is not started.
     /// </summary>
     public string? SessionsDirectory { get; init; }
+
+    /// <summary>
+    /// The configuration's entries the run's model is reached by - its provider's, its own and its client's - as the engine
+    /// resolved them; null where it gave none, and a client that builds every request from them is not started.
+    /// </summary>
+    public AgentEntries? Entries { get; init; }
 }
+
+/// <summary>
+/// The configuration's entries a run's model is reached by: its provider - the API's address and the currency of its
+/// prices - the model's own - what it holds and costs - and its client's, where the configuration declares one.
+/// </summary>
+/// <param name="Provider">The provider's entry.</param>
+/// <param name="Model">The model's entry, one of the provider's.</param>
+/// <param name="Client">The client's entry under <c>agentClients</c>; null where the configuration declares none, and every key is its default.</param>
+public sealed record AgentEntries(Configuration.AgentProviderConfig Provider, Configuration.AgentModelConfig Model, Configuration.AgentClientConfig? Client);

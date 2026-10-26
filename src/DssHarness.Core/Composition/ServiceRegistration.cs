@@ -200,7 +200,8 @@ public static class ServiceRegistration
         services.AddSingleton<Codebase.ICodebaseGraphService, Codebase.CodebaseGraphService>();
 
         // The one way an agent's step is worked, whatever the client is: each client built in is registered here as its
-        // slice lands - claude-code first - and a test registers its fake the same way.
+        // slice lands - claude-code, then claude-api over the one connection the API clients share - and a test registers
+        // its fake the same way.
         services.AddSingleton<IAgentClient>(provider => new Agents.ClaudeCode.ClaudeCodeClient(
             provider.GetRequiredService<IProcessRunner>(),
             provider.GetRequiredService<IFileSystem>(),
@@ -208,6 +209,12 @@ public static class ServiceRegistration
             provider.GetRequiredService<ChildSessions>(),
             provider.GetRequiredService<TimeProvider>(),
             tools: provider.GetRequiredService<Agents.Runtime.AgentToolHost>()));
+        services.AddSingleton(provider => new Agents.Http.ApiConnection(provider.GetRequiredService<TimeProvider>()));
+        services.AddSingleton<IAgentClient>(provider => new Agents.ClaudeApi.ClaudeApiClient(
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<Agents.Runtime.AgentToolHost>(),
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<Agents.Http.ApiConnection>()));
         services.AddSingleton<IAgentRunner, AgentRunner>();
 
         // The harness's own tools, built for the API clients to give their agents and served to Claude Code's through the

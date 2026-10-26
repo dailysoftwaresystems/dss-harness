@@ -58,6 +58,9 @@ internal sealed class FakeChat : IChatProvider
     /// <summary>Answers the next request with <paramref name="written"/>, then nothing more until the request is left.</summary>
     public FakeChat Hang(string? written = null, Action? whenHanging = null) => Reply((_, cancellationToken) => Hanging(written, whenHanging, cancellationToken));
 
+    /// <summary>What every request is billed by; what every provider's requests are, where a test names none.</summary>
+    public AgentUsage Uses { get; init; } = AgentPrices.EveryRequestUses;
+
     public string Tools(IReadOnlyList<AgentToolDefinition> tools)
         => new JsonArray([.. tools.Select(tool => (JsonNode)new JsonObject { ["name"] = tool.Name })]).ToJsonString();
 

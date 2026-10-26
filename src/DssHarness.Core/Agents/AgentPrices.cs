@@ -57,18 +57,25 @@ public static class AgentPrices
 
     /// <summary>
     /// Why a step held to a budget may not start on <paramref name="model"/>: the cost a budget is charged with is counted
-    /// from the model's prices, so a run under one needs its input, cache-read and output prices before its first request
-    /// (user, 2026-10-26), and its provider's prices in the budget's currency; null where it has them.
+    /// from the model's prices, so a run under one needs the price of every kind its requests are billed by before its
+    /// first request - input, cache read and output on every provider (user, 2026-10-26), and the cache write a provider's
+    /// requests make, flat and, where the model has one, in its large-prompt set - and its provider's prices in the
+    /// budget's currency; null where it has them.
     /// </summary>
     /// <param name="provider">The model's provider, whose currency holds.</param>
     /// <param name="model">The model the step starts on.</param>
+    /// <param name="uses">A token of each kind every request of the run's provider is billed by: <see cref="EveryRequestUses"/>, and what its requests add.</param>
     /// <returns>The sentence the refusal says, naming the keys to fill; null where nothing is missing.</returns>
-    public static string? BudgetRefusal(AgentProviderConfig provider, AgentModelConfig model)
+    public static string? BudgetRefusal(AgentProviderConfig provider, AgentModelConfig model, AgentUsage uses)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(uses);
 
-        string[] missing = [.. Charges(provider, model, EveryRequestUses).Where(charge => charge.Price is null).Select(charge => charge.Key)];
+        // A request whose prompt is over the model's large-prompt bound is priced by that set alone: its prices of the same
+        // kinds are needed too, or a request past the bound could not be counted once the step is under way.
+        AgentUsage[] probes = model.LargePrompt is { } large ? [uses, uses with { InputTokens = large.OverTokens + 1 }] : [uses];
+        string[] missing = [.. probes.SelectMany(probe => Charges(provider, model, probe)).Where(charge => charge.Price is null).Select(charge => charge.Key)];
 
         return missing.Length > 0 ? $"{NoPrice(provider, model, missing)}, and a budget is charged with the cost counted from them"
             : provider.Currency is { } currency && !string.Equals(currency, BudgetCurrency, StringComparison.Ordinal)
@@ -79,8 +86,11 @@ public static class AgentPrices
     /// <summary>The currency a budget is counted in: what <c>maxBudgetUsd</c> says.</summary>
     public const string BudgetCurrency = "USD";
 
-    /// <summary>A token of each kind every request may use - input missed and hit, and output - whose prices a budget needs first.</summary>
-    private static readonly AgentUsage EveryRequestUses = new(InputTokens: 1, OutputTokens: 1, CacheReadTokens: 1, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0);
+    /// <summary>
+    /// A token of each kind every request of every provider may be billed by - input missed and hit, and output - whose
+    /// prices a budget needs first: what a provider whose requests write no cache of their own is billed by.
+    /// </summary>
+    public static readonly AgentUsage EveryRequestUses = new(InputTokens: 1, OutputTokens: 1, CacheReadTokens: 1, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0);
 
     /// <summary>The sentence of a price missing: the model, and each key of its entry that would fill it.</summary>
     private static string NoPrice(AgentProviderConfig provider, AgentModelConfig model, IReadOnlyList<string> keys)

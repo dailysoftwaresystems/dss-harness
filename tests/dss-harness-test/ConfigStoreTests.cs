@@ -3070,6 +3070,40 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
+    /// The claude-api client's own keys are read from config.json as written - its extras as the JSON they are - and one
+    /// that sets what the tool sends itself is refused where the file is read, naming the file.
+    /// </summary>
+    [Fact]
+    public void TheApiClientsKeys_AreReadAsWritten_AndRefusedWhereTheFileIsRead()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.WriteFile(
+            "config.json",
+            """{ "agentClients": { "claude-api": { "maxRetries": 2, "maxRetryWaitSeconds": 30, "cacheTtl": "1h", "requestExtras": { "metadata": { "user_id": "u1" } }, "betas": ["b-2026-01-01"] } } }""");
+
+        var api = CreateStore().Load(path).AgentClients["claude-api"];
+
+        Assert.Equal((2, 30, "1h", """{"metadata":{"user_id":"u1"}}"""), (api.MaxRetries, api.MaxRetryWaitSeconds, api.CacheTtl, System.Text.Json.JsonSerializer.Serialize(api.RequestExtras)));
+        Assert.Equal(["b-2026-01-01"], api.Betas);
+
+        // A value holding a comment and a trailing comma, as config.json may, reaches every request as what it says.
+        var commented = temp.WriteFile(
+            "commented.json",
+            """{ "agentClients": { "claude-api": { "requestExtras": { "metadata": { "user_id": "u1", /* the run's */ }, "top_k": [1, 2,], } } } }""");
+        var extras = CreateStore().Load(commented).AgentClients["claude-api"];
+        var request = new DssHarness.Core.Agents.Loop.ChatRequest("claude-opus-5-5", null, "s", "[]", ["""{"role":"user","content":[{"type":"text","text":"Go."}]}"""], 16, new DssHarness.Core.Agents.AgentKey("K", "v"), null);
+        var body = System.Text.Json.Nodes.JsonNode.Parse(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.Body(request, DssHarness.Core.Agents.ClaudeApi.ClaudeApiSettings.Of(extras)))!;
+
+        Assert.Equal(("""{"user_id":"u1"}""", "[1,2]"), (body["metadata"]!.ToJsonString(), body["top_k"]!.ToJsonString()));
+
+        var owned = temp.WriteFile("owned.json", """{ "agentClients": { "claude-api": { "requestExtras": { "model": "claude-other" } } } }""");
+
+        Assert.Equal(
+            $"'{owned}' could not be read: agentClients 'claude-api' requestExtras.model is refused: the tool sends it itself",
+            Assert.Throws<ConfigException>(() => CreateStore().Load(owned)).Message);
+    }
+
+    /// <summary>
     /// The agent sections' own refusals are made where config.json is read: a file whose providers do not read does not
     /// load, naming the file and the problem, so a config that loads is one the tool can use.
     /// </summary>

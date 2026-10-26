@@ -185,6 +185,17 @@ public sealed class AgentProviderTests
         var (_, ofClientAlone) = AgentProviders.Resolve(glm);
 
         Exactly(ofClientAlone, "agentClients 'glm' names update, a key of the claude-code client alone: whether the tool installs Claude Code with npm and brings one up to date");
+
+        var (_, misnamed) = AgentProviders.Resolve(Config(
+            new() { ["Claude-API"] = new AgentClientConfig { Update = false, Auth = AgentAuth.Login, MaxRetries = 1, ConfigDir = "MY_DIR" } },
+            [Provider()]));
+
+        Exactly(misnamed, "agentClients 'Claude-API' is not a client this tool builds in: 'claude-code', 'claude-api', 'glm'");
+
+        var served = Provider(name: "anthropic", type: "anthropic", api: "https://api.anthropic.com", key: "ANTHROPIC_API_KEY", client: "claude-api", models: [Model(code: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", efforts: ["low", "high"])]);
+        var (_, misnamedServed) = AgentProviders.Resolve(Config(new() { ["Claude-API"] = new AgentClientConfig { ConfigDir = "MY_DIR", MaxRetries = 1 } }, [served]));
+
+        Exactly(misnamedServed, "agentClients 'Claude-API' is not a client this tool builds in: 'claude-code', 'claude-api', 'glm'");
     }
 
     /// <summary>
@@ -335,6 +346,45 @@ public sealed class AgentProviderTests
         static IReadOnlyList<string> Refused(Dictionary<string, AgentClientConfig> clients)
             => AgentProviders.Resolve(Config(clients, [Anthropic()])).Problems;
     }
+
+    /// <summary>
+    /// The claude-api client's own keys - its tries, its longest wait, its cache's lifetime, the fields merged into its
+    /// requests and its betas - are refused on any other client, and held to what each can be: the API's own fallback
+    /// never asked for by either of the last two.
+    /// </summary>
+    [Fact]
+    public void TheApiClientsKeys_AreItsAlone_AndHeldToWhatEachCanBe()
+    {
+        using var extras = System.Text.Json.JsonDocument.Parse("""{"metadata":{"user_id":"u1"},"fallbacks":"default","output_config":{"task_budget":{"type":"tokens","total":1}}}""");
+        var api = Provider(name: "anthropic", type: "anthropic", api: "https://api.anthropic.com", key: "ANTHROPIC_API_KEY", client: ClaudeApiClient, models: [Model(code: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", efforts: ["low", "high"])]);
+
+        Exactly(
+            Refused(new() { ["claude-code"] = new AgentClientConfig { MaxRetries = 2, MaxRetryWaitSeconds = 30, CacheTtl = "1h", RequestExtras = extras.RootElement.Clone(), Betas = ["b"] } }, Anthropic()),
+            "agentClients 'claude-code' names maxRetries, a key of the claude-api client alone: how many times a failed request is asked again",
+            "agentClients 'claude-code' names maxRetryWaitSeconds, a key of the claude-api client alone: the longest wait before a failed request is asked again",
+            "agentClients 'claude-code' names cacheTtl, a key of the claude-api client alone: how long what a request caches is kept",
+            "agentClients 'claude-code' names requestExtras, a key of the claude-api client alone: the fields merged into every request's body",
+            "agentClients 'claude-code' names betas, a key of the claude-api client alone: the beta headers sent beside the tool's own");
+        Exactly(
+            Refused(new() { [ClaudeApiClient] = new AgentClientConfig { MaxRetries = -1, MaxRetryWaitSeconds = 0, CacheTtl = "1d", RequestExtras = extras.RootElement.Clone(), Betas = ["a b", "server-side-fallback-2026-01-01", "x", "x", ""] } }, api),
+            "agentClients 'claude-api' maxRetries is -1; how many times a failed request is asked again is none or more",
+            "agentClients 'claude-api' maxRetryWaitSeconds is 0; the longest wait before a failed request is asked again is a second or more",
+            "agentClients 'claude-api' cacheTtl '1d' is none of: 5m, 1h",
+            "agentClients 'claude-api' requestExtras.fallbacks is refused: no request carries fallbacks, for the engine's fallback is the only one a step has",
+            "agentClients 'claude-api' betas 'a b' is no beta's name: one word, sent in a header beside the tool's own",
+            "agentClients 'claude-api' betas 'server-side-fallback-2026-01-01' is refused: the API's own fallback is never asked for, for the engine's fallback is the only one a step has",
+            "agentClients 'claude-api' betas '' is no beta's name: one word, sent in a header beside the tool's own",
+            "agentClients 'claude-api' lists 'x' twice in betas: each beta is listed once");
+
+        using var fine = System.Text.Json.JsonDocument.Parse("""{"metadata":{"user_id":"u1"}}""");
+
+        Assert.Empty(Refused(new() { [ClaudeApiClient] = new AgentClientConfig { MaxRetries = 0, MaxRetryWaitSeconds = 1, CacheTtl = "5m", RequestExtras = fine.RootElement.Clone(), Betas = ["b-2026-01-01"] } }, api));
+
+        static IReadOnlyList<string> Refused(Dictionary<string, AgentClientConfig> clients, AgentProviderConfig provider)
+            => AgentProviders.Resolve(Config(clients, [provider])).Problems;
+    }
+
+    private const string ClaudeApiClient = Core.Agents.ClaudeApi.ClaudeApiClient.ClientName;
 
     /// <summary>balanceKeyUsage is refused where it is on and a provider with two keys or more lists a model with no price; one key is nothing to balance, and off is never refused.</summary>
     [Fact]

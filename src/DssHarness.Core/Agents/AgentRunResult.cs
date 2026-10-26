@@ -121,7 +121,20 @@ public sealed record AgentUsageReport(AgentUsage Total, IReadOnlyList<AgentModel
 /// </summary>
 /// <param name="BalanceSpent">Whether what is spent is its balance or its included usage, which time alone does not give back.</param>
 /// <param name="Lifts">When the limit lifts, where the provider says; null where it does not.</param>
-public sealed record AgentAccountLimit(bool BalanceSpent, DateTimeOffset? Lifts = null);
+/// <param name="Key">The key whose limit it is, by its name and never its value; null for a client's login.</param>
+/// <param name="Model">
+/// The model whose limit on that key it is - a rate limit is a model's on a key - where the limit is no other model's;
+/// null where it is the key's whole, every model it signs: its balance, its plan.
+/// </param>
+public sealed record AgentAccountLimit(bool BalanceSpent, DateTimeOffset? Lifts = null, string? Key = null, string? Model = null);
+
+/// <summary>
+/// What a declined request leaves the step's next model, where the provider gives it: a token the same request sent
+/// again on that model carries, so what the declined one had cached is billed as read rather than written again.
+/// </summary>
+/// <param name="Token">The provider's token, opaque, good for minutes.</param>
+/// <param name="PrefillClaim">Whether the request sent again may carry what the declined answer wrote, for the next model to go on from.</param>
+public sealed record AgentFallbackCredit(string Token, bool PrefillClaim);
 
 /// <summary>The agent's answer to the handoff turn, or why there is none.</summary>
 /// <param name="Answer">The answer, masked; null where the agent gave none.</param>
@@ -208,6 +221,12 @@ public sealed record AgentRunResult(
     public string? DeclinedFor { get; init; }
 
     /// <summary>
+    /// The credit a declined request left for the step's next model, where the run ended <see cref="AgentRunStatus.Refused"/>
+    /// and the provider gave one: what the engine's fallback sends the same request again with.
+    /// </summary>
+    public AgentFallbackCredit? Credit { get; init; }
+
+    /// <summary>
     /// What the container of a child the client started could not reach when that child ended, and why - one entry for
     /// each child whose container missed some of what it held, for what that child started may still run. Empty where
     /// every child was ended whole.
@@ -246,6 +265,7 @@ public sealed record AgentRunResult(
             : Status == AgentRunStatus.RateLimited && Limit is null ? "it ended RateLimited, and names no account's limit"
             : Status != AgentRunStatus.RateLimited && Limit is not null ? $"it ended {Status}, and names an account's limit, which only a run that ended RateLimited does"
             : Status != AgentRunStatus.Refused && DeclinedFor is not null ? $"it ended {Status}, and names what a declined request was of, which only a run that ended Refused does"
+            : Status != AgentRunStatus.Refused && Credit is not null ? $"it ended {Status}, and holds a declined request's credit, which only a run that ended Refused does"
             : Status != AgentRunStatus.Completed && StructuredOutput is not null ? $"it ended {Status}, and holds an answer read against its schema, which only a run that completed does"
             : Status == AgentRunStatus.HandedOff && Handoff is null ? "it ended HandedOff, and says not whether its agent answered the handoff"
             : Status != AgentRunStatus.HandedOff && Handoff is not null ? $"it ended {Status}, and holds a handoff, which only a run that handed off does"
@@ -261,7 +281,7 @@ public sealed record AgentRunResult(
 
     /// <summary>
     /// This run as one that failed for <paramref name="error"/>: what only another ending carries - why it never began, an
-    /// account's limit, what a declined request was of, an answer read against its schema, its questions, its handoff -
+    /// account's limit, what a declined request was of and its credit, an answer read against its schema, its questions, its handoff -
     /// is not a failed run's, and goes; what it did and what it used stay.
     /// </summary>
     /// <param name="error">Why it failed, masked.</param>
@@ -275,6 +295,7 @@ public sealed record AgentRunResult(
             Questions = [],
             Limit = null,
             DeclinedFor = null,
+            Credit = null,
             Error = error,
         };
 
