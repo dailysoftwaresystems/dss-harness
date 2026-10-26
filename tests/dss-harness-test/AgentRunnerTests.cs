@@ -1056,6 +1056,17 @@ public sealed class AgentRunnerTests
             (new(AgentRunStatus.InvalidOutput, Error: "x") { Assumptions = [new AgentAssumption("a", "b", "c")] }, "it ended InvalidOutput, and holds assumptions, which only a run whose answer read does"),
             (new(AgentRunStatus.Completed) { Assumptions = [null!] }, "it names an assumption as null"),
             (new(AgentRunStatus.Asked) { Questions = [null!] }, "it names a question as null"),
+            (new(AgentRunStatus.Completed) { Served = [null!] }, "it names a model that served it as null"),
+            (new(AgentRunStatus.Completed) { Files = ["a.txt", null!] }, "it names a file as null"),
+            (new(AgentRunStatus.Completed) { KeysRefused = [null!] }, "it names a key refused as null"),
+            (new(AgentRunStatus.Completed) { SessionFilesRemoved = [null!] }, "it names a session file removed as null"),
+            (new(AgentRunStatus.Completed) { Uncontained = [null!] }, "it names an uncontained child as null"),
+            (new(AgentRunStatus.Completed, Notes: "n") { Assumptions = [new AgentAssumption("a", " ", "c")] }, "its assumptions[0].assumed: is empty; say it, as the schema describes it"),
+            (
+                new(AgentRunStatus.Asked, Notes: "n") { Questions = [new AgentQuestion("q", "p", "t", "m", ["a", "b"], "a", "w"), new AgentQuestion("q", "p", "t", "m", ["Do X", "Do X"], "Do X", "w")] },
+                "its questions[1].options[1]: \"Do X\" stands at options[0] already; each option is a choice of its own"
+            ),
+            (new(AgentRunStatus.Asked, Notes: "n") { Questions = [new AgentQuestion("q", "p", "t", "m", ["a", "b"], "c", "w")] }, "its questions[0].recommended: \"c\" is none of the 2 options; recommend one of them, word for word"),
         };
 
         Assert.Equal(cases.Select(@case => @case.Problem), cases.Select(@case => @case.Result.Problem()));

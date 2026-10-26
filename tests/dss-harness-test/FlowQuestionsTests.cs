@@ -120,6 +120,33 @@ public sealed class FlowQuestionsTests
         Assert.Equal(JsonSerializer.Serialize(entry, JsonStateFile.Options), JsonSerializer.Serialize(again, JsonStateFile.Options));
     }
 
+    /// <summary>
+    /// The questions an agent or a step's output wrote are held, in a run's questions, to their record's own rule, as the
+    /// answer that held them was: every text written, options no two alike, the recommendation among them.
+    /// </summary>
+    [Fact]
+    public void TheQuestionsAnAgentWrote_AreHeldToTheirRecordsOwnRule()
+    {
+        FlowQuestionEntry Entry(params AgentQuestion?[] asked)
+            => new(
+                "q1",
+                "open",
+                "pause",
+                new DateTimeOffset(2026, 10, 21, 8, 30, 0, TimeSpan.Zero),
+                asked!,
+                [new FlowQuestionOption("approve", "the plan goes on"), new FlowQuestionOption("revise", "the plan is written again")],
+                []);
+        var asked = new AgentQuestion("which way?", "two ways stand", "the map", "the route", ["left", "right"], "left", "it is shorter");
+
+        Assert.Null(Entry(asked).Problem());
+        Assert.Equal("its questions[1].tried: is empty; say it, as the schema describes it", Entry(asked, asked with { Tried = "\t" }).Problem());
+        Assert.Equal("its questions[0].options: holds 1 option, and a question offers at least 2", Entry(asked with { Options = ["left"] }).Problem());
+        Assert.Equal("its questions[0]: is null", Entry([null]).Problem());
+        Assert.Equal(
+            "its question 'q1': its questions[0].recommended: \"up\" is none of the 2 options; recommend one of them, word for word",
+            new FlowQuestionsFile(1, "r1", new DateTimeOffset(2026, 10, 21, 8, 30, 0, TimeSpan.Zero), [Entry(asked with { Recommended = "up" })]).Problem());
+    }
+
     /// <summary>Each kind's answers, as the coordinator offers them: the kind's own, and skip only where the step is skippable.</summary>
     [Fact]
     public void EachKindOffersItsOwnAnswers_AndSkipOnlyWhereTheStepIsSkippable()

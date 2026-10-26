@@ -642,7 +642,7 @@ public sealed class ClaudeCodeClient(
                 await Emit(new SessionStarted(
                     ClientName,
                     named,
-                    FileContentHash.Of(Encoding.UTF8.GetBytes(run.SystemPrompt)),
+                    FileContentHash.Of(Encoding.UTF8.GetBytes(Masked(run.SystemPrompt))),
                     init.Tools,
                     [.. run.Skills.Select(skill => skill.Name)],
                     HandedConversation: false,
@@ -1372,17 +1372,21 @@ public sealed class ClaudeCodeClient(
             }
         }
 
-        /// <summary>Writes a user message, as the event that says so first.</summary>
+        /// <summary>
+        /// Writes a user message, as the event that says so first - masked, as the system prompt is: the agent is never told
+        /// a secret of the run's, and nothing Claude Code keeps of what it was told holds one the engine wrote.
+        /// </summary>
         private async Task SayAsync(string text, AgentMessageKind kind)
         {
-            await Emit(new MessageSent(Masked(text), kind)).ConfigureAwait(false);
+            var masked = Masked(text);
+            await Emit(new MessageSent(masked, kind)).ConfigureAwait(false);
             // Each message carries an id of the engine's, by which the interrupt's receipt names the messages it dropped.
             var id = Guid.NewGuid().ToString("D");
             _pending.Add(id);
             Write(new JsonObject
             {
                 ["type"] = "user",
-                ["message"] = new JsonObject { ["role"] = "user", ["content"] = text },
+                ["message"] = new JsonObject { ["role"] = "user", ["content"] = masked },
                 ["uuid"] = id,
             });
             Watch();

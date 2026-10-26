@@ -26,9 +26,13 @@ internal abstract record ApiReply
     /// <summary>A stream of <paramref name="events"/> that then says nothing more until the request is left.</summary>
     public static ApiReply Silent(string events) => new Streamed(events, 5, After.Hangs);
 
-    /// <summary>A refusal: <paramref name="status"/> with <paramref name="body"/>, naming its wait by <paramref name="retryAfter"/> or the date <paramref name="retryAt"/> where one is given.</summary>
-    public static ApiReply Status(int status, string body, TimeSpan? retryAfter = null, string type = "application/json", DateTimeOffset? retryAt = null)
-        => new Refusing(status, body, retryAfter, type, retryAt);
+    /// <summary>
+    /// A refusal: <paramref name="status"/> with <paramref name="body"/>, naming its wait by <paramref name="retryAfter"/> or
+    /// the date <paramref name="retryAt"/> where one is given - its connection reset once the body is read, where
+    /// <paramref name="cut"/> says so.
+    /// </summary>
+    public static ApiReply Status(int status, string body, TimeSpan? retryAfter = null, string type = "application/json", DateTimeOffset? retryAt = null, bool cut = false)
+        => new Refusing(status, body, retryAfter, type, retryAt, cut);
 
     /// <summary>The API's own error body: its type and message, and the request it names.</summary>
     public static ApiReply Error(int status, string type, string message, TimeSpan? retryAfter = null)
@@ -53,8 +57,8 @@ internal abstract record ApiReply
     /// <summary>A streamed answer.</summary>
     public sealed record Streamed(string Events, int Chunk, After Then) : ApiReply;
 
-    /// <summary>A refused request.</summary>
-    public sealed record Refusing(int Code, string Body, TimeSpan? RetryAfter, string Type, DateTimeOffset? RetryAt) : ApiReply;
+    /// <summary>A refused request, its body cut part way where <paramref name="BodyCut"/> says so.</summary>
+    public sealed record Refusing(int Code, string Body, TimeSpan? RetryAfter, string Type, DateTimeOffset? RetryAt, bool BodyCut = false) : ApiReply;
 
     /// <summary>A request that reaches nothing.</summary>
     public sealed record Unreached(string Why) : ApiReply;
@@ -111,7 +115,10 @@ internal sealed class ApiEndpoint : HttpMessageHandler
             case ApiReply.Unreached unreached:
                 throw new HttpRequestException(unreached.Why);
             case ApiReply.Refusing refusing:
-                var refused = new HttpResponseMessage((HttpStatusCode)refusing.Code) { Content = new StringContent(refusing.Body, Encoding.UTF8, refusing.Type), RequestMessage = request };
+                HttpContent body = refusing.BodyCut
+                    ? new StreamContent(new Chunked(Encoding.UTF8.GetBytes(refusing.Body), 5, ApiReply.After.Resets)) { Headers = { ContentType = new MediaTypeHeaderValue(refusing.Type) } }
+                    : new StringContent(refusing.Body, Encoding.UTF8, refusing.Type);
+                var refused = new HttpResponseMessage((HttpStatusCode)refusing.Code) { Content = body, RequestMessage = request };
 
                 if (refusing.RetryAfter is { } wait)
                 {

@@ -91,19 +91,30 @@ public static class ApiAnswers
     public static ChatPart.Failed EndedUnknown(string? reason) => Failed(ChatFailureKind.Fatal, $"the answer ended for '{reason ?? "no reason"}', which this tool does not know");
 
     /// <summary>
-    /// The call of a turn that ended to call tools whose input the stream left no JSON object - the answer failing part
-    /// way, asked again; null where every call is whole. A turn cut off at its length is thrown away by the loop itself,
-    /// its calls never run.
+    /// The part a turn put back together comes to, its end held to its calls for every API alike: a turn that holds calls
+    /// and says it is done ended to call them, and is a turn of calls - stored as one with no answer to its calls, it would
+    /// be a history no provider takes; one that ended to call tools and holds none, or holds a call whose input the stream
+    /// left no JSON object, failed part way, and is asked again, never run. A turn cut off at its length is thrown away by
+    /// the loop itself, its calls never run.
     /// </summary>
-    /// <param name="ended">How the turn ended.</param>
-    /// <param name="calls">Its calls, as put back together.</param>
-    public static ChatPart.Failed? CallUnread(ChatStop ended, IReadOnlyList<ChatCall> calls)
+    /// <param name="turn">The turn, its end as the API's word for it says.</param>
+    public static ChatPart Settled(ChatTurn turn)
     {
-        ArgumentNullException.ThrowIfNull(calls);
+        ArgumentNullException.ThrowIfNull(turn);
 
-        return ended == ChatStop.Tools && calls.FirstOrDefault(call => ObjectOf(call.Input) is null) is { } broken
-            ? Failed(ChatFailureKind.Transient, $"the answer's call {broken.Id} of '{broken.Name}' came with an input that is no JSON object")
-            : null;
+        var stop = turn.Stop == ChatStop.Done && turn.Calls.Count > 0 ? ChatStop.Tools : turn.Stop;
+
+        if (stop == ChatStop.Tools && turn.Calls.Count == 0)
+        {
+            return Failed(ChatFailureKind.Transient, "the answer ended to call tools and called none");
+        }
+
+        if (stop == ChatStop.Tools && turn.Calls.FirstOrDefault(call => ObjectOf(call.Input) is null) is { } broken)
+        {
+            return Failed(ChatFailureKind.Transient, $"the answer's call {broken.Id} of '{broken.Name}' came with an input that is no JSON object");
+        }
+
+        return new ChatPart.Answered(stop == turn.Stop ? turn : turn with { Stop = stop });
     }
 
     /// <summary>What a refusal whose body is an error the API wrote is said as: its status, the error's kind and message, and the request the API names.</summary>

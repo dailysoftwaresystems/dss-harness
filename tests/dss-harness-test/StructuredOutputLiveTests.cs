@@ -31,10 +31,10 @@ public sealed class StructuredOutputLiveTests
 
     /// <summary>
     /// Every shipped schema's envelope is answered on the Claude API, as a step that may ask and as one that may not: as
-    /// the format in the copy it is sent - where the API compiles it - or else in words after the system prompt, the
-    /// provider told and going on (2026-10-26: the plan's, with questions offered, is more than structured outputs
-    /// compile). None fails; the plan's that offers no questions is taken as the format, its work item one definition.
-    /// Each answer is held to a few tokens, for only the taking is asked.
+    /// the format in the copy it is sent - where the API compiles it - or else, the schema refused, in words in a message
+    /// after the conversation's, as the loop goes on (2026-10-26: the plan's, with questions offered, is more than
+    /// structured outputs compile). None fails; the plan's that offers no questions is taken as the format, its work item
+    /// one definition. Each answer is held to a few tokens, for only the taking is asked.
     /// </summary>
     [Fact]
     public async Task EachShippedEnvelope_IsAnsweredOnTheClaudeApi_AsTheFormatOrInWords()
@@ -65,23 +65,20 @@ public sealed class StructuredOutputLiveTests
                     64,
                     key,
                     AgentEnvelope.Schema(new AgentOutput("o", WorkflowTemplates.TextOf(file)!, AskRounds: rounds)));
-                var parts = new List<ChatPart>();
+                var parts = await Parts(provider, request);
 
-                await foreach (var part in provider.SendAsync(request, Token))
+                // The schema refused is the loop's to answer: the request sent again with none, the envelope in words after it.
+                if (parts[^1] is ChatPart.Failed { Failure.Kind: ChatFailureKind.SchemaRefused })
                 {
-                    parts.Add(part);
+                    inWords.Add(name);
+                    parts = await Parts(provider, request with { Schema = null, Messages = [.. request.Messages, provider.UserMessage(AgentEnvelope.InWords(request.Schema!))] });
                 }
 
-                said.AppendLine($"{name}: {parts[^1].GetType().Name}{(parts.OfType<ChatPart.Notice>().Any() ? ", in words" : string.Empty)}");
+                said.AppendLine($"{name}: {parts[^1].GetType().Name}{(inWords.Contains(name) ? ", in words" : string.Empty)}");
 
                 if (parts[^1] is ChatPart.Failed { Failure: var failure })
                 {
                     failed.Add($"{name}: {failure.Message}");
-                }
-
-                if (parts.OfType<ChatPart.Notice>().Any(notice => notice.Message == ClaudeApiRequest.FormatInWords))
-                {
-                    inWords.Add(name);
                 }
             }
         }
@@ -137,5 +134,18 @@ public sealed class StructuredOutputLiveTests
         Assert.Equal(["a", "l", "p", "h", "a"], output["letters"]!.AsArray().Select(letter => letter!.GetValue<string>().ToLowerInvariant()));
         Assert.False(string.IsNullOrWhiteSpace(result.Notes));
         Assert.Equal(result.Notes, File.ReadAllText(Path.Combine(run.StepDirectory("s1"), OrchestratorLayout.StepNotesFileName)));
+    }
+
+    /// <summary>Every part <paramref name="provider"/> answers <paramref name="request"/> with, in order.</summary>
+    private static async Task<List<ChatPart>> Parts(ClaudeApiProvider provider, ChatRequest request)
+    {
+        var parts = new List<ChatPart>();
+
+        await foreach (var part in provider.SendAsync(request, Token))
+        {
+            parts.Add(part);
+        }
+
+        return parts;
     }
 }

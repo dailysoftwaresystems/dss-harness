@@ -737,10 +737,11 @@ request, one line for each point where the history is whole - a turn that called
 their answers - and a step that goes on in it sends what it began with; where a provider begins
 sending it shortened to keep it within its model's context, the point is kept beside it
 (`shortened.json`) and given with every later request, a notice saying so once. The first request
-asks for a quarter of the model's `maxOutputTokens`. A turn cut off at its length that called no tool is stored
-and nudged on, 2 times at most; one cut off while it called a tool - its calls never run - or before
-it wrote anything is thrown away and asked again with twice the room, up to the most; past either
-the step is `Truncated`. A turn the provider paused is sent again with nothing added, 10 in a row
+asks for a quarter of the model's `maxOutputTokens`. A turn cut off at its length that called no tool, its
+request holding it to no schema, is stored and nudged on, 2 times at most; one cut off while it called a
+tool - its calls never run - before it wrote anything, or while its request held it to a schema, which
+the answer to a nudge would be held to whole, is thrown away and asked again with twice the room, up to
+the most; past either the step is `Truncated`. A turn the provider paused is sent again with nothing added, 10 in a row
 failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request
 is asked again up to 6 times after a wait that doubles from 2 s to 60 s, or the one the provider
 names; a rate limit past them, or naming a wait past 300 s, is the account at its limit
@@ -775,8 +776,10 @@ fallback is the only one a step has. Two keys are `claude-api`'s alone: `betas`,
 tool's own, each one word and never the API's fallback's, and `cacheTtl`; three are both API
 clients': `requestExtras`, an object merged into every request's body - a member it adds sent as
 given, an object's members merged into the tool's own - refused where it sets what the tool sends
-itself or, here, `fallbacks`; and `maxRetries` and `maxRetryWaitSeconds`, the loop's tries and
-longest wait (6 and 300 where nothing is said). A
+itself or, here, `fallbacks` or a sampling parameter (`temperature`, `top_p`, `top_k`), which
+`anthropic-version 2026-10-21` refuses on every model, and free to add a tool choice or
+`thinking.budget_tokens` where the step's model takes one; and `maxRetries` and
+`maxRetryWaitSeconds`, the loop's tries and longest wait (6 and 300 where nothing is said). A
 spend limit reached - the organization's monthly cap, a 429 whose error names
 `enforced_spend_limit_reached`, or one the organization or a workspace set, a 400 that says so - is
 the key's limit, the step `RateLimited` at once until the date the API names; a 401 is a key
@@ -835,16 +838,17 @@ validator holds the answer to it, whatever a client was sent. The notes are not 
 masked, as the step's `notes.md` beside its result; the output is read against the step's whole
 schema, each problem named by its path under `$.output`, a text an `enum` or a `const` holds in
 another case read as the schema spells it; each assumption is `{about, assumed, why}`; each question
-is `{question, problem, tried, means, options, recommended, why}`, with at least 2 options,
-recommending one of them word for word. The output is null only in a handoff, whose notes are the
+is `{question, problem, tried, means, options, recommended, why}`, with at least 2 options, no two
+alike, recommending one of them word for word; no text of either is empty. The output is null only
+in a handoff, whose notes are the
 handoff, or where the answer asks, and the step then ends `Asked` with its questions; an answer with
 both is sent back, and so is one that asks where the step may not or has asked as often as it may,
 told to write what it would have asked under assumptions. The `claude-code` client holds the answer
 to the envelope by `--json-schema`; the `claude-api` client sends it as `output_config.format` on
 every request, the handoff's too, each array's `minItems` above 1 and every `maxItems` moved into
 the array's description in words, for structured outputs take no other - and where the API refuses
-it as more than it compiles, the run's requests carry no format and their system prompt says it in
-words; the `glm` client, whose wire holds no answer to a schema, says it in words in the step's
+it as more than it compiles, the run's later requests carry no format, and a message of the
+conversation says it in words, the system prompt untouched; the `glm` client, whose wire holds no answer to a schema, says it in words in the step's
 first message, and asks an answer that read as no JSON again in JSON alone - no tool offered,
 `response_format` a JSON object. An answer that does not read is sent back in the same conversation,
 2 times at most, and the step is then `InvalidOutput`.

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.ServerSentEvents;
@@ -119,7 +120,12 @@ public sealed class ApiConnection : IDisposable
         {
             if (!response.IsSuccessStatusCode || !IsEventStream(response))
             {
-                yield return new ApiEvent.Refused((int)response.StatusCode, await RefusalAsync(response, cancellationToken).ConfigureAwait(false), RetryAfter(response));
+                // A refusal whose body was cut is no refusal said: what it would have said is unknown, so it is asked again.
+                var (said, unread) = await RefusalAsync(response, cancellationToken).ConfigureAwait(false);
+
+                yield return unread is null
+                    ? new ApiEvent.Refused((int)response.StatusCode, said, RetryAfter(response))
+                    : new ApiEvent.Cut($"the API answered {((int)response.StatusCode).ToString(CultureInfo.InvariantCulture)}, and its body could not be read: {unread}");
                 yield break;
             }
 
@@ -186,8 +192,11 @@ public sealed class ApiConnection : IDisposable
     private static bool IsEventStream(HttpResponseMessage response)
         => string.Equals(response.Content.Headers.ContentType?.MediaType, EventStream, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>What a refused request's body says, up to <see cref="MostRefusalBytes"/>; empty where it cannot be read.</summary>
-    private static async Task<string> RefusalAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    /// <summary>
+    /// What a refused request's body says, up to <see cref="MostRefusalBytes"/>; or, where it could not be read, what the
+    /// network said of it.
+    /// </summary>
+    private static async Task<(string Said, string? Unread)> RefusalAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         try
         {
@@ -203,12 +212,12 @@ public sealed class ApiConnection : IDisposable
                     read += count;
                 }
 
-                return Encoding.UTF8.GetString(buffer, 0, read);
+                return (Encoding.UTF8.GetString(buffer, 0, read), null);
             }
         }
         catch (Exception ex) when (ex is IOException or HttpRequestException)
         {
-            return string.Empty;
+            return (string.Empty, ex.Message);
         }
     }
 
@@ -258,7 +267,9 @@ public abstract record ApiEvent
     /// <param name="Why">What the network said.</param>
     public sealed record Unreached(string Why) : ApiEvent;
 
-    /// <summary>The answer's stream was cut part way. The last.</summary>
-    /// <param name="Why">What the network said.</param>
+    /// <summary>
+    /// The answer's stream was cut part way - or the body of a refusal was, so what the API said of it is unknown. The last.
+    /// </summary>
+    /// <param name="Why">What the network said, after the status a refusal's cut body came with.</param>
     public sealed record Cut(string Why) : ApiEvent;
 }

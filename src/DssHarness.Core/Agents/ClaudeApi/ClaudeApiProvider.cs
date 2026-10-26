@@ -29,10 +29,6 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
     private readonly Uri _endpoint = ClaudeApiRequest.Endpoint(api ?? throw new ArgumentNullException(nameof(api)));
     private readonly ClaudeApiSettings _settings = settings ?? throw new ArgumentNullException(nameof(settings));
 
-    // Whether the API refused the run's envelope as a format too large to compile: every request of the run is then
-    // sent without one, the envelope in words in its system prompt.
-    private bool _inWords;
-
     /// <inheritdoc cref="IChatProvider.SendsSchema"/>
     public bool SendsSchema => ClaudeApiRequest.HoldsToSchema;
 
@@ -105,36 +101,19 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
     }
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<ChatPart> SendAsync(ChatRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
+    /// <remarks>
+    /// A format the API refuses as more than it compiles is failed as the schema refused
+    /// (<see cref="ChatFailureKind.SchemaRefused"/>), never sent again here: the loop, which owns the conversation, sends the
+    /// run's requests none from then on and says the envelope in words in a message of it, so every request's system prompt
+    /// stays the one its conversation's thinking was made under.
+    /// </remarks>
+    public IAsyncEnumerable<ChatPart> SendAsync(ChatRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        while (true)
-        {
-            var sent = _inWords ? ClaudeApiRequest.InWords(request) : request;
-            var post = new ApiPost(_endpoint, ClaudeApiRequest.Headers(sent, _settings), ClaudeApiRequest.Body(sent, _settings));
-            var answer = new Answer(sent, _settings);
-            var again = false;
+        var post = new ApiPost(_endpoint, ClaudeApiRequest.Headers(request, _settings), ClaudeApiRequest.Body(request, _settings));
 
-            await foreach (var part in ApiAnswers.ReadAsync(_connection, post, answer.Read, cancellationToken).ConfigureAwait(false))
-            {
-                // A format too large to compile is no failure of the step's: the request is sent again without it, and
-                // so is every later one of the run, the envelope said in words.
-                if (part is ChatPart.Failed && answer.FormatRefused)
-                {
-                    _inWords = again = true;
-                    yield return new ChatPart.Notice(ClaudeApiRequest.FormatInWords);
-                    break;
-                }
-
-                yield return part;
-            }
-
-            if (!again)
-            {
-                yield break;
-            }
-        }
+        return ApiAnswers.ReadAsync(_connection, post, new Answer(request, _settings).Read, cancellationToken);
     }
 
     private static JsonObject TextBlock(string text) => new() { ["type"] = "text", ["text"] = text };
@@ -155,18 +134,8 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
         private long? _cacheWrite1h;
         private long _searches;
 
-        /// <summary>Whether the API refused the request's format as too large to compile.</summary>
-        public bool FormatRefused { get; private set; }
-
         /// <summary>The parts an event of the answer comes to; one that ends it - a turn or a failure - last.</summary>
-        public IEnumerable<ChatPart> Read(ApiEvent happened) => ApiAnswers.Parts(happened, Item, Refused);
-
-        private ChatFailure Refused(ApiEvent.Refused refused)
-        {
-            FormatRefused = request.Schema is not null && ClaudeApiFailures.RefusesTheFormat(refused);
-
-            return ClaudeApiFailures.Of(refused, _first, request.Model);
-        }
+        public IEnumerable<ChatPart> Read(ApiEvent happened) => ApiAnswers.Parts(happened, Item, refused => ClaudeApiFailures.Of(refused, _first, request.Model));
 
         private IEnumerable<ChatPart> Item(ApiEvent.Item item)
         {
@@ -339,18 +308,12 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
             }
 
             var calls = _blocks.Where(block => block.Type == Block.ToolUse).Select(block => new ChatCall(block.Id ?? string.Empty, block.Name ?? string.Empty, block.Input)).ToList();
-
-            // Calls the loop runs are whole.
-            if (ApiAnswers.CallUnread(ended, calls) is { } unread)
-            {
-                return unread;
-            }
-
             var message = new JsonObject { ["role"] = "assistant", ["content"] = new JsonArray([.. _blocks.Select(block => (JsonNode)block.Whole())]) };
             var thinking = _blocks.Where(block => block.Type == Block.Thinking).ToList();
             var category = ended == ChatStop.Declined && _stopDetails is { } declined ? ApiAnswers.Text(declined, "category") : null;
 
-            return new ChatPart.Answered(new ChatTurn(
+            // An end its calls disagree with, and a call the loop would run that is not whole, are settled alike for every API.
+            return ApiAnswers.Settled(new ChatTurn(
                 ended,
                 message.ToJsonString(ApiBody.Json),
                 model,

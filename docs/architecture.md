@@ -1708,7 +1708,10 @@ JSON array of the provider's messages written at a point where the history is wh
 byte for byte - and, where the provider begins sending it shortened (`ChatPart.Shortened`), the point kept beside it
 (`StoredConversation.Shorten`, `shortened.json`) and given with every later request (`ChatRequest.ShortenedBefore`), so
 each sends what the last did. The first request asks for a quarter of the model's `maxOutputTokens` (`ToolLoop.FirstMaxTokens`), a turn
-cut off while it called a tool, or before it wrote anything, doubling it. Every client ends a run in the same words, whatever its wire: a step that
+cut off while it called a tool, before it wrote anything, or while its request held it to a schema (`ToolLoop.WhileHeld`: the
+answer to a nudge would be a whole object of its own), doubling it. Every message the engine sends the agent - the step's
+prompt, a nudge, a repair, the handoff's question, a message to an agent at work - is masked as the system prompt is,
+before it is sent or stored. Every client ends a run in the same words, whatever its wire: a step that
 never began, a model nobody asked for, an answer outside its schema, a declined request and an account at its limit are
 each said by `AgentEndings`, and what a run used, by model, is counted by `AgentUsageTally`.
 
@@ -1716,11 +1719,12 @@ The `claude-api` client is `Agents\ClaudeApi\ClaudeApiClient`: the loop over `Cl
 from the run's entries (`AgentEntries`: the provider's, the model's and the client's own where the configuration
 declares one, which the runner copies from the step's request) and refusing a start without the provider's and the
 model's. `ClaudeApiRequest` is the one owner of a request - its body, its
-headers, the version, the betas, what the tool sends itself (`ClaudeApiRequest.Owned`, which a client's `requestExtras`
-may not set, `ExtrasProblems` refusing it when the configuration is read) and the cache's lifetimes; the provider
+headers, the version, the betas, what the tool sends itself or never sends (`ClaudeApiRequest.Owned`, which a client's
+`requestExtras` may not set, `ExtrasProblems` refusing it when the configuration is read - the sampling parameters the
+version refuses on every model among it, `ClaudeApiRequest.SamplingRefused`) and the cache's lifetimes; the provider
 streams each answer through `Agents\Http\ApiConnection` - one `HttpClient` for the process, its events read by
 `System.Net.ServerSentEvents`, a refusal, a network that failed and a stream cut each an `ApiEvent` of its own, never
-an exception - puts each block back together from its deltas, and keeps the answer's message as the API wrote it;
+an exception, a refusal whose body could not be read a stream cut - puts each block back together from its deltas, and keeps the answer's message as the API wrote it;
 `ClaudeApiFailures` is the one table of what each status and error type is to the loop. Its tests replay the answers
 under `tests/dss-harness-test/fixtures/claude-api/` through `ApiEndpoint`, a handler that stands in for the network
 and keeps every request as it was sent.
@@ -1731,7 +1735,9 @@ clients' wires share has one owner each under `Agents\Http`: `ApiBody` writes a 
 the stored tools and messages written raw, a client's `requestExtras` merged and refused where they set an
 `OwnedMember` - and `ApiAnswers` reads a posted request's events into the loop's parts (`ApiAnswers.Parts`), says
 a refusal, a network that failed, a stream cut, an answer that never began, an ending it does not know and a call it
-cannot put back together in the same words for both, and reads JSON's members. `ZaiApiRequest` is the one owner of
+cannot put back together in the same words for both, settles a turn whose end its calls disagree with
+(`ApiAnswers.Settled`: one done that holds calls is a turn of calls, one of calls that holds none failed part way), and
+reads JSON's members. `ZaiApiRequest` is the one owner of
 a Z.AI request - its body, its header, what the tool sends itself (`ZaiApiRequest.Owned`), the short form an older
 answer goes out in (`ZaiApiRequest.ShortAnswer`) - and `ZaiApiProvider` reads each chunk into the loop's parts, puts
 the message back together - its text, its reasoning and each call's arguments by the call's index - and owns the one
@@ -1747,15 +1753,18 @@ Where a step names an output, every client asks for the envelope `AgentEnvelope`
 writes) where `AgentOutput.AskRounds` leaves the step rounds to ask - and one `StructuredOutputGate` for each run reads
 every answer of it on all three clients: the members by the subset's check, the output against the step's schema under
 `$.output` (`JsonSchemaSubset.Problems` from a path, `JsonSchemaSubset.Respelled` for an enum's spelling), what no
-schema says (the notes not empty, a null output only where the answer asks, a recommendation among its options), and the
+schema says (the notes not empty, a null output only where the answer asks, and each assumption and question by its
+record's own rule - `AgentAssumption.Problems`, `AgentQuestion.Problems`: every text written, options no two alike, a
+recommendation among them - which `AgentRunResult.Problem` and the run's `questions.json` hold them to as well), and the
 run's end - `Completed` or `Asked`, with `PersonAsked`, or a repair sent back, then `InvalidOutput`. The runner writes
 the notes as `notes.md` (`OrchestratorLayout.StepNotesFileName`) before `result.json`, and removes an earlier attempt's
 before an attempt begins, for the step's directory is every attempt's. What each client is sent: `--json-schema` the
 envelope as built; the loop's `ChatRequest.Schema`, which the Claude API sends as `output_config.format` in the copy
 `ClaudeApiRequest.Sent` makes - every array bound structured outputs do not take moved into its description, over
-`JsonSchemaSubset.SchemasIn` - sending the run's requests no format, the envelope in words after the system prompt
-(`ClaudeApiRequest.InWords`), once the API refuses it as more than it compiles (`ClaudeApiFailures.RefusesTheFormat`) -
-and which a provider whose wire holds no answer to a schema (`IChatProvider.SendsSchema` false, Z.AI) is told in words
+`JsonSchemaSubset.SchemasIn` - and which, once the API refuses it as more than it compiles
+(`ClaudeApiFailures.RefusesTheFormat`, failed as `ChatFailureKind.SchemaRefused`), the loop sends the run's later requests
+none of, the envelope said in words in a message it appends to the conversation (`AgentMessageKind.EnvelopeInWords`) -
+never in the system prompt, which every stored turn's thinking was made under - and which a provider whose wire holds no answer to a schema (`IChatProvider.SendsSchema` false, Z.AI) is told in words
 in the step's first message (`AgentEnvelope.InWords`), an answer that read as no JSON asked again in JSON alone
 (`ChatRequest.JsonAlone`: no tool offered, `response_format` a JSON object).
 

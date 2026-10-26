@@ -2290,6 +2290,26 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// Every message a launch is told is masked as its system prompt is - the step's prompt among them - so the agent is
+    /// never told a secret of the run's, and what the launch began with says the digest of the system prompt it was sent.
+    /// </summary>
+    [Fact]
+    public async Task WhatALaunchIsTold_IsMaskedAsItsSystemPromptIs()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run() with { Mask = new Masking("s3cret"), SystemPrompt = "be terse s3cret", UserPrompt = "do the work s3cret" }, sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        var told = Assert.Single(kit.Launches()).Read.Where(line => line["type"]?.GetValue<string>() == "user").ToList();
+        Assert.Equal(["do the work ***"], told.Select(line => line["message"]!["content"]!.GetValue<string>()));
+        Assert.Equal("be terse ***", File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SystemFileName)));
+        Assert.Equal(FileContentHash.Of(System.Text.Encoding.UTF8.GetBytes("be terse ***")), Assert.Single(sink.Of<SessionStarted>()).SystemPromptHash);
+    }
+
+    /// <summary>
     /// A handoff the agent never answers ends the run <see cref="AgentRunStatus.HandedOff"/> once the handoff's bound
     /// passes, saying so: a pause is never turned into a wait on an agent that does not answer.
     /// </summary>

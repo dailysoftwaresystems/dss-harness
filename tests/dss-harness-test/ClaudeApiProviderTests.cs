@@ -390,7 +390,7 @@ public sealed class ClaudeApiProviderTests : IDisposable
             { 400, "invalid_request_error", "messages: something", false, new(ChatFailureKind.Fatal, $"the API answered 400 invalid_request_error: messages: something{Request}") },
             {
                 400, "invalid_request_error", "The compiled grammar is too large, which would cause performance issues.", true,
-                new(ChatFailureKind.Fatal, $"the API answered 400 invalid_request_error: The compiled grammar is too large, which would cause performance issues.{Request} - the step's schema is more than the API's structured outputs compile, even said in words")
+                new(ChatFailureKind.SchemaRefused, $"the API answered 400 invalid_request_error: The compiled grammar is too large, which would cause performance issues.{Request}")
             },
             { 403, "permission_error", "not allowed", false, new(ChatFailureKind.Unserved, $"the API answered 403 permission_error: not allowed{Request}") },
             { 404, "not_found_error", "model: claude-opus-5-5", false, new(ChatFailureKind.Unserved, $"the API answered 404 not_found_error: model: claude-opus-5-5{Request}") },
@@ -527,34 +527,70 @@ public sealed class ClaudeApiProviderTests : IDisposable
     }
 
     /// <summary>
-    /// A format the API refuses as too large to compile is no failure of the step's: the loop is told, the same request is
-    /// sent again without it, the envelope in words after the system prompt and the stored messages as they were, and so
-    /// is every later request of the run - none sent the format again.
+    /// A format the API refuses as too large to compile is the schema refused - the loop's to answer, for it owns the
+    /// conversation - and is never sent again by the provider itself, nor with another system prompt: the request is asked
+    /// once, and a later one is sent as it is given, the system prompt it holds untouched.
     /// </summary>
     [Fact]
-    public async Task AFormatTooLargeToCompile_IsSentAgainInWords_ForTheRestOfTheRun()
+    public async Task AFormatTooLargeToCompile_IsTheSchemaRefused_ForTheLoopToAnswer()
     {
+        const string TooLarge = "The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas or reduce the number of strict tools.";
         var schema = AgentEnvelope.Schema(new AgentOutput("o", """{"type":"object","additionalProperties":false,"required":["a"],"properties":{"a":{"type":"string"}}}"""));
         var provider = Provider();
-        _endpoint
-            .Then(ApiReply.Error(400, "invalid_request_error", "The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas or reduce the number of strict tools."))
-            .Then(ApiReply.Fixture("answer.sse"))
-            .Then(ApiReply.Fixture("answer.sse"));
+        _endpoint.Then(ApiReply.Error(400, "invalid_request_error", TooLarge)).Then(ApiReply.Fixture("answer.sse"));
 
-        var parts = await Sent(Request() with { Schema = schema }, provider: provider);
-        await Sent(Request(3) with { Schema = schema }, provider: provider);
+        var refused = await Sent(Request() with { Schema = schema }, provider: provider);
+        var later = await Sent(Request(3), provider: provider);
 
-        Assert.Equal(ClaudeApiRequest.FormatInWords, Assert.IsType<ChatPart.Notice>(parts[0]).Message);
-        Assert.IsType<ChatPart.Answered>(parts[^1]);
-        Assert.Single(parts.OfType<ChatPart.Notice>());
-
-        var (refused, again, later) = (JsonNode.Parse(_endpoint.Asked[0].Body)!, JsonNode.Parse(_endpoint.Asked[1].Body)!, JsonNode.Parse(_endpoint.Asked[2].Body)!);
-        Assert.Equal("json_schema", refused["output_config"]!["format"]!["type"]!.GetValue<string>());
-        Assert.All([again, later], body => Assert.Null(body["output_config"]));
-        Assert.All([again, later], body => Assert.Equal($"You are a careful agent.\n\n{AgentEnvelope.InWords(schema)}", body["system"]![0]!["text"]!.GetValue<string>()));
-        Assert.Equal(refused["messages"]!.ToJsonString(), again["messages"]!.ToJsonString());
+        Assert.Equal(
+            new ChatFailure(ChatFailureKind.SchemaRefused, $"the API answered 400 invalid_request_error: {TooLarge} (request req_000000000000000000000009)"),
+            Assert.IsType<ChatPart.Failed>(Assert.Single(refused)).Failure);
+        Assert.IsType<ChatPart.Answered>(later[^1]);
+        Assert.Equal(2, _endpoint.Asked.Count);
+        Assert.Equal("json_schema", JsonNode.Parse(_endpoint.Asked[0].Body)!["output_config"]!["format"]!["type"]!.GetValue<string>());
+        Assert.All(_endpoint.Asked, asked => Assert.Equal("You are a careful agent.", JsonNode.Parse(asked.Body)!["system"]![0]!["text"]!.GetValue<string>()));
+        Assert.True(ClaudeApiFailures.RefusesTheFormat(new ApiEvent.Refused(400, $$$"""{"type":"error","error":{"type":"invalid_request_error","message":"{{{TooLarge}}}"}}""", null)));
         Assert.False(ClaudeApiFailures.RefusesTheFormat(new ApiEvent.Refused(400, """{"type":"error","error":{"type":"invalid_request_error","message":"messages: something"}}""", null)));
         Assert.False(ClaudeApiFailures.RefusesTheFormat(new ApiEvent.Refused(500, """{"type":"error","error":{"type":"api_error","message":"The compiled grammar is too large"}}""", null)));
+    }
+
+    /// <summary>
+    /// An answer whose end its calls disagree with is settled as every API's is: one that says its turn ended while it holds
+    /// calls ended to call them - stored as an answer, its calls would stand unanswered, a history the API refuses - and
+    /// one that says it ended to call tools and holds none failed part way, asked again.
+    /// </summary>
+    [Fact]
+    public async Task AnEndItsCallsDisagreeWith_IsSettledAsEveryApisIs()
+    {
+        _endpoint
+            .Then(ApiReply.Stream(ClaudeApiFixtures.Events(
+            [
+                ClaudeApiFixtures.Start(),
+                ("content_block_start", """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_000000000000000000000004","name":"view_file","input":{}}}"""),
+                ("content_block_delta", """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"a.txt\"}"}}"""),
+                .. ClaudeApiFixtures.End("end_turn"),
+            ])))
+            .Then(ApiReply.Stream(ClaudeApiFixtures.Events([ClaudeApiFixtures.Start(), .. ClaudeApiFixtures.End("tool_use")])));
+
+        var turn = Assert.IsType<ChatPart.Answered>((await Sent(Request()))[^1]).Turn;
+
+        Assert.Equal((ChatStop.Tools, "end_turn"), (turn.Stop, turn.StopReason));
+        Assert.Equal([new ChatCall("toolu_000000000000000000000004", "view_file", """{"path":"a.txt"}""")], turn.Calls);
+        Assert.Equal(new ChatFailure(ChatFailureKind.Transient, "the answer ended to call tools and called none"), Assert.IsType<ChatPart.Failed>((await Sent(Request()))[^1]).Failure);
+    }
+
+    /// <summary>
+    /// A refusal whose body is cut before it is read is no refusal said - what the API meant by it is unknown - and is the
+    /// stream cut, asked again: never a first request's 400 read as a model the account is not given.
+    /// </summary>
+    [Fact]
+    public async Task ARefusalWhoseBodyIsCut_IsAskedAgain()
+    {
+        _endpoint.Then(ApiReply.Status(400, """{"type":"error","error":{"type":"invalid""", cut: true));
+
+        var failure = Assert.IsType<ChatPart.Failed>(Assert.Single(await Sent(Request()))).Failure;
+
+        Assert.Equal(new ChatFailure(ChatFailureKind.Transient, "the answer's stream was cut: the API answered 400, and its body could not be read: the connection was reset"), failure);
     }
 
     /// <summary>A conversation with no tools sends none; a step with no effort sends none; a client's cache of an hour marks both cache marks so.</summary>
@@ -600,6 +636,14 @@ public sealed class ClaudeApiProviderTests : IDisposable
     [InlineData("[1]", new[] { "x requestExtras is a list, and the fields merged into every request's body are an object's members" })]
     [InlineData("""{"model":"other","stream":false}""", new[] { "x requestExtras.model is refused: the tool sends it itself", "x requestExtras.stream is refused: the tool sends it itself" })]
     [InlineData("""{"fallbacks":"default"}""", new[] { "x requestExtras.fallbacks is refused: no request carries fallbacks, for the engine's fallback is the only one a step has" })]
+    [InlineData(
+        """{"temperature":1,"top_p":0.9,"top_k":40,"tool_choice":{"type":"auto"},"thinking":{"budget_tokens":2048}}""",
+        new[]
+        {
+            "x requestExtras.temperature is refused: anthropic-version 2026-10-21 refuses sampling parameters on every model",
+            "x requestExtras.top_p is refused: anthropic-version 2026-10-21 refuses sampling parameters on every model",
+            "x requestExtras.top_k is refused: anthropic-version 2026-10-21 refuses sampling parameters on every model",
+        })]
     [InlineData("""{"thinking":{"type":"disabled"},"output_config":{"format":{}}}""", new[] { "x requestExtras.thinking.type is refused: the tool sends it itself", "x requestExtras.output_config.format is refused: the tool sends it itself" })]
     [InlineData("""{"thinking":true}""", new[] { "x requestExtras.thinking is true or false, and the tool sends an object there, which its members are merged into" })]
     public void RequestExtras_SetNothingTheToolSends(string extras, string[] problems)

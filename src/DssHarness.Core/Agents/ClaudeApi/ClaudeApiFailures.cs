@@ -18,10 +18,10 @@ namespace DssHarness.Core.Agents.ClaudeApi;
 /// waited out within the client's tries and its longest wait; a 413 or a prompt too long the context full; a
 /// 403 or a 404 - and a 400 answering a conversation's first request, which a model the key's organization is not set
 /// up for is refused with - a model the provider will not serve the account; a 400 for a thinking block bound to another
-/// conversation a defect of this tool's, never sent again; a 400 for a format too large to compile the provider's to
-/// answer by asking without it (<see cref="RefusesTheFormat"/>); any other 400 a request no try mends; and an overload, a
-/// server's error, a request timed out or a conflict, a network that failed and a stream cut, the service failing for
-/// now.
+/// conversation a defect of this tool's, never sent again; a 400 for a format too large to compile the schema refused
+/// (<see cref="RefusesTheFormat"/>), which the loop answers by asking without it; any other 400 a request no try mends;
+/// and an overload, a server's error, a request timed out or a conflict, a network that failed and a stream cut, the
+/// service failing for now.
 /// </remarks>
 public static partial class ClaudeApiFailures
 {
@@ -45,14 +45,17 @@ public static partial class ClaudeApiFailures
 
     /// <summary>
     /// Whether <paramref name="refused"/> refuses the request's format - its schema more than structured outputs compile -
-    /// which the provider answers by asking without it (<see cref="ClaudeApiProvider"/>), never a failure of the step's.
+    /// which is the schema refused (<see cref="ChatFailureKind.SchemaRefused"/>), never a failure of the step's: the loop
+    /// sends the run's requests no format from then on, the envelope said in words in a message of the conversation.
     /// </summary>
     /// <param name="refused">The refusal.</param>
     public static bool RefusesTheFormat(ApiEvent.Refused refused)
     {
         ArgumentNullException.ThrowIfNull(refused);
 
-        return refused.Status == 400 && Read(refused.Body).Message is { } message && message.Contains(GrammarTooLarge, StringComparison.OrdinalIgnoreCase);
+        var (type, message, _, _) = Read(refused.Body);
+
+        return FormatTooLarge(refused.Status, type, message ?? string.Empty);
     }
 
     /// <summary>What a request the API refused is, as the loop acts on it.</summary>
@@ -101,9 +104,7 @@ public static partial class ClaudeApiFailures
             (413, _) or (null, "request_too_large") => new(ChatFailureKind.ContextFull, said),
             (403 or 404, _) or (null, "permission_error" or "not_found_error") => new(ChatFailureKind.Unserved, said),
             (400, _) or (null, "invalid_request_error") when message.Contains(PromptTooLong, StringComparison.OrdinalIgnoreCase) => new(ChatFailureKind.ContextFull, said),
-            (400, _) or (null, "invalid_request_error") when message.Contains(GrammarTooLarge, StringComparison.OrdinalIgnoreCase) => new(
-                ChatFailureKind.Fatal,
-                $"{said} - the step's schema is more than the API's structured outputs compile, even said in words"),
+            _ when FormatTooLarge(status, type, message) => new(ChatFailureKind.SchemaRefused, said),
             (400, _) or (null, "invalid_request_error") when message.Contains(BoundElsewhere, StringComparison.OrdinalIgnoreCase) => new(
                 ChatFailureKind.Fatal,
                 $"{said} - this tool changed the conversation's history under a thinking block, which is a defect of its own: the request is not sent again, nor its thinking dropped"),
@@ -114,6 +115,13 @@ public static partial class ClaudeApiFailures
             (null, "overloaded_error" or "api_error" or "timeout_error") => new(ChatFailureKind.Transient, said, retryAfter),
             _ => new(ChatFailureKind.Fatal, said),
         };
+
+    /// <summary>
+    /// Whether a refusal of <paramref name="status"/> - none for an error of a stream, then of <paramref name="type"/> -
+    /// says <paramref name="message"/> of a format too large to compile.
+    /// </summary>
+    private static bool FormatTooLarge(int? status, string? type, string message)
+        => (status == 400 || (status is null && type == "invalid_request_error")) && message.Contains(GrammarTooLarge, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>An error's type, message and request, and the code its details name, as the API writes them; nulls where the body is no error of its.</summary>
     private static (string? Type, string? Message, string? Request, string? Code) Read(string body)

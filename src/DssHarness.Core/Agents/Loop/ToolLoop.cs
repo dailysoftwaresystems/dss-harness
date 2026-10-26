@@ -106,7 +106,10 @@ public sealed record ToolLoopTerms(
 /// <param name="tools">The host each run's tool runtime is opened on.</param>
 /// <param name="clock">Times the run's bounds - its duration, a stall, a handoff's bound - and each wait.</param>
 /// <param name="wait">Waits before a request is asked again; <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/> on the clock where none is given.</param>
-/// <param name="jitter">A number from naught up to one, which takes up to a quarter off each wait; a random one where none is given.</param>
+/// <param name="jitter">
+/// A number from naught up to one, which takes up to a quarter off each doubled wait - a wait the provider names is kept as
+/// named; a random one where none is given.
+/// </param>
 public sealed class ToolLoop(
     IFileSystem fileSystem,
     AgentToolHost tools,
@@ -122,6 +125,9 @@ public sealed class ToolLoop(
 
     /// <summary>How many paused turns in a row end the run <see cref="AgentRunStatus.Failed"/>.</summary>
     public const int MostPausesInARow = 10;
+
+    /// <summary>Where a turn its request held to a schema was cut off, as the run says it: thrown away, never nudged on.</summary>
+    public const string WhileHeld = "while it wrote an answer held to its schema";
 
     /// <summary>Why a turn's calls are cut, and its request abandoned, when the run pauses: what each call it cut is answered.</summary>
     public const string Pausing = "the run is pausing";
@@ -147,10 +153,19 @@ public sealed class ToolLoop(
     /// <summary>
     /// The most a run's first request asks for: a quarter of the most a reply of the model holds, rounded up (user,
     /// 2026-10-26), so an ordinary turn reserves no more of the account's output allowance than it needs; a turn cut off
-    /// while it calls a tool doubles it, up to the most, for the rest of the run.
+    /// while it calls a tool, before it wrote anything, or while its request held it to a schema doubles it, up to the most,
+    /// for the rest of the run.
     /// </summary>
     /// <param name="most">The most a reply of the model holds.</param>
     public static long FirstMaxTokens(long most) => Math.Max(1, (most + 3) / 4);
+
+    /// <summary>
+    /// What the run is told where the provider refused the step's envelope as a schema: its requests send none from then
+    /// on, and a message of the conversation says it in words.
+    /// </summary>
+    /// <param name="why">What the provider said, masked.</param>
+    public static string SchemaSaidInWords(string why)
+        => $"The provider refused the step's envelope as a schema ({why}): the run's requests send it no more, and a message of the conversation says it in words; the harness's own check still holds every answer to it.";
 
     /// <summary>The wait before the <paramref name="retry"/>th try after a failure: <c>min(60 s, 2 s x 2^(n-1))</c>, up to a quarter of it taken off by <paramref name="jitter"/>.</summary>
     /// <param name="retry">Which try after the failure, from one.</param>
@@ -209,8 +224,12 @@ public sealed class ToolLoop(
             : run.Limits.MaxBudgetUsd is not null && AgentPrices.BudgetRefusal(terms.Provider, terms.Model, uses) is { } priceless ? (AgentNotStartedBecause.ConfigurationWrong, priceless)
             : null;
 
-    /// <summary>One request answered, or how the run ends, or that the run's pause or the handoff's bound abandoned it.</summary>
-    private sealed record Sent(ChatTurn? Turn = null, AgentRunResult? Ending = null, bool Left = false);
+    /// <summary>
+    /// One request answered - and whether that request held the answer to a schema - or how the run ends, or that the run
+    /// left it: the run's pause or the handoff's bound abandoned it, or what failed requests used spent the step's budget,
+    /// which the loop's top ends the run on.
+    /// </summary>
+    private sealed record Sent(ChatTurn? Turn = null, AgentRunResult? Ending = null, bool Left = false, bool Held = false);
 
     /// <summary>Why the run can go no further from a turn: how it ends, and why.</summary>
     private sealed record Stuck(AgentRunStatus Status, string Why);
@@ -263,6 +282,10 @@ public sealed class ToolLoop(
         // The gate of the step's answer, where it names an output; and whether the answer it last sent back read as no JSON.
         private readonly StructuredOutputGate? _gate = run.Output is { } output ? new(output, run.Mask) : null;
         private bool _jsonAlone;
+
+        // Whether the provider refused the step's envelope as a schema: the run's requests then send none, the envelope said
+        // in words in a message of the conversation - never in its system prompt, which every stored turn was made under.
+        private bool _schemaRefused;
 
         private StoredConversation Conversation => _conversation!;
 
@@ -383,7 +406,7 @@ public sealed class ToolLoop(
                     return uncounted;
                 }
 
-                if (await GoesOnAsync(turn).ConfigureAwait(false) is { } went)
+                if (await GoesOnAsync(turn, sent.Held).ConfigureAwait(false) is { } went)
                 {
                     if (went.Stuck is { } stuck)
                     {
@@ -509,7 +532,7 @@ public sealed class ToolLoop(
                     return await HandedAsync(null, AgentHandoffSignal.TurnEnded(wrong.Status, wrong.Error)).ConfigureAwait(false);
                 }
 
-                if (await GoesOnAsync(turn).ConfigureAwait(false) is { } went)
+                if (await GoesOnAsync(turn, sent.Held).ConfigureAwait(false) is { } went)
                 {
                     if (went.Stuck is { } stuck)
                     {
@@ -590,13 +613,15 @@ public sealed class ToolLoop(
         /// What becomes of a turn the agent goes on from - an answer cut off at its length, a turn cut off while it called a
         /// tool, a turn the provider paused - in every turn alike, the handoff's among them; null for every other turn.
         /// </summary>
-        private async Task<Went?> GoesOnAsync(ChatTurn turn)
+        /// <param name="turn">The turn.</param>
+        /// <param name="held">Whether its request held the answer to a schema (<see cref="HeldToSchema"/>).</param>
+        private async Task<Went?> GoesOnAsync(ChatTurn turn, bool held)
         {
             _pauses = turn.Stop == ChatStop.Paused ? _pauses + 1 : 0;
 
             switch (turn.Stop)
             {
-                case ChatStop.CutOff when turn.Calls.Count == 0 && Says(turn):
+                case ChatStop.CutOff when turn.Calls.Count == 0 && Says(turn) && !held:
                 {
                     // Kept, and gone on from as a turn of its own: the answer is every piece of it.
                     await AnsweredAsync(turn).ConfigureAwait(false);
@@ -615,9 +640,11 @@ public sealed class ToolLoop(
 
                 case ChatStop.CutOff:
                 {
-                    // Never run, never stored: a call no answer follows is a history the provider refuses, and an answer
-                    // cut off before it wrote anything - its room spent on thinking - has nothing to go on from.
-                    var where = turn.Calls.Count > 0 ? "while it called a tool" : "before it wrote anything";
+                    // Never run, never stored: a call no answer follows is a history the provider refuses; an answer cut
+                    // off before it wrote anything - its room spent on thinking - has nothing to go on from; and one its
+                    // request held to a schema cannot be gone on from, for the answer to a nudge is held to it too, a whole
+                    // object of its own, which joined to the first is no JSON.
+                    var where = turn.Calls.Count > 0 ? "while it called a tool" : Says(turn) ? WhileHeld : "before it wrote anything";
 
                     if (Regrown() is not { } larger)
                     {
@@ -653,7 +680,9 @@ public sealed class ToolLoop(
 
         /// <summary>
         /// Sends the conversation and reads what it answers, asking again as each failure allows: the turn, or how the run
-        /// ends, or that the pause - outside the handoff turn - or the handoff's bound abandoned the request.
+        /// ends, or that the run left the request - the pause, outside the handoff turn, or the handoff's bound abandoned it,
+        /// or what failed requests used spent the step's budget - which the loop's top ends the run on. A schema the provider
+        /// refuses is said in words from then on, and the request sent again without it, no try of the service's.
         /// </summary>
         /// <param name="stop">The hard stop, which abandons the request and ends the run.</param>
         /// <param name="bound">The handoff's bound, in the handoff turn; none otherwise.</param>
@@ -666,7 +695,7 @@ public sealed class ToolLoop(
                     return new Sent(Left: true);
                 }
 
-                var request = new ChatRequest(run.Model!, run.Effort, Conversation.SystemPrompt, Conversation.Tools, [.. Conversation.Messages(), .. _pending, .. _paused], _maxTokens, Key, _gate?.Envelope, Credit: _goesOn, ShortenedBefore: Conversation.ShortenedBefore, JsonAlone: _jsonAlone);
+                var request = new ChatRequest(run.Model!, run.Effort, Conversation.SystemPrompt, Conversation.Tools, [.. Conversation.Messages(), .. _pending, .. _paused], _maxTokens, Key, _schemaRefused ? null : _gate?.Envelope, Credit: _goesOn, ShortenedBefore: Conversation.ShortenedBefore, JsonAlone: _jsonAlone);
 
                 // The handoff turn is held to its bound, not to the step's time: it counts against none of the step's
                 // turns, budget or time.
@@ -775,7 +804,7 @@ public sealed class ToolLoop(
                 if (answered is not null)
                 {
                     _answered = true;
-                    return new Sent(Turn: answered);
+                    return new Sent(Turn: answered, Held: HeldToSchema(request));
                 }
 
                 var failure = failed!;
@@ -793,8 +822,12 @@ public sealed class ToolLoop(
                 // the service's.
                 var passedOver = failure.Kind == ChatFailureKind.KeyRefused && NextKey();
 
+                // A schema the provider refused is said in words from now on, and the request sent again without it: no try
+                // of the service's either. A request that sent no schema has none to drop, and its refusal ends the run.
+                var inWords = failure.Kind == ChatFailureKind.SchemaRefused && request.Schema is not null;
+
                 // The failure's own end outranks a cost that cannot be counted.
-                if (!passedOver && Failure(failure, tried, stall.IsCancellationRequested) is { } ending)
+                if (!passedOver && !inWords && Failure(failure, tried, stall.IsCancellationRequested) is { } ending)
                 {
                     return new Sent(Ending: ending);
                 }
@@ -820,6 +853,12 @@ public sealed class ToolLoop(
                 if (passedOver)
                 {
                     await PassedOverAsync(failure, parts > 0).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (inWords)
+                {
+                    await InWordsAsync(failure, request.Schema!).ConfigureAwait(false);
                     continue;
                 }
 
@@ -893,11 +932,30 @@ public sealed class ToolLoop(
         }
 
         /// <summary>
+        /// The provider refused the step's envelope as a schema: the run's requests send none from now on, and the envelope
+        /// is said in words in a message of the conversation - stored with it as every message the engine sends is, so what
+        /// was sent stays the history and a step that goes on in it sends it again - which a notice tells.
+        /// </summary>
+        private async Task InWordsAsync(ChatFailure failure, string schema)
+        {
+            _schemaRefused = true;
+            await Emit(new Notice(SchemaSaidInWords(Masked(failure.Message)))).ConfigureAwait(false);
+            await SayAsync(AgentEnvelope.InWords(schema), AgentMessageKind.EnvelopeInWords).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Whether <paramref name="request"/> held the answer to a schema: the schema it sent, on a provider whose wire holds
+        /// every answer to one; the ask for JSON alone, on one whose wire does not.
+        /// </summary>
+        private bool HeldToSchema(ChatRequest request) => provider.SendsSchema ? request.Schema is not null : request.JsonAlone;
+
+        /// <summary>
         /// How a request's failure ends the run, where it does: one asked again within the client's tries and its longest
         /// wait ends nothing; a rate limit past the tries, or naming a wait past the longest, is the account at its limit -
         /// the model's on the key - and a limit at once is the key's; a service still failing past the tries, or naming
         /// such a wait, ends the run - <see cref="AgentRunStatus.Stalled"/> where it went silent; a model the provider will
-        /// not serve the account means a run with no answer yet never began; and every other failure ends it at once.
+        /// not serve the account means a run with no answer yet never began; and every other failure ends it at once, a
+        /// schema refused on a request that sent none among them.
         /// </summary>
         private AgentRunResult? Failure(ChatFailure failure, int tried, bool silent)
         {
@@ -921,7 +979,7 @@ public sealed class ToolLoop(
                 ChatFailureKind.Declined => AgentEndings.Declined(failure.Category, said, run.Mask),
                 ChatFailureKind.ContextFull => Ended(AgentRunStatus.ContextExhausted, said),
                 ChatFailureKind.Unserved when !_answered => AgentEndings.NotStarted(terms.Client, AgentNotStartedBecause.ConfigurationWrong, said, run.Model, run.Mask),
-                ChatFailureKind.Unserved or ChatFailureKind.Fatal => Ended(AgentRunStatus.Failed, said),
+                ChatFailureKind.Unserved or ChatFailureKind.Fatal or ChatFailureKind.SchemaRefused => Ended(AgentRunStatus.Failed, said),
                 _ => throw new InvalidOperationException($"'{failure.Kind}' is no failure a provider classes."),
             };
         }
@@ -1032,7 +1090,10 @@ public sealed class ToolLoop(
             await Emit(new UsageReported(usage, _used.Total)).ConfigureAwait(false);
         }
 
-        /// <summary>The room a turn cut off while it called a tool is asked again with: double, up to the most; null where it had the most.</summary>
+        /// <summary>
+        /// The room a turn thrown away as it was cut off - while it called a tool, before it wrote anything, or while its
+        /// request held it to a schema - is asked again with: double, up to the most; null where it had the most.
+        /// </summary>
         private long? Regrown() => _maxTokens >= terms.Model.MaxOutputTokens ? null : Math.Min(terms.Model.MaxOutputTokens, _maxTokens * 2);
 
         /// <summary>The run's end a turn that ends the conversation comes to: declined, with the credit it left where it left one, or out of context.</summary>
@@ -1106,33 +1167,41 @@ public sealed class ToolLoop(
             _paused.Clear();
         }
 
-        /// <summary>Every message the engine has posted and the agent not yet been given, in order.</summary>
+        /// <summary>
+        /// Every message the engine has posted and the agent not yet been given, in order, each masked as every message the
+        /// engine sends is (<see cref="SayAsync"/>).
+        /// </summary>
         private List<string> Told()
         {
             var told = new List<string>();
 
             while (run.Messages.TryTake(out var message))
             {
-                told.Add(message);
+                told.Add(Masked(message));
             }
 
             return told;
         }
 
-        /// <summary>Says each message the engine gives the agent, as the event that records it.</summary>
+        /// <summary>Says each message the engine gives the agent, masked already, as the event that records it.</summary>
         private async Task TellAsync(IReadOnlyList<string> told)
         {
             foreach (var message in told)
             {
-                await Emit(new MessageSent(Masked(message), AgentMessageKind.PlanUpdate)).ConfigureAwait(false);
+                await Emit(new MessageSent(message, AgentMessageKind.PlanUpdate)).ConfigureAwait(false);
             }
         }
 
-        /// <summary>A message of the engine's, said as the event that records it and sent with the next request.</summary>
+        /// <summary>
+        /// A message of the engine's, said as the event that records it and sent with the next request - masked, as the
+        /// system prompt is: the agent is never told a secret of the run's, and the stored conversation never holds one the
+        /// engine wrote.
+        /// </summary>
         private async Task SayAsync(string text, AgentMessageKind kind)
         {
-            await Emit(new MessageSent(Masked(text), kind)).ConfigureAwait(false);
-            _pending.Add(provider.UserMessage(text));
+            var masked = Masked(text);
+            await Emit(new MessageSent(masked, kind)).ConfigureAwait(false);
+            _pending.Add(provider.UserMessage(masked));
         }
 
         /// <summary>

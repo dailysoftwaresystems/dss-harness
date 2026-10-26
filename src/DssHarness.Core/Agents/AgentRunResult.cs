@@ -244,14 +244,16 @@ public sealed record AgentRunResult(
     /// <see cref="AgentRunStatus.HandedOff"/>, questions to <see cref="AgentRunStatus.Asked"/> - and each ending that
     /// carries one says it, and notes and assumptions to an answer that read - <see cref="AgentRunStatus.Completed"/> or
     /// <see cref="AgentRunStatus.Asked"/>; a run that completed says no error, no count is below naught, every list is
-    /// written, and none holds a null.
+    /// written, none holds a null, and each assumption and question holds together by its record's own rule
+    /// (<see cref="AgentAssumption.Problems"/>, <see cref="AgentQuestion.Problems"/>).
     /// </summary>
     public string? Problem()
     {
-        var lists = new (string Name, object? List)[]
+        var lists = new (string Name, string Item, IEnumerable<object?>? List)[]
         {
-            ("assumptions", Assumptions), ("questions", Questions), ("served", Served), ("files", Files),
-            ("keysRefused", KeysRefused), ("sessionFilesRemoved", SessionFilesRemoved), ("uncontained", Uncontained),
+            ("assumptions", "an assumption", Assumptions), ("questions", "a question", Questions), ("served", "a model that served it", Served),
+            ("files", "a file", Files), ("keysRefused", "a key refused", KeysRefused), ("sessionFilesRemoved", "a session file removed", SessionFilesRemoved),
+            ("uncontained", "an uncontained child", Uncontained),
         };
 
         var counts = new (string Name, int Count)[]
@@ -262,6 +264,7 @@ public sealed record AgentRunResult(
 
         return !Enum.IsDefined(Status) ? $"its status {(int)Status} is no ending a run has"
             : lists.FirstOrDefault(list => list.List is null) is { Name: { } unwritten } ? $"its {unwritten} is null, and that list is always written"
+            : lists.FirstOrDefault(list => list.List!.Any(item => item is null)) is { Item: { } nulled } ? $"it names {nulled} as null"
             : counts.FirstOrDefault(count => count.Count < 0) is { Name: { } below } named ? $"its {below} is {named.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)}, and a count is never below naught"
             : Duration < TimeSpan.Zero ? $"its duration is {Duration}, and a run never ran for less than naught"
             : Status == AgentRunStatus.NotStarted && NotStartedBecause is null ? "it never began, and says not why"
@@ -280,10 +283,9 @@ public sealed record AgentRunResult(
             : Status != AgentRunStatus.Asked && Questions.Count > 0 ? $"it ended {Status}, and asks the person, which only a run that ended Asked does"
             : Status is not (AgentRunStatus.Completed or AgentRunStatus.Asked) && Notes is not null ? $"it ended {Status}, and holds notes, which only a run whose answer read does"
             : Status is not (AgentRunStatus.Completed or AgentRunStatus.Asked) && Assumptions.Count > 0 ? $"it ended {Status}, and holds assumptions, which only a run whose answer read does"
-            : Assumptions.Any(assumption => assumption is null) ? "it names an assumption as null"
-            : Questions.Any(question => question is null) ? "it names a question as null"
+            : AgentAssumption.ProblemIn(Assumptions) is { } assumed ? $"its {assumed}"
+            : AgentQuestion.ProblemIn(Questions) is { } asked ? $"its {asked}"
             : Status == AgentRunStatus.Completed && Error is not null ? "it completed, and says why it failed"
-            : Served.Any(served => served is null) ? "it names a model that served it as null"
             : Served.FirstOrDefault(served => served.FromTurn < 1) is { } early ? $"it names '{early.Model}' as serving from turn {early.FromTurn.ToString(System.Globalization.CultureInfo.InvariantCulture)}, and turns are counted from one"
             : null;
     }

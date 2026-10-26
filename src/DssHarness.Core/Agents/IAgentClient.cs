@@ -143,13 +143,29 @@ public sealed record AgentWorkspace(
 /// </summary>
 /// <param name="Name">Its name, as the step's outputs name it.</param>
 /// <param name="Schema">The JSON schema it must read against.</param>
-/// <param name="MaxRepairs">How many times a schema problem is sent back; two unless given.</param>
+/// <param name="MaxRepairs">How many times a schema problem is sent back; two unless given, and never below naught.</param>
 /// <param name="AskRounds">
 /// How many more times the agent may ask the person in this attempt - the step's <c>askRounds</c> less the times it has
 /// asked - offered questions only while some are left; zero where it has asked as often as it may, and null where the
-/// step may not ask: an answer that asks all the same is sent back, told so.
+/// step may not ask: an answer that asks all the same is sent back, told so. Never below naught: a count below it would
+/// read as asked out, which it is not.
 /// </param>
-public sealed record AgentOutput(string Name, string Schema, int MaxRepairs = 2, int? AskRounds = null);
+public sealed record AgentOutput(string Name, string Schema, int MaxRepairs = 2, int? AskRounds = null)
+{
+    /// <inheritdoc cref="AgentOutput" path="/param[@name='MaxRepairs']"/>
+    public int MaxRepairs { get; init => field = Counted(value, nameof(MaxRepairs)); } = Counted(MaxRepairs, nameof(MaxRepairs));
+
+    /// <inheritdoc cref="AgentOutput" path="/param[@name='AskRounds']"/>
+    public int? AskRounds { get; init => field = value is { } rounds ? Counted(rounds, nameof(AskRounds)) : null; } = AskRounds is { } rounds ? Counted(rounds, nameof(AskRounds)) : null;
+
+    /// <summary>A count, as given; refused below naught, which no count of repairs or rounds is.</summary>
+    private static int Counted(int value, string name)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(value, name);
+
+        return value;
+    }
+}
 
 /// <summary>A stored conversation a run appends to, where its client is handed one.</summary>
 /// <param name="Client">The client's key.</param>

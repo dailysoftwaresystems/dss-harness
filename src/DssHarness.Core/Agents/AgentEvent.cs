@@ -94,6 +94,9 @@ public enum AgentMessageKind
 
     /// <summary>A nudge to go on with an answer the provider cut off at its length.</summary>
     Continue,
+
+    /// <summary>The step's envelope said in words, once the provider refused it as a schema.</summary>
+    EnvelopeInWords,
 }
 
 /// <summary>Who ran a tool call, as the call's events name it.</summary>
@@ -175,6 +178,73 @@ public sealed record AgentQuestion(string Question, string Problem, string Tried
 
         return new(mask.Redact(Question), mask.Redact(Problem), mask.Redact(Tried), mask.Redact(Means), [.. Options.Select(mask.Redact)], mask.Redact(Recommended), mask.Redact(Why));
     }
+
+    /// <summary>
+    /// What is wrong with this question, each problem named by the member it is in as the envelope names it -
+    /// <c>options[1]: ...</c>, for the question's own path to go before - and empty where nothing is: every text written, at
+    /// least <see cref="AgentEnvelope.FewestOptions"/> options, no two alike, and the one recommended among them, word for
+    /// word. The one owner of what no schema says of a question, which the envelope's gate, a run's result and a run's
+    /// questions hold it to alike.
+    /// </summary>
+    public IReadOnlyList<string> Problems()
+    {
+        // A record read from a file may lack what its type says it holds: what is not there is empty.
+        var options = Options ?? [];
+        var problems = new List<string>();
+
+        foreach (var (member, text) in new[] { (nameof(Question), Question), (nameof(Problem), Problem), (nameof(Tried), Tried), (nameof(Means), Means) })
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                problems.Add(AgentEnvelope.Empty(member));
+            }
+        }
+
+        var named = AgentEnvelope.Member(nameof(Options));
+
+        if (options.Count < AgentEnvelope.FewestOptions)
+        {
+            problems.Add($"{named}: holds {Counted(options.Count)}, and a question offers at least {AgentEnvelope.FewestOptions}");
+        }
+
+        for (var at = 0; at < options.Count; at++)
+        {
+            if (string.IsNullOrWhiteSpace(options[at]))
+            {
+                problems.Add($"{named}[{at}]: is empty; each option is a sentence that says what it leads to");
+            }
+            else if (Enumerable.Range(0, at).FirstOrDefault(before => string.Equals(options[before], options[at], StringComparison.Ordinal), -1) is >= 0 and var first)
+            {
+                problems.Add($"{named}[{at}]: {AgentEnvelope.Quoted(options[at])} stands at {named}[{first}] already; each option is a choice of its own");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(Recommended))
+        {
+            problems.Add(AgentEnvelope.Empty(nameof(Recommended)));
+        }
+        else if (!options.Contains(Recommended, StringComparer.Ordinal))
+        {
+            problems.Add($"{AgentEnvelope.Member(nameof(Recommended))}: {AgentEnvelope.Quoted(Recommended)} is none of the {Counted(options.Count)}; recommend one of them, word for word");
+        }
+
+        if (string.IsNullOrWhiteSpace(Why))
+        {
+            problems.Add(AgentEnvelope.Empty(nameof(Why)));
+        }
+
+        return problems;
+    }
+
+    /// <summary>
+    /// The first thing wrong with any of <paramref name="questions"/>, said by its place in them - <c>questions[1].why: ...</c>
+    /// - or null where every one of them holds together.
+    /// </summary>
+    /// <param name="questions">The questions, in order.</param>
+    public static string? ProblemIn(IReadOnlyList<AgentQuestion?> questions)
+        => AgentEnvelope.ProblemIn(AgentEnvelope.Questions, questions, question => question.Problems());
+
+    private static string Counted(int options) => $"{options} option{(options == 1 ? string.Empty : "s")}";
 }
 
 /// <summary>One thing an agent assumed where a person could have told it: what was open, what it took, and why.</summary>
@@ -191,6 +261,24 @@ public sealed record AgentAssumption(string About, string Assumed, string Why)
 
         return new(mask.Redact(About), mask.Redact(Assumed), mask.Redact(Why));
     }
+
+    /// <summary>
+    /// What is wrong with this assumption, each problem named by the member it is in as the envelope names it, for the
+    /// assumption's own path to go before; empty where nothing is: every text written. The one owner of what no schema says
+    /// of an assumption, which the envelope's gate and a run's result hold it to alike.
+    /// </summary>
+    public IReadOnlyList<string> Problems()
+        => [.. new[] { (nameof(About), About), (nameof(Assumed), Assumed), (nameof(Why), Why) }
+            .Where(member => string.IsNullOrWhiteSpace(member.Item2))
+            .Select(member => AgentEnvelope.Empty(member.Item1))];
+
+    /// <summary>
+    /// The first thing wrong with any of <paramref name="assumptions"/>, said by its place in them -
+    /// <c>assumptions[1].why: ...</c> - or null where every one of them holds together.
+    /// </summary>
+    /// <param name="assumptions">The assumptions, in order.</param>
+    public static string? ProblemIn(IReadOnlyList<AgentAssumption?> assumptions)
+        => AgentEnvelope.ProblemIn(AgentEnvelope.Assumptions, assumptions, assumption => assumption.Problems());
 }
 
 /// <summary>The launch began: what it runs as, where its credential came from, and what it was given.</summary>

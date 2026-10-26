@@ -304,11 +304,12 @@ public sealed class ZaiApiProvider(ApiConnection connection, string api, ZaiApiS
 
             var calls = _calls.Values.Select(call => new ChatCall(call.Id, call.Name, call.Arguments.ToString())).ToList();
 
-            // A turn that holds calls ended to call them, whatever word its finish says it in.
+            // Each finish read as its word says it; a turn whose word and calls disagree - one that stopped holding calls,
+            // one that ended to call tools holding none - is settled as every API's is (ApiAnswers.Settled).
             ChatStop? stop = _finish switch
             {
                 "tool_calls" => ChatStop.Tools,
-                "stop" => calls.Count > 0 ? ChatStop.Tools : ChatStop.Done,
+                "stop" => ChatStop.Done,
                 "length" => ChatStop.CutOff,
                 "sensitive" => ChatStop.Declined,
                 "model_context_window_exceeded" => ChatStop.ContextFull,
@@ -318,17 +319,6 @@ public sealed class ZaiApiProvider(ApiConnection connection, string api, ZaiApiS
             if (stop is not { } ended)
             {
                 return ApiAnswers.EndedUnknown(_finish);
-            }
-
-            if (ended == ChatStop.Tools && calls.Count == 0)
-            {
-                return Failed(ChatFailureKind.Transient, "the answer ended to call tools and called none");
-            }
-
-            // Calls the loop runs are whole.
-            if (ApiAnswers.CallUnread(ended, calls) is { } unread)
-            {
-                return unread;
             }
 
             // The reasoning goes back with the message always: Z.AI reads it with the answers to the turn's calls.
@@ -344,7 +334,7 @@ public sealed class ZaiApiProvider(ApiConnection connection, string api, ZaiApiS
                 })]);
             }
 
-            return new ChatPart.Answered(new ChatTurn(
+            return ApiAnswers.Settled(new ChatTurn(
                 ended,
                 message.ToJsonString(ApiBody.Json),
                 model,

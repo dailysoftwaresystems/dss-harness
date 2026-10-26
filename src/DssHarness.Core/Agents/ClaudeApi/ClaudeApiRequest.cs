@@ -15,9 +15,13 @@ namespace DssHarness.Core.Agents.ClaudeApi;
 /// one owner of what a client's <c>requestExtras</c> may add to it, and of the copy of a schema the API is sent.
 /// </summary>
 /// <remarks>
-/// No sampling parameter, no prefill and no forced tool choice is ever sent, no thinking is turned off or given a budget,
-/// and no tool of the provider's own is declared: the web is the harness's own (values 365 and 382). No request carries
-/// <c>fallbacks</c> or a <c>server-side-fallback-</c> header: the engine's fallback is the only one a step has.
+/// The tool sends no prefill, no tool choice and no thinking budget of its own, and never turns thinking off - a client's
+/// <c>requestExtras</c> may add a tool choice and <c>thinking.budget_tokens</c>, each where the step's model takes it: the
+/// Claude 4.7 and later models refuse a thinking budget, and Claude Fable 5.1, Claude Opus 5.5 and Claude Sonnet 5.5 a
+/// forced tool choice. No sampling parameter is ever sent, nor may <c>requestExtras</c> add one: the API version every
+/// request is sent on refuses them on every model (<see cref="SamplingRefused"/>). No tool of the provider's own is
+/// declared: the web is the harness's own (values 365 and 382). No request carries <c>fallbacks</c> or a
+/// <c>server-side-fallback-</c> header: the engine's fallback is the only one a step has.
 /// </remarks>
 public static class ClaudeApiRequest
 {
@@ -39,11 +43,8 @@ public static class ClaudeApiRequest
     /// </summary>
     public const bool HoldsToSchema = true;
 
-    /// <summary>
-    /// What the loop is told when the API refuses a run's envelope as a format too large to compile: its requests go on
-    /// with no format, the envelope said in words in the system prompt they send, and the gate holds each answer to it.
-    /// </summary>
-    public const string FormatInWords = "The Claude API compiles no grammar as large as the step's envelope: its requests are sent no format from now on, and the envelope in words in their system prompt; the harness's own check still holds every answer to it.";
+    /// <summary>Why no <c>requestExtras</c> may add a sampling parameter - <c>temperature</c>, <c>top_p</c>, <c>top_k</c> - as the refusal says it.</summary>
+    public const string SamplingRefused = $"anthropic-version {Version} refuses sampling parameters on every model";
 
     /// <summary>The most an array's <c>minItems</c> may say in a schema the API is sent: structured outputs take 0 or 1 alone.</summary>
     public const int MostLeastItems = 1;
@@ -69,6 +70,7 @@ public static class ClaudeApiRequest
             ["output_config", "effort"], ["output_config", "format"], ["context_management", "edits"], ["cache_control"], ["fallback_credit_token"],
         }.Select(path => new OwnedMember(path)),
         new OwnedMember(["fallbacks"], "no request carries fallbacks, for the engine's fallback is the only one a step has"),
+        .. new[] { "temperature", "top_p", "top_k" }.Select(name => new OwnedMember([name], SamplingRefused)),
     ];
 
     /// <summary>The cache lifetimes a client may name, in the order help names them.</summary>
@@ -125,19 +127,6 @@ public static class ClaudeApiRequest
         }
 
         return sent;
-    }
-
-    /// <summary>
-    /// <paramref name="request"/> as it is sent where the API refused its envelope as a format too large to compile: no
-    /// format, and the envelope in words after its system prompt - never in a message, for the stored ones are sent as
-    /// they were stored.
-    /// </summary>
-    /// <param name="request">The request, holding the envelope.</param>
-    public static ChatRequest InWords(ChatRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        return request.Schema is { } schema ? request with { Schema = null, System = $"{request.System}\n\n{AgentEnvelope.InWords(schema)}" } : request;
     }
 
     /// <summary>The body of <paramref name="request"/>, as JSON: its stored tools and messages as they were stored, byte for byte.</summary>

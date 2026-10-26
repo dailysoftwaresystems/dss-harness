@@ -1132,17 +1132,58 @@ public sealed class ToolLoopTests : IDisposable
         }
     }
 
-    /// <summary>An answer to a schema cut off at its length is read whole: its pieces, gone on from, are the JSON.</summary>
+    /// <summary>
+    /// An answer cut off at its length while its request held it to a schema is never nudged on - the answer to a nudge is
+    /// held to the schema too, a whole object of its own, which joined to the first is no JSON - but thrown away and asked
+    /// again with room to grow, as one cut off while it called a tool is, and cut at the most it ends the run truncated.
+    /// </summary>
     [Fact]
-    public async Task AnAnswerToASchemaCutOff_IsReadWhole()
+    public async Task AnAnswerToASchemaCutOff_IsThrownAway_AndAskedAgainWithRoomToGrow()
     {
-        var output = new AgentOutput("result", """{ "type": "object", "additionalProperties": false, "required": ["a"], "properties": { "a": { "type": "string" } } }""");
-        _chat.Answer(FakeChat.CutOff("""{ "notes": "n", "output": { "a": """)).Answer(FakeChat.Said(""" "x" }, "assumptions": [] }"""));
+        // Answered again, the API writes the object whole, as it writes every answer to the schema.
+        _chat.Answer(FakeChat.CutOff("""{ "notes": "n", "output": { "a": """)).Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
 
-        var result = await Ran(Run(output: output));
+        var result = await Ran(Run(output: Schema));
+
+        Assert.Equal((AgentRunStatus.Completed, """{"a":"x"}""", 1), (result.Status, result.StructuredOutput, result.Turns));
+        Assert.Equal([16000L, 32000L], _chat.Requests.Select(request => request.MaxOutputTokens));
+        Assert.Equal([FakeChat.User(Asked)], _chat.Requests[1].Messages);
+        Assert.Equal($"the answer was cut off at 16000 tokens {ToolLoop.WhileHeld}; asked again with room for 32000", Assert.Single(_events.All.OfType<TurnRestarted>()).Why);
+        Assert.DoesNotContain(_events.All.OfType<MessageSent>(), sent => sent.Which == AgentMessageKind.Continue);
+        Assert.Empty(_events.All.OfType<OutputRepair>());
+        Assert.Equal([["user", "assistant"]], File.ReadAllLines(Path.Combine(_sessions, result.Session!, StoredConversation.ConversationFileName)).Select(Roles));
+
+        var chat = new FakeChat();
+        chat.Answer(FakeChat.CutOff("{")).Answer(FakeChat.CutOff("{")).Answer(FakeChat.CutOff("{"));
+
+        var cut = await Ran(Run(output: Schema), chat: chat);
+
+        Assert.Equal((AgentRunStatus.Truncated, $"the answer was cut off at 64000 tokens {ToolLoop.WhileHeld}, the most a reply of 'claude-opus-5-5' holds"), (cut.Status, cut.Error));
+    }
+
+    /// <summary>
+    /// On a provider whose wire holds no answer to a schema, an answer asked as every other is held to nothing - its
+    /// cut-off nudged on, the pieces one answer - and one asked for in JSON alone is held: its cut-off thrown away and asked
+    /// again with room to grow.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerAskedInJsonAloneCutOff_IsAskedAgain_AndOneAskedAsAnyOther_IsNudgedOn()
+    {
+        var chat = new FakeChat { SendsSchema = false };
+        chat.Answer(FakeChat.CutOff("""{ "notes": "n", "output": { "a": """))
+            .Answer(FakeChat.Said(""" 1 }, "assumptions": [] }"""))
+            .Answer(FakeChat.Said("not json"))
+            .Answer(FakeChat.CutOff("{"))
+            .Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
+
+        var result = await Ran(Run(output: Schema), chat: chat);
 
         Assert.Equal((AgentRunStatus.Completed, """{"a":"x"}"""), (result.Status, result.StructuredOutput));
-        Assert.Empty(_events.All.OfType<OutputRepair>());
+        Assert.Equal([false, false, false, true, true], chat.Requests.Select(request => request.JsonAlone));
+        Assert.Equal([16000L, 16000L, 16000L, 16000L, 32000L], chat.Requests.Select(request => request.MaxOutputTokens));
+        Assert.Equal(["$.output.a: 1 is not a string"], _events.All.OfType<OutputRepair>().First().Problems);
+        Assert.Equal($"the answer was cut off at 16000 tokens {ToolLoop.WhileHeld}; asked again with room for 32000", Assert.Single(_events.All.OfType<TurnRestarted>()).Why);
+        Assert.Equal(1, _events.All.OfType<MessageSent>().Count(sent => sent.Which == AgentMessageKind.Continue));
     }
 
     /// <summary>A message written while the agent's answer was makes one more turn, which counts against the step's turns.</summary>
@@ -1226,17 +1267,23 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Equal((AgentRunStatus.Completed, "c d"), (result.Status, result.FinalText));
     }
 
-    /// <summary>An answer that needed a repair may itself be cut off and nudged on: the nudges of the answer before are let go with it.</summary>
+    /// <summary>
+    /// An answer that needed a repair may itself be cut off and nudged on, where its request held it to no schema: the
+    /// nudges of the answer before are let go with it.
+    /// </summary>
     [Fact]
     public async Task AnAnswerAfterARepair_MayBeNudgedOnAgain()
     {
-        _chat.Answer(FakeChat.CutOff("x")).Answer(FakeChat.CutOff("y")).Answer(FakeChat.Said("z"))
+        // JSON that does not read is asked again as every answer is, never in JSON alone.
+        var chat = new FakeChat { SendsSchema = false };
+        chat.Answer(FakeChat.CutOff("""{"a":""")).Answer(FakeChat.CutOff("1")).Answer(FakeChat.Said("}"))
             .Answer(FakeChat.CutOff("""{ "notes": "n", "output": { "a": """)).Answer(FakeChat.Said(""" "b" }, "assumptions": [] }"""));
 
-        var result = await Ran(Run(output: Schema));
+        var result = await Ran(Run(output: Schema), chat: chat);
 
         Assert.Equal((AgentRunStatus.Completed, """{"a":"b"}"""), (result.Status, result.StructuredOutput));
         Assert.Single(_events.All.OfType<OutputRepair>());
+        Assert.Equal(3, _events.All.OfType<MessageSent>().Count(sent => sent.Which == AgentMessageKind.Continue));
     }
 
     /// <summary>A rate limit that names no wait is waited out by the doubled wait, held to the longest: the service asked for nothing past it.</summary>
@@ -1326,7 +1373,9 @@ public sealed class ToolLoopTests : IDisposable
 
     /// <summary>
     /// What a run says of a secret is masked wherever it says it - a refusal and a failure as they are told, each part of
-    /// an answer as it streams, the answer whole, how the run ended, and a handoff.
+    /// an answer as it streams, the answer whole, how the run ended, and a handoff - and every message the engine sends is
+    /// masked as its system prompt is, the step's prompt and a message to an agent at work among them: the agent is never
+    /// told a secret, and the stored conversation never holds one the engine wrote.
     /// </summary>
     [Fact]
     public async Task ASecretTheProviderEchoes_IsMaskedWhereverTheRunSaysIt()
@@ -1346,6 +1395,10 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Equal("the answer failed part way: cut ***", Assert.Single(_events.All.OfType<TurnRestarted>()).Why);
         Assert.Equal("system ***", _chat.Requests[0].System);
         Assert.Equal("the task ***", Assert.Single(_events.All.OfType<MessageSent>(), sent => sent.Which == AgentMessageKind.FirstPrompt).Text);
+        Assert.All(_chat.Requests, request => Assert.Equal([FakeChat.User("the task ***")], request.Messages));
+        var stored = File.ReadAllText(Path.Combine(_sessions, result.Session!, StoredConversation.ConversationFileName));
+        Assert.StartsWith($"[{FakeChat.User("the task ***")},", stored, StringComparison.Ordinal);
+        Assert.DoesNotContain("the task sk-1", stored, StringComparison.Ordinal);
         Assert.Equal(["half", "text ***"], _events.All.OfType<TextDelta>().Select(delta => delta.Text));
         Assert.Equal("think ***", Assert.Single(_events.All.OfType<ThinkingDelta>()).Text);
         Assert.Contains(_events.All.OfType<Notice>(), notice => notice.Text == "notice ***");
@@ -1368,6 +1421,15 @@ public sealed class ToolLoopTests : IDisposable
         structured.Answer(FakeChat.Said(Envelopes.Text("""{ "a": "sk-1" }""")));
 
         Assert.Equal("""{"a":"***"}""", (await Ran(Run(output: Schema) with { Mask = new Masking("sk-1") }, chat: structured)).StructuredOutput);
+
+        var telling = Run() with { Mask = new Masking("sk-1") };
+        var told = new FakeChat();
+        told.Reply((_, _) => PostingThenAnswering(telling, FakeChat.Said("my answer"), "the plan sk-1")).Answer(FakeChat.Said("done"));
+        var heard = new RecordedEvents();
+
+        Assert.Equal(AgentRunStatus.Completed, (await Ran(telling, chat: told, sink: heard)).Status);
+        Assert.Equal(FakeChat.User("the plan ***"), told.Requests[1].Messages[^1]);
+        Assert.Equal("the plan ***", Assert.Single(heard.All.OfType<MessageSent>(), sent => sent.Which == AgentMessageKind.PlanUpdate).Text);
     }
 
     /// <summary>
@@ -1710,6 +1772,62 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Equal(AgentEnvelope.Schema(Schema with { AskRounds = 1 }), _chat.Requests[0].Schema);
     }
 
+    /// <summary>
+    /// A schema the provider refuses is said in words in the conversation, never in its system prompt: the request is sent
+    /// again at once with no schema and the envelope in words in a message after what it held - no try of the service's -
+    /// and so is every later request of the run, a repair's among them; the message is stored with the conversation as
+    /// every message the engine sends is, and a notice says so.
+    /// </summary>
+    [Fact]
+    public async Task ASchemaTheProviderRefuses_IsSaidInWordsInTheConversation_ForTheRestOfTheRun()
+    {
+        _chat.Fail(new ChatFailure(ChatFailureKind.SchemaRefused, "too large sk-1"))
+            .Answer(FakeChat.Said("not json"))
+            .Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
+
+        var result = await Ran(Run(output: Schema) with { Mask = new Masking("sk-1") });
+
+        var inWords = AgentEnvelope.InWords(AgentEnvelope.Schema(Schema));
+        Assert.Equal((AgentRunStatus.Completed, """{"a":"x"}""", 0, 2), (result.Status, result.StructuredOutput, result.Retries, result.Turns));
+        Assert.Equal([AgentEnvelope.Schema(Schema), null, null], _chat.Requests.Select(request => request.Schema));
+        Assert.All(_chat.Requests, request => Assert.Equal("system", request.System));
+        Assert.Equal([FakeChat.User(Asked), FakeChat.User(inWords)], _chat.Requests[1].Messages);
+        Assert.Equal([FakeChat.User(Asked), FakeChat.User(inWords), FakeChat.Said("not json").Message], _chat.Requests[2].Messages.Take(3));
+        Assert.Equal(ToolLoop.SchemaSaidInWords("too large ***"), Assert.Single(_events.All.OfType<Notice>()).Text);
+        Assert.Equal(inWords, Assert.Single(_events.All.OfType<MessageSent>(), sent => sent.Which == AgentMessageKind.EnvelopeInWords).Text);
+        Assert.Single(_events.All.OfType<OutputRepair>());
+        Assert.Empty(_waits);
+        Assert.Empty(_events.All.OfType<WaitingToRetry>());
+        Assert.Equal(
+            [["user", "user", "assistant"], ["user", "assistant"]],
+            File.ReadAllLines(Path.Combine(_sessions, result.Session!, StoredConversation.ConversationFileName)).Select(Roles));
+
+        // A request that sent no schema has none to drop: the refusal ends the run, as one after the schema was dropped does.
+        var plain = new FakeChat();
+        plain.Fail(new ChatFailure(ChatFailureKind.SchemaRefused, "too large"));
+        var twice = new FakeChat();
+        twice.Fail(new ChatFailure(ChatFailureKind.SchemaRefused, "too large")).Fail(new ChatFailure(ChatFailureKind.SchemaRefused, "still too large"));
+
+        Assert.Equal((AgentRunStatus.Failed, "too large"), await Ran(Run(), chat: plain) is var failed ? (failed.Status, failed.Error) : default);
+        Assert.Single(plain.Requests);
+        Assert.Equal((AgentRunStatus.Failed, "still too large"), await Ran(Run(output: Schema), chat: twice) is var again ? (again.Status, again.Error) : default);
+        Assert.Equal(2, twice.Requests.Count);
+    }
+
+    /// <summary>The handoff turn after a schema the provider refused is asked as every later request is: no schema, the envelope said in words before its question.</summary>
+    [Fact]
+    public async Task TheHandoffTurnAfterASchemaRefused_IsAskedWithNone()
+    {
+        var run = Run(output: Schema);
+        _chat.Fail(new ChatFailure(ChatFailureKind.SchemaRefused, "too large")).Answer(FakeChat.Said("""{"notes":"handed"}"""));
+
+        var result = await Ran(run, sink: new Reacting(_events, @event => @event is MessageSent { Which: AgentMessageKind.EnvelopeInWords }, () => run.Handoff.Ask()));
+
+        Assert.Equal((AgentRunStatus.HandedOff, "handed"), (result.Status, result.Handoff!.Answer));
+        Assert.Equal([AgentEnvelope.Schema(Schema), null], _chat.Requests.Select(request => request.Schema));
+        Assert.Equal([FakeChat.User(Asked), FakeChat.User(AgentEnvelope.InWords(AgentEnvelope.Schema(Schema))), FakeChat.User(AgentHandoffSignal.Prompt)], _chat.Requests[1].Messages);
+    }
+
     /// <summary>A step past its time between requests asks nothing more: the answer that needed a repair is its last.</summary>
     [Fact]
     public async Task AStepPastItsTimeBetweenRequests_AsksNothingMore()
@@ -1845,10 +1963,10 @@ public sealed class ToolLoopTests : IDisposable
     /// <summary>The roles of the messages a stored line holds, in order.</summary>
     private static string[] Roles(string line) => [.. JsonNode.Parse(line)!.AsArray().Select(message => message!["role"]!.GetValue<string>())];
 
-    private static async IAsyncEnumerable<ChatPart> PostingThenAnswering(AgentRun run, ChatTurn turn, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    private static async IAsyncEnumerable<ChatPart> PostingThenAnswering(AgentRun run, ChatTurn turn, string posted = "the plan changed", [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         yield return new ChatPart.Text(turn.Text);
-        run.Messages.Post("the plan changed");
+        run.Messages.Post(posted);
         await Task.Yield();
         cancellationToken.ThrowIfCancellationRequested();
         yield return new ChatPart.Answered(turn);

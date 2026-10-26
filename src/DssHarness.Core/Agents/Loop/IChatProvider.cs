@@ -23,7 +23,9 @@ public interface IChatProvider
     /// <summary>
     /// Whether the provider's wire holds every answer to the schema a request sends (<see cref="ChatRequest.Schema"/>): where
     /// it does not, the loop puts the schema in words in the step's first message, and asks an answer that read as no JSON
-    /// again in JSON alone (<see cref="ChatRequest.JsonAlone"/>).
+    /// again in JSON alone (<see cref="ChatRequest.JsonAlone"/>). Where it does and refuses a schema
+    /// (<see cref="ChatFailureKind.SchemaRefused"/>), the loop sends the run's requests none from then on, said in words in a
+    /// message of the conversation.
     /// </summary>
     bool SendsSchema { get; }
 
@@ -114,7 +116,11 @@ public abstract record ChatPart
     /// <param name="Model">The model the provider says writes it.</param>
     public sealed record Began(string Model) : ChatPart;
 
-    /// <summary>Something the provider says of the request that is none of the answer's: what it cleared of the context, what it sent shortened.</summary>
+    /// <summary>
+    /// Something the provider says of the request that is none of the answer's - what its server cleared of the
+    /// conversation's context for it - told as the run's notice; where the provider sends the conversation shortened, it
+    /// says so by <see cref="Shortened"/>, and the loop tells it.
+    /// </summary>
     /// <param name="Message">What it says.</param>
     public sealed record Notice(string Message) : ChatPart;
 
@@ -250,6 +256,14 @@ public enum ChatFailureKind
 
     /// <summary>A failure no try mends, said in the provider's own words: a plan that does not cover the call, a history the provider will not read, an answer this tool cannot put back together.</summary>
     Fatal,
+
+    /// <summary>
+    /// The provider refused the schema the request sent (<see cref="ChatRequest.Schema"/>) as more than its wire takes - no
+    /// failure of the step's: the loop sends the run's requests no schema from then on, says the envelope in words in a
+    /// message of the conversation, and sends the request again, no try of the service's. A request that sent no schema
+    /// and is refused so fails the step, said in the provider's own words.
+    /// </summary>
+    SchemaRefused,
 }
 
 /// <summary>A request's failure, as the provider classes it.</summary>

@@ -133,6 +133,39 @@ public sealed class ClaudeApiClientTests : IDisposable
         Assert.DoesNotContain("reads against this JSON schema", _endpoint.Asked[0].Body, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A format the API cannot compile is said in words in a message of the conversation, never in its system prompt: every
+    /// request of the run and of a step that goes on in the conversation sends the system prompt its thinking was made
+    /// under, and the earlier requests' messages as a byte prefix - an answer that does not read still repaired - and every
+    /// request after the refusal sends no format.
+    /// </summary>
+    [Fact]
+    public async Task AFormatTheApiCannotCompile_IsSaidInWordsInTheConversation_ItsSystemPromptUntouched()
+    {
+        var output = new AgentOutput("o", """{"type":"object","additionalProperties":false,"required":["a"],"properties":{"a":{"type":"string"}}}""");
+        _endpoint
+            .Then(ApiReply.Error(400, "invalid_request_error", "The compiled grammar is too large, which would cause performance issues."))
+            .Then(ClaudeApiFixtures.Answer("not json"))
+            .Then(ClaudeApiFixtures.Answer(Envelopes.Text("""{ "a": "x" }""")))
+            .Then(ClaudeApiFixtures.Answer(Envelopes.Text("""{ "a": "y" }""")));
+
+        var first = await Ran(Run() with { Output = output });
+        var goingOn = await Ran(Run() with { Output = output, UserPrompt = "go on", Conversation = new AgentSessionRef(ClaudeApiClient.ClientName, "anthropic", first.Session!) });
+
+        Assert.Equal((AgentRunStatus.Completed, """{"a":"x"}""", 0), (first.Status, first.StructuredOutput, first.Retries));
+        Assert.Equal((AgentRunStatus.Completed, """{"a":"y"}"""), (goingOn.Status, goingOn.StructuredOutput));
+        Assert.Single(_events.All.OfType<OutputRepair>());
+        AssertTheConversationHolds(_endpoint.Asked);
+        Assert.Equal([true, false, false, true], _endpoint.Asked.Select(asked => JsonNode.Parse(asked.Body)!["output_config"] is not null));
+        Assert.Equal(
+            AgentEnvelope.InWords(AgentEnvelope.Schema(output)),
+            JsonNode.Parse(Messages(_endpoint.Asked[1])[1])!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(2, Messages(_endpoint.Asked[1]).Count);
+        Assert.Equal(
+            ToolLoop.SchemaSaidInWords("the API answered 400 invalid_request_error: The compiled grammar is too large, which would cause performance issues. (request req_000000000000000000000009)"),
+            Assert.Single(_events.All.OfType<Notice>(), notice => notice.Text.StartsWith("The provider refused", StringComparison.Ordinal)).Text);
+    }
+
     /// <summary>A step on this client is worked by the terms of its entries: the client's tries and its longest wait.</summary>
     [Fact]
     public async Task AStep_IsWorkedByItsEntriesTerms()

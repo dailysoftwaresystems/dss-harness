@@ -136,13 +136,17 @@ public sealed record FlowQuestionEntry(
     /// <summary>The states a question stands in.</summary>
     public static readonly IReadOnlyList<string> States = ["open", "answered", "withdrawn"];
 
-    /// <summary>What is wrong with this entry; null when nothing is.</summary>
+    /// <summary>
+    /// What is wrong with this entry; null when nothing is. The questions an agent or a step's output wrote are held to
+    /// their record's own rule (<see cref="Agents.AgentQuestion.Problems"/>), as the answer that held them was.
+    /// </summary>
     public string? Problem()
         => !FlowQuestionIds.IsWellFormed(Id) ? $"'{Id}' is not a question's id"
             : !States.Contains(State, StringComparer.Ordinal) ? $"'{State}' is not a state a question stands in"
             : string.IsNullOrWhiteSpace(Kind) ? "its kind is empty"
             : Options.Count < 2 ? $"it takes {Options.Count.ToString(CultureInfo.InvariantCulture)} answers, and a question takes at least two"
             : Options.Any(option => string.IsNullOrWhiteSpace(option.Answer)) ? "an answer it takes is empty"
+            : Agents.AgentQuestion.ProblemIn(Questions ?? []) is { } asked ? $"its {asked}"
             : null;
 }
 

@@ -19,8 +19,10 @@ namespace DssHarness.Core.Agents;
 /// One gate is made for each run that names an output, and counts its repairs. The notes are not empty. The output is
 /// null only where the answer asks the person, and an answer with both an output and questions is sent back. Questions
 /// are taken only where the envelope offers them - an answer that asks where the step may not, or has asked as often as
-/// it may, is sent back told so - and each recommends one of its options, word for word. A text an <c>enum</c> or a
-/// <c>const</c> of the step's schema holds in another case reads as the schema spells it.
+/// it may, is sent back told so - and each assumption and question is held to its record's own rules
+/// (<see cref="AgentAssumption.Problems"/>, <see cref="AgentQuestion.Problems"/>): every text written, and a question's
+/// options no two alike, one of them recommended word for word. A text an <c>enum</c> or a <c>const</c> of the step's
+/// schema holds in another case reads as the schema spells it.
 /// </para>
 /// <para>
 /// An answer that reads ends the run: <see cref="AgentRunStatus.Asked"/> where it asks, with its questions, and
@@ -45,8 +47,11 @@ public sealed class StructuredOutputGate
     /// <summary>Why an answer whose notes are empty does not read.</summary>
     public const string NotesEmpty = "$.notes: is empty; say what you leave for whoever goes on with this work";
 
-    /// <summary>How a value is written into a problem: as JSON, escaping only what JSON itself must.</summary>
-    private static readonly JsonSerializerOptions Written = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    /// <summary>The shape an assumption has as the envelope says it, which its record's own rule is read on.</summary>
+    private static readonly JsonObject AssumptionShape = AgentEnvelope.Assumption();
+
+    /// <summary>The shape a question has as the envelope says it, which its record's own rule is read on.</summary>
+    private static readonly JsonObject QuestionShape = AgentEnvelope.Question();
 
     private readonly AgentOutput _output;
     private readonly JsonObject _step;
@@ -153,16 +158,10 @@ public sealed class StructuredOutputGate
         var questions = offered ? envelope[AgentEnvelope.Questions] as JsonArray : null;
         var asks = questions is { Count: > 0 };
 
-        foreach (var (question, at) in (questions ?? []).Select((question, at) => (question, at)))
-        {
-            // An item that is no object has its problem from the envelope's check already, and no options to look in.
-            if (question is JsonObject asked && asked[AgentEnvelope.Member(nameof(AgentQuestion.Options))] is JsonArray options
-                && asked[AgentEnvelope.Member(nameof(AgentQuestion.Recommended))] is JsonValue recommended && recommended.GetValueKind() == JsonValueKind.String
-                && !options.Any(option => JsonNode.DeepEquals(option, recommended)))
-            {
-                problems.Add($"$.{AgentEnvelope.Questions}[{at}].{AgentEnvelope.Member(nameof(AgentQuestion.Recommended))}: {recommended.ToJsonString(Written)} is none of the {options.Count} option{(options.Count == 1 ? string.Empty : "s")}; recommend one of them, word for word");
-            }
-        }
+        // Each assumption and question is held to its record's own rules - those no schema says - once it has the record's
+        // shape: one that has not has its problems from the envelope's check already.
+        problems.AddRange(RecordProblems(envelope[AgentEnvelope.Assumptions] as JsonArray, AgentEnvelope.Assumptions, AssumptionShape, (AgentAssumption assumption) => assumption.Problems()));
+        problems.AddRange(RecordProblems(questions, AgentEnvelope.Questions, QuestionShape, (AgentQuestion question) => question.Problems()));
 
         JsonNode? output = null;
 
@@ -217,4 +216,13 @@ public sealed class StructuredOutputGate
 
     /// <summary>An item the envelope's check passed, read as the record it is: its members are the record's (<see cref="AgentEnvelope.Member"/>).</summary>
     private static T Record<T>(JsonNode? item) => item.Deserialize<T>(JsonStateFile.Options)!;
+
+    /// <summary>
+    /// What is wrong with each item of the envelope's <paramref name="list"/> that has its record's <paramref name="shape"/>,
+    /// by the record's own rule, each problem named by its path in the answer.
+    /// </summary>
+    private static IEnumerable<string> RecordProblems<T>(JsonArray? items, string list, JsonObject shape, Func<T, IReadOnlyList<string>> problems)
+        => (items ?? []).SelectMany((item, at) => JsonSchemaSubset.Problems(shape, item).Count > 0
+            ? []
+            : problems(Record<T>(item)).Select(problem => $"$.{list}[{at}].{problem}"));
 }

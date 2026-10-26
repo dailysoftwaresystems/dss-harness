@@ -148,6 +148,55 @@ public sealed class StructuredOutputTests
     }
 
     /// <summary>
+    /// A question and an assumption that have their shape are held to what no schema says of them, by their records' own
+    /// rules, each problem named by its path: every text written - a question's options among them - its options no two
+    /// alike, and its recommendation among them. One out of its shape has its shape's problems alone.
+    /// </summary>
+    [Fact]
+    public void AQuestionAndAnAssumption_AreHeldToTheirRecordsOwnRules()
+    {
+        const string Empty = "is empty; say it, as the schema describes it";
+        var gate = Gate(rounds: 2);
+        var blank = Envelopes.Question();
+        blank["problem"] = " ";
+        blank["why"] = string.Empty;
+
+        Assert.Equal([$"$.questions[0].problem: {Empty}", $"$.questions[0].why: {Empty}"], gate.Problems(Envelopes.Of(null, questions: [blank])));
+        Assert.Equal(
+            ["$.questions[1].options[1]: \"Do X\" stands at options[0] already; each option is a choice of its own"],
+            gate.Problems(Envelopes.Of(null, questions: [Envelopes.Question(), Envelopes.Question(recommended: "Do X", options: ["Do X", "Do X"])])));
+        Assert.Equal(
+            [
+                "$.questions[0].options[0]: is empty; each option is a sentence that says what it leads to",
+                "$.questions[0].options[1]: is empty; each option is a sentence that says what it leads to",
+                $"$.questions[0].recommended: {Empty}",
+            ],
+            gate.Problems(Envelopes.Of(null, questions: [Envelopes.Question(recommended: string.Empty, options: [string.Empty, string.Empty])])));
+        Assert.Equal(
+            [$"$.assumptions[1].about: {Empty}", $"$.assumptions[1].why: {Empty}"],
+            gate.Problems(Envelopes.Of(Output, assumptions: [Envelopes.Assumption(), Envelopes.Assumption(about: " ", why: string.Empty)])));
+
+        var unshaped = Envelopes.Question();
+        unshaped["problem"] = " ";
+        unshaped.Remove("why");
+
+        Assert.Equal(["$.questions[0]: 'why' is required and missing"], gate.Problems(Envelopes.Of(null, questions: [unshaped])));
+    }
+
+    /// <summary>An output's repairs and the rounds it may ask in are never below naught, given or changed: a count below it would read as spent.</summary>
+    [Fact]
+    public void AnOutputsRepairsAndRounds_AreNeverBelowNaught()
+    {
+        var output = new AgentOutput("o", Step, MaxRepairs: 0, AskRounds: 0);
+
+        Assert.Equal(nameof(AgentOutput.MaxRepairs), Assert.Throws<ArgumentOutOfRangeException>(() => new AgentOutput("o", Step, MaxRepairs: -1)).ParamName);
+        Assert.Equal(nameof(AgentOutput.AskRounds), Assert.Throws<ArgumentOutOfRangeException>(() => new AgentOutput("o", Step, AskRounds: -1)).ParamName);
+        Assert.Equal(nameof(AgentOutput.MaxRepairs), Assert.Throws<ArgumentOutOfRangeException>(() => output with { MaxRepairs = -1 }).ParamName);
+        Assert.Equal(nameof(AgentOutput.AskRounds), Assert.Throws<ArgumentOutOfRangeException>(() => output with { AskRounds = -2 }).ParamName);
+        Assert.Equal((0, 0, null), (output.MaxRepairs, output.AskRounds, (output with { AskRounds = null }).AskRounds));
+    }
+
+    /// <summary>
     /// An assumption's members and a question's are their records' as every record that keeps them is written, in order:
     /// an answer reads as the record it becomes.
     /// </summary>

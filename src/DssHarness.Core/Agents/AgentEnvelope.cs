@@ -17,8 +17,10 @@ namespace DssHarness.Core.Agents;
 /// <see cref="Questions"/> is offered only where the step may ask and has rounds left. An assumption's members and a
 /// question's are their records' (<see cref="AgentAssumption"/>, <see cref="AgentQuestion"/>), named as the records are
 /// written wherever they are kept, so an answer reads as the record it becomes. What no schema can say - notes
-/// that are not empty, a null output only where the answer asks, a recommendation among its options - is the gate's
-/// (<see cref="StructuredOutputGate"/>).
+/// that are not empty, a null output only where the answer asks - is the gate's (<see cref="StructuredOutputGate"/>), and
+/// what none says of an assumption or a question - every text written, options no two alike, a recommendation among them -
+/// its record's own (<see cref="AgentAssumption.Problems"/>, <see cref="AgentQuestion.Problems"/>), which the gate holds
+/// each to.
 /// </remarks>
 public static class AgentEnvelope
 {
@@ -37,8 +39,11 @@ public static class AgentEnvelope
     /// <summary>The fewest choices a question offers.</summary>
     public const int FewestOptions = 2;
 
-    /// <summary>How the envelope is written: as JSON, escaping only what JSON itself must, so a model reads it as it was written.</summary>
-    private static readonly JsonSerializerOptions Written = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    /// <summary>
+    /// How the envelope, and a value a problem of an answer quotes, are written: as JSON, escaping only what JSON itself
+    /// must, so a model reads it as it was written.
+    /// </summary>
+    internal static readonly JsonSerializerOptions Written = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     /// <summary>The schema of one assumption: what was open, what was taken, and why.</summary>
     public static JsonObject Assumption() => Closed(
@@ -92,6 +97,42 @@ public static class AgentEnvelope
     /// </summary>
     /// <param name="property">The record's property.</param>
     public static string Member(string property) => JsonStateFile.Options.PropertyNamingPolicy!.ConvertName(property);
+
+    /// <summary>The problem of a text of an assumption's or a question's that is empty, named by its member as the envelope names it.</summary>
+    /// <param name="property">The record's property.</param>
+    internal static string Empty(string property) => $"{Member(property)}: is empty; say it, as the schema describes it";
+
+    /// <summary>A text a problem quotes, as JSON writes it.</summary>
+    /// <param name="text">The text.</param>
+    internal static string Quoted(string text) => JsonSerializer.Serialize(text, Written);
+
+    /// <summary>
+    /// The first thing wrong with any of <paramref name="items"/> - an assumption or a question - said by its place in the
+    /// envelope's <paramref name="list"/>, or null where every one of them holds together.
+    /// </summary>
+    /// <param name="list">The envelope's member that holds them: <see cref="Assumptions"/> or <see cref="Questions"/>.</param>
+    /// <param name="items">The items, in order.</param>
+    /// <param name="problems">What is wrong with one, by its record's own rule.</param>
+    internal static string? ProblemIn<T>(string list, IReadOnlyList<T?> items, Func<T, IReadOnlyList<string>> problems)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(items);
+
+        for (var at = 0; at < items.Count; at++)
+        {
+            if (items[at] is not { } item)
+            {
+                return $"{list}[{at}]: is null";
+            }
+
+            if (problems(item) is [var first, ..])
+            {
+                return $"{list}[{at}].{first}";
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>Whether the envelope offers <see cref="Questions"/>: the step may ask, and has rounds left.</summary>
     /// <param name="output">The output the run is to produce.</param>

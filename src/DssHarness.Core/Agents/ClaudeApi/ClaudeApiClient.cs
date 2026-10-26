@@ -16,7 +16,10 @@ namespace DssHarness.Core.Agents.ClaudeApi;
 /// <param name="clock">Times the run's bounds and each wait.</param>
 /// <param name="connection">How each request is posted and its answer read.</param>
 /// <param name="wait">Waits before a request is asked again; the clock's own where none is given.</param>
-/// <param name="jitter">A number from naught up to one, which takes up to a quarter off each wait; a random one where none is given.</param>
+/// <param name="jitter">
+/// A number from naught up to one, which takes up to a quarter off each doubled wait - a wait the provider names is kept as
+/// named; a random one where none is given.
+/// </param>
 public sealed class ClaudeApiClient(
     IFileSystem fileSystem,
     AgentToolHost tools,
