@@ -1606,7 +1606,7 @@ in help: the inside of a script file a command runs. The worktree rules
 and CI starts of `gh` - each endpoint and GraphQL mutation that merges or starts CI with the `gh`
 commands that reach it, one list (`AgentPolicy.GhCiReaches`) that `AgentPolicy.NeverCiCommands`
 (`gh pr merge`, `gh pr update-branch`, `gh repo sync`, `gh workflow run`, `gh run rerun`),
-`AgentPolicy.GhApiEndpoints` and `AgentPolicy.GhApiMutations` are read from, `gh alias set`, and a `gh` command
+`AgentPolicy.GhApiEndpoints` and `AgentPolicy.GhApiMutations` are read from, `gh alias set`, `gh extension exec`, and a `gh` command
 named by none of gh's own (`AgentPolicy.GhCommands`: an alias, `co` among them, or an extension) - keep git's own files unwritten whatever `protectedPaths` says (`AgentPolicy.GitsOwnRule`:
 a `.git` segment at any depth beneath a root, in any case, so a nested repository's hooks are as
 safe as the root's), and hold the tool's own

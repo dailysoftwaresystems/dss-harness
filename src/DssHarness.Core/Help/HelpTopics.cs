@@ -2625,7 +2625,7 @@ public static class HelpTopics
             + "one from) is the git "
             + "config it is - and so are the gh commands that merge or start CI "
             + $"({string.Join(", ", Agents.Policy.AgentPolicy.NeverCiCommands)}), the gh api endpoints and GraphQL "
-            + "mutations that reach the same, gh alias set, and a gh command named by none of gh's own "
+            + "mutations that reach the same, gh alias set, gh extension exec, and a gh command named by none of gh's own "
             + $"({string.Join(", ", Agents.Policy.AgentPolicy.GhCommands)}) - an alias, gh's own co among them, or an extension, "
             + "a name for any command - for never merges, never starts CI binds the agents too; git's own files - a "
             + ".git, file or directory, at any depth beneath a root and in any case, a nested repository's and a "

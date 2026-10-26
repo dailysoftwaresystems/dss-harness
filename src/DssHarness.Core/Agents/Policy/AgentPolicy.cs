@@ -840,7 +840,8 @@ public sealed class AgentPolicy
         // The Run rules, against each reading of the command's own words in turn: git configured
         // where it runs the git config it is first, then the command with git's options dropped
         // before its subcommand.
-        var readings = CommandAnalysis.ForRules(words, program: start == CommandAnalysis.EnvironmentOf(command));
+        var runs = start == CommandAnalysis.EnvironmentOf(command);
+        var readings = CommandAnalysis.ForRules(words, program: runs);
 
         foreach (var reading in readings)
         {
@@ -874,7 +875,7 @@ public sealed class AgentPolicy
                 }
             }
 
-            if (readings.Select(MergesOrStartsCi).OfType<string>().FirstOrDefault() is { } reached)
+            if (readings.Select(reading => MergesOrStartsCi(reading, runs)).OfType<string>().FirstOrDefault() is { } reached)
             {
                 return new AgentPolicyAnswer.Denied(
                     "the merges and CI starts of gh",
@@ -1035,10 +1036,16 @@ public sealed class AgentPolicy
     /// <summary>
     /// What a <c>gh</c> command reaches that merges or starts CI, as the worktree rules refuse it:
     /// an <c>api</c> endpoint of <see cref="GhApiEndpoints"/> or a mutation of
-    /// <see cref="GhApiMutations"/>, a GraphQL query read from a file, or an alias made; null where
-    /// it reaches none.
+    /// <see cref="GhApiMutations"/>, a GraphQL query read from a file, an alias made, an extension
+    /// run, or - where gh is the command's program - a command named by none of <see cref="GhCommands"/>;
+    /// null where it reaches none.
     /// </summary>
-    private static string? MergesOrStartsCi(IReadOnlyList<string> words)
+    /// <param name="words">The command as its rules read it.</param>
+    /// <param name="runs">
+    /// Whether gh is the command's program: a gh met among another program's words (<c>git grep gh src</c>) is data
+    /// where it stands, and its next word no command of gh's.
+    /// </param>
+    private static string? MergesOrStartsCi(IReadOnlyList<string> words, bool runs)
     {
         if (words.Count < 2 || !CommandAnalysis.Name(words[0]).Equals("gh", StringComparison.OrdinalIgnoreCase))
         {
@@ -1047,15 +1054,21 @@ public sealed class AgentPolicy
 
         // A word that is none of gh's own commands is an alias or an extension: a name for any command, a refused one
         // among them, that no rule knows.
-        if (!GhCommands.Contains(words[1], StringComparer.Ordinal))
+        if (runs && !GhCommands.Contains(words[1], StringComparer.Ordinal))
         {
             return $"'gh {words[1]}', an alias or an extension, a name for any command";
         }
 
-        // An alias stands for any command, a refused one among them, under a name no rule knows.
+        // An alias stands for any command, a refused one among them, under a name no rule knows; an extension run by
+        // exec is a command no rule here reads.
         if (words[1].Equals("alias", StringComparison.OrdinalIgnoreCase) && words.Count > 2 && words[2] is "set" or "import")
         {
             return $"gh alias {words[2]}, a name for any command";
+        }
+
+        if (words[1].Equals("extension", StringComparison.OrdinalIgnoreCase) && words.Count > 2 && words[2] is "exec")
+        {
+            return "gh extension exec, an extension run: a command no rule here reads";
         }
 
         if (!words[1].Equals("api", StringComparison.OrdinalIgnoreCase))

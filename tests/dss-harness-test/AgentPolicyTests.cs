@@ -2075,9 +2075,20 @@ public sealed class AgentPolicyTests
                     (denied.Rule, denied.Reason));
             }
 
-            foreach (var command in new[] { "gh pr view 12", "gh issue list", "gh search code AgentPolicy", "gh --version", "gh help pr", "gh status" })
+            var exec = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("gh extension exec any-ext 42"));
+            Assert.Equal(
+                ("the merges and CI starts of gh", "'gh extension exec any-ext 42' is denied by a worktree rule of this tool: it reaches gh extension exec, an extension run: a command no rule here reads, and never merges, never starts CI binds the agents too"),
+                (exec.Rule, exec.Reason));
+
+            foreach (var command in new[] { "gh pr view 12", "gh issue list", "gh search code AgentPolicy", "gh --version", "gh help pr", "gh status", "gh extension list" })
             {
                 Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+            }
+
+            // gh among another program's words is data where it stands: its next word is no command of gh's.
+            foreach (var command in new[] { "git grep -n gh src", "find . -name gh -type f", "git add tools/gh README.md", "rg gh src" })
+            {
+                Assert.IsNotType<AgentPolicyAnswer.Denied>(policy.Run(command));
             }
 
             Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false).Run("gh co 42"));

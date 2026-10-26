@@ -3089,12 +3089,12 @@ public sealed class ConfigStoreTests
         // A value holding a comment and a trailing comma, as config.json may, reaches every request as what it says.
         var commented = temp.WriteFile(
             "commented.json",
-            """{ "agentClients": { "claude-api": { "requestExtras": { "metadata": { "user_id": "u1", /* the run's */ }, "top_k": [1, 2,], } } } }""");
+            """{ "agentClients": { "claude-api": { "requestExtras": { "metadata": { "user_id": "u1", /* the run's */ }, "stop_sequences": ["END", "STOP",], } } } }""");
         var extras = CreateStore().Load(commented).AgentClients["claude-api"];
         var request = new DssHarness.Core.Agents.Loop.ChatRequest("claude-opus-5-5", null, "s", "[]", ["""{"role":"user","content":[{"type":"text","text":"Go."}]}"""], 16, new DssHarness.Core.Agents.AgentKey("K", "v"), null);
         var body = System.Text.Json.Nodes.JsonNode.Parse(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.Body(request, DssHarness.Core.Agents.ClaudeApi.ClaudeApiSettings.Of(extras)))!;
 
-        Assert.Equal(("""{"user_id":"u1"}""", "[1,2]"), (body["metadata"]!.ToJsonString(), body["top_k"]!.ToJsonString()));
+        Assert.Equal(("""{"user_id":"u1"}""", """["END","STOP"]"""), (body["metadata"]!.ToJsonString(), body["stop_sequences"]!.ToJsonString()));
 
         var owned = temp.WriteFile("owned.json", """{ "agentClients": { "claude-api": { "requestExtras": { "model": "claude-other" } } } }""");
 
