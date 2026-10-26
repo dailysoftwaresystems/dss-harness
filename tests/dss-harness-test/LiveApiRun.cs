@@ -5,6 +5,7 @@ using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Application;
 using DssHarness.Core.Composition;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Orchestration;
 using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Secrets;
@@ -97,7 +98,8 @@ internal sealed class LiveApiRun : IDisposable
     /// <param name="session">The conversation the step goes on in; null for a new one.</param>
     /// <param name="entry">The client's entry under <c>agentClients</c>; null where the configuration declares none.</param>
     /// <param name="cancellationToken">Ends the step.</param>
-    public Task<AgentRunResult> StepAsync(string step, string model, string effort, string prompt, string? session, AgentClientConfig? entry, CancellationToken cancellationToken)
+    /// <param name="output">The output the step is to produce, held to its envelope; null for an answer of text.</param>
+    public Task<AgentRunResult> StepAsync(string step, string model, string effort, string prompt, string? session, AgentClientConfig? entry, CancellationToken cancellationToken, AgentOutput? output = null)
     {
         var request = new AgentStepRequest(
             "r1",
@@ -116,11 +118,9 @@ internal sealed class LiveApiRun : IDisposable
             new Dictionary<string, string>(),
             null,
             new AgentWorkspace(_tree, _work, _temp.Path, [], _tree, Path.Combine(_temp.Path, ".orchestrators", "r1")),
-            null,
+            output,
             session is null ? null : new AgentSessionRef(Client, Provider.Name, session),
             new AgentLimits(8, 0.5m, TimeSpan.FromMinutes(5), 120),
-            MayAsk: false,
-            AskRounds: 0,
             new Masking(Key.Value))
         {
             Ground = PolicyGrounds.Of(_tree, [_tree, _work], [_tree, _work], [], [], [], capabilities: [AgentCapability.Read]),
@@ -130,6 +130,10 @@ internal sealed class LiveApiRun : IDisposable
 
         return _runner.RunAsync(request, new RecordedEvents(), cancellationToken);
     }
+
+    /// <summary>The directory of the run's step <paramref name="step"/>, where its records are kept.</summary>
+    /// <param name="step">The step's instance, as <see cref="StepAsync"/> named it.</param>
+    public string StepDirectory(string step) => OrchestratorLayout.Of(new HarnessLayout(_temp.Path, _temp.Path), "r1").AgentStepDirectory("a1", step);
 
     /// <summary>Copies the steps' records and the wire to where <see cref="LiveRecords.RecordsVariable"/> names, for the person to read.</summary>
     public void Keep() => LiveRecords.Copy((Path.Combine(_temp.Path, ".orchestrators"), "steps"), (Wire, "wire"));

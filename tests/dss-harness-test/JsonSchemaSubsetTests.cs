@@ -797,4 +797,70 @@ public sealed class JsonSchemaSubsetTests
             "The schema is not one this engine reads, so nothing is typed by it: $: an object holds additionalProperties: false, saying every property is one it names. (Parameter 'schema')",
             refused.Message);
     }
+
+    /// <summary>A document's problems are named from where it stands in a larger one: its root's path given, every path after it.</summary>
+    [Fact]
+    public void ADocumentsProblems_AreNamedFromWhereItStands()
+    {
+        var schema = Schema("""{"type":"object","additionalProperties":false,"required":["a"],"properties":{"a":{"type":"array","items":{"type":"string"}},"b c":{"type":"string"}}}""");
+
+        Assert.Equal(
+            ["$.output: 'a' is required and missing", "$.output[\"b c\"]: 1 is not a string"],
+            JsonSchemaSubset.Problems(schema, JsonNode.Parse("""{"b c":1}"""), "$.output"));
+        Assert.Equal(["$.output.a[1]: 2 is not a string"], JsonSchemaSubset.Problems(schema, JsonNode.Parse("""{"a":["x",2]}"""), "$.output"));
+        Assert.Equal(JsonSchemaSubset.Problems(schema, JsonNode.Parse("{}"), "$"), JsonSchemaSubset.Problems(schema, JsonNode.Parse("{}")));
+    }
+
+    /// <summary>
+    /// A text an enum or a const holds in another case is spelled as the schema spells it - through a reference, in a
+    /// list's items, under the first shape of an anyOf that the spelled document answers - where exactly one value
+    /// matches it so; every other value, and the document given, is left as it was.
+    /// </summary>
+    [Fact]
+    public void AValueInAnotherCase_IsSpelledAsTheSchemaSpellsIt()
+    {
+        var schema = Schema("""
+            {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "level": { "$ref": "#/$defs/level" },
+                "levels": { "type": "array", "items": { "$ref": "#/$defs/level" } },
+                "kind": { "const": "review" },
+                "either": { "anyOf": [ { "type": "integer" }, { "enum": ["Yes", "no"] } ] },
+                "alike": { "enum": ["ab", "AB"] },
+                "count": { "enum": [1, 2] },
+                "free": { "type": "string" }
+              },
+              "$defs": { "level": { "enum": ["high", "low"] } }
+            }
+            """);
+        var given = JsonNode.Parse("""{"level":"HIGH","levels":["Low","high"],"kind":"REVIEW","either":"yes","alike":"AB","count":1,"free":"HIGH"}""");
+
+        var spelled = JsonSchemaSubset.Respelled(schema, given);
+
+        Assert.Equal("""{"level":"high","levels":["low","high"],"kind":"review","either":"Yes","alike":"AB","count":1,"free":"HIGH"}""", spelled!.ToJsonString());
+        Assert.Equal("""{"level":"HIGH","levels":["Low","high"],"kind":"REVIEW","either":"yes","alike":"AB","count":1,"free":"HIGH"}""", given!.ToJsonString());
+        Assert.Empty(JsonSchemaSubset.Problems(schema, spelled));
+        Assert.Null(JsonSchemaSubset.Respelled(schema, null));
+        Assert.Equal("""{"either":"maybe","alike":"Ab"}""", JsonSchemaSubset.Respelled(schema, JsonNode.Parse("""{"either":"maybe","alike":"Ab"}"""))!.ToJsonString());
+        Assert.Throws<ArgumentException>("schema", () => JsonSchemaSubset.Respelled(Schema("""{"type":"object"}"""), given));
+    }
+
+    /// <summary>Every schema a schema holds is walked, itself first: its properties', its items', its anyOf's shapes and its definitions, each in its order.</summary>
+    [Fact]
+    public void EverySchemaASchemaHolds_IsWalked_ItselfFirst()
+    {
+        var schema = Schema("""
+            {
+              "title": "root", "type": "object", "additionalProperties": false,
+              "properties": {
+                "a": { "title": "a", "type": "array", "items": { "title": "a-item", "type": "string" } },
+                "b": { "title": "b", "anyOf": [ { "title": "b-1", "type": "null" }, { "title": "b-2", "$ref": "#/$defs/d" } ] }
+              },
+              "$defs": { "d": { "title": "d", "type": "string" } }
+            }
+            """).AsObject();
+
+        Assert.Equal(["root", "a", "a-item", "b", "b-1", "b-2", "d"], JsonSchemaSubset.SchemasIn(schema).Select(each => each["title"]!.GetValue<string>()));
+    }
 }

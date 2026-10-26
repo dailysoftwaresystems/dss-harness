@@ -210,6 +210,17 @@ internal static class ClaudeApiFixtures
             ("message_delta", $$$"""{"type":"message_delta","delta":{"stop_reason":"{{{reason}}}","stop_sequence":null},"usage":{"output_tokens":5}}"""),
             ("message_stop", """{"type":"message_stop"}"""),
         ];
+
+    /// <summary>A message that answers <paramref name="text"/> and ends its turn.</summary>
+    public static ApiReply Answer(string text)
+        => ApiReply.Stream(Events(
+        [
+            Start(),
+            ("content_block_start", """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"""),
+            ("content_block_delta", """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""" + JsonSerializer.Serialize(text) + "}}"),
+            ("content_block_stop", """{"type":"content_block_stop","index":0}"""),
+            .. End("end_turn"),
+        ]));
 }
 
 /// <summary>Z.AI's stored answers (<c>fixtures/zai-api</c>): what the probe met live, and what it cannot ask for, written in its shape.</summary>
@@ -223,4 +234,11 @@ internal static class ZaiApiFixtures
 
     /// <summary>The stored answer <paramref name="name"/>, streamed <paramref name="chunk"/> bytes at a time.</summary>
     public static ApiReply Reply(string name, int chunk = 5) => ApiReply.Stream(Read(name), chunk);
+
+    /// <summary>A message that answers <paramref name="text"/> and stops, in the chunks Z.AI writes one in.</summary>
+    public static ApiReply Answer(string text)
+        => ApiReply.Stream(
+            "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":" + JsonSerializer.Serialize(text) + "}}]}\n\n"
+            + "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":8,\"total_tokens\":28,\"prompt_tokens_details\":{\"cached_tokens\":0}}}\n\n"
+            + "data: [DONE]\n\n");
 }

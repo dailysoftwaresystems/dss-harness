@@ -53,8 +53,9 @@ public static class WorkflowExpressions
     /// <summary>
     /// What each of the engine's facts of a step is, as a path into one is typed: how the step ended (<c>done</c>,
     /// <c>failed</c>, <c>skipped</c>, <c>stopped</c>, <c>notRun</c>), its exit code, its message, the kind of the
-    /// question its failure was answered with, and what its agent assumed, as a list. <c>latest</c> is the step's own
-    /// output, and is typed as the step is.
+    /// question its failure was answered with, and what its agent assumed, as a list of <c>{about, assumed, why}</c> - the
+    /// envelope's own shape of an assumption (<see cref="Agents.AgentEnvelope.Assumption"/>). <c>latest</c> is the step's
+    /// own output, and is typed as the step is.
     /// </summary>
     public static IReadOnlyDictionary<string, JsonSchemaSubset.Reading> StepFactReadings { get; } = new Dictionary<string, JsonSchemaSubset.Reading>(StringComparer.Ordinal)
     {
@@ -62,7 +63,7 @@ public static class WorkflowExpressions
         ["code"] = JsonSchemaSubset.Reading.Of("integer"),
         ["error"] = JsonSchemaSubset.Reading.Of("string", "null"),
         ["question"] = JsonSchemaSubset.Reading.Of("string", "null"),
-        ["assumptions"] = JsonSchemaSubset.Reading.ListOf(JsonSchemaSubset.Reading.Of("string")),
+        ["assumptions"] = JsonSchemaSubset.Read(new System.Text.Json.Nodes.JsonObject { ["type"] = "array", ["items"] = Agents.AgentEnvelope.Assumption() }),
     };
 
     /// <summary>

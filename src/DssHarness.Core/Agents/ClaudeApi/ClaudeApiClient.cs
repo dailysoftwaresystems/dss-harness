@@ -37,7 +37,7 @@ public sealed class ClaudeApiClient(
         Thinking: true,
         WritableWhileWorking: true,
         GoesOnWith: AgentConversationHandling.Handed,
-        SchemaEnforcedOutput: false,
+        SchemaEnforcedOutput: ClaudeApiRequest.HoldsToSchema,
         FileAndCommandTools: AgentToolsOwner.Harness,
         Web: AgentToolsOwner.Harness,
         ReportsCost: false,

@@ -1044,13 +1044,18 @@ public sealed class AgentRunnerTests
             (new(AgentRunStatus.HandedOff, Handoff: new AgentHandoff()), "its handoff holds neither an answer nor why there is none, and it holds one of them"),
             (new(AgentRunStatus.HandedOff, Handoff: new AgentHandoff("a", "b")), "its handoff holds both an answer and why there is none, and it holds one of them"),
             (new(AgentRunStatus.Asked), "it ended Asked, and asks nothing"),
-            (new(AgentRunStatus.Completed) { Questions = [new AgentQuestion("which?", ["a", "b"])] }, "it ended Completed, and asks the person, which only a run that ended Asked does"),
+            (new(AgentRunStatus.Completed) { Questions = [new AgentQuestion("which?", "two stand", "the task", "the build", ["a", "b"], "a", "it is shorter")] }, "it ended Completed, and asks the person, which only a run that ended Asked does"),
             (new(AgentRunStatus.Completed, Error: "x"), "it completed, and says why it failed"),
             (new(AgentRunStatus.Completed, Turns: -1), "its turns is -1, and a count is never below naught"),
             (new(AgentRunStatus.Completed, Duration: TimeSpan.FromSeconds(-1)), "its duration is -00:00:01, and a run never ran for less than naught"),
             (new(AgentRunStatus.Completed) { Served = [new AgentServedModel("m", 0)] }, "it names 'm' as serving from turn 0, and turns are counted from one"),
             (new(AgentRunStatus.Completed) { Files = null! }, "its files is null, and that list is always written"),
             (new((AgentRunStatus)99), "its status 99 is no ending a run has"),
+            (new(AgentRunStatus.Failed, Notes: "n", Error: "x"), "it ended Failed, and holds notes, which only a run whose answer read does"),
+            (new(AgentRunStatus.HandedOff, Notes: "n", Handoff: new AgentHandoff("a")), "it ended HandedOff, and holds notes, which only a run whose answer read does"),
+            (new(AgentRunStatus.InvalidOutput, Error: "x") { Assumptions = [new AgentAssumption("a", "b", "c")] }, "it ended InvalidOutput, and holds assumptions, which only a run whose answer read does"),
+            (new(AgentRunStatus.Completed) { Assumptions = [null!] }, "it names an assumption as null"),
+            (new(AgentRunStatus.Asked) { Questions = [null!] }, "it names a question as null"),
         };
 
         Assert.Equal(cases.Select(@case => @case.Problem), cases.Select(@case => @case.Result.Problem()));
@@ -1060,12 +1065,41 @@ public sealed class AgentRunnerTests
             new(AgentRunStatus.NotStarted, AgentNotStartedBecause.KeyMissing, Error: "x"),
             new(AgentRunStatus.RateLimited, Error: "x") { Limit = limit },
             new(AgentRunStatus.Refused, Error: "x") { DeclinedFor = "cyber" },
-            new(AgentRunStatus.Completed, StructuredOutput: "{}"),
+            new(AgentRunStatus.Completed, StructuredOutput: "{}", Notes: "n") { Assumptions = [new AgentAssumption("a", "b", "c")] },
+            new(AgentRunStatus.Asked, Notes: "n") { Questions = [new AgentQuestion("q", "p", "t", "m", ["a", "b"], "a", "w")], Assumptions = [new AgentAssumption("a", "b", "c")] },
             new(AgentRunStatus.HandedOff, Handoff: new AgentHandoff(WhyNone: "y")),
         };
 
         Assert.All(endings, ending => Assert.Null(ending.Problem()));
         Assert.All(endings, ending => Assert.Equal((AgentRunStatus.Failed, "lost", null), (ending.FailedFor("lost").Status, ending.FailedFor("lost").Error, ending.FailedFor("lost").Problem())));
+    }
+
+    /// <summary>
+    /// The notes an answer left are written, as the client masked them, beside the result as the step's notes.md - before
+    /// it, so a result that holds notes is never read without them - and what it assumed is in the result; a run that left
+    /// no notes writes none, and a later attempt begins by removing an earlier one's.
+    /// </summary>
+    [Fact]
+    public async Task TheNotesAnAnswerLeft_AreWrittenBesideTheResult()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient { Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Completed, Notes: "done; *** kept out") { Assumptions = [new AgentAssumption("a", "b", "c")] }) };
+
+        var result = await Runner(client).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
+
+        var written = JsonNode.Parse(File.ReadAllText(ResultFile(temp)))!;
+        Assert.Equal("done; *** kept out", File.ReadAllText(Path.Combine(StepDirectory(temp), DssHarness.Core.Orchestration.OrchestratorLayout.StepNotesFileName)));
+        Assert.Equal((result.Notes, """[{"about":"a","assumed":"b","why":"c"}]"""), (written["notes"]!.GetValue<string>(), written["assumptions"]!.ToJsonString()));
+
+        using var other = new TempDirectory();
+        await Runner(new FakeClient()).RunAsync(Step(other), events: null, TestContext.Current.CancellationToken);
+
+        Assert.False(File.Exists(Path.Combine(StepDirectory(other), DssHarness.Core.Orchestration.OrchestratorLayout.StepNotesFileName)));
+
+        // The step's directory is every attempt's: one that leaves no notes begins without the ones an earlier one left.
+        await Runner(new FakeClient()).RunAsync(Step(temp, attempt: 2), events: null, TestContext.Current.CancellationToken);
+
+        Assert.False(File.Exists(Path.Combine(StepDirectory(temp), DssHarness.Core.Orchestration.OrchestratorLayout.StepNotesFileName)));
     }
 
     /// <summary>
@@ -1205,8 +1239,6 @@ public sealed class AgentRunnerTests
             Output: null,
             Conversation: null,
             new AgentLimits(MaxTurns: 10, MaxBudgetUsd: null, MaxDuration: null, StallSeconds: 7, HandoffSeconds: handoffSeconds),
-            MayAsk: false,
-            AskRounds: 0,
             Mask: null);
 
     /// <summary>The agent's work directory, the only place it writes.</summary>

@@ -343,7 +343,7 @@ public sealed class ClaudeCodeClient(
         private string? _declined;
         private AgentAccountLimit? _limit;
         private DateTimeOffset? _resets;
-        private int _repairs;
+        private readonly StructuredOutputGate? _gate = run.Output is { } output ? new(output, run.Mask) : null;
         private int _handoffAnswers;
         private Handing _handing;
         private string? _interruptId;
@@ -1157,31 +1157,16 @@ public sealed class ClaudeCodeClient(
                 return new LaunchOutcome(ended);
             }
 
-            if (run.Output is not { } output)
+            if (_gate is not { } gate)
             {
                 return new LaunchOutcome(new AgentRunResult(AgentRunStatus.Completed, FinalText: Masked(result.Text ?? _lastText ?? string.Empty)));
             }
 
-            var problems = StructuredOutputGate.Problems(output, result.Structured);
-
-            if (problems.Count == 0)
-            {
-                return new LaunchOutcome(new AgentRunResult(
-                    AgentRunStatus.Completed,
-                    FinalText: Masked(result.Text ?? string.Empty),
-                    StructuredOutput: Masked(result.Structured!.ToJsonString())));
-            }
-
-            if (_repairs >= output.MaxRepairs)
-            {
-                return new LaunchOutcome(AgentEndings.InvalidOutput(_repairs, problems, run.Mask));
-            }
-
-            _repairs++;
-            await Emit(new OutputRepair(_repairs, [.. problems.Select(Masked)])).ConfigureAwait(false);
-            await SayAsync(StructuredOutputGate.Repair(problems), AgentMessageKind.Repair).ConfigureAwait(false);
-
-            return null;
+            // The envelope Claude Code held the answer to, read by the gate: what its own retries passed, the harness's
+            // validator may still send back, to the same launch.
+            return await gate.CheckedAsync(result.Structured, result.Text ?? string.Empty, events, repair => SayAsync(repair, AgentMessageKind.Repair)).ConfigureAwait(false) is { } answered
+                ? new LaunchOutcome(answered)
+                : null;
         }
 
         /// <summary>How a turn that ended on an error, a decline or the account's limit ends the step, where it did; null for a success.</summary>

@@ -286,13 +286,35 @@ public sealed class ZaiApiProviderTests : IDisposable
     }
 
     /// <summary>
+    /// A request that asks for JSON alone - the answer before it read as no JSON - offers no tool and asks for a JSON
+    /// object; the schema itself is never sent, for Z.AI takes none.
+    /// </summary>
+    [Fact]
+    public async Task ARequestForJsonAlone_OffersNoTool_AndAsksForAJsonObject()
+    {
+        _endpoint.Then(ZaiApiFixtures.Reply("answer.sse")).Then(ZaiApiFixtures.Reply("answer.sse"));
+
+        await Sent(Request() with { Schema = """{"type":"object"}""", JsonAlone = true });
+        await Sent(Request() with { Schema = """{"type":"object"}""" });
+
+        var alone = JsonNode.Parse(_endpoint.Asked[0].Body)!.AsObject();
+        var asked = JsonNode.Parse(_endpoint.Asked[1].Body)!.AsObject();
+
+        Assert.Equal(["model", "messages", "stream", "thinking", "reasoning_effort", "max_tokens", "response_format"], alone.Select(member => member.Key));
+        Assert.Equal("""{"type":"json_object"}""", alone["response_format"]!.ToJsonString());
+        Assert.Equal(["model", "messages", "stream", "tool_stream", "tools", "thinking", "reasoning_effort", "max_tokens"], asked.Select(member => member.Key));
+        Assert.False(ZaiApiRequest.HoldsToSchema);
+        Assert.False(Provider().SendsSchema);
+    }
+
+    /// <summary>
     /// What a client's requestExtras may not set is every member the tool sends itself, each refused by its path; a member
     /// under the thinking the tool sends is merged into it, and one it does not send is added.
     /// </summary>
     [Fact]
     public void RequestExtras_SetNothingTheToolSendsItself()
     {
-        using var refused = JsonDocument.Parse("""{"model":"x","messages":[],"stream":false,"tool_stream":false,"tools":[],"reasoning_effort":"max","max_tokens":1,"thinking":{"type":"disabled","clear_thinking":true,"budget":1}}""");
+        using var refused = JsonDocument.Parse("""{"model":"x","messages":[],"stream":false,"tool_stream":false,"tools":[],"reasoning_effort":"max","max_tokens":1,"response_format":{"type":"text"},"thinking":{"type":"disabled","clear_thinking":true,"budget":1}}""");
         using var thinking = JsonDocument.Parse("""{"thinking":"off"}""");
 
         Assert.Equal(
@@ -304,6 +326,7 @@ public sealed class ZaiApiProviderTests : IDisposable
                 "x requestExtras.tools is refused: the tool sends it itself",
                 "x requestExtras.reasoning_effort is refused: the tool sends it itself",
                 "x requestExtras.max_tokens is refused: the tool sends it itself",
+                "x requestExtras.response_format is refused: the tool sends it itself",
                 "x requestExtras.thinking.type is refused: the tool sends it itself",
                 "x requestExtras.thinking.clear_thinking is refused: the tool sends it itself",
             ],

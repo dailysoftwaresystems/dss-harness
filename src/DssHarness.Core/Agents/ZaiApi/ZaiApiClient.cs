@@ -38,7 +38,7 @@ public sealed class ZaiApiClient(
         Thinking: true,
         WritableWhileWorking: true,
         GoesOnWith: AgentConversationHandling.Handed,
-        SchemaEnforcedOutput: false,
+        SchemaEnforcedOutput: ZaiApiRequest.HoldsToSchema,
         FileAndCommandTools: AgentToolsOwner.Harness,
         Web: AgentToolsOwner.Harness,
         ReportsCost: false,

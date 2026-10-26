@@ -92,7 +92,7 @@ public sealed class AgentStreamTests
             [],
             HandedConversation: false,
             Credential: new AgentCredentialSource(AgentCredentialSource.EnvironmentFile, "KEY_s3cret")));
-        await stream.EmitAsync(new PersonAsked([new AgentQuestion("is s3cret the answer?", ["yes", "s3cret"], "no")]));
+        await stream.EmitAsync(new PersonAsked([new AgentQuestion("is s3cret the answer?", "s3cret is open", "the s3cret file", "the build", ["yes", "s3cret"], "yes", "s3cret is old")]));
 
         stream.Dispose();
 
@@ -102,7 +102,7 @@ public sealed class AgentStreamTests
         Assert.Equal(["Read", "***-tool"], lines[1]["tools"]!.AsArray().Select(item => (string)item!));
         Assert.Equal("{\"kind\":\"EnvFile\",\"variable\":\"KEY_***\"}", lines[1]["credential"]!.ToJsonString());
         Assert.Equal(
-            "[{\"text\":\"is *** the answer?\",\"choices\":[\"yes\",\"***\"],\"recommended\":\"no\"}]",
+            "[{\"question\":\"is *** the answer?\",\"problem\":\"*** is open\",\"tried\":\"the *** file\",\"means\":\"the build\",\"options\":[\"yes\",\"***\"],\"recommended\":\"yes\",\"why\":\"*** is old\"}]",
             lines[2]["questions"]!.ToJsonString());
     }
 
@@ -355,8 +355,8 @@ public sealed class AgentStreamTests
         Assert.Equal(
             [
                 "sessionStarted.tools", "sessionStarted.skills", "assistantMessage.calls", "outputRepair.problems",
-                "personAsked.questions", "personAsked.questions[0].choices", "result.json.usage.perModel", "result.json.assumptions",
-                "result.json.questions", "result.json.questions[0].choices", "result.json.served", "result.json.files",
+                "personAsked.questions", "personAsked.questions[0].options", "result.json.usage.perModel", "result.json.assumptions",
+                "result.json.questions", "result.json.questions[0].options", "result.json.served", "result.json.files",
                 "result.json.keysRefused", "result.json.sessionFilesRemoved", "result.json.uncontained",
             ],
             refused);

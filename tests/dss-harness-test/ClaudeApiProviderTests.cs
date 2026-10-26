@@ -388,6 +388,10 @@ public sealed class ClaudeApiProviderTests : IDisposable
                 new(ChatFailureKind.Unserved, $"the API answered 400 invalid_request_error: In order to access this model, your organization must have data retention enabled.{Request}; if the request itself is not at fault, the organization this key belongs to is not given '{Model}' - a model that needs 30-day data retention is refused this way where the organization keeps less - and another model can be put first under its tier in tierConfig, or named on the step")
             },
             { 400, "invalid_request_error", "messages: something", false, new(ChatFailureKind.Fatal, $"the API answered 400 invalid_request_error: messages: something{Request}") },
+            {
+                400, "invalid_request_error", "The compiled grammar is too large, which would cause performance issues.", true,
+                new(ChatFailureKind.Fatal, $"the API answered 400 invalid_request_error: The compiled grammar is too large, which would cause performance issues.{Request} - the step's schema is more than the API's structured outputs compile, even said in words")
+            },
             { 403, "permission_error", "not allowed", false, new(ChatFailureKind.Unserved, $"the API answered 403 permission_error: not allowed{Request}") },
             { 404, "not_found_error", "model: claude-opus-5-5", false, new(ChatFailureKind.Unserved, $"the API answered 404 not_found_error: model: claude-opus-5-5{Request}") },
             { 529, "overloaded_error", "Overloaded", false, new(ChatFailureKind.Transient, $"the API answered 529 overloaded_error: Overloaded{Request}") },
@@ -498,6 +502,59 @@ public sealed class ClaudeApiProviderTests : IDisposable
         Assert.Equal(
             """[{"name":"view_file","description":"Views a file.","input_schema":{"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"}}},"eager_input_streaming":true}]""",
             tools);
+    }
+
+    /// <summary>
+    /// A step that names an output sends its envelope as <c>output_config.format</c>, beside the effort where it has one and
+    /// alone where it has none, in the copy the API takes: a bound it does not take moved into the description.
+    /// </summary>
+    [Fact]
+    public async Task AStepsEnvelope_IsSentAsTheFormat_InTheCopyTheApiTakes()
+    {
+        var schema = AgentEnvelope.Schema(new AgentOutput("o", """{"type":"object","additionalProperties":false,"required":["a"],"properties":{"a":{"type":"array","minItems":2,"items":{"type":"string"}}}}"""));
+        _endpoint.Then(ApiReply.Fixture("answer.sse")).Then(ApiReply.Fixture("answer.sse"));
+
+        await Sent(Request() with { Schema = schema, Effort = "high" });
+        await Sent(Request() with { Schema = schema, JsonAlone = true });
+
+        var format = new JsonObject { ["type"] = "json_schema", ["schema"] = ClaudeApiRequest.Sent(schema) };
+
+        Assert.Equal(new JsonObject { ["effort"] = "high", ["format"] = format.DeepClone() }.ToJsonString(), JsonNode.Parse(_endpoint.Asked[0].Body)!["output_config"]!.ToJsonString());
+        Assert.Equal(new JsonObject { ["format"] = format.DeepClone() }.ToJsonString(), JsonNode.Parse(_endpoint.Asked[1].Body)!["output_config"]!.ToJsonString());
+        Assert.DoesNotContain("minItems\":2", _endpoint.Asked[0].Body, StringComparison.Ordinal);
+        Assert.Contains("At least 2 items.", _endpoint.Asked[0].Body, StringComparison.Ordinal);
+        Assert.True(Provider().SendsSchema);
+    }
+
+    /// <summary>
+    /// A format the API refuses as too large to compile is no failure of the step's: the loop is told, the same request is
+    /// sent again without it, the envelope in words after the system prompt and the stored messages as they were, and so
+    /// is every later request of the run - none sent the format again.
+    /// </summary>
+    [Fact]
+    public async Task AFormatTooLargeToCompile_IsSentAgainInWords_ForTheRestOfTheRun()
+    {
+        var schema = AgentEnvelope.Schema(new AgentOutput("o", """{"type":"object","additionalProperties":false,"required":["a"],"properties":{"a":{"type":"string"}}}"""));
+        var provider = Provider();
+        _endpoint
+            .Then(ApiReply.Error(400, "invalid_request_error", "The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas or reduce the number of strict tools."))
+            .Then(ApiReply.Fixture("answer.sse"))
+            .Then(ApiReply.Fixture("answer.sse"));
+
+        var parts = await Sent(Request() with { Schema = schema }, provider: provider);
+        await Sent(Request(3) with { Schema = schema }, provider: provider);
+
+        Assert.Equal(ClaudeApiRequest.FormatInWords, Assert.IsType<ChatPart.Notice>(parts[0]).Message);
+        Assert.IsType<ChatPart.Answered>(parts[^1]);
+        Assert.Single(parts.OfType<ChatPart.Notice>());
+
+        var (refused, again, later) = (JsonNode.Parse(_endpoint.Asked[0].Body)!, JsonNode.Parse(_endpoint.Asked[1].Body)!, JsonNode.Parse(_endpoint.Asked[2].Body)!);
+        Assert.Equal("json_schema", refused["output_config"]!["format"]!["type"]!.GetValue<string>());
+        Assert.All([again, later], body => Assert.Null(body["output_config"]));
+        Assert.All([again, later], body => Assert.Equal($"You are a careful agent.\n\n{AgentEnvelope.InWords(schema)}", body["system"]![0]!["text"]!.GetValue<string>()));
+        Assert.Equal(refused["messages"]!.ToJsonString(), again["messages"]!.ToJsonString());
+        Assert.False(ClaudeApiFailures.RefusesTheFormat(new ApiEvent.Refused(400, """{"type":"error","error":{"type":"invalid_request_error","message":"messages: something"}}""", null)));
+        Assert.False(ClaudeApiFailures.RefusesTheFormat(new ApiEvent.Refused(500, """{"type":"error","error":{"type":"api_error","message":"The compiled grammar is too large"}}""", null)));
     }
 
     /// <summary>A conversation with no tools sends none; a step with no effort sends none; a client's cache of an hour marks both cache marks so.</summary>
@@ -739,7 +796,7 @@ public sealed class ClaudeApiProviderTests : IDisposable
     /// The parts <paramref name="request"/> was answered with - by <paramref name="reply"/> where one is given - what is heard
     /// of no part and what is said of its usage left out unless <paramref name="all"/>.
     /// </summary>
-    private async Task<IReadOnlyList<ChatPart>> Sent(ChatRequest request, ClaudeApiSettings? settings = null, string api = Api, bool all = false, ApiReply? reply = null)
+    private async Task<IReadOnlyList<ChatPart>> Sent(ChatRequest request, ClaudeApiSettings? settings = null, string api = Api, bool all = false, ApiReply? reply = null, ClaudeApiProvider? provider = null)
     {
         var parts = new List<ChatPart>();
 
@@ -748,7 +805,7 @@ public sealed class ClaudeApiProviderTests : IDisposable
             _endpoint.Then(reply);
         }
 
-        await foreach (var part in Provider(settings, api).SendAsync(request, TestContext.Current.CancellationToken))
+        await foreach (var part in (provider ?? Provider(settings, api)).SendAsync(request, TestContext.Current.CancellationToken))
         {
             if (all || part is not (ChatPart.Heard or ChatPart.Used))
             {

@@ -157,6 +157,29 @@ public sealed class ZaiApiClientTests : IDisposable
             body => Assert.Equal(("harness-run", false), (body["user_id"]!.GetValue<string>(), body["thinking"]!["clear_thinking"]!.GetValue<bool>())));
     }
 
+    /// <summary>
+    /// Z.AI holds no answer to a schema: the step's envelope is said in words in its first message; an answer that read as
+    /// no JSON is asked again in JSON alone - no tool offered, a JSON object asked for - and the request after one that read
+    /// as JSON offers the tools again.
+    /// </summary>
+    [Fact]
+    public async Task TheEnvelope_IsSaidInWords_AndAnAnswerOfNoJson_IsAskedAgainInJsonAlone()
+    {
+        var output = new AgentOutput("o", """{"type":"object","additionalProperties":false,"required":["word"],"properties":{"word":{"type":"string"}}}""");
+        _endpoint
+            .Then(ZaiApiFixtures.Answer("The word is alpha."))
+            .Then(ZaiApiFixtures.Answer(Envelopes.Of(JsonNode.Parse("""{"wrd":"alpha"}""")).ToJsonString()))
+            .Then(ZaiApiFixtures.Answer(Envelopes.Of(JsonNode.Parse("""{"word":"alpha"}""")).ToJsonString()));
+
+        var result = await Ran(Run() with { Output = output });
+
+        Assert.Equal((AgentRunStatus.Completed, """{"word":"alpha"}"""), (result.Status, result.StructuredOutput));
+        var bodies = _endpoint.Asked.Select(asked => JsonNode.Parse(asked.Body)!.AsObject()).ToList();
+        Assert.EndsWith($"\n\n{AgentEnvelope.InWords(AgentEnvelope.Schema(output))}", bodies[0]["messages"]![1]!["content"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal([true, false, true], bodies.Select(body => body.ContainsKey("tools")));
+        Assert.Equal([false, true, false], bodies.Select(body => body.ContainsKey("response_format")));
+    }
+
     /// <summary>A step on this client is worked by the terms of its entries: the client's tries and its longest wait.</summary>
     [Fact]
     public async Task AStep_IsWorkedByItsEntriesTerms()

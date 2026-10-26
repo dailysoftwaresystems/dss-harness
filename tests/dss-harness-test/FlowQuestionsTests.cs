@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
@@ -102,7 +103,7 @@ public sealed class FlowQuestionsTests
             "answered",
             "visitBound",
             at,
-            [new FlowAgentQuestion("which way?", "two ways stand", ["left", "right"], "left", "it is shorter", "the map", "the route")],
+            [new AgentQuestion("which way?", "two ways stand", "the map", "the route", ["left", "right"], "left", "it is shorter")],
             [new FlowQuestionOption("more", "one more of what was bounded"), new FlowQuestionOption("direct", "the fix given", Text: true), new FlowQuestionOption("abort", "the run ends")],
             [
                 new FlowAnswerRecord("more", at.AddMinutes(1), "go on", new FlowAnswerBy("person", "front-end"), "one more visit", at.AddMinutes(5)),

@@ -689,14 +689,14 @@ public sealed class ToolLoopTests : IDisposable
     public async Task AnAnswerOutsideItsSchema_IsSentBack_ThenTheOutputIsInvalid()
     {
         var output = new AgentOutput("result", """{ "type": "object", "additionalProperties": false, "required": ["a"], "properties": { "a": { "type": "string" } } }""");
-        _chat.Answer(FakeChat.Said("not json")).Answer(FakeChat.Said("""{ "a": "x" }"""));
+        _chat.Answer(FakeChat.Said("not json")).Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
 
         var repaired = await Ran(Run(output: output));
 
         Assert.Equal((AgentRunStatus.Completed, """{"a":"x"}"""), (repaired.Status, repaired.StructuredOutput));
         var repair = Assert.Single(_events.All.OfType<OutputRepair>());
         Assert.Equal(1, repair.Attempt);
-        Assert.Equal(StructuredOutputGate.Problems(output, null), repair.Problems);
+        Assert.Equal(new StructuredOutputGate(output, new Masking()).Problems(null), repair.Problems);
         Assert.Equal(StructuredOutputGate.Repair(repair.Problems), Assert.Single(_events.All.OfType<MessageSent>(), sent => sent.Which == AgentMessageKind.Repair).Text);
         Assert.StartsWith("Your answer does not read against the schema", FakeChat.ContentOf(_chat.Requests[1].Messages[^1]), StringComparison.Ordinal);
 
@@ -1137,7 +1137,7 @@ public sealed class ToolLoopTests : IDisposable
     public async Task AnAnswerToASchemaCutOff_IsReadWhole()
     {
         var output = new AgentOutput("result", """{ "type": "object", "additionalProperties": false, "required": ["a"], "properties": { "a": { "type": "string" } } }""");
-        _chat.Answer(FakeChat.CutOff("""{ "a": """)).Answer(FakeChat.Said(""" "x" }"""));
+        _chat.Answer(FakeChat.CutOff("""{ "notes": "n", "output": { "a": """)).Answer(FakeChat.Said(""" "x" }, "assumptions": [] }"""));
 
         var result = await Ran(Run(output: output));
 
@@ -1231,7 +1231,7 @@ public sealed class ToolLoopTests : IDisposable
     public async Task AnAnswerAfterARepair_MayBeNudgedOnAgain()
     {
         _chat.Answer(FakeChat.CutOff("x")).Answer(FakeChat.CutOff("y")).Answer(FakeChat.Said("z"))
-            .Answer(FakeChat.CutOff("""{ "a": """)).Answer(FakeChat.Said(""" "b" }"""));
+            .Answer(FakeChat.CutOff("""{ "notes": "n", "output": { "a": """)).Answer(FakeChat.Said(""" "b" }, "assumptions": [] }"""));
 
         var result = await Ran(Run(output: Schema));
 
@@ -1306,7 +1306,7 @@ public sealed class ToolLoopTests : IDisposable
     [Fact]
     public async Task AnAnswerThatSaysNothing_IsNeverStored()
     {
-        _chat.Answer(FakeChat.Said(string.Empty)).Answer(FakeChat.Said("""{ "a": "x" }"""));
+        _chat.Answer(FakeChat.Said(string.Empty)).Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
 
         var result = await Ran(Run(output: Schema));
 
@@ -1365,7 +1365,7 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Equal("handed ***", (await Ran(handing, chat: answering)).Handoff!.Answer);
 
         var structured = new FakeChat();
-        structured.Answer(FakeChat.Said("""{ "a": "sk-1" }"""));
+        structured.Answer(FakeChat.Said(Envelopes.Text("""{ "a": "sk-1" }""")));
 
         Assert.Equal("""{"a":"***"}""", (await Ran(Run(output: Schema) with { Mask = new Masking("sk-1") }, chat: structured)).StructuredOutput);
     }
@@ -1500,7 +1500,7 @@ public sealed class ToolLoopTests : IDisposable
     [Fact]
     public async Task AnAnswerOfWhiteSpace_IsNeverStored()
     {
-        _chat.Answer(FakeChat.Said("\n\n")).Answer(FakeChat.Said("""{ "a": "x" }"""));
+        _chat.Answer(FakeChat.Said("\n\n")).Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
 
         var result = await Ran(Run(output: Schema));
 
@@ -1634,12 +1634,80 @@ public sealed class ToolLoopTests : IDisposable
     [Fact]
     public async Task ARequest_CarriesTheStepsModelEffortOutputAndKey()
     {
-        _chat.Answer(FakeChat.Said("""{ "a": "x" }"""));
+        _chat.Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
 
         await Ran(Run(output: Schema) with { Effort = "high" });
 
         var sent = Assert.Single(_chat.Requests);
-        Assert.Equal((FakeChat.Model, "high", Schema, "WORK_KEY", 16000L), (sent.Model, sent.Effort, sent.Output, sent.Key!.Name, sent.MaxOutputTokens));
+        Assert.Equal((FakeChat.Model, "high", AgentEnvelope.Schema(Schema), "WORK_KEY", 16000L), (sent.Model, sent.Effort, sent.Schema, sent.Key!.Name, sent.MaxOutputTokens));
+    }
+
+    /// <summary>
+    /// A provider whose wire holds no answer to the schema is told it in words in the step's first message; an answer that
+    /// read as no JSON is asked again in JSON alone, and the request after any other turn - a turn of calls, JSON that did
+    /// not read - is asked as every other is. A provider whose wire holds it is told nothing in words.
+    /// </summary>
+    [Fact]
+    public async Task AProviderThatHoldsNoSchema_IsToldItInWords_AndAnAnswerOfNoJson_IsAskedAgainInJsonAlone()
+    {
+        Write("a.txt", "alpha");
+        var chat = new FakeChat { SendsSchema = false };
+        chat.Answer(FakeChat.Said("not json")).Answer(FakeChat.Calling(View("c1", "a.txt"))).Answer(FakeChat.Said("""{"a":1}""")).Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
+
+        var result = await Ran(Run(output: Schema), chat: chat);
+
+        Assert.Equal((AgentRunStatus.Completed, """{"a":"x"}"""), (result.Status, result.StructuredOutput));
+        Assert.Equal([false, true, false, false], chat.Requests.Select(request => request.JsonAlone));
+        Assert.Equal($"{Asked}\n\n{AgentEnvelope.InWords(AgentEnvelope.Schema(Schema))}", FakeChat.ContentOf(chat.Requests[0].Messages[0]));
+        Assert.Equal([StructuredOutputGate.NoObject], _events.All.OfType<OutputRepair>().First().Problems);
+
+        _chat.Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
+        await Ran(Run(output: Schema));
+
+        Assert.Equal(Asked, FakeChat.ContentOf(_chat.Requests[0].Messages[0]));
+    }
+
+    /// <summary>
+    /// The ask for JSON alone is the one request after an answer that read as no JSON: after an answer the engine told the
+    /// agent something while it was written, the agent goes on as in any other request, and the handoff turn is asked as
+    /// every turn is.
+    /// </summary>
+    [Fact]
+    public async Task AJsonAloneAsk_IsOnlyTheRequestAfterAnAnswerOfNoJson()
+    {
+        var run = Run(output: Schema);
+        var chat = new FakeChat { SendsSchema = false };
+        chat.Answer(FakeChat.Said("not json")).Reply((_, _) => PostingThenAnswering(run, FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")))).Answer(FakeChat.Said(Envelopes.Text("""{ "a": "y" }""")));
+
+        var result = await Ran(run, chat: chat);
+
+        Assert.Equal((AgentRunStatus.Completed, """{"a":"y"}"""), (result.Status, result.StructuredOutput));
+        Assert.Equal([false, true, false], chat.Requests.Select(request => request.JsonAlone));
+
+        var handing = Run(output: Schema);
+        var asking = new FakeChat { SendsSchema = false };
+        asking.Answer(FakeChat.Said("not json")).Answer(FakeChat.Said("handed: half done"));
+
+        var handed = await Ran(handing, chat: asking, sink: new Reacting(_events, @event => @event is OutputRepair, () => handing.Handoff.Ask()));
+
+        Assert.Equal((AgentRunStatus.HandedOff, "handed: half done"), (handed.Status, handed.Handoff!.Answer));
+        Assert.Equal([false, false], asking.Requests.Select(request => request.JsonAlone));
+    }
+
+    /// <summary>
+    /// An answer that asks, on a step that may, ends the run Asked with its questions and notes, said by a PersonAsked; the
+    /// envelope it was asked for offered them.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerThatAsks_EndsTheRunAsked()
+    {
+        _chat.Answer(FakeChat.Said(Envelopes.Of(null, questions: [Envelopes.Question()]).ToJsonString()));
+
+        var result = await Ran(Run(output: Schema with { AskRounds = 1 }));
+
+        Assert.Equal((AgentRunStatus.Asked, "use the cache", Envelopes.Notes), (result.Status, Assert.Single(result.Questions).Recommended, result.Notes));
+        Assert.Equal(result.Questions, Assert.Single(_events.All.OfType<PersonAsked>()).Questions);
+        Assert.Equal(AgentEnvelope.Schema(Schema with { AskRounds = 1 }), _chat.Requests[0].Schema);
     }
 
     /// <summary>A step past its time between requests asks nothing more: the answer that needed a repair is its last.</summary>

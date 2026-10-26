@@ -291,14 +291,16 @@ public sealed class WorkflowTemplatesTests
         Assert.Contains(schema.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
         Assert.Contains("one builder's cycle", schema.GetProperty("properties").GetProperty("items").GetProperty("description").GetString(), StringComparison.Ordinal);
 
-        var item = schema.GetProperty("properties").GetProperty("items").GetProperty("items");
+        // The work item is one definition: the plan's items and a scope piece's item both refer to it.
+        var item = schema.GetProperty("$defs").GetProperty("workItem");
 
+        Assert.Equal("#/$defs/workItem", schema.GetProperty("properties").GetProperty("items").GetProperty("items").GetProperty("$ref").GetString());
         Assert.Contains(item.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
         Assert.Equal("string", item.GetProperty("properties").GetProperty("done").GetProperty("type").GetString());
 
         var piece = schema.GetProperty("properties").GetProperty("scope").GetProperty("items").GetProperty("properties").GetProperty("item");
 
-        Assert.Contains(piece.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
+        Assert.Contains(piece.GetProperty("anyOf").EnumerateArray(), shape => shape.TryGetProperty("$ref", out var reference) && reference.GetString() == "#/$defs/workItem");
 
         // A further round's items and a recovery's are work items as the plan's are: each carries its definition of done.
         foreach (var further in new[] { "schemas/self-audit.schema.json", "schemas/diagnosis.schema.json" })

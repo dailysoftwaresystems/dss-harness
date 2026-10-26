@@ -92,7 +92,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
                 "--mcp-config", Path.Combine(kit.StepDirectory, ClaudeLaunch.McpFileName),
                 "--settings", Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName),
                 "--append-system-prompt-file", Path.Combine(kit.StepDirectory, ClaudeLaunch.SystemFileName),
-                "--json-schema", Schema,
+                "--json-schema", AgentEnvelope.Schema(new AgentOutput("o", Schema)),
                 "--add-dir", kit.WorkDirectory, "--add-dir", kit.Temp.Path,
             ],
             argv);
@@ -386,24 +386,24 @@ public sealed class ClaudeCodeClientTests : IDisposable
     public async Task AnAnswerThatDoesNotRead_IsSentBack_AndTheOneThatReadsCompletesTheStep()
     {
         using var kit = new Kit();
-        kit.Script([new JsonObject { ["answer"] = new JsonObject { ["answers"] = "a" } }, new JsonObject { ["answer"] = new JsonObject { ["answer"] = "b" } }]);
+        kit.Script([new JsonObject { ["answer"] = Envelopes.Of(new JsonObject { ["answers"] = "a" }) }, new JsonObject { ["answer"] = Envelopes.Of(new JsonObject { ["answer"] = "b" }), ["text"] = "It is b." }]);
         var sink = new Sink();
 
         var result = await kit.Client().RunAsync(kit.Run(new AgentOutput("o", Schema)), sink, Token);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.Equal("""{"answer":"b"}""", result.StructuredOutput);
+        Assert.Equal(("""{"answer":"b"}""", "It is b."), (result.StructuredOutput, result.FinalText));
 
         var repair = Assert.Single(sink.Of<OutputRepair>());
         Assert.Equal(1, repair.Attempt);
-        Assert.Equal(["$: 'answer' is required and missing", "$.answers: is said by no property of the schema"], repair.Problems);
+        Assert.Equal(["$.output: 'answer' is required and missing", "$.output.answers: is said by no property of the schema"], repair.Problems);
 
         var sent = sink.Of<MessageSent>();
         Assert.Equal([AgentMessageKind.FirstPrompt, AgentMessageKind.Repair], sent.Select(message => message.Which));
         Assert.Equal(
             "Your answer does not read against the schema it was asked for:\n"
-                + "- $: 'answer' is required and missing\n"
-                + "- $.answers: is said by no property of the schema\n"
+                + "- $.output: 'answer' is required and missing\n"
+                + "- $.output.answers: is said by no property of the schema\n"
                 + "Answer again, whole, as the schema says.",
             sent[1].Text);
         Assert.Equal(2, result.Turns);
@@ -414,7 +414,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
     public async Task AnAnswerStillWrongAfterItsRepairs_EndsInvalidOutput()
     {
         using var kit = new Kit();
-        var wrong = new JsonObject { ["answer"] = new JsonObject { ["answers"] = "a" } };
+        var wrong = new JsonObject { ["answer"] = Envelopes.Of(new JsonObject { ["answers"] = "a" }) };
         kit.Script([wrong.DeepClone().AsObject(), wrong.DeepClone().AsObject(), wrong.DeepClone().AsObject()]);
         var sink = new Sink();
 
@@ -422,8 +422,27 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         Assert.Equal(AgentRunStatus.InvalidOutput, result.Status);
         Assert.Equal(2, sink.Of<OutputRepair>().Count);
-        var problems = StructuredOutputGate.Problems(new AgentOutput("o", Schema), wrong["answer"]);
+        var problems = new StructuredOutputGate(new AgentOutput("o", Schema), new Masking()).Problems(wrong["answer"]);
         Assert.Equal($"the answer did not read against its schema after 2 repairs: {string.Join("; ", problems)}", result.Error);
+    }
+
+    /// <summary>
+    /// A launch whose step may ask is held to the envelope that offers questions; an answer that asks ends the step Asked,
+    /// with its questions, said by a PersonAsked.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerThatAsks_EndsTheStepAsked()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["answer"] = Envelopes.Of(null, questions: [Envelopes.Question()]) }]);
+        var sink = new Sink();
+        var output = new AgentOutput("o", Schema, AskRounds: 2);
+
+        var result = await kit.Client().RunAsync(kit.Run(output), sink, Token);
+
+        Assert.Equal((AgentRunStatus.Asked, "Which cache is meant?", Envelopes.Notes), (result.Status, Assert.Single(result.Questions).Question, result.Notes));
+        Assert.Equal(result.Questions, Assert.Single(sink.Of<PersonAsked>()).Questions);
+        Assert.Equal(AgentEnvelope.Schema(output), Value(kit.Launches()[0].Arguments, "--json-schema"));
     }
 
     /// <summary>
@@ -1607,7 +1626,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var refused = new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["refusedByClaude"] = true };
         kit.Script(after == "aCallRan"
             ? [new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } }, refused) }]
-            : [new JsonObject { ["answer"] = new JsonObject { ["answers"] = "a" } }, new JsonObject { ["calls"] = new JsonArray(refused) }]);
+            : [new JsonObject { ["answer"] = Envelopes.Of(new JsonObject { ["answers"] = "a" }) }, new JsonObject { ["calls"] = new JsonArray(refused) }]);
 
         var result = await kit.Client().RunAsync(kit.Run(new AgentOutput("o", Schema)), new Sink(), Token);
 
@@ -1743,7 +1762,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
     public async Task ABoundForAMessageTaken_EndsNothing_ThoughAnotherWaits()
     {
         using var kit = new Kit();
-        kit.Script([new JsonObject { ["slowMs"] = 4000, ["answer"] = new JsonObject { ["answers"] = "a" } }, new JsonObject { ["takeAfterMs"] = 5000 }]);
+        kit.Script([new JsonObject { ["slowMs"] = 4000, ["answer"] = Envelopes.Of(new JsonObject { ["answers"] = "a" }) }, new JsonObject { ["takeAfterMs"] = 5000 }]);
         var run = kit.Run(new AgentOutput("o", Schema)) with { Limits = new AgentLimits(30, 2.5m, null, StallSeconds: 7) };
 
         var result = await kit.Client().RunAsync(run, new Sink(), Token);
@@ -2432,7 +2451,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var result = await kit.Client().RunAsync(kit.Run(new AgentOutput("o", Schema)), sink, Token);
 
         Assert.Equal(
-            (AgentRunStatus.InvalidOutput, "the answer did not read against its schema after 2 repairs: $: the answer holds no output held to the schema; answer with one"),
+            (AgentRunStatus.InvalidOutput, $"the answer did not read against its schema after 2 repairs: {StructuredOutputGate.NoObject}"),
             (result.Status, result.Error));
         Assert.Null(result.StructuredOutput);
         Assert.Equal(2, sink.Of<OutputRepair>().Count);
@@ -2893,8 +2912,6 @@ public sealed class ClaudeCodeClientTests : IDisposable
                 null,
                 null,
                 new AgentLimits(30, 2.5m, null, null),
-                MayAsk: false,
-                AskRounds: 0,
                 null)
             {
                 Ground = Ground(),

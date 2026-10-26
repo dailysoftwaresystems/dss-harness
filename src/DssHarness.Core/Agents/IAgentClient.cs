@@ -137,11 +137,19 @@ public sealed record AgentWorkspace(
     string WorkingDirectory,
     string RunDirectory);
 
-/// <summary>The output a run is to produce, where its step names one.</summary>
+/// <summary>
+/// The output a run is to produce, where its step names one: what its answer's envelope holds as its output
+/// (<see cref="AgentEnvelope"/>), and whether the envelope offers the agent questions for the person.
+/// </summary>
 /// <param name="Name">Its name, as the step's outputs name it.</param>
 /// <param name="Schema">The JSON schema it must read against.</param>
 /// <param name="MaxRepairs">How many times a schema problem is sent back; two unless given.</param>
-public sealed record AgentOutput(string Name, string Schema, int MaxRepairs = 2);
+/// <param name="AskRounds">
+/// How many more times the agent may ask the person in this attempt - the step's <c>askRounds</c> less the times it has
+/// asked - offered questions only while some are left; zero where it has asked as often as it may, and null where the
+/// step may not ask: an answer that asks all the same is sent back, told so.
+/// </param>
+public sealed record AgentOutput(string Name, string Schema, int MaxRepairs = 2, int? AskRounds = null);
 
 /// <summary>A stored conversation a run appends to, where its client is handed one.</summary>
 /// <param name="Client">The client's key.</param>
@@ -219,14 +227,15 @@ public sealed class AgentHandoffSignal(TimeSpan Bound, int MaxAnswers = 3)
     public static string NoneIn(int answers) => $"the agent gave no handoff in {answers} answers";
 
     /// <summary>
-    /// The handoff an answer gives: its notes where it answered with an object that holds them, else the whole answer
-    /// held to the schema, else its text; null where that says nothing, and the agent gave no handoff.
+    /// The handoff an answer gives: its notes where it answered with an envelope that holds them
+    /// (<see cref="AgentEnvelope.Notes"/>), else the whole answer held to the schema, else its text; null where that says
+    /// nothing, and the agent gave no handoff.
     /// </summary>
     /// <param name="structured">The answer held to the run's schema, where it carries one.</param>
     /// <param name="text">The answer's text.</param>
     public static string? AnswerOf(System.Text.Json.Nodes.JsonNode? structured, string? text)
     {
-        var answer = structured is System.Text.Json.Nodes.JsonObject held && held["notes"] is System.Text.Json.Nodes.JsonValue notes && notes.TryGetValue<string>(out var said)
+        var answer = structured is System.Text.Json.Nodes.JsonObject held && held[AgentEnvelope.Notes] is System.Text.Json.Nodes.JsonValue notes && notes.TryGetValue<string>(out var said)
             ? said
             : structured?.ToJsonString() ?? text;
 
@@ -394,8 +403,6 @@ public sealed class AgentMessages
 /// <param name="Output">The output it is to produce, where its step names one.</param>
 /// <param name="Conversation">The stored conversation to append to, where the client is handed one.</param>
 /// <param name="Limits">The bounds it is held to.</param>
-/// <param name="MayAsk">Whether it may ask the person.</param>
-/// <param name="AskRounds">How many times it may ask.</param>
 /// <param name="Mask">What masks the secrets its lines may carry; null where the step carries none.</param>
 public sealed record AgentStepRequest(
     string Run,
@@ -417,8 +424,6 @@ public sealed record AgentStepRequest(
     AgentOutput? Output,
     AgentSessionRef? Conversation,
     AgentLimits Limits,
-    bool MayAsk,
-    int AskRounds,
     ILineMask? Mask)
 {
     /// <summary>

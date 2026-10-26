@@ -21,6 +21,9 @@ internal sealed class FakeChat : IChatProvider
     private readonly List<ChatRequest> _requests = [];
     private readonly Lock _gate = new();
 
+    /// <summary>Whether its wire holds every answer to the schema a request sends; a test of the provider that holds none says false.</summary>
+    public bool SendsSchema { get; init; } = true;
+
     /// <summary>Every request the loop sent, in order.</summary>
     public IReadOnlyList<ChatRequest> Requests
     {

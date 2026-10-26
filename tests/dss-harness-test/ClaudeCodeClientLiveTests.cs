@@ -142,8 +142,6 @@ public sealed class ClaudeCodeClientLiveTests
             new AgentOutput("o", Schema),
             null,
             new AgentLimits(8, 0.5m, TimeSpan.FromMinutes(5), 120),
-            MayAsk: false,
-            AskRounds: 0,
             null)
         {
             Ground = PolicyGrounds.Of(tree, [tree, work], [tree, work], [Path.GetDirectoryName(slot)!], [], [], capabilities: [AgentCapability.Read]),

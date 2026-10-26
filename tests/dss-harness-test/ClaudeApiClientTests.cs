@@ -109,6 +109,30 @@ public sealed class ClaudeApiClientTests : IDisposable
         Assert.Contains(_events.All.OfType<Notice>(), notice => notice.Text.Contains("goes on with the system prompt it began with", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// An answer outside a bound the copy the API is sent leaves out - two options at least, moved into words - is sent
+    /// back by the gate, which holds the answer to the definition's whole schema; the answer that then reads completes the
+    /// step. Every request carries the envelope as its format, and the first message says nothing of it.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerOutsideABoundTheApiWasNotSent_IsRepairedByTheGate()
+    {
+        var output = new AgentOutput("o", """{"type":"object","additionalProperties":false,"required":["options"],"properties":{"options":{"type":"array","minItems":2,"items":{"type":"string"}}}}""");
+        _endpoint
+            .Then(ClaudeApiFixtures.Answer(Envelopes.Of(JsonNode.Parse("""{"options":["only"]}""")).ToJsonString()))
+            .Then(ClaudeApiFixtures.Answer(Envelopes.Of(JsonNode.Parse("""{"options":["one","two"]}""")).ToJsonString()));
+
+        var result = await Ran(Run() with { Output = output });
+
+        Assert.Equal((AgentRunStatus.Completed, """{"options":["one","two"]}""", Envelopes.Notes), (result.Status, result.StructuredOutput, result.Notes));
+        Assert.Equal(["$.output.options: holds 1 item and at least 2 are asked"], Assert.Single(_events.All.OfType<OutputRepair>()).Problems);
+        Assert.Equal(2, _endpoint.Asked.Count);
+        Assert.All(_endpoint.Asked, asked => Assert.Equal(
+            ClaudeApiRequest.Sent(AgentEnvelope.Schema(output)).ToJsonString(),
+            JsonNode.Parse(asked.Body)!["output_config"]!["format"]!["schema"]!.ToJsonString()));
+        Assert.DoesNotContain("reads against this JSON schema", _endpoint.Asked[0].Body, StringComparison.Ordinal);
+    }
+
     /// <summary>A step on this client is worked by the terms of its entries: the client's tries and its longest wait.</summary>
     [Fact]
     public async Task AStep_IsWorkedByItsEntriesTerms()
@@ -223,7 +247,7 @@ public sealed class ClaudeApiClientTests : IDisposable
 
         Assert.Equal(ClaudeApiClient.ClientName, client.Name);
         Assert.Equal(
-            (true, true, true, AgentConversationHandling.Handed, false, AgentToolsOwner.Harness, AgentToolsOwner.Harness, false, "anthropic", "the request's model"),
+            (true, true, true, AgentConversationHandling.Handed, true, AgentToolsOwner.Harness, AgentToolsOwner.Harness, false, "anthropic", "the request's model"),
             (can.Streaming, can.Thinking, can.WritableWhileWorking, can.GoesOnWith, can.SchemaEnforcedOutput, can.FileAndCommandTools, can.Web, can.ReportsCost, can.ProviderType, can.ToldModelBy));
         Assert.Equal(["low", "medium", "high", "xhigh", "max"], can.EffortLevels);
     }

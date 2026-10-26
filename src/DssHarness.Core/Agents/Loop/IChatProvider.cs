@@ -20,6 +20,13 @@ public interface IChatProvider
     /// </summary>
     AgentUsage Uses { get; }
 
+    /// <summary>
+    /// Whether the provider's wire holds every answer to the schema a request sends (<see cref="ChatRequest.Schema"/>): where
+    /// it does not, the loop puts the schema in words in the step's first message, and asks an answer that read as no JSON
+    /// again in JSON alone (<see cref="ChatRequest.JsonAlone"/>).
+    /// </summary>
+    bool SendsSchema { get; }
+
     /// <summary>The tools a conversation begins with, in the provider's own form and in the order given: what every request of it sends.</summary>
     /// <param name="tools">The tools, as the runtime offers them: by name.</param>
     string Tools(IReadOnlyList<AgentToolDefinition> tools);
@@ -56,7 +63,10 @@ public interface IChatProvider
 /// <param name="Messages">Every message of the conversation, in order, each as it was stored: what was sent and received.</param>
 /// <param name="MaxOutputTokens">The most the answer may hold.</param>
 /// <param name="Key">The key the request is signed with; null where the run was given none.</param>
-/// <param name="Output">The output the run is to produce, where its step names one.</param>
+/// <param name="Schema">
+/// The envelope the answer is held to, as JSON (<see cref="AgentEnvelope.Schema"/>), where the run names an output; null
+/// where it names none and its answer is text. A provider whose wire takes a schema sends it as that wire takes it.
+/// </param>
 /// <param name="Credit">
 /// Whether the step has a model after this one to go on with, so a request the model declines is to leave it a credit,
 /// where the provider gives one (<see cref="ChatTurn.Credit"/>).
@@ -66,6 +76,10 @@ public interface IChatProvider
 /// this one go out in the provider's short form, as every request of the conversation since sent them; null where it
 /// never began.
 /// </param>
+/// <param name="JsonAlone">
+/// Whether the agent's last answer read as no JSON and was sent back: a provider whose wire holds no answer to the schema
+/// asks this request for JSON alone, offering no tool; one whose wire holds every answer to it asks it as any other.
+/// </param>
 public sealed record ChatRequest(
     string Model,
     string? Effort,
@@ -74,9 +88,10 @@ public sealed record ChatRequest(
     IReadOnlyList<string> Messages,
     long MaxOutputTokens,
     AgentKey? Key,
-    AgentOutput? Output,
+    string? Schema,
     bool Credit = false,
-    int? ShortenedBefore = null);
+    int? ShortenedBefore = null,
+    bool JsonAlone = false);
 
 /// <summary>One part of what a request answers, in the order it came.</summary>
 public abstract record ChatPart

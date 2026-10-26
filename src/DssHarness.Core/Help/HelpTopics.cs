@@ -2564,6 +2564,8 @@ public static class HelpTopics
         AppendWrapped(builder, ClaudeApiClientProse());
         builder.AppendLine();
         AppendWrapped(builder, ZaiApiClientProse());
+        builder.AppendLine();
+        AppendWrapped(builder, StructuredOutputProse());
 
         return builder.ToString();
     }
@@ -2640,7 +2642,6 @@ public static class HelpTopics
                 $"{row.Capability.ToString().ToLowerInvariant()}: {(row.Tools.Count == 0 ? "none of Claude Code's" : string.Join(", ", row.Tools.Select(tool => tool.Name)))}"
                 + (Agents.ClaudeCode.ClaudeCodeTools.ServedOf(row.Capability) is [_, ..] served ? $", but {string.Join(" and ", served)} of the engine's tool server beside them" : string.Empty)));
         var controlled = string.Join(", ", Agents.Policy.ClaudeSettings.Controlled.Select(name => $"{name.Key}={name.Value}"));
-        var output = new Agents.AgentOutput("o", "{}");
 
         return "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed "
             + "and never continued, keeping no session file (one a launch leaves all the same is removed once it has ended, "
@@ -2660,9 +2661,8 @@ public static class HelpTopics
             + "engine was not asked about and did not allow runs nothing and fails the step. Every call its own deny rules do not "
             + "refuse first is asked of the engine before it runs and answered from the policy above: a denial carries its rule's sentence, which the model "
             + $"reads, and is a line of the step's {Agents.AgentCallRecords.DenialsFileName}; a tool the launch was not given, or whose calls the engine "
-            + "cannot read, is denied by name. An answer held to a step's schema that does not read is sent back, each "
-            + $"problem by its path, up to {output.MaxRepairs} times; a message the engine gives an agent at work is written "
-            + "to the same launch, and a result written before the launch took it is not the answer; a handoff asked "
+            + "cannot read, is denied by name. An answer sent back (below) and a message the engine gives an agent at work are "
+            + "written to the same launch, and a result written before the launch took it is not the answer; a handoff asked "
             + "interrupts the turn and asks the agent for its handoff in the same launch once every message it was given was "
             + "taken or dropped, no tool running in that turn, a "
             + "launch that does not take the interrupt ended whole. Every message is held to the model asked for, a date "
@@ -2889,6 +2889,37 @@ public static class HelpTopics
             + $"Z.AI ends as sensitive ends the step {nameof(Agents.AgentRunStatus.Refused)}, one it ends for its context the "
             + "context is exhausted and one it ends for a network error is asked again; a failure Z.AI names is said in its own "
             + "words.";
+    }
+
+    /// <summary>
+    /// The envelope every client asks for where a step names an output, what the gate holds it to, and how each client
+    /// asks for it - each member, file, bound and number from its owner.
+    /// </summary>
+    private static string StructuredOutputProse()
+    {
+        var output = new Agents.AgentOutput("o", "{}");
+        static string Members(System.Text.Json.Nodes.JsonObject shape) => string.Join(", ", shape["properties"]!.AsObject().Select(member => member.Key));
+
+        return $"Where a step names an output, every client asks the agent for one envelope - {Agents.AgentEnvelope.Notes}, "
+            + $"{Agents.AgentEnvelope.Output}, {Agents.AgentEnvelope.Assumptions}, and {Agents.AgentEnvelope.Questions} where the step may ask and has rounds "
+            + "left - and the harness's own validator holds the answer to it, whatever a client was sent. The notes are not "
+            + $"empty, and are kept, masked, as the step's {OrchestratorLayout.StepNotesFileName} beside its result; the output is read "
+            + "against the step's whole schema, each problem named by its path under $.output, a text an enum or a const holds "
+            + $"in another case read as the schema spells it; each assumption is {{{Members(Agents.AgentEnvelope.Assumption())}}}; each question is "
+            + $"{{{Members(Agents.AgentEnvelope.Question())}}}, with at least "
+            + $"{Agents.AgentEnvelope.FewestOptions} options, recommending one of them word for word. The output is null only in a "
+            + "handoff, whose notes are the handoff, or where the answer asks, and the step then ends "
+            + $"{nameof(Agents.AgentRunStatus.Asked)} with its questions; an answer with both is sent back, and so is one that asks "
+            + "where the step may not or has asked as often as it may, told to write what it would have asked under assumptions. "
+            + $"The {Agents.ClaudeCode.ClaudeCodeClient.ClientName} client holds the answer to the envelope by --json-schema; the "
+            + $"{Agents.ClaudeApi.ClaudeApiClient.ClientName} client sends it as output_config.format on every request, the "
+            + $"handoff's too, each array's minItems above {Agents.ClaudeApi.ClaudeApiRequest.MostLeastItems} and every maxItems moved "
+            + "into the array's description in words, for structured outputs take no other - and where the API refuses it as "
+            + "more than it compiles, the run's requests carry no format and their system prompt says it in words; the "
+            + $"{Agents.ZaiApi.ZaiApiClient.ClientName} client, whose wire holds no answer to a schema, says it in words in the "
+            + "step's first message, and asks an answer that read as no JSON again in JSON alone - no tool offered, "
+            + "response_format a JSON object. An answer that does not read is sent back in the same conversation, "
+            + $"{output.MaxRepairs} times at most, and the step is then {nameof(Agents.AgentRunStatus.InvalidOutput)}.";
     }
 
     /// <summary>What a failure of <paramref name="kind"/> is to a step, as the loop acts on it.</summary>

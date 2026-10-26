@@ -189,7 +189,7 @@ public static class ClaudeLaunch
 
         if (run.Output is { } output)
         {
-            arguments.AddRange(["--json-schema", output.Schema]);
+            arguments.AddRange(["--json-schema", AgentEnvelope.Schema(output)]);
         }
 
         foreach (var root in otherRoots)

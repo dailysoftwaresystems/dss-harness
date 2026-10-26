@@ -96,6 +96,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         var recordLost = false;
         Exception? unclosed = null;
 
+        // The step's directory is every attempt's, and notes beside a result are that result's: an attempt begins with none
+        // an earlier one left, before it does anything - so a file that cannot go fails it there, never its own record.
+        _fileSystem.DeleteFile(Path.Combine(directory, OrchestratorLayout.StepNotesFileName));
         var stream = StoredStream.Open(_fileSystem, directory, mask);
 
         try
@@ -353,7 +356,11 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             ? _clients.FirstOrDefault(client => string.Equals(client.Name, named, StringComparison.Ordinal))
             : _clients.Count == 1 ? _clients[0] : null;
 
-    /// <summary>Writes the run's own record beside its stream, in one step, so that one there is one written whole.</summary>
+    /// <summary>
+    /// Writes the run's own record beside its stream, in one step, so that one there is one written whole - and, where its
+    /// answer left notes, the notes before it (<see cref="OrchestratorLayout.StepNotesFileName"/>), so a result that holds
+    /// notes is never read without them beside it.
+    /// </summary>
     /// <param name="directory">The step's own directory.</param>
     /// <param name="result">How the run ended.</param>
     /// <exception cref="InvalidOperationException">The result does not hold together, which none the runner makes does.</exception>
@@ -362,6 +369,11 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         if (result.Problem() is { } problem)
         {
             throw new InvalidOperationException($"Refusing to write a result that does not read back: {problem}.");
+        }
+
+        if (result.Notes is { } notes)
+        {
+            _fileSystem.WriteAllTextAtomic(Path.Combine(directory, OrchestratorLayout.StepNotesFileName), notes);
         }
 
         JsonStateFile.Write(_fileSystem, Path.Combine(directory, ResultFileName), result);

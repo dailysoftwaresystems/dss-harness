@@ -422,7 +422,7 @@ internal static class FakeClaude
 
             if (schema)
             {
-                answer = entry.ContainsKey("answer") ? entry["answer"]?.DeepClone() : new JsonObject { ["answer"] = "alpha" };
+                answer = entry.ContainsKey("answer") ? entry["answer"]?.DeepClone() : Envelopes.Of(new JsonObject { ["answer"] = "alpha" });
                 var structured = Id("toolu_");
                 Say(new JsonObject { ["type"] = "stream_event", ["event"] = new JsonObject { ["type"] = "message_start", ["message"] = new JsonObject { ["model"] = Model(entry) } }, ["session_id"] = session });
                 Say(new JsonObject { ["type"] = "stream_event", ["event"] = new JsonObject { ["type"] = "content_block_start", ["index"] = 0, ["content_block"] = new JsonObject { ["type"] = "tool_use", ["id"] = structured, ["name"] = "StructuredOutput", ["input"] = new JsonObject() } }, ["session_id"] = session });

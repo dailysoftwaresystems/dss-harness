@@ -156,6 +156,12 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The name of the file a step's output is kept in, validated, in its directory.</summary>
     public const string StepOutputFileName = "output.json";
 
+    /// <summary>
+    /// The name of the file a reason step's notes are kept in, masked, in its directory: what its agent left for whoever
+    /// goes on, as its answer's envelope said it.
+    /// </summary>
+    public const string StepNotesFileName = "notes.md";
+
     /// <summary>The name of the file a leg step keeps its legs' ledger in, as <c>--json</c> gives it, in its directory.</summary>
     public const string StepLedgerFileName = "ledger.json";
 

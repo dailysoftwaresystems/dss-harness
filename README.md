@@ -655,8 +655,8 @@ and run by the tool runtime below as on the API clients. A launch whose init doe
 server connected with its tools taken, or that connects another, never started, and a call of it
 the engine did not allow runs nothing and fails the step. Every call its own deny rules do not refuse first is asked of the
 engine before it runs and answered from the policy, a denial with its rule's sentence the model reads and a line of the step's
-`denials.jsonl`; an answer that does not read against the step's schema is sent back, each problem
-by its path; a message the engine gives an agent at work is written to the same launch; a handoff
+`denials.jsonl`; an answer sent back (below) and a message the engine gives an agent at work are
+written to the same launch; a handoff
 asked interrupts the turn and asks the agent for its handoff, no tool running in that turn; every
 message is held to the model asked for; the launch's environment holds nothing of a Claude Code
 session the tool was started in but a name `agentPolicy.keepEnvironment` gives back, none of what
@@ -828,6 +828,26 @@ request timed out, a conflict or a server's error is asked again, and any other 
 answer Z.AI ends as sensitive ends the step `Refused`, one it ends for its context the context is
 exhausted and one it ends for a network error is asked again; a failure Z.AI names is said in its
 own words.
+
+Where a step names an output, every client asks the agent for one envelope - `notes`, `output`,
+`assumptions`, and `questions` where the step may ask and has rounds left - and the harness's own
+validator holds the answer to it, whatever a client was sent. The notes are not empty, and are kept,
+masked, as the step's `notes.md` beside its result; the output is read against the step's whole
+schema, each problem named by its path under `$.output`, a text an `enum` or a `const` holds in
+another case read as the schema spells it; each assumption is `{about, assumed, why}`; each question
+is `{question, problem, tried, means, options, recommended, why}`, with at least 2 options,
+recommending one of them word for word. The output is null only in a handoff, whose notes are the
+handoff, or where the answer asks, and the step then ends `Asked` with its questions; an answer with
+both is sent back, and so is one that asks where the step may not or has asked as often as it may,
+told to write what it would have asked under assumptions. The `claude-code` client holds the answer
+to the envelope by `--json-schema`; the `claude-api` client sends it as `output_config.format` on
+every request, the handoff's too, each array's `minItems` above 1 and every `maxItems` moved into
+the array's description in words, for structured outputs take no other - and where the API refuses
+it as more than it compiles, the run's requests carry no format and their system prompt says it in
+words; the `glm` client, whose wire holds no answer to a schema, says it in words in the step's
+first message, and asks an answer that read as no JSON again in JSON alone - no tool offered,
+`response_format` a JSON object. An answer that does not read is sent back in the same conversation,
+2 times at most, and the step is then `InvalidOutput`.
 
 `web_search` is the harness's own search, made by dssharness itself over HTTP: it asks the sources
 `agentWebSearch` in `config.json` declares - search APIs that answer JSON, feeds, OpenSearch

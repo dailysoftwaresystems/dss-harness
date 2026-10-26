@@ -110,9 +110,21 @@ public static class JsonSchemaSubset
     /// <paramref name="schema"/> has subset problems: no document is held to a schema this engine does not read,
     /// and a caller that asks has skipped <see cref="SubsetProblems"/> where the schema was loaded.
     /// </exception>
-    public static IReadOnlyList<string> Problems(JsonNode schema, JsonNode? document)
+    public static IReadOnlyList<string> Problems(JsonNode schema, JsonNode? document) => Problems(schema, document, "$");
+
+    /// <summary>
+    /// Why <paramref name="document"/> does not answer <paramref name="schema"/>, as <see cref="Problems(JsonNode, JsonNode?)"/>
+    /// says it, each path named from <paramref name="at"/>: where the document stands in a larger one -
+    /// <c>$.output</c> for the output an answer's envelope holds.
+    /// </summary>
+    /// <param name="schema">The schema to answer, free of subset problems.</param>
+    /// <param name="document">The answer to check; JSON null is a null document.</param>
+    /// <param name="at">The document's own path, from the root of what holds it.</param>
+    /// <exception cref="ArgumentException"><paramref name="schema"/> has subset problems.</exception>
+    public static IReadOnlyList<string> Problems(JsonNode schema, JsonNode? document, string at)
     {
         ArgumentNullException.ThrowIfNull(schema);
+        ArgumentException.ThrowIfNullOrEmpty(at);
 
         var subset = SubsetProblems(schema);
 
@@ -125,7 +137,64 @@ public static class JsonSchemaSubset
 
         var root = (JsonObject)schema;
 
-        return Check(root, document, "$", new DocumentCheck(root));
+        return Check(root, document, at, new DocumentCheck(root));
+    }
+
+    /// <summary>
+    /// <paramref name="document"/> with each text an <c>enum</c> or a <c>const</c> of <paramref name="schema"/> holds in
+    /// another case spelled as the schema spells it - where exactly one of its values matches it so - and every other
+    /// value as it is: a model held to a schema may answer a value in another case (the Claude API's structured outputs
+    /// say so), which reads as the value it names. Under an <c>anyOf</c>, the first shape the spelled document answers
+    /// spells it. The document is never changed: what comes back is a copy.
+    /// </summary>
+    /// <param name="schema">The schema the document is held to, free of subset problems.</param>
+    /// <param name="document">The document; JSON null is a null document.</param>
+    /// <exception cref="ArgumentException"><paramref name="schema"/> has subset problems.</exception>
+    public static JsonNode? Respelled(JsonNode schema, JsonNode? document)
+    {
+        ArgumentNullException.ThrowIfNull(schema);
+
+        var subset = SubsetProblems(schema);
+
+        if (subset.Count > 0)
+        {
+            throw new ArgumentException($"The schema is not one this engine reads, so no document is spelled by it: {string.Join("; ", subset)}.", nameof(schema));
+        }
+
+        var root = (JsonObject)schema;
+
+        return Respell(root, document?.DeepClone(), new DocumentCheck(root));
+    }
+
+    /// <summary>
+    /// Every schema <paramref name="schema"/> holds, itself first: each of its properties', its items', each shape of its
+    /// <c>anyOf</c> and each of its definitions, and every one each of those holds - the places a copy of the schema sent
+    /// to a reader that takes less than the subset is changed at.
+    /// </summary>
+    /// <param name="schema">A schema free of subset problems.</param>
+    public static IEnumerable<JsonObject> SchemasIn(JsonObject schema)
+    {
+        ArgumentNullException.ThrowIfNull(schema);
+
+        var left = new Stack<JsonObject>([schema]);
+
+        while (left.TryPop(out var each))
+        {
+            yield return each;
+
+            IEnumerable<JsonNode?> held =
+            [
+                .. (each["properties"] as JsonObject)?.Select(property => property.Value) ?? [],
+                each["items"],
+                .. each["anyOf"] as JsonArray ?? [],
+                .. (each["$defs"] as JsonObject)?.Select(definition => definition.Value) ?? [],
+            ];
+
+            foreach (var inner in held.OfType<JsonObject>().Reverse())
+            {
+                left.Push(inner);
+            }
+        }
     }
 
     /// <summary>
@@ -762,6 +831,71 @@ public static class JsonSchemaSubset
     }
 
     /// <summary>
+    /// Spells each text of <paramref name="document"/> an <c>enum</c> or a <c>const</c> holds in another case as the
+    /// schema spells it, in place, where exactly one value matches it so: what <see cref="Respelled"/> gives, walked as
+    /// the document check walks.
+    /// </summary>
+    private static JsonNode? Respell(JsonObject said, JsonNode? document, DocumentCheck check)
+    {
+        if (said["$ref"] is JsonValue reference)
+        {
+            return Respell((JsonObject)check.Root["$defs"]![reference.GetValue<string>()[Definitions.Length..]]!, document, check);
+        }
+
+        if (said["anyOf"] is JsonArray shapes)
+        {
+            foreach (var shape in shapes.Cast<JsonObject>())
+            {
+                var spelled = Respell(shape, document?.DeepClone(), check);
+
+                // Each shape is tried on its own copy, so what one found at a place is never read for another.
+                if (Check(shape, spelled, "$", new DocumentCheck(check.Root)).Count == 0)
+                {
+                    document = spelled;
+                    break;
+                }
+            }
+        }
+
+        if (document is JsonValue scalar && scalar.GetValueKind() == JsonValueKind.String)
+        {
+            var text = scalar.GetValue<string>();
+            IEnumerable<JsonNode?> values = [.. said["enum"] as JsonArray ?? [], .. said.ContainsKey("const") ? [said["const"]] : Array.Empty<JsonNode?>()];
+            var spellings = values
+                .Where(value => value is JsonValue each && each.GetValueKind() == JsonValueKind.String)
+                .Select(value => value!.GetValue<string>())
+                .ToList();
+            var alike = spellings.Where(value => string.Equals(value, text, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            return spellings.Contains(text, StringComparer.Ordinal) || alike.Count != 1 ? document : JsonValue.Create(alike[0]);
+        }
+
+        if (document is JsonObject map && said["properties"] is JsonObject properties)
+        {
+            foreach (var name in map.Select(member => member.Key).ToList())
+            {
+                if (properties[name] is JsonObject property && Respell(property, map[name], check) is var spelled && !ReferenceEquals(spelled, map[name]))
+                {
+                    map[name] = spelled;
+                }
+            }
+        }
+
+        if (document is JsonArray list && said["items"] is JsonObject items)
+        {
+            for (var index = 0; index < list.Count; index++)
+            {
+                if (Respell(items, list[index], check) is var spelled && !ReferenceEquals(spelled, list[index]))
+                {
+                    list[index] = spelled;
+                }
+            }
+        }
+
+        return document;
+    }
+
+    /// <summary>
     /// Checks a document against a schema the subset check passed, naming the document's own path at every break.
     /// A path names one place in the document, since a name no identifier spells is written in brackets.
     /// </summary>
@@ -982,7 +1116,7 @@ public static class JsonSchemaSubset
     /// check passes is one the document check holds a document to.
     /// </summary>
     /// <param name="value">What the schema says the count is.</param>
-    private static int? Count(JsonNode? value)
+    internal static int? Count(JsonNode? value)
         => value is JsonValue number
             && number.GetValueKind() == JsonValueKind.Number
             && number.ToJsonString() is var text

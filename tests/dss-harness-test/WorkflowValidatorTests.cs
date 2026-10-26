@@ -3121,6 +3121,30 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// What a reason step's agent assumed is a list of the envelope's assumptions, each its about, what it assumed and
+    /// why: a member of one is read, and a member none holds is refused.
+    /// </summary>
+    [Fact]
+    public void WhatAReasonStepAssumed_IsTypedAsTheEnvelopesAssumptions()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: think
+                type: reason
+                agent: thinker
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+              - name: c
+                type: orient
+                when: 'any(think.assumptions, it.about == ''cache'' || it.assumed == it.why) && any(think.assumptions, it.nope == ''x'')'
+            """);
+
+        Assert.Equal(["'c.when' reads 'it.nope', and each item of 'think.assumptions' has no property 'nope'"], problems);
+    }
+
+    /// <summary>
     /// A name is looked up from the inside out, so an inner step never takes a name it can see from outside by bare name
     /// - a step beside a group around it, declared before or after, or that group itself; and the recovery's steps,
     /// which see the flow's top level by bare name, take none of its names. Steps of the same name in two groups neither

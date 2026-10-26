@@ -1741,6 +1741,24 @@ and past `ZaiApiProvider.FullAt` after that the context is full. `ZaiApiFailures
 row. Its tests replay the
 answers under `tests/dss-harness-test/fixtures/zai-api/`, recorded live by `ZaiApiProbeTests` and curated.
 
+Where a step names an output, every client asks for the envelope `AgentEnvelope` builds round the step's schema -
+`notes`, `output` (the step's schema whole, null beside it, its definitions at the envelope's root), `assumptions`
+(`AgentAssumption`), and `questions` (`AgentQuestion`, the one shape of a question an agent asks or a step's output
+writes) where `AgentOutput.AskRounds` leaves the step rounds to ask - and one `StructuredOutputGate` for each run reads
+every answer of it on all three clients: the members by the subset's check, the output against the step's schema under
+`$.output` (`JsonSchemaSubset.Problems` from a path, `JsonSchemaSubset.Respelled` for an enum's spelling), what no
+schema says (the notes not empty, a null output only where the answer asks, a recommendation among its options), and the
+run's end - `Completed` or `Asked`, with `PersonAsked`, or a repair sent back, then `InvalidOutput`. The runner writes
+the notes as `notes.md` (`OrchestratorLayout.StepNotesFileName`) before `result.json`, and removes an earlier attempt's
+before an attempt begins, for the step's directory is every attempt's. What each client is sent: `--json-schema` the
+envelope as built; the loop's `ChatRequest.Schema`, which the Claude API sends as `output_config.format` in the copy
+`ClaudeApiRequest.Sent` makes - every array bound structured outputs do not take moved into its description, over
+`JsonSchemaSubset.SchemasIn` - sending the run's requests no format, the envelope in words after the system prompt
+(`ClaudeApiRequest.InWords`), once the API refuses it as more than it compiles (`ClaudeApiFailures.RefusesTheFormat`) -
+and which a provider whose wire holds no answer to a schema (`IChatProvider.SendsSchema` false, Z.AI) is told in words
+in the step's first message (`AgentEnvelope.InWords`), an answer that read as no JSON asked again in JSON alone
+(`ChatRequest.JsonAlone`: no tool offered, `response_format` a JSON object).
+
 The harness's own web search is built under `Web\Search`: each kind of source an implementation of `IWebSearchKind` -
 pure, asking and reading only what it is handed - found by the one scan of the core (`CoreImplementations<T>`, which
 the codebase graph's languages are found by too) into the registry `WebSearchKinds`, which refuses two kinds of one

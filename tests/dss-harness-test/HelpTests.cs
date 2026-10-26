@@ -387,7 +387,8 @@ public sealed partial class HelpTests
         Assert.Contains("a call of it the engine was not asked about and did not allow runs nothing and fails the step.", prose, StringComparison.Ordinal);
         Assert.Contains("The run's reporter is given Read, Grep, Glob alone.", prose, StringComparison.Ordinal);
         Assert.Contains("Every call its own deny rules do not refuse first is asked of the engine before it runs and answered from the policy above", prose, StringComparison.Ordinal);
-        Assert.Contains("is sent back, each problem by its path, up to 2 times", prose, StringComparison.Ordinal);
+        Assert.Contains("An answer sent back (below) and a message the engine gives an agent at work are written to the same launch, and a result written before the launch took it is not the answer;", prose, StringComparison.Ordinal);
+        Assert.DoesNotContain("each problem by its path, up to", prose, StringComparison.Ordinal);
         Assert.Contains("a handoff asked interrupts the turn and asks the agent for its handoff in the same launch", prose, StringComparison.Ordinal);
         Assert.Contains("Every message is held to the model asked for, a date after its id the same model", prose, StringComparison.Ordinal);
         Assert.Contains("(CLAUDECODE, CLAUDE_PID and CLAUDE_EFFORT, and every name beginning CLAUDE_CODE_, CLAUDE_AGENT_SDK_, CLAUDE_PREVIEW_ or MCP_ but CLAUDE_CODE_GIT_BASH_PATH, which says only where a program is, and a name agentPolicy.keepEnvironment gives back), none of what every child of an agent loses (the tool runtime below)", prose, StringComparison.Ordinal);
@@ -722,6 +723,60 @@ public sealed partial class HelpTests
             nameof(DssHarness.Core.Agents.Http.ApiEvent),
             $"{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest)}.{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.Owned)}",
             nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.ExtrasProblems),
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The envelope every client asks for where a step names an output is said alike by help agent-clients and the README -
+    /// each member, file, bound and number from its owner - and the architecture names its owners by the types that are them.
+    /// </summary>
+    [Fact]
+    public void TheEnvelope_IsSaidByTheHelpAndTheDocuments()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+        var repairs = new DssHarness.Core.Agents.AgentOutput("o", "{}").MaxRepairs;
+        static string Members(System.Text.Json.Nodes.JsonObject shape) => string.Join(", ", shape["properties"]!.AsObject().Select(member => member.Key));
+        var (assumption, question) = (Members(DssHarness.Core.Agents.AgentEnvelope.Assumption()), Members(DssHarness.Core.Agents.AgentEnvelope.Question()));
+
+        Assert.Contains("Where a step names an output, every client asks the agent for one envelope - notes, output, assumptions, and questions where the step may ask and has rounds left - and the harness's own validator holds the answer to it, whatever a client was sent.", prose, StringComparison.Ordinal);
+        Assert.Contains("Where a step names an output, every client asks the agent for one envelope - `notes`, `output`, `assumptions`, and `questions` where the step may ask and has rounds left - and the harness's own validator holds the answer to it, whatever a client was sent.", readme, StringComparison.Ordinal);
+        Assert.Contains($"The notes are not empty, and are kept, masked, as the step's {DssHarness.Core.Orchestration.OrchestratorLayout.StepNotesFileName} beside its result;", prose, StringComparison.Ordinal);
+        Assert.Contains($"the output is read against the step's whole schema, each problem named by its path under $.output, a text an enum or a const holds in another case read as the schema spells it; each assumption is {{{assumption}}}; each question is {{{question}}}, with at least {DssHarness.Core.Agents.AgentEnvelope.FewestOptions} options, recommending one of them word for word.", prose, StringComparison.Ordinal);
+        Assert.Contains($"the output is read against the step's whole schema, each problem named by its path under `$.output`, a text an `enum` or a `const` holds in another case read as the schema spells it; each assumption is `{{{assumption}}}`; each question is `{{{question}}}`, with at least {DssHarness.Core.Agents.AgentEnvelope.FewestOptions} options, recommending one of them word for word.", readme, StringComparison.Ordinal);
+        Assert.Contains("The output is null only in a handoff, whose notes are the handoff, or where the answer asks, and the step then ends Asked with its questions; an answer with both is sent back, and so is one that asks where the step may not or has asked as often as it may, told to write what it would have asked under assumptions.", prose, StringComparison.Ordinal);
+        Assert.Contains("The output is null only in a handoff, whose notes are the handoff, or where the answer asks, and the step then ends `Asked` with its questions; an answer with both is sent back, and so is one that asks where the step may not or has asked as often as it may, told to write what it would have asked under assumptions.", readme, StringComparison.Ordinal);
+        Assert.Contains("The claude-code client holds the answer to the envelope by --json-schema;", prose, StringComparison.Ordinal);
+        Assert.Contains("The `claude-code` client holds the answer to the envelope by `--json-schema`;", readme, StringComparison.Ordinal);
+        Assert.Contains("an answer sent back (below) and a message the engine gives an agent at work are written to the same launch;", readme, StringComparison.Ordinal);
+        Assert.Contains($"the claude-api client sends it as output_config.format on every request, the handoff's too, each array's minItems above {DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.MostLeastItems} and every maxItems moved into the array's description in words, for structured outputs take no other - and where the API refuses it as more than it compiles, the run's requests carry no format and their system prompt says it in words;", prose, StringComparison.Ordinal);
+        Assert.Contains($"the `claude-api` client sends it as `output_config.format` on every request, the handoff's too, each array's `minItems` above {DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.MostLeastItems} and every `maxItems` moved into the array's description in words, for structured outputs take no other - and where the API refuses it as more than it compiles, the run's requests carry no format and their system prompt says it in words;", readme, StringComparison.Ordinal);
+        Assert.Contains("and asks an answer that read as no JSON again in JSON alone - no tool offered, response_format a JSON object.", prose, StringComparison.Ordinal);
+        Assert.Contains("and asks an answer that read as no JSON again in JSON alone - no tool offered, `response_format` a JSON object.", readme, StringComparison.Ordinal);
+        Assert.Contains($"An answer that does not read is sent back in the same conversation, {repairs} times at most, and the step is then InvalidOutput.", prose, StringComparison.Ordinal);
+        Assert.Contains($"An answer that does not read is sent back in the same conversation, {repairs} times at most, and the step is then `InvalidOutput`.", readme, StringComparison.Ordinal);
+
+        foreach (var owner in new[]
+        {
+            nameof(DssHarness.Core.Agents.AgentEnvelope),
+            nameof(DssHarness.Core.Agents.AgentAssumption),
+            nameof(DssHarness.Core.Agents.AgentQuestion),
+            nameof(DssHarness.Core.Agents.StructuredOutputGate),
+            $"{nameof(DssHarness.Core.Agents.AgentOutput)}.{nameof(DssHarness.Core.Agents.AgentOutput.AskRounds)}",
+            $"{nameof(DssHarness.Core.Schemas.JsonSchemaSubset)}.{nameof(DssHarness.Core.Schemas.JsonSchemaSubset.Respelled)}",
+            $"{nameof(DssHarness.Core.Schemas.JsonSchemaSubset)}.{nameof(DssHarness.Core.Schemas.JsonSchemaSubset.SchemasIn)}",
+            $"{nameof(DssHarness.Core.Orchestration.OrchestratorLayout)}.{nameof(DssHarness.Core.Orchestration.OrchestratorLayout.StepNotesFileName)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ChatRequest)}.{nameof(DssHarness.Core.Agents.Loop.ChatRequest.Schema)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ChatRequest)}.{nameof(DssHarness.Core.Agents.Loop.ChatRequest.JsonAlone)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.IChatProvider)}.{nameof(DssHarness.Core.Agents.Loop.IChatProvider.SendsSchema)}",
+            $"{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest)}.{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.Sent)}",
+            $"{nameof(DssHarness.Core.Agents.AgentEnvelope)}.{nameof(DssHarness.Core.Agents.AgentEnvelope.InWords)}",
+            $"{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest)}.{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.InWords)}",
+            $"{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures)}.{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.RefusesTheFormat)}",
         })
         {
             Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);

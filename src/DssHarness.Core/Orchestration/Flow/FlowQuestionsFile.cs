@@ -101,23 +101,6 @@ public sealed record FlowAnswerRecord(
     string? Did = null,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? ReplacedAt = null);
 
-/// <summary>One question a step's output wrote or an agent asked, in the shape every question holds; empty for the engine's own.</summary>
-/// <param name="Question">What is asked.</param>
-/// <param name="Problem">What is open or stands in the way.</param>
-/// <param name="Tried">Where the agent looked before it asked.</param>
-/// <param name="Means">What depends on the answer.</param>
-/// <param name="Options">The choices, at least two, each a sentence that says what it leads to.</param>
-/// <param name="Recommended">The one recommended, word for word as it stands among the choices.</param>
-/// <param name="Why">Why, by the bar the agent was given.</param>
-public sealed record FlowAgentQuestion(
-    string Question,
-    string Problem,
-    IReadOnlyList<string> Options,
-    string Recommended,
-    string Why,
-    string? Tried = null,
-    string? Means = null);
-
 /// <summary>
 /// One question a run raised, as <c>questions.json</c> holds it: its id, kind and state, who raised it, the problem
 /// as it was shown, the options each with what it does, the recommendation and who wrote it, and every answer it was
@@ -142,7 +125,7 @@ public sealed record FlowQuestionEntry(
     string State,
     string Kind,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset RaisedAt,
-    IReadOnlyList<FlowAgentQuestion> Questions,
+    IReadOnlyList<Agents.AgentQuestion> Questions,
     IReadOnlyList<FlowQuestionOption> Options,
     IReadOnlyList<FlowAnswerRecord> Answers,
     FlowQuestionRaisedBy? RaisedBy = null,

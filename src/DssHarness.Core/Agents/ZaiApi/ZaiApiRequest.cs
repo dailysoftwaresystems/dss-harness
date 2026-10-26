@@ -16,9 +16,14 @@ namespace DssHarness.Core.Agents.ZaiApi;
 /// <remarks>
 /// The tool sends no sampling parameter and no tool choice of its own - a client's <c>requestExtras</c> may add them -
 /// and never asks Z.AI's search or its reader, whose tools no request declares: the web is the harness's own (value 382).
+/// Z.AI holds no answer to a schema: the step's is said in its first message, and an answer that read as no JSON is
+/// asked again in JSON alone - no tool offered, <c>response_format</c> a JSON object - as the live probe found it answered.
 /// </remarks>
 public static class ZaiApiRequest
 {
+    /// <summary>Whether Z.AI holds every answer to a schema: it takes none, only an answer in JSON (<c>response_format</c>).</summary>
+    public const bool HoldsToSchema = false;
+
     /// <summary>The path of the API's chat completions, under the provider's <c>api</c>.</summary>
     public const string CompletionsPath = "chat/completions";
 
@@ -34,7 +39,7 @@ public static class ZaiApiRequest
         .. new[]
         {
             new[] { "model" }, ["messages"], ["stream"], ["tool_stream"], ["tools"], ["thinking", "type"], ["thinking", "clear_thinking"],
-            ["reasoning_effort"], ["max_tokens"],
+            ["reasoning_effort"], ["max_tokens"], ["response_format"],
         }.Select(path => new OwnedMember(path)),
     ];
 
@@ -52,7 +57,8 @@ public static class ZaiApiRequest
 
     /// <summary>
     /// The body of <paramref name="request"/>, as JSON: the system prompt first, then the stored messages as they were
-    /// stored, byte for byte - but each answer to a call before <paramref name="shortenedBefore"/>, sent in its short form.
+    /// stored, byte for byte - but each answer to a call before <paramref name="shortenedBefore"/>, sent in its short form;
+    /// a request that asks for JSON alone offers no tool and asks for a JSON object.
     /// </summary>
     /// <param name="request">The request.</param>
     /// <param name="settings">The client's settings: whether the model's reasoning is kept across turns, and the fields it adds.</param>
@@ -72,13 +78,18 @@ public static class ZaiApiRequest
             ["model"] = request.Model,
             [ApiBody.Messages] = null,
             ["stream"] = true,
-            ["tool_stream"] = true,
         };
 
-        // A conversation with no tools sends none; one with tools sends them as it began with them, as stored.
-        if (!ApiBody.IsEmptyList(request.Tools))
+        // A request that asks for JSON alone offers no tool: what it answers is the JSON, and no call.
+        if (!request.JsonAlone)
         {
-            body[ApiBody.Tools] = null;
+            body["tool_stream"] = true;
+
+            // A conversation with no tools sends none; one with tools sends them as it began with them, as stored.
+            if (!ApiBody.IsEmptyList(request.Tools))
+            {
+                body[ApiBody.Tools] = null;
+            }
         }
 
         body["thinking"] = thinking;
@@ -89,6 +100,11 @@ public static class ZaiApiRequest
         }
 
         body["max_tokens"] = request.MaxOutputTokens;
+
+        if (request.JsonAlone)
+        {
+            body["response_format"] = new JsonObject { ["type"] = "json_object" };
+        }
 
         var system = new JsonObject { ["role"] = "system", ["content"] = request.System }.ToJsonString(ApiBody.Json);
         IReadOnlyList<string> messages = [system, .. request.Messages.Select((message, at) => at < shortenedBefore ? Short(message) : message)];

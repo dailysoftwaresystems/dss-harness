@@ -250,7 +250,6 @@ public sealed class ToolLoop(
         private int _turns;
         private int _counted;
         private int _retries;
-        private int _repairs;
         private int _nudges;
         private int _pauses;
         private bool _inTurn;
@@ -260,6 +259,10 @@ public sealed class ToolLoop(
         private decimal _cost;
         private string? _unknown;
         private bool _handing;
+
+        // The gate of the step's answer, where it names an output; and whether the answer it last sent back read as no JSON.
+        private readonly StructuredOutputGate? _gate = run.Output is { } output ? new(output, run.Mask) : null;
+        private bool _jsonAlone;
 
         private StoredConversation Conversation => _conversation!;
 
@@ -317,7 +320,10 @@ public sealed class ToolLoop(
                 SessionId: _session,
                 Credential: new AgentCredentialSource(AgentCredentialSource.EnvironmentFile, Key.Name))).ConfigureAwait(false);
 
-            await SayAsync(run.UserPrompt, AgentMessageKind.FirstPrompt).ConfigureAwait(false);
+            // A provider whose wire holds no answer to the schema is told it in words, in the step's first message.
+            await SayAsync(
+                _gate is { } gate && !provider.SendsSchema ? $"{run.UserPrompt}\n\n{AgentEnvelope.InWords(gate.Envelope)}" : run.UserPrompt,
+                AgentMessageKind.FirstPrompt).ConfigureAwait(false);
 
             var result = await LoopAsync(stop).ConfigureAwait(false);
 
@@ -393,6 +399,7 @@ public sealed class ToolLoop(
                     {
                         await AnsweredAsync(turn).ConfigureAwait(false);
                         var answer = Said(turn);
+                        _jsonAlone = false;
 
                         // The engine's message written while the answer was: the answer is not the step's, and the agent
                         // goes on with what it was told.
@@ -418,6 +425,7 @@ public sealed class ToolLoop(
                     {
                         await AnsweredAsync(turn).ConfigureAwait(false);
                         Forget();
+                        _jsonAlone = false;
 
                         // A pause asked before the calls began cuts them before they run, and outranks the budget. What a
                         // cut comes to - the handoff, the step past its time, its budget spent - the loop's top decides,
@@ -445,6 +453,7 @@ public sealed class ToolLoop(
             // provider paused of it is not.
             await LeaveTurnAsync(Pausing).ConfigureAwait(false);
             _handing = true;
+            _jsonAlone = false;
             _paused.Clear();
             _pauses = 0;
             Forget();
@@ -657,7 +666,7 @@ public sealed class ToolLoop(
                     return new Sent(Left: true);
                 }
 
-                var request = new ChatRequest(run.Model!, run.Effort, Conversation.SystemPrompt, Conversation.Tools, [.. Conversation.Messages(), .. _pending, .. _paused], _maxTokens, Key, run.Output, Credit: _goesOn, ShortenedBefore: Conversation.ShortenedBefore);
+                var request = new ChatRequest(run.Model!, run.Effort, Conversation.SystemPrompt, Conversation.Tools, [.. Conversation.Messages(), .. _pending, .. _paused], _maxTokens, Key, _gate?.Envelope, Credit: _goesOn, ShortenedBefore: Conversation.ShortenedBefore, JsonAlone: _jsonAlone);
 
                 // The handoff turn is held to its bound, not to the step's time: it counts against none of the step's
                 // turns, budget or time.
@@ -942,32 +951,21 @@ public sealed class ToolLoop(
             Store([turn.Message, .. provider.Answers(turn, answers, told)]);
         }
 
-        /// <summary>The answer checked against the step's output, where it names one: the run's end, or null where a repair was sent.</summary>
+        /// <summary>
+        /// The answer read by the step's gate, where it names an output: the run's end, or null where a repair was sent - one
+        /// that read as no JSON asked again in JSON alone.
+        /// </summary>
         private async Task<AgentRunResult?> CheckedAsync(string text)
         {
-            if (run.Output is not { } output)
+            if (_gate is not { } gate)
             {
                 return new AgentRunResult(AgentRunStatus.Completed, FinalText: Masked(text));
             }
 
             var answer = Parsed(text);
-            var problems = StructuredOutputGate.Problems(output, answer);
+            _jsonAlone = answer is null;
 
-            if (problems.Count == 0)
-            {
-                return new AgentRunResult(AgentRunStatus.Completed, FinalText: Masked(text), StructuredOutput: Masked(answer!.ToJsonString()));
-            }
-
-            if (_repairs >= output.MaxRepairs)
-            {
-                return AgentEndings.InvalidOutput(_repairs, problems, run.Mask);
-            }
-
-            _repairs++;
-            await Emit(new OutputRepair(_repairs, [.. problems.Select(Masked)])).ConfigureAwait(false);
-            await SayAsync(StructuredOutputGate.Repair(problems), AgentMessageKind.Repair).ConfigureAwait(false);
-
-            return null;
+            return await gate.CheckedAsync(answer, text, events, repair => SayAsync(repair, AgentMessageKind.Repair)).ConfigureAwait(false);
         }
 
         /// <summary>The answer's text as JSON, where it reads as JSON; null where it does not.</summary>

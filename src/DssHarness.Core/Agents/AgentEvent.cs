@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using DssHarness.Core.Execution;
 
 namespace DssHarness.Core.Agents;
 
@@ -153,11 +154,44 @@ public sealed record AgentUsage(long InputTokens, long OutputTokens, long CacheR
 /// <param name="Name">The tool's name.</param>
 public sealed record AgentToolCall(string Id, string Name);
 
-/// <summary>One question the agent asks the person.</summary>
-/// <param name="Text">The question.</param>
-/// <param name="Choices">The answers there are to pick from, where the question offers them.</param>
-/// <param name="Recommended">The one it recommends, where it does.</param>
-public sealed record AgentQuestion(string Text, IReadOnlyList<string> Choices, string? Recommended = null);
+/// <summary>
+/// One question an agent asks the person or a step's output writes, in the shape every question holds (part 04): what is
+/// asked, what stands in the way, what was tried, what depends on it, the choices, the one recommended and why.
+/// </summary>
+/// <param name="Question">What is asked.</param>
+/// <param name="Problem">What is open or stands in the way.</param>
+/// <param name="Tried">What was looked at or tried before asking.</param>
+/// <param name="Means">What depends on the answer.</param>
+/// <param name="Options">The choices, at least two, each a sentence that says what it leads to.</param>
+/// <param name="Recommended">The one recommended, word for word as it stands among the choices.</param>
+/// <param name="Why">Why, by the bar the agent was given.</param>
+public sealed record AgentQuestion(string Question, string Problem, string Tried, string Means, IReadOnlyList<string> Options, string Recommended, string Why)
+{
+    /// <summary>This question with every text of it masked.</summary>
+    /// <param name="mask">The run's mask.</param>
+    public AgentQuestion MaskedBy(ILineMask mask)
+    {
+        ArgumentNullException.ThrowIfNull(mask);
+
+        return new(mask.Redact(Question), mask.Redact(Problem), mask.Redact(Tried), mask.Redact(Means), [.. Options.Select(mask.Redact)], mask.Redact(Recommended), mask.Redact(Why));
+    }
+}
+
+/// <summary>One thing an agent assumed where a person could have told it: what was open, what it took, and why.</summary>
+/// <param name="About">What was open.</param>
+/// <param name="Assumed">What it took it to be.</param>
+/// <param name="Why">Why it took that.</param>
+public sealed record AgentAssumption(string About, string Assumed, string Why)
+{
+    /// <summary>This assumption with every text of it masked.</summary>
+    /// <param name="mask">The run's mask.</param>
+    public AgentAssumption MaskedBy(ILineMask mask)
+    {
+        ArgumentNullException.ThrowIfNull(mask);
+
+        return new(mask.Redact(About), mask.Redact(Assumed), mask.Redact(Why));
+    }
+}
 
 /// <summary>The launch began: what it runs as, where its credential came from, and what it was given.</summary>
 /// <param name="Client">The client's key, as the configuration names it.</param>

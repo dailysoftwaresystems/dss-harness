@@ -153,7 +153,10 @@ public sealed record AgentHandoff(string? Answer = null, string? WhyNone = null)
 /// <param name="NotStartedBecause">Why, where it never began; null otherwise.</param>
 /// <param name="FinalText">The agent's answer as text.</param>
 /// <param name="StructuredOutput">Its answer against the schema, where one was named and it read; null otherwise.</param>
-/// <param name="Notes">What the agent left for whoever goes on, masked.</param>
+/// <param name="Notes">
+/// What the agent left for whoever goes on, masked: the notes of an answer's envelope, where the run answered in one; null
+/// otherwise - a run that did not reach its answer leaves none, and its handoff stands in their place.
+/// </param>
 /// <param name="Session">The session the run worked as, where the client names one.</param>
 /// <param name="Model">The model the step asked for.</param>
 /// <param name="Usage">What it used and what that cost.</param>
@@ -187,8 +190,8 @@ public sealed record AgentRunResult(
     AgentHandoff? Handoff = null,
     string? Error = null)
 {
-    /// <summary>What it assumed where a person could have told it; empty where it assumed nothing.</summary>
-    public IReadOnlyList<string> Assumptions { get; init; } = [];
+    /// <summary>What it assumed where a person could have told it, masked, as its answer said it; empty where it assumed nothing.</summary>
+    public IReadOnlyList<AgentAssumption> Assumptions { get; init; } = [];
 
     /// <summary>What it asks the person, where the step may ask and it did; empty where it asked nothing.</summary>
     public IReadOnlyList<AgentQuestion> Questions { get; init; } = [];
@@ -239,7 +242,9 @@ public sealed record AgentRunResult(
     /// <see cref="AgentRunStatus.RateLimited"/>, what a declined request was of to <see cref="AgentRunStatus.Refused"/>, an
     /// answer read against its schema to <see cref="AgentRunStatus.Completed"/>, a handoff to
     /// <see cref="AgentRunStatus.HandedOff"/>, questions to <see cref="AgentRunStatus.Asked"/> - and each ending that
-    /// carries one says it; a run that completed says no error, no count is below naught, and every list is written.
+    /// carries one says it, and notes and assumptions to an answer that read - <see cref="AgentRunStatus.Completed"/> or
+    /// <see cref="AgentRunStatus.Asked"/>; a run that completed says no error, no count is below naught, every list is
+    /// written, and none holds a null.
     /// </summary>
     public string? Problem()
     {
@@ -273,6 +278,10 @@ public sealed record AgentRunResult(
             : Handoff is { Answer: null, WhyNone: null } ? "its handoff holds neither an answer nor why there is none, and it holds one of them"
             : Status == AgentRunStatus.Asked && Questions.Count == 0 ? "it ended Asked, and asks nothing"
             : Status != AgentRunStatus.Asked && Questions.Count > 0 ? $"it ended {Status}, and asks the person, which only a run that ended Asked does"
+            : Status is not (AgentRunStatus.Completed or AgentRunStatus.Asked) && Notes is not null ? $"it ended {Status}, and holds notes, which only a run whose answer read does"
+            : Status is not (AgentRunStatus.Completed or AgentRunStatus.Asked) && Assumptions.Count > 0 ? $"it ended {Status}, and holds assumptions, which only a run whose answer read does"
+            : Assumptions.Any(assumption => assumption is null) ? "it names an assumption as null"
+            : Questions.Any(question => question is null) ? "it names a question as null"
             : Status == AgentRunStatus.Completed && Error is not null ? "it completed, and says why it failed"
             : Served.Any(served => served is null) ? "it names a model that served it as null"
             : Served.FirstOrDefault(served => served.FromTurn < 1) is { } early ? $"it names '{early.Model}' as serving from turn {early.FromTurn.ToString(System.Globalization.CultureInfo.InvariantCulture)}, and turns are counted from one"
@@ -281,7 +290,8 @@ public sealed record AgentRunResult(
 
     /// <summary>
     /// This run as one that failed for <paramref name="error"/>: what only another ending carries - why it never began, an
-    /// account's limit, what a declined request was of and its credit, an answer read against its schema, its questions, its handoff -
+    /// account's limit, what a declined request was of and its credit, an answer read against its schema, its notes, what it
+    /// assumed, its questions, its handoff -
     /// is not a failed run's, and goes; what it did and what it used stay.
     /// </summary>
     /// <param name="error">Why it failed, masked.</param>
@@ -291,7 +301,9 @@ public sealed record AgentRunResult(
             Status = AgentRunStatus.Failed,
             NotStartedBecause = null,
             StructuredOutput = null,
+            Notes = null,
             Handoff = null,
+            Assumptions = [],
             Questions = [],
             Limit = null,
             DeclinedFor = null,
