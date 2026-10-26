@@ -1259,6 +1259,14 @@ public sealed class AgentPolicyTests
         // A value an expansion names is undecided, as any script named by one is.
         Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git ls-remote --upload-pack=$CMD .")).Rule);
 
+        // send-email's own --to and --cc are no abbreviations of its --to-cmd and --cc-cmd: an address is data.
+        foreach (var command in new[] { "git send-email --to \"Foo Bar <foo@bar.example>\" 0001.patch", "git send-email --cc=\"Foo <foo@bar.example>\" 0001.patch" })
+        {
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+        }
+
+        Assert.Equal("Run(make install *)", Assert.IsType<AgentPolicyAnswer.Denied>(ruled.Run("git send-email --to-c 'make install' 0001.patch")).Rule);
+
         // Plain uses of the same subcommands stay allowed: the option's value is data, not a command.
         foreach (var command in new[] { "git ls-remote origin", "git difftool --tool-help", "git grep -n foo", "git grep -O foo", "git fetch origin", "git clone ./repo ./dest" })
         {

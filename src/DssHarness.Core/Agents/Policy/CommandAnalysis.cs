@@ -1392,7 +1392,7 @@ public static partial class CommandAnalysis
         {
             foreach (var spec in specs)
             {
-                if (GitOptionValue(command, at, spec.Long, spec.Short, spec.GluedOnly) is { } found
+                if (GitOptionValue(command, at, spec.Long, spec.Short, spec.GluedOnly, GitOptionsOfTheirOwn(subcommand)) is { } found
                     && (!spec.PathOnly || NamesAPath(found.Value)))
                 {
                     yield return spec.Appends ? ["sh", "-c", found.Value, InputWord] : ["sh", "-c", found.Value];
@@ -1437,6 +1437,14 @@ public static partial class CommandAnalysis
         };
 
     /// <summary>
+    /// A git subcommand's options whose names begin a name of <see cref="GitExecutedOptions"/>: each an option of its own,
+    /// which git reads by its exact name before any abbreviation - send-email's <c>--to</c> and <c>--cc</c>, never its
+    /// <c>--to-cmd</c> and <c>--cc-cmd</c>.
+    /// </summary>
+    private static IReadOnlyList<string> GitOptionsOfTheirOwn(string subcommand)
+        => subcommand == "send-email" ? ["to", "cc"] : [];
+
+    /// <summary>
     /// The command <c>git submodule foreach</c> evaluates, the words after <c>foreach</c> joined -
     /// its <c>--recursive</c> and <c>-q</c> no part of it; null where the submodule command is not a
     /// <c>foreach</c>, or names no command.
@@ -1475,11 +1483,12 @@ public static partial class CommandAnalysis
     /// <c>-x value</c> or <c>-xvalue</c>, and the letter at the end of a cluster or inside one (<c>-dx value</c>,
     /// <c>-dxvalue</c>), the letters before it ones that take no value. Where <paramref name="gluedOnly"/>, only the glued
     /// forms (<c>--name=value</c>, <c>-xvalue</c>), as git reads an option whose argument is optional. Read so where a
-    /// prefix or a letter may be another option's too: a value misread is a command refused, never one let through. Null
-    /// where the word names none of <paramref name="longNames"/> or <paramref name="shortLetters"/>, or names one with no
-    /// value to read.
+    /// prefix or a letter may be another option's too - a value misread is a command refused, never one let through - but
+    /// for an option of the subcommand's own that a prefix would reach (<paramref name="theirOwn"/>), which git reads by its
+    /// exact name first. Null where the word names none of <paramref name="longNames"/> or <paramref name="shortLetters"/>,
+    /// or names one with no value to read.
     /// </summary>
-    private static (string Value, int Next)? GitOptionValue(IReadOnlyList<string> words, int at, IReadOnlyList<string> longNames, string shortLetters, bool gluedOnly)
+    private static (string Value, int Next)? GitOptionValue(IReadOnlyList<string> words, int at, IReadOnlyList<string> longNames, string shortLetters, bool gluedOnly, IReadOnlyList<string>? theirOwn = null)
     {
         var word = words[at];
 
@@ -1487,7 +1496,7 @@ public static partial class CommandAnalysis
         {
             var named = word[2..].Split('=', 2);
 
-            if (!longNames.Any(name => name.StartsWith(named[0], StringComparison.Ordinal)))
+            if ((theirOwn ?? []).Contains(named[0], StringComparer.Ordinal) || !longNames.Any(name => name.StartsWith(named[0], StringComparison.Ordinal)))
             {
                 return null;
             }
