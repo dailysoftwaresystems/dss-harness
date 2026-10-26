@@ -60,28 +60,14 @@ public sealed class ClaudeApiClient(
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(events);
 
-        if (Unstartable(run) is { } why)
+        if (ToolLoopTerms.Unstartable(run, Kind) is { } why)
         {
             return Task.FromResult(AgentEndings.NotStarted(ClientName, AgentNotStartedBecause.ConfigurationWrong, why, run.Model, run.Mask));
         }
 
         var entries = run.Entries!;
         var provider = new ClaudeApiProvider(_connection, entries.Provider.Api, ClaudeApiSettings.Of(entries.Client));
-        var terms = new ToolLoopTerms(
-            ClientName,
-            entries.Provider,
-            entries.Model,
-            entries.Client?.MaxRetries ?? ToolLoopTerms.DefaultMaxRetries,
-            entries.Client?.MaxRetryWaitSeconds is { } seconds ? TimeSpan.FromSeconds(seconds) : null);
 
-        return _loop.RunAsync(run, events, provider, terms, cancellationToken);
+        return _loop.RunAsync(run, events, provider, ToolLoopTerms.Of(ClientName, entries), cancellationToken);
     }
-
-    /// <summary>Why the run may not start on this client - its entries missing, or of another provider - and null where it may.</summary>
-    private static string? Unstartable(AgentRun run)
-        => run.Entries is not { } entries ? "the run was given no entries of its provider, model and client, which every request is built from"
-            : !string.Equals(entries.Provider.Type, Kind.ProviderType, StringComparison.Ordinal) ? $"the run's provider '{entries.Provider.Name}' is of type '{entries.Provider.Type}', and {ClientName} reaches '{Kind.ProviderType}' alone"
-            : run.Provider is { } named && !string.Equals(named, entries.Provider.Name, StringComparison.Ordinal) ? $"the run is of provider '{named}', and the entries it was given are provider '{entries.Provider.Name}''s"
-            : !Uri.TryCreate(entries.Provider.Api, UriKind.Absolute, out _) ? $"provider '{entries.Provider.Name}' api '{entries.Provider.Api}' is no absolute address"
-            : null;
 }

@@ -1,6 +1,6 @@
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents.Http;
 using DssHarness.Core.Agents.Loop;
 using DssHarness.Core.Configuration;
 
@@ -44,47 +44,30 @@ public static class ClaudeApiRequest
     public const string AnHour = "1h";
 
     /// <summary>Every member of a request's body the tool sends itself or never sends, each by its path: what no <c>requestExtras</c> may set.</summary>
-    public static readonly IReadOnlyList<IReadOnlyList<string>> Owned =
+    public static readonly IReadOnlyList<OwnedMember> Owned =
     [
-        ["model"], ["max_tokens"], ["stream"], ["system"], ["tools"], ["messages"], ["thinking", "type"], ["thinking", "display"],
-        ["output_config", "effort"], ["output_config", "format"], ["context_management", "edits"], ["cache_control"],
-        ["fallbacks"], ["fallback_credit_token"],
+        .. new[]
+        {
+            new[] { "model" }, ["max_tokens"], ["stream"], ["system"], ["tools"], ["messages"], ["thinking", "type"], ["thinking", "display"],
+            ["output_config", "effort"], ["output_config", "format"], ["context_management", "edits"], ["cache_control"], ["fallback_credit_token"],
+        }.Select(path => new OwnedMember(path)),
+        new OwnedMember(["fallbacks"], "no request carries fallbacks, for the engine's fallback is the only one a step has"),
     ];
 
     /// <summary>The cache lifetimes a client may name, in the order help names them.</summary>
     public static IReadOnlyList<string> CacheTtls { get; } = [FiveMinutes, AnHour];
 
-    /// <summary>How the client writes JSON: compact, and escaping only what JSON must, for none of it is put in a page.</summary>
-    internal static JsonSerializerOptions Json { get; } = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
-
     /// <summary>Where a provider's requests are posted: its <c>api</c>, with the messages' path under it.</summary>
     /// <param name="api">The provider's <c>api</c>, an absolute address.</param>
-    public static Uri Endpoint(string api)
-    {
-        ArgumentNullException.ThrowIfNull(api);
-
-        return new Uri($"{api.TrimEnd('/')}/{MessagesPath}", UriKind.Absolute);
-    }
+    public static Uri Endpoint(string api) => ApiPost.Under(api, MessagesPath);
 
     /// <summary>
-    /// What is wrong with a client's <c>requestExtras</c>, each said in full: an object, whose members set nothing the tool
-    /// sends itself or never sends, and whose member under one the tool sends as an object is an object too.
+    /// What is wrong with a claude-api client's <c>requestExtras</c>, each said in full (<see cref="ApiBody.ExtrasProblems"/>):
+    /// an object, whose members set nothing the tool sends itself or never sends (<see cref="Owned"/>).
     /// </summary>
     /// <param name="extras">The client's <c>requestExtras</c>, as the configuration holds it.</param>
     /// <param name="where">Where it is, as a refusal names it: <c>agentClients 'claude-api' requestExtras</c>.</param>
-    public static IEnumerable<string> ExtrasProblems(JsonElement extras, string where)
-    {
-        if (extras.ValueKind != JsonValueKind.Object)
-        {
-            yield return $"{where} is {Said(extras.ValueKind)}, and the fields merged into every request's body are an object's members";
-            yield break;
-        }
-
-        foreach (var problem in MemberProblems(extras, [], where))
-        {
-            yield return problem;
-        }
-    }
+    public static IEnumerable<string> ExtrasProblems(JsonElement extras, string where) => ApiBody.ExtrasProblems(extras, where, Owned);
 
     /// <summary>The body of <paramref name="request"/>, as JSON: its stored tools and messages as they were stored, byte for byte.</summary>
     /// <param name="request">The request.</param>
@@ -101,12 +84,12 @@ public static class ClaudeApiRequest
         };
 
         // A conversation with no tools sends none; one with tools sends them as it began with them, as stored.
-        if (!IsEmptyList(request.Tools))
+        if (!ApiBody.IsEmptyList(request.Tools))
         {
-            body["tools"] = null;
+            body[ApiBody.Tools] = null;
         }
 
-        body["messages"] = null;
+        body[ApiBody.Messages] = null;
         body["thinking"] = new JsonObject { ["type"] = "adaptive", ["display"] = "summarized" };
 
         if (request.Effort is { Length: > 0 } effort)
@@ -117,55 +100,7 @@ public static class ClaudeApiRequest
         body["context_management"] = new JsonObject { ["edits"] = new JsonArray(new JsonObject { ["type"] = ClearToolUses }) };
         body["cache_control"] = cache;
 
-        if (settings.RequestExtras is { } extras)
-        {
-            Merge(body, extras, []);
-        }
-
-        using var stream = new MemoryStream();
-
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Encoder = Json.Encoder }))
-        {
-            writer.WriteStartObject();
-
-            foreach (var (name, node) in body)
-            {
-                writer.WritePropertyName(name);
-
-                switch (name)
-                {
-                    case "tools":
-                        writer.WriteRawValue(request.Tools);
-                        break;
-                    case "messages":
-                        writer.WriteStartArray();
-
-                        foreach (var message in request.Messages)
-                        {
-                            writer.WriteRawValue(message);
-                        }
-
-                        writer.WriteEndArray();
-                        break;
-                    default:
-                        // A member requestExtras gives as null is sent as null.
-                        if (node is null)
-                        {
-                            writer.WriteNullValue();
-                        }
-                        else
-                        {
-                            node.WriteTo(writer);
-                        }
-
-                        break;
-                }
-            }
-
-            writer.WriteEndObject();
-        }
-
-        return stream.ToArray();
+        return ApiBody.Write(body, request.Tools, request.Messages, settings.RequestExtras);
     }
 
     /// <summary>The headers of <paramref name="request"/>: its key, the version, and every beta it is sent under, once each.</summary>
@@ -183,81 +118,6 @@ public static class ClaudeApiRequest
             new("anthropic-beta", string.Join(",", betas.Distinct(StringComparer.Ordinal))),
         ];
     }
-
-    /// <summary>
-    /// Merges <paramref name="extras"/> into <paramref name="body"/>, member by member: an object under one the body holds
-    /// as an object merged into it, any other added. One the body holds already is refused where the configuration is
-    /// read (<see cref="ExtrasProblems"/>), so meeting one here is a defect.
-    /// </summary>
-    private static void Merge(JsonObject body, JsonElement extras, IReadOnlyList<string> path)
-    {
-        foreach (var member in extras.EnumerateObject())
-        {
-            if (body[member.Name] is JsonObject inner && member.Value.ValueKind == JsonValueKind.Object)
-            {
-                Merge(inner, member.Value, [.. path, member.Name]);
-            }
-            else if (body.ContainsKey(member.Name))
-            {
-                throw new InvalidOperationException($"requestExtras.{string.Join(".", path.Append(member.Name))} sets what the request sends itself, which the configuration's reader refuses.");
-            }
-            else
-            {
-                // From the value as it was read, never its text: config.json may hold comments and trailing commas within it.
-                body[member.Name] = JsonSerializer.SerializeToNode(member.Value);
-            }
-        }
-    }
-
-    /// <summary>Each member of <paramref name="extras"/>, under <paramref name="path"/>, that sets what the tool sends itself or never sends.</summary>
-    private static IEnumerable<string> MemberProblems(JsonElement extras, IReadOnlyList<string> path, string where)
-    {
-        foreach (var member in extras.EnumerateObject())
-        {
-            IReadOnlyList<string> at = [.. path, member.Name];
-            var named = $"{where}.{string.Join(".", at)}";
-
-            if (Owned.Any(owned => owned.SequenceEqual(at, StringComparer.Ordinal)))
-            {
-                yield return at[0] is "fallbacks"
-                    ? $"{named} is refused: no request carries fallbacks, for the engine's fallback is the only one a step has"
-                    : $"{named} is refused: the tool sends it itself";
-            }
-            else if (Owned.Any(owned => owned.Count > at.Count && owned.Take(at.Count).SequenceEqual(at, StringComparer.Ordinal)))
-            {
-                if (member.Value.ValueKind != JsonValueKind.Object)
-                {
-                    yield return $"{named} is {Said(member.Value.ValueKind)}, and the tool sends an object there, which its members are merged into";
-                    continue;
-                }
-
-                foreach (var problem in MemberProblems(member.Value, at, where))
-                {
-                    yield return problem;
-                }
-            }
-        }
-    }
-
-    /// <summary>Whether <paramref name="json"/> is the empty list: a conversation that has no tools.</summary>
-    private static bool IsEmptyList(string json)
-    {
-        using var document = JsonDocument.Parse(json);
-
-        return document.RootElement is { ValueKind: JsonValueKind.Array } list && list.GetArrayLength() == 0;
-    }
-
-    /// <summary>A JSON value's kind, as a refusal says it.</summary>
-    private static string Said(JsonValueKind kind)
-        => kind switch
-        {
-            JsonValueKind.Array => "a list",
-            JsonValueKind.String => "a string",
-            JsonValueKind.Number => "a number",
-            JsonValueKind.True or JsonValueKind.False => "true or false",
-            JsonValueKind.Null => "null",
-            _ => "an object",
-        };
 }
 
 /// <summary>What a claude-api client's entry says of its requests: its cache's lifetime, the fields it adds, the betas it adds.</summary>

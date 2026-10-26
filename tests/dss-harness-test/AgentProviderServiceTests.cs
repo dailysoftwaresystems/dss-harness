@@ -174,6 +174,26 @@ public sealed class AgentProviderServiceTests
         Assert.Contains("declared in the slot and appointed by nothing: CLAUDE_CODE_OAUTH_TOKEN", key.Details!);
     }
 
+    /// <summary>
+    /// An API client - claude-api, glm - is listed as no client: it signs each request with its provider's key, which the
+    /// provider's own row says, and appoints no name of its own.
+    /// </summary>
+    [Fact]
+    public async Task AnApiClient_IsListedAsNoClient()
+    {
+        using var repository = await RepositoryAsync();
+        var file = Path.Combine(repository.Tree.Path, ".harness-config", "config.json");
+        var config = JsonNode.Parse(File.ReadAllText(file))!.AsObject();
+        config["providers"]![0]!["client"] = "claude-api";
+        File.WriteAllText(file, config.ToJsonString(DssHarness.Core.Output.ReportJson.Options));
+
+        var outcome = await Service(repository.Harness).ListAsync(repository.Tree.Path, template: false, json: true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Equal(["anthropic", "zai"], JsonNode.Parse(Assert.Single(outcome.Data!))!["providers"]!.AsArray().Select(provider => (string?)provider!["name"]));
+        Assert.Empty(JsonNode.Parse(Assert.Single(outcome.Data!))!["clients"]!.AsArray());
+    }
+
     [Fact]
     public async Task AnswersOneJsonDocument_WithNoMemberForAValue()
     {

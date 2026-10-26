@@ -2642,7 +2642,7 @@ public static class WorkflowValidator
         }
 
         /// <summary>The effort ladder by capability, lowest first: the order a refusal names the nearest level a model takes.</summary>
-        private static readonly string[] CapabilityLadder = ["low", "medium", "high", "xhigh", "max"];
+        private static readonly IReadOnlyList<string> CapabilityLadder = DssHarness.Core.Agents.AgentProviders.EffortLevels;
 
         private void AgentRules(
             DssHarness.Core.Agents.AgentProviders providers,
@@ -2808,9 +2808,9 @@ public static class WorkflowValidator
         /// </summary>
         private static string Nearest(DssHarness.Core.Configuration.AgentModelConfig model, string asked)
         {
-            var at = Array.IndexOf(CapabilityLadder, asked);
+            var at = CapabilityLadder.ToList().IndexOf(asked);
 
-            foreach (var level in CapabilityLadder.Skip(at < 0 ? CapabilityLadder.Length : at))
+            foreach (var level in CapabilityLadder.Skip(at < 0 ? CapabilityLadder.Count : at))
             {
                 if (model.Efforts.Contains(level, StringComparer.Ordinal))
                 {

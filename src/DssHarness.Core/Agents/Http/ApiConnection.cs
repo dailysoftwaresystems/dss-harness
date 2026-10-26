@@ -226,7 +226,19 @@ public sealed class ApiConnection : IDisposable
 /// <param name="Address">Where it is posted.</param>
 /// <param name="Headers">Its headers beside the body's type and the stream asked for: its key among them, which nothing here writes anywhere.</param>
 /// <param name="Body">Its body, as JSON.</param>
-public sealed record ApiPost(Uri Address, IReadOnlyList<KeyValuePair<string, string>> Headers, byte[] Body);
+public sealed record ApiPost(Uri Address, IReadOnlyList<KeyValuePair<string, string>> Headers, byte[] Body)
+{
+    /// <summary>The address of <paramref name="path"/> under a provider's <c>api</c>: one slash between them, however the api ends.</summary>
+    /// <param name="api">The provider's <c>api</c>, an absolute address.</param>
+    /// <param name="path">The path under it.</param>
+    public static Uri Under(string api, string path)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+        ArgumentNullException.ThrowIfNull(path);
+
+        return new Uri($"{api.TrimEnd('/')}/{path}", UriKind.Absolute);
+    }
+}
 
 /// <summary>What an API answered a request with, as it came.</summary>
 public abstract record ApiEvent

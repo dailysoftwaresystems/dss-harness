@@ -211,3 +211,16 @@ internal static class ClaudeApiFixtures
             ("message_stop", """{"type":"message_stop"}"""),
         ];
 }
+
+/// <summary>Z.AI's stored answers (<c>fixtures/zai-api</c>): what the probe met live, and what it cannot ask for, written in its shape.</summary>
+internal static class ZaiApiFixtures
+{
+    /// <summary>The folder the stored answers are in.</summary>
+    public static string Folder => Path.Combine(Prose.RepositoryRoot(), "tests", "dss-harness-test", "fixtures", "zai-api");
+
+    /// <summary>The stored answer or body <paramref name="name"/>.</summary>
+    public static string Read(string name) => File.ReadAllText(Path.Combine(Folder, name));
+
+    /// <summary>The stored answer <paramref name="name"/>, streamed <paramref name="chunk"/> bytes at a time.</summary>
+    public static ApiReply Reply(string name, int chunk = 5) => ApiReply.Stream(Read(name), chunk);
+}

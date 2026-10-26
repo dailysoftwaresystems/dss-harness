@@ -61,6 +61,11 @@ public interface IChatProvider
 /// Whether the step has a model after this one to go on with, so a request the model declines is to leave it a credit,
 /// where the provider gives one (<see cref="ChatTurn.Credit"/>).
 /// </param>
+/// <param name="ShortenedBefore">
+/// Where the provider began sending the conversation shortened (<see cref="ChatPart.Shortened"/>): the messages before
+/// this one go out in the provider's short form, as every request of the conversation since sent them; null where it
+/// never began.
+/// </param>
 public sealed record ChatRequest(
     string Model,
     string? Effort,
@@ -70,7 +75,8 @@ public sealed record ChatRequest(
     long MaxOutputTokens,
     AgentKey? Key,
     AgentOutput? Output,
-    bool Credit = false);
+    bool Credit = false,
+    int? ShortenedBefore = null);
 
 /// <summary>One part of what a request answers, in the order it came.</summary>
 public abstract record ChatPart
@@ -96,6 +102,15 @@ public abstract record ChatPart
     /// <summary>Something the provider says of the request that is none of the answer's: what it cleared of the context, what it sent shortened.</summary>
     /// <param name="Message">What it says.</param>
     public sealed record Notice(string Message) : ChatPart;
+
+    /// <summary>
+    /// The provider sends the messages before <paramref name="Before"/> shortened from this request on, to keep the
+    /// conversation within its model's context: the loop stores the point with the conversation and gives it with every
+    /// later request of it (<see cref="ChatRequest.ShortenedBefore"/>), a step that goes on in it among them, so each
+    /// sends what the last did and the cache misses once. Nothing stored is changed: only what is sent is shortened.
+    /// </summary>
+    /// <param name="Before">The first message sent whole, by its place in the conversation.</param>
+    public sealed record Shortened(int Before) : ChatPart;
 
     /// <summary>A fragment of the answer's text.</summary>
     /// <param name="Fragment">The fragment.</param>

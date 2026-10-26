@@ -282,42 +282,4 @@ public sealed class AgentModelTests
         Assert.NotNull(resolved);
         Assert.Empty(WorkflowValidator.Validate(WorkflowTemplates.ShippedDefinition(), hasCommitTemplate: false, files: null, resolved));
     }
-
-    /// <summary>The line of each of the shipped workflow's <c>glm-5.3</c> effort entries, by its index in the file.</summary>
-    public static TheoryData<int> GlmEffortEntries()
-    {
-        var lines = WorkflowTemplates.TextOf("implementation.yml")!.Split('\n');
-
-        return [.. Enumerable.Range(0, lines.Length).Where(index => lines[index].TrimStart().StartsWith("glm-5.3:", StringComparison.Ordinal))];
-    }
-
-    /// <summary>
-    /// The shipped workflow fails V38 with any one of its <c>glm-5.3: max</c> entries taken out - each of them, alone:
-    /// GLM 5.3 would run at the xhigh <c>all</c> gives it, which it does not take, and the one refusal names the level to
-    /// give it. Every entry is one a step needs, none a level the check would let go.
-    /// </summary>
-    [Theory]
-    [MemberData(nameof(GlmEffortEntries))]
-    public void TheShippedWorkflow_FailsWithAnyOneOfItsGlmMaxEntriesTakenOut(int at)
-    {
-        var (resolved, problems) = AgentProviders.Resolve(DefaultConfigFactory.Create([], "windows", "x64"));
-
-        Assert.Empty(problems);
-
-        var lines = WorkflowTemplates.TextOf("implementation.yml")!.Split('\n');
-
-        Assert.Equal("glm-5.3: max    # GLM 5.3, which takes no xhigh", lines[at].Trim());
-
-        var parsed = WorkflowFileParser.Parse("implementation.yml", string.Join("\n", lines.Where((_, index) => index != at)));
-        var refusal = Assert.Single(WorkflowValidator.Validate(parsed, hasCommitTemplate: false, files: WorkflowTemplates.TextOf, resolved));
-
-        Assert.Matches(
-            @"^workflow 'implementation' step '[a-z.\-]+' runs 'glm-5\.3' \(tier '(best|high|balanced|fast)'\) at effort 'xhigh', which it does not take\. It takes: low, high, max\. Give it a level of its own under effort: glm-5\.3: max$",
-            refusal);
-    }
-
-    /// <summary>The shipped workflow holds its thirteen glm-5.3 entries, so the theory above takes each one out.</summary>
-    [Fact]
-    public void TheShippedWorkflow_HoldsItsThirteenGlmEffortEntries()
-        => Assert.Equal(13, GlmEffortEntries().Count);
 }

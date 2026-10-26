@@ -153,6 +153,35 @@ public sealed class ToolLoopTests : IDisposable
     }
 
     /// <summary>
+    /// Where the provider says it began sending the conversation shortened is stored with it, which a notice says once,
+    /// and given with every later request - the one asked again after a failure, and a later step's that goes on in it,
+    /// among them; the first point holds, and a later one the provider says is let go of.
+    /// </summary>
+    [Fact]
+    public async Task WhereTheProviderBeganSendingTheConversationShortened_IsKept_ForEveryLaterRequest()
+    {
+        Write("a.txt", "alpha");
+        _chat.Answer(FakeChat.Calling(View("c1", "a.txt")))
+            .Reply(new ChatPart.Shortened(2), new ChatPart.Failed(new ChatFailure(ChatFailureKind.Transient, "overloaded")))
+            .Answer(FakeChat.Calling(View("c2", "a.txt")))
+            .Answer(FakeChat.Said("first"));
+
+        var first = await Ran(Run());
+
+        _chat.Reply(new ChatPart.Shortened(4), new ChatPart.Began(FakeChat.Model), new ChatPart.Answered(FakeChat.Said("second")));
+
+        var second = await Ran(Run(userPrompt: "the next task", conversation: new AgentSessionRef("claude-api", "anthropic", first.Session!)));
+
+        Assert.Equal((AgentRunStatus.Completed, AgentRunStatus.Completed), (first.Status, second.Status));
+        Assert.Equal([null, null, 2, 2, 2], _chat.Requests.Select(request => request.ShortenedBefore));
+        Assert.Equal("{\"before\":2}", File.ReadAllText(Path.Combine(_sessions, first.Session!, StoredConversation.ShortenedFileName)));
+        Assert.Equal(
+            $"The conversation {first.Session} is sent shortened before message 2 from now on, to keep it within the context of '{FakeChat.Model}'; what is stored stays whole.",
+            Assert.Single(_events.All.OfType<Notice>(), notice => notice.Text.Contains("is sent shortened", StringComparison.Ordinal)).Text);
+        Assert.Equal(_chat.Requests[3].Messages, _chat.Requests[4].Messages.Take(_chat.Requests[3].Messages.Count));
+    }
+
+    /// <summary>
     /// An answer cut off at its length and calling no tool is stored and nudged on, twice at most, and the answer is every
     /// piece of it; a third cut ends the run truncated.
     /// </summary>

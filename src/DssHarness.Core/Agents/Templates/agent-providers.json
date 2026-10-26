@@ -30,7 +30,7 @@
       "currency": "USD", "readOn": "2026-10-12", "source": "https://docs.z.ai/guides/overview/pricing",
       "models": [
         { "code": "glm-5.3", "name": "GLM 5.3", "tiers": ["best", "high", "balanced", "fast"],
-          "efforts": ["low", "high", "max"], "contextTokens": 1000000, "maxOutputTokens": 131072,
+          "efforts": ["low", "medium", "high", "xhigh", "max"], "contextTokens": 1000000, "maxOutputTokens": 131072,
           "priceInputMiss": 1.4, "priceInputHit": 0.26, "priceOutput": 4.4 }
       ]
     }

@@ -215,6 +215,11 @@ public static class ServiceRegistration
             provider.GetRequiredService<Agents.Runtime.AgentToolHost>(),
             provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<Agents.Http.ApiConnection>()));
+        services.AddSingleton<IAgentClient>(provider => new Agents.ZaiApi.ZaiApiClient(
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<Agents.Runtime.AgentToolHost>(),
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<Agents.Http.ApiConnection>()));
         services.AddSingleton<IAgentRunner, AgentRunner>();
 
         // The harness's own tools, built for the API clients to give their agents and served to Claude Code's through the

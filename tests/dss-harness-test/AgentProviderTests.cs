@@ -348,9 +348,10 @@ public sealed class AgentProviderTests
     }
 
     /// <summary>
-    /// The claude-api client's own keys - its tries, its longest wait, its cache's lifetime, the fields merged into its
-    /// requests and its betas - are refused on any other client, and held to what each can be: the API's own fallback
-    /// never asked for by either of the last two.
+    /// The API clients' keys are each held to the clients it is of - their tries, their longest wait and the fields merged
+    /// into their requests both API clients', the cache's lifetime and the betas claude-api's, keeping the reasoning glm's
+    /// - and to what each can be: the API's own fallback never asked for by claude-api, and no field either client sends
+    /// itself set by its requestExtras.
     /// </summary>
     [Fact]
     public void TheApiClientsKeys_AreItsAlone_AndHeldToWhatEachCanBe()
@@ -359,18 +360,37 @@ public sealed class AgentProviderTests
         var api = Provider(name: "anthropic", type: "anthropic", api: "https://api.anthropic.com", key: "ANTHROPIC_API_KEY", client: ClaudeApiClient, models: [Model(code: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", efforts: ["low", "high"])]);
 
         Exactly(
-            Refused(new() { ["claude-code"] = new AgentClientConfig { MaxRetries = 2, MaxRetryWaitSeconds = 30, CacheTtl = "1h", RequestExtras = extras.RootElement.Clone(), Betas = ["b"] } }, Anthropic()),
-            "agentClients 'claude-code' names maxRetries, a key of the claude-api client alone: how many times a failed request is asked again",
-            "agentClients 'claude-code' names maxRetryWaitSeconds, a key of the claude-api client alone: the longest wait before a failed request is asked again",
+            Refused(new() { ["claude-code"] = new AgentClientConfig { MaxRetries = 2, MaxRetryWaitSeconds = 30, CacheTtl = "1h", RequestExtras = extras.RootElement.Clone(), Betas = ["b"], PreserveThinking = true } }, Anthropic()),
+            "agentClients 'claude-code' names maxRetries, a key of the API clients alone (claude-api, glm): how many times a failed request is asked again",
+            "agentClients 'claude-code' names maxRetryWaitSeconds, a key of the API clients alone (claude-api, glm): the longest wait before a failed request is asked again",
+            "agentClients 'claude-code' names requestExtras, a key of the API clients alone (claude-api, glm): the fields merged into every request's body",
             "agentClients 'claude-code' names cacheTtl, a key of the claude-api client alone: how long what a request caches is kept",
-            "agentClients 'claude-code' names requestExtras, a key of the claude-api client alone: the fields merged into every request's body",
-            "agentClients 'claude-code' names betas, a key of the claude-api client alone: the beta headers sent beside the tool's own");
+            "agentClients 'claude-code' names betas, a key of the claude-api client alone: the beta headers sent beside the tool's own",
+            "agentClients 'claude-code' names preserveThinking, a key of the glm client alone: whether Z.AI keeps the model's reasoning across turns");
+        Exactly(
+            Refused(new() { [ClaudeApiClient] = new AgentClientConfig { PreserveThinking = false } }, api),
+            "agentClients 'claude-api' names preserveThinking, a key of the glm client alone: whether Z.AI keeps the model's reasoning across turns");
+
+        using var zaiExtras = System.Text.Json.JsonDocument.Parse("""{"user_id":"u1","fallbacks":"default","model":"x","thinking":{"clear_thinking":true}}""");
+
+        Exactly(
+            Refused(new() { [Glm] = new AgentClientConfig { MaxRetries = -1, MaxRetryWaitSeconds = 0, CacheTtl = "5m", RequestExtras = zaiExtras.RootElement.Clone(), Betas = ["b"] } }, Provider()),
+            "agentClients 'glm' names cacheTtl, a key of the claude-api client alone: how long what a request caches is kept",
+            "agentClients 'glm' names betas, a key of the claude-api client alone: the beta headers sent beside the tool's own",
+            "agentClients 'glm' maxRetries is -1; how many times a failed request is asked again is none or more",
+            "agentClients 'glm' maxRetryWaitSeconds is 0; the longest wait before a failed request is asked again is a second or more",
+            "agentClients 'glm' requestExtras.model is refused: the tool sends it itself",
+            "agentClients 'glm' requestExtras.thinking.clear_thinking is refused: the tool sends it itself");
+
+        using var zaiFine = System.Text.Json.JsonDocument.Parse("""{"user_id":"u1"}""");
+
+        Assert.Empty(Refused(new() { [Glm] = new AgentClientConfig { MaxRetries = 0, MaxRetryWaitSeconds = 1, PreserveThinking = true, RequestExtras = zaiFine.RootElement.Clone() } }, Provider()));
         Exactly(
             Refused(new() { [ClaudeApiClient] = new AgentClientConfig { MaxRetries = -1, MaxRetryWaitSeconds = 0, CacheTtl = "1d", RequestExtras = extras.RootElement.Clone(), Betas = ["a b", "server-side-fallback-2026-01-01", "x", "x", ""] } }, api),
             "agentClients 'claude-api' maxRetries is -1; how many times a failed request is asked again is none or more",
             "agentClients 'claude-api' maxRetryWaitSeconds is 0; the longest wait before a failed request is asked again is a second or more",
-            "agentClients 'claude-api' cacheTtl '1d' is none of: 5m, 1h",
             "agentClients 'claude-api' requestExtras.fallbacks is refused: no request carries fallbacks, for the engine's fallback is the only one a step has",
+            "agentClients 'claude-api' cacheTtl '1d' is none of: 5m, 1h",
             "agentClients 'claude-api' betas 'a b' is no beta's name: one word, sent in a header beside the tool's own",
             "agentClients 'claude-api' betas 'server-side-fallback-2026-01-01' is refused: the API's own fallback is never asked for, for the engine's fallback is the only one a step has",
             "agentClients 'claude-api' betas '' is no beta's name: one word, sent in a header beside the tool's own",
@@ -385,6 +405,8 @@ public sealed class AgentProviderTests
     }
 
     private const string ClaudeApiClient = Core.Agents.ClaudeApi.ClaudeApiClient.ClientName;
+
+    private const string Glm = Core.Agents.ZaiApi.ZaiApiClient.ClientName;
 
     /// <summary>balanceKeyUsage is refused where it is on and a provider with two keys or more lists a model with no price; one key is nothing to balance, and off is never refused.</summary>
     [Fact]
@@ -499,7 +521,7 @@ public sealed class AgentProviderTests
     public void AModelsEffortsAndSizes_AreRefusedWhereTheyDoNotRead()
     {
         var (_, efforts) = Resolve([Provider(models: [Model(efforts: ["low", "turbo"])])]);
-        Exactly(efforts, @"providers[0] 'zai' model 'glm-5.3' takes effort 'turbo', which its client 'glm' cannot say. It can: low, high, max");
+        Exactly(efforts, @"providers[0] 'zai' model 'glm-5.3' takes effort 'turbo', which its client 'glm' cannot say. It can: low, medium, high, xhigh, max");
 
         var (_, none) = Resolve([Provider(models: [Model(efforts: [])])]);
         Exactly(none, @"providers[0] 'zai' model 'glm-5.3' takes no efforts; a model's entry names the efforts it takes, each one of its client's levels");

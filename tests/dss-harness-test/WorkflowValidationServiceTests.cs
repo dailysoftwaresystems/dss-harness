@@ -53,7 +53,7 @@ public sealed class WorkflowValidationServiceTests
     /// <summary>
     /// The implementation workflow, initialized into a repository and declared in its config, passes its check: the one
     /// line says what it is, and under it each reason step's models and the level each runs at - the plan's own among
-    /// them, xhigh on Fable 5.1 and max on GLM 5.3 - and the outcome says every one checked.
+    /// them, xhigh on Fable 5.1 and on GLM 5.3 - and the outcome says every one checked.
     /// </summary>
     [Fact]
     public async Task TheImplementationWorkflow_InitializedIntoARepository_PassesItsCheck()
@@ -65,7 +65,7 @@ public sealed class WorkflowValidationServiceTests
 
         Assert.True(report.Passed);
         Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", report.Lines[0]);
-        Assert.Contains("step 'planning.plan' (best): claude-fable-5-1 at xhigh, glm-5.3 at max", report.Lines);
+        Assert.Contains("step 'planning.plan' (best): claude-fable-5-1 at xhigh, glm-5.3 at xhigh", report.Lines);
         Assert.Contains("step 'intake.triage' (high): claude-opus-5-5 at high, glm-5.3 at high", report.Lines);
 
         // Whether each model a step may run on has a price, and when its provider's numbers were read: every model of

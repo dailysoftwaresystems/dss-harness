@@ -39,9 +39,6 @@ public static partial class ClaudeApiFailures
     /// <summary>What the API says of a request whose prompt its model's context cannot hold.</summary>
     public const string PromptTooLong = "prompt is too long";
 
-    /// <summary>The most of a body that is no error the API wrote said in a failure: the start of what came.</summary>
-    public const int MostSaid = 300;
-
     /// <summary>What a request the API refused is, as the loop acts on it.</summary>
     /// <param name="refused">The refusal: its status, its body, the wait it named.</param>
     /// <param name="first">Whether the request was its conversation's first.</param>
@@ -52,10 +49,9 @@ public static partial class ClaudeApiFailures
         ArgumentNullException.ThrowIfNull(model);
 
         var (type, message, request, code) = Read(refused.Body);
-        var status = refused.Status.ToString(CultureInfo.InvariantCulture);
         var said = type is null
-            ? $"the API answered {status}{(refused.Body.Length > 0 ? $": {Start(refused.Body)}" : " with nothing said")}"
-            : $"the API answered {status} {type}: {message}{(request is null ? string.Empty : $" (request {request})")}";
+            ? ApiAnswers.Answered(refused.Status, refused.Body)
+            : ApiAnswers.Refusal(refused.Status, type, message, request);
 
         return Classed(refused.Status, type, code, message ?? string.Empty, said, refused.RetryAfter, first, model);
     }
@@ -69,18 +65,10 @@ public static partial class ClaudeApiFailures
         ArgumentNullException.ThrowIfNull(data);
 
         var (type, message, request, code) = Read(data);
-        var said = $"the API's stream failed: {type ?? "an error"}: {message ?? Start(data)}{(request is null ? string.Empty : $" (request {request})")}";
+        var said = ApiAnswers.StreamFailure(type, message, data, request);
 
         return Classed(null, type, code, message ?? string.Empty, said, null, first, model);
     }
-
-    /// <summary>A request that never reached the API: the network failed, which is the service failing for now.</summary>
-    /// <param name="why">What the network said.</param>
-    public static ChatFailure Unreached(string why) => new(ChatFailureKind.Transient, $"the API could not be reached: {why}");
-
-    /// <summary>An answer whose stream was cut part way: the service failing for now.</summary>
-    /// <param name="why">What the network said.</param>
-    public static ChatFailure Cut(string why) => new(ChatFailureKind.Transient, $"the answer's stream was cut: {why}");
 
     /// <summary>
     /// The failure of a status - none for an error of a stream - and an error's type and the code its details name, said as
@@ -103,7 +91,8 @@ public static partial class ClaudeApiFailures
             (400, _) or (null, "invalid_request_error") when first => new(
                 ChatFailureKind.Unserved,
                 $"{said}; if the request itself is not at fault, the organization this key belongs to is not given '{model}' - a model that needs 30-day data retention is refused this way where the organization keeps less - and another model can be put first under its tier in tierConfig, or named on the step"),
-            (408 or 409 or >= 500, _) or (null, "overloaded_error" or "api_error" or "timeout_error") => new(ChatFailureKind.Transient, said, retryAfter),
+            ({ } failing, _) when ApiAnswers.FailsForNow(failing) => new(ChatFailureKind.Transient, said, retryAfter),
+            (null, "overloaded_error" or "api_error" or "timeout_error") => new(ChatFailureKind.Transient, said, retryAfter),
             _ => new(ChatFailureKind.Fatal, said),
         };
 
@@ -121,10 +110,10 @@ public static partial class ClaudeApiFailures
             }
 
             return (
-                Text(error, "type"),
-                Text(error, "message"),
-                Text(root, "request_id"),
-                error.TryGetProperty("details", out var details) && details.ValueKind == JsonValueKind.Object ? Text(details, "error_code") : null);
+                ApiAnswers.Text(error, "type"),
+                ApiAnswers.Text(error, "message"),
+                ApiAnswers.Text(root, "request_id"),
+                ApiAnswers.Member(error, "details") is { } details ? ApiAnswers.Text(details, "error_code") : null);
         }
         catch (JsonException)
         {
@@ -141,15 +130,4 @@ public static partial class ClaudeApiFailures
 
     [GeneratedRegex(@"regain access on (?<date>\d{4}-\d{2}-\d{2}) at (?<time>\d{2}:\d{2}) UTC", RegexOptions.CultureInvariant)]
     private static partial Regex RegainsAccess();
-
-    private static string? Text(JsonElement value, string name)
-        => value.TryGetProperty(name, out var member) && member.ValueKind == JsonValueKind.String ? member.GetString() : null;
-
-    /// <summary>The start of a body that is no error the API wrote, on one line.</summary>
-    private static string Start(string body)
-    {
-        var line = string.Join(' ', body.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-
-        return line.Length <= MostSaid ? line : $"{line[..MostSaid]}...";
-    }
 }

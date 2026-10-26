@@ -10,7 +10,7 @@ namespace DssHarness.Core.Agents;
 /// <param name="Providers">Each provider the configuration declares, in the order it lists them.</param>
 /// <param name="BalanceKeyUsage">Whether <c>balanceKeyUsage</c> is on: whether the engine, when it runs a run's steps, is to balance each provider's keys by what each spent.</param>
 /// <param name="Tiers">Each tier the configuration defines, with its models in the order they are tried.</param>
-/// <param name="Clients">Each client a provider names, with how it signs in and the names it appoints.</param>
+/// <param name="Clients">Each client a provider names that signs in, with how it signs in and the names it appoints; an API client, which signs each request with its provider's key, is none of them.</param>
 /// <param name="Settings">Each setting a client reads from the slot, by the name it is read under, with whether the slot holds it.</param>
 /// <param name="Sources">Each web-search source that is sent a variable of the slot as its key, with whether the slot holds it: none is needed.</param>
 /// <param name="Unappointed">The names the slot holds that nothing appoints, in the order their files are read.</param>
@@ -89,7 +89,7 @@ public sealed record AgentTierListing(string Name, IReadOnlyList<(string Code, s
 /// <summary>
 /// One client as the listing holds it: how it signs in, and the names it appoints with whether the slot holds each -
 /// none for a client that signs in with the machine's login, its one token's name for one that signs in with a token,
-/// its provider's keys for one that signs in with a key or signs each request with them (claude-api, glm).
+/// its provider's keys for one that signs in with a key.
 /// </summary>
 /// <param name="Name">The client's name, as its providers name it.</param>
 /// <param name="SignIn">How it signs in, said as the listing says it.</param>

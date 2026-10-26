@@ -129,7 +129,7 @@ public sealed class AgentProvidersService(
             {
                 clients.Add(new AgentClientListing(client, AgentAuth.Described(auth), [new AgentKeyListing(token, Holds(token))]));
             }
-            else if (auth == AgentAuth.ApiKey || client == "claude-api")
+            else if (auth == AgentAuth.ApiKey)
             {
                 foreach (var provider in config.Providers.Where(provider => provider.Client == client))
                 {

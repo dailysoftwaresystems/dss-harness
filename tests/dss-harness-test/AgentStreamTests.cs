@@ -496,6 +496,48 @@ public sealed class AgentStreamTests
         File.Delete(file);
     }
 
+    /// <summary>
+    /// Where the provider began sending a conversation shortened is written once, in one step, and read back with it: the
+    /// first point holds, one before the first message or past those stored is refused, and a record that names no point
+    /// among the messages stored was written by no writer of this tool's, so it refuses the open.
+    /// </summary>
+    [Fact]
+    public void WhereAConversationIsSentShortened_IsWrittenOnce_AndReadBackWithIt()
+    {
+        using var temp = new TempDirectory();
+        var directory = Path.Combine(temp.Path, "conv1");
+        var recording = new RecordingWrites(Disk());
+        var conversation = StoredConversation.Open(recording, directory, "the system prompt", "[]");
+        conversation.Append(["{\"role\": \"user\"}", "{\"role\": \"assistant\"}", "{\"role\": \"tool\"}"]);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => conversation.Shorten(0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => conversation.Shorten(4));
+        Assert.Null(conversation.ShortenedBefore);
+        Assert.True(conversation.Shorten(2));
+        Assert.False(conversation.Shorten(3));
+        Assert.False(conversation.Shorten(99));
+        Assert.Equal(2, conversation.ShortenedBefore);
+
+        conversation.Dispose();
+
+        var file = Path.Combine(directory, StoredConversation.ShortenedFileName);
+
+        Assert.Equal([Path.Combine(directory, StoredConversation.SystemFileName), Path.Combine(directory, StoredConversation.ToolsFileName), file], recording.Written);
+        Assert.Equal("{\"before\":2}", File.ReadAllText(file));
+
+        using (var again = StoredConversation.Open(Disk(), directory, "the system prompt", "[]"))
+        {
+            Assert.Equal(2, again.ShortenedBefore);
+        }
+
+        foreach (var record in new[] { "{\"before\":0}", "{\"before\":4}", "{\"before\":\"2\"}", "{\"at\":2}", "[2]", "not json" })
+        {
+            File.WriteAllText(file, record);
+
+            Assert.Throws<InvalidDataException>(() => StoredConversation.Open(Disk(), directory, "the system prompt", "[]"));
+        }
+    }
+
     /// <summary>How much of a sample is filled.</summary>
     private enum Fill
     {

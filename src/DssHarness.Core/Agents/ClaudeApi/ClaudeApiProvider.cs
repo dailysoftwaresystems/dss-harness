@@ -52,7 +52,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
             ["eager_input_streaming"] = true,
         })]);
 
-        return list.ToJsonString(ClaudeApiRequest.Json);
+        return list.ToJsonString(ApiBody.Json);
     }
 
     /// <inheritdoc/>
@@ -60,7 +60,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        return new JsonObject { ["role"] = "user", ["content"] = new JsonArray(TextBlock(text)) }.ToJsonString(ClaudeApiRequest.Json);
+        return new JsonObject { ["role"] = "user", ["content"] = new JsonArray(TextBlock(text)) }.ToJsonString(ApiBody.Json);
     }
 
     /// <inheritdoc/>
@@ -94,7 +94,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
             content.Add(TextBlock(message));
         }
 
-        return content.Count == 0 ? [] : [new JsonObject { ["role"] = "user", ["content"] = content }.ToJsonString(ClaudeApiRequest.Json)];
+        return content.Count == 0 ? [] : [new JsonObject { ["role"] = "user", ["content"] = content }.ToJsonString(ApiBody.Json)];
     }
 
     /// <inheritdoc/>
@@ -105,29 +105,10 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
         var post = new ApiPost(_endpoint, ClaudeApiRequest.Headers(request, _settings), ClaudeApiRequest.Body(request, _settings));
         var answer = new Answer(request, _settings);
 
-        await foreach (var happened in _connection.PostAsync(post, cancellationToken).ConfigureAwait(false))
+        await foreach (var part in ApiAnswers.ReadAsync(_connection, post, answer.Read, cancellationToken).ConfigureAwait(false))
         {
-            var heard = false;
-
-            foreach (var part in answer.Read(happened))
-            {
-                heard = true;
-                yield return part;
-
-                if (part is ChatPart.Answered or ChatPart.Failed)
-                {
-                    yield break;
-                }
-            }
-
-            // An event of no part - a ping, a block's end - is the answer not silent all the same.
-            if (!heard)
-            {
-                yield return new ChatPart.Heard();
-            }
+            yield return part;
         }
-
-        yield return new ChatPart.Failed(new ChatFailure(ChatFailureKind.Transient, "the answer's stream ended before its message did"));
     }
 
     private static JsonObject TextBlock(string text) => new() { ["type"] = "text", ["text"] = text };
@@ -149,15 +130,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
         private long _searches;
 
         /// <summary>The parts an event of the answer comes to; one that ends it - a turn or a failure - last.</summary>
-        public IEnumerable<ChatPart> Read(ApiEvent happened)
-            => happened switch
-            {
-                ApiEvent.Item item => Item(item),
-                ApiEvent.Refused refused => [new ChatPart.Failed(ClaudeApiFailures.Of(refused, _first, request.Model))],
-                ApiEvent.Unreached unreached => [new ChatPart.Failed(ClaudeApiFailures.Unreached(unreached.Why))],
-                ApiEvent.Cut cut => [new ChatPart.Failed(ClaudeApiFailures.Cut(cut.Why))],
-                _ => throw new InvalidOperationException($"'{happened.GetType().Name}' is no event a connection yields."),
-            };
+        public IEnumerable<ChatPart> Read(ApiEvent happened) => ApiAnswers.Parts(happened, Item, refused => ClaudeApiFailures.Of(refused, _first, request.Model));
 
         private IEnumerable<ChatPart> Item(ApiEvent.Item item)
         {
@@ -193,7 +166,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
 
         private IEnumerable<ChatPart> Started(JsonElement data)
         {
-            if (!data.TryGetProperty("message", out var message) || Text(message, "model") is not { Length: > 0 } model)
+            if (!data.TryGetProperty("message", out var message) || ApiAnswers.Text(message, "model") is not { Length: > 0 } model)
             {
                 return [Failed(ChatFailureKind.Transient, "the answer's stream began with no model named")];
             }
@@ -211,7 +184,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
 
         private IEnumerable<ChatPart> BlockStarted(JsonElement data)
         {
-            if (!data.TryGetProperty("content_block", out var start) || start.ValueKind != JsonValueKind.Object || Text(start, "type") is not { } type)
+            if (!data.TryGetProperty("content_block", out var start) || start.ValueKind != JsonValueKind.Object || ApiAnswers.Text(start, "type") is not { } type)
             {
                 return [Failed(ChatFailureKind.Transient, "the answer's stream began a block with no type")];
             }
@@ -231,7 +204,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
 
             if (type == Block.ToolUse && (block.Id is not { Length: > 0 } || block.Name is not { Length: > 0 }))
             {
-                return [Failed(ChatFailureKind.Transient, "the answer's stream began a call with no id or no tool named")];
+                return [ApiAnswers.CallUnnamed()];
             }
 
             _blocks.Add(block);
@@ -241,7 +214,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
 
         private IEnumerable<ChatPart> Delta(JsonElement data)
         {
-            if (Index(data) is not { } at || at < 0 || at >= _blocks.Count || !data.TryGetProperty("delta", out var delta) || Text(delta, "type") is not { } type)
+            if (Index(data) is not { } at || at < 0 || at >= _blocks.Count || !data.TryGetProperty("delta", out var delta) || ApiAnswers.Text(delta, "type") is not { } type)
             {
                 return [Failed(ChatFailureKind.Transient, "the answer's stream sent a delta of no block it began")];
             }
@@ -249,10 +222,10 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
             var block = _blocks[at];
             var fragment = type switch
             {
-                "text_delta" when block.Type == Block.Text => Text(delta, "text"),
-                "thinking_delta" when block.Type == Block.Thinking => Text(delta, "thinking"),
-                "signature_delta" when block.Type == Block.Thinking => Text(delta, "signature"),
-                "input_json_delta" when block.Type == Block.ToolUse => Text(delta, "partial_json"),
+                "text_delta" when block.Type == Block.Text => ApiAnswers.Text(delta, "text"),
+                "thinking_delta" when block.Type == Block.Thinking => ApiAnswers.Text(delta, "thinking"),
+                "signature_delta" when block.Type == Block.Thinking => ApiAnswers.Text(delta, "signature"),
+                "input_json_delta" when block.Type == Block.ToolUse => ApiAnswers.Text(delta, "partial_json"),
                 _ => null,
             };
 
@@ -276,11 +249,11 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
         {
             var delta = data.TryGetProperty("delta", out var given) && given.ValueKind == JsonValueKind.Object ? given : default;
 
-            _stopReason = Text(delta, "stop_reason") ?? _stopReason;
+            _stopReason = ApiAnswers.Text(delta, "stop_reason") ?? _stopReason;
 
             // Why a request ended beyond its reason - a declined one's category and credit - and what the server cleared of
             // the conversation's context, wherever the event puts them: beside the reason, or beside the delta.
-            if ((Member(delta, "stop_details") ?? Member(data, "stop_details")) is { } details)
+            if ((ApiAnswers.Member(delta, "stop_details") ?? ApiAnswers.Member(data, "stop_details")) is { } details)
             {
                 _stopDetails = details.Clone();
             }
@@ -294,7 +267,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
             }
 
             // What the server cleared is said, and changes nothing of the stored history.
-            if ((Member(data, "context_management") ?? Member(delta, "context_management")) is { } context
+            if ((ApiAnswers.Member(data, "context_management") ?? ApiAnswers.Member(delta, "context_management")) is { } context
                 && context.TryGetProperty("applied_edits", out var edits)
                 && edits.ValueKind == JsonValueKind.Array)
             {
@@ -304,13 +277,13 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
             return parts;
         }
 
-        private static ChatPart.Failed Failed(ChatFailureKind kind, string message) => new(new ChatFailure(kind, message));
+        private static ChatPart.Failed Failed(ChatFailureKind kind, string message) => ApiAnswers.Failed(kind, message);
 
         private ChatPart Ended()
         {
             if (_model is not { } model)
             {
-                return Failed(ChatFailureKind.Transient, "the answer's stream ended a message it never began");
+                return ApiAnswers.NeverBegan();
             }
 
             ChatStop? stop = _stopReason switch
@@ -326,25 +299,24 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
 
             if (stop is not { } ended)
             {
-                return Failed(ChatFailureKind.Fatal, $"the answer ended for '{_stopReason ?? "no reason"}', which this tool does not know");
+                return ApiAnswers.EndedUnknown(_stopReason);
             }
 
             var calls = _blocks.Where(block => block.Type == Block.ToolUse).Select(block => new ChatCall(block.Id ?? string.Empty, block.Name ?? string.Empty, block.Input)).ToList();
 
-            // Calls the loop runs are whole: an input the stream left no JSON object is the answer failing part way, asked
-            // again - a turn cut off at its length is thrown away by the loop itself, its calls never run.
-            if (ended == ChatStop.Tools && calls.FirstOrDefault(call => !IsObject(call.Input)) is { } broken)
+            // Calls the loop runs are whole.
+            if (ApiAnswers.CallUnread(ended, calls) is { } unread)
             {
-                return Failed(ChatFailureKind.Transient, $"the answer's call {broken.Id} of '{broken.Name}' came with an input that is no JSON object");
+                return unread;
             }
 
             var message = new JsonObject { ["role"] = "assistant", ["content"] = new JsonArray([.. _blocks.Select(block => (JsonNode)block.Whole())]) };
             var thinking = _blocks.Where(block => block.Type == Block.Thinking).ToList();
-            var category = ended == ChatStop.Declined && _stopDetails is { } declined ? Text(declined, "category") : null;
+            var category = ended == ChatStop.Declined && _stopDetails is { } declined ? ApiAnswers.Text(declined, "category") : null;
 
             return new ChatPart.Answered(new ChatTurn(
                 ended,
-                message.ToJsonString(ClaudeApiRequest.Json),
+                message.ToJsonString(ApiBody.Json),
                 model,
                 string.Concat(_blocks.Where(block => block.Type == Block.Text).Select(block => block.Written)),
                 thinking.Count == 0 ? null : string.Concat(thinking.Select(block => block.Written)),
@@ -357,7 +329,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
 
         /// <summary>The credit a declined answer left, where it names a token.</summary>
         private AgentFallbackCredit? Credit()
-            => _stopDetails is { } details && Text(details, "fallback_credit_token") is { Length: > 0 } token
+            => _stopDetails is { } details && ApiAnswers.Text(details, "fallback_credit_token") is { Length: > 0 } token
                 ? new AgentFallbackCredit(token, details.TryGetProperty("fallback_has_prefill_claim", out var claim) && claim.ValueKind == JsonValueKind.True)
                 : null;
 
@@ -369,20 +341,20 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
                 return;
             }
 
-            _input = Count(usage, "input_tokens") ?? _input;
-            _output = Count(usage, "output_tokens") ?? _output;
-            _cacheRead = Count(usage, "cache_read_input_tokens") ?? _cacheRead;
-            _cacheWrite = Count(usage, "cache_creation_input_tokens") ?? _cacheWrite;
+            _input = ApiAnswers.Count(usage, "input_tokens") ?? _input;
+            _output = ApiAnswers.Count(usage, "output_tokens") ?? _output;
+            _cacheRead = ApiAnswers.Count(usage, "cache_read_input_tokens") ?? _cacheRead;
+            _cacheWrite = ApiAnswers.Count(usage, "cache_creation_input_tokens") ?? _cacheWrite;
 
             if (usage.TryGetProperty("cache_creation", out var written) && written.ValueKind == JsonValueKind.Object)
             {
-                _cacheWrite5m = Count(written, "ephemeral_5m_input_tokens") ?? _cacheWrite5m;
-                _cacheWrite1h = Count(written, "ephemeral_1h_input_tokens") ?? _cacheWrite1h;
+                _cacheWrite5m = ApiAnswers.Count(written, "ephemeral_5m_input_tokens") ?? _cacheWrite5m;
+                _cacheWrite1h = ApiAnswers.Count(written, "ephemeral_1h_input_tokens") ?? _cacheWrite1h;
             }
 
             if (usage.TryGetProperty("server_tool_use", out var server) && server.ValueKind == JsonValueKind.Object)
             {
-                _searches = Count(server, "web_search_requests") ?? _searches;
+                _searches = ApiAnswers.Count(server, "web_search_requests") ?? _searches;
             }
         }
 
@@ -399,21 +371,9 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
             return new AgentUsage(_input, _output, _cacheRead, fiveMinutes, anHour, _searches);
         }
 
-        private static long? Count(JsonElement value, string name)
-            => value.TryGetProperty(name, out var member) && member.ValueKind == JsonValueKind.Number && member.TryGetInt64(out var count) ? count : null;
-
-        /// <summary>The object <paramref name="value"/> holds as <paramref name="name"/>; null where it holds none.</summary>
-        private static JsonElement? Member(JsonElement value, string name)
-            => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var member) && member.ValueKind == JsonValueKind.Object ? member : null;
-
         /// <summary>The place of the block an event is of; null where it names none.</summary>
         private static int? Index(JsonElement data)
             => data.TryGetProperty("index", out var index) && index.ValueKind == JsonValueKind.Number && index.TryGetInt32(out var at) ? at : null;
-
-        private static string? Text(JsonElement value, string name)
-            => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var member) && member.ValueKind == JsonValueKind.String ? member.GetString() : null;
-
-        private static bool IsObject(string json) => Block.ObjectOf(json) is not null;
     }
 
     /// <summary>
@@ -444,7 +404,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
         public string Written => $"{Begun(Type == Text ? "text" : "thinking")}{_written}";
 
         /// <summary>A call's input as the API produced it: what its deltas wrote, else what it began with.</summary>
-        public string Input => _input.Length > 0 ? _input.ToString() : start["input"]?.ToJsonString(ClaudeApiRequest.Json) ?? "{}";
+        public string Input => _input.Length > 0 ? _input.ToString() : start["input"]?.ToJsonString(ApiBody.Json) ?? "{}";
 
         public void Add(string delta, string fragment)
         {
@@ -476,21 +436,8 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
         /// <summary>What a member of the block said as it began; empty where it said nothing.</summary>
         private string Begun(string member) => start[member] is JsonValue value && value.TryGetValue<string>(out var said) ? said : string.Empty;
 
-        /// <summary>The JSON object <paramref name="json"/> reads as; null where it reads as none.</summary>
-        public static JsonObject? ObjectOf(string json)
-        {
-            try
-            {
-                return JsonNode.Parse(json) as JsonObject;
-            }
-            catch (JsonException)
-            {
-                return null;
-            }
-        }
-
         /// <summary>A call's input as JSON, where what its deltas wrote reads as an object; the input it began with otherwise, which only a call cut off part way has.</summary>
         private JsonNode InputNode()
-            => (_input.Length > 0 ? ObjectOf(_input.ToString()) : null) ?? start["input"]?.DeepClone() ?? new JsonObject();
+            => (_input.Length > 0 ? ApiAnswers.ObjectOf(_input.ToString()) : null) ?? start["input"]?.DeepClone() ?? new JsonObject();
     }
 }

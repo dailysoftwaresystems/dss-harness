@@ -3070,8 +3070,8 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
-    /// The claude-api client's own keys are read from config.json as written - its extras as the JSON they are - and one
-    /// that sets what the tool sends itself is refused where the file is read, naming the file.
+    /// The API clients' keys are read from config.json as written - their extras as the JSON they are - and one that sets
+    /// what the tool sends itself is refused where the file is read, naming the file.
     /// </summary>
     [Fact]
     public void TheApiClientsKeys_AreReadAsWritten_AndRefusedWhereTheFileIsRead()
@@ -3101,6 +3101,18 @@ public sealed class ConfigStoreTests
         Assert.Equal(
             $"'{owned}' could not be read: agentClients 'claude-api' requestExtras.model is refused: the tool sends it itself",
             Assert.Throws<ConfigException>(() => CreateStore().Load(owned)).Message);
+
+        var glm = CreateStore().Load(temp.WriteFile(
+            "glm.json",
+            """{ "agentClients": { "glm": { "maxRetries": 1, "maxRetryWaitSeconds": 5, "preserveThinking": true, "requestExtras": { "user_id": "u1" } } } }""")).AgentClients["glm"];
+
+        Assert.Equal((1, 5, true, """{"user_id":"u1"}"""), (glm.MaxRetries, glm.MaxRetryWaitSeconds, glm.PreserveThinking, System.Text.Json.JsonSerializer.Serialize(glm.RequestExtras)));
+
+        var thinking = temp.WriteFile("thinking.json", """{ "agentClients": { "glm": { "requestExtras": { "thinking": { "clear_thinking": true } } } } }""");
+
+        Assert.Equal(
+            $"'{thinking}' could not be read: agentClients 'glm' requestExtras.thinking.clear_thinking is refused: the tool sends it itself",
+            Assert.Throws<ConfigException>(() => CreateStore().Load(thinking)).Message);
     }
 
     /// <summary>

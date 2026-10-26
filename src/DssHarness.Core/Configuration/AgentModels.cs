@@ -46,13 +46,14 @@ public sealed class AgentClientConfig
     public string? Executable { get; init; }
 
     /// <summary>
-    /// How many times a failed request is asked again (claude-api's key; <see cref="Agents.Loop.ToolLoopTerms.DefaultMaxRetries"/>
-    /// where nothing is said): past them a rate limit is the account at its limit, and a failing service fails the step.
+    /// How many times a failed request is asked again (a key of the API clients, claude-api and glm;
+    /// <see cref="Agents.Loop.ToolLoopTerms.DefaultMaxRetries"/> where nothing is said): past them a rate limit is the
+    /// account at its limit, and a failing service fails the step.
     /// </summary>
     public int? MaxRetries { get; init; }
 
     /// <summary>
-    /// The longest wait before a failed request is asked again, in seconds (claude-api's key;
+    /// The longest wait before a failed request is asked again, in seconds (a key of the API clients;
     /// <see cref="Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait"/> where nothing is said): a rate limit naming a longer one
     /// is the account at its limit, and a failing service naming one fails the step.
     /// </summary>
@@ -65,11 +66,17 @@ public sealed class AgentClientConfig
     public string? CacheTtl { get; init; }
 
     /// <summary>
-    /// Fields merged into every request's body (claude-api's key): one the tool does not send yet, sent before it learns
-    /// it - an object merged member by member into one the tool sends - and never one the tool sends itself, nor
-    /// <c>fallbacks</c>, which no request carries.
+    /// Fields merged into every request's body (a key of the API clients): one the tool does not send yet, sent before it
+    /// learns it - an object merged member by member into one the tool sends - and never one the tool sends itself, nor
+    /// the Claude API's <c>fallbacks</c>, which no request carries.
     /// </summary>
     public System.Text.Json.JsonElement? RequestExtras { get; init; }
+
+    /// <summary>
+    /// Whether Z.AI is asked to keep the model's reasoning across turns (glm's key; <c>thinking.clear_thinking: false</c>,
+    /// false where nothing is said): the reasoning is stored and sent back with each message either way.
+    /// </summary>
+    public bool? PreserveThinking { get; init; }
 
     /// <summary>
     /// Beta header values sent beside the ones the tool sends itself (claude-api's key) - never a

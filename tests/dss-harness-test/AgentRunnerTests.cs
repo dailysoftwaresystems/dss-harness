@@ -1125,7 +1125,7 @@ public sealed class AgentRunnerTests
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
         Assert.IsType<AgentRunner>(provider.GetRequiredService<IAgentRunner>());
-        Assert.Equal(["claude-code", "claude-api"], provider.GetServices<IAgentClient>().Select(client => client.Name));
+        Assert.Equal(["claude-code", "claude-api", "glm"], provider.GetServices<IAgentClient>().Select(client => client.Name));
     }
 
     /// <summary>The scripted work: a launch, a message with its delta.</summary>

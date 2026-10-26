@@ -38,6 +38,40 @@ public sealed record ToolLoopTerms(
 
     /// <summary>The longest wait before a request is asked again.</summary>
     public TimeSpan LongestWait => MaxRetryWait ?? DefaultMaxRetryWait;
+
+    /// <summary>The terms an API client works a run by: its entries' - the provider, the model, and the client's own tries and longest wait.</summary>
+    /// <param name="client">The client's key under <c>agentClients</c>.</param>
+    /// <param name="entries">The run's entries.</param>
+    public static ToolLoopTerms Of(string client, AgentEntries entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        return new ToolLoopTerms(
+            client,
+            entries.Provider,
+            entries.Model,
+            entries.Client?.MaxRetries ?? DefaultMaxRetries,
+            entries.Client?.MaxRetryWaitSeconds is { } seconds ? TimeSpan.FromSeconds(seconds) : null);
+    }
+
+    /// <summary>
+    /// Why <paramref name="run"/> may not start on an API client of <paramref name="kind"/> - its entries missing, of a
+    /// provider the client does not reach, of another provider than the run's, or at no absolute address - and null
+    /// where it may.
+    /// </summary>
+    /// <param name="run">The run.</param>
+    /// <param name="kind">The client's kind, as the tool builds it in.</param>
+    public static string? Unstartable(AgentRun run, AgentClientKind kind)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(kind);
+
+        return run.Entries is not { } entries ? "the run was given no entries of its provider, model and client, which every request is built from"
+            : !string.Equals(entries.Provider.Type, kind.ProviderType, StringComparison.Ordinal) ? $"the run's provider '{entries.Provider.Name}' is of type '{entries.Provider.Type}', and {kind.Name} reaches '{kind.ProviderType}' alone"
+            : run.Provider is { } named && !string.Equals(named, entries.Provider.Name, StringComparison.Ordinal) ? $"the run is of provider '{named}', and the entries it was given are provider '{entries.Provider.Name}''s"
+            : !Uri.TryCreate(entries.Provider.Api, UriKind.Absolute, out _) ? $"provider '{entries.Provider.Name}' api '{entries.Provider.Api}' is no absolute address"
+            : null;
+    }
 }
 
 /// <summary>
@@ -623,7 +657,7 @@ public sealed class ToolLoop(
                     return new Sent(Left: true);
                 }
 
-                var request = new ChatRequest(run.Model!, run.Effort, Conversation.SystemPrompt, Conversation.Tools, [.. Conversation.Messages(), .. _pending, .. _paused], _maxTokens, Key, run.Output, Credit: _goesOn);
+                var request = new ChatRequest(run.Model!, run.Effort, Conversation.SystemPrompt, Conversation.Tools, [.. Conversation.Messages(), .. _pending, .. _paused], _maxTokens, Key, run.Output, Credit: _goesOn, ShortenedBefore: Conversation.ShortenedBefore);
 
                 // The handoff turn is held to its bound, not to the step's time: it counts against none of the step's
                 // turns, budget or time.
@@ -672,6 +706,14 @@ public sealed class ToolLoop(
                                     break;
                                 case ChatPart.Notice notice:
                                     await Emit(new Notice(Masked(notice.Message))).ConfigureAwait(false);
+                                    break;
+                                case ChatPart.Shortened shortened:
+                                    // The first point holds: a provider that says another later is sending what it began with.
+                                    if (Conversation.Shorten(shortened.Before))
+                                    {
+                                        await Emit(new Notice($"The conversation {_session} is sent shortened before message {shortened.Before.ToString(CultureInfo.InvariantCulture)} from now on, to keep it within the context of '{terms.Model.Code}'; what is stored stays whole.")).ConfigureAwait(false);
+                                    }
+
                                     break;
                                 case ChatPart.Answered done:
                                     answered = done.Turn;

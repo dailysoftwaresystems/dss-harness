@@ -1667,7 +1667,7 @@ that ran (`ClaudeLine.CallResult.Ran`) one the engine was asked about and allowe
 with an `AgentAccountLimit`. Each client's denials, requests of the web and answers too large for
 their events are recorded by the one `AgentCallRecords` (`denials.jsonl`, `web.jsonl`,
 `tool-results/`). The harness's own tools, `Agents\Runtime\AgentToolRuntime`, are built for the
-API clients - `claude-api`, and `glm` next - each run's opened by `AgentToolHost.Open`, and serve
+API clients - `claude-api` and `glm` - each run's opened by `AgentToolHost.Open`, and serve
 the `claude-code` client the web's through the engine's tool server (`AgentToolServer`, opened by
 `AgentToolHost.Serve` for one launch: the server's tools alone, written to the launch's own
 `AgentCallRecords`, each call answered by `AgentToolRuntime.ServeAsync`, whose end the launch's
@@ -1705,7 +1705,9 @@ agent at work (`AgentMessages.TryTake`), the output check (`StructuredOutputGate
 (`AgentModelIds`, which the claude-code client holds its messages to too) and the conversation: `StoredConversation`
 under the agent's `sessions/<id>/` (`AgentRun.SessionsDirectory`, `OrchestratorLayout.SessionDirectoryIn`), each line a
 JSON array of the provider's messages written at a point where the history is whole, each message kept and sent back
-byte for byte. The first request asks for a quarter of the model's `maxOutputTokens` (`ToolLoop.FirstMaxTokens`), a turn
+byte for byte - and, where the provider begins sending it shortened (`ChatPart.Shortened`), the point kept beside it
+(`StoredConversation.Shorten`, `shortened.json`) and given with every later request (`ChatRequest.ShortenedBefore`), so
+each sends what the last did. The first request asks for a quarter of the model's `maxOutputTokens` (`ToolLoop.FirstMaxTokens`), a turn
 cut off while it called a tool, or before it wrote anything, doubling it. Every client ends a run in the same words, whatever its wire: a step that
 never began, a model nobody asked for, an answer outside its schema, a declined request and an account at its limit are
 each said by `AgentEndings`, and what a run used, by model, is counted by `AgentUsageTally`.
@@ -1722,6 +1724,22 @@ an exception - puts each block back together from its deltas, and keeps the answ
 `ClaudeApiFailures` is the one table of what each status and error type is to the loop. Its tests replay the answers
 under `tests/dss-harness-test/fixtures/claude-api/` through `ApiEndpoint`, a handler that stands in for the network
 and keeps every request as it was sent.
+
+The `glm` client is `Agents\ZaiApi\ZaiApiClient`: the same loop over `ZaiApiProvider`, built the same way from the
+run's entries (`ToolLoopTerms.Of`, `ToolLoopTerms.Unstartable`, which both API clients start by). What the two API
+clients' wires share has one owner each under `Agents\Http`: `ApiBody` writes a request's body - the tool's own members,
+the stored tools and messages written raw, a client's `requestExtras` merged and refused where they set an
+`OwnedMember` - and `ApiAnswers` reads a posted request's events into the loop's parts (`ApiAnswers.Parts`), says
+a refusal, a network that failed, a stream cut, an answer that never began, an ending it does not know and a call it
+cannot put back together in the same words for both, and reads JSON's members. `ZaiApiRequest` is the one owner of
+a Z.AI request - its body, its header, what the tool sends itself (`ZaiApiRequest.Owned`), the short form an older
+answer goes out in (`ZaiApiRequest.ShortAnswer`) - and `ZaiApiProvider` reads each chunk into the loop's parts, puts
+the message back together - its text, its reasoning and each call's arguments by the call's index - and owns the one
+rewrite of what is sent: past `ZaiApiProvider.ShortenAt` of the model's context it yields `ChatPart.Shortened` once,
+and past `ZaiApiProvider.FullAt` after that the context is full. `ZaiApiFailures` is the one table of Z.AI's codes
+(`ZaiApiFailures.Codes`) and of its statuses where it names none (`ZaiApiFailures.Statuses`), which the help says row by
+row. Its tests replay the
+answers under `tests/dss-harness-test/fixtures/zai-api/`, recorded live by `ZaiApiProbeTests` and curated.
 
 The harness's own web search is built under `Web\Search`: each kind of source an implementation of `IWebSearchKind` -
 pure, asking and reading only what it is handed - found by the one scan of the core (`CoreImplementations<T>`, which

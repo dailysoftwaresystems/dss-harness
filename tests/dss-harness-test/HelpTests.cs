@@ -169,9 +169,10 @@ public sealed partial class HelpTests
                 + "whether the tool installs and updates Claude Code with npm; auth, claude-code's alone, how it signs in (login, apiKey, "
                 + "oauthToken, authToken, login where nothing is said), and token the variable a token is held under; configDir and "
                 + "executable, claude-code's alone, the variables that hold a specific login's Claude Code directory and the program it "
-                + "starts (CLAUDE_CONFIG_DIR, CLAUDE_EXECUTABLE where none is named); maxRetries, maxRetryWaitSeconds, cacheTtl, "
-                + "requestExtras and betas, claude-api's alone, its tries and longest wait, how long its requests are cached, the "
-                + "fields merged into each one and the betas sent beside the tool's own; a client holds no "
+                + "starts (CLAUDE_CONFIG_DIR, CLAUDE_EXECUTABLE where none is named); maxRetries, maxRetryWaitSeconds and requestExtras, "
+                + "the API clients' (claude-api, glm), their tries, longest wait and the fields merged into each request; cacheTtl and "
+                + "betas, claude-api's alone, how long its requests are cached and the betas sent beside the tool's own; "
+                + "preserveThinking, glm's alone, whether Z.AI keeps the model's reasoning across turns; a client holds no "
                 + "model, size or price - contextTokens and maxOutputTokens are a model's ('help agent-clients')",
             config,
             StringComparison.Ordinal);
@@ -399,7 +400,7 @@ public sealed partial class HelpTests
         Assert.Contains("A key Claude Code reports invalid is passed over, and while the step has done no work the next key is given a new launch", prose, StringComparison.Ordinal);
         Assert.Contains(
             "the claude-code client below asks it of every call, the tool runtime below decides by it each call it runs - the web's of the claude-code client, served through "
-                + "the engine's tool server, and every call of the API clients, the claude-api client below and glm, which comes next - and no command of this build runs an agent yet.",
+                + "the engine's tool server, and every call of the API clients, the claude-api and glm clients below - and no command of this build runs an agent yet.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("a second layer, for the engine is asked about every other call and answers from this policy in its own process, and a call those rules refuse first is counted and recorded as Claude Code's own denial.", prose, StringComparison.Ordinal);
@@ -426,7 +427,7 @@ public sealed partial class HelpTests
                 + "alone in its turn); run_command (run, alone in its turn); web_fetch (web); web_search (web).",
             prose,
             StringComparison.Ordinal);
-        Assert.Contains("built for the API clients to give their agents in place of a client's own - the claude-api client below, and glm, which comes next - and serving the claude-code client the web's through the engine's tool server,", prose, StringComparison.Ordinal);
+        Assert.Contains("built for the API clients to give their agents in place of a client's own - the claude-api and glm clients below - and serving the claude-code client the web's through the engine's tool server,", prose, StringComparison.Ordinal);
         Assert.Contains("The run's reporter is given view_file, find_files, search_files, those that read, and no other.", prose, StringComparison.Ordinal);
         Assert.Contains("A replace or an insert needs its file viewed first, by its content: one that changed since is refused, nothing written, and an edit keeps the file's encoding (UTF-8 with or without its mark, UTF-16 by its mark), its line endings and whether it ends with a newline.", prose, StringComparison.Ordinal);
         Assert.Contains("a write inside a writable one and through no link below it (a link put in place between the check and the act is the known limit)", prose, StringComparison.Ordinal);
@@ -536,7 +537,7 @@ public sealed partial class HelpTests
         Assert.Contains("a call those rules refuse before the engine is asked is counted and recorded as Claude Code's own denial.", readme, StringComparison.Ordinal);
         Assert.Contains(
             "the tool runtime below decides by it each call it runs - the web's of the `claude-code` client, served through the engine's tool "
-                + "server, and every call of the API clients, the `claude-api` client below and `glm`, which comes next - and no command of this build runs an agent yet.",
+                + "server, and every call of the API clients, the `claude-api` and `glm` clients below - and no command of this build runs an agent yet.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -610,7 +611,15 @@ public sealed partial class HelpTests
         Assert.Contains("A turn is one answer of the agent's - a request the provider paused, or one thrown away and asked again, goes on as the same turn - counted against the step's `maxTurns` but a handoff turn;", readme, StringComparison.Ordinal);
         Assert.Contains("no request but the handoff turn's is sent once the step's maxBudgetUsd is spent, and a step held to a budget on a model missing a price of what its provider's requests are billed by - input, cache reads and output, and the cache writes of a provider whose requests write one, in the model's large-prompt set too where it has one - is never started, naming the key to fill.", prose, StringComparison.Ordinal);
         Assert.Contains("and a step held to a budget on a model missing a price of what its provider's requests are billed by - input, cache reads and output, and the cache writes of a provider whose requests write one, in the model's large-prompt set too where it has one - is never started, naming the key to fill.", readme, StringComparison.Ordinal);
-        Assert.Contains("The loop the claude-api and glm clients share (ToolLoop) runs a step of either over the provider each gives it - the Claude API's below, glm's next.", prose, StringComparison.Ordinal);
+        Assert.Contains("The loop the claude-api and glm clients share (ToolLoop) runs a step of either over the provider each gives it - the Claude API's and Z.AI's below.", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            $"a step that goes on in it sends what it began with; where a provider begins sending it shortened to keep it within its model's context, the point is kept beside it ({DssHarness.Core.Agents.StoredConversation.ShortenedFileName}) and given with every later request, a notice saying so once.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"a step that goes on in it sends what it began with; where a provider begins sending it shortened to keep it within its model's context, the point is kept beside it (`{DssHarness.Core.Agents.StoredConversation.ShortenedFileName}`) and given with every later request, a notice saying so once.",
+            readme,
+            StringComparison.Ordinal);
         Assert.Contains($"under the agent's {DssHarness.Core.Orchestration.OrchestratorLayout.SessionsDirectoryName}/<id>/, each message as it was sent and received", prose, StringComparison.Ordinal);
 
         Assert.Contains(
@@ -650,6 +659,9 @@ public sealed partial class HelpTests
             $"{nameof(DssHarness.Core.Agents.AgentMessages)}.{nameof(DssHarness.Core.Agents.AgentMessages.TryTake)}",
             $"{nameof(DssHarness.Core.Agents.AgentRun)}.{nameof(DssHarness.Core.Agents.AgentRun.SessionsDirectory)}",
             $"{nameof(DssHarness.Core.Orchestration.OrchestratorLayout)}.{nameof(DssHarness.Core.Orchestration.OrchestratorLayout.SessionDirectoryIn)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ChatPart)}.{nameof(DssHarness.Core.Agents.Loop.ChatPart.Shortened)}",
+            $"{nameof(DssHarness.Core.Agents.StoredConversation)}.{nameof(DssHarness.Core.Agents.StoredConversation.Shorten)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ChatRequest)}.{nameof(DssHarness.Core.Agents.Loop.ChatRequest.ShortenedBefore)}",
         })
         {
             Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
@@ -657,8 +669,8 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The claude-api client is said by the help and the README alike - its version, its betas, its cache, its five keys,
-    /// what each failure is - each name and number read from the type that holds it, and the architecture names its owners.
+    /// The claude-api client is said by the help and the README alike - its version, its betas, its cache, its keys, what
+    /// each failure is - each name and number read from the type that holds it, and the architecture names its owners.
     /// </summary>
     [Fact]
     public void TheClaudeApiClient_IsSaidByTheHelpAndTheDocuments()
@@ -679,7 +691,8 @@ public sealed partial class HelpTests
         Assert.Contains($"old tool uses cleared by the server as the context fills ({Clear}, under the {Context} beta), each clearing said in a notice;", prose, StringComparison.Ordinal);
         Assert.Contains("the system prompt and the conversation cached for agentClients.claude-api.cacheTtl (5m or 1h, 5m where nothing is said), so a budget needs the model's price of that cache's writes too: priceCacheWrite, or priceCacheWrite1h for an hour.", prose, StringComparison.Ordinal);
         Assert.Contains($"A step with a fallback that can go on here sends the {Credit} beta, and a request the model declines ends the step Refused, with its category and the credit the API gave for it on the result; no request carries fallbacks or a server-side-fallback-* beta,", prose, StringComparison.Ordinal);
-        Assert.Contains($"cacheTtl; and maxRetries and maxRetryWaitSeconds, the loop's tries and longest wait ({tries} and {wait} where nothing is said).", prose, StringComparison.Ordinal);
+        Assert.Contains("Two keys are claude-api's alone: betas, sent beside the tool's own, each one word and never the API's fallback's, and cacheTtl; three are both API clients':", prose, StringComparison.Ordinal);
+        Assert.Contains($"refused where it sets what the tool sends itself or, here, fallbacks; and maxRetries and maxRetryWaitSeconds, the loop's tries and longest wait ({tries} and {wait} where nothing is said).", prose, StringComparison.Ordinal);
         Assert.Contains("a 403, a 404, or a 400 answering a conversation's first request - a model the key's organization is not given, such as one that needs a data retention the organization does not keep - is a model the provider does not serve the key, naming it;", prose, StringComparison.Ordinal);
         Assert.Contains($"A spend limit reached - the organization's monthly cap, a 429 whose error names {DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}, or one the organization or a workspace set, a 400 that says so - is the key's limit, the step RateLimited at once until the date the API names; a 401 is a key refused, passed over for the next; a 402 the key's balance spent, the step RateLimited at once; a 429 the model's limit on that key, waited out within those tries and the step RateLimited past them;", prose, StringComparison.Ordinal);
         Assert.Contains("every request's usage - one that ended without its turn, failed, silent or left, by what it said it used so far - is counted at the model's prices,", prose, StringComparison.Ordinal);
@@ -691,7 +704,8 @@ public sealed partial class HelpTests
         Assert.Contains($"old tool uses cleared by the server as the context fills (`{Clear}`, under the `{Context}` beta), each clearing said in a notice;", readme, StringComparison.Ordinal);
         Assert.Contains("`agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said), so a budget needs the model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour.", readme, StringComparison.Ordinal);
         Assert.Contains($"A step with a fallback that can go on here sends the `{Credit}` beta, and a request the model declines ends the step `Refused`,", readme, StringComparison.Ordinal);
-        Assert.Contains($"`cacheTtl`; and `maxRetries` and `maxRetryWaitSeconds`, the loop's tries and longest wait ({tries} and {wait} where nothing is said).", readme, StringComparison.Ordinal);
+        Assert.Contains("Two keys are `claude-api`'s alone: `betas`, sent beside the tool's own, each one word and never the API's fallback's, and `cacheTtl`; three are both API clients':", readme, StringComparison.Ordinal);
+        Assert.Contains($"refused where it sets what the tool sends itself or, here, `fallbacks`; and `maxRetries` and `maxRetryWaitSeconds`, the loop's tries and longest wait ({tries} and {wait} where nothing is said).", readme, StringComparison.Ordinal);
         Assert.Contains("a 403, a 404, or a 400 answering a conversation's first request - a model the key's organization is not given, such as one that needs a data retention the organization does not keep - is a model the provider does not serve the key, naming it;", readme, StringComparison.Ordinal);
         Assert.Contains($"A spend limit reached - the organization's monthly cap, a 429 whose error names `{DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}`, or one the organization or a workspace set, a 400 that says so - is the key's limit, the step `RateLimited` at once until the date the API names; a 401 is a key refused, passed over for the next; a 402 the key's balance spent, the step `RateLimited` at once; a 429 the model's limit on that key, waited out within those tries and the step `RateLimited` past them;", readme, StringComparison.Ordinal);
         Assert.Contains("every request's usage - one that ended without its turn, failed, silent or left, by what it said it used so far - is counted at the model's prices,", readme, StringComparison.Ordinal);
@@ -715,6 +729,80 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The glm client is said by the help and the README alike - its request, its efforts, the reasoning it keeps, where
+    /// it sends a conversation shortened, its keys and each of Z.AI's codes from the one table of them - each name and
+    /// number read from the type that holds it, and the architecture names its owners.
+    /// </summary>
+    [Fact]
+    public void TheGlmClient_IsSaidByTheHelpAndTheDocuments()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+        var (shorten, full, whole) = (Percent(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.ShortenAt), Percent(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.FullAt), DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.WholeTurns);
+        const string Path = DssHarness.Core.Agents.ZaiApi.ZaiApiRequest.CompletionsPath;
+
+        Assert.Contains($"each request is posted to its provider's api with /{Path} after it, signed with a key of the provider's (Authorization: Bearer), and its answer streamed.", prose, StringComparison.Ordinal);
+        Assert.Contains($"each request is posted to its provider's `api` with `/{Path}` after it, signed with a key of the provider's (`Authorization: Bearer`), and its answer streamed.", readme, StringComparison.Ordinal);
+        Assert.Contains("the model's thinking on, the step's effort as reasoning_effort (low, medium, high, xhigh, max); and max_tokens - no sampling parameter or tool choice of the tool's own, which requestExtras may add, and no tool of Z.AI's, for the web is the harness's own.", prose, StringComparison.Ordinal);
+        Assert.Contains("the model's thinking on, the step's effort as `reasoning_effort` (`low`, `medium`, `high`, `xhigh`, `max`); and `max_tokens` - no sampling parameter or tool choice of the tool's own, which `requestExtras` may add, and no tool of Z.AI's, for the web is the harness's own.", readme, StringComparison.Ordinal);
+        Assert.Contains("unless agentClients.glm.preserveThinking is true (false where nothing is said), which keeps it (thinking.clear_thinking: false).", prose, StringComparison.Ordinal);
+        Assert.Contains("unless `agentClients.glm.preserveThinking` is true (false where nothing is said), which keeps it (`thinking.clear_thinking: false`).", readme, StringComparison.Ordinal);
+        Assert.Contains($"passes {shorten} of the model's contextTokens, the answers to the calls of every turn but the last {whole} that called tools go out in a short form that says so, from that request on - the calls and the reasoning as they were, and what is stored whole; past {full} after that, the context is exhausted (ContextExhausted).", prose, StringComparison.Ordinal);
+        Assert.Contains($"passes {shorten} of the model's `contextTokens`, the answers to the calls of every turn but the last {whole} that called tools go out in a short form that says so, from that request on - the calls and the reasoning as they were, and what is stored whole; past {full} after that, the context is exhausted (`ContextExhausted`).", readme, StringComparison.Ordinal);
+        Assert.Contains("and one is glm's alone: preserveThinking.", prose, StringComparison.Ordinal);
+        Assert.Contains("and one is `glm`'s alone: `preserveThinking`.", readme, StringComparison.Ordinal);
+
+        // Every row of the codes' table is said, in its order, with what the loop takes it for.
+        foreach (var row in DssHarness.Core.Agents.ZaiApi.ZaiApiFailures.Codes)
+        {
+            Assert.Contains($"{row.What} ({string.Join(", ", row.Codes)})", prose, StringComparison.Ordinal);
+            Assert.Contains($"{row.What} ({string.Join(", ", row.Codes)})", readme, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("a usage limit that names when it resets (1308, 1310, 1316, 1317, 1318, 1319, 1320, 1321) is the key's limit, the step RateLimited at once;", prose, StringComparison.Ordinal);
+        Assert.Contains("a model unknown, an API the key may not call or a plan without the model (1211, 1220, 1311) is a model the provider does not serve the key;", prose, StringComparison.Ordinal);
+        Assert.Contains("a plan that does not cover the call or has ended (1309, 1313, 1314, 1315) fails the step. A code that list does not hold is read by the status:", prose, StringComparison.Ordinal);
+        Assert.Contains("read by the status: a 401 is a key refused, passed over for the next; a 429 is the model's limit on that key, waited out within the tries and the step RateLimited past them; a 413 is the context exhausted (ContextExhausted); a 403 or a 404 is a model the provider does not serve the key; a request timed out, a conflict or a server's error is asked again, and any other fails the step.", prose, StringComparison.Ordinal);
+        Assert.Contains("read by the status: a 401 is a key refused, passed over for the next; a 429 is the model's limit on that key, waited out within the tries and the step `RateLimited` past them; a 413 is the context exhausted (`ContextExhausted`); a 403 or a 404 is a model the provider does not serve the key; a request timed out, a conflict or a server's error is asked again, and any other fails the step.", readme, StringComparison.Ordinal);
+        Assert.Contains("a failure Z.AI names is said in its own words.", prose, StringComparison.Ordinal);
+        Assert.Contains("a failure Z.AI names is said in its own words.", readme, StringComparison.Ordinal);
+
+        // Every row of the statuses' table is said, with what the loop takes it for.
+        foreach (var row in DssHarness.Core.Agents.ZaiApi.ZaiApiFailures.Statuses)
+        {
+            Assert.Contains($"{string.Join(" or ", row.Statuses.Select(status => $"a {status}"))} is ", prose, StringComparison.Ordinal);
+        }
+        Assert.Contains("a plan that does not cover the call or has ended (1309, 1313, 1314, 1315) fails the step. A code that list does not hold is read by the status:", readme, StringComparison.Ordinal);
+        Assert.Contains($"(1211, 1220, 1311) is a model the provider does not serve the key;", readme, StringComparison.Ordinal);
+
+        Assert.Contains($"`Agents\\ZaiApi\\{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiClient)}`", architecture, StringComparison.Ordinal);
+
+        foreach (var owner in new[]
+        {
+            nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider),
+            nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest),
+            nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures),
+            nameof(DssHarness.Core.Agents.Http.ApiBody),
+            nameof(DssHarness.Core.Agents.Http.ApiAnswers),
+            nameof(DssHarness.Core.Agents.Http.OwnedMember),
+            $"{nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms)}.{nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms.Of)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms)}.{nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms.Unstartable)}",
+            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest.Owned)}",
+            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest.ShortAnswer)}",
+            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.ShortenAt)}",
+            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.FullAt)}",
+            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures.Codes)}",
+            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures.Statuses)}",
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
+
+        static string Percent(double share) => $"{(int)Math.Round(share * 100)}%";
+    }
+
+    /// <summary>
     /// The README says the tool runtime as the help does - each tool, each bound and default read from the type that holds
     /// it - and the architecture names its owners by the types that are them.
     /// </summary>
@@ -733,7 +821,7 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("the run's reporter is given those that read and no other.", readme, StringComparison.Ordinal);
         Assert.Contains(
-            "built for the API clients to give their agents in place of a client's own - the `claude-api` client below, and `glm`, which comes next - and serving the `claude-code` client the web's through the engine's tool server:",
+            "built for the API clients to give their agents in place of a client's own - the `claude-api` and `glm` clients below - and serving the `claude-code` client the web's through the engine's tool server:",
             readme,
             StringComparison.Ordinal);
         Assert.Contains($"its links followed (one whose links cannot be followed refused as {DssHarness.Core.Agents.Policy.AgentPolicy.UndecidedRule}) and held to the agent's roots", readme, StringComparison.Ordinal);

@@ -459,9 +459,9 @@ shown in the pull request's body and the handoff. Where a workflow has such a st
 engine raises the triage and keeps the list; until the reasoning step runner is built, no step reports an issue.
 
 A reasoning step's `effort` is one level for every model it may run on, or a map giving each its own -
-`all` for the rest and a model's code for one, so the shipped workflow's heaviest steps run their
-Claude models at `xhigh` and GLM 5.3 at `max`, which is the highest it takes, and its other agents
-every model at one level - `high`, or `low` on the `fast` tier. Each model's level is checked against
+`all` for the rest and a model's code for one; the shipped workflow runs its heaviest steps at
+`xhigh` and its other agents at `high`, or `low` on the `fast` tier, every model of a step's tier at
+the one level. Each model's level is checked against
 what that model takes, and `validate-workflow` says, under the line that says a definition holds,
 every step's models and levels, each provider's prices for the models its steps may run on and the
 date they were read, and each key a step's model would read that the slot lacks. A `test` step's
@@ -635,8 +635,8 @@ agent touches is the slot itself, in any root. Where this tool cannot decide a c
 runs while the host that would answer is silent or gone. The policy is built and holds every
 action behind it; the `claude-code` client asks it of every call, the tool runtime below decides
 by it each call it runs - the web's of the `claude-code` client, served through the engine's tool
-server, and every call of the API clients, the `claude-api` client below and `glm`, which comes
-next - and no command of this build runs an agent yet.
+server, and every call of the API clients, the `claude-api` and `glm` clients below - and no
+command of this build runs an agent yet.
 
 The `claude-code` client starts Claude Code once for each launch, a new session every time -
 never resumed or continued, keeping no session file (one a launch leaves all the same is removed
@@ -682,7 +682,7 @@ an account at its limit `RateLimited`, with when the limit lifts where Claude Co
 `help agent-clients` says it whole.
 
 The tool runtime is the harness's own tools, built for the API clients to give their agents in
-place of a client's own - the `claude-api` client below, and `glm`, which comes next - and serving
+place of a client's own - the `claude-api` and `glm` clients below - and serving
 the `claude-code` client the web's through the engine's tool server: `view_file`, `find_files` and `search_files` (read),
 `create_file`, `replace_in_file`, `insert_in_file`, `create_directory`, `delete_file`,
 `delete_directory` and `move_path` (write), `run_command` (run) and `web_fetch` and `web_search` (web), each under
@@ -722,7 +722,7 @@ one that writes or runs alone; an answer past 32,768 characters is given as its 
 last 24,576, the whole kept in the step's `tool-results/`.
 
 The loop the `claude-api` and `glm` clients share (`ToolLoop`) runs a step of either over the
-provider each gives it - the Claude API's below, `glm`'s next. A turn is one answer of the agent's - a
+provider each gives it - the Claude API's and Z.AI's below. A turn is one answer of the agent's - a
 request the provider paused, or one thrown away and asked again, goes on as the same turn - counted
 against the step's `maxTurns` but a handoff turn; every request's usage - one that ended without
 its turn, failed, silent or left, by what it said it used so far - is counted at the model's
@@ -734,8 +734,10 @@ model's large-prompt set too where it has one - is never started, naming the key
 spent the budget runs none of them. The conversation is kept in the provider's own form under the
 agent's `sessions/<id>/`, each message as it was sent and received and sent back so with every later
 request, one line for each point where the history is whole - a turn that called tools stored with
-their answers - and a step that goes on in it sends what it began with. The first request asks for a
-quarter of the model's `maxOutputTokens`. A turn cut off at its length that called no tool is stored
+their answers - and a step that goes on in it sends what it began with; where a provider begins
+sending it shortened to keep it within its model's context, the point is kept beside it
+(`shortened.json`) and given with every later request, a notice saying so once. The first request
+asks for a quarter of the model's `maxOutputTokens`. A turn cut off at its length that called no tool is stored
 and nudged on, 2 times at most; one cut off while it called a tool - its calls never run - or before
 it wrote anything is thrown away and asked again with twice the room, up to the most; past either
 the step is `Truncated`. A turn the provider paused is sent again with nothing added, 10 in a row
@@ -769,11 +771,12 @@ model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite
 step with a fallback that can go on here sends the `fallback-credit-2026-07-01` beta, and a request
 the model declines ends the step `Refused`, with its category and the credit the API gave for it on
 the result; no request carries `fallbacks` or a `server-side-fallback-*` beta, for the engine's
-fallback is the only one a step has. Five keys are `claude-api`'s alone: `requestExtras`, an object
-merged into every request's body - a member it adds sent as given, an object's members merged into
-the tool's own - refused where it sets what the tool sends itself or `fallbacks`; `betas`, sent
-beside the tool's own, each one word and never the API's fallback's; `cacheTtl`; and `maxRetries`
-and `maxRetryWaitSeconds`, the loop's tries and longest wait (6 and 300 where nothing is said). A
+fallback is the only one a step has. Two keys are `claude-api`'s alone: `betas`, sent beside the
+tool's own, each one word and never the API's fallback's, and `cacheTtl`; three are both API
+clients': `requestExtras`, an object merged into every request's body - a member it adds sent as
+given, an object's members merged into the tool's own - refused where it sets what the tool sends
+itself or, here, `fallbacks`; and `maxRetries` and `maxRetryWaitSeconds`, the loop's tries and
+longest wait (6 and 300 where nothing is said). A
 spend limit reached - the organization's monthly cap, a 429 whose error names
 `enforced_spend_limit_reached`, or one the organization or a workspace set, a 400 that says so - is
 the key's limit, the step `RateLimited` at once until the date the API names; a 401 is a key
@@ -786,6 +789,45 @@ that needs a data retention the organization does not keep - is a model the prov
 the key, naming it; an overload, a server's error, a request timed out, a conflict, a network that
 failed and a stream cut or ended before its message are asked again; and any other 400 fails the
 step, said in the API's own words with the request it names.
+
+The `glm` client works a step through Z.AI by the loop above, every call run by the tool runtime:
+each request is posted to its provider's `api` with `/chat/completions` after it, signed with a key
+of the provider's (`Authorization: Bearer`), and its answer streamed. It is given the run's entries
+as the `claude-api` client is, and never starts without its provider and model, or on a provider of
+a type but `zai`. A request sends the model; the system prompt as the first message and every
+message as the conversation stored it - the engine's as a user message of text, an answer's calls
+each answered by a tool message, in order; the tools as functions, their calls' arguments streamed
+(`tool_stream`); the model's thinking on, the step's effort as `reasoning_effort` (`low`, `medium`,
+`high`, `xhigh`, `max`); and `max_tokens` - no sampling parameter or tool choice of the tool's own,
+which `requestExtras` may add, and no tool of Z.AI's, for the web is the harness's own. Z.AI caches what a request repeats by itself
+and bills no write, so a budget needs the model's input, cached-input and output prices. Each
+answer's reasoning is stored with it and sent back; Z.AI leaves it out of what the model reads in
+later turns unless `agentClients.glm.preserveThinking` is true (false where nothing is said), which
+keeps it (`thinking.clear_thinking: false`). Z.AI clears nothing of a conversation itself, so once
+what the model last read and wrote passes 70% of the model's `contextTokens`, the answers to the
+calls of every turn but the last 6 that called tools go out in a short form that says so, from that
+request on - the calls and the reasoning as they were, and what is stored whole; past 90% after
+that, the context is exhausted (`ContextExhausted`). Three keys are both API clients' -
+`requestExtras`, refused where it sets what the tool sends itself, and `maxRetries` and
+`maxRetryWaitSeconds`, as the `claude-api` client's above - and one is `glm`'s alone:
+`preserveThinking`. A failure is read by Z.AI's code first: a key it does not take (1000, 1001,
+1003, 1005) is a key refused, passed over for the next; an empty balance (1113) is the key's limit,
+its balance spent, the step `RateLimited` at once; a usage limit that names when it resets (1308,
+1310, 1316, 1317, 1318, 1319, 1320, 1321) is the key's limit, the step `RateLimited` at once; a
+rate limit (1302) is the
+model's limit on that key, waited out within the tries and the step `RateLimited` past them; an
+overload, a network error or a call failed on its side (1305, 1234, 1200, 1230) is asked again; a
+prompt too long (1261) is the context exhausted (`ContextExhausted`); content it will not answer
+(1301) ends the step `Refused`; a model unknown, an API the key may not call or a plan without the
+model (1211, 1220, 1311) is a model the provider does not serve the key; a plan that does not cover
+the call or has ended (1309, 1313, 1314, 1315) fails the step. A code that list does not hold is
+read by the status: a 401 is a key refused, passed over for the next; a 429 is the model's limit on
+that key, waited out within the tries and the step `RateLimited` past them; a 413 is the context
+exhausted (`ContextExhausted`); a 403 or a 404 is a model the provider does not serve the key; a
+request timed out, a conflict or a server's error is asked again, and any other fails the step. An
+answer Z.AI ends as sensitive ends the step `Refused`, one it ends for its context the context is
+exhausted and one it ends for a network error is asked again; a failure Z.AI names is said in its
+own words.
 
 `web_search` is the harness's own search, made by dssharness itself over HTTP: it asks the sources
 `agentWebSearch` in `config.json` declares - search APIs that answer JSON, feeds, OpenSearch

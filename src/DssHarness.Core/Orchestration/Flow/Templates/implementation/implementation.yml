@@ -165,9 +165,7 @@ steps:
         type: reason
         agent: planner
         tier: best
-        effort:
-          all: xhigh      # every model of the tier but the ones named below
-          glm-5.3: max    # GLM 5.3, which takes no xhigh
+        effort: xhigh
         ask: true
         resume: plan
         retries: 3
@@ -187,9 +185,7 @@ steps:
         type: reason
         agent: plan-auditor
         tier: high
-        effort:
-          all: xhigh      # every model of the tier but the ones named below
-          glm-5.3: max    # GLM 5.3, which takes no xhigh
+        effort: xhigh
         independent: true
         dependsOn: [check]
         retries: 3
@@ -269,9 +265,7 @@ steps:
             type: reason
             agent: implementer
             tier: balanced
-            effort:
-              all: xhigh      # every model of the tier but the ones named below
-              glm-5.3: max    # GLM 5.3, which takes no xhigh
+            effort: xhigh
             access: write
             in: item-agent
             writes: 'item.ownedPaths'
@@ -286,9 +280,7 @@ steps:
             type: reason
             agent: implementer
             tier: balanced
-            effort:
-              all: xhigh      # every model of the tier but the ones named below
-              glm-5.3: max    # GLM 5.3, which takes no xhigh
+            effort: xhigh
             access: write
             in: item-agent
             writes: 'item.ownedPaths'
@@ -302,9 +294,7 @@ steps:
             type: reason
             agent: implementer
             tier: balanced
-            effort:
-              all: xhigh      # every model of the tier but the ones named below
-              glm-5.3: max    # GLM 5.3, which takes no xhigh
+            effort: xhigh
             access: write
             in: item-agent
             writes: 'item.ownedPaths'
@@ -489,9 +479,7 @@ steps:
                     type: reason
                     agent: reviewer-correctness
                     tier: high
-                    effort:
-                      all: xhigh      # every model of the tier but the ones named below
-                      glm-5.3: max    # GLM 5.3, which takes no xhigh
+                    effort: xhigh
                     independent: true
                     retries: 3
                     backoffSeconds: 30
@@ -503,9 +491,7 @@ steps:
                     type: reason
                     agent: reviewer-errors
                     tier: high
-                    effort:
-                      all: xhigh      # every model of the tier but the ones named below
-                      glm-5.3: max    # GLM 5.3, which takes no xhigh
+                    effort: xhigh
                     independent: true
                     when: 'review-scope.errors'
                     retries: 3
@@ -518,9 +504,7 @@ steps:
                     type: reason
                     agent: reviewer-tests
                     tier: high
-                    effort:
-                      all: xhigh      # every model of the tier but the ones named below
-                      glm-5.3: max    # GLM 5.3, which takes no xhigh
+                    effort: xhigh
                     independent: true
                     when: 'review-scope.tests'
                     retries: 3
@@ -745,9 +729,7 @@ steps:
         type: reason
         agent: auditor
         tier: high
-        effort:
-          all: xhigh      # every model of the tier but the ones named below
-          glm-5.3: max    # GLM 5.3, which takes no xhigh
+        effort: xhigh
         independent: true
         dependsOn: [gate, mutations]
         retries: 3
@@ -950,9 +932,7 @@ recover:
           type: reason
           agent: implementer
           tier: balanced
-          effort:
-            all: xhigh      # every model of the tier but the ones named below
-            glm-5.3: max    # GLM 5.3, which takes no xhigh
+          effort: xhigh
           access: write
           in: item-agent
           writes: 'item.ownedPaths'
@@ -1129,9 +1109,7 @@ recover:
                   type: reason
                   agent: reviewer-correctness
                   tier: high
-                  effort:
-                    all: xhigh      # every model of the tier but the ones named below
-                    glm-5.3: max    # GLM 5.3, which takes no xhigh
+                  effort: xhigh
                   independent: true
                   retries: 3
                   backoffSeconds: 30
@@ -1143,9 +1121,7 @@ recover:
                   type: reason
                   agent: reviewer-errors
                   tier: high
-                  effort:
-                    all: xhigh      # every model of the tier but the ones named below
-                    glm-5.3: max    # GLM 5.3, which takes no xhigh
+                  effort: xhigh
                   independent: true
                   when: 'review-scope.errors'
                   retries: 3
@@ -1158,9 +1134,7 @@ recover:
                   type: reason
                   agent: reviewer-tests
                   tier: high
-                  effort:
-                    all: xhigh      # every model of the tier but the ones named below
-                    glm-5.3: max    # GLM 5.3, which takes no xhigh
+                  effort: xhigh
                   independent: true
                   when: 'review-scope.tests'
                   retries: 3

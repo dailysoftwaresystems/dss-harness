@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using DssHarness.Core.Configuration;
 
 namespace DssHarness.Core.Agents;
@@ -16,12 +17,18 @@ namespace DssHarness.Core.Agents;
 /// otherwise - rather than signing each request with its provider's key, as an API client does.
 /// </param>
 /// <param name="Settings">The names of the slot it reads that hold no key - a setting, such as the program it starts - each by the entry's key that renames it.</param>
+/// <param name="ExtrasProblems">
+/// What is wrong with the fields its entry's <c>requestExtras</c> merge into every request, each said in full, given the
+/// value and where it is - for an API client, which writes each request itself and takes the API clients' keys; null for
+/// a client that writes none (claude-code), which takes none of them.
+/// </param>
 public sealed record AgentClientKind(
     string Name,
     string ProviderType,
     IReadOnlyList<string> Efforts,
     bool SignsIn,
-    IReadOnlyList<AgentClientSetting> Settings);
+    IReadOnlyList<AgentClientSetting> Settings,
+    Func<JsonElement, string, IEnumerable<string>>? ExtrasProblems = null);
 
 /// <summary>
 /// A setting a client reads from the slot - a value that is no key, such as the program it starts - under the name its
@@ -108,21 +115,30 @@ public static class AgentAuth
 /// </summary>
 public sealed partial class AgentProviders
 {
+    /// <summary>
+    /// The levels of effort the tool says, lowest first: what each client says a step's effort in, and the ladder a level
+    /// a model does not take is checked along.
+    /// </summary>
+    public static readonly IReadOnlyList<string> EffortLevels = ["low", "medium", "high", "xhigh", "max"];
+
     /// <summary>The client kinds the tool builds in, each naming no model.</summary>
     public static readonly IReadOnlyList<AgentClientKind> ClientKinds =
     [
         new(
             ClaudeCode.ClaudeCodeClient.ClientName,
             "anthropic",
-            ["low", "medium", "high", "xhigh", "max"],
+            EffortLevels,
             SignsIn: true,
             [
                 new(AgentClientSetting.ExecutableKey, ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable, "the program the claude-code client starts in place of npm's Claude Code"),
                 new(AgentClientSetting.ConfigDirKey, Orchestration.ClaudeTranscripts.ConfigDirectoryVariable, "the Claude Code directory the claude-code client signs in from and reads the user's settings in"),
             ]),
-        new(ClaudeApi.ClaudeApiClient.ClientName, "anthropic", ["low", "medium", "high", "xhigh", "max"], SignsIn: false, []),
-        new("glm", "zai", ["low", "high", "max"], SignsIn: false, []),
+        new(ClaudeApi.ClaudeApiClient.ClientName, "anthropic", EffortLevels, SignsIn: false, [], ClaudeApi.ClaudeApiRequest.ExtrasProblems),
+        new(ZaiApi.ZaiApiClient.ClientName, "zai", EffortLevels, SignsIn: false, [], ZaiApi.ZaiApiRequest.ExtrasProblems),
     ];
+
+    /// <summary>The API clients, by name: the client kinds that write each request themselves, and take the API clients' keys.</summary>
+    public static IEnumerable<string> ApiClients => ClientKinds.Where(kind => kind.ExtrasProblems is not null).Select(kind => kind.Name);
 
     private readonly Dictionary<string, (AgentProviderConfig Provider, AgentModelConfig Model)> _models = new(StringComparer.Ordinal);
 
@@ -383,35 +399,40 @@ public sealed partial class AgentProviders
     }
 
     /// <summary>
-    /// What the claude-api client's entry says of its requests - its tries, its longest wait, its cache's lifetime, the
-    /// fields and betas it adds - each a key of that client alone, so a key that loads is a key that is read: tries none or
-    /// more, a wait of a second or more, a lifetime of <see cref="ClaudeApi.ClaudeApiRequest.CacheTtls"/>, fields that set
-    /// nothing the tool sends itself, and betas each one word, named once, none the API's own fallback's.
+    /// What an API client's entry says of its requests, each key held to the clients it is of - so a key that loads is a
+    /// key that is read - and to what it can be: the API clients' tries, none or more, their longest wait, a second or
+    /// more, and the fields they add, setting nothing their tool sends itself; claude-api's cache lifetime, one of
+    /// <see cref="ClaudeApi.ClaudeApiRequest.CacheTtls"/>, and its betas, each one word, named once, none the API's own
+    /// fallback's; and glm's <c>preserveThinking</c>.
     /// </summary>
     private static void RequestRules(List<KeyValuePair<string, AgentClientConfig>> clients, List<string> problems)
     {
-        const string Api = ClaudeApi.ClaudeApiClient.ClientName;
+        const string Claude = ClaudeApi.ClaudeApiClient.ClientName;
+        const string Glm = ZaiApi.ZaiApiClient.ClientName;
+        string[] apis = [.. ApiClients];
 
         foreach (var (client, entry) in clients)
         {
             var where = $"agentClients '{client}'";
+            (string Key, bool Named, string What, string[] Of)[] keys =
+            [
+                ("maxRetries", entry.MaxRetries is not null, "how many times a failed request is asked again", apis),
+                ("maxRetryWaitSeconds", entry.MaxRetryWaitSeconds is not null, "the longest wait before a failed request is asked again", apis),
+                ("requestExtras", entry.RequestExtras is not null, "the fields merged into every request's body", apis),
+                ("cacheTtl", entry.CacheTtl is not null, "how long what a request caches is kept", [Claude]),
+                ("betas", entry.Betas is not null, "the beta headers sent beside the tool's own", [Claude]),
+                ("preserveThinking", entry.PreserveThinking is not null, "whether Z.AI keeps the model's reasoning across turns", [Glm]),
+            ];
 
-            if (!string.Equals(client, Api, StringComparison.Ordinal))
+            foreach (var (key, _, what, of) in keys.Where(key => key.Named && !key.Of.Contains(client, StringComparer.Ordinal)))
             {
-                (string Key, bool Named, string What)[] keys =
-                [
-                    ("maxRetries", entry.MaxRetries is not null, "how many times a failed request is asked again"),
-                    ("maxRetryWaitSeconds", entry.MaxRetryWaitSeconds is not null, "the longest wait before a failed request is asked again"),
-                    ("cacheTtl", entry.CacheTtl is not null, "how long what a request caches is kept"),
-                    ("requestExtras", entry.RequestExtras is not null, "the fields merged into every request's body"),
-                    ("betas", entry.Betas is not null, "the beta headers sent beside the tool's own"),
-                ];
+                problems.Add(of is [var alone]
+                    ? $"{where} names {key}, a key of the {alone} client alone: {what}"
+                    : $"{where} names {key}, a key of the API clients alone ({string.Join(", ", of)}): {what}");
+            }
 
-                foreach (var (key, _, what) in keys.Where(key => key.Named))
-                {
-                    problems.Add($"{where} names {key}, a key of the {Api} client alone: {what}");
-                }
-
+            if (KindOf(client) is not { ExtrasProblems: { } extrasProblems })
+            {
                 continue;
             }
 
@@ -425,14 +446,19 @@ public sealed partial class AgentProviders
                 problems.Add($"{where} maxRetryWaitSeconds is {entry.MaxRetryWaitSeconds.Value.ToString(CultureInfo.InvariantCulture)}; the longest wait before a failed request is asked again is a second or more");
             }
 
+            if (entry.RequestExtras is { } extras)
+            {
+                problems.AddRange(extrasProblems(extras, $"{where} requestExtras"));
+            }
+
+            if (client != Claude)
+            {
+                continue;
+            }
+
             if (entry.CacheTtl is { } ttl && !ClaudeApi.ClaudeApiRequest.CacheTtls.Contains(ttl, StringComparer.Ordinal))
             {
                 problems.Add($"{where} cacheTtl '{ttl}' is none of: {string.Join(", ", ClaudeApi.ClaudeApiRequest.CacheTtls)}");
-            }
-
-            if (entry.RequestExtras is { } extras)
-            {
-                problems.AddRange(ClaudeApi.ClaudeApiRequest.ExtrasProblems(extras, $"{where} requestExtras"));
             }
 
             foreach (var beta in entry.Betas ?? [])
