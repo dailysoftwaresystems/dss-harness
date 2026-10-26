@@ -1270,7 +1270,11 @@ public sealed class AgentPolicyTests
         {
             "git send-email --to-c 'make install' 0001.patch", "git send-email -to-cmd='make install' 0001.patch",
             "git send-email --TO-CMD 'make install' 0001.patch", "git send-email -Sendmail-Cmd='make install' 0001.patch",
-            "git send-email -smtp-server=/usr/bin/make install 0001.patch",
+            "git send-email -smtp-server=/usr/bin/make install 0001.patch", "git send-email +to-cmd='make install' 0001.patch",
+            "git send-email +SENDMAIL-CMD 'make install' 0001.patch",
+
+            // A prefix Getopt::Long finds ambiguous takes no value: the option after it is read as the option it is.
+            "git send-email -c --sendmail-cmd='make install' 0001.patch", "git send-email --to-c --to-cmd='make install' 0001.patch",
         })
         {
             Assert.Equal("Run(make install *)", Assert.IsType<AgentPolicyAnswer.Denied>(ruled.Run(command)).Rule);

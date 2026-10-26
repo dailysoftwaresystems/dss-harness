@@ -1395,8 +1395,9 @@ public static partial class CommandAnalysis
                 if (GitOptionValue(GetoptLong(command, at, subcommand), at, spec.Long, spec.Short, spec.GluedOnly, GitOptionsOfTheirOwn(subcommand)) is { } found
                     && (!spec.PathOnly || NamesAPath(found.Value)))
                 {
+                    // The value's word is read again as an option of its own: where git would not take it as this one's
+                    // value - Getopt::Long passing over a prefix it finds ambiguous - it is the option it names.
                     yield return spec.Appends ? ["sh", "-c", found.Value, InputWord] : ["sh", "-c", found.Value];
-                    at = found.Next - 1;
                     break;
                 }
             }
@@ -1446,17 +1447,20 @@ public static partial class CommandAnalysis
 
     /// <summary>
     /// The words as git's option reader would have them where the subcommand reads its options by Perl's Getopt::Long, as
-    /// send-email does: a long option written with one dash or in any case (<c>-TO-CMD=x</c>) is the <c>--to-cmd=x</c> it
-    /// is, its value as written - the word at <paramref name="at"/> so respelled; every other subcommand's words as they stand.
+    /// send-email does: a long option written after <c>--</c>, <c>-</c> or <c>+</c> - Getopt::Long's prefixes - and in any
+    /// case (<c>+TO-CMD=x</c>) is the <c>--to-cmd=x</c> it is, its value as written - the word at <paramref name="at"/> so
+    /// respelled, one prefix taken off as Getopt::Long takes it; every other subcommand's words as they stand.
     /// </summary>
     private static IReadOnlyList<string> GetoptLong(IReadOnlyList<string> command, int at, string subcommand)
     {
-        if (subcommand != "send-email" || command[at].Length < 2 || command[at][0] != '-' || command[at] == "--")
+        var word = command[at];
+
+        if (subcommand != "send-email" || word.Length < 2 || word[0] is not ('-' or '+') || word == "--")
         {
             return command;
         }
 
-        var named = command[at].TrimStart('-').Split('=', 2);
+        var named = word[(word.StartsWith("--", StringComparison.Ordinal) ? 2 : 1)..].Split('=', 2);
         var respelled = "--" + named[0].ToLowerInvariant() + (named.Length == 2 ? "=" + named[1] : string.Empty);
 
         return [.. command.Take(at), respelled, .. command.Skip(at + 1)];
