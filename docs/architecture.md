@@ -1601,7 +1601,8 @@ results a search gives, a search source's own requests held to the `Web(...)` ru
 refused where the step has no web, and refused where
 the web is held to any rule when it reads what it reaches from a file. What it does not see is said
 in help: the inside of a script file a command runs. The worktree rules
-(`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs and the merges
+(`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs, the `gh` commands that run them
+(`AgentPolicy.GhGitStateCommands`), and the merges
 and CI starts of `gh` - each endpoint and GraphQL mutation that merges or starts CI with the `gh`
 commands that reach it, one list (`AgentPolicy.GhCiReaches`) that `AgentPolicy.NeverCiCommands`
 (`gh pr merge`, `gh pr update-branch`, `gh repo sync`, `gh workflow run`, `gh run rerun`),

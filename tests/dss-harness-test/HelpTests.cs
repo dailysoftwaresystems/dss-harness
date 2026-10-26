@@ -328,7 +328,7 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("the inside of a script file a command runs", prose, StringComparison.Ordinal);
         Assert.Contains("The worktree rules (agentPolicy.worktreeRules, true where nothing is said)", prose, StringComparison.Ordinal);
-        Assert.Contains($"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) are refused", prose, StringComparison.Ordinal);
+        Assert.Contains($"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) are refused, and so are the gh commands that run them ({string.Join(", ", AgentPolicy.GhGitStateCommands)}) - reading git", prose, StringComparison.Ordinal);
         Assert.Contains(
             $"and so are the gh commands that merge or start CI ({string.Join(", ", AgentPolicy.NeverCiCommands)}), the gh api endpoints and GraphQL "
                 + "mutations that reach the same, and gh alias set, for never merges,",

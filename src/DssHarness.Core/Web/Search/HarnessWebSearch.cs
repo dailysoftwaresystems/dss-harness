@@ -301,7 +301,7 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
     /// for this step - by the first they refuse; <see langword="null"/> where they refuse none.
     /// </summary>
     private static WebSearchAnswer? Refusal(WebSearchStep step, IEnumerable<string> addresses)
-        => addresses.Select(address => (Address: address, Answer: Decided(step, address))).FirstOrDefault(decided => decided.Answer is AgentPolicyAnswer.Denied) is { Answer: AgentPolicyAnswer.Denied denied, Address: var refused }
+        => addresses.Select(address => (Address: address, Denied: Decided(step, address).Refusal())).FirstOrDefault(decided => decided.Denied is not null) is { Denied: { } denied, Address: var refused }
             ? Refused(refused, denied)
             : null;
 
@@ -576,7 +576,7 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
     {
         var site = request.Settings.Site;
 
-        if (Decided(step, site) is AgentPolicyAnswer.Denied denied)
+        if (Decided(step, site).Refusal() is { } denied)
         {
             return (null, Refused(site, denied), [site], null);
         }

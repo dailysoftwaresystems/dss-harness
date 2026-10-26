@@ -220,7 +220,7 @@ public sealed class HarnessFetch : IDisposable
                 return WebFetched.Refused(current, $"'{address}' redirects more than {MostRedirects} times, and no more are followed");
             }
 
-            if (await gate.Decide(current).ConfigureAwait(false) is AgentPolicyAnswer.Denied denied)
+            if ((await gate.Decide(current).ConfigureAwait(false)).Refusal() is { } denied)
             {
                 return WebFetched.Denied(current, denied);
             }

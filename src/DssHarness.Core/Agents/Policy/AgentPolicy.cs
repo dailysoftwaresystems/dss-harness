@@ -62,6 +62,13 @@ public sealed class AgentPolicy
          "bisect", "symbolic-ref", "filter-branch", "fast-import", "replace", "notes", "reflog", "remote", "submodule", "sparse-checkout", "read-tree", "prune", "repack", "pack-refs", "maintenance"];
 
     /// <summary>
+    /// The <c>gh</c> commands that run git's state-writing verbs (<see cref="GitStateVerbs"/>) on the repository they stand
+    /// in, refused by the worktree rules beside those verbs: a pull request's branch fetched and checked out, a default
+    /// repository written into git's configuration, and a fork made with its remote added or its clone.
+    /// </summary>
+    public static IReadOnlyList<string> GhGitStateCommands { get; } = ["gh pr checkout", "gh repo set-default", "gh repo fork"];
+
+    /// <summary>
     /// Every way <c>gh</c> merges or starts CI, refused by the worktree rules - never merges, never
     /// starts CI binds the agents too, not only the engine's own steps: each REST endpoint and GraphQL
     /// mutation that does it, with the <c>gh</c> commands that reach it. The one list the three below
@@ -209,6 +216,7 @@ public sealed class AgentPolicy
             : [];
         _worktreeRunRules =
             [.. GitStateVerbs.Select(verb => AgentRule.Parse($"Run(git {verb} *)")),
+               .. GhGitStateCommands.Select(command => AgentRule.Parse($"Run({command} *)")),
                .. NeverCiCommands.Select(command => AgentRule.Parse($"Run({command} *)"))];
         _worktreePolicyWrites = [.. WorktreePolicyWrites.Select(pattern => (GlobPattern.Parse(pattern), pattern))];
         _protectedPaths = [.. ProtectedPathRules.Select(pattern => (GlobPattern.Parse(pattern), pattern))];

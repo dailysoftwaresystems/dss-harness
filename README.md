@@ -609,8 +609,8 @@ can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
 `help agent-clients`) - a git configured where it runs, by `-c` or `--config-env` of any key but
 the ones that only shape what git prints, or by its environment - a home it reads its global
 configuration from (`HOME`, `XDG_CONFIG_HOME`, Windows' `USERPROFILE`) among it - the `git config`
-it is and still the command it runs -
-and the `gh` commands that merge or start CI (`gh pr merge`, `gh pr update-branch`, `gh repo sync`,
+it is and still the command it runs - the `gh` commands that run them (`gh pr checkout`, `gh repo set-default`,
+`gh repo fork`), and the `gh` commands that merge or start CI (`gh pr merge`, `gh pr update-branch`, `gh repo sync`,
 `gh workflow run`, `gh run rerun`), the `gh api` endpoints and GraphQL mutations that reach the
 same and `gh alias set` are refused (reading git stays allowed), git's own
 files - a `.git`, file or directory, at any depth beneath a root and in any case, a nested

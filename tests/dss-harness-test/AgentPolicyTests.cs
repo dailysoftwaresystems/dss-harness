@@ -2054,6 +2054,41 @@ public sealed class AgentPolicyTests
     }
 
     /// <summary>
+    /// The gh commands that run git's state-writing verbs on the repository they stand in - a pull request's branch checked
+    /// out, a default repository written into git's configuration, a fork with its remote or its clone - are refused by the
+    /// worktree rules beside those verbs; reading a pull request or a repository stays allowed.
+    /// </summary>
+    [Fact]
+    public void TheGhCommandsThatRunGitsStateVerbs_AreRefusedBesideThem()
+    {
+        Assert.Equal(["gh pr checkout", "gh repo set-default", "gh repo fork"], AgentPolicy.GhGitStateCommands);
+
+        foreach (var platform in new[] { PlatformId.Linux, PlatformId.Windows })
+        {
+            using var ground = Ground(platform);
+            var policy = ground.Policy();
+
+            foreach (var (command, rule) in new[]
+            {
+                ("gh pr checkout 12", "Run(gh pr checkout *)"),
+                ("gh pr -R owner/repo checkout 12 --force", "Run(gh pr checkout *)"),
+                ("gh repo set-default owner/repo", "Run(gh repo set-default *)"),
+                ("gh repo fork --remote", "Run(gh repo fork *)"),
+                ("gh repo fork owner/repo --clone", "Run(gh repo fork *)"),
+            })
+            {
+                var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
+
+                Assert.Equal((rule, AgentPolicySource.Builtin, $"'{command}' is denied by {rule}, a worktree rule of this tool"), (denied.Rule, denied.Source, denied.Reason));
+            }
+
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("gh pr view 12"));
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("gh pr diff 12"));
+            Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false).Run("gh pr checkout 12"));
+        }
+    }
+
+    /// <summary>
     /// A home git reads its global configuration from, set for a command or declared, is git's configuration set where it
     /// runs: an alias or a pager in that home's configuration would run outside every rule on what git names, so the command
     /// is the git config it is - and so is GIT_CONFIG_NOSYSTEM's taking the system's configuration away.
