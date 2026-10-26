@@ -846,6 +846,12 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         {
             record = read();
         }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // Removed between the look and the read - a run's owner released as a stop watches for it - the record is
+            // not there, as one never written is not.
+            return null;
+        }
         catch (JsonException ex)
         {
             throw Unreadable(path, what, ex.Message.TrimEnd('.'));

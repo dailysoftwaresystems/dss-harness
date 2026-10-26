@@ -117,6 +117,25 @@ internal sealed class Held(IFileSystem inner, string path, bool denied = false) 
 }
 
 /// <summary>
+/// The real file system, save that <paramref name="path"/> is removed the moment it is opened to be read - as a file
+/// another process deletes between a reader's look and its read - so the read finds it gone.
+/// </summary>
+/// <param name="inner">The file system every member passes through to.</param>
+/// <param name="path">The file removed as it is opened.</param>
+internal sealed class GoneAtOpen(IFileSystem inner, string path) : PassThroughFileSystem(inner)
+{
+    public override Stream OpenRead(string read)
+    {
+        if (Path.GetFullPath(read) == Path.GetFullPath(path))
+        {
+            File.Delete(path);
+        }
+
+        return base.OpenRead(read);
+    }
+}
+
+/// <summary>
 /// The real file system, whose atomic writes and appends fail while <see cref="Full"/> says so, as a full disk's do.
 /// </summary>
 /// <param name="inner">The file system every member passes through to.</param>
