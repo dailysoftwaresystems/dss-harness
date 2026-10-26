@@ -809,10 +809,11 @@ internal sealed class CFamilyReading
     }
 
     /// <summary>
-    /// The head the keyword at <paramref name="at"/> begins: its tag - the last name of its run where a body or a base list
-    /// follows, since an export macro may stand before it (<c>class DllExport Widget {</c>), but where C++'s brace
-    /// initialises that name as a variable (<see cref="Initializes"/>); its first where neither follows or the brace is
-    /// an initialiser's, a variable's name after it and no body - its bases, and its body's brace.
+    /// The head the keyword at <paramref name="at"/> begins: its tag - the last name of its run where a body follows, a
+    /// base list or a final between, since an export macro may stand before it (<c>class DllExport Widget {</c>), and a
+    /// single name a base list or a final follows (<c>enum E : int;</c>); its first where C++'s brace initialises the
+    /// last as a variable (<see cref="Initializes"/>) or two names or more are followed by no body - a bit-field's,
+    /// <c>enum Color c : 4;</c> - a variable's name after it and no body; its bases, and its body's brace.
     /// </summary>
     private Head TypeHead(int at, int end)
     {
@@ -834,8 +835,11 @@ internal sealed class CFamilyReading
             next = Attributes(past, end);
         }
 
-        var defining = (_scan.Is(next, "{") || _scan.Is(next, ":") || _scan.Is(next, "final") || _scan.Is(next, "sealed"))
-            && !(_cpp && _scan.Is(next, "{") && run.Count > 1 && !run.SkipLast(1).All(before => IsMacroName(before.Chain)) && Initializes(keyword, next, end));
+        // After two names or more a base list or a final defines the last only where a body follows: enum Color c : 4; is a
+        // bit-field of the type Color names.
+        var defining = _scan.Is(next, "{")
+            ? !(_cpp && run.Count > 1 && !run.SkipLast(1).All(before => IsMacroName(before.Chain)) && Initializes(keyword, next, end))
+            : (_scan.Is(next, ":") || _scan.Is(next, "final") || _scan.Is(next, "sealed")) && (run.Count < 2 || _scan.Is(HeadEnd(next, end), "{"));
 
         if (run.Count > 1 && !defining)
         {
@@ -855,15 +859,24 @@ internal sealed class CFamilyReading
         if (_scan.Is(next, ":"))
         {
             bases = _scan.Next(next);
-            next = bases;
-
-            while (next < end && !_scan.Is(next, "{") && !_scan.Is(next, ";"))
-            {
-                next = _scan.Is(next, "(") || _scan.Is(next, "[") ? _scan.Past(next) : _scan.Is(next, "<") ? _scan.AngleEnd(next, end) : _scan.Next(next);
-            }
+            next = HeadEnd(bases, end);
         }
 
         return new Head(written?[(written.LastIndexOf('.') + 1)..], written, keyword, bases, _scan.Is(next, "{") ? next : -1, next);
+    }
+
+    /// <summary>
+    /// The index of the <c>{</c> or the <c>;</c> that ends a type's head from <paramref name="at"/> - its base list, its
+    /// final - groups and type arguments passed over; <paramref name="end"/> where neither comes before.
+    /// </summary>
+    private int HeadEnd(int at, int end)
+    {
+        while (at < end && !_scan.Is(at, "{") && !_scan.Is(at, ";"))
+        {
+            at = _scan.Is(at, "(") || _scan.Is(at, "[") ? _scan.Past(at) : _scan.Is(at, "<") ? _scan.AngleEnd(at, end) : _scan.Next(at);
+        }
+
+        return Math.Min(at, end);
     }
 
     /// <summary>
@@ -871,17 +884,19 @@ internal sealed class CFamilyReading
     /// of which is written as no macro is, initialises the last as a variable of the type the first names, as C++ alone
     /// writes one - <c>struct timeval tv{};</c>, <c>struct sockaddr_in addr_{1, 2};</c> - rather than opening the body of a
     /// type an export macro stands before (<c>struct DllExport Widget { int w; };</c>): after <c>struct</c> or
-    /// <c>union</c> where it holds no <c>;</c> at its top, which a member list always does and an initialiser never; after
-    /// an enumeration where it holds nothing, which an enumerator list is not; never after <c>class</c>, which C++ code
-    /// writes before no variable's type - <c>class DllExport Empty {};</c> defines Empty.
+    /// <c>union</c> where what it holds (<see cref="ScannedText.Inside"/>) holds at its top none of what a member list
+    /// holds and an initialiser never does - a <c>;</c>, a function's body (<see cref="OpensFunctionBody"/>), an access
+    /// label's colon; after an enumeration where it holds nothing, which an enumerator list is not; never after
+    /// <c>class</c>, which C++ code writes before no variable's type - <c>class DllExport Empty {};</c> defines Empty.
     /// </summary>
     private bool Initializes(string keyword, int open, int end)
     {
         var (inner, _) = _scan.Bounds(open, end);
+        var held = _scan.Inside(open, inner).ToList();
 
         if (keyword.StartsWith("enum", StringComparison.Ordinal))
         {
-            return _scan.Next(open) >= inner;
+            return !held.Any(run => _scan.Code(run.Start, run.End).Any());
         }
 
         if (keyword is not ("struct" or "union"))
@@ -889,15 +904,36 @@ internal sealed class CFamilyReading
             return false;
         }
 
-        for (var at = _scan.Next(open); at < inner; at = _scan.Opens(at) ? _scan.Past(at) : _scan.Next(at))
+        foreach (var (from, to) in held)
         {
-            if (_scan.Is(at, ";"))
+            for (var at = from; at < to; at = _scan.Opens(at) ? _scan.Bounds(at, to).Past : at + 1)
             {
-                return false;
+                if (_scan.Is(at, ";") || (_scan.Is(at, "{") && OpensFunctionBody(at))
+                    || (_scan.Is(at, ":") && _scan.Previous(at) is var label && _scan.IsName(label) && AccessLabels.Contains(_scan.Text(label))))
+                {
+                    return false;
+                }
             }
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Whether the brace at <paramref name="open"/> opens a function's body: a parameter list's <c>)</c> before it, past
+    /// the words and the reference marks that may follow one (<c>const</c>, <c>noexcept</c>, <c>override</c>, <c>&amp;</c>),
+    /// which no lambda's capture stands before - <c>[](int a) { ... }</c> is a value an initialiser may hold.
+    /// </summary>
+    private bool OpensFunctionBody(int open)
+    {
+        var before = _scan.Previous(open);
+
+        while ((_scan.IsName(before) && Trailers.Contains(_scan.Text(before))) || _scan.Is(before, "&"))
+        {
+            before = _scan.Previous(before);
+        }
+
+        return _scan.Is(before, ")") && _scan.Match(before) is var parameters and >= 0 && !_scan.Is(_scan.Previous(parameters), "]");
     }
 
     /// <summary>
@@ -1345,16 +1381,16 @@ internal sealed class CFamilyReading
 
     /// <summary>
     /// The index of the <c>;</c> that ends the declaration of an old-style definition's parameters at <paramref name="at"/>:
-    /// specifiers, then declarators joined by commas, each naming one of <paramref name="listed"/> - alone, after stars, or
-    /// in parentheses (<c>(*cb)</c>) - with its brackets and its parameters after it. -1 where the tokens are no such
-    /// declaration, read no further than the first token that says so: a parenthesis right after its first name, as a
-    /// macro's call is written (<c>X(red)</c>); a group among its specifiers that names none of <paramref name="listed"/>;
-    /// a name, a star or any other token after a declarator but a comma; an end that comes first; or a declaration that
-    /// declares none of them.
+    /// specifiers, then declarators joined by commas, each naming one of <paramref name="listed"/> - alone, after stars,
+    /// or in parentheses with a star (<c>int (*cmp)();</c>, <c>int (*rows)[10];</c>) - with its brackets and its
+    /// parameters after it. -1 where the tokens are no such declaration, read no further than the first token that says
+    /// so: a group among its specifiers that names none of <paramref name="listed"/>, as a macro's use is written
+    /// (<c>X(red)</c>); a name, a star or any other token after a declarator but a comma - the next use after a group
+    /// that names one; an end that comes first; or a declaration that declares none of them.
     /// </summary>
     private int ParameterDeclarationEnd(int at, int end, IReadOnlySet<string> listed)
     {
-        if (!_scan.IsName(at) || _scan.Is(_scan.Next(at), "("))
+        if (!_scan.IsName(at))
         {
             return -1;
         }

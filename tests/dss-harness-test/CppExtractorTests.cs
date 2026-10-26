@@ -798,6 +798,58 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             (Node(extract, "cpp:Outer.addr_").ValueType, Node(extract, "cpp:Outer.tv_").ValueType, Node(extract, "cpp:net.any_").ValueType, Node(extract, "cpp:shade_").ValueType));
     }
 
+    /// <summary>
+    /// A brace holding at its top what a member list holds and no initialiser does - a function's body, its parameters'
+    /// <c>)</c> and the words after them before it, or an access label - opens a type's body, an export macro before its
+    /// name, whatever else it holds; and so does one whose head each branch of a conditional repeats, the first branch
+    /// writing nothing after its own. A lambda's body is a value, and the brace that holds one an initialiser.
+    /// </summary>
+    [Fact]
+    public void ABraceHoldingAFunctionsBodyOrAnAccessLabel_IsATypesBody()
+    {
+        var extract = Read("b.hpp", """
+            struct DllExport Less { bool operator()(int a, int b) const { return a < b; } };
+            struct DllExport Widget { Widget() {} };
+            struct DllExport Open { public: };
+            #ifdef WIDE
+            struct DllExport Pair {
+            #else
+            struct DllExport Pair {
+            #endif
+                int a;
+            };
+            struct Callback cb_{[](int a) { return a; }};
+            """);
+
+        Assert.Equal(
+            [
+                ("cpp:Less", "struct"), ("cpp:Less.operator()(int,int)const", "operator"), ("cpp:Open", "struct"), ("cpp:Pair", "struct"), ("cpp:Pair.a", "field"),
+                ("cpp:Widget", "struct"), ("cpp:Widget.Widget()", "constructor"), ("cpp:cb_", "variable"),
+            ],
+            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind!)));
+    }
+
+    /// <summary>
+    /// A bit-field of an enumeration's type - <c>enum Color c : 4;</c> - is a field of that type: after two names a base
+    /// list or a final defines the last only where a body follows, as an export macro's does (<c>enum DllExport E : int {</c>,
+    /// <c>class DllExport Sealed final {</c>).
+    /// </summary>
+    [Fact]
+    public void AnEnumerationsBitField_IsAField_ButABaseListBeforeABodyDefines()
+    {
+        var extract = Read("f.hpp", """
+            struct S { enum Color c : 4; unsigned d : 2; };
+            enum DllExport E : int { A };
+            class DllExport Sealed final { int s; };
+            """);
+
+        Assert.Equal(
+            [("cpp:A", "enumerator"), ("cpp:E", "enum"), ("cpp:S", "struct"), ("cpp:S.c", "field"), ("cpp:S.d", "field"), ("cpp:Sealed", "class"), ("cpp:Sealed.s", "field")],
+            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind!)));
+        Assert.Equal("Color", Node(extract, "cpp:S.c").ValueType);
+        Assert.Contains(extract.References, reference => reference is { From: "cpp:S.c", Kind: CodeEdgeKinds.References, Name: "Color" });
+    }
+
     private static FileExtract Read(string path, string text) => new CppExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);

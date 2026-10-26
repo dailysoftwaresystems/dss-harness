@@ -540,6 +540,55 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     }
 
     /// <summary>
+    /// An old-style definition's parameters are read in every form C declares one in - a function pointer in parentheses
+    /// with a star, an array's pointer, a storage class, two declarators of one type, a pointer to a pointer - and a call
+    /// through a function pointer among them is marked dynamic, as one through any is; none declares anything of the file's.
+    /// </summary>
+    [Fact]
+    public void AnOldStyleDefinitionsParameters_AreReadInEveryFormOfDeclarator()
+    {
+        var extract = Read("sort.c", """
+            void sort(base, n, cmp)
+                char *base;
+                int n;
+                int (*cmp)();
+            {
+                run(base);
+                cmp(base, base);
+            }
+
+            int serve(handler, rows, x, a, b, argv)
+                void (*handler)();
+                int (*rows)[10];
+                register int x;
+                int a, b;
+                char **argv;
+            {
+                return handler();
+            }
+            """);
+
+        Assert.Equal([("c:serve", (6, 6)), ("c:sort", (3, 3))], extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, Arity(extract, node.Id))));
+        Assert.Equal([((1, 8), 5), ((10, 18), 16)], new[] { "c:sort", "c:serve" }.Select(id => (Lines(extract, id), Node(extract, id).BodyStart)));
+        Assert.Equal(["run"], Calls(extract, "c:sort"));
+        Assert.Empty(Calls(extract, "c:serve"));
+        Assert.Equal([(7, "a call through the function pointer cmp"), (17, "a call through the function pointer handler")], extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+    }
+
+    /// <summary>
+    /// A bit-field of an enumeration's type - <c>enum pipe_format format:16;</c>, as GCC lets C write one - is a field of
+    /// that type: a type's keyword before two names and a colon defines no type where no body follows.
+    /// </summary>
+    [Fact]
+    public void AnEnumerationsBitField_IsAField()
+    {
+        var extract = Read("p.h", "struct pipe { enum pipe_format format:16; unsigned bound:1; };\n");
+
+        Assert.Equal([("c:pipe", "struct"), ("c:pipe.bound", "field"), ("c:pipe.format", "field")], extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind!)));
+        Assert.Equal("pipe_format", Node(extract, "c:pipe.format").ValueType);
+    }
+
+    /// <summary>
     /// In C no brace initialises a declarator's name, so a type's keyword before two names and a brace defines the last,
     /// an attribute macro written in small letters before it: <c>struct __packed hdr { ... };</c> is hdr with its fields.
     /// </summary>
@@ -552,15 +601,21 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     }
 
     /// <summary>
-    /// A list of macro uses with no semicolon between them - an X-macro list, QEMU's helper definitions - is read in time
-    /// linear in its length: what probes each for an old-style definition stops at the first token none could be, never
-    /// walking on to the next semicolon or the end, and each use is marked a macro standing in a declaration's place.
+    /// A list of macro uses with no semicolon between them - an X-macro list, QEMU's helper definitions, a use repeated -
+    /// is read in time linear in its length: what probes each for an old-style definition stops at the first token none
+    /// could be - a use's group that names no parameter, or the token after one that does - never walking on to the next
+    /// semicolon or the end, and each use is marked a macro standing in a declaration's place.
     /// </summary>
     [Fact]
     public void AListOfMacroUses_IsReadInLinearTime()
     {
         const int Uses = 20_000;
-        var text = string.Concat(Enumerable.Range(0, Uses).Select(at => at % 2 == 0 ? $"X(color{at})\n" : $"DEF_HELPER_2(helper{at}, i32, env)\n"));
+        var text = string.Concat(Enumerable.Range(0, Uses).Select(at => (at % 4) switch
+        {
+            0 => $"X(color{at})\n",
+            1 => $"DEF_HELPER_2(helper{at}, i32, env)\n",
+            _ => "X(red)\n",
+        }));
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var extract = Read("x.h", text);
 
