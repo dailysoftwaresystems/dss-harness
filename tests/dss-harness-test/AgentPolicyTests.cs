@@ -2066,7 +2066,12 @@ public sealed class AgentPolicyTests
             using var ground = Ground(platform);
             var policy = ground.Policy();
 
-            foreach (var (command, named) in new[] { ("gh co 42", "co"), ("gh -R owner/repo co 42", "co"), ("gh my-extension run", "my-extension"), ("gh Co 42", "Co") })
+            // Past a wrapper this does not strip, gh runs all the same: it is read as where it leads.
+            foreach (var (command, named) in new[]
+            {
+                ("gh co 42", "co"), ("gh -R owner/repo co 42", "co"), ("gh my-extension run", "my-extension"), ("gh Co 42", "Co"),
+                ("setsid gh co 42", "co"), ("stdbuf -oL gh co 42", "co"), ("ionice -c3 gh my-extension run", "my-extension"),
+            })
             {
                 var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
 
@@ -2075,12 +2080,22 @@ public sealed class AgentPolicyTests
                     (denied.Rule, denied.Reason));
             }
 
-            var exec = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("gh extension exec any-ext 42"));
-            Assert.Equal(
-                ("the merges and CI starts of gh", "'gh extension exec any-ext 42' is denied by a worktree rule of this tool: it reaches gh extension exec, an extension run: a command no rule here reads, and never merges, never starts CI binds the agents too"),
-                (exec.Rule, exec.Reason));
+            // gh's own alias of extension is the command it names; past a wrapper too.
+            foreach (var command in new[] { "gh extension exec any-ext 42", "gh ext exec any-ext 42", "setsid gh extensions exec any-ext" })
+            {
+                var exec = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
 
-            foreach (var command in new[] { "gh pr view 12", "gh issue list", "gh search code AgentPolicy", "gh --version", "gh help pr", "gh status", "gh extension list" })
+                Assert.Equal(
+                    ("the merges and CI starts of gh", $"'{command}' is denied by a worktree rule of this tool: it reaches gh extension exec, an extension run: a command no rule here reads, and never merges, never starts CI binds the agents too"),
+                    (exec.Rule, exec.Reason));
+            }
+
+            // gh's own commands, its help topics and its own aliases of them stay as their rules decide them.
+            foreach (var command in new[]
+            {
+                "gh pr view 12", "gh issue list", "gh search code AgentPolicy", "gh --version", "gh help pr", "gh status", "gh extension list",
+                "gh ext ls", "gh cs list", "gh rs ls", "gh at verify a.tgz -o org", "gh pr ls", "gh reference", "gh environment", "gh exit-codes",
+            })
             {
                 Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
             }
@@ -2096,14 +2111,19 @@ public sealed class AgentPolicyTests
     }
 
     /// <summary>
-    /// The gh commands that run git's state-writing verbs on the repository they stand in - a pull request's branch checked
-    /// out, a default repository written into git's configuration, a fork with its remote or its clone - are refused by the
-    /// worktree rules beside those verbs; reading a pull request or a repository stays allowed.
+    /// The gh commands that run git's state-writing verbs on the repository they stand in - a pull request's or an issue's
+    /// branch checked out, a branch pushed for a pull request, a default repository or a remote written into git's
+    /// configuration, a fork or a new repository with its remote, push or clone, gh made git's credential helper - and the
+    /// one that writes gh's own configuration are refused by the worktree rules beside those verbs, by gh's own aliases of
+    /// them too, and so is a command that sets where gh reads its configuration from; reading a pull request or a
+    /// repository stays allowed.
     /// </summary>
     [Fact]
     public void TheGhCommandsThatRunGitsStateVerbs_AreRefusedBesideThem()
     {
-        Assert.Equal(["gh pr checkout", "gh repo set-default", "gh repo fork"], AgentPolicy.GhGitStateCommands);
+        Assert.Equal(
+            ["gh pr checkout", "gh pr create", "gh issue develop", "gh repo set-default", "gh repo fork", "gh repo create", "gh repo rename", "gh auth setup-git", "gh config set"],
+            AgentPolicy.GhStateCommands);
 
         foreach (var platform in new[] { PlatformId.Linux, PlatformId.Windows })
         {
@@ -2117,6 +2137,20 @@ public sealed class AgentPolicyTests
                 ("gh repo set-default owner/repo", "Run(gh repo set-default *)"),
                 ("gh repo fork --remote", "Run(gh repo fork *)"),
                 ("gh repo fork owner/repo --clone", "Run(gh repo fork *)"),
+                ("gh pr co 12", "Run(gh pr checkout *)"),
+                ("gh -R owner/repo pr co 12", "Run(gh pr checkout *)"),
+                ("setsid gh pr co 12", "Run(gh pr checkout *)"),
+                ("gh pr create --fill", "Run(gh pr create *)"),
+                ("gh pr new --title t --body b", "Run(gh pr create *)"),
+                ("gh issue develop 7 --checkout", "Run(gh issue develop *)"),
+                ("gh repo create new-repo --private --source . --remote upstream --push", "Run(gh repo create *)"),
+                ("gh repo new new-repo --public --clone", "Run(gh repo create *)"),
+                ("gh repo rename better-name --yes", "Run(gh repo rename *)"),
+                ("gh auth setup-git", "Run(gh auth setup-git *)"),
+                ("gh config set browser firefox", "Run(gh config set *)"),
+                ("gh config set -h github.com pager less", "Run(gh config set *)"),
+                ("GH_CONFIG_DIR=.ghcfg gh pr view 5 --web", "Run(gh config set *)"),
+                ("APPDATA=.ghcfg gh browse", "Run(gh config set *)"),
             })
             {
                 var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
@@ -2124,9 +2158,13 @@ public sealed class AgentPolicyTests
                 Assert.Equal((rule, AgentPolicySource.Builtin, $"'{command}' is denied by {rule}, a worktree rule of this tool"), (denied.Rule, denied.Source, denied.Reason));
             }
 
-            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("gh pr view 12"));
-            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("gh pr diff 12"));
+            foreach (var command in new[] { "gh pr view 12", "gh pr diff 12", "gh config get editor", "gh config list", "gh repo view", "gh issue view 7" })
+            {
+                Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+            }
+
             Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false).Run("gh pr checkout 12"));
+            Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false).Run("gh pr co 12"));
         }
     }
 

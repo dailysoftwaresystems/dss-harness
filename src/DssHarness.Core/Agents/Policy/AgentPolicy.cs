@@ -62,24 +62,33 @@ public sealed class AgentPolicy
          "bisect", "symbolic-ref", "filter-branch", "fast-import", "replace", "notes", "reflog", "remote", "submodule", "sparse-checkout", "read-tree", "prune", "repack", "pack-refs", "maintenance"];
 
     /// <summary>
-    /// gh's own commands, as gh 2.89 lists them: the first word of a gh command that is none of them is an alias - gh's
-    /// own <c>co</c> among them, for <c>pr checkout</c> - or an extension, which gh runs as a command no rule here reads,
-    /// and the worktree rules refuse it as they refuse <c>gh alias set</c>. A command a later gh adds is refused until it is
-    /// named here.
+    /// gh's own commands and help topics, as gh 2.89 lists them, each read by its own name where gh gives it another
+    /// (<see cref="CommandAnalysis.GhAliases"/>): the first word of a gh command that is none of them is an alias - the
+    /// <c>co</c> gh's configuration holds for <c>pr checkout</c> among them - or an extension, which gh runs as a command
+    /// no rule here reads, and the worktree rules refuse it as they refuse <c>gh alias set</c>. A command a later gh adds
+    /// is refused until it is named here.
     /// </summary>
     public static IReadOnlyList<string> GhCommands { get; } =
     [
         "agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "codespace", "completion", "config", "copilot",
         "extension", "gist", "gpg-key", "help", "issue", "label", "licenses", "org", "pr", "preview", "project", "release",
         "repo", "ruleset", "run", "search", "secret", "ssh-key", "status", "variable", "version", "workflow",
+        "accessibility", "actions", "environment", "exit-codes", "formatting", "mintty", "reference",
     ];
 
     /// <summary>
-    /// The <c>gh</c> commands that run git's state-writing verbs (<see cref="GitStateVerbs"/>) on the repository they stand
-    /// in, refused by the worktree rules beside those verbs: a pull request's branch fetched and checked out, a default
-    /// repository written into git's configuration, and a fork made with its remote added or its clone.
+    /// The <c>gh</c> commands that write the state the worktree rules keep, refused by them beside git's state-writing
+    /// verbs (<see cref="GitStateVerbs"/>): git's, run on the repository they stand in - a pull request's or an issue's
+    /// branch fetched and checked out, a branch pushed for a pull request, a default repository or a remote written into
+    /// git's configuration, a fork or a new repository made with its remote, its push or its clone, a repository renamed
+    /// with its remote, and gh made git's credential helper - and gh's own configuration, which names the editor, pager
+    /// and browser every gh command runs.
     /// </summary>
-    public static IReadOnlyList<string> GhGitStateCommands { get; } = ["gh pr checkout", "gh repo set-default", "gh repo fork"];
+    public static IReadOnlyList<string> GhStateCommands { get; } =
+    [
+        "gh pr checkout", "gh pr create", "gh issue develop", "gh repo set-default", "gh repo fork", "gh repo create",
+        "gh repo rename", "gh auth setup-git", "gh config set",
+    ];
 
     /// <summary>
     /// Every way <c>gh</c> merges or starts CI, refused by the worktree rules - never merges, never
@@ -229,7 +238,7 @@ public sealed class AgentPolicy
             : [];
         _worktreeRunRules =
             [.. GitStateVerbs.Select(verb => AgentRule.Parse($"Run(git {verb} *)")),
-               .. GhGitStateCommands.Select(command => AgentRule.Parse($"Run({command} *)")),
+               .. GhStateCommands.Select(command => AgentRule.Parse($"Run({command} *)")),
                .. NeverCiCommands.Select(command => AgentRule.Parse($"Run({command} *)"))];
         _worktreePolicyWrites = [.. WorktreePolicyWrites.Select(pattern => (GlobPattern.Parse(pattern), pattern))];
         _protectedPaths = [.. ProtectedPathRules.Select(pattern => (GlobPattern.Parse(pattern), pattern))];
@@ -840,7 +849,8 @@ public sealed class AgentPolicy
         // The Run rules, against each reading of the command's own words in turn: git configured
         // where it runs the git config it is first, then the command with git's options dropped
         // before its subcommand.
-        var runs = start == CommandAnalysis.EnvironmentOf(command);
+        var environment = CommandAnalysis.EnvironmentOf(command);
+        var runs = start == environment;
         var readings = CommandAnalysis.ForRules(words, program: runs);
 
         foreach (var reading in readings)
@@ -875,7 +885,11 @@ public sealed class AgentPolicy
                 }
             }
 
-            if (readings.Select(reading => MergesOrStartsCi(reading, runs)).OfType<string>().FirstOrDefault() is { } reached)
+            // A gh met past the command's program runs where that program is a wrapper this does not strip (setsid gh co):
+            // among git's, find's or fd's own words it is data, for what they run is read apart.
+            var ghRuns = runs || !GhAmongData.Any(program => CommandAnalysis.Name(command[environment]).Equals(program, StringComparison.OrdinalIgnoreCase));
+
+            if (readings.Select(reading => MergesOrStartsCi(reading, ghRuns)).OfType<string>().FirstOrDefault() is { } reached)
             {
                 return new AgentPolicyAnswer.Denied(
                     "the merges and CI starts of gh",
@@ -1034,6 +1048,13 @@ public sealed class AgentPolicy
         => new(rule, source, $"'{whole}' may be what {rule} denies: a word the rule reads is one the shell expands, which this does not read");
 
     /// <summary>
+    /// The programs among whose own words a gh is data, never run: git, whose commands that run another are read where
+    /// they stand - its state verbs, its configuration and the commands its options name - and find and fd, whose commands
+    /// are read apart as the commands they run. Past any other program a gh may be one a wrapper runs.
+    /// </summary>
+    private static readonly string[] GhAmongData = ["git", "find", "fd", "fdfind"];
+
+    /// <summary>
     /// What a <c>gh</c> command reaches that merges or starts CI, as the worktree rules refuse it:
     /// an <c>api</c> endpoint of <see cref="GhApiEndpoints"/> or a mutation of
     /// <see cref="GhApiMutations"/>, a GraphQL query read from a file, an alias made, an extension
@@ -1042,8 +1063,9 @@ public sealed class AgentPolicy
     /// </summary>
     /// <param name="words">The command as its rules read it.</param>
     /// <param name="runs">
-    /// Whether gh is the command's program: a gh met among another program's words (<c>git grep gh src</c>) is data
-    /// where it stands, and its next word no command of gh's.
+    /// Whether the gh the words begin with may run: the command's own program, or a word past a wrapper this does not
+    /// strip; never a word among the words of a program of <see cref="GhAmongData"/> (<c>git grep gh src</c>), which is
+    /// data where it stands, and its next word no command of gh's.
     /// </param>
     private static string? MergesOrStartsCi(IReadOnlyList<string> words, bool runs)
     {

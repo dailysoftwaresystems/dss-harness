@@ -1602,12 +1602,15 @@ refused where the step has no web, and refused where
 the web is held to any rule when it reads what it reaches from a file. What it does not see is said
 in help: the inside of a script file a command runs. The worktree rules
 (`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs, the `gh` commands that run them
-(`AgentPolicy.GhGitStateCommands`), and the merges
+or write gh's own configuration (`AgentPolicy.GhStateCommands`; gh's own aliases read as the commands they name,
+`CommandAnalysis.GhAliases`, and a place gh reads its configuration from set for a command read as `gh config set`),
+and the merges
 and CI starts of `gh` - each endpoint and GraphQL mutation that merges or starts CI with the `gh`
 commands that reach it, one list (`AgentPolicy.GhCiReaches`) that `AgentPolicy.NeverCiCommands`
 (`gh pr merge`, `gh pr update-branch`, `gh repo sync`, `gh workflow run`, `gh run rerun`),
 `AgentPolicy.GhApiEndpoints` and `AgentPolicy.GhApiMutations` are read from, `gh alias set`, `gh extension exec`, and a `gh` command
-named by none of gh's own (`AgentPolicy.GhCommands`: an alias, `co` among them, or an extension) - keep git's own files unwritten whatever `protectedPaths` says (`AgentPolicy.GitsOwnRule`:
+named by none of gh's own (`AgentPolicy.GhCommands`: an alias, `co` among them, or an extension), wherever `gh` may
+run - past a wrapper the policy does not strip too, but not among git's, find's or fd's own words - keep git's own files unwritten whatever `protectedPaths` says (`AgentPolicy.GitsOwnRule`:
 a `.git` segment at any depth beneath a root, in any case, so a nested repository's hooks are as
 safe as the root's), and hold the tool's own
 policy and what the next launch loads unwritten by any agent; its own state

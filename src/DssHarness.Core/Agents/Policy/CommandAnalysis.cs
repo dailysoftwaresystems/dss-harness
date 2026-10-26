@@ -391,9 +391,18 @@ public static partial class CommandAnalysis
         // another program's last word, an assignment before no program.
         var environment = EnvironmentOf(words);
 
-        if ((program || environment < words.Count ? Declarations(words) : []).FirstOrDefault(SetsGitConfiguration) is { } setting)
+        var declared = program || environment < words.Count ? Declarations(words) : [];
+
+        if (declared.FirstOrDefault(SetsGitConfiguration) is { } setting)
         {
             readings.Add(["git", "config", AssignedName(setting), .. words.Skip(environment)]);
+        }
+
+        // Setting where gh reads its configuration from is gh config set of the setter's choosing: its editor, pager and
+        // browser among it, each a program any gh command runs.
+        if (declared.FirstOrDefault(word => IsAssignment(word) && GhConfigurationNames.Contains(AssignedName(word), StringComparer.OrdinalIgnoreCase)) is { } ghSetting)
+        {
+            readings.Add(["gh", "config", "set", AssignedName(ghSetting), .. words.Skip(environment)]);
         }
 
         var (command, configured) = Plain(words, program);
@@ -504,9 +513,34 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>
-    /// A gh command as its rules read it: gh, the words of its command's path - its flags before
-    /// the path's end taken out, a flag's value with it - then the rest as it stands. gh finds its
-    /// command past any flag, so <c>gh pr -R o/r merge 5</c> is <c>gh pr merge 5</c>. A flag before
+    /// gh's own aliases of its commands, as gh 2.89 gives them, each to the command it names: a command's by its alias
+    /// alone, a subcommand's by its command's name, a space and its alias. gh runs <c>gh pr co</c> as <c>gh pr checkout</c>
+    /// and <c>gh ext exec</c> as <c>gh extension exec</c>, and a rule on the one meets the other. An alias gh's
+    /// configuration holds (<c>co</c>) is none of these: it is the user's to change.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> GhAliases { get; } = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["agent-tasks"] = "agent-task", ["agent"] = "agent-task", ["agents"] = "agent-task", ["at"] = "attestation",
+        ["cs"] = "codespace", ["extensions"] = "extension", ["ext"] = "extension", ["rs"] = "ruleset",
+        ["alias ls"] = "list", ["cache ls"] = "list", ["codespace ls"] = "list", ["config ls"] = "list", ["extension ls"] = "list",
+        ["gist new"] = "create", ["gist ls"] = "list", ["gpg-key ls"] = "list", ["issue new"] = "create", ["issue ls"] = "list",
+        ["label ls"] = "list", ["org ls"] = "list", ["pr new"] = "create", ["pr ls"] = "list", ["pr co"] = "checkout",
+        ["project ls"] = "list", ["release new"] = "create", ["release ls"] = "list", ["repo new"] = "create", ["repo ls"] = "list",
+        ["ruleset ls"] = "list", ["run ls"] = "list", ["secret remove"] = "delete", ["secret ls"] = "list", ["ssh-key ls"] = "list",
+        ["variable remove"] = "delete", ["variable ls"] = "list", ["workflow ls"] = "list",
+    };
+
+    /// <summary>
+    /// The environment names gh reads its configuration from where they are set - its own directory, and the homes it
+    /// finds one in: <c>XDG_CONFIG_HOME</c>'s <c>gh</c>, Windows' <c>AppData</c>'s <c>GitHub CLI</c>, and <c>HOME</c>'s
+    /// <c>.config/gh</c> - read so on every system. Set for a command, each is a gh config set of the setter's choosing.
+    /// </summary>
+    private static readonly string[] GhConfigurationNames = ["GH_CONFIG_DIR", "XDG_CONFIG_HOME", "APPDATA", "HOME"];
+
+    /// <summary>
+    /// A gh command as its rules read it: gh, the words of its command's path, each by gh's own name for it
+    /// (<see cref="GhAliases"/>) - its flags before the path's end taken out, a flag's value with it - then the rest as it
+    /// stands. gh finds its command past any flag, so <c>gh pr -R o/r merge 5</c> is <c>gh pr merge 5</c>. A flag before
     /// the path's end that this does not know may take the word after it, and is refused.
     /// </summary>
     private static IReadOnlyList<string> GhForRules(IReadOnlyList<string> words, bool program)
@@ -522,7 +556,7 @@ public static partial class CommandAnalysis
 
             if (!word.StartsWith('-'))
             {
-                path.Add(word);
+                path.Add(GhAliases.TryGetValue(path.Count == 1 ? word : $"{path[1]} {word}", out var named) ? named : word);
                 at++;
 
                 // gh api's path ends at api: what follows is its endpoint and its own flags.

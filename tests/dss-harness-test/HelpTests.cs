@@ -328,10 +328,15 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("the inside of a script file a command runs", prose, StringComparison.Ordinal);
         Assert.Contains("The worktree rules (agentPolicy.worktreeRules, true where nothing is said)", prose, StringComparison.Ordinal);
-        Assert.Contains($"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) are refused, and so are the gh commands that run them ({string.Join(", ", AgentPolicy.GhGitStateCommands)}) - reading git", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            $"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) are refused, and so are the gh commands that run them or write gh's own configuration ({string.Join(", ", AgentPolicy.GhStateCommands)}; "
+                + "a command gh names by an alias of its own, pr co for pr checkout among them, read as the command it names, and "
+                + "where gh reads its configuration from - GH_CONFIG_DIR, XDG_CONFIG_HOME, AppData, HOME - set for a command the gh config set it is) - reading git",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains(
             $"and so are the gh commands that merge or start CI ({string.Join(", ", AgentPolicy.NeverCiCommands)}), the gh api endpoints and GraphQL "
-                + $"mutations that reach the same, gh alias set, gh extension exec, and a gh command named by none of gh's own ({string.Join(", ", AgentPolicy.GhCommands)}) - an alias, gh's own co among them, or an extension, a name for any command - for never merges,",
+                + $"mutations that reach the same, gh alias set, gh extension exec, and a gh command named by none of gh's own ({string.Join(", ", AgentPolicy.GhCommands)}) - an alias, gh's own co among them, or an extension, a name for any command, wherever gh may run - past a wrapper this does not strip too, but among git's, find's or fd's own words - for never merges,",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(

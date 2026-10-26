@@ -800,13 +800,44 @@ public sealed class CommandAnalysisTests
     [Fact]
     public void ForRules_AHomeGitReadsItsConfigurationFrom_IsTheGitConfigItIs()
     {
-        foreach (var name in new[] { "HOME", "XDG_CONFIG_HOME", "HOMEDRIVE", "HOMEPATH", "USERPROFILE" })
+        foreach (var name in new[] { "HOMEDRIVE", "HOMEPATH", "USERPROFILE" })
         {
             Assert.Equal([["git", "config", name, "git", "st"], ["git", "st"]], CommandAnalysis.ForRules([$"{name}=/tmp/evil", "git", "st"]));
         }
 
-        Assert.Equal([["git", "config", "HOME", "export", "HOME=/tmp/evil"], ["export", "HOME=/tmp/evil"]], CommandAnalysis.ForRules(["export", "HOME=/tmp/evil"]));
+        // HOME and XDG_CONFIG_HOME are where gh reads its configuration from as well.
+        foreach (var name in new[] { "HOME", "XDG_CONFIG_HOME" })
+        {
+            Assert.Equal([["git", "config", name, "git", "st"], ["gh", "config", "set", name, "git", "st"], ["git", "st"]], CommandAnalysis.ForRules([$"{name}=/tmp/evil", "git", "st"]));
+        }
+
+        Assert.Equal(
+            [["git", "config", "HOME", "export", "HOME=/tmp/evil"], ["gh", "config", "set", "HOME", "export", "HOME=/tmp/evil"], ["export", "HOME=/tmp/evil"]],
+            CommandAnalysis.ForRules(["export", "HOME=/tmp/evil"]));
         Assert.Equal([["git", "st"]], CommandAnalysis.ForRules(["HOMEBREW_NO_AUTO_UPDATE=1", "git", "st"]));
+    }
+
+    /// <summary>
+    /// A place gh reads its configuration from - its own directory, Windows' AppData, and the homes git reads too - set for a
+    /// command or declared, is gh config set of the setter's choosing, its browser, pager and editor among it; gh's own
+    /// aliases of its commands are read as the commands they name, a configured alias as it stands.
+    /// </summary>
+    [Fact]
+    public void ForRules_WhereGhReadsItsConfigurationFrom_IsGhConfigSet_AndGhsOwnAliasesTheirCommands()
+    {
+        foreach (var name in new[] { "GH_CONFIG_DIR", "APPDATA", "AppData" })
+        {
+            Assert.Equal([["gh", "config", "set", name, "gh", "pr", "view", "5", "--web"], ["gh", "pr", "view", "5", "--web"]], CommandAnalysis.ForRules([$"{name}=.cfg", "gh", "pr", "view", "5", "--web"]));
+        }
+
+        Assert.Equal([["gh", "config", "set", "GH_CONFIG_DIR", "export", "GH_CONFIG_DIR=.cfg"], ["export", "GH_CONFIG_DIR=.cfg"]], CommandAnalysis.ForRules(["export", "GH_CONFIG_DIR=.cfg"]));
+        Assert.Equal([["gh", "pr", "view", "5"]], CommandAnalysis.ForRules(["GH_REPO=o/r", "gh", "pr", "view", "5"]));
+
+        Assert.Equal([["gh", "pr", "checkout", "12"]], CommandAnalysis.ForRules(["gh", "-R", "o/r", "pr", "co", "12"]));
+        Assert.Equal([["gh", "extension", "exec", "x"]], CommandAnalysis.ForRules(["gh", "ext", "exec", "x"]));
+        Assert.Equal([["gh", "repo", "create", "r", "--clone"]], CommandAnalysis.ForRules(["gh", "repo", "new", "r", "--clone"]));
+        Assert.Equal([["gh", "co", "12"]], CommandAnalysis.ForRules(["gh", "co", "12"]));
+        Assert.Equal([["gh", "issue", "co", "12"]], CommandAnalysis.ForRules(["gh", "issue", "co", "12"]));
     }
 
     /// <summary>

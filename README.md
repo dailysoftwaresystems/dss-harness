@@ -609,11 +609,15 @@ can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
 `help agent-clients`) - a git configured where it runs, by `-c` or `--config-env` of any key but
 the ones that only shape what git prints, or by its environment - a home it reads its global
 configuration from (`HOME`, `XDG_CONFIG_HOME`, Windows' `USERPROFILE`) among it - the `git config`
-it is and still the command it runs - the `gh` commands that run them (`gh pr checkout`, `gh repo set-default`,
-`gh repo fork`), and the `gh` commands that merge or start CI (`gh pr merge`, `gh pr update-branch`, `gh repo sync`,
+it is and still the command it runs - the `gh` commands that run them or write gh's own configuration
+(`gh pr checkout`, `gh pr create`, `gh issue develop`, `gh repo set-default`, `gh repo fork`, `gh repo create`,
+`gh repo rename`, `gh auth setup-git`, `gh config set`; a command by one of gh's own aliases - `gh pr co` - read as
+the command it names, and `GH_CONFIG_DIR` or another place gh reads its configuration from, set for a command, the
+`gh config set` it is), and the `gh` commands that merge or start CI (`gh pr merge`, `gh pr update-branch`, `gh repo sync`,
 `gh workflow run`, `gh run rerun`), the `gh api` endpoints and GraphQL mutations that reach the
 same, `gh alias set`, `gh extension exec`, and a `gh` command named by none of gh's own (an alias - gh's own `co` among them - or an
-extension, a name for any command) are refused (reading git stays allowed), git's own
+extension, a name for any command, wherever `gh` may run - behind a wrapper the policy does not strip too, but not
+among git's, find's or fd's own words) are refused (reading git stays allowed), git's own
 files - a `.git`, file or directory, at any depth beneath a root and in any case, a nested
 repository's and a submodule's too (`Write(**/.git/**)`) - are not written by a tool whatever
 `protectedPaths` says, and an agent does not edit its own policy
