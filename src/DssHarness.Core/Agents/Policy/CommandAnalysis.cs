@@ -1000,7 +1000,7 @@ public static partial class CommandAnalysis
 
         // A program git's own settings name, which git runs through the shell: core.pager, core.sshCommand, an
         // alias's '!' line, as the variables above are read.
-        if (Is(Name(words[0]), "git") && GitSettingScripts(words, environment) is { Count: > 0 } settings)
+        if (GitWords(words) is { } git && GitSettingScripts(git, environment) is { Count: > 0 } settings)
         {
             foreach (var command in GoneInto(settings, depth, environment))
             {
@@ -1332,10 +1332,9 @@ public static partial class CommandAnalysis
 
             yield return ["sh", "-c", command.Any(Placeholder().IsMatch) ? script : $"{script} {quoted}"];
         }
-        else if (Is(program, "git") || (program.Length > 4 && program.StartsWith("git-", StringComparison.OrdinalIgnoreCase)))
+        else if (GitWords(words) is { } git)
         {
-            // git-ls-remote is git ls-remote, as git's own directory holds each of its commands (Plain reads it so).
-            foreach (var executed in GitExecuted(words))
+            foreach (var executed in GitExecuted(git))
             {
                 yield return executed;
             }
@@ -1385,7 +1384,7 @@ public static partial class CommandAnalysis
 
         // archive runs its --exec only when it fetches from a --remote; without one git ignores it.
         var specs = subcommand == "archive"
-                && !command.Skip(2).Any(word => word == "--remote" || word.StartsWith("--remote=", StringComparison.Ordinal))
+                && !Enumerable.Range(2, command.Count - 2).Any(at => GitOptionValue(command, at, ["remote"], string.Empty, gluedOnly: false) is not null)
             ? []
             : GitExecutedOptions(subcommand);
 
@@ -1394,7 +1393,7 @@ public static partial class CommandAnalysis
             foreach (var spec in specs)
             {
                 if (GitOptionValue(command, at, spec.Long, spec.Short, spec.GluedOnly) is { } found
-                    && (!spec.PathOnly || found.Value.StartsWith('/')))
+                    && (!spec.PathOnly || NamesAPath(found.Value)))
                 {
                     yield return spec.Appends ? ["sh", "-c", found.Value, InputWord] : ["sh", "-c", found.Value];
                     at = found.Next - 1;
@@ -1403,6 +1402,16 @@ public static partial class CommandAnalysis
             }
         }
     }
+
+    /// <summary>
+    /// A git command's words with git its program: as they stand where it is git, and a dashed command - git-ls-remote, as
+    /// git's own directory holds each of its commands - as the <c>git ls-remote</c> it is; null where the program is no git.
+    /// </summary>
+    private static IReadOnlyList<string>? GitWords(IReadOnlyList<string> words)
+        => words.Count == 0 ? null
+            : Is(Name(words[0]), "git") ? words
+            : Name(words[0]) is { Length: > 4 } dashed && dashed.StartsWith("git-", StringComparison.OrdinalIgnoreCase) ? ["git", dashed[4..], .. words.Skip(1)]
+            : null;
 
     /// <summary>
     /// A git subcommand's options whose value git runs: each its long names (given without the
@@ -1453,35 +1462,54 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>
-    /// The value a git option carries at <paramref name="at"/>: <c>--name value</c> or
-    /// <c>--name=value</c>, and a short <c>-x value</c> or <c>-xvalue</c>; where
-    /// <paramref name="gluedOnly"/>, only the glued forms (<c>--name=value</c>, <c>-xvalue</c>), as
-    /// git reads an option whose argument is optional. Null where the word names none of
-    /// <paramref name="longNames"/> or <paramref name="shortLetters"/>, or names one with no value
-    /// to read.
+    /// Whether a <c>--smtp-server</c>'s value may name a path, which git runs as the mailer: one written whole from a root
+    /// (<c>/</c>, a drive's <c>C:\</c>), one the shell makes so (<c>~/bin/m</c>), and one an expansion gives.
+    /// </summary>
+    private static bool NamesAPath(string value)
+        => value.StartsWith('/') || value.StartsWith('~') || Expansion(value) is not null
+            || (value.Length > 2 && char.IsAsciiLetter(value[0]) && value[1] == ':' && value[2] is '\\' or '/');
+
+    /// <summary>
+    /// The value a git option carries at <paramref name="at"/>, as git's parse-options reads it: <c>--name value</c> or
+    /// <c>--name=value</c> by any prefix of its name, which git takes for the whole where it is no other option's; a short
+    /// <c>-x value</c> or <c>-xvalue</c>, and the letter at the end of a cluster or inside one (<c>-dx value</c>,
+    /// <c>-dxvalue</c>), the letters before it ones that take no value. Where <paramref name="gluedOnly"/>, only the glued
+    /// forms (<c>--name=value</c>, <c>-xvalue</c>), as git reads an option whose argument is optional. Read so where a
+    /// prefix or a letter may be another option's too: a value misread is a command refused, never one let through. Null
+    /// where the word names none of <paramref name="longNames"/> or <paramref name="shortLetters"/>, or names one with no
+    /// value to read.
     /// </summary>
     private static (string Value, int Next)? GitOptionValue(IReadOnlyList<string> words, int at, IReadOnlyList<string> longNames, string shortLetters, bool gluedOnly)
     {
         var word = words[at];
 
-        foreach (var name in longNames)
+        if (word.StartsWith("--", StringComparison.Ordinal) && word.Length > 2)
         {
-            if (word.StartsWith("--" + name + "=", StringComparison.Ordinal))
+            var named = word[2..].Split('=', 2);
+
+            if (!longNames.Any(name => name.StartsWith(named[0], StringComparison.Ordinal)))
             {
-                return (word[("--" + name + "=").Length..], at + 1);
+                return null;
             }
 
-            if (!gluedOnly && word == "--" + name)
-            {
-                return at + 1 < words.Count ? (words[at + 1], at + 2) : null;
-            }
-        }
-
-        if (word.Length >= 2 && word[0] == '-' && word[1] != '-' && shortLetters.IndexOf(word[1]) >= 0)
-        {
-            return word.Length > 2 ? (word[2..], at + 1)
+            return named.Length == 2 ? (named[1], at + 1)
                 : !gluedOnly && at + 1 < words.Count ? (words[at + 1], at + 2)
                 : null;
+        }
+
+        if (word.Length < 2 || word[0] != '-' || word[1] == '-')
+        {
+            return null;
+        }
+
+        for (var letter = 1; letter < word.Length; letter++)
+        {
+            if (shortLetters.IndexOf(word[letter]) >= 0)
+            {
+                return letter + 1 < word.Length ? (word[(letter + 1)..], at + 1)
+                    : !gluedOnly && at + 1 < words.Count ? (words[at + 1], at + 2)
+                    : null;
+            }
         }
 
         return null;

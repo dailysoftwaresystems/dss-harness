@@ -365,9 +365,79 @@ public static partial class CommandAnalysis
     /// <summary>The methods an <c>http</c> or <c>https</c> takes before its URL.</summary>
     private static readonly string[] HttpMethods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"];
 
-    /// <summary>The options of <c>gh api</c> that take a value in the next word.</summary>
+    /// <summary>The long options of <c>gh api</c> that take a value: glued after an <c>=</c>, or the next word.</summary>
     private static readonly string[] GhApiValueTaking =
-        ["-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "-p", "--preview", "-q", "--jq", "-t", "--template", "--input", "--cache"];
+        ["method", "header", "raw-field", "field", "preview", "jq", "template", "input", "cache", "hostname"];
+
+    /// <summary>
+    /// The short options of <c>gh api</c>, each by its long name: <c>-i</c> takes no value, every other one takes one -
+    /// the rest of its word, after an <c>=</c> where one stands first, or the next word.
+    /// </summary>
+    private static readonly Dictionary<char, string> GhApiShorts = new()
+    {
+        ['X'] = "method", ['H'] = "header", ['f'] = "raw-field", ['F'] = "field", ['p'] = "preview", ['q'] = "jq", ['t'] = "template",
+        ['i'] = "include",
+    };
+
+    /// <summary>
+    /// <c>gh api</c>'s words as pflag reads them: each option by its long name with its value - a long one's glued after
+    /// an <c>=</c> or the next word, a short one's by <see cref="GhApiShorts"/> - and a cluster of short ones
+    /// (<c>-iXDELETE</c>, <c>-iX DELETE</c>, <c>-if a=b</c>) read letter by letter, the first that takes a value taking
+    /// the rest of the word or the next; and each word that is no option, nor an option's value, with no name. A
+    /// short letter gh does not have is read as one that takes no value, so the letters after it are read all the same.
+    /// </summary>
+    /// <param name="arguments">The words after <c>gh</c>, <c>api</c> first.</param>
+    private static IEnumerable<(string? Name, string Value)> GhApiWords(IReadOnlyList<string> arguments)
+    {
+        for (var at = 1; at < arguments.Count; at++)
+        {
+            var word = arguments[at];
+
+            if (word == "--")
+            {
+                foreach (var rest in arguments.Skip(at + 1))
+                {
+                    yield return (null, rest);
+                }
+
+                yield break;
+            }
+
+            if (word.StartsWith("--", StringComparison.Ordinal))
+            {
+                var name = word[2..].Split('=', 2);
+
+                yield return name.Length == 2 ? (name[0], name[1])
+                    : GhApiValueTaking.Contains(name[0], StringComparer.Ordinal) && at + 1 < arguments.Count ? (name[0], arguments[++at])
+                    : (name[0], string.Empty);
+                continue;
+            }
+
+            if (word.Length < 2 || word[0] != '-')
+            {
+                yield return (null, word);
+                continue;
+            }
+
+            for (var letter = 1; letter < word.Length; letter++)
+            {
+                var named = GhApiShorts.GetValueOrDefault(word[letter]) ?? word[letter].ToString();
+
+                if (named is "include" || !GhApiShorts.ContainsKey(word[letter]))
+                {
+                    yield return (named, string.Empty);
+                    continue;
+                }
+
+                var glued = word[(letter + 1)..];
+
+                yield return glued.Length > 0 ? (named, glued.StartsWith('=') ? glued[1..] : glued)
+                    : at + 1 < arguments.Count ? (named, arguments[++at])
+                    : (named, string.Empty);
+                break;
+            }
+        }
+    }
 
     /// <summary>
     /// The address <c>gh api</c> reaches: its endpoint where that is a whole URL, else
@@ -381,17 +451,11 @@ public static partial class CommandAnalysis
             return null;
         }
 
-        for (var at = 1; at < arguments.Count; at++)
+        foreach (var (name, value) in GhApiWords(arguments))
         {
-            var word = arguments[at];
-
-            if (word.StartsWith("--hostname=", StringComparison.OrdinalIgnoreCase) && word["--hostname=".Length..] is { Length: > 0 } glued)
+            if (name == "hostname" && value.Length > 0)
             {
-                host = glued;
-            }
-            else if (word.Equals("--hostname", StringComparison.OrdinalIgnoreCase) && at + 1 < arguments.Count)
-            {
-                host = arguments[++at];
+                host = value;
             }
         }
 
@@ -408,85 +472,36 @@ public static partial class CommandAnalysis
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
-        for (var at = 1; at < arguments.Count; at++)
-        {
-            var word = arguments[at];
-
-            if ((GhApiValueTaking.Contains(word, StringComparer.Ordinal) || word.Equals("--hostname", StringComparison.OrdinalIgnoreCase)) && at + 1 < arguments.Count)
-            {
-                at++;
-            }
-            else if (!word.StartsWith('-'))
-            {
-                return word;
-            }
-        }
-
-        return null;
+        return GhApiWords(arguments).FirstOrDefault(word => word.Name is null).Value;
     }
 
     /// <summary>
-    /// Whether <c>gh api</c> writes: its method, by <c>-X</c> or <c>--method</c>, any but GET or HEAD as written - so one
-    /// the shell expands, which may be any, writes - and, where it names none, gh's own POST for a request given fields or
-    /// an input.
+    /// Whether <c>gh api</c> writes: its method, by <c>-X</c> or <c>--method</c> in any form pflag reads
+    /// (<see cref="GhApiWords"/>), any but GET or HEAD as written - so one the shell expands, which may be any, writes -
+    /// and, where it names none, gh's own POST for a request given fields or an input.
     /// </summary>
     /// <param name="arguments">The words after <c>gh</c>, <c>api</c> first.</param>
     public static bool GhApiWrites(IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
-        string? method = null;
+        var words = GhApiWords(arguments).ToList();
 
-        for (var at = 1; at < arguments.Count; at++)
-        {
-            var word = arguments[at];
-
-            if (word is "-X" or "--method" && at + 1 < arguments.Count)
-            {
-                method = arguments[++at];
-            }
-            else if (word.StartsWith("--method=", StringComparison.Ordinal))
-            {
-                method = word["--method=".Length..];
-            }
-            else if (word.StartsWith("-X", StringComparison.Ordinal) && word.Length > 2)
-            {
-                method = word[2] == '=' ? word[3..] : word[2..];
-            }
-        }
-
-        return method is not null
-            ? !(method.Equals("GET", StringComparison.OrdinalIgnoreCase) || method.Equals("HEAD", StringComparison.OrdinalIgnoreCase))
-            : GhApiFields(arguments).Any() || arguments.Any(word => word == "--input" || word.StartsWith("--input=", StringComparison.Ordinal));
+        return words.LastOrDefault(word => word.Name == "method") is { Name: not null } method
+            ? !(method.Value.Equals("GET", StringComparison.OrdinalIgnoreCase) || method.Value.Equals("HEAD", StringComparison.OrdinalIgnoreCase))
+            : words.Any(word => word.Name is "raw-field" or "field" or "input");
     }
 
     /// <summary>
-    /// The values <c>gh api</c>'s fields give, by their names: <c>-f</c>, <c>-F</c>,
-    /// <c>--raw-field</c> and <c>--field</c>, each <c>name=value</c>, the next word or glued after
-    /// an <c>=</c>.
+    /// The values <c>gh api</c>'s fields give, by their names: <c>-f</c>, <c>-F</c>, <c>--raw-field</c> and
+    /// <c>--field</c>, each <c>name=value</c>, in any form pflag reads (<see cref="GhApiWords"/>).
     /// </summary>
     /// <param name="arguments">The words after <c>gh</c>, <c>api</c> first.</param>
     internal static IEnumerable<string> GhApiFields(IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
-        for (var at = 1; at < arguments.Count; at++)
-        {
-            var word = arguments[at];
-
-            if (word is "-f" or "-F" or "--raw-field" or "--field" && at + 1 < arguments.Count)
-            {
-                yield return arguments[++at];
-            }
-            else if (word.StartsWith("--raw-field=", StringComparison.Ordinal) || word.StartsWith("--field=", StringComparison.Ordinal))
-            {
-                yield return word.Split('=', 2)[1];
-            }
-            else if (word.Length > 2 && word[0] == '-' && word[1] is 'f' or 'F' && word[2] != '-')
-            {
-                yield return word[2..];
-            }
-        }
+        return GhApiWords(arguments).Where(word => word.Name is "raw-field" or "field").Select(word => word.Value);
     }
 
     /// <summary>

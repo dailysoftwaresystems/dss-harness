@@ -911,8 +911,10 @@ public sealed class CommandAnalysisTests
         // git's own options before the subcommand are passed over, as Plain passes them, so the subcommand is still found.
         Assert.Contains(["id"], Commands("git -C .. ls-remote --upload-pack=id ."));
 
-        // archive runs its --exec only with --remote; without one git ignores it, and so is it left unread.
+        // archive runs its --exec only with --remote, by any prefix git takes for it; without one git ignores it, and so is
+        // it left unread.
         Assert.Contains(["id"], Commands("git archive --remote=host:repo --exec=id HEAD"));
+        Assert.Contains(["id"], Commands("git archive --rem=host:repo --exe=id HEAD"));
         Assert.DoesNotContain(["id"], Commands("git archive --exec=id HEAD"));
     }
 
@@ -930,6 +932,17 @@ public sealed class CommandAnalysisTests
         Assert.Contains(["id"], Commands("git rebase -x 'id' main"));
         Assert.Contains(["id"], Commands("git rebase --exec=id main"));
 
+        // As git's parse-options reads them: a long option by any prefix of its name, and a short letter at the end of a
+        // cluster or inside one, the letters before it ones that take no value.
+        Assert.Contains(["id"], Commands("git difftool -dx id HEAD~1"));
+        Assert.Contains(["id"], Commands("git difftool -dxid HEAD~1"));
+        Assert.Contains(["id"], Commands("git rebase -ix id main"));
+        Assert.Contains(["id"], Commands("git rebase --exe id main"));
+        Assert.Contains(["id"], Commands("git difftool --extc=id HEAD~1"));
+        Assert.Contains(["id"], Commands("git fetch --upload-p=id origin"));
+        Assert.Contains(["id"], Commands("git grep -nOid foo"));
+        Assert.Contains(["id"], Commands("git-clone -qu id ./repo"));
+
         // grep's -O takes an optional pager glued only, never the next word, which stays the pattern.
         Assert.Contains(["id"], Commands("git grep -Oid foo"));
         Assert.Contains(["id"], Commands("git grep --open-files-in-pager=id foo"));
@@ -945,8 +958,11 @@ public sealed class CommandAnalysisTests
         Assert.Contains(["id"], Commands("git send-email --to-cmd=id *.patch"));
         Assert.Contains(["id"], Commands("git send-email --sendmail-cmd 'id'"));
 
-        // --smtp-server names a command only where it is a path; a host name is no command.
+        // --smtp-server names a command only where it is a path - written from a root or a drive, made so by the shell, or
+        // given by an expansion; a host name is no command.
         Assert.Contains(["/id"], Commands("git send-email --smtp-server=/id *.patch"));
+        Assert.Contains(["~/bin/id"], Commands("git send-email --smtp-server ~/bin/id x.patch"));
+        Assert.Contains(["C:/bin/id"], Commands("git send-email --smtp-server=C:/bin/id x.patch"));
         Assert.DoesNotContain(["smtp.example.com"], Commands("git send-email --smtp-server=smtp.example.com *.patch"));
     }
 

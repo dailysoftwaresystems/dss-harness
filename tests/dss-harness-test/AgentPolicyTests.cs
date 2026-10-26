@@ -2148,6 +2148,11 @@ public sealed class AgentPolicyTests
                 ("gh api repos/o/r/releases --input release.json", "repos/o/r/releases"),
                 ("gh api -X=PATCH repos/o/r/releases/123 -F draft=false", "repos/o/r/releases/123"),
                 ("gh api -X $METHOD repos/o/r/git/refs/heads/main", "repos/o/r/git/refs/heads/main"),
+                ("gh api -iXDELETE repos/o/r/git/refs/heads/feature", "repos/o/r/git/refs/heads/feature"),
+                ("gh api -iX DELETE repos/o/r/git/refs/heads/feature", "repos/o/r/git/refs/heads/feature"),
+                ("gh api -if ref=refs/heads/x -if sha=abc repos/o/r/git/refs", "repos/o/r/git/refs"),
+                ("gh api -iH Accept:x -X PATCH repos/o/r/git/refs/heads/m", "repos/o/r/git/refs/heads/m"),
+                ("gh api --hostname=github.com -iX=PUT repos/o/r/contents/a.cs", "repos/o/r/contents/a.cs"),
             })
             {
                 var written = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
@@ -2173,6 +2178,7 @@ public sealed class AgentPolicyTests
             {
                 "gh api repos/o/r/git/refs/heads/main", "gh api -X GET repos/o/r/pulls -f state=open", "gh api repos/o/r/contents/README.md",
                 "gh api -X=GET repos/o/r/git/refs/heads/main -f per_page=5", "gh api -XGET repos/o/r/contents/README.md -f ref=main",
+                "gh api -iXGET repos/o/r/git/refs/heads/main", "gh api -i repos/o/r/git/refs", "gh api -iX HEAD repos/o/r/contents/a.cs",
                 "gh api --method HEAD repos/o/r/releases", "gh api repos/o/r/releases/123/assets", "gh api repos/o/r/pulls/5/comments",
                 "gh release view v1", "gh release list",
             })
