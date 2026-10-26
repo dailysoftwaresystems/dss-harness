@@ -513,21 +513,22 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>
-    /// gh's own aliases of its commands, as gh 2.89 gives them, each to the command it names: a command's by its alias
-    /// alone, a subcommand's by its command's name, a space and its alias. gh runs <c>gh pr co</c> as <c>gh pr checkout</c>
+    /// gh's own aliases of its commands, as gh 2.89 and gh's manual of 2026-10-26 give them, each to the command it names: a
+    /// command's by its alias alone, a subcommand's by its command's name, a space and its alias. gh runs <c>gh pr co</c> as <c>gh pr checkout</c>
     /// and <c>gh ext exec</c> as <c>gh extension exec</c>, and a rule on the one meets the other. An alias gh's
     /// configuration holds (<c>co</c>) is none of these: it is the user's to change.
     /// </summary>
     public static IReadOnlyDictionary<string, string> GhAliases { get; } = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["agent-tasks"] = "agent-task", ["agent"] = "agent-task", ["agents"] = "agent-task", ["at"] = "attestation",
-        ["cs"] = "codespace", ["extensions"] = "extension", ["ext"] = "extension", ["rs"] = "ruleset",
+        ["cs"] = "codespace", ["extensions"] = "extension", ["ext"] = "extension", ["rs"] = "ruleset", ["skills"] = "skill",
         ["alias ls"] = "list", ["cache ls"] = "list", ["codespace ls"] = "list", ["config ls"] = "list", ["extension ls"] = "list",
         ["gist new"] = "create", ["gist ls"] = "list", ["gpg-key ls"] = "list", ["issue new"] = "create", ["issue ls"] = "list",
         ["label ls"] = "list", ["org ls"] = "list", ["pr new"] = "create", ["pr ls"] = "list", ["pr co"] = "checkout",
         ["project ls"] = "list", ["release new"] = "create", ["release ls"] = "list", ["repo new"] = "create", ["repo ls"] = "list",
         ["ruleset ls"] = "list", ["run ls"] = "list", ["secret remove"] = "delete", ["secret ls"] = "list", ["ssh-key ls"] = "list",
-        ["variable remove"] = "delete", ["variable ls"] = "list", ["workflow ls"] = "list",
+        ["variable remove"] = "delete", ["variable ls"] = "list", ["workflow ls"] = "list", ["discussion ls"] = "list",
+        ["extension uninstall"] = "remove", ["skill add"] = "install", ["skill ls"] = "list", ["skill show"] = "preview",
     };
 
     /// <summary>
@@ -1843,6 +1844,20 @@ public static partial class CommandAnalysis
 
     /// <summary>Whether <paramref name="program"/> runs none of its words (<see cref="DataPrograms"/>), by its name in any case.</summary>
     public static bool RunsNoWords(string program) => Is(Name(program), [.. DataPrograms]);
+
+    /// <summary>
+    /// The programs that run the words after their own options as a command, which this does not strip - their options
+    /// are theirs to read - each tried by the rules on its own program as every word is: a check that holds only where a
+    /// program runs (a gh named by none of gh's own) holds past these too, and among any other program's words reads its
+    /// word as that program's data.
+    /// </summary>
+    public static IReadOnlyList<string> CommandRunners { get; } =
+        ["setsid", "stdbuf", "ionice", "chrt", "taskset", "unshare", "nsenter", "prlimit", "numactl", "cpulimit", "firejail", "flock",
+         "torsocks", "proxychains", "proxychains4", "faketime", "strace", "ltrace", "valgrind", "caffeinate", "chroot", "runuser",
+         "watch", "ssh", "wsl", "start", "call"];
+
+    /// <summary>Whether <paramref name="program"/> runs the words after its own options (<see cref="CommandRunners"/>), by its name in any case.</summary>
+    public static bool RunsItsWords(string program) => Is(Name(program), [.. CommandRunners]);
 
     /// <summary>
     /// What fish runs, its options read as fish reads them, getopt's way - a short option's value glued after it or the

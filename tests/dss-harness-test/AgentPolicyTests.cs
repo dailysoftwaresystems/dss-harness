@@ -2017,9 +2017,13 @@ public sealed class AgentPolicyTests
     [Fact]
     public void EveryGhCommandThatReachesARefusedEndpointOrMutation_IsRefused()
     {
-        Assert.Equal(["gh pr merge", "gh pr update-branch", "gh repo sync", "gh workflow run", "gh run rerun"], AgentPolicy.NeverCiCommands);
+        Assert.Equal(["gh pr merge", "gh pr update-branch", "gh repo sync", "gh workflow run", "gh run rerun", "gh pr create", "gh release create", "gh release edit"], AgentPolicy.NeverCiCommands);
         Assert.Equal(["pulls/<n>/merge", "pulls/<n>/update-branch", "merges", "merge-upstream", "dispatches", "approve", "rerun", "rerun-failed-jobs", "rerequest"], AgentPolicy.GhApiEndpoints);
-        Assert.Equal(["mergePullRequest", "enablePullRequestAutoMerge", "enqueuePullRequest", "mergeBranch", "updatePullRequestBranch", "rerequestCheckSuite"], AgentPolicy.GhApiMutations);
+        Assert.Equal(["git/refs/**", "contents/**", "pulls", "releases", "releases/<n>"], AgentPolicy.GhApiWriteEndpoints);
+        Assert.Equal(
+            ["mergePullRequest", "enablePullRequestAutoMerge", "enqueuePullRequest", "mergeBranch", "updatePullRequestBranch", "rerequestCheckSuite",
+             "createRef", "updateRef", "updateRefs", "deleteRef", "createCommitOnBranch", "createLinkedBranch", "createPullRequest"],
+            AgentPolicy.GhApiMutations);
 
         foreach (var platform in new[] { PlatformId.Linux, PlatformId.Windows })
         {
@@ -2047,6 +2051,50 @@ public sealed class AgentPolicyTests
             }
 
             Assert.Equal("the merges and CI starts of gh", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("gh api -X POST repos/owner/fork/merge-upstream -f branch=main")).Rule);
+
+            // A push, a pull request opened or a release made through the API, where the request writes: a method other
+            // than GET or HEAD - one the shell expands too - or gh's own POST for fields or an input.
+            foreach (var (command, endpoint) in new[]
+            {
+                ("gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc -F force=true", "repos/o/r/git/refs/heads/main"),
+                ("gh api repos/o/r/git/refs -f ref=refs/heads/x -f sha=abc", "repos/o/r/git/refs"),
+                ("gh api --method=DELETE repos/o/r/git/refs/tags/v1", "repos/o/r/git/refs/tags/v1"),
+                ("gh api -XPUT repos/o/r/contents/src/a.cs -f message=m -f content=eA==", "repos/o/r/contents/src/a.cs"),
+                ("gh api repos/o/r/pulls -f title=t -f head=x -f base=main", "repos/o/r/pulls"),
+                ("gh api repos/o/r/releases --input release.json", "repos/o/r/releases"),
+                ("gh api -X=PATCH repos/o/r/releases/123 -F draft=false", "repos/o/r/releases/123"),
+                ("gh api -X $METHOD repos/o/r/git/refs/heads/main", "repos/o/r/git/refs/heads/main"),
+            })
+            {
+                var written = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
+
+                Assert.Equal(
+                    ("the merges and CI starts of gh", $"'{command}' is denied by a worktree rule of this tool: it reaches the endpoint '{endpoint}', written, and never merges, never starts CI binds the agents too"),
+                    (written.Rule, written.Reason));
+            }
+
+            foreach (var (command, mutation) in new[]
+            {
+                ("gh api graphql -f query='mutation { createRef(input: {}) { clientMutationId } }'", "createRef"),
+                ("gh api graphql -f query='mutation { updateRefs(input: {}) { clientMutationId } }'", "updateRef"),
+                ("gh api graphql -f query='mutation { createCommitOnBranch(input: {}) { clientMutationId } }'", "createCommitOnBranch"),
+                ("gh api graphql -f query='mutation { createPullRequest(input: {}) { clientMutationId } }'", "createPullRequest"),
+            })
+            {
+                Assert.Contains($"it reaches the mutation {mutation},", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command)).Reason, StringComparison.Ordinal);
+            }
+
+            // Read, the same endpoints stay allowed.
+            foreach (var command in new[]
+            {
+                "gh api repos/o/r/git/refs/heads/main", "gh api -X GET repos/o/r/pulls -f state=open", "gh api repos/o/r/contents/README.md",
+                "gh api --method HEAD repos/o/r/releases", "gh api repos/o/r/releases/123/assets", "gh api repos/o/r/pulls/5/comments",
+                "gh release view v1", "gh release list",
+            })
+            {
+                Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+            }
+
             Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("gh repo view owner/fork"));
             Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("gh pr view 12"));
             Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false).Run("gh repo sync owner/fork"));
@@ -2066,11 +2114,12 @@ public sealed class AgentPolicyTests
             using var ground = Ground(platform);
             var policy = ground.Policy();
 
-            // Past a wrapper this does not strip, gh runs all the same: it is read as where it leads.
+            // Past a program that runs the words after it, gh runs all the same: it is read as where it leads.
             foreach (var (command, named) in new[]
             {
                 ("gh co 42", "co"), ("gh -R owner/repo co 42", "co"), ("gh my-extension run", "my-extension"), ("gh Co 42", "Co"),
                 ("setsid gh co 42", "co"), ("stdbuf -oL gh co 42", "co"), ("ionice -c3 gh my-extension run", "my-extension"),
+                ("ssh build-host gh co 42", "co"), ("wsl gh co 42", "co"), ("watch -x gh co 42", "co"),
             })
             {
                 var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
@@ -2079,6 +2128,9 @@ public sealed class AgentPolicyTests
                     ("the merges and CI starts of gh", $"'{command}' is denied by a worktree rule of this tool: it reaches 'gh {named}', an alias or an extension, a name for any command, and never merges, never starts CI binds the agents too"),
                     (denied.Rule, denied.Reason));
             }
+
+            // A wrapper stripped before a program that runs the words after it: the command it leaves is read so.
+            Assert.Contains("it reaches 'gh co', an alias or an extension", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("nice setsid gh co 42")).Reason, StringComparison.Ordinal);
 
             // gh's own alias of extension is the command it names; past a wrapper too.
             foreach (var command in new[] { "gh extension exec any-ext 42", "gh ext exec any-ext 42", "setsid gh extensions exec any-ext" })
@@ -2095,18 +2147,70 @@ public sealed class AgentPolicyTests
             {
                 "gh pr view 12", "gh issue list", "gh search code AgentPolicy", "gh --version", "gh help pr", "gh status", "gh extension list",
                 "gh ext ls", "gh cs list", "gh rs ls", "gh at verify a.tgz -o org", "gh pr ls", "gh reference", "gh environment", "gh exit-codes",
+                "gh discussion list", "gh discussion ls", "gh skill list", "gh skills search x", "gh telemetry",
             })
             {
                 Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
             }
 
-            // gh among another program's words is data where it stands: its next word is no command of gh's.
-            foreach (var command in new[] { "git grep -n gh src", "find . -name gh -type f", "git add tools/gh README.md", "rg gh src" })
+            // gh among another program's words is that program's data: its next word is no command of gh's.
+            foreach (var command in new[]
             {
-                Assert.IsNotType<AgentPolicyAnswer.Denied>(policy.Run(command));
+                "git grep -n gh src", "find . -name gh -type f", "git add tools/gh README.md", "rg gh src", "Get-Command gh -ErrorAction SilentlyContinue",
+                "Select-String -Pattern gh -Path README.md", "cp -r gh backup", "make -C gh all", "docker build -t gh .", "pytest -k gh tests",
+            })
+            {
+                var answer = policy.Run(command);
+                Assert.True(answer is not AgentPolicyAnswer.Denied, $"{command}: {(answer as AgentPolicyAnswer.Denied)?.Reason}");
             }
 
             Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false).Run("gh co 42"));
+        }
+    }
+
+    /// <summary>
+    /// The gh commands that hand an agent's work to another agent - the Copilot CLI, an agent task - or install what the next
+    /// launch loads - a skill installed, updated or published - are refused whatever worktreeRules says, by gh's own aliases
+    /// and past a program that runs them too; reading an agent task or a skill stays allowed.
+    /// </summary>
+    [Fact]
+    public void TheGhCommandsThatLeaveAStepsLimits_AreRefusedWhateverWorktreeRulesSays()
+    {
+        Assert.Equal(["gh copilot", "gh agent-task create", "gh skill install", "gh skill update", "gh skill publish"], AgentPolicy.GhOutOfStepCommands);
+
+        foreach (var platform in new[] { PlatformId.Linux, PlatformId.Windows })
+        {
+            using var ground = Ground(platform);
+
+            foreach (var worktreeRules in new[] { true, false })
+            {
+                var policy = ground.Policy(worktreeRules: worktreeRules);
+
+                foreach (var (command, rule) in new[]
+                {
+                    ("gh copilot", "Run(gh copilot *)"),
+                    ("gh copilot -p 'fix the build'", "Run(gh copilot *)"),
+                    ("gh agent-task create 'fix the build'", "Run(gh agent-task create *)"),
+                    ("gh agent create -F task.md", "Run(gh agent-task create *)"),
+                    ("gh skill install owner/repo skill", "Run(gh skill install *)"),
+                    ("gh skills add owner/repo skill", "Run(gh skill install *)"),
+                    ("gh skill update", "Run(gh skill update *)"),
+                    ("gh skill publish --fix", "Run(gh skill publish *)"),
+                    ("setsid gh copilot", "Run(gh copilot *)"),
+                })
+                {
+                    var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
+
+                    Assert.Equal(
+                        (rule, AgentPolicySource.Builtin, $"'{command.Replace("'", string.Empty, StringComparison.Ordinal)}' is denied by {rule}, a rule of this tool: an agent does not leave its step's limits"),
+                        (denied.Rule, denied.Source, denied.Reason));
+                }
+
+                foreach (var command in new[] { "gh agent-task list", "gh agent-task view 1", "gh skill list", "gh skill preview owner/repo skill" })
+                {
+                    Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+                }
+            }
         }
     }
 
@@ -2122,7 +2226,7 @@ public sealed class AgentPolicyTests
     public void TheGhCommandsThatRunGitsStateVerbs_AreRefusedBesideThem()
     {
         Assert.Equal(
-            ["gh pr checkout", "gh pr create", "gh issue develop", "gh repo set-default", "gh repo fork", "gh repo create", "gh repo rename", "gh auth setup-git", "gh config set"],
+            ["gh pr checkout", "gh pr close", "gh issue develop", "gh repo set-default", "gh repo fork", "gh repo create", "gh repo rename", "gh auth setup-git", "gh config set"],
             AgentPolicy.GhStateCommands);
 
         foreach (var platform in new[] { PlatformId.Linux, PlatformId.Windows })
@@ -2142,6 +2246,8 @@ public sealed class AgentPolicyTests
                 ("setsid gh pr co 12", "Run(gh pr checkout *)"),
                 ("gh pr create --fill", "Run(gh pr create *)"),
                 ("gh pr new --title t --body b", "Run(gh pr create *)"),
+                ("gh pr close 5 --delete-branch", "Run(gh pr close *)"),
+                ("gh pr close 5 -dc done", "Run(gh pr close *)"),
                 ("gh issue develop 7 --checkout", "Run(gh issue develop *)"),
                 ("gh repo create new-repo --private --source . --remote upstream --push", "Run(gh repo create *)"),
                 ("gh repo new new-repo --public --clone", "Run(gh repo create *)"),

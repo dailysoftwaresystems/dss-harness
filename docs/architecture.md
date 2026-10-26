@@ -1607,10 +1607,12 @@ or write gh's own configuration (`AgentPolicy.GhStateCommands`; gh's own aliases
 and the merges
 and CI starts of `gh` - each endpoint and GraphQL mutation that merges or starts CI with the `gh`
 commands that reach it, one list (`AgentPolicy.GhCiReaches`) that `AgentPolicy.NeverCiCommands`
-(`gh pr merge`, `gh pr update-branch`, `gh repo sync`, `gh workflow run`, `gh run rerun`),
-`AgentPolicy.GhApiEndpoints` and `AgentPolicy.GhApiMutations` are read from, `gh alias set`, `gh extension exec`, and a `gh` command
-named by none of gh's own (`AgentPolicy.GhCommands`: an alias, `co` among them, or an extension), wherever `gh` may
-run - past a wrapper the policy does not strip too, but not among git's, find's or fd's own words - keep git's own files unwritten whatever `protectedPaths` says (`AgentPolicy.GitsOwnRule`:
+(`gh pr merge`, `gh pr update-branch`, `gh repo sync`, `gh workflow run`, `gh run rerun`, `gh pr create`,
+`gh release create`, `gh release edit`), `AgentPolicy.GhApiEndpoints`, `AgentPolicy.GhApiWriteEndpoints` (a ref, a
+file, a pull request or a release written: refused where `CommandAnalysis.GhApiWrites` says the request writes) and
+`AgentPolicy.GhApiMutations` are read from, `gh alias set`, `gh extension exec`, and a `gh` command
+named by none of gh's own (`AgentPolicy.GhCommands`: an alias, `co` among them, or an extension), where `gh` runs -
+its command's own program, or past one that runs the words after it (`CommandAnalysis.CommandRunners`) - keep git's own files unwritten whatever `protectedPaths` says (`AgentPolicy.GitsOwnRule`:
 a `.git` segment at any depth beneath a root, in any case, so a nested repository's hooks are as
 safe as the root's), and hold the tool's own
 policy and what the next launch loads unwritten by any agent; its own state
@@ -1618,7 +1620,8 @@ policy and what the next launch loads unwritten by any agent; its own state
 says, a writable root standing inside it - the agent's own work directory - the one exception; the
 tool's own verbs (`AgentPolicy.ToolVerbs`, each the command's own name as its service declares it)
 and `run-side-task` are refused, run by any program or from a response file, whatever the switch
-says. The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
+says, and so are the `gh` commands that hand the work to another agent or install what the next launch loads
+(`AgentPolicy.GhOutOfStepCommands`). The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
 as rules (`AgentPolicy.ProtectedPathRules`), pinned by a test and printed by `help agent-clients`,
 refused on every client; a step's `writes` is the one source that narrows, and the reporter's reads
 are narrowed to the run's directory alone (`AgentPolicyGround.ReporterRoot`: no command, no write,

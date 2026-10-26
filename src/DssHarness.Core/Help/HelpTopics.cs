@@ -2508,7 +2508,9 @@ public static class HelpTopics
         builder.AppendLine("credential slot or a Claude Code directory of the run's and every search over one, any");
         builder.AppendLine("command naming one - by ~ or $HOME, as a redirect's file or an option's value too - and");
         builder.AppendLine("this tool's own verbs and run-side-task, run by any program or from a response file,");
-        builder.AppendLine("whatever any switch says: an agent does not move its own run, nor leave its step's limits.");
+        builder.AppendLine("whatever any switch says: an agent does not move its own run, nor leave its step's limits -");
+        builder.AppendLine("nor do the gh commands that hand its work to another agent or install what the next launch");
+        builder.AppendLine($"loads ({string.Join(", ", Agents.Policy.AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too.");
         builder.AppendLine("No agent starts while this tool itself runs elevated: its step is recorded never started,");
         builder.AppendLine("saying so, before any client is taken. A path is decided as asked and as resolved, and a");
         builder.AppendLine("refusal's places compare in any case on every system, a Windows short name read as its long");
@@ -2629,7 +2631,9 @@ public static class HelpTopics
             + $"({string.Join(", ", Agents.Policy.AgentPolicy.NeverCiCommands)}), the gh api endpoints and GraphQL "
             + "mutations that reach the same, gh alias set, gh extension exec, and a gh command named by none of gh's own "
             + $"({string.Join(", ", Agents.Policy.AgentPolicy.GhCommands)}) - an alias, gh's own co among them, or an extension, "
-            + "a name for any command, wherever gh may run - past a wrapper this does not strip too, but among git's, find's or fd's own words - "
+            + "a name for any command, where gh runs - its command's own program, or past one that runs the words after it "
+            + $"({string.Join(", ", Agents.Policy.CommandAnalysis.CommandRunners)}), never among another program's words, its data - "
+            + "and, where the request writes, the gh api endpoints that push, open a pull request or make a release - "
             + "for never merges, never starts CI binds the agents too; git's own files - a "
             + ".git, file or directory, at any depth beneath a root and in any case, a nested repository's and a "
             + $"submodule's too ({Agents.Policy.AgentPolicy.GitsOwnRule}) - are not written by a tool, whatever "

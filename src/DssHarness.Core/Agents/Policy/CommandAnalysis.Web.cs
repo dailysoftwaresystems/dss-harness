@@ -426,6 +426,40 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>
+    /// Whether <c>gh api</c> writes: its method, by <c>-X</c> or <c>--method</c>, any but GET or HEAD - one the shell
+    /// expands may be any - and, where it names none, gh's own POST for a request given fields or an input.
+    /// </summary>
+    /// <param name="arguments">The words after <c>gh</c>, <c>api</c> first.</param>
+    public static bool GhApiWrites(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        string? method = null;
+
+        for (var at = 1; at < arguments.Count; at++)
+        {
+            var word = arguments[at];
+
+            if (word is "-X" or "--method" && at + 1 < arguments.Count)
+            {
+                method = arguments[++at];
+            }
+            else if (word.StartsWith("--method=", StringComparison.Ordinal))
+            {
+                method = word["--method=".Length..];
+            }
+            else if (word.StartsWith("-X", StringComparison.Ordinal) && word.Length > 2)
+            {
+                method = word[2] == '=' ? word[3..] : word[2..];
+            }
+        }
+
+        return method is not null
+            ? Expansion(method) is not null || !(method.Equals("GET", StringComparison.OrdinalIgnoreCase) || method.Equals("HEAD", StringComparison.OrdinalIgnoreCase))
+            : GhApiFields(arguments).Any() || arguments.Any(word => word == "--input" || word.StartsWith("--input=", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// The values <c>gh api</c>'s fields give, by their names: <c>-f</c>, <c>-F</c>,
     /// <c>--raw-field</c> and <c>--field</c>, each <c>name=value</c>, the next word or glued after
     /// an <c>=</c>.

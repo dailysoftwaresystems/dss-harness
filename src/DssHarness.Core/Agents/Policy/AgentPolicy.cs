@@ -62,7 +62,8 @@ public sealed class AgentPolicy
          "bisect", "symbolic-ref", "filter-branch", "fast-import", "replace", "notes", "reflog", "remote", "submodule", "sparse-checkout", "read-tree", "prune", "repack", "pack-refs", "maintenance"];
 
     /// <summary>
-    /// gh's own commands and help topics, as gh 2.89 lists them, each read by its own name where gh gives it another
+    /// gh's own commands and help topics, as gh 2.89 lists them and gh's manual of 2026-10-26 (<c>discussion</c>,
+    /// <c>skill</c>, <c>telemetry</c>), each read by its own name where gh gives it another
     /// (<see cref="CommandAnalysis.GhAliases"/>): the first word of a gh command that is none of them is an alias - the
     /// <c>co</c> gh's configuration holds for <c>pr checkout</c> among them - or an extension, which gh runs as a command
     /// no rule here reads, and the worktree rules refuse it as they refuse <c>gh alias set</c>. A command a later gh adds
@@ -73,30 +74,42 @@ public sealed class AgentPolicy
         "agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "codespace", "completion", "config", "copilot",
         "extension", "gist", "gpg-key", "help", "issue", "label", "licenses", "org", "pr", "preview", "project", "release",
         "repo", "ruleset", "run", "search", "secret", "ssh-key", "status", "variable", "version", "workflow",
-        "accessibility", "actions", "environment", "exit-codes", "formatting", "mintty", "reference",
+        "discussion", "skill", "accessibility", "actions", "environment", "exit-codes", "formatting", "mintty", "reference", "telemetry",
     ];
 
     /// <summary>
     /// The <c>gh</c> commands that write the state the worktree rules keep, refused by them beside git's state-writing
     /// verbs (<see cref="GitStateVerbs"/>): git's, run on the repository they stand in - a pull request's or an issue's
-    /// branch fetched and checked out, a branch pushed for a pull request, a default repository or a remote written into
-    /// git's configuration, a fork or a new repository made with its remote, its push or its clone, a repository renamed
-    /// with its remote, and gh made git's credential helper - and gh's own configuration, which names the editor, pager
-    /// and browser every gh command runs.
+    /// branch fetched and checked out, a pull request closed with its branch deleted (checked out of first), a default
+    /// repository or a remote written into git's configuration, a fork or a new repository made with its remote, its push
+    /// or its clone, a repository renamed with its remote, and gh made git's credential helper - and gh's own
+    /// configuration, which names the editor, pager and browser every gh command runs. Opening a pull request, which may
+    /// push its branch, is a CI start (<see cref="GhCiReaches"/>).
     /// </summary>
     public static IReadOnlyList<string> GhStateCommands { get; } =
     [
-        "gh pr checkout", "gh pr create", "gh issue develop", "gh repo set-default", "gh repo fork", "gh repo create",
+        "gh pr checkout", "gh pr close", "gh issue develop", "gh repo set-default", "gh repo fork", "gh repo create",
         "gh repo rename", "gh auth setup-git", "gh config set",
     ];
 
     /// <summary>
+    /// The <c>gh</c> commands that leave a step's limits, refused whatever <c>worktreeRules</c> says, as
+    /// <c>run-side-task</c> is: the work handed to another agent - the Copilot CLI, which runs commands no rule here reads,
+    /// and an agent task, which works and opens a pull request where no rule reaches - and skills installed, updated or
+    /// fixed where the next launch loads them.
+    /// </summary>
+    public static IReadOnlyList<string> GhOutOfStepCommands { get; } =
+        ["gh copilot", "gh agent-task create", "gh skill install", "gh skill update", "gh skill publish"];
+
+    /// <summary>
     /// Every way <c>gh</c> merges or starts CI, refused by the worktree rules - never merges, never
     /// starts CI binds the agents too, not only the engine's own steps: each REST endpoint and GraphQL
-    /// mutation that does it, with the <c>gh</c> commands that reach it. The one list the three below
+    /// mutation that does it, with the <c>gh</c> commands that reach it. The one list the four below
     /// are read from, so a command that reaches a refused endpoint is refused with it: a pull request's
     /// merge, its auto-merge and its queue, the update of its branch, a branch's merge, a fork's sync, a
-    /// workflow's dispatch, approval and reruns, and a check asked again.
+    /// workflow's dispatch, approval and reruns, a check asked again - and, where the request writes, a
+    /// push through the API (a ref made, moved or deleted, a file committed, a linked branch made), a pull
+    /// request opened, and a release made or published, its tag with it.
     /// </summary>
     public static IReadOnlyList<GhCiReach> GhCiReaches { get; } =
     [
@@ -115,6 +128,18 @@ public sealed class AgentPolicy
         new("mergeBranch", Mutation: true, []),
         new("updatePullRequestBranch", Mutation: true, ["gh pr update-branch"]),
         new("rerequestCheckSuite", Mutation: true, []),
+        new("git/refs/**", Mutation: false, [], Writes: true),
+        new("contents/**", Mutation: false, [], Writes: true),
+        new("pulls", Mutation: false, ["gh pr create"], Writes: true),
+        new("releases", Mutation: false, ["gh release create"], Writes: true),
+        new("releases/<n>", Mutation: false, ["gh release edit"], Writes: true),
+        new("createRef", Mutation: true, []),
+        new("updateRef", Mutation: true, []),
+        new("updateRefs", Mutation: true, []),
+        new("deleteRef", Mutation: true, []),
+        new("createCommitOnBranch", Mutation: true, []),
+        new("createLinkedBranch", Mutation: true, []),
+        new("createPullRequest", Mutation: true, ["gh pr create"]),
     ];
 
     /// <summary>
@@ -125,7 +150,14 @@ public sealed class AgentPolicy
     public static IReadOnlyList<string> NeverCiCommands { get; } = [.. GhCiReaches.SelectMany(reach => reach.Commands).Distinct(StringComparer.Ordinal)];
 
     /// <summary>The REST endpoints through which <c>gh api</c> merges or starts CI (<see cref="GhCiReaches"/>), refused by the worktree rules at a path's end.</summary>
-    public static IReadOnlyList<string> GhApiEndpoints { get; } = [.. GhCiReaches.Where(reach => !reach.Mutation).Select(reach => reach.Reached)];
+    public static IReadOnlyList<string> GhApiEndpoints { get; } = [.. GhCiReaches.Where(reach => !reach.Mutation && !reach.Writes).Select(reach => reach.Reached)];
+
+    /// <summary>
+    /// The REST endpoints through which <c>gh api</c> pushes, opens a pull request or makes a release
+    /// (<see cref="GhCiReaches"/>), refused by the worktree rules at a path's end - or past it, where one ends in
+    /// <c>/**</c> - where the request writes (<see cref="CommandAnalysis.GhApiWrites"/>): reading them stays allowed.
+    /// </summary>
+    public static IReadOnlyList<string> GhApiWriteEndpoints { get; } = [.. GhCiReaches.Where(reach => !reach.Mutation && reach.Writes).Select(reach => reach.Reached)];
 
     /// <summary>The GraphQL mutations through which <c>gh api graphql</c> merges or starts CI (<see cref="GhCiReaches"/>), refused by the worktree rules wherever a word names one.</summary>
     public static IReadOnlyList<string> GhApiMutations { get; } = [.. GhCiReaches.Where(reach => reach.Mutation).Select(reach => reach.Reached)];
@@ -198,6 +230,7 @@ public sealed class AgentPolicy
     private readonly IReadOnlyList<string> _webDomains;
     private readonly IReadOnlyList<(GlobPattern Pattern, string Text)> _writes;
     private readonly IReadOnlyList<AgentRule> _worktreeRunRules;
+    private readonly IReadOnlyList<AgentRule> _outOfStepRules = [.. GhOutOfStepCommands.Select(command => AgentRule.Parse($"Run({command} *)"))];
     private readonly IReadOnlyList<(GlobPattern Pattern, string Text)> _worktreePolicyWrites;
     private readonly IReadOnlyList<(GlobPattern Pattern, string Text)> _protectedPaths;
     private readonly string _workingRoot;
@@ -853,6 +886,22 @@ public sealed class AgentPolicy
         var runs = start == environment;
         var readings = CommandAnalysis.ForRules(words, program: runs);
 
+        // The gh commands that hand the work to another agent, or install what the next launch loads, are refused whatever
+        // worktreeRules says: an agent does not leave its step's limits.
+        foreach (var (reading, rule) in readings.SelectMany(reading => _outOfStepRules.Select(rule => (reading, rule))))
+        {
+            switch (rule.Match(reading, comparison))
+            {
+                case AgentRuleMatch.Yes:
+                    return new AgentPolicyAnswer.Denied(
+                        rule.Text,
+                        AgentPolicySource.Builtin,
+                        $"'{whole}' is denied by {rule.Text}, a rule of this tool: an agent does not leave its step's limits");
+                case AgentRuleMatch.Expanded:
+                    return MayBe(rule.Text, AgentPolicySource.Builtin, whole);
+            }
+        }
+
         foreach (var reading in readings)
         {
             foreach (var (rule, declared) in _rules.Where(pair => pair.Rule.Verb is AgentRuleVerb.Run))
@@ -885,9 +934,9 @@ public sealed class AgentPolicy
                 }
             }
 
-            // A gh met past the command's program runs where that program is a wrapper this does not strip (setsid gh co):
-            // among git's, find's or fd's own words it is data, for what they run is read apart.
-            var ghRuns = runs || !GhAmongData.Any(program => CommandAnalysis.Name(command[environment]).Equals(program, StringComparison.OrdinalIgnoreCase));
+            // A gh met past the command's program runs where that program runs the words after it (setsid gh co); among any
+            // other program's words it is that program's data (Get-Command gh -ErrorAction SilentlyContinue).
+            var ghRuns = runs || CommandAnalysis.RunsItsWords(command[environment]);
 
             if (readings.Select(reading => MergesOrStartsCi(reading, ghRuns)).OfType<string>().FirstOrDefault() is { } reached)
             {
@@ -1047,12 +1096,6 @@ public sealed class AgentPolicy
     private static AgentPolicyAnswer.Denied MayBe(string rule, AgentPolicySource source, string whole)
         => new(rule, source, $"'{whole}' may be what {rule} denies: a word the rule reads is one the shell expands, which this does not read");
 
-    /// <summary>
-    /// The programs among whose own words a gh is data, never run: git, whose commands that run another are read where
-    /// they stand - its state verbs, its configuration and the commands its options name - and find and fd, whose commands
-    /// are read apart as the commands they run. Past any other program a gh may be one a wrapper runs.
-    /// </summary>
-    private static readonly string[] GhAmongData = ["git", "find", "fd", "fdfind"];
 
     /// <summary>
     /// What a <c>gh</c> command reaches that merges or starts CI, as the worktree rules refuse it:
@@ -1063,9 +1106,9 @@ public sealed class AgentPolicy
     /// </summary>
     /// <param name="words">The command as its rules read it.</param>
     /// <param name="runs">
-    /// Whether the gh the words begin with may run: the command's own program, or a word past a wrapper this does not
-    /// strip; never a word among the words of a program of <see cref="GhAmongData"/> (<c>git grep gh src</c>), which is
-    /// data where it stands, and its next word no command of gh's.
+    /// Whether the gh the words begin with runs: the command's own program, or a word past a program that runs the words
+    /// after it (<see cref="CommandAnalysis.CommandRunners"/>); among any other program's words (<c>git grep gh src</c>,
+    /// <c>Get-Command gh -ErrorAction SilentlyContinue</c>) a gh is that program's data, and its next word no command of gh's.
     /// </param>
     private static string? MergesOrStartsCi(IReadOnlyList<string> words, bool runs)
     {
@@ -1098,11 +1141,21 @@ public sealed class AgentPolicy
             return null;
         }
 
+        var arguments = words.Skip(1).ToList();
+        var writes = CommandAnalysis.GhApiWrites(arguments);
+
         foreach (var word in words.Skip(2))
         {
-            if (CiEndpoint.IsMatch(word.Split('?', 2)[0].TrimEnd('/')))
+            var path = word.Split('?', 2)[0].TrimEnd('/');
+
+            if (CiEndpoint.IsMatch(path))
             {
                 return $"the endpoint '{word}'";
+            }
+
+            if (writes && WrittenEndpoint.IsMatch(path))
+            {
+                return $"the endpoint '{word}', written";
             }
 
             if (GhApiMutations.FirstOrDefault(mutation => word.Contains(mutation, StringComparison.OrdinalIgnoreCase)) is { } named)
@@ -1112,8 +1165,6 @@ public sealed class AgentPolicy
         }
 
         // An endpoint the shell expands may be any endpoint, a merge's among them.
-        var arguments = words.Skip(1).ToList();
-
         if (CommandAnalysis.GhApiEndpoint(arguments) is { } endpoint && CommandAnalysis.Expansion(endpoint) is { } expansion)
         {
             return $"an endpoint named by {expansion} ('{endpoint}'), which this does not read";
@@ -1138,9 +1189,21 @@ public sealed class AgentPolicy
     }
 
     /// <summary>A REST path that merges or starts CI: an endpoint of <see cref="GhApiEndpoints"/> at a path's end, its <c>&lt;n&gt;</c> any one segment.</summary>
-    private static readonly System.Text.RegularExpressions.Regex CiEndpoint = new(
-        $"(^|/)({string.Join('|', GhApiEndpoints.Select(endpoint => System.Text.RegularExpressions.Regex.Escape(endpoint).Replace("<n>", "[^/]+", StringComparison.Ordinal)))})$",
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.NonBacktracking);
+    private static readonly System.Text.RegularExpressions.Regex CiEndpoint = EndpointsAtAPathsEnd(GhApiEndpoints);
+
+    /// <summary>A REST path that pushes, opens a pull request or makes a release where the request writes: an endpoint of <see cref="GhApiWriteEndpoints"/>.</summary>
+    private static readonly System.Text.RegularExpressions.Regex WrittenEndpoint = EndpointsAtAPathsEnd(GhApiWriteEndpoints);
+
+    /// <summary>
+    /// The paths that end in one of <paramref name="endpoints"/>, any case: an <c>&lt;n&gt;</c> any one segment, and an
+    /// endpoint that ends in <c>/**</c> any path beneath it too.
+    /// </summary>
+    private static System.Text.RegularExpressions.Regex EndpointsAtAPathsEnd(IReadOnlyList<string> endpoints)
+        => new(
+            $"(^|/)({string.Join('|', endpoints.Select(endpoint => endpoint.EndsWith("/**", StringComparison.Ordinal)
+                ? System.Text.RegularExpressions.Regex.Escape(endpoint[..^3]).Replace("<n>", "[^/]+", StringComparison.Ordinal) + "(/.*)?"
+                : System.Text.RegularExpressions.Regex.Escape(endpoint).Replace("<n>", "[^/]+", StringComparison.Ordinal)))})$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.NonBacktracking);
 
     /// <summary>
     /// The root action <paramref name="word"/> names, in the list's own spelling: the word itself,

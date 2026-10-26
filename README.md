@@ -550,7 +550,9 @@ PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`,
 names one), writes outside an agent's writable roots, every read and write of a credential slot or
 a Claude Code directory of the run's and every search over one, any command naming one - by `~` or
 `$HOME`, as a redirect's file or an option's value too - and this tool's own verbs and
-`run-side-task`, run by any program or from a response file, whatever any switch says. No agent
+`run-side-task`, run by any program or from a response file, whatever any switch says - and so are the `gh`
+commands that hand an agent's work to another agent or install what the next launch loads (`gh copilot`,
+`gh agent-task create`, `gh skill install`, `gh skill update`, `gh skill publish`). No agent
 starts while this tool itself runs elevated: its step is recorded never started, saying so, before
 any client is taken. A path is decided as asked and as resolved, and a refusal's places compare in
 any case on every system, a Windows short name read as its long one. On Windows a device prefix
@@ -610,14 +612,15 @@ can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
 the ones that only shape what git prints, or by its environment - a home it reads its global
 configuration from (`HOME`, `XDG_CONFIG_HOME`, Windows' `USERPROFILE`) among it - the `git config`
 it is and still the command it runs - the `gh` commands that run them or write gh's own configuration
-(`gh pr checkout`, `gh pr create`, `gh issue develop`, `gh repo set-default`, `gh repo fork`, `gh repo create`,
+(`gh pr checkout`, `gh pr close`, `gh issue develop`, `gh repo set-default`, `gh repo fork`, `gh repo create`,
 `gh repo rename`, `gh auth setup-git`, `gh config set`; a command by one of gh's own aliases - `gh pr co` - read as
 the command it names, and `GH_CONFIG_DIR` or another place gh reads its configuration from, set for a command, the
 `gh config set` it is), and the `gh` commands that merge or start CI (`gh pr merge`, `gh pr update-branch`, `gh repo sync`,
-`gh workflow run`, `gh run rerun`), the `gh api` endpoints and GraphQL mutations that reach the
-same, `gh alias set`, `gh extension exec`, and a `gh` command named by none of gh's own (an alias - gh's own `co` among them - or an
-extension, a name for any command, wherever `gh` may run - behind a wrapper the policy does not strip too, but not
-among git's, find's or fd's own words) are refused (reading git stays allowed), git's own
+`gh workflow run`, `gh run rerun`, `gh pr create`, `gh release create`, `gh release edit`), the `gh api` endpoints and
+GraphQL mutations that reach the same - a ref, a file, a pull request or a release written through the API among them - `gh alias set`, `gh extension exec`, and a `gh` command named by none of gh's own (an alias - gh's own `co` among them - or an
+extension, a name for any command, where `gh` runs - its command's own program, or behind one that runs the words
+after it, `setsid`, `stdbuf`, `ssh`, `wsl` and the others `CommandAnalysis.CommandRunners` names) are refused (reading
+git stays allowed), git's own
 files - a `.git`, file or directory, at any depth beneath a root and in any case, a nested
 repository's and a submodule's too (`Write(**/.git/**)`) - are not written by a tool whatever
 `protectedPaths` says, and an agent does not edit its own policy

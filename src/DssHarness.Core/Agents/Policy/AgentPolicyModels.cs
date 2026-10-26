@@ -82,10 +82,14 @@ public abstract record AgentPolicyAnswer
 }
 
 /// <summary>One way <c>gh</c> merges or starts CI, refused by the worktree rules (<see cref="AgentPolicy.GhCiReaches"/>).</summary>
-/// <param name="Reached">The REST endpoint, as it ends a path - <c>&lt;n&gt;</c> standing for any one segment - or the GraphQL mutation's name.</param>
+/// <param name="Reached">
+/// The REST endpoint, as it ends a path - <c>&lt;n&gt;</c> standing for any one segment, and a last <c>/**</c> for any path
+/// beneath it - or the GraphQL mutation's name.
+/// </param>
 /// <param name="Mutation">Whether <paramref name="Reached"/> is a GraphQL mutation rather than a REST endpoint.</param>
 /// <param name="Commands">The <c>gh</c> commands that reach it, each by its command's path; none where only <c>gh api</c> does.</param>
-public sealed record GhCiReach(string Reached, bool Mutation, IReadOnlyList<string> Commands);
+/// <param name="Writes">Whether the REST endpoint merges or starts CI only where the request writes, reading it allowed.</param>
+public sealed record GhCiReach(string Reached, bool Mutation, IReadOnlyList<string> Commands, bool Writes = false);
 
 /// <summary>One restriction, as the policy holds it: the rule's whole string, and where it comes from.</summary>
 /// <param name="Text">The rule, one string: <c>Run(git push *)</c>, <c>Write(.github/**)</c>, <c>Read(secrets/**)</c>.</param>

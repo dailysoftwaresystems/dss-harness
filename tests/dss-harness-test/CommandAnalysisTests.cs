@@ -838,6 +838,7 @@ public sealed class CommandAnalysisTests
         Assert.Equal([["gh", "repo", "create", "r", "--clone"]], CommandAnalysis.ForRules(["gh", "repo", "new", "r", "--clone"]));
         Assert.Equal([["gh", "co", "12"]], CommandAnalysis.ForRules(["gh", "co", "12"]));
         Assert.Equal([["gh", "issue", "co", "12"]], CommandAnalysis.ForRules(["gh", "issue", "co", "12"]));
+        Assert.Equal([["gh", "skill", "install", "o/r", "s"]], CommandAnalysis.ForRules(["gh", "skills", "add", "o/r", "s"]));
     }
 
     /// <summary>
