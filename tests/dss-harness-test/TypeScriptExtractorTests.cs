@@ -519,6 +519,25 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
     }
 
     /// <summary>
+    /// In a .tsx file the type arguments a component's tag writes after its name - <c>&lt;Table&lt;User&gt;</c> - are the
+    /// tag's own, none of its <c>&gt;</c> the tag's end: the element ends where its tag does, self-closing or closed by its
+    /// own tag, and the reading goes on past it.
+    /// </summary>
+    [Fact]
+    public void AComponentsTypeArguments_AreItsTagsOwn()
+    {
+        foreach (var element in (string[])["<Table<User> rows={rows} />", "<Table<Map<string, (x: User) => void>>>{rows.map(row => draw(row))}</Table>"])
+        {
+            var extract = Read("src/t.tsx", $"export function List() {{ return {element}; }}\nexport function Other() {{ helper(); }}\n");
+
+            Assert.Equal([("List", 1, 1), ("Other", 2, 2)], extract.Nodes.Select(node => (node.Name, node.Start, node.End)));
+            Assert.Equal(
+                element.Contains("draw", StringComparison.Ordinal) ? ["List:map", "List:draw", "List:Table", "Other:helper"] : ["List:Table", "Other:helper"],
+                extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => $"{reference.From[(reference.From.LastIndexOf('.') + 1)..]}:{reference.Name}"));
+        }
+    }
+
+    /// <summary>
     /// A line break ends a member or a statement where TypeScript's would, whatever word ends the line - a type's void,
     /// as const, a member's name a keyword spells - and a type's member before an index or a call signature on the next
     /// line, a list of type arguments one member however many commas it holds.

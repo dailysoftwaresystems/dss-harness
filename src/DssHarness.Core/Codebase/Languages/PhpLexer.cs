@@ -77,13 +77,9 @@ internal static class PhpLexer
                     Add(ScanTokenKind.Punctuation, at, at + 1);
                     at++;
                 }
-                else if (character == '#' || (character == '/' && at + 1 < end && text[at + 1] == '/'))
+                else if (CommentEnd(at, end) is var comment && comment > at)
                 {
-                    at = Comment(at, LineCommentEnd(at, end));
-                }
-                else if (character == '/' && at + 1 < end && text[at + 1] == '*')
-                {
-                    at = Comment(at, text.IndexOf("*/", at + 2, end - at - 2, StringComparison.Ordinal) is var close and >= 0 ? close + 2 : end);
+                    at = Comment(at, comment);
                 }
                 else if (character == '<' && at + 2 < end && text[at + 1] == '<' && text[at + 2] == '<' && Heredoc(at, end) is var past and > 0)
                 {
@@ -198,6 +194,17 @@ internal static class PhpLexer
             Tokens.RemoveRange(tokens, Tokens.Count - tokens);
             return at;
         }
+
+        /// <summary>
+        /// PHP's comments: <c>#</c> - but an attribute's <c>#[</c> - and <c>//</c> to their line's end or the <c>?&gt;</c>
+        /// before it (<see cref="LineCommentEnd"/>), <c>/* */</c> past its closer - in an interpolation's code too, which
+        /// PHP reads as any code.
+        /// </summary>
+        protected override int CommentEnd(int at, int end)
+            => at >= end ? at
+                : (text[at] == '#' && !(at + 1 < end && text[at + 1] == '[')) || (text[at] == '/' && at + 1 < end && text[at + 1] == '/') ? LineCommentEnd(at, end)
+                : text[at] == '/' && at + 1 < end && text[at + 1] == '*' ? (text.IndexOf("*/", at + 2, end - at - 2, StringComparison.Ordinal) is var close and >= 0 ? close + 2 : end)
+                : at;
 
         /// <summary>Where a line comment at <paramref name="at"/> ends: at its line's break, or before the <c>?&gt;</c> that ends the code.</summary>
         private int LineCommentEnd(int at, int end)
@@ -349,8 +356,8 @@ internal static class PhpLexer
         /// that closes it, only <c>\\</c> and <c>\'</c> escaped; in double quotes or backticks - or a heredoc's lines, to
         /// <paramref name="stop"/>, where <paramref name="mark"/> is none - to its closing quote, past each escape and each
         /// interpolation whose code it says (<c>{$...}</c> from its <c>$</c>, <c>${...}</c> after its brace), code that may
-        /// hold braces and strings of its own, read with a stack of what it is in. A heredoc's token is its caller's; any
-        /// other's is added. Answers where the text goes on.
+        /// hold braces, comments and strings of its own, read with a stack of what it is in. A heredoc's token is its
+        /// caller's; any other's is added. Answers where the text goes on.
         /// </summary>
         private int Literal(int start, int from, char mark, int stop, int end)
         {
@@ -378,11 +385,13 @@ internal static class PhpLexer
 
                 if (literals.InCode)
                 {
-                    if (character is '{' or '}')
+                    if (literals.Past(character, index, stop) is var past && past > index)
                     {
-                        literals.Brace(character == '{', index);
+                        index = past;
+                        continue;
                     }
-                    else if (character is '\'' or '"')
+
+                    if (character is '\'' or '"')
                     {
                         literals.OpenLiteral(character);
                     }

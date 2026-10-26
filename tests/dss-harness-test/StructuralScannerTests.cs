@@ -1,6 +1,9 @@
+using System.Globalization;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
 using DssHarness.Core.Codebase.Languages.Scanning;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 
 namespace DssHarness.Tests;
 
@@ -14,6 +17,8 @@ public sealed class StructuralScannerTests
     /// <summary>
     /// A bracket each branch of a conditional opens, left open after it, is one bracket: the one after the conditional
     /// closes every branch's, and its own match is the first branch's; what a branch opens and closes in it is its own.
+    /// What the joined group holds begins past the last of its openers, so the head another branch writes is none of it;
+    /// what any other group holds, past its own opener.
     /// </summary>
     [Fact]
     public void ABracketEachBranchLeavesOpen_IsClosedByTheOneAfterTheConditional()
@@ -35,6 +40,57 @@ public sealed class StructuralScannerTests
         Assert.Equal(first, scan.Match(close));
         Assert.Equal(At(scan, ")", 1), scan.Match(At(scan, "(", 1)));
         Assert.Equal(At(scan, ")", 2), scan.Match(At(scan, "(", 2)));
+        Assert.Equal((second + 1, second + 1), (scan.Within(first), scan.Within(second)));
+        Assert.Equal(At(scan, "(", 3) + 1, scan.Within(At(scan, "(", 3)));
+    }
+
+    /// <summary>
+    /// A run of closers nothing opened is matched in time linear in its length - each passed over at once, where nothing
+    /// it could close is open, with no walk down what is open - and what follows still matches.
+    /// </summary>
+    [Fact]
+    public void ARunOfClosersNothingOpened_IsMatchedInLinearTime()
+    {
+        const int Run = 50_000;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var scan = CFamilyLexer.Scan(new string('[', Run) + new string(')', Run) + new string('(', Run) + new string('}', Run) + "{}", cpp: false);
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"took {clock.Elapsed}");
+        Assert.Equal([-1, -1], new[] { Run, 3 * Run }.Select(scan.Match));
+        Assert.Equal(4 * Run + 1, scan.Match(4 * Run));
+    }
+
+    /// <summary>
+    /// A run of non-null assertions before a list of type arguments is stepped back over in a loop, so no hostile file's
+    /// run of them reaches past the reader's stack - an overflow no catch stops. It is read in a child on a small stack:
+    /// a reading that recursed once per <c>!</c> would end that child, never this run of the suite.
+    /// </summary>
+    [Fact]
+    public async Task ARunOfNonNullAssertions_IsSteppedOverInALoop()
+    {
+        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create())
+            .RunAsync(TestHost.ChildRequest(AssertionsChild, "100000"), TestContext.Current.CancellationToken);
+
+        Assert.Equal((0, "1\n"), (result.ExitCode, result.StandardOutput.ReplaceLineEndings("\n")));
+    }
+
+    /// <summary>The child mode of <see cref="AssertionsOnASmallStack"/>.</summary>
+    internal const string AssertionsChild = "read-assertions-on-a-small-stack";
+
+    /// <summary>
+    /// The child that reads the call <c>f(</c>, as many <c>!</c> as its argument says, then <c>&lt;A&gt;(0));</c> on a
+    /// thread of a 256 KB stack, and says the call's arity.
+    /// </summary>
+    internal static int AssertionsOnASmallStack(TextWriter output, string[] arguments)
+    {
+        var scan = CFamilyLexer.Scan($"f({new string('!', int.Parse(arguments[0], CultureInfo.InvariantCulture))}<A>(0));", cpp: true);
+        int? arity = null;
+        var reader = new Thread(() => arity = ScanCalls.At(scan, 0, new ScanCallRules(new HashSet<string>(StringComparer.Ordinal), CppLike))?.Arity, maxStackSize: 256 * 1024);
+
+        reader.Start();
+        reader.Join();
+        output.Write($"{arity?.ToString(CultureInfo.InvariantCulture)}\n");
+        return 0;
     }
 
     /// <summary>Branches that leave different brackets open at a depth are not joined: the bracket after closes the first branch's alone.</summary>
@@ -432,6 +488,34 @@ public sealed class StructuralScannerTests
 
         var open = PhpLexer.Scan("<?php a = \"x {$b->c()");
         Assert.Equal(["$b->c()"], open.Interpolations.Values.Single().Select(span => "<?php a = \"x {$b->c()"[span.Start..span.End]));
+    }
+
+    /// <summary>
+    /// A comment in an interpolation's code is read by its language's own rules and is none of the code's - a quote in
+    /// <c>// don't</c> opens no string, a brace in one closes nothing - in Dart's, JavaScript's and PHP's alike, PHP's
+    /// <c>#</c> among them: the literal ends where it does, its code is said whole, and what follows it is read.
+    /// </summary>
+    [Fact]
+    public void ACommentInAnInterpolation_IsNoneOfItsCode_InEveryLanguage()
+    {
+        const string Dart = "xs.map((x) {\n  // don't } here\n  /* nor ' here */ return x;\n})";
+        const string Js = "xs.map((x) => {\n  // don't } here\n  /* nor ' here */ return x;\n})";
+        const string Php = "$xs->map(function ($x) {\n  // don't } here\n  # nor ' here\n  /* nor } here */ return $x;\n})";
+
+        foreach (var (literal, code, scanned) in (IEnumerable<(string, string, Func<string, InterpolatedText>)>)
+        [
+            ($"'''${{{Dart}}}'''", Dart, text => DartLexer.Scan(text)),
+            ($"`${{{Js}}}`", Js, text => JsLexer.Scan(text, markup: false)),
+            ($"\"{{{Php}}}\"", Php, text => PhpLexer.Scan("<?php " + text)),
+        ])
+        {
+            var text = $"a = {literal}; f();";
+            var scan = scanned(text);
+            var source = scan.Scan.Source;
+
+            Assert.Equal(["a", "=", literal, ";", "f", "(", ")", ";"], Enumerable.Range(0, scan.Scan.Count).Select(at => scan.Scan.Text(at)));
+            Assert.Equal([code], scan.Interpolations[scan.Scan[2].Start].Select(span => source[span.Start..span.End]));
+        }
     }
 
     /// <summary>

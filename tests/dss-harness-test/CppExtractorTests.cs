@@ -682,6 +682,101 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         Assert.Single(extract.Nodes, node => node.Id == "cpp:after()");
     }
 
+    /// <summary>
+    /// Placements of a <c>new</c> nested deeper than a reader reads are marked and passed over: no nesting of them reaches
+    /// past the reader's stack, and the reading goes on past them.
+    /// </summary>
+    [Fact]
+    public void PlacementsNestedTooDeep_AreMarked_AndPassedOver()
+    {
+        var depth = 2 * ScanFrame.MostDepth;
+        var placed = string.Concat(Enumerable.Repeat("new (", depth)) + "arena()" + string.Concat(Enumerable.Repeat(") T", depth));
+        var extract = Read("p.cc", $"void f() {{\n    auto p = {placed};\n}}\nvoid after() {{ done(); }}\n");
+
+        Assert.Equal([(2, $"code nested more than {ScanFrame.MostDepth} placements of a new deep, which is not read")], extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Equal(["cpp:after()", "cpp:f()"], extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(["done"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name));
+    }
+
+    /// <summary>
+    /// A head written under each branch of a conditional over one body is read by its first head, the heads the other
+    /// branches write none of what the body holds: a class, an enumeration, a namespace and a linkage block each one node
+    /// holding its members - never a nested one of its own name - and a function's body calls nothing another head names.
+    /// </summary>
+    [Fact]
+    public void AHeadUnderEachBranch_IsReadByItsFirst_TheOthersNoneOfItsBody()
+    {
+        var extract = Read("s.hpp", """
+            #ifdef _WIN32
+            class Sock : public A, public B {
+            #else
+            class Sock : public A {
+            #endif
+                void send();
+            };
+            #if WIDE
+            enum class Mode : long {
+            #else
+            enum class Mode {
+            #endif
+                On,
+            };
+            #ifdef V2
+            namespace net {
+            #else
+            namespace net {
+            #endif
+            void open();
+            }
+            #ifdef C_API
+            extern "C" {
+            #else
+            extern "C" {
+            #endif
+            void closed();
+            }
+            #ifdef FAST
+            void run(int a = fast()) {
+            #else
+            void run(int a = slow()) {
+            #endif
+                go();
+            }
+            """);
+
+        Assert.Equal(
+            ["cpp:Mode", "cpp:Mode.On", "cpp:Sock", "cpp:Sock.send()", "cpp:closed()", "cpp:net", "cpp:net.open()", "cpp:run(int)"],
+            extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(["A", "B"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Inherits).Select(reference => reference.Name));
+        Assert.Equal(["go"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name));
+    }
+
+    /// <summary>
+    /// A type's keyword before two names declares a variable of the type the first names, its brace an initializer -
+    /// <c>struct sockaddr_in addr_{};</c> a field at a class's scope, a variable at a namespace's - but where each name
+    /// before the last is written as a macro is, an export macro's: <c>class API_EXPORT Widget { ... };</c> defines Widget.
+    /// </summary>
+    [Fact]
+    public void ABraceInitialisedVariableOfATaggedType_IsAVariable_ButAfterAnExportMacro()
+    {
+        var extract = Read("n.hpp", """
+            class Outer {
+                struct sockaddr_in addr_{};
+                int n_;
+            };
+            namespace net { struct sockaddr_in any_{}; }
+            class API_EXPORT Widget { int w_; };
+            """);
+
+        Assert.Equal(
+            [
+                ("cpp:Outer", "class"), ("cpp:Outer.addr_", "field"), ("cpp:Outer.n_", "field"), ("cpp:Widget", "class"), ("cpp:Widget.w_", "field"),
+                ("cpp:net", null), ("cpp:net.any_", "variable"),
+            ],
+            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind)));
+        Assert.Equal(("sockaddr_in", "sockaddr_in"), (Node(extract, "cpp:Outer.addr_").ValueType, Node(extract, "cpp:net.any_").ValueType));
+    }
+
     private static FileExtract Read(string path, string text) => new CppExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);

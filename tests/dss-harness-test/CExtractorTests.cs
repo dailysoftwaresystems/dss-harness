@@ -505,6 +505,67 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
         Assert.Single(extract.Nodes, node => node.Id == "c:after");
     }
 
+    /// <summary>
+    /// A typedef's struct whose head is written under each branch of a conditional over one body is one type holding its
+    /// fields, the head another branch writes none of its body - never a nested type of its own name.
+    /// </summary>
+    [Fact]
+    public void ATypedefsStructUnderEachBranch_IsOneTypeHoldingItsFields()
+    {
+        var extract = Read("t.h", """
+            #ifdef PACKED
+            typedef struct foo {
+            #else
+            typedef struct foo {
+            #endif
+                int x;
+            } foo_t;
+            """);
+
+        Assert.Equal(
+            [("c:foo", "struct", null), ("c:foo.x", "field", "c:foo"), ("c:foo_t", "typedef", null)],
+            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind, node.Parent)));
+    }
+
+    /// <summary>
+    /// A function defined in the old style - its parameters' names alone in its list, each declared after it, as vendored
+    /// zlib writes - is a function taking as many as its list names, its body's calls its own and its parameters' types
+    /// referenced; their declarations declare nothing of the file's. One of an implicit int, and pointers declared after
+    /// their list, are read alike.
+    /// </summary>
+    [Fact]
+    public void AnOldStyleDefinition_IsAFunction_ItsParametersDeclarationsNoneOfTheFiles()
+    {
+        var extract = Read("deflate.c", """
+            int ZEXPORT deflateInit_(strm, level)
+                z_streamp strm;
+                int level;
+            {
+                return helper(strm);
+            }
+
+            main(argc, argv)
+                int argc;
+                char **argv;
+            {
+                run(argv);
+            }
+
+            int after(void) { return done(); }
+            """);
+
+        Assert.Equal(
+            [("c:after", "function"), ("c:deflateInit_", "function"), ("c:main", "function")],
+            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind!)));
+        Assert.Equal("int ZEXPORT deflateInit_(strm, level) z_streamp strm; int level;", Node(extract, "c:deflateInit_").Signature);
+        Assert.Equal(((1, 6), 4), (Lines(extract, "c:deflateInit_"), Node(extract, "c:deflateInit_").BodyStart));
+        Assert.Equal(((2, 2), (2, 2)), (Arity(extract, "c:deflateInit_"), Arity(extract, "c:main")));
+        Assert.Equal(
+            [("c:deflateInit_", CodeEdgeKinds.References, "z_streamp"), ("c:deflateInit_", CodeEdgeKinds.Calls, "helper"), ("c:main", CodeEdgeKinds.Calls, "run"), ("c:after", CodeEdgeKinds.Calls, "done")],
+            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name)));
+        Assert.Empty(extract.Dynamic);
+    }
+
     private static FileExtract Read(string path, string text) => new CExtractor().Extract(new CodeFileInput(path, text));
 
     private static CodeGraphFile File(string path, string text) => new(path, "c", Read(path, text));

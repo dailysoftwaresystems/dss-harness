@@ -73,6 +73,7 @@ internal static class TestChild
             "link-directory" => LinkDirectory(arguments),
             "claude-code" => ClaudeCode(standardOutput, arguments),
             "flow-interrupted" => FlowServiceTests.InterruptedChild(standardOutput, arguments),
+            StructuralScannerTests.AssertionsChild => StructuralScannerTests.AssertionsOnASmallStack(standardOutput, arguments),
             "exit" => int.Parse(arguments[0], CultureInfo.InvariantCulture),
             _ => 99,
         };

@@ -42,6 +42,15 @@ internal abstract class ScanLexing(CodeLineIndex lines)
     protected void Add(ScanTokenKind kind, int start, int end, ScanBranch branch = ScanBranch.None)
         => Tokens.Add(new ScanToken(kind, start, end - start, Lines.LineAt(start), Lines.LineAt(Math.Max(start, end - 1)), branch));
 
+    /// <summary>
+    /// Where the comment that begins at <paramref name="at"/> ends, within <paramref name="end"/>, by the language's rules -
+    /// a line comment at its line's end, a block comment past its closer; <paramref name="at"/> where none begins there.
+    /// The one reading of the language's comments, by which its code and the code its literals hold
+    /// (<see cref="LiteralStack{TMark}"/>) are both read: a quote in a comment there - <c>// don't</c> - opens no string,
+    /// and a brace in one closes nothing.
+    /// </summary>
+    protected abstract int CommentEnd(int at, int end);
+
     /// <summary>A comment from <paramref name="start"/> to <paramref name="end"/>, kept apart; answers where the text goes on.</summary>
     protected int Comment(int start, int end)
     {
@@ -119,10 +128,33 @@ internal abstract class ScanLexing(CodeLineIndex lines)
         }
 
         /// <summary>
+        /// Reads what an interpolation's code holds at <paramref name="at"/> - its first character <paramref name="character"/> -
+        /// alike in every language: a comment, by the language's own rules (<see cref="CommentEnd"/>), passed over as none
+        /// of the code's, so a quote in <c>// don't</c> opens no string and a brace in it closes nothing; a brace, held open
+        /// or closing (<see cref="Brace"/>). Answers where the reading goes on; <paramref name="at"/> where neither stands
+        /// there, and the lexer reads what does by its language's rules - a string, a template, a regular expression.
+        /// </summary>
+        public int Past(char character, int at, int end)
+        {
+            if (lexing.CommentEnd(at, end) is var comment && comment > at)
+            {
+                return comment;
+            }
+
+            if (character is '{' or '}')
+            {
+                Brace(character == '{', at);
+                return at + 1;
+            }
+
+            return at;
+        }
+
+        /// <summary>
         /// A brace in an interpolation's code at <paramref name="at"/>: an opening one held open; a closing one closing the
         /// last held open, else the code itself - recorded where it is the literal's own.
         /// </summary>
-        public void Brace(bool opens, int at)
+        private void Brace(bool opens, int at)
         {
             var top = _frames[^1];
 

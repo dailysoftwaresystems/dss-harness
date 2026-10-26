@@ -2131,12 +2131,15 @@ A language no parser this tool can carry reads goes through the structural scann
 whose core knows no language: a language's lexer cuts the text into tokens (`ScanToken`), its comments apart and each
 conditional's directives marked as opening, alternative or closing - each lexer's run a `ScanLexing`, which holds what
 every language's reads alike: the tokens and comments it collects, a name's characters, a line break, a punctuator read
-alone - and `ScannedText` matches the brackets - each branch
+alone, and the one reading of the language's comments (`CommentEnd`) its code and the code its literals hold are both
+read by - and `ScannedText` matches the brackets - each branch
 of a conditional read from where the conditional began, the brackets every branch leaves open at one depth joined into
 one closed by the bracket after it (a brace the first branch leaves open kept though another leaves none, as
-`extern "C" {` is), every other bracket a branch leaves unbalanced stranded - matching nothing, holding nothing, and
-ending its statement with the rest of its branch - and a stray parenthesis or square bracket stopped at a brace so it
-never ends a body; it gives a group's bounds and the bracket that closes one (`CloseOf`), a statement's end - past a `;`,
+`extern "C" {` is), what the joined group holds beginning past the last of its openers (`Within`), so the head another
+branch writes is none of it, every other bracket a branch leaves unbalanced stranded - matching nothing, holding
+nothing, and ending its statement with the rest of its branch - and a stray parenthesis or square bracket stopped at a
+brace so it never ends a body, a closer with nothing open it could close passed over at once, with no walk down what is
+open; it gives a group's bounds and the bracket that closes one (`CloseOf`), a statement's end - past a `;`,
 or the closer a language gives (`EndsStatement`) - the code between two indices, the comments above a declaration
 (`CommentsAbove`) and a header on one line (`Spelled`, and as a node's signature `Signature`). `ScanCalls` reads a call alike for every such
 language by the rules it gives (`ScanCallRules`: its keywords, and how it writes type arguments - the punctuators a
@@ -2153,21 +2156,23 @@ type arguments' end and its start from either bracket, alike for every language 
 (C and C++ share `CFamilyReading`; Dart's is `DartReading`, over `DartLexer`) says what a declaration, a scope and an
 import are. Dart's lexer keeps a string whole with every interpolation it holds and says where each `${...}` holds
 code - through `ScanLexing.LiteralStack`, the one stack of what a literal's reading is in, JavaScript's and PHP's lexers'
-too - which the reader scans as a text of its own; its reader puts a library's declarations - its file's and its parts'
-- in one open scope named by the library's path, keeps each private name to it (`SeenIn`), has a part share its
+too, which passes over that code's comments by its language's rules and holds its braces alike for each
+(`LiteralStack.Past`) - which the reader scans as a text of its own; its reader puts a library's declarations - its
+file's and its parts' - in one open scope named by the library's path, keeps each private name to it (`SeenIn`), has a part share its
 library's imports (`Shares`), and reads a test framework's `test`, `testWidgets` and `group` calls in a test file as test
 nodes. Any name but a reserved word's may name a member - `of`, `show`, `get` - and a member's call is one whatever its
 name spells after the receiver's dot (`x.when(...)`); a call's arity counts no comma that ends its arguments, where
 the language lets one (`ScanCallRules.TrailingComma`), and no comma of a type's arguments a literal's list or a type
-test holds. Declarations, interpolations and test groups nested past `ScanFrame.MostDepth` are marked dynamic and read no
-deeper (`ScanFrame.ReadsDeeper`).
+test holds. Declarations, interpolations, test groups and C++'s placements of a `new` nested past `ScanFrame.MostDepth`
+are marked dynamic and read no deeper (`ScanFrame.ReadsDeeper`), and a run of non-null assertions before a list of type
+arguments is stepped over in a loop, so no hostile text reaches past a reader's stack.
 `pubspec`, an outline over the repository's YAML reader (`YamlReading.Load`, which says the line and column a text stops
 being one mapping at, as `Root`'s refusals do), declares the address root each package's `package:` imports resolve
 through.
 JavaScript and TypeScript share one reader (`JsReading`, over `JsLexer`), JSX and TSX with them. The lexer tells a
 regular expression from a division by what the slash follows, keeps a template whole with each `${...}` said to be code,
-and in a JSX file reads an element - its tags, attributes, text and the elements it holds - as one token whose code and
-whose tags' names it says; a statement ends where JavaScript's automatic semicolons end it, and a type where
+and in a JSX file reads an element - its tags, a component's type arguments (`<Table<User> />`), attributes, text and the
+elements it holds - as one token whose code and whose tags' names it says; a statement ends where JavaScript's automatic semicolons end it, and a type where
 TypeScript's grammar does. A module - a file that imports or exports, `require`s or assigns `module.exports`, or is a
 `.mjs`, `.cjs`, `.mts` or `.cts` - puts its declarations in one open scope named by its path, each it does not export
 kept to it (`SeenIn`); a script's are the repository's, at no scope. Each binding is an import of its own: the names a

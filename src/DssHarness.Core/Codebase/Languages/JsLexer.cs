@@ -9,9 +9,9 @@ namespace DssHarness.Core.Codebase.Languages;
 /// the token before it - each one token, never read as code; names that may hold <c>$</c>, and <c>#private</c> ones;
 /// numbers with their separators and suffixes; <c>?.</c>, <c>??=</c>, <c>??</c>, <c>...</c>, <c>=&gt;</c>, the
 /// equalities, <c>&amp;&amp;</c>, <c>||</c> and <c>**</c> whole and every other punctuator alone, so <c>&gt;&gt;</c> closes two
-/// lists of type arguments. In markup (<c>.jsx</c>, <c>.tsx</c>) an element - its tags, attributes and text - is one
-/// token, whose <c>{...}</c> alone is code. Where a literal holds code, the lexer says where, so that code is read in
-/// its turn as a text of its own, and where each tag an element opens is named.
+/// lists of type arguments. In markup (<c>.jsx</c>, <c>.tsx</c>) an element - its tags, a component's type arguments,
+/// attributes and text - is one token, whose <c>{...}</c> alone is code. Where a literal holds code, the lexer says
+/// where, so that code is read in its turn as a text of its own, and where each tag an element opens is named.
 /// </summary>
 internal static class JsLexer
 {
@@ -72,14 +72,9 @@ internal static class JsLexer
                 {
                     at++;
                 }
-                else if (character == '/' && at + 1 < end && text[at + 1] == '/')
+                else if (CommentEnd(at, end) is var comment && comment > at)
                 {
-                    at = Comment(at, LineEnd(text, at, end));
-                }
-                else if (character == '/' && at + 1 < end && text[at + 1] == '*')
-                {
-                    var close = text.IndexOf("*/", at + 2, end - at - 2, StringComparison.Ordinal);
-                    at = Comment(at, close < 0 ? end : close + 2);
+                    at = Comment(at, comment);
                 }
                 else if (character is '\'' or '"')
                 {
@@ -129,6 +124,13 @@ internal static class JsLexer
 
             return end;
         }
+
+        /// <summary>JavaScript's comments: <c>//</c> to its line's end, <c>/* */</c> past its closer - to the end where none closes it.</summary>
+        protected override int CommentEnd(int at, int end)
+            => at + 1 >= end || text[at] != '/' ? at
+                : text[at + 1] == '/' ? LineEnd(text, at, end)
+                : text[at + 1] == '*' ? (text.IndexOf("*/", at + 2, end - at - 2, StringComparison.Ordinal) is var close and >= 0 ? close + 2 : end)
+                : at;
 
         /// <summary>A name from <paramref name="start"/> - a private one's <c>#</c> with it - its characters from <paramref name="from"/>.</summary>
         private int Name(int start, int from, int end)
@@ -191,7 +193,7 @@ internal static class JsLexer
 
         /// <summary>
         /// A template literal from <paramref name="start"/>, to its closing backquote: each <c>${...}</c> it holds directly
-        /// recorded as code, which may hold braces, strings and templates of its own - one stack of what is open.
+        /// recorded as code, which may hold braces, comments, strings and templates of its own - one stack of what is open.
         /// </summary>
         private int Template(int start, int end)
         {
@@ -228,6 +230,12 @@ internal static class JsLexer
                         at++;
                     }
                 }
+                else if (literals.Past(character, at, end) is var past && past > at)
+                {
+                    // A comment leaves what the code last read as it was; a brace is what it last read.
+                    last = character is '{' or '}' ? character : last;
+                    at = past;
+                }
                 else if (character is '\'' or '"')
                 {
                     at = Skipped(at, end);
@@ -239,20 +247,10 @@ internal static class JsLexer
                     at++;
                     last = character;
                 }
-                else if (character == '/' && at + 1 < end && text[at + 1] is '/' or '*')
-                {
-                    at = text[at + 1] == '/' ? LineEnd(text, at, end) : (text.IndexOf("*/", at + 2, end - at - 2, StringComparison.Ordinal) is var close and >= 0 ? close + 2 : end);
-                }
                 else if (character == '/' && !(IsNamePart(last) || last is ')' or ']' or '\'' or '"' or '`'))
                 {
                     at = ExpressionEnd(at, end);
                     last = '/';
-                }
-                else if (character is '{' or '}')
-                {
-                    literals.Brace(character == '{', at);
-                    at++;
-                    last = character;
                 }
                 else
                 {
@@ -347,6 +345,8 @@ internal static class JsLexer
                 past++;
             }
 
+            var named = past;
+            past = TypeArgumentsPast(past, end);
             var next = past;
 
             while (next < end && char.IsWhiteSpace(text[next]))
@@ -356,7 +356,55 @@ internal static class JsLexer
 
             // <T>(x: T) => T is a signature, unless a closing tag of its name follows: <small>(optional): </small>.
             return !(next < end && text[next] == ',') && !(next + 7 <= end && string.CompareOrdinal(text, next, "extends", 0, 7) == 0 && next > past)
-                && !(next < end && text[next] == '>' && SignatureFollows(next + 1, end) && !ClosedAfter(past, end, text[name..past]));
+                && !(next < end && text[next] == '>' && SignatureFollows(next + 1, end) && !ClosedAfter(past, end, text[name..named]));
+        }
+
+        /// <summary>
+        /// Past the type arguments a component's tag writes after its name at <paramref name="at"/> - TypeScript's
+        /// <c>&lt;Table&lt;User&gt; /&gt;</c> - past white space, its angle brackets balanced and an arrow's <c>=&gt;</c> and
+        /// the strings within passed over: none of the tag's own <c>&gt;</c>; <paramref name="at"/> where no list begins
+        /// there, or the text ends before one closes.
+        /// </summary>
+        private int TypeArgumentsPast(int at, int end)
+        {
+            var less = at;
+
+            while (less < end && char.IsWhiteSpace(text[less]))
+            {
+                less++;
+            }
+
+            if (less >= end || text[less] != '<')
+            {
+                return at;
+            }
+
+            var depth = 0;
+
+            for (var index = less; index < end; index++)
+            {
+                if (text[index] == '<')
+                {
+                    depth++;
+                }
+                else if (text[index] == '>' && text[index - 1] != '=' && --depth == 0)
+                {
+                    return index + 1;
+                }
+                else if (text[index] is '\'' or '"' or '`')
+                {
+                    var close = text.IndexOf(text[index], index + 1, end - index - 1);
+
+                    if (close < 0)
+                    {
+                        return at;
+                    }
+
+                    index = close;
+                }
+            }
+
+            return at;
         }
 
         /// <summary>Whether a closing tag of <paramref name="name"/> - that name whole, <c>&lt;/T&gt;</c> and no <c>&lt;/Table&gt;</c> - is written from <paramref name="at"/>.</summary>
@@ -417,9 +465,9 @@ internal static class JsLexer
         }
 
         /// <summary>
-        /// A JSX element from <paramref name="start"/>, one token to the end of its closing tag - its attributes, its text
-        /// and the elements it holds with it - recording where each <c>{...}</c> it holds is code and where the name of
-        /// each tag it opens stands.
+        /// A JSX element from <paramref name="start"/>, one token to the end of its closing tag - a component's type
+        /// arguments after its name (<see cref="TypeArgumentsPast"/>), its attributes, its text and the elements it holds
+        /// with it - recording where each <c>{...}</c> it holds is code and where the name of each tag it opens stands.
         /// </summary>
         private int Element(int start, int end)
         {
@@ -442,6 +490,7 @@ internal static class JsLexer
                 if (!closingTag && at > name)
                 {
                     tags.Add((name, at));
+                    at = TypeArgumentsPast(at, end);
                 }
 
                 var selfClosing = false;

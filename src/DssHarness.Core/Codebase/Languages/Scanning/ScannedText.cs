@@ -11,7 +11,8 @@ namespace DssHarness.Core.Codebase.Languages.Scanning;
 /// branch and closed after the conditional ends - <c>void f(int a) {</c> under <c>#if</c>, <c>void f(int a, int b) {</c>
 /// under <c>#else</c>, one body after <c>#endif</c> - is matched as though each branch had been taken alone: each branch
 /// begins where the conditional began, and after it the brackets the branches left open at one depth are one, the
-/// first branch's, closed by the same bracket. A brace the first branch leaves open stays open though another leaves
+/// first branch's, closed by the same bracket - what the group holds begins past the last of them (<see cref="Within"/>),
+/// so the head another branch writes is none of it. A brace the first branch leaves open stays open though another leaves
 /// none - <c>extern "C" {</c> under a conditional of its own, closed under another - but a parenthesis or a square
 /// bracket stays open only where every branch leaves one at that depth, a conditional with no alternative having an
 /// empty one; every other bracket a branch leaves open is stranded (<see cref="IsStranded"/>): it matches nothing and
@@ -22,6 +23,9 @@ internal sealed class ScannedText
     private readonly int[] _match;
     private readonly bool[] _stranded;
     private readonly string? _closer;
+
+    /// <summary>For each opener joined to others - one written under each branch of a conditional - the last of them.</summary>
+    private readonly Dictionary<int, int> _lastOpeners;
 
     /// <summary>Scans <paramref name="tokens"/> of <paramref name="source"/>, matching their brackets.</summary>
     /// <param name="source">The text.</param>
@@ -34,7 +38,7 @@ internal sealed class ScannedText
         Source = source;
         Tokens = tokens;
         Comments = comments;
-        (_match, _stranded) = Matched(source, tokens);
+        (_match, _stranded, _lastOpeners) = Matched(source, tokens);
         Stranded = [.. Enumerable.Range(0, tokens.Count).Where(at => _stranded[at])];
     }
 
@@ -119,6 +123,13 @@ internal sealed class ScannedText
 
     /// <summary>Whether the bracket at <paramref name="at"/> is one a conditional's branch left open that stands for none after it: it matches nothing and holds nothing.</summary>
     public bool IsStranded(int at) => at >= 0 && at < _stranded.Length && _stranded[at];
+
+    /// <summary>
+    /// The index of the first token the group the bracket at <paramref name="open"/> opens holds: the one past it - or,
+    /// where each branch of a conditional wrote an opener of the group, joined to it, the one past the last of those, so
+    /// the head another branch writes before its own opener is none of what the group holds.
+    /// </summary>
+    public int Within(int open) => (_lastOpeners.TryGetValue(open, out var last) ? last : open) + 1;
 
     /// <summary>
     /// The index past the group the bracket at <paramref name="open"/> opens: past its match; past itself where it is
@@ -328,17 +339,50 @@ internal sealed class ScannedText
         return found;
     }
 
-    /// <summary>One bracket left open: its kind and each token that opened it, several where branches each opened one.</summary>
-    private sealed record Open(char Bracket, List<int> Tokens);
+    /// <summary>
+    /// One bracket left open: its kind and each token that opened it, several where branches each opened one - with how
+    /// many of each kind are open at it and below, which tell a closer at once that nothing it could close is open.
+    /// </summary>
+    private sealed record Open(char Bracket, List<int> Tokens)
+    {
+        /// <summary>How many braces are open at it and below.</summary>
+        public int Braces { get; init; }
+
+        /// <summary>How many parentheses are open at it and below, above the innermost brace among them.</summary>
+        public int Parentheses { get; init; }
+
+        /// <summary>How many square brackets are open at it and below, above the innermost brace among them.</summary>
+        public int Squares { get; init; }
+
+        /// <summary>How many brackets that <paramref name="bracket"/> closes - a brace any, a parenthesis or a square bracket one above the innermost brace - are open at it and below.</summary>
+        public int Closable(char bracket) => bracket switch { '{' => Braces, '(' => Parentheses, _ => Squares };
+
+        /// <summary>This bracket counted over <paramref name="below"/>, the one open under it; over none where it is the first.</summary>
+        public Open Over(Open? below)
+        {
+            var brace = Bracket == '{';
+
+            return this with
+            {
+                Braces = (below?.Braces ?? 0) + (brace ? 1 : 0),
+                Parentheses = brace ? 0 : (below?.Parentheses ?? 0) + (Bracket == '(' ? 1 : 0),
+                Squares = brace ? 0 : (below?.Squares ?? 0) + (Bracket == '[' ? 1 : 0),
+            };
+        }
+    }
 
     /// <summary>One conditional being read: the index of its first directive, the brackets open where it began, and those each branch read so far left.</summary>
     private sealed record Conditional(int At, List<Open> Start, List<List<Open>> Ends);
 
-    /// <summary>The match of every bracket of <paramref name="tokens"/>, -1 where none matches it, and whether each is stranded.</summary>
-    private static (int[] Match, bool[] Stranded) Matched(string source, IReadOnlyList<ScanToken> tokens)
+    /// <summary>
+    /// The match of every bracket of <paramref name="tokens"/>, -1 where none matches it, whether each is stranded, and for
+    /// each opener joined to others the last of them.
+    /// </summary>
+    private static (int[] Match, bool[] Stranded, Dictionary<int, int> LastOpeners) Matched(string source, IReadOnlyList<ScanToken> tokens)
     {
         var match = new int[tokens.Count];
         var stranded = new bool[tokens.Count];
+        var lastOpeners = new Dictionary<int, int>();
         Array.Fill(match, -1);
 
         var open = new List<Open>();
@@ -364,7 +408,7 @@ internal sealed class ScannedText
 
                     case ScanBranch.Closes when conditionals.TryPop(out var conditional):
                         conditional.Ends.Add(open);
-                        open = Ended(conditional, stranded);
+                        open = Counted(Ended(conditional, stranded, lastOpeners));
                         break;
                 }
 
@@ -379,7 +423,7 @@ internal sealed class ScannedText
             switch (source[token.Start])
             {
                 case var bracket and ('(' or '[' or '{'):
-                    open.Add(new Open(bracket, [at]));
+                    open.Add(new Open(bracket, [at]).Over(open.Count > 0 ? open[^1] : null));
                     break;
 
                 case var closing and (')' or ']' or '}'):
@@ -388,16 +432,22 @@ internal sealed class ScannedText
             }
         }
 
-        return (match, stranded);
+        return (match, stranded, lastOpeners);
     }
 
     /// <summary>
     /// The bracket at <paramref name="at"/> closes the nearest open one of its kind: a brace whatever is open above it,
     /// which is left unmatched; a parenthesis or a square bracket only where no brace stands between, else it matches
-    /// nothing - so a stray one never ends a body.
+    /// nothing - so a stray one never ends a body. Where none it could close is open it is passed over at once, so a run
+    /// of closers nothing opened costs no walk down what is open each.
     /// </summary>
     private static void Close(List<Open> open, int[] match, int at, char bracket)
     {
+        if (open.Count == 0 || open[^1].Closable(bracket) == 0)
+        {
+            return;
+        }
+
         for (var depth = open.Count - 1; depth >= 0; depth--)
         {
             if (open[depth].Bracket == bracket)
@@ -421,11 +471,12 @@ internal sealed class ScannedText
 
     /// <summary>
     /// What is open once <paramref name="conditional"/> ends: what its first branch left, each bracket another branch left
-    /// open at the same depth, of the same kind, joined to it - closed by one bracket. A parenthesis or a square bracket
-    /// of the first branch's own that a branch - the empty one of a conditional with no alternative among them - did not
-    /// leave open too, and each bracket of another branch's own not joined, is stranded.
+    /// open at the same depth, of the same kind, joined to it - closed by one bracket, each of its openers recorded in
+    /// <paramref name="lastOpeners"/> with the last of them. A parenthesis or a square bracket of the first branch's own
+    /// that a branch - the empty one of a conditional with no alternative among them - did not leave open too, and each
+    /// bracket of another branch's own not joined, is stranded.
     /// </summary>
-    private static List<Open> Ended(Conditional conditional, bool[] stranded)
+    private static List<Open> Ended(Conditional conditional, bool[] stranded, Dictionary<int, int> lastOpeners)
     {
         var ends = conditional.Ends;
         var kept = ends[0];
@@ -456,6 +507,16 @@ internal sealed class ScannedText
                 bracket.Tokens.AddRange(other.Tokens.Except(bracket.Tokens));
                 joined.Add(other);
             }
+
+            if (bracket.Tokens.Count > 1)
+            {
+                var last = bracket.Tokens.Max();
+
+                foreach (var opener in bracket.Tokens)
+                {
+                    lastOpeners[opener] = last;
+                }
+            }
         }
 
         foreach (var bracket in ends.Skip(1).SelectMany(end => end).Where(bracket => Own(bracket) && !joined.Contains(bracket)))
@@ -464,6 +525,17 @@ internal sealed class ScannedText
         }
 
         return kept;
+    }
+
+    /// <summary><paramref name="open"/> with each bracket counted over the one under it: what a conditional's end leaves, whose brackets it may have taken out from among them.</summary>
+    private static List<Open> Counted(List<Open> open)
+    {
+        for (var depth = 0; depth < open.Count; depth++)
+        {
+            open[depth] = open[depth].Over(depth > 0 ? open[depth - 1] : null);
+        }
+
+        return open;
     }
 
     private static void Strand(Open bracket, bool[] stranded)

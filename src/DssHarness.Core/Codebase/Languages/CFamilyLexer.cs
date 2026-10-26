@@ -131,16 +131,9 @@ internal static class CFamilyLexer
                     continue;
                 }
 
-                if (character == '/' && at + 1 < end && text[at + 1] == '/')
+                if (CommentEnd(at, end) is var comment && comment > at)
                 {
-                    at = Comment(at, LineEnd(at, end));
-                    continue;
-                }
-
-                if (character == '/' && at + 1 < end && text[at + 1] == '*')
-                {
-                    var close = text.IndexOf("*/", at + 2, end - at - 2, StringComparison.Ordinal);
-                    at = Comment(at, close < 0 ? end : close + 2);
+                    at = Comment(at, comment);
                     continue;
                 }
 
@@ -177,6 +170,13 @@ internal static class CFamilyLexer
                 }
             }
         }
+
+        /// <summary>C's comments: <c>//</c> to its line's end, a backslash continuing it (<see cref="LineEnd"/>), <c>/* */</c> past its closer.</summary>
+        protected override int CommentEnd(int at, int end)
+            => at + 1 >= end || text[at] != '/' ? at
+                : text[at + 1] == '/' ? LineEnd(at, end)
+                : text[at + 1] == '*' ? (text.IndexOf("*/", at + 2, end - at - 2, StringComparison.Ordinal) is var close and >= 0 ? close + 2 : end)
+                : at;
 
         /// <summary>Where the line <paramref name="at"/> is on ends: at a line break no backslash continues.</summary>
         private int LineEnd(int at, int end)
@@ -218,14 +218,9 @@ internal static class CFamilyLexer
                 {
                     break;
                 }
-                else if (text[at] == '/' && at + 1 < end && text[at + 1] == '/')
+                else if (CommentEnd(at, end) is var comment && comment > at)
                 {
-                    at = LineEnd(at, end);
-                }
-                else if (text[at] == '/' && at + 1 < end && text[at + 1] == '*')
-                {
-                    var close = text.IndexOf("*/", at + 2, end - at - 2, StringComparison.Ordinal);
-                    at = close < 0 ? end : close + 2;
+                    at = comment;
                 }
                 else if (text[at] is '"' or '\'' && !(text[at] == '\'' && IsNamePart(text[at - 1])))
                 {

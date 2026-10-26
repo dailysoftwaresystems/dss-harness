@@ -162,15 +162,21 @@ internal static class ScanCalls
     /// Whether an operand may end at <paramref name="at"/>, so that a <c>&lt;</c> after it may compare: a name but one of
     /// the words a literal's list follows, a number, a text, a group's closer, a non-null assertion's <c>!</c> - one after
     /// an operand, where a negation's comes before one - a postfix <c>++</c> or <c>--</c> (two tokens, as the lexers cut
-    /// them).
+    /// them). A run of <c>!</c> is stepped back over in a loop, so no run of them reaches past the reader's stack.
     /// </summary>
     private static bool EndsOperand(ScannedText scan, int at, ScanTypeArguments types)
-        => at >= 0 && at < scan.Count
+    {
+        while (scan.Is(at, "!"))
+        {
+            at = scan.Previous(at);
+        }
+
+        return at >= 0 && at < scan.Count
             && ((scan[at].Kind == ScanTokenKind.Name && types.Introducers?.Contains(scan.Text(at)) != true)
                 || scan[at].Kind is ScanTokenKind.Number or ScanTokenKind.Text
                 || scan.Is(at, ")") || scan.Is(at, "]")
-                || (scan.Is(at, "!") && EndsOperand(scan, scan.Previous(at), types))
                 || ((scan.Is(at, "+") || scan.Is(at, "-")) && scan.Is(scan.Previous(at), scan.Text(at))));
+    }
 
     /// <summary>
     /// The spans between the top-level commas of a list of declarations from <paramref name="from"/> to

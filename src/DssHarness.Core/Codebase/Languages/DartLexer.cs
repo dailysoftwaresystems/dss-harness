@@ -50,13 +50,9 @@ internal static class DartLexer
                 {
                     at++;
                 }
-                else if (character == '/' && at + 1 < end && text[at + 1] == '/')
+                else if (CommentEnd(at, end) is var comment && comment > at)
                 {
-                    at = Comment(at, LineEnd(text, at, end));
-                }
-                else if (character == '/' && at + 1 < end && text[at + 1] == '*')
-                {
-                    at = Comment(at, BlockEnd(at, end));
+                    at = Comment(at, comment);
                 }
                 else if (character == 'r' && at + 1 < end && text[at + 1] is '\'' or '"')
                 {
@@ -94,6 +90,13 @@ internal static class DartLexer
                 }
             }
         }
+
+        /// <summary>Dart's comments: <c>//</c> and <c>///</c> to their line's end, <c>/* */</c> past its closer, as they nest (<see cref="BlockEnd"/>).</summary>
+        protected override int CommentEnd(int at, int end)
+            => at + 1 >= end || text[at] != '/' ? at
+                : text[at + 1] == '/' ? LineEnd(text, at, end)
+                : text[at + 1] == '*' ? BlockEnd(at, end)
+                : at;
 
         /// <summary>Past the block comment that opens at <paramref name="at"/>: each <c>/*</c> inside it opens one more, as Dart's nest.</summary>
         private int BlockEnd(int at, int end)
@@ -142,14 +145,9 @@ internal static class DartLexer
 
                 if (literals.InCode)
                 {
-                    if (character is '{' or '}')
+                    if (literals.Past(character, at, end) is var past && past > at)
                     {
-                        literals.Brace(character == '{', at);
-                        at++;
-                    }
-                    else if (character == '/' && at + 1 < end && text[at + 1] == '*')
-                    {
-                        at = BlockEnd(at, end);
+                        at = past;
                     }
                     else if (character is '\'' or '"')
                     {
