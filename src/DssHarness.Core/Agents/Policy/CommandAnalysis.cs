@@ -407,7 +407,7 @@ public static partial class CommandAnalysis
 
         var (command, configured) = Plain(words, program);
 
-        if (configured)
+        if (configured || ClonesConfigured(command))
         {
             readings.Add(["git", "config", .. command.Skip(1)]);
         }
@@ -510,6 +510,57 @@ public static partial class CommandAnalysis
         }
 
         return at >= words.Count ? ([.. words.Skip(environment)], false) : (["git", .. words.Skip(at)], config);
+    }
+
+    /// <summary>
+    /// Whether a git command configures git where it runs through its subcommand's own options,
+    /// beside the global <c>-c</c> <see cref="Plain"/> reads: clone's own <c>-c</c> or
+    /// <c>--config</c> of any key but one that only shapes what git prints - its hooks run during the
+    /// clone's checkout, its <c>core.sshCommand</c> during its fetch - and clone's and init's
+    /// <c>--template</c>, whose directory git copies its hooks from, as <c>GIT_TEMPLATE_DIR</c> does.
+    /// So <c>git clone -c core.hooksPath=x url</c> is the <c>git config</c> it is.
+    /// </summary>
+    /// <param name="command">A git command with its global options dropped, as <see cref="Plain"/> returns it.</param>
+    private static bool ClonesConfigured(IReadOnlyList<string> command)
+    {
+        if (command.Count < 2 || !Is(Name(command[0]), "git"))
+        {
+            return false;
+        }
+
+        var subcommand = Name(command[1]).ToLowerInvariant();
+
+        if (subcommand == "clone" && CloneKeyValues(command, 1).Any(Configures))
+        {
+            return true;
+        }
+
+        return subcommand is "clone" or "init"
+            && Enumerable.Range(2, command.Count - 2).Any(at => GitOptionValue(command, at, ["template"], string.Empty, gluedOnly: false) is not null);
+    }
+
+    /// <summary>
+    /// Each <c>key=value</c> clone's own <c>-c</c> or <c>--config</c> sets, in every form git takes
+    /// (the value glued or the next word): the configuration clone writes into the new repository,
+    /// read as a global <c>-c</c>'s is. None where <paramref name="subcommand"/> is not a clone.
+    /// </summary>
+    /// <param name="words">A git command's words, its program first.</param>
+    /// <param name="subcommand">Where the subcommand stands among the words.</param>
+    private static IEnumerable<string> CloneKeyValues(IReadOnlyList<string> words, int subcommand)
+    {
+        if (subcommand >= words.Count || !Is(Name(words[subcommand]), "clone"))
+        {
+            yield break;
+        }
+
+        for (var at = subcommand + 1; at < words.Count; at++)
+        {
+            if (GitOptionValue(words, at, ["config"], "c", gluedOnly: false) is { } found)
+            {
+                yield return found.Value;
+                at = found.Next - 1;
+            }
+        }
     }
 
     /// <summary>
@@ -1072,7 +1123,9 @@ public static partial class CommandAnalysis
     {
         var scripts = new List<string>();
 
-        for (var at = 1; at < words.Count && words[at].StartsWith('-'); at++)
+        var at = 1;
+
+        while (at < words.Count && words[at].StartsWith('-'))
         {
             var option = words[at];
             var fromEnvironment = option.StartsWith("--config-env", StringComparison.Ordinal);
@@ -1095,25 +1148,33 @@ public static partial class CommandAnalysis
                 at++;
             }
 
-            if (setting is null || !setting.Contains('=', StringComparison.Ordinal) || !RunsProgram(setting.Split('=', 2)[0]))
+            if (setting is not null && setting.Contains('=', StringComparison.Ordinal) && RunsProgram(setting.Split('=', 2)[0]))
             {
-                continue;
+                var (key, value) = (setting.Split('=', 2)[0], setting.Split('=', 2)[1]);
+
+                if (!fromEnvironment)
+                {
+                    scripts.Add(SettingScript(key, value));
+                }
+                else if (environment.Select(assignment => assignment.Split('=', 2)).LastOrDefault(pair => pair[0] == value) is { Length: 2 } named)
+                {
+                    scripts.Add(SettingScript(key, named[1]));
+                }
+                else
+                {
+                    throw new NotSupportedException($"'{option}' runs what the variable {value} holds, which the command does not set, and this does not read");
+                }
             }
 
-            var (key, value) = (setting.Split('=', 2)[0], setting.Split('=', 2)[1]);
+            at++;
+        }
 
-            if (!fromEnvironment)
-            {
-                scripts.Add(SettingScript(key, value));
-            }
-            else if (environment.Select(assignment => assignment.Split('=', 2)).LastOrDefault(pair => pair[0] == value) is { Length: 2 } named)
-            {
-                scripts.Add(SettingScript(key, named[1]));
-            }
-            else
-            {
-                throw new NotSupportedException($"'{option}' runs what the variable {value} holds, which the command does not set, and this does not read");
-            }
+        // clone's own -c/--config run git's programs inside the new repository, as a global -c does: core.sshCommand on its
+        // fetch, a hook core.hooksPath names on its checkout. Its keys stand after the subcommand, where the scan above ends.
+        foreach (var setting in CloneKeyValues(words, at)
+            .Where(setting => setting.Contains('=', StringComparison.Ordinal) && RunsProgram(setting.Split('=', 2)[0])))
+        {
+            scripts.Add(SettingScript(setting.Split('=', 2)[0], setting.Split('=', 2)[1]));
         }
 
         return scripts;
@@ -1271,6 +1332,158 @@ public static partial class CommandAnalysis
 
             yield return ["sh", "-c", command.Any(Placeholder().IsMatch) ? script : $"{script} {quoted}"];
         }
+        else if (Is(program, "git"))
+        {
+            foreach (var executed in GitExecuted(words))
+            {
+                yield return executed;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The commands a git subcommand's own options run, each read as the command it is, so a rule
+    /// meets what git would run as it meets what <c>find -exec</c> runs: the pack program a
+    /// transport runs through the shell (<c>--upload-pack</c> of a fetch, pull, clone, ls-remote or
+    /// fetch-pack, <c>--receive-pack</c> of a push or send-pack, their <c>--exec</c> synonyms and
+    /// clone's <c>-u</c>, archive's <c>--exec</c> with <c>--remote</c>), difftool's <c>--extcmd</c>
+    /// (<c>-x</c>) and grep's <c>--open-files-in-pager</c> (<c>-O</c>, its value glued as git takes
+    /// an optional one) - each with the words git appends as <see cref="InputWord"/> - and the value
+    /// run alone or with a patch's path appended of rebase's <c>--exec</c> (<c>-x</c>),
+    /// filter-branch's filters, send-email's <c>--to-cmd</c>, <c>--cc-cmd</c>, <c>--header-cmd</c>,
+    /// <c>--sendmail-cmd</c> and a <c>--smtp-server</c> that names a path. <c>bisect run</c>'s words
+    /// git runs as the program and arguments they are; <c>submodule foreach</c>'s as the one script
+    /// the shell evaluates. Each a shell-run value is <c>sh -c &lt;value&gt;</c>, read as the script
+    /// it is - so a value an expansion gives is refused as any such script is. git's global options
+    /// before the subcommand are passed over as <see cref="Plain"/> passes them.
+    /// </summary>
+    private static IEnumerable<IReadOnlyList<string>> GitExecuted(IReadOnlyList<string> words)
+    {
+        var (command, _) = Plain(words, program: false);
+
+        if (command.Count < 2 || !Is(Name(command[0]), "git"))
+        {
+            yield break;
+        }
+
+        var subcommand = Name(command[1]).ToLowerInvariant();
+
+        // bisect run names its command as the words after 'run', which git runs as the program and arguments they are.
+        if (subcommand == "bisect" && command.ElementAtOrDefault(2) is "run" && command.Count > 3)
+        {
+            yield return [.. command.Skip(3)];
+            yield break;
+        }
+
+        // submodule foreach evaluates the words after it as one shell script in each submodule, its --recursive and -q its own.
+        if (subcommand == "submodule" && Foreach(command) is { } foreachScript)
+        {
+            yield return ["sh", "-c", foreachScript];
+            yield break;
+        }
+
+        // archive runs its --exec only when it fetches from a --remote; without one git ignores it.
+        var specs = subcommand == "archive"
+                && !command.Skip(2).Any(word => word == "--remote" || word.StartsWith("--remote=", StringComparison.Ordinal))
+            ? []
+            : GitExecutedOptions(subcommand);
+
+        for (var at = 2; at < command.Count; at++)
+        {
+            foreach (var spec in specs)
+            {
+                if (GitOptionValue(command, at, spec.Long, spec.Short, spec.GluedOnly) is { } found
+                    && (!spec.PathOnly || found.Value.StartsWith('/')))
+                {
+                    yield return spec.Appends ? ["sh", "-c", found.Value, InputWord] : ["sh", "-c", found.Value];
+                    at = found.Next - 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// A git subcommand's options whose value git runs: each its long names (given without the
+    /// <c>--</c>) and the short letters it also goes by, whether only a glued value is read (git's
+    /// rule for an option whose argument is optional, as grep's pager is), whether git appends words
+    /// of its own to it (<see cref="InputWord"/>), and whether only a value naming a path is a
+    /// command (a <c>--smtp-server</c>'s). None where the subcommand runs no option's value.
+    /// </summary>
+    private static IReadOnlyList<(IReadOnlyList<string> Long, string Short, bool GluedOnly, bool Appends, bool PathOnly)> GitExecutedOptions(string subcommand)
+        => subcommand switch
+        {
+            "ls-remote" or "fetch-pack" => [(["upload-pack", "exec"], "", false, true, false)],
+            "fetch" or "pull" => [(["upload-pack"], "", false, true, false)],
+            "clone" => [(["upload-pack"], "u", false, true, false)],
+            "push" or "send-pack" => [(["receive-pack", "exec"], "", false, true, false)],
+            "archive" => [(["exec"], "", false, true, false)],
+            "difftool" => [(["extcmd"], "x", false, true, false)],
+            "grep" => [(["open-files-in-pager"], "O", true, true, false)],
+            "rebase" => [(["exec"], "x", false, false, false)],
+            "filter-branch" => [(["setup", "env-filter", "tree-filter", "index-filter", "parent-filter", "msg-filter", "commit-filter", "tag-name-filter"], "", false, false, false)],
+            "send-email" => [(["to-cmd", "cc-cmd", "header-cmd"], "", false, true, false), (["sendmail-cmd"], "", false, false, false), (["smtp-server"], "", false, true, true)],
+            _ => [],
+        };
+
+    /// <summary>
+    /// The command <c>git submodule foreach</c> evaluates, the words after <c>foreach</c> joined -
+    /// its <c>--recursive</c> and <c>-q</c> no part of it; null where the submodule command is not a
+    /// <c>foreach</c>, or names no command.
+    /// </summary>
+    private static string? Foreach(IReadOnlyList<string> command)
+    {
+        for (var at = 2; at < command.Count; at++)
+        {
+            if (command[at] == "foreach")
+            {
+                var script = command.Skip(at + 1).Where(word => word is not ("--recursive" or "-q" or "--quiet" or "--")).ToList();
+
+                return script.Count > 0 ? string.Join(' ', script) : null;
+            }
+
+            if (!command[at].StartsWith('-'))
+            {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The value a git option carries at <paramref name="at"/>: <c>--name value</c> or
+    /// <c>--name=value</c>, and a short <c>-x value</c> or <c>-xvalue</c>; where
+    /// <paramref name="gluedOnly"/>, only the glued forms (<c>--name=value</c>, <c>-xvalue</c>), as
+    /// git reads an option whose argument is optional. Null where the word names none of
+    /// <paramref name="longNames"/> or <paramref name="shortLetters"/>, or names one with no value
+    /// to read.
+    /// </summary>
+    private static (string Value, int Next)? GitOptionValue(IReadOnlyList<string> words, int at, IReadOnlyList<string> longNames, string shortLetters, bool gluedOnly)
+    {
+        var word = words[at];
+
+        foreach (var name in longNames)
+        {
+            if (word.StartsWith("--" + name + "=", StringComparison.Ordinal))
+            {
+                return (word[("--" + name + "=").Length..], at + 1);
+            }
+
+            if (!gluedOnly && word == "--" + name)
+            {
+                return at + 1 < words.Count ? (words[at + 1], at + 2) : null;
+            }
+        }
+
+        if (word.Length >= 2 && word[0] == '-' && word[1] != '-' && shortLetters.IndexOf(word[1]) >= 0)
+        {
+            return word.Length > 2 ? (word[2..], at + 1)
+                : !gluedOnly && at + 1 < words.Count ? (words[at + 1], at + 2)
+                : null;
+        }
+
+        return null;
     }
 
     /// <summary>

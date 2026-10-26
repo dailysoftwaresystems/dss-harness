@@ -1211,6 +1211,87 @@ public sealed class AgentPolicyTests
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(["git", "pushx", "origin"]));
     }
 
+    /// <summary>
+    /// A git subcommand option that runs a command line - a pack program a transport runs, difftool's --extcmd, rebase's
+    /// --exec, grep's pager, bisect run, submodule foreach, filter-branch's filters, send-email's commands - is read as the
+    /// command it is, so a deny rule on it meets it; under the worktree rules a pack program's merge of a pull request is
+    /// refused where its own subcommand (ls-remote, a fetch) is no state verb and would otherwise pass every rule.
+    /// </summary>
+    [Fact]
+    public void AGitSubcommandOptionThatRunsACommand_IsRefusedAsTheCommandItRuns()
+    {
+        using var ground = Ground();
+        var ruled = ground.Policy([new("Run(make install *)", AgentPolicySource.Config)], worktreeRules: false);
+
+        // A deny rule on the run command meets it, in each form git takes the option.
+        foreach (var command in new[]
+        {
+            "git ls-remote --upload-pack='make install;' .",
+            "git ls-remote --upload-pack 'make install;' .",
+            "git ls-remote --exec='make install;' .",
+            "git fetch --upload-pack='make install' origin",
+            "git clone -u 'make install' ./repo",
+            "git push --receive-pack='make install;' origin",
+            "git send-pack --receive-pack='make install' host:repo",
+            "git archive --remote=host:repo --exec='make install' HEAD",
+            "git difftool -x 'make install' HEAD~1",
+            "git difftool --extcmd='make install' HEAD~1",
+            "git rebase -x 'make install' main",
+            "git grep --open-files-in-pager='make install' foo",
+            "git bisect run make install",
+            "git submodule foreach 'make install'",
+            "git filter-branch --tree-filter 'make install' HEAD",
+            "git send-email --to-cmd='make install' x.patch",
+        })
+        {
+            Assert.Equal("Run(make install *)", Assert.IsType<AgentPolicyAnswer.Denied>(ruled.Run(command)).Rule);
+        }
+
+        // Under the worktree rules a pack program reaching a pull request's merge is refused, though ls-remote is no state verb.
+        var policy = ground.Policy();
+        var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git ls-remote --upload-pack='gh pr merge 5;' ."));
+        Assert.Equal("Run(gh pr merge *)", denied.Rule);
+        Assert.Equal(AgentPolicySource.Builtin, denied.Source);
+
+        // A value an expansion names is undecided, as any script named by one is.
+        Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git ls-remote --upload-pack=$CMD .")).Rule);
+
+        // Plain uses of the same subcommands stay allowed: the option's value is data, not a command.
+        foreach (var command in new[] { "git ls-remote origin", "git difftool --tool-help", "git grep -n foo", "git grep -O foo", "git fetch origin", "git clone ./repo ./dest" })
+        {
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+        }
+    }
+
+    /// <summary>
+    /// clone's own -c/--config and clone's and init's --template configure git where it runs - its hooks run on the clone's
+    /// checkout, core.sshCommand on its fetch - so each is refused as the git config it is by the worktree rules, though
+    /// clone and init are no state verbs, and its program-naming keys run the program they name.
+    /// </summary>
+    [Fact]
+    public void ClonesConfigAndTemplate_AreRefusedAsTheGitConfigTheyAre()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy();
+
+        foreach (var command in new[]
+        {
+            "git clone -c core.hooksPath=.githooks https://h/r",
+            "git clone --config=core.hooksPath=x https://h/r",
+            "git clone --template=/tmp/evil https://h/r",
+            "git init --template /tmp/evil",
+        })
+        {
+            Assert.Equal("Run(git config *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command)).Rule);
+        }
+
+        // A program clone's -c names runs, refused as a root action here; an ordinary clone stays allowed.
+        var offline = ground.Policy(worktreeRules: false);
+        Assert.Equal("the root actions", Assert.IsType<AgentPolicyAnswer.Denied>(offline.Run("git clone -c core.sshCommand='sudo id' https://h/r")).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, offline.Run("git clone -c color.ui=always https://h/r"));
+        Assert.Equal(AgentPolicyAnswer.Allow, offline.Run("git clone https://h/r"));
+    }
+
     [Fact]
     public void GhsCommandIsReadPastItsOwnFlags_AndItsApiEndpointsByTheirWords()
     {

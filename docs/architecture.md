@@ -1572,9 +1572,14 @@ refuses to read are undecided, as is a command line a program composes (`Command
 `ForEach-Object` calls by name) - to four levels, and into a shell another program runs with its script among its
 words, find's `-exec` and its kind to their `;` (or the `+` after a `{}`), reading find's input;
 `env -S`'s string is split by env's own rules (`CommandAnalysis.SplitWords`), never the shell's; a
-command `find -exec`, `fd -x`, `rg --pre` or `--hostname-bin` or `parallel` runs is a command of its own
-(`CommandAnalysis.Executed`), each word it fills in `CommandAnalysis.InputWord` and fd's, rg's and
-parallel's added one too; `$((...))`, `((...))` and `$[...]` are read as arithmetic, their close found
+command `find -exec`, `fd -x`, `rg --pre` or `--hostname-bin`, `parallel` or an option of a git subcommand runs is a
+command of its own (`CommandAnalysis.Executed`, git's dispatched by `CommandAnalysis.GitExecuted` on the subcommand its
+global options are passed over to find) - a pack program a transport runs through the shell (`--upload-pack` of a fetch,
+pull, clone, ls-remote or fetch-pack, `--receive-pack` of a push or send-pack, their `--exec` synonyms, clone's `-u`,
+archive's `--exec` with `--remote`), difftool's `--extcmd`, rebase's `--exec`, grep's `--open-files-in-pager`,
+filter-branch's filters and send-email's commands, each in every form git takes a value; `bisect run`'s words git runs
+as the program and arguments they are, `submodule foreach`'s as one script the shell evaluates - each word it fills in
+`CommandAnalysis.InputWord` and fd's, rg's and parallel's added one too; `$((...))`, `((...))` and `$[...]` are read as arithmetic, their close found
 as bash finds it, their text read as a double quote's and their substitutions read as commands, so a
 `<<` there shifts and opens no here-document; a single quote inside a double quote's or a
 here-document's `${...}` is a character; a shell's options are read as it reads them before its
@@ -1604,7 +1609,9 @@ a cmd line's `@` dropped, `git-push` read as `git push`), so a command another p
 denies as what the rule may be; git's own options, valued ones with their values, are dropped
 before its subcommand, gh's flags before its command's path (`gh pr -R o/r merge` is
 `gh pr merge`), and a git configured where it runs - a `-c` or `--config-env` of any key but the
-ones that only shape what git prints, `--exec-path`, the `GIT_CONFIG` names, `GIT_EXEC_PATH`,
+ones that only shape what git prints, `--exec-path`, clone's own `-c` or `--config` and clone's and init's `--template`
+(`CommandAnalysis.ClonesConfigured`, whose keys git runs read through the same owner as a global `-c`'s), the
+`GIT_CONFIG` names, `GIT_EXEC_PATH`,
 `GIT_TEMPLATE_DIR` and the homes git reads its global configuration from (`HOME`, `XDG_CONFIG_HOME`,
 `HOMEDRIVE`, `HOMEPATH`, `USERPROFILE`) its assignments set, never a word of data that spells one - is the `git config` it is, and still the command it runs,
 each reading met by the rules. A word that names a path is read

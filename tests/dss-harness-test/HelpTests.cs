@@ -331,6 +331,13 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains("the inside of a script file a command runs", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "a command find -exec, fd -x, rg --pre or --hostname-bin, parallel or an option of a git subcommand runs - a pack "
+                + "program a transport runs (--upload-pack, --receive-pack, --exec, clone's -u), difftool's --extcmd, rebase's "
+                + "--exec, grep's --open-files-in-pager, bisect run, submodule foreach, filter-branch's filters and send-email's "
+                + "commands - read as its own",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains("The worktree rules (agentPolicy.worktreeRules, true where nothing is said)", prose, StringComparison.Ordinal);
         Assert.Contains(
             $"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) are refused, and so are the gh commands that run them or write gh's own configuration ({string.Join(", ", AgentPolicy.GhStateCommands)}; "
@@ -346,7 +353,9 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "GIT_CONFIG, the names through which git finds its programs and hooks, and the homes it reads its global configuration from - "
+            "a -c or --config-env of any key but the ones that only shape what git prints, --exec-path, clone's own -c or "
+                + "--config and clone's and init's --template, GIT_CONFIG, the names through which git finds its programs and "
+                + "hooks, and the homes it reads its global configuration from - "
                 + "HOME, XDG_CONFIG_HOME, and the HOMEDRIVE, HOMEPATH and USERPROFILE git on Windows takes one from) is the git config it is",
             prose,
             StringComparison.Ordinal);

@@ -606,7 +606,10 @@ conditions and blocks, each statement a block holds read as one that may run, `I
 one string - by whatever name it is called, the call operator's string or a module's name before
 it among them - read as a script of its own - to four levels, and into a shell another program runs with its script
 (`find -exec sh -c`, find's words read to their `;`), a command `find -exec`, `fd -x`,
-`rg --pre` or `--hostname-bin` or `parallel` runs read as its own, each word it fills in an expansion, `env -S`'s
+`rg --pre` or `--hostname-bin`, `parallel` or an option of a git subcommand runs - a pack program a transport runs
+(`--upload-pack`, `--receive-pack`, `--exec`, clone's `-u`), difftool's `--extcmd`, rebase's `--exec`, grep's
+`--open-files-in-pager`, `bisect run`, `submodule foreach`, filter-branch's filters and send-email's commands - read as its
+own, each word it fills in an expansion, `env -S`'s
 string split by env's own rules, and `$((...))`, `((...))` and `$[...]` read as arithmetic, their
 substitutions as commands - so `git -C x push` is `git push`, and `env A=1 git push` and
 `A=1 /usr/bin/git push` are too; every word of a command is tried as the program of the words
@@ -629,7 +632,8 @@ what it does not see is the inside of a script file a command runs. The worktree
 (`agentPolicy.worktreeRules`, on unless turned off) keep an agent's worktree a thing the engine
 can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
 `help agent-clients`) - a git configured where it runs, by `-c` or `--config-env` of any key but
-the ones that only shape what git prints, or by its environment - a home it reads its global
+the ones that only shape what git prints, by clone's own `-c` or `--config` and clone's and init's `--template`, or by
+its environment - a home it reads its global
 configuration from (`HOME`, `XDG_CONFIG_HOME`, Windows' `USERPROFILE`) among it - the `git config`
 it is and still the command it runs - the `gh` commands that run them or write gh's own configuration
 (`gh pr checkout`, `gh pr close`, `gh issue develop`, `gh repo set-default`, `gh repo fork`, `gh repo create`,

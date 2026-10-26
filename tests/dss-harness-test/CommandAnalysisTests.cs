@@ -887,6 +887,116 @@ public sealed class CommandAnalysisTests
         Assert.Contains(["sudo", "x"], Commands("pwsh -wd -c 'sudo x'"));
     }
 
+    /// <summary>
+    /// A git subcommand option that runs a pack program through the shell - --upload-pack of a fetch, clone, ls-remote or
+    /// fetch-pack, --receive-pack of a push or send-pack, their --exec synonyms and clone's -u, in every form git takes -
+    /// is read as the command it is, so a rule meets what git would run.
+    /// </summary>
+    [Fact]
+    public void AGitPackProgramOption_IsReadAsTheCommandItRuns()
+    {
+        Assert.Contains(["id"], Commands("git ls-remote --upload-pack='id;' ."));
+        Assert.Contains(["id"], Commands("git ls-remote --upload-pack 'id;' ."));
+        Assert.Contains(["id"], Commands("git ls-remote --exec='id;' ."));
+        Assert.Contains(["id"], Commands("git fetch --upload-pack=id origin"));
+        Assert.Contains(["id"], Commands("git pull --upload-pack id origin"));
+        Assert.Contains(["id"], Commands("git clone --upload-pack=id ./repo"));
+        Assert.Contains(["id"], Commands("git clone -u id ./repo"));
+        Assert.Contains(["id"], Commands("git clone -uid ./repo"));
+        Assert.Contains(["id"], Commands("git fetch-pack --exec=id host:repo"));
+        Assert.Contains(["id"], Commands("git push --receive-pack='id;' origin"));
+        Assert.Contains(["id"], Commands("git push --exec id origin"));
+        Assert.Contains(["id"], Commands("git send-pack --receive-pack=id host:repo"));
+
+        // git's own options before the subcommand are passed over, as Plain passes them, so the subcommand is still found.
+        Assert.Contains(["id"], Commands("git -C .. ls-remote --upload-pack=id ."));
+
+        // archive runs its --exec only with --remote; without one git ignores it, and so is it left unread.
+        Assert.Contains(["id"], Commands("git archive --remote=host:repo --exec=id HEAD"));
+        Assert.DoesNotContain(["id"], Commands("git archive --exec=id HEAD"));
+    }
+
+    /// <summary>
+    /// A git subcommand option that runs a command of its own - difftool's --extcmd, rebase's --exec, grep's pager, bisect
+    /// run, submodule foreach, filter-branch's filters and send-email's commands - is read as the command it is, each in
+    /// every form git takes; a plain use of the same subcommand runs none of them.
+    /// </summary>
+    [Fact]
+    public void AGitSubcommandOptionThatRunsACommand_IsReadAsTheCommandItRuns()
+    {
+        Assert.Contains(["id"], Commands("git difftool -x 'id' HEAD~1"));
+        Assert.Contains(["id"], Commands("git difftool --extcmd=id HEAD~1"));
+        Assert.Contains(["id"], Commands("git difftool -xid HEAD~1"));
+        Assert.Contains(["id"], Commands("git rebase -x 'id' main"));
+        Assert.Contains(["id"], Commands("git rebase --exec=id main"));
+
+        // grep's -O takes an optional pager glued only, never the next word, which stays the pattern.
+        Assert.Contains(["id"], Commands("git grep -Oid foo"));
+        Assert.Contains(["id"], Commands("git grep --open-files-in-pager=id foo"));
+        Assert.DoesNotContain(["id"], Commands("git grep -O id"));
+
+        // bisect run's words are the program and arguments git runs; submodule foreach's are one script the shell evaluates.
+        Assert.Contains(["git", "status"], Commands("git bisect run git status"));
+        Assert.Contains(["id"], Commands("git submodule foreach 'id'"));
+        Assert.Contains(["id"], Commands("git submodule --quiet foreach --recursive id"));
+
+        Assert.Contains(["id"], Commands("git filter-branch --tree-filter 'id' HEAD"));
+        Assert.Contains(["id"], Commands("git filter-branch --env-filter=id -- --all"));
+        Assert.Contains(["id"], Commands("git send-email --to-cmd=id *.patch"));
+        Assert.Contains(["id"], Commands("git send-email --sendmail-cmd 'id'"));
+
+        // --smtp-server names a command only where it is a path; a host name is no command.
+        Assert.Contains(["/id"], Commands("git send-email --smtp-server=/id *.patch"));
+        Assert.DoesNotContain(["smtp.example.com"], Commands("git send-email --smtp-server=smtp.example.com *.patch"));
+    }
+
+    /// <summary>A value a git option runs that an expansion names is refused, as any script named by one is.</summary>
+    [Fact]
+    public void AGitOptionsValueAnExpansionNames_IsRefused()
+    {
+        Assert.Throws<NotSupportedException>(() => Commands("git ls-remote --upload-pack=$CMD ."));
+        Assert.Throws<NotSupportedException>(() => Commands("git difftool -x \"$(cat payload)\" HEAD~1"));
+    }
+
+    /// <summary>
+    /// A plain use of a git subcommand that has a command-running option runs none of its own words: the option's value is
+    /// its data, not a command, so the subcommand's ordinary arguments are never read as one.
+    /// </summary>
+    [Fact]
+    public void APlainGitSubcommand_RunsNoneOfItsWords()
+    {
+        Assert.Equal([["git", "ls-remote", "origin"]], Commands("git ls-remote origin"));
+        Assert.Equal([["git", "difftool", "--tool-help"]], Commands("git difftool --tool-help"));
+        Assert.Equal([["git", "grep", "-n", "foo"]], Commands("git grep -n foo"));
+        Assert.Equal([["git", "rebase", "main"]], Commands("git rebase main"));
+    }
+
+    /// <summary>
+    /// clone's own -c/--config and clone's and init's --template configure git where it runs - its hooks and its programs
+    /// run inside the new repository - so each is the git config it is, read for the programs it names too, as a global -c
+    /// is; a -c of a key that only shapes what git prints is no configuration.
+    /// </summary>
+    [Fact]
+    public void ClonesConfigAndTemplate_AreTheGitConfigTheyAre()
+    {
+        Assert.Equal([["git", "config", "clone", "-c", "core.hooksPath=.githooks", "./repo"], ["git", "clone", "-c", "core.hooksPath=.githooks", "./repo"]],
+            CommandAnalysis.ForRules(["git", "clone", "-c", "core.hooksPath=.githooks", "./repo"]));
+        Assert.Equal([["git", "config", "clone", "--config=core.hooksPath=x", "./repo"], ["git", "clone", "--config=core.hooksPath=x", "./repo"]],
+            CommandAnalysis.ForRules(["git", "clone", "--config=core.hooksPath=x", "./repo"]));
+        Assert.Equal([["git", "config", "clone", "--template", "/tmp/t", "./repo"], ["git", "clone", "--template", "/tmp/t", "./repo"]],
+            CommandAnalysis.ForRules(["git", "clone", "--template", "/tmp/t", "./repo"]));
+        Assert.Equal([["git", "config", "init", "--template=/tmp/t"], ["git", "init", "--template=/tmp/t"]],
+            CommandAnalysis.ForRules(["git", "init", "--template=/tmp/t"]));
+
+        // A key that only shapes what git prints is no configuration; an ordinary clone is left alone.
+        Assert.Equal([["git", "clone", "-c", "color.ui=always", "./repo"]], CommandAnalysis.ForRules(["git", "clone", "-c", "color.ui=always", "./repo"]));
+        Assert.Equal([["git", "clone", "./repo"]], CommandAnalysis.ForRules(["git", "clone", "./repo"]));
+
+        // clone's -c of a key git runs as a program runs that program, as a global -c does.
+        Assert.Contains(["id"], Commands("git clone -c core.sshCommand='id' ./repo"));
+        Assert.Contains(["id"], Commands("git clone --config core.pager=id ./repo"));
+    }
+
     /// <summary>The commands a shell string runs, each whole: its words, then its redirects as they are spelled.</summary>
     private static IReadOnlyList<IReadOnlyList<string>> Commands(string shell)
         => [.. CommandAnalysis.Commands(shell).Select(command => command.Whole)];
