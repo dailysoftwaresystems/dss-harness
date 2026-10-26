@@ -13,7 +13,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// forced, through <see cref="IGitPublisher.PushAsync"/> under the step's time limit, else the push's own
 /// (<see cref="PublisherCommands.Push"/>). It
 /// answers whether the remote's branch moved, the remote, the branch and the commit it pushed, which a <c>ci-wait</c> that
-/// names no commit waits on. HEAD detached, no commit yet or no remote fails it 13 with nothing pushed; a push the remote
+/// names no commit waits on. HEAD detached, the main checkout on another branch than the run started on
+/// (<see cref="FlowRunPlace.OffItsBranch"/>), no commit yet or no remote fails it 13 with nothing pushed; a push the remote
 /// refused fails it 20, one that did not finish in time 21. A checkpoint push the switch keeps off never reaches it: the
 /// engine skips it (<c>pushCheckpoints</c>). Run again, it pushes what is pushed already, and answers <c>pushed</c> false.
 /// </summary>
@@ -42,6 +43,11 @@ public sealed class PushStepRunner(
         if (checkout.Branch is not { } branch)
         {
             return Refused($"'{run.Instance}' pushes the branch the main checkout is on, and its HEAD is detached: check out the run's branch, then resume. Nothing was pushed.");
+        }
+
+        if (place.OffItsBranch(run.Instance, branch, "pushed") is { } off)
+        {
+            return Refused(off);
         }
 
         if (checkout.Head is not { } commit)
@@ -79,8 +85,10 @@ public sealed class PushStepRunner(
 /// of the remotes itself - with its title filled and its body - the file it names, filled as the step
 /// started - written to its directory for the forge's tool to read. One already open from that branch to that base is
 /// answered as it is, <c>created</c> false, so a step run again opens no second; its title and body are a person's then.
-/// It answers the pull request's number and address. A title blank once filled fails it 12; HEAD detached, no remote or
-/// no base it can tell fails it 13, nothing opened; the forge's tool not there 14, saying no 20, not answering in time 21
+/// It answers the pull request's number and address - one open from a fork's branch of the same name is none of the run's
+/// (<see cref="IGitPublisher.FindPullRequestAsync"/>). A title blank once filled fails it 12; HEAD detached, the main
+/// checkout on another branch than the run started on (<see cref="FlowRunPlace.OffItsBranch"/>), no remote or no base it
+/// can tell fails it 13, nothing opened; the forge's tool not there 14, saying no 20, not answering in time 21
 /// (<see cref="Ci.GhProcess"/>). The run never merges what it opened.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
@@ -120,6 +128,11 @@ public sealed class PullRequestStepRunner(
         if (checkout.Branch is not { } head)
         {
             return Refused($"'{run.Instance}' opens the pull request of the branch the main checkout is on, and its HEAD is detached: check out the run's branch, then resume. Nothing was opened.");
+        }
+
+        if (place.OffItsBranch(run.Instance, head, "opened") is { } off)
+        {
+            return Refused(off);
         }
 
         if (checkout.Remote is not { } remote)

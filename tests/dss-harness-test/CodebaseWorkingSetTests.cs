@@ -144,6 +144,23 @@ public sealed class CodebaseWorkingSetTests
         Assert.Equal(0, set.Unplaced);
     }
 
+    /// <summary>
+    /// A whole file's write whose file does not read as the step left it - gone since, or no text - is matched to no node,
+    /// and counted unplaced: a write is never lost from the count.
+    /// </summary>
+    [Fact]
+    public async Task AWholeFilesWrite_WhoseFileDoesNotReadNow_IsCountedUnplaced()
+    {
+        using var tree = await CodebaseContextPackTests.ShopAsync();
+        var view = await ViewAsync(tree);
+        File.Delete(Full(tree, Loyalty));
+
+        var set = Make(tree, view, [.. Call("1", ClaudeCodeTools.Write, new() { ["file_path"] = Full(tree, Loyalty), ["content"] = "x" }, "written")]);
+
+        Assert.Empty(set.Nodes);
+        Assert.Equal(1, set.Unplaced);
+    }
+
     [Fact]
     public async Task TheGraphsCalls_AreFoundServedAndEdited_ANodeGoneKeptByItsId_EditedFirstThenByHowOften()
     {

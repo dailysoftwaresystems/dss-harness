@@ -1893,13 +1893,20 @@ what the apply answered before the ledger's settle, and an apply that threw goes
 left for the next attempt where reading the tree fails too. `CommitStepRunner` commits the folds upstream of it
 (`FoldLedger.Owed`, over the instances the coordinator read where it started - `FlowInstanceId.Precedes`, then
 `FlowGraph.Waits`, so another item of a `forEach` is never upstream): its message from `CommitTemplate`, the one owner
-of `commit.template`'s grammar and of its refusals, which `ValidateCommit` and V30 read too; every fold upstream settled
-(`FoldOwed.Unsettled`), an empty index and each path's digest checked before anything is
+of `commit.template`'s grammar and of its refusals, which `ValidateCommit` and V30 read too; the main checkout on the
+branch the run started on (`FlowRunPlace.OffItsBranch`, over `FlowRunContext.Branch`, the one guard the commit, the push
+and the pull request apply), every fold upstream settled (`FoldOwed.Unsettled`), an empty index, each path's digest and
+no path to stage the index marks assume-unchanged or skip-worktree checked before anything is
 staged; the staged set written to the ledger (`FlowCommitEntry`) before `IGitPublisher` stages it by explicit path and
-commits once, then marked committed in it and in each fold path it took (`FlowFoldPath.Committed`); a path git ignores
-marked `Ignored`; and a set an attempt before left staged settled first. Whether a fold is committed is read from the
-main tree as well (`FoldLedger.Uncommitted`, over git's status, read before the repository's section where another run's
-ledger owes a path), so a commit made by hand ends a stopped run's hold as the run's own does. The texts of what a run
+commits once, then held to what the commit changes against its parent - one that took more, or left a path of the set
+out, is left for a person and kept beside the set (`FlowCommitStray`) - and marked committed in it and in each fold path
+it took (`FlowFoldPath.Committed`); a path git ignores marked `Ignored` and answered under `ignored`
+(`FoldLedger.IgnoredOf`); and a set an attempt before left staged settled first, committed only where the tree holds
+what it staged. Whether HEAD holds a fold's path as the tree does is one answer, `FoldLedger.DifferingAsync` - the blob
+git would store the file as against HEAD's, never git's status, which does not look at a path marked assume-unchanged or
+skip-worktree - which the commit reads and so does whether a fold is committed at all (`FoldLedger.Uncommitted`, read
+before the repository's section where another run's ledger owes a path, a path git ignores left out as the commit
+leaves it out), so a commit made by hand ends a stopped run's hold as the run's own does. The texts of what a run
 checked - `{run.ran}`, `{run.notRun}`, `{run.red}`, and `{carried.*}` of one commit - are `FlowChecks`', over the
 step records the coordinator hands it; a check is a type `WorkflowStepTypes.StepType.Checks` marks or an independent
 reason step. A deletion run
@@ -1907,14 +1914,18 @@ again whose agent its record says deleted - its ending cut off by a stop's drain
 (`FoldFamilyStepRunner.DoneAlreadyAsync`), its output what `fold.json` kept of the apply. A
 refresh or a rebase of `others` is one turn for each target (`FlowInstance.Targets`, `FlowTargetRecord`), in
 `OrchestrationRules.AgentNameOrder`, each claimed on its own tree (`FlowClaims.Of`), retried by its own count and ended
-on its own. `PushStepRunner` and `PullRequestStepRunner` read the main checkout as a run's start does (`FlowCheckout`):
-the push sends HEAD to its branch on the step's remote, else `FlowCheckout.Remote`, through `IGitPublisher.PushAsync` -
+on its own. `PushStepRunner` and `PullRequestStepRunner` read the main checkout as a run's start does (`FlowCheckout`),
+each refused where it is not on the run's branch (`FlowRunPlace.OffItsBranch`):
+the push sends HEAD to its branch on the step's remote, else `FlowCheckout.Remote` - one, which the definition's check
+holds every push step that names a remote to - through `IGitPublisher.PushAsync` -
 `<sha>:refs/heads/<branch>` with `--porcelain`, never forced, its line read for whether the branch moved; the pull
-request is found or opened through `GhProcess` on the repository `GitRemotes.ForgeAddress` reads from the remote's
+request is found - among those gh lists from the branch's name, never one from another repository (`isCrossRepository`)
+- or opened through `GhProcess` on the repository `GitRemotes.ForgeAddress` reads from the remote's
 address - its host as ssh's configuration names it where the address is over ssh (`SshHostNames`, `ssh -G`), and none,
 leaving gh to read the remotes itself, where it cannot be told - against `FlowCheckout.BaseBranch`, its body the workflow's file the coordinator read and filled where the step
 started (`WorkflowNamedFiles.ReadText`, the one rule the definition's check holds a named file to) and the runner wrote
-to the step's directory; `FlowReports.LeftForAPerson` names each pull request the run opened or found. Every command a
+to the step's directory; `FlowReports.LeftForAPerson` names each pull request the run opened or found, and each path
+its folds changed that git ignores, as its commits answered them. Every command a
 publishing step runs is one of `PublisherCommands.All`, over `IGitClient.RunWithinAsync` and `GhProcess`, given the
 step's `timeoutMinutes` else the command's own limit. The other step runners - the agents, the rest of the steps over the services the tool already has - are
 the next thing the tool grows.
@@ -2426,8 +2437,10 @@ member's signature line kept - and where its hash moved since the view was read,
 serving it, where the tool may sync, the node looked for again in the same file (`CodebaseGraphQueries.Part`); `edit`,
 one at a time, writes a node's lines through `EditedText.ReplaceLines` only where the hash given is its hash now
 (optimistic concurrency) - a node spread over files in the part that hash names - after the write rule the tool is
-handed, keeping the file's encoding, endings and final newline, and answers the card the file's new extract gives. The
-schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
+handed, keeping the file's encoding, endings and final newline, and answers the card the file's new extract gives. Every
+file `body` reads and `edit` writes is reached through the `ConfinedPaths` the tool is handed (`ConfinedPaths.Within` the
+tree where query-codebase-graph runs it), which resolves each link, so a link out of the tree is neither read nor written
+through. The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
 `wholeFile` with `narrow`), and a call given a member its operation does not read, one of the wrong type, or missing one
 it needs, is a usage line (`CodebaseGraphTool.Misused`). Nothing gives a step the tool yet: slice 27d adds it to the tool
 runtime's table with its write rules and edit check. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
@@ -2460,13 +2473,14 @@ file's text into an extract, its size check with it) beside its extract and line
 `CodebaseGraphChanges.Compared` telling each declaration added, changed by its own lines (`CodeLineDiff`, Myers' walk
 bounded by `CodeLineDiff.MostEdits`, lines taken out judged at the base) or taken out - a type by none of its members,
 each declaration taken out with what it was declared in (`CodeChangedNode.Parent`), a file kept out as generated, or a
-side not read, telling none for that side. The pack lists those first, each with where its lines differ - a
+side not read, telling none for that side and kept with why (`CodebaseGraphChanges.Uncompared`), which the pack's first
+line names, never saying no declaration changed while one was not compared. The pack lists those first, each with where its lines differ - a
 declaration moved to another file said moved from where it was, a part of a type in each file it changed in listed
 for each, one taken out said as the base held it, whether or not another file still declares a part of it, and what
 went with its container said by the container alone - then their tests and their direct callers' tests, then their
 callers to two hops, overrides both ways, implementations and dispatches, and derived types, then the task's seeds;
 its first line counts the lines the changes lead with, and with no base, its changes unread (and why, on one line:
-`TextLines.OneLine`), no change, or no declaration among the files that differ, says so and the task's seeds stand
+`TextLines.OneLine`), no change, or no declaration among the files that differ and were compared, says so and the task's seeds stand
 in. `FlowGraphSyncs.ChangesBase` names the base: an agent's recorded `Base`, the run's start commit for the main
 checkout. A pack keeps, beside its text, its seeds (each node once, by its heaviest seed - the one its line says), its
 nodes and each node line it wrote (`ContextPack.Lines`, what a delta gives of a pack a conversation was not given).
@@ -2484,7 +2498,7 @@ the `AssistantMessage` that made it), on every client's form: a read (`Read`, `v
 gave stand once in the file as the step left it, else by the first and the last number it gave them, a write (`Edit`,
 `replace_in_file`, `insert_in_file`) where its new text stands once there - every place, with `replace_all` - else by
 the lines it names, else counted unplaced with a deletion, which writes no lines, and a whole file's write (`Write`,
-`create_file`) by every line; text is found line by line, each line's trailing blanks aside, as a client may strip
+`create_file`) by every line, counted unplaced where its file does not read as the step left it; text is found line by line, each line's trailing blanks aside, as a client may strip
 them where it writes - each matched to the declarations whose own lines it meets (`CodeOwnLines`, a member's
 lines never its type's), as the view at the step's end holds them. The coordinator names in each reason step's
 `FlowStepRun.WorkedFrom` the instances whose sets seed its pack: the step it goes on with (`resume`), each step it

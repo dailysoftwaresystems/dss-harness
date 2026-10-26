@@ -75,7 +75,10 @@ public interface IGitPublisher
     /// </exception>
     Task<bool> PushAsync(string tree, string remote, string commit, string branch, TimeSpan? limit, CancellationToken cancellationToken);
 
-    /// <summary>The pull request open from <paramref name="target"/>'s head to its base; null where none is.</summary>
+    /// <summary>
+    /// The pull request open from <paramref name="target"/>'s head to its base, of the target's own repository; null where
+    /// none is - one open from a fork's branch of the same name is none.
+    /// </summary>
     /// <param name="tree">The work tree's root, whose remotes the forge's tool reads where the target names no repository.</param>
     /// <param name="target">Where the pull request is.</param>
     /// <param name="limit">How long the read may take: the step's limit; null for its own.</param>
@@ -152,8 +155,11 @@ public static class PublisherCommands
     /// <summary>Pushes one commit to one branch of a remote, never forced.</summary>
     public static PublisherCommand Push { get; } = new("git", ["push", "--porcelain"], PushLimit);
 
-    /// <summary>Reads the pull request open from a branch to another.</summary>
-    public static PublisherCommand FindPullRequest { get; } = new(GhProcess.Executable, ["pr", "list", "--state", "open", "--json", "number,url", "--limit", "1"], GhProcess.Limit);
+    /// <summary>
+    /// Reads the pull requests open from a branch to another, each with whether it comes from another repository: the forge's
+    /// tool matches a head by its branch's name alone, a fork's among them.
+    /// </summary>
+    public static PublisherCommand FindPullRequest { get; } = new(GhProcess.Executable, ["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository"], GhProcess.Limit);
 
     /// <summary>Opens a pull request.</summary>
     public static PublisherCommand OpenPullRequest { get; } = new(GhProcess.Executable, ["pr", "create"], GhProcess.Limit);
@@ -247,8 +253,10 @@ public sealed partial class GitPublisher(IGitClient git, GhProcess gh) : IGitPub
         {
             using var document = JsonDocument.Parse(listed);
 
+            // The tool matches --head by the branch's name in any repository: a fork's branch of the same name is listed too,
+            // and is none of this repository's.
             return document.RootElement.ValueKind == JsonValueKind.Array
-                ? document.RootElement.EnumerateArray().Select(Read).FirstOrDefault()
+                ? document.RootElement.EnumerateArray().Where(entry => !entry.GetProperty("isCrossRepository").GetBoolean()).Select(Read).FirstOrDefault()
                 : throw new HarnessException(HarnessExit.CommandFailed, $"{GhProcess.Executable} answered no list of pull requests open from '{target.Head}': {listed.Trim()}");
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException or FormatException or KeyNotFoundException)

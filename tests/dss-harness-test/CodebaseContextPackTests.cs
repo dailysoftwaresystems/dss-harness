@@ -414,6 +414,40 @@ public sealed class CodebaseContextPackTests
         Assert.DoesNotContain("\nchanged:\n", none.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Under change-first, a differing file the view could not compare - too large now, so no extract tells its
+    /// declarations - is named on the pack's first line with why, and the line never says no declaration changed while one
+    /// was not compared: what it changed is not known.
+    /// </summary>
+    [Fact]
+    public async Task UnderChangeFirst_AFileThatCouldNotBeCompared_IsNamed_AndNoDeclarationIsSaidUnchanged()
+    {
+        using var tree = await CodebaseGraphTree.CreateAsync(new CodebaseGraphShape([], [], null, 120, ExcludeGenerated: true, CodebaseGraphShape.DefaultMapTokens));
+        tree.Over([.. CodeGraphExtractors.OfThisBuild.All]);
+        tree.Write("src/Grows.cs", "public static class Grows\n{\n}\n");
+        await tree.CommitAsync();
+        await tree.SyncAsync();
+        var based = await tree.HeadAsync();
+        tree.Write("src/Grows.cs", "public static class Grows\n{\n" + string.Concat(Enumerable.Repeat("    // a comment that makes the file too large\n", 4)) + "}\n");
+        var read = (await tree.CheckAsync(null, null, "src/Grows.cs")).Read;
+        var changes = await tree.Service.ChangesAsync(tree.Request(), read, based, _token);
+
+        var pack = CodebaseContextPack.Make(new CodebaseGraphQueries(read), new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = changes });
+
+        var first = pack.Text.Split('\n')[0];
+        Assert.Contains($", 1 file(s) differing from its base {based[..12]}; 1 differing file(s) could not be compared: src/Grows.cs (218 bytes, over maxFileBytes (120)), so packed from the task: ", first, StringComparison.Ordinal);
+        Assert.DoesNotContain("no declaration", first, StringComparison.Ordinal);
+
+        // Beside a file compared, the line says no declaration among the rest changed; one the step may not read is never named.
+        var some = changes with { Files = ["README.md", .. changes.Files] };
+        var beside = CodebaseContextPack.Make(new CodebaseGraphQueries(read), new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = some });
+        var unreadable = CodebaseContextPack.Make(new CodebaseGraphQueries(read), new ContextPackRequest("Review it.", path => path != "src/Grows.cs") { From = ContextPackFrom.Changes, Changes = some });
+
+        Assert.Contains($", 2 file(s) differing from its base {based[..12]}; 1 differing file(s) could not be compared: src/Grows.cs (218 bytes, over maxFileBytes (120)); no declaration among the rest changed, so packed from the task: ", beside.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.Contains($", 1 file(s) differing from its base {based[..12]}; no declaration among them changed, so packed from the task: ", unreadable.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("Grows", unreadable.Text, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task UnderChangeFirst_ADeclarationTakenOut_IsListedAsTheBaseHeldIt_AndOneAdded_SaysSo()
     {

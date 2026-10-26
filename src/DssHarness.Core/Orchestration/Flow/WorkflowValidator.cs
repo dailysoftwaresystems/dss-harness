@@ -304,6 +304,7 @@ public static class WorkflowValidator
             AgentPrompts();
             Outputs();
             PullRequests();
+            Pushes();
         }
 
         internal IReadOnlyList<string> Problems => _problems;
@@ -3835,6 +3836,21 @@ public static class WorkflowValidator
             }
 
             static string Base(Entry request) => request.Step.Base is { } named ? $"'{named}'" : "the remote's default branch";
+        }
+
+        /// <summary>
+        /// The remote the run's branch goes to (<see cref="FlowCheckout.Remote"/>), which its pushes send it to and its pull
+        /// request is opened on, is one: every push step that names a remote names the same one, so which repository that is
+        /// never turns on which push step is declared first. A push step that names none goes to that one.
+        /// </summary>
+        private void Pushes()
+        {
+            var named = _entries.Where(entry => entry.Step.Type == "push" && entry.Step.Remote is not null).ToList();
+
+            foreach (var other in named.Skip(1).Where(other => !string.Equals(other.Step.Remote, named[0].Step.Remote, StringComparison.Ordinal)))
+            {
+                _problems.Add($"steps '{named[0].Path}' and '{other.Path}' push to different remotes, '{named[0].Step.Remote}' and '{other.Step.Remote}'; the run's branch goes to one remote, which every push sends it to and its pull request is opened on");
+            }
         }
     }
 }

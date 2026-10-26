@@ -22,12 +22,34 @@ public sealed record FlowAnswerGiven(string Question, string Answer);
 /// <param name="Blocks">Whether the issue stops the reporting step's own work.</param>
 public sealed record FlowPreExistingReport(string Title, string Description, string Where, string Evidence, bool Blocks);
 
-/// <summary>The run a step belongs to: where it works, its name, the commit it started from and the workflow it runs.</summary>
+/// <summary>
+/// The run a step belongs to: where it works, its name, the commit and the branch it started from and the workflow it
+/// runs.
+/// </summary>
 /// <param name="Repository">The main checkout's root: where every service a step calls is asked from.</param>
 /// <param name="Run">The run's name, which names its orchestrator.</param>
 /// <param name="StartCommit">The commit the run started from; null where its records name none.</param>
 /// <param name="Definition">The workflow the run runs, as it was frozen when the run began.</param>
-public sealed record FlowRunPlace(string Repository, string Run, string? StartCommit, WorkflowDefinition Definition);
+/// <param name="Branch">
+/// The branch the run started on, as its records keep it (<see cref="FlowRunContext.Branch"/>): the one its commits, its
+/// pushes and its pull request work on (<see cref="OffItsBranch"/>); null where its records name none.
+/// </param>
+public sealed record FlowRunPlace(string Repository, string Run, string? StartCommit, WorkflowDefinition Definition, string? Branch = null)
+{
+    /// <summary>
+    /// Why a step that publishes the run's work - a commit, a push, a pull request - is refused with the main checkout on
+    /// <paramref name="branch"/>: it is not the branch the run started on - a person checked another out while the run was
+    /// paused - and the run's work would go onto that one. The one guard of the three; null where the checkout is on the
+    /// run's branch, or where the run's records name none.
+    /// </summary>
+    /// <param name="instance">The step's instance, which the refusal names.</param>
+    /// <param name="branch">The branch the main checkout is on now; null where its HEAD is detached.</param>
+    /// <param name="untouched">What the step did not do, as the refusal's last sentence says it: <c>staged</c>, <c>pushed</c> or <c>opened</c>.</param>
+    public string? OffItsBranch(string instance, string? branch, string untouched)
+        => Branch is { } started && !string.Equals(branch, started, StringComparison.Ordinal)
+            ? $"'{instance}' works on '{started}', the branch the run started on, and the main checkout {(branch is null ? "has its HEAD detached" : $"is on '{branch}'")} now: check out '{started}', then resume. Nothing was {untouched}."
+            : null;
+}
 
 /// <summary>
 /// The agent a step makes, as the engine named it before the step began: written to the step's record with the model

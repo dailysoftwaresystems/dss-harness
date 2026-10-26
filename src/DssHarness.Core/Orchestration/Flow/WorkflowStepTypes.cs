@@ -307,7 +307,7 @@ public static class WorkflowStepTypes
             "CommitStepRunner: FoldLedger.Owed, CommitTemplate, IGitPublisher over IGitClient.RunWithinAsync",
             ["write main"],
             null,
-            ObjectOf(("committed", Flag), ("sha", TextOrNull), ("paths", ListOf(Text)))),
+            ObjectOf(("committed", Flag), ("sha", TextOrNull), ("paths", ListOf(Text)), ("ignored", ListOf(Text)))),
         new(
             "push",
             [new("remote", "the remote it pushes to; absent, the one the run's branch goes to"), new("checkpoint", "a push made before the run's end, which runs only where the workflow says pushCheckpoints")],

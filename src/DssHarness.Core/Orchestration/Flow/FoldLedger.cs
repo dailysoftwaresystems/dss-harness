@@ -25,7 +25,8 @@ public sealed record FoldOwedPath(string Path, string? Digest, string? Before, s
 /// means to write with what the main tree holds there - appended before the verb is called, and what it left there
 /// recorded after, so nothing reaches the main tree unrecorded, and a crash between the two leaves an intent the next
 /// attempt of the step settles from what the tree holds; and a commit's staged set, written before its first
-/// <c>git add</c> and marked committed - with each fold path it took - or unstaged after.
+/// <c>git add</c> and marked committed - with each fold path it took - or unstaged after, or left staged with the commit
+/// made of it where that commit was not the set's alone.
 /// </summary>
 /// <param name="store">Reads and writes the ledger, inside the run's own section.</param>
 /// <param name="fileSystem">Reads what the main tree holds at each path.</param>
@@ -177,8 +178,8 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
     /// </summary>
     /// <param name="ledger">The run's ledger; null where it holds none.</param>
     /// <param name="differing">
-    /// Every path the main tree holds otherwise than its HEAD - modified, staged, deleted or untracked
-    /// (<see cref="DifferingAsync"/>); null where it was not read.
+    /// The paths a commit owes (<see cref="OwedPaths"/>) the main tree holds otherwise than its HEAD, told by what each
+    /// holds (<see cref="DifferingAsync"/>); null where it was not read.
     /// </param>
     public static IReadOnlyList<FlowFoldEntry> Uncommitted(FlowFoldLedgerFile? ledger, IReadOnlySet<string>? differing)
         => [.. (ledger?.Folds ?? []).Where(entry => entry.State == FlowFoldEntry.Intended
@@ -186,8 +187,16 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
 
     /// <summary>Whether <paramref name="ledger"/> holds a path a commit owes, which only the main tree can say was not committed by hand.</summary>
     /// <param name="ledger">The run's ledger; null where it holds none.</param>
-    public static bool OwesAny(FlowFoldLedgerFile? ledger)
-        => (ledger?.Folds ?? []).Any(entry => entry.Paths.Any(path => path.Owed));
+    public static bool OwesAny(FlowFoldLedgerFile? ledger) => OwedPaths(ledger).Count > 0;
+
+    /// <summary>
+    /// Every path of <paramref name="ledger"/> a commit owes (<see cref="FlowFoldPath.Owed"/>), each once, in the order the
+    /// ledger first names it: what the main tree is asked of (<see cref="DifferingAsync"/>) to tell whether the run is
+    /// unfinished.
+    /// </summary>
+    /// <param name="ledger">The run's ledger; null where it holds none.</param>
+    public static IReadOnlyList<string> OwedPaths(FlowFoldLedgerFile? ledger)
+        => [.. (ledger?.Folds ?? []).SelectMany(entry => entry.Paths).Where(path => path.Owed).Select(path => path.Path).Distinct(StringComparer.Ordinal)];
 
     /// <summary>
     /// What a commit of the folds of the step instances <paramref name="upstream"/> weighs: each path one of their settled
@@ -221,10 +230,32 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
         }
 
         return new FoldOwed(owed, [.. ours.Where(entry => entry.State == FlowFoldEntry.Intended)]);
-
-        // A fold whose ending was recorded with what it left: an intent left nobody knows what, and a refusal wrote nothing.
-        static bool Settled(FlowFoldEntry entry) => entry.State is not (FlowFoldEntry.Intended or FlowFoldEntry.Refused);
     }
+
+    /// <summary>
+    /// Each path a settled fold of the step instances <paramref name="upstream"/> changed that no commit of the run took
+    /// and git ignored when last asked (<see cref="FlowFoldPath.Ignored"/>), once, in the order the ledger first names it:
+    /// what a commit of their folds answers it left out - folded, ignored by git, never committed.
+    /// </summary>
+    /// <param name="ledger">The run's ledger; null where it holds none.</param>
+    /// <param name="upstream">The instances of the <c>fold</c> and <c>delete-agent</c> steps upstream of the commit.</param>
+    public static IReadOnlyList<string> IgnoredOf(FlowFoldLedgerFile? ledger, IReadOnlyCollection<string> upstream)
+    {
+        ArgumentNullException.ThrowIfNull(upstream);
+
+        return
+        [
+            .. (ledger?.Folds ?? [])
+                .Where(entry => Settled(entry) && upstream.Contains(entry.Instance, StringComparer.Ordinal))
+                .SelectMany(entry => entry.Paths)
+                .Where(path => path.Uncommitted && path.Ignored == true)
+                .Select(path => path.Path)
+                .Distinct(StringComparer.Ordinal),
+        ];
+    }
+
+    /// <summary>Whether a fold's ending was recorded with what it left: an intent left nobody knows what, and a refusal wrote nothing.</summary>
+    private static bool Settled(FlowFoldEntry entry) => entry.State is not (FlowFoldEntry.Intended or FlowFoldEntry.Refused);
 
     /// <summary>
     /// Appends a commit's staged set - the paths it stages with what the main tree holds at each, the folds they settle
@@ -277,6 +308,30 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
                     ? fold with { Paths = [.. fold.Paths.Select(path => path.Owed && paths.Contains(path.Path) ? path with { Committed = id } : path)] }
                     : fold)],
                 Commits = [.. ledger.Commits.Select(commit => commit.Id == id ? commit with { State = FlowCommitEntry.Committed, SettledAt = clock.GetUtcNow(), Sha = sha } : commit)],
+            };
+        });
+    }
+
+    /// <summary>
+    /// Records that the commit made of the staged set <paramref name="id"/> is not the set's alone - a hook staged more, or
+    /// git left a path of it out (<paramref name="stray"/>) - and leaves the set staged: the commit is a person's to keep or
+    /// undo, and the step's next attempt settles the set from what HEAD and the tree hold by then.
+    /// </summary>
+    /// <param name="layout">The run's orchestrator.</param>
+    /// <param name="id">The staged set's id, as <see cref="Staging"/> gave it.</param>
+    /// <param name="stray">The commit made, what it took besides the set and what of the set it did not take.</param>
+    public void Strayed(OrchestratorLayout layout, string id, FlowCommitStray stray)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(stray);
+
+        store.UpdateFolds(layout, ledger =>
+        {
+            _ = StagedOf(ledger, id);
+
+            return ledger with
+            {
+                Commits = [.. ledger.Commits.Select(commit => commit.Id == id ? commit with { Strayed = stray } : commit)],
             };
         });
     }
@@ -336,22 +391,50 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
             : throw new HarnessException(HarnessExit.InternalError, $"the run's ledger of its folds holds no staged commit '{id}' to settle");
 
     /// <summary>
-    /// Every path the main tree at <paramref name="main"/> holds otherwise than its HEAD does, as git's status names it -
-    /// modified, staged, deleted, and each file of an untracked directory - for <see cref="Uncommitted"/> to hold a
-    /// fold's changed paths to. Nothing is written.
+    /// Which of <paramref name="paths"/> the main tree at <paramref name="main"/> holds otherwise than its HEAD does, told by
+    /// what each holds: the blob git would store its file as (<see cref="IGitClient.HashWorkingFilesAsync"/>) against the
+    /// one HEAD holds at the path (<see cref="IGitClient.HeldAtAsync"/>), and no file against none - never by git's status,
+    /// which does not look at a path marked assume-unchanged or skip-worktree, and would read its change as none. The one
+    /// answer to whether HEAD holds a fold's path as the tree does: whether a run is unfinished (<see cref="Uncommitted"/>),
+    /// and whether a commit step finds a path committed - by hand, or by an attempt of its own a crash cut off. Nothing is
+    /// written.
     /// </summary>
-    /// <param name="git">Reads the main tree's status.</param>
+    /// <param name="git">Reads HEAD, and what the files hold.</param>
     /// <param name="main">The main tree's root.</param>
-    /// <param name="cancellationToken">Stops the read.</param>
-    /// <exception cref="HarnessException">git could not read the status.</exception>
-    public static async Task<IReadOnlySet<string>> DifferingAsync(IGitClient git, string main, CancellationToken cancellationToken)
+    /// <param name="paths">The paths asked about, relative to the tree and spelt with forward slashes.</param>
+    /// <param name="cancellationToken">Stops the reads.</param>
+    /// <exception cref="HarnessException">git could not read HEAD, or what a file holds.</exception>
+    public static async Task<IReadOnlySet<string>> DifferingAsync(IGitClient git, string main, IReadOnlyCollection<string> paths, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(git);
+        ArgumentNullException.ThrowIfNull(paths);
 
-        return DifferingOf(await git.ReadStatusAsync(main, cancellationToken).ConfigureAwait(false));
+        var asked = paths.Distinct(StringComparer.Ordinal).ToList();
+        var differing = new HashSet<string>(StringComparer.Ordinal);
+
+        if (asked.Count == 0)
+        {
+            return differing;
+        }
+
+        var head = await git.ResolveCommitAsync(main, "HEAD", cancellationToken).ConfigureAwait(false);
+        var held = head is null ? null : await git.HeldAtAsync(main, head, asked, cancellationToken).ConfigureAwait(false);
+        var now = await git.HashWorkingFilesAsync(main, asked, cancellationToken).ConfigureAwait(false);
+
+        for (var at = 0; at < asked.Count; at++)
+        {
+            var then = held?.GetValueOrDefault(asked[at]) ?? GitHeld.Nothing;
+
+            if (now[at] is { } blob ? !string.Equals(blob, then.Blob, StringComparison.Ordinal) : !then.IsNothing)
+            {
+                differing.Add(asked[at]);
+            }
+        }
+
+        return differing;
     }
 
-    /// <summary>Every path <paramref name="status"/> names - both of a rename's - each once: what the tree holds otherwise than its HEAD.</summary>
+    /// <summary>Every path <paramref name="status"/> names - both of a rename's - each once: each change status says the tree holds, staged or not.</summary>
     /// <param name="status">The main tree's status, as <see cref="IGitClient.ReadStatusAsync"/> reads it.</param>
     public static IReadOnlySet<string> DifferingOf(IEnumerable<GitStatusEntry> status)
     {

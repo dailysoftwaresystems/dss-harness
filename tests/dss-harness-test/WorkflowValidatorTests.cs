@@ -4553,6 +4553,55 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// Every push step that names a remote names the same one: the run's branch goes to one remote, which its pushes send
+    /// it to and its pull request is opened on, so which repository that is never turns on which push step is declared
+    /// first. A push step that names none goes to that one, and is refused nothing.
+    /// </summary>
+    [Fact]
+    public void PushStepsThatNameDifferentRemotes_AreRefused()
+    {
+        Assert.Equal(
+            [
+                "steps 'first' and 'third' push to different remotes, 'origin' and 'upstream'; the run's branch goes to one remote, which every push sends it to and its pull request is opened on",
+            ],
+            Problems(
+                """
+                name: flow
+                steps:
+                  - name: first
+                    type: push
+                    remote: origin
+                  - name: second
+                    type: push
+                    dependsOn: [first]
+                  - name: third
+                    type: push
+                    dependsOn: [second]
+                    remote: upstream
+                  - name: fourth
+                    type: push
+                    dependsOn: [third]
+                    remote: origin
+                """));
+
+        Assert.Empty(Problems(
+            """
+            name: flow
+            steps:
+              - name: first
+                type: push
+                remote: upstream
+              - name: second
+                type: push
+                dependsOn: [first]
+              - name: third
+                type: push
+                dependsOn: [second]
+                remote: upstream
+            """));
+    }
+
+    /// <summary>
     /// A prompt's own placeholders - a reason step's prompt and resumePrompt, a pull request's body - are checked against
     /// what the step can read from where it sits, each said at the line it first stands on: a name nothing provides, a
     /// path no schema holds, and in a prompt, which the first iteration is asked with too, the iteration before; a

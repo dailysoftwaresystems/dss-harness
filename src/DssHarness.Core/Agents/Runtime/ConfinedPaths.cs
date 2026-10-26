@@ -67,6 +67,21 @@ public sealed class ConfinedPaths
     }
 
     /// <summary>
+    /// Where a tool that serves one tree alone may reach - the <c>graph</c> tool where no agent's roots are handed it, as
+    /// the <c>query-codebase-graph</c> verb runs it: <paramref name="tree"/> its one root, read and written, and the place a
+    /// relative path is read against.
+    /// </summary>
+    /// <param name="fileSystem">Resolves the links, and says how the tree compares names.</param>
+    /// <param name="platform">The platform, whose spellings are refused.</param>
+    /// <param name="tree">The tree's root, absolute.</param>
+    public static ConfinedPaths Within(IFileSystem fileSystem, IHostPlatform platform, string tree)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+
+        return new ConfinedPaths(fileSystem, platform, new AgentPolicyGround(tree, [], [tree], [], [], [], [], null, null, null, WorktreeRules: false, ProtectedPaths: false, []));
+    }
+
+    /// <summary>
     /// The place <paramref name="path"/> names for a read - a file read, a directory listed or searched - as the tool acts
     /// on it: absolute, against the agent's working directory; or why it may not be reached.
     /// </summary>

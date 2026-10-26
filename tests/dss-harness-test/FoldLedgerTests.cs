@@ -646,6 +646,46 @@ public sealed class FoldLedgerTests
         Assert.Equal("second", (await sessions.CreateAsync(layout, definition, wantedName: "second", cancellationToken: Token)).Run.Name);
     }
 
+    /// <summary>
+    /// Whether a stopped run's fold is committed is told by what HEAD holds at its path, never by git's status, which does
+    /// not look at a path marked assume-unchanged or skip-worktree: one so marked is unfinished all the same - and a fold
+    /// of a path git ignores alone, which no commit takes, holds nothing in the tree.
+    /// </summary>
+    [Fact]
+    public async Task ARunsFoldAMarkHidesFromStatus_IsUnfinished_AndOneGitIgnoresHoldsNothing()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(temp.Path, Token);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "base\n");
+        File.WriteAllText(Path.Combine(temp.Path, ".gitignore"), "*.log\n");
+        _ = await harness.RunGitAsync(temp.Path, ["add", "--", "a.txt", ".gitignore"], Token);
+        _ = await harness.RunGitAsync(temp.Path, ["commit", "--quiet", "-m", "a base"], Token);
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n");
+        var (other, _) = await sessions.CreateAsync(layout, definition, cancellationToken: Token);
+        new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Release(other);
+        harness.OrchestrationStore.WriteFlow(other, new FlowFile(1, other.Name, "flow", Digest, new Dictionary<string, string>(), "Stopped", new FlowBudgetRecord(0, 0, 0), 0, [], [], At));
+        var ledger = new FoldLedger(harness.OrchestrationStore, harness.FileSystem, TimeProvider.System);
+        var id = await ledger.IntendAsync(other, temp.Path, "one", 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = ["run.log"] }, Token);
+        File.WriteAllText(Path.Combine(temp.Path, "run.log"), "evidence\n");
+        await ledger.SettleAsync(other, temp.Path, id, HarnessExit.Success);
+
+        Assert.Equal("second", (await sessions.CreateAsync(layout, definition, wantedName: "second", cancellationToken: Token)).Run.Name);
+
+        new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Release(OrchestratorLayout.Of(layout, "second"));
+        Directory.Delete(OrchestratorLayout.Of(layout, "second").Directory, recursive: true);
+        id = await ledger.IntendAsync(other, temp.Path, "one", 2, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = ["a.txt"] }, Token);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "folded\n");
+        await ledger.SettleAsync(other, temp.Path, id, HarnessExit.Success);
+        _ = await harness.RunGitAsync(temp.Path, ["update-index", "--assume-unchanged", "--", "a.txt"], Token);
+
+        var held = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, definition, wantedName: "third", cancellationToken: Token));
+
+        Assert.Contains("run 'r1' of this repository is unfinished (stopped; 1 fold in its ledger not yet committed)", held.Message, StringComparison.Ordinal);
+    }
+
     private const string Head = "1111111111111111111111111111111111111111";
 
     private const string Other = "2222222222222222222222222222222222222222";

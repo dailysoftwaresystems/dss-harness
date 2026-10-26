@@ -746,12 +746,14 @@ public static partial class CodebaseContextPack
 
         /// <summary>
         /// The pack's first line: the view, its commit, how many files the step may read the tree holds otherwise than its
-        /// base, and what the pack was seeded from - or, under change-first, how many lines the changes lead with, or why
-        /// the task's seeds stand in for them.
+        /// base and each of them that could not be compared, with why, and what the pack was seeded from - or, under
+        /// change-first, how many lines the changes lead with, or why the task's seeds stand in for them: never that no
+        /// declaration changed while a file was not compared, for what it changed is not known.
         /// </summary>
         private string FirstLine(int changesLead)
         {
             var line = new StringBuilder($"codebase graph: view '{queries.View}' at {(queries.Head is { } head ? ReportText.Commit(head) : "no commit")}");
+            List<CodeUncomparedFile> uncompared = [.. request.Changes?.Uncompared.Where(file => request.MayRead(file.Path)) ?? []];
 
             if (request.Changes is { } read)
             {
@@ -760,11 +762,22 @@ public static partial class CodebaseContextPack
 
             line.Append("; ");
 
+            // Every differing file not compared leaves nothing that was: the task's seeds stand in, said as following from it.
+            var noneCompared = uncompared.Count > 0 && uncompared.Count == request.Changes!.Files.Count(request.MayRead);
+
+            if (uncompared.Count > 0)
+            {
+                line.Append(CultureInfo.InvariantCulture, $"{ReportText.Counted(uncompared.Count, "differing file")} could not be compared: {ReportText.Listed([.. uncompared.Select(file => $"{file.Path} ({file.Why})")])}");
+                line.Append(request.From == ContextPackFrom.Changes && changesLead == 0 && noneCompared ? ", " : "; ");
+            }
+
             if (request.From == ContextPackFrom.Changes)
             {
                 line.Append(changesLead > 0 ? $"packed from those changes first - {ReportText.Counted(changesLead, "declaration")} added, changed or taken out, their tests, then their impact - then from the task: "
                     : request.ChangesUnread is { } why ? $"its changes could not be read ({TextLines.OneLine(why).TrimEnd('.')}), so packed from the task: "
                     : request.Changes is null ? "no base to compare with, so packed from the task: "
+                    : noneCompared ? "so packed from the task: "
+                    : uncompared.Count > 0 ? "no declaration among the rest changed, so packed from the task: "
                     : request.Changes.Files.Any(request.MayRead) ? "no declaration among them changed, so packed from the task: "
                     : "no change against its base, so packed from the task: ");
             }

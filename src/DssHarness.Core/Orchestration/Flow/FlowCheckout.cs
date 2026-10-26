@@ -16,8 +16,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="Dirty">Every path the checkout changes - staged, not staged or untracked - as git names them, each once, in order.</param>
 /// <param name="Remotes">The repository's remotes, as git lists them.</param>
 /// <param name="Remote">
-/// The remote the run's branch goes to: the one the flow's <c>push</c> step names, else the remote the branch tracks,
-/// else <c>origin</c> (<see cref="GitRemotes.ConventionalRemote"/>), else the only one there is; null where none is found.
+/// The remote the run's branch goes to: the one the flow's <c>push</c> steps name - one, which the definition's check holds
+/// every push step that names a remote to - else the remote the branch tracks, else <c>origin</c>
+/// (<see cref="GitRemotes.ConventionalRemote"/>), else the only one there is; null where none is found.
 /// </param>
 /// <param name="RemoteDefault">The branch <paramref name="Remote"/> names its default, without the remote's name; null where it names none here.</param>
 public sealed record FlowCheckout(

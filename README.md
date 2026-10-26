@@ -951,17 +951,19 @@ consent, a path outside a fold's `within`, conflicting merges - with what it is 
 only what it named, write each path a fold means to write to the run's ledger of its folds (`folds.json`) before the
 verb and what it left after, and, of `others`, work on each other open agent of the run in turn; and `commit`, which
 commits the folds upstream of it and no other work - each path they changed that no commit of the run took, held to what
-its fold left there (a path edited or restored since, or a fold upstream whose intent nobody settled, fails it, and
-nothing is staged), on an empty index, by explicit
-path, with the configuration's `commit.template` filled or the step's own message - and with nothing owed is done and runs
-no git; any template reads what the run checked (`{run.ran}`, `{run.notRun}`, `{run.red}`), and a commit's message what
+its fold left there (a path edited or restored since, a path the index marks assume-unchanged or skip-worktree, the
+main checkout off the branch the run started on, or a fold upstream whose intent nobody settled, fails it, and nothing
+is staged), on an empty index, by explicit path, with the configuration's `commit.template` filled or the step's own
+message, the commit held to that set (one a hook made take more, or less, fails it, 20, left for a person) - answers the
+paths git ignores, which it never commits, and with nothing owed is done and runs no git; any template reads what the run checked (`{run.ran}`, `{run.notRun}`, `{run.red}`), and a commit's message what
 checked what it carries (`{carried.ran}`, `{carried.notRun}`, `{carried.red}`); `push`, which pushes the main checkout's
 HEAD to its branch on the remote the run's branch goes to (or the step's), a fast-forward never forced, and answers
-whether the branch moved (a detached HEAD or no remote it can name refuses it, 13; the remote refusing fails it, 20); and
+whether the branch moved (a detached HEAD, the main checkout off the branch the run started on, or no remote it can name
+refuses it, 13; the remote refusing fails it, 20; push steps that name two remotes are refused); and
 `pull-request`, which opens the run's branch's pull request against its base - the step's, else the remote's default -
 on the repository the remote's address names, its body the workflow's file filled where the step starts, and answers an
-open one as it is (`created` false) so a step run again opens no second; the run never merges it, and its end leaves
-each pull request for a person. A check that finds red
+open one as it is (`created` false) so a step run again opens no second, and never one from a fork's branch of the same
+name; the run never merges it, and its end leaves each pull request, and each folded path git ignores, for a person. A check that finds red
 fails its step under `failOn: red`, every check's default but `ci-read`'s. Every text a step hands on is filled where it
 starts, and one that reads nothing fails the step (12). Every call of `gh` and every git command is started so it
 cannot ask, and each command a step runs on the forge or to publish - a read of CI, a commit's, a push, a pull

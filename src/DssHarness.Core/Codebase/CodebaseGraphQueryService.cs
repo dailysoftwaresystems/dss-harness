@@ -185,7 +185,7 @@ public sealed class CodebaseGraphQueryService(
         // A person reads what the graph lists: never the credential slots or the tool's own state, which a text search would otherwise reach.
         var never = CodebaseGraphService.NeverListed(context.Config.Worktrees.Root);
         var files = new AgentFiles(_gitClient, _fileSystem, _time);
-        var tool = new CodebaseGraphTool(queries, files, _fileSystem, path => !PathPatterns.Matches(never, path, _platform.PathComparison));
+        var tool = new CodebaseGraphTool(queries, files, _fileSystem, ConfinedPaths.Within(_fileSystem, _platform, queries.Tree), path => !PathPatterns.Matches(never, path, _platform.PathComparison));
         var answer = await tool.RunAsync(input, new HashSet<GraphOp>(CodebaseGraphTool.Read), cancellationToken).ConfigureAwait(false);
         var text = said + answer.Text;
 

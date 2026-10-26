@@ -1,14 +1,21 @@
 namespace DssHarness.Core.Codebase;
 
 /// <summary>
-/// What a tree holds otherwise than its base commit: every path that differs, and each declaration added, changed or
-/// taken out - what change-first packs a step from (value 371).
+/// What a tree holds otherwise than its base commit: every path that differs, each declaration added, changed or taken
+/// out, and each differing file whose declarations could not be told - what change-first packs a step from (value 371).
 /// </summary>
 /// <param name="Base">The commit the tree was compared with.</param>
 /// <param name="Files">Every path the tree holds otherwise than the base - changed, added, taken out, or untracked - that a graph may list, by path.</param>
 /// <param name="Nodes">Each declaration changed, by path and line: added or changed as the tree holds it now, taken out as the base held it.</param>
 public sealed record CodebaseGraphChanges(string Base, IReadOnlyList<string> Files, IReadOnlyList<CodeChangedNode> Nodes)
 {
+    /// <summary>
+    /// Each file of <see cref="Files"/> that could not be compared, by path, with why: kept out as generated code, or not
+    /// read on a side - too large, not text, claimed by no one implementation, gone or locked now. What it changed is not
+    /// known, so no line says no declaration changed while one is here. None where every file was compared.
+    /// </summary>
+    public IReadOnlyList<CodeUncomparedFile> Uncompared { get; init; } = [];
+
     /// <summary>
     /// The declarations of one file that differ between <paramref name="before"/> and <paramref name="after"/>, each of
     /// <see cref="CodeNodeKinds.Declarations"/>' kinds: one the base did not declare, added; one whose digest moved and whose
@@ -101,6 +108,11 @@ public sealed record CodebaseGraphChanges(string Base, IReadOnlyList<string> Fil
         return own;
     }
 }
+
+/// <summary>One differing file whose declarations could not be told, and why.</summary>
+/// <param name="Path">The file's path, relative to the tree with forward separators.</param>
+/// <param name="Why">Why it could not be compared, as a line names it: what kept it out, and on which side.</param>
+public sealed record CodeUncomparedFile(string Path, string Why);
 
 /// <summary>One declaration a change added, changed or took out.</summary>
 /// <param name="Id">Its id.</param>

@@ -207,36 +207,40 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     }
 
     /// <summary>
-    /// What the main tree holds otherwise than its HEAD (<see cref="FoldLedger.DifferingAsync"/>), read before the
-    /// repository's section, which is synchronous - and read only where a run but <paramref name="leavingOut"/> has a
-    /// ledger holding a path a commit owes, the one question it answers; null where none does, or where a ledger cannot
-    /// be read, which the section says. A commit made between the read and the section only counts a fold uncommitted
-    /// that is committed by then, never the other way round: a run that folds meanwhile has a live owner, which the
-    /// section refuses.
+    /// Which of the paths a commit owes in the ledgers of every run but <paramref name="leavingOut"/> git does not ignore
+    /// and the main tree holds otherwise than its HEAD (<see cref="FoldLedger.DifferingAsync"/>), read before the repository's section, which is
+    /// synchronous - and read only where such a ledger holds one, the one question it answers; null where none does, or
+    /// where every ledger that might cannot be read, which the section says. A commit made between the read and the
+    /// section only counts a fold uncommitted that is committed by then, never the other way round: a run that folds
+    /// meanwhile has a live owner, which the section refuses.
     /// </summary>
     private async Task<IReadOnlySet<string>?> DifferingAsync(HarnessLayout layout, string? leavingOut, CancellationToken cancellationToken)
     {
+        var owed = new List<string>();
+
         foreach (var other in _store.Orchestrators(layout).Where(other => !string.Equals(other.Name, leavingOut, StringComparison.Ordinal)))
         {
-            FlowFoldLedgerFile? ledger;
-
             try
             {
-                ledger = _store.ReadFolds(other);
+                owed.AddRange(FoldLedger.OwedPaths(_store.ReadFolds(other)));
             }
             catch (HarnessException)
             {
                 // The section reads it again, and says it cannot be read.
-                continue;
-            }
-
-            if (FoldLedger.OwesAny(ledger))
-            {
-                return await FoldLedger.DifferingAsync(_git, layout.MainCheckoutRoot, cancellationToken).ConfigureAwait(false);
             }
         }
 
-        return null;
+        if (owed.Count == 0)
+        {
+            return null;
+        }
+
+        // A path git ignores is one no commit takes, whatever it holds, so it holds no run unfinished.
+        var main = layout.MainCheckoutRoot;
+        var asked = owed.Distinct(StringComparer.Ordinal).ToList();
+        var ignored = await _git.FindIgnoredAsync(main, asked, cancellationToken).ConfigureAwait(false);
+
+        return await FoldLedger.DifferingAsync(_git, main, [.. asked.Where(path => !ignored.Contains(path))], cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

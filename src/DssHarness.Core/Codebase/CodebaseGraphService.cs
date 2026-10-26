@@ -116,7 +116,7 @@ public interface ICodebaseGraphService
     /// (<see cref="CodebaseGraphChanges.Compared"/>) - each such file's blob at the base read as a sync reads a file, its size
     /// first, in memory and nothing written, beside its extract in <paramref name="read"/>, the view as the step's start
     /// synced it, and its lines now. A file the view keeps out as generated code, or one not read on a side, tells no
-    /// declaration. No gate, no sync.
+    /// declaration, and is said not compared, with why (<see cref="CodebaseGraphChanges.Uncompared"/>). No gate, no sync.
     /// </summary>
     /// <param name="request">The tree, and how the workflow shapes its graph.</param>
     /// <param name="read">The view of that tree, synced.</param>
@@ -2427,22 +2427,26 @@ public sealed class CodebaseGraphService(
         IReadOnlyList<long?> sizes = blobs.Count == 0 ? [] : await _gitClient.ReadBlobSizesAsync(tree, blobs, cancellationToken).ConfigureAwait(false);
         List<string> small = [.. blobs.Where((_, at) => sizes[at] is { } size && size <= request.Shape.MaxFileBytes)];
         IReadOnlyList<byte[]?> contents = small.Count == 0 ? [] : await _gitClient.ReadBlobsAsync(tree, small, cancellationToken).ConfigureAwait(false);
+        var sizeOf = blobs.Zip(sizes).ToDictionary(blob => blob.First, blob => blob.Second, StringComparer.Ordinal);
         var bytesOf = small.Zip(contents).ToDictionary(blob => blob.First, blob => blob.Second, StringComparer.Ordinal);
         var nodes = new List<CodeChangedNode>();
+        var uncompared = new List<CodeUncomparedFile>();
 
         foreach (var path in paths)
         {
             // Each side is no file, or a file an implementation read: a file kept out as generated code, or one not read on
             // a side - too large, not text, gone or locked while it was read - tells no declaration, for what that side held
-            // is not known, and nothing is said changed or gone by it.
+            // is not known: nothing is said changed or gone by it, and it is said not compared, with why.
             var after = Side.None;
 
             if (read.Files.TryGetValue(path, out var entry))
             {
-                if (string.Equals(entry.State, CodeFileStates.Generated, StringComparison.Ordinal)
-                    || read.Extract(path) is not { } now
-                    || await LinesNowAsync(Path.Combine(tree, path.Replace('/', Path.DirectorySeparatorChar)), path, cancellationToken).ConfigureAwait(false) is not { } lines)
+                var now = string.Equals(entry.State, CodeFileStates.Generated, StringComparison.Ordinal) ? null : read.Extract(path);
+                var lines = now is null ? null : await LinesNowAsync(Path.Combine(tree, path.Replace('/', Path.DirectorySeparatorChar)), path, cancellationToken).ConfigureAwait(false);
+
+                if (now is null || lines is null)
                 {
+                    uncompared.Add(new CodeUncomparedFile(path, now is not null ? "it could not be read now" : Unextracted(entry.State, entry.Why)));
                     continue;
                 }
 
@@ -2453,8 +2457,13 @@ public sealed class CodebaseGraphService(
 
             if (held.TryGetValue(path, out var at) && at.Blob is { } blob)
             {
-                if (bytesOf.GetValueOrDefault(blob) is not { } bytes || AtBase(path, blob, bytes, request.Shape) is not { } then)
+                var (then, why) = bytesOf.GetValueOrDefault(blob) is { } bytes
+                    ? AtBase(path, blob, bytes, request.Shape)
+                    : (null, sizeOf.GetValueOrDefault(blob) is { } size ? TooLarge(blob, size, request.Shape, written: null)?.Why : "its blob could not be read");
+
+                if (then is null)
                 {
+                    uncompared.Add(new CodeUncomparedFile(path, $"{why} at the base"));
                     continue;
                 }
 
@@ -2464,18 +2473,25 @@ public sealed class CodebaseGraphService(
             nodes.AddRange(CodebaseGraphChanges.Compared(path, before.Extract, before.Lines, after.Extract, after.Lines));
         }
 
-        return new CodebaseGraphChanges(baseCommit, paths, nodes);
+        return new CodebaseGraphChanges(baseCommit, paths, nodes) { Uncompared = uncompared };
     }
 
     /// <summary>
-    /// A file's blob at the base, read as a sync reads the file - its size, its bytes, the implementation that claims it - or
-    /// null where no implementation read it, or it is kept out as generated code.
+    /// A file's blob at the base, read as a sync reads the file - its size, its bytes, the implementation that claims it - or,
+    /// where no implementation read it or it is kept out as generated code, none and why.
     /// </summary>
-    private Side? AtBase(string path, string blob, byte[] bytes, CodebaseGraphShape shape)
-        => Read(path, blob, bytes, shape, written: null) is { Stored: { } stored, Lines: { } lines } read
-            && !string.Equals(read.Entry.State, CodeFileStates.Generated, StringComparison.Ordinal)
-            ? new Side(stored.Extract, lines)
-            : null;
+    private (Side? Side, string? Why) AtBase(string path, string blob, byte[] bytes, CodebaseGraphShape shape)
+    {
+        var read = Read(path, blob, bytes, shape, written: null);
+
+        return read is { Stored: { } stored, Lines: { } lines } && !string.Equals(read.Entry.State, CodeFileStates.Generated, StringComparison.Ordinal)
+            ? (new Side(stored.Extract, lines), null)
+            : (null, Unextracted(read.Entry.State, read.Entry.Why));
+    }
+
+    /// <summary>Why a file in <paramref name="state"/> tells no declaration a change-first comparison can read: kept out as generated code, or what its entry says kept it unread.</summary>
+    private static string Unextracted(string state, string? why)
+        => string.Equals(state, CodeFileStates.Generated, StringComparison.Ordinal) ? "kept out as generated code" : why ?? state;
 
     /// <summary>One side of a file's change: its extract and its lines, or no file there.</summary>
     private sealed record Side(FileExtract? Extract, IReadOnlyList<string> Lines)

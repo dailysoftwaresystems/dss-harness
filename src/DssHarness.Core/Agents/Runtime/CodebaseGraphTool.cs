@@ -109,6 +109,11 @@ public enum GraphToolOutcome
 /// <param name="queries">The indexed view it answers from.</param>
 /// <param name="files">The one search a text fallback runs, as <c>search_files</c> runs it.</param>
 /// <param name="fileSystem">Reads a body fresh, and writes an edit.</param>
+/// <param name="paths">
+/// Where a body's read and an edit's write may reach, as the runtime's file tools' do: the step's agent's roots in a step,
+/// the tree alone for the verb (<see cref="ConfinedPaths.Within"/>) - so a file of the view that became a link out of the
+/// tree since the view was read, or lies along one, is never read or written through.
+/// </param>
 /// <param name="mayRead">Whether the step's policy lets a file be read, by its path relative to the tree: a node of a file it does not is left out, and counted.</param>
 /// <param name="mayWrite">The step's policy on writing a file, by its path relative to the tree; null where <c>edit</c> is not given.</param>
 /// <param name="reExtract">Checks a file again by its path relative to the tree and answers the view it leaves; null where nothing may be synced (the verb).</param>
@@ -117,6 +122,7 @@ public sealed class CodebaseGraphTool(
     CodebaseGraphQueries queries,
     AgentFiles files,
     IFileSystem fileSystem,
+    ConfinedPaths paths,
     Func<string, bool> mayRead,
     Func<string, AgentPolicyAnswer>? mayWrite = null,
     Func<string, CancellationToken, Task<CodebaseGraphQueries>>? reExtract = null,
@@ -175,6 +181,7 @@ public sealed class CodebaseGraphTool(
 
     private readonly AgentFiles _files = files ?? throw new ArgumentNullException(nameof(files));
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
+    private readonly ConfinedPaths _paths = paths ?? throw new ArgumentNullException(nameof(paths));
     private readonly Func<string, bool> _mayRead = mayRead ?? throw new ArgumentNullException(nameof(mayRead));
     private readonly SemaphoreSlim _extracting = new(1, 1);
     private readonly SemaphoreSlim _editing = new(1, 1);
@@ -631,6 +638,13 @@ public sealed class CodebaseGraphTool(
             return new GraphToolAnswer(denied.Reason, GraphToolOutcome.Refused, card.Path, denied);
         }
 
+        // The file is written where the runtime's own tools may write it, and never through a link: one put along its path
+        // since the view was read is refused as theirs is.
+        if (_paths.Write(Full(card.Path)).Denied is { } confined)
+        {
+            return new GraphToolAnswer(confined.Reason, GraphToolOutcome.Refused, card.Path, confined);
+        }
+
         // An edit answers the card its file's new extract gives, and finds a node that moved by it: a view it cannot check again is no view to edit by.
         if (reExtract is null)
         {
@@ -772,12 +786,18 @@ public sealed class CodebaseGraphTool(
     }
 
     /// <summary>
-    /// The file at <paramref name="path"/> read whole, in its encoding, or why it is not: none there, past the bytes a view
-    /// holds whole (<see cref="AgentTools.MostViewedBytes"/>), or no text this tool reads.
+    /// The file at <paramref name="path"/> read whole, in its encoding, or why it is not: a place the runtime's own tools
+    /// may not read (<see cref="ConfinedPaths.Read"/>) - a link out of the tree put along it since the view was read - none
+    /// there, past the bytes a view holds whole (<see cref="AgentTools.MostViewedBytes"/>), or no text this tool reads.
     /// </summary>
     private async Task<(EncodedTextReading? Reading, string? Why)> ReadFileAsync(string path, CancellationToken cancellationToken)
     {
-        var full = Full(path);
+        var confined = _paths.Read(Full(path));
+
+        if (confined.Full is not { } full)
+        {
+            return (null, confined.Denied!.Reason);
+        }
 
         if (_fileSystem.StandingOf(full) is not { } standing)
         {

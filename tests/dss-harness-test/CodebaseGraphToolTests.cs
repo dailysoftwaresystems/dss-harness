@@ -539,6 +539,32 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
+    /// The graph tool reaches the tree's files as the runtime's file tools reach them (<see cref="ConfinedPaths"/>): a
+    /// directory of the tree that became a link out of it since the view was read is never read through by body nor
+    /// written through by edit - each refused by the rule that holds the path, saying where it leads - and what lies
+    /// outside is left as it was, though it holds what the tree's file held.
+    /// </summary>
+    [Fact]
+    public async Task ALinkOutOfTheTree_IsNeitherReadNorWrittenThrough()
+    {
+        const string Notes = "namespace Demo;\n\npublic static class Notes\n{\n    public static int Count()\n    {\n        return 1;\n    }\n}\n";
+        using var outside = new TempDirectory();
+        using var tree = await TreeAsync(("lib/Notes.cs", Notes));
+        var queries = await QueriesAsync(tree);
+        var count = ((GraphResolve.Found)queries.Resolve("Notes.Count")).Card;
+        outside.WriteFile("Notes.cs", Notes);
+        Directory.Delete(Path.Combine(tree.Tree, "lib"), recursive: true);
+        TestLinks.DirectoryLink(Path.Combine(tree.Tree, "lib"), outside.Path);
+
+        var read = await AskAsync(Tool(tree, queries, sync: false), """{"op":"body","symbols":["Notes.Count"]}""");
+        var written = await AskAsync(Tool(tree, queries), $$"""{"op":"edit","symbol":"Notes.Count","hash":"{{count.Hash}}","text":"    public static int Count() => 2;"}""");
+
+        Assert.DoesNotContain("return 1;", read.Text, StringComparison.Ordinal);
+        Assert.Equal(GraphToolOutcome.Refused, written.Outcome);
+        Assert.Equal(Notes, File.ReadAllText(outside.Combine("Notes.cs")));
+    }
+
+    /// <summary>
     /// The schema made for a step holds only the operations it is given - <c>edit</c> with <c>write</c>, <c>wholeFile</c>
     /// with <c>narrow</c> - and the members they read, within the subset the runtime holds a call to; an operation the step
     /// was not given is refused by the schema and by the tool.
@@ -1133,7 +1159,8 @@ public sealed partial class CodebaseGraphToolTests
             queries,
             new AgentFiles(tree.Harness.GitClient, tree.Harness.FileSystem, TimeProvider.System),
             tree.Harness.FileSystem,
-            path => !PathPatterns.Matches(never, path, tree.Harness.Platform.PathComparison) && (mayRead?.Invoke(path) ?? true),
+            ConfinedPaths.Within(tree.Harness.FileSystem, tree.Harness.Platform, queries.Tree),
+            path =>!PathPatterns.Matches(never, path, tree.Harness.Platform.PathComparison) && (mayRead?.Invoke(path) ?? true),
             mayWrite ?? (_ => AgentPolicyAnswer.Allow),
             sync ? async (path, _) => new CodebaseGraphQueries((await tree.CheckAsync(null, null, path)).Read) : null,
             near);

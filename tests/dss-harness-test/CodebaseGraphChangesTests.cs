@@ -130,6 +130,7 @@ public sealed class CodebaseGraphChangesTests
             [("src/Gone.cs", "Gone", CodeChanges.Removed), ("src/Gone.cs", "Gone.Go", CodeChanges.Removed), ("src/Kept.cs", "Kept.One", CodeChanges.Changed), ("src/New.cs", "Fresh", CodeChanges.Added), ("src/New.cs", "Fresh.Begin", CodeChanges.Added)],
             changes.Nodes.Select(node => (node.Path, node.Qualified, node.Change)).OrderBy(node => node.Path, StringComparer.Ordinal).ThenBy(node => node.Qualified, StringComparer.Ordinal));
         Assert.Equal([new CodeLineHunk(5, 1, 1, 5)], changes.Nodes.Single(node => node.Qualified == "Kept.One").Lines);
+        Assert.Empty(changes.Uncompared);
         Assert.Equal(extracts, tree.Extracts());
     }
 
@@ -151,6 +152,11 @@ public sealed class CodebaseGraphChangesTests
 
         Assert.Equal(["src/Grows.cs", "src/Made.g.cs"], changes.Files);
         Assert.Empty(changes.Nodes);
+
+        // Neither is said unchanged: each is kept with why it could not be compared.
+        Assert.Equal(
+            [new CodeUncomparedFile("src/Grows.cs", "218 bytes, over maxFileBytes (120)"), new CodeUncomparedFile("src/Made.g.cs", "kept out as generated code")],
+            changes.Uncompared);
     }
 
     [Fact]
@@ -174,6 +180,9 @@ public sealed class CodebaseGraphChangesTests
 
         Assert.Equal(["src/Turns.cs", "src/Untold.cs"], changes.Files);
         Assert.Empty(changes.Nodes);
+        Assert.Equal(
+            [new CodeUncomparedFile("src/Turns.cs", "kept out as generated code"), new CodeUncomparedFile("src/Untold.cs", "kept out as generated code at the base")],
+            changes.Uncompared);
     }
 
     [Fact]
@@ -198,6 +207,7 @@ public sealed class CodebaseGraphChangesTests
 
         Assert.Equal(["src/Shrinks.cs"], changes.Files);
         Assert.Empty(changes.Nodes);
+        Assert.Equal([new CodeUncomparedFile("src/Shrinks.cs", "301 bytes, over maxFileBytes (200) at the base")], changes.Uncompared);
         Assert.DoesNotContain(tooLarge, asked);
     }
 

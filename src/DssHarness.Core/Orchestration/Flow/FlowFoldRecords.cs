@@ -44,7 +44,9 @@ public sealed record FlowFoldLedgerFile(int Schema, string Run, IReadOnlyList<Fl
 /// <summary>
 /// One commit a <c>commit</c> step made of the folds upstream of it: the paths it stages with what each holds, the folds
 /// they settle and the HEAD it commits on, written before the first <c>git add</c>; then committed, with the commit's id,
-/// or unstaged, where git refused the commit or a later attempt found no commit took it.
+/// or unstaged, where git refused the commit or a later attempt found no commit took it. A commit made of it that was not
+/// its alone - a hook staged more, or git left a path of it out - is kept beside it (<see cref="Strayed"/>), the set left
+/// staged for the step's next attempt to settle.
 /// </summary>
 /// <param name="Id">The entry's id: <c>c&lt;n&gt;</c>, in the order staged.</param>
 /// <param name="Instance">The commit step's instance.</param>
@@ -56,6 +58,7 @@ public sealed record FlowFoldLedgerFile(int Schema, string Run, IReadOnlyList<Fl
 /// <param name="StagedAt">When it was written.</param>
 /// <param name="SettledAt">When it was committed or unstaged; null while it is staged.</param>
 /// <param name="Sha">The commit that took its paths - the one it made, or HEAD where an earlier commit had taken them all; null unless it is committed.</param>
+/// <param name="Strayed">The commit an attempt made of it that was not its alone, with what it took besides and what of it it left out; null where none was.</param>
 public sealed record FlowCommitEntry(
     string Id,
     string Instance,
@@ -66,7 +69,8 @@ public sealed record FlowCommitEntry(
     IReadOnlyList<string> Folds,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset StagedAt,
     [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? SettledAt = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Sha = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Sha = null,
+    FlowCommitStray? Strayed = null)
 {
     /// <summary>The state an entry is written in before its first <c>git add</c>.</summary>
     public const string Staged = "staged";
@@ -102,6 +106,28 @@ public sealed record FlowCommitEntry(
             : Paths.GroupBy(path => path.Path, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice ? $"'{twice.Key}' is named twice"
             : Folds.Count == 0 || !Folds.All(FlowFoldEntry.IsId) ? "it names the folds its paths settle, by id"
             : Folds.Distinct(StringComparer.Ordinal).Count() != Folds.Count ? "it names a fold twice"
+            : Strayed?.Problem() is { } stray ? $"the commit made of it that was not its alone: {stray}"
+            : Strayed?.Besides.FirstOrDefault(path => Paths.Any(staged => staged.Path == path)) is { } own ? $"it says its commit took '{own}' besides it, which it stages"
+            : Strayed?.Without.FirstOrDefault(path => !Paths.Any(staged => staged.Path == path)) is { } foreign ? $"it says its commit left out '{foreign}', which it does not stage"
+            : null;
+}
+
+/// <summary>
+/// The commit an attempt of a <c>commit</c> step made of its staged set that was not the set's alone: a hook staged more
+/// into it, or git left a path of the set out - read from what the commit changes against its parent, or holds where it has
+/// none. It is left as it is, a person's to keep or undo.
+/// </summary>
+/// <param name="Sha">The commit made.</param>
+/// <param name="Besides">The paths it took that the set does not stage, in git's order.</param>
+/// <param name="Without">The paths of the set it did not take, in the set's order.</param>
+public sealed record FlowCommitStray(string Sha, IReadOnlyList<string> Besides, IReadOnlyList<string> Without)
+{
+    /// <summary>What is wrong with this record; null when nothing is.</summary>
+    public string? Problem()
+        => string.IsNullOrWhiteSpace(Sha) ? "it names no commit"
+            : OrchestrationRules.CommitProblem(Sha, "commit") is { } commit ? commit
+            : Besides.Count == 0 && Without.Count == 0 ? "it names nothing the commit took besides the set, nor anything it left out"
+            : Besides.Concat(Without).Select(path => OrchestrationRules.RelativePathProblem(path, "a path it names")).FirstOrDefault(problem => problem is not null) is { } path ? path
             : null;
 }
 

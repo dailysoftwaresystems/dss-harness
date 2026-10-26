@@ -183,9 +183,9 @@ public sealed class PublishStepRunnerTests
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("pull-request")!.Output!)!, opened.Output));
         Assert.Equal(
             [
-                ["pr", "list", "--state", "open", "--json", "number,url", "--limit", "1", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work"],
+                ["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work"],
                 ["pr", "create", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work", "--title", "the run's work", "--body-file", bodyFile],
-                ["pr", "list", "--state", "open", "--json", "number,url", "--limit", "1", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work"],
+                ["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work"],
                 ["pr", "create", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work", "--title", "the run's work", "--body-file", bodyFile, "--draft"],
             ],
             requests.Select(request => request.Arguments.ToArray()));
@@ -207,7 +207,7 @@ public sealed class PublishStepRunnerTests
         using var temp = new TempDirectory();
         var kit = await ForgedAsync(temp);
         var requests = new List<ProcessRequest>();
-        var runner = PullRequests(kit, requests, null, Exited(0, """[{"number":7,"url":"https://github.com/acme/widgets/pull/7"}]"""));
+        var runner = PullRequests(kit, requests, null, Exited(0, """[{"number":7,"url":"https://github.com/acme/widgets/pull/7","isCrossRepository":false}]"""));
 
         var found = await runner.RunAsync(Run(kit, PullRequestStep() with { Base = "release" }, body: "the body\n"), Token);
 
@@ -270,7 +270,7 @@ public sealed class PublishStepRunnerTests
         var kit = await ForgedAsync(temp);
         await kit.Harness.RunGitAsync(kit.Main, ["remote", "set-url", "origin", "git@work-gh:acme/widgets.git"], Token);
         var requests = new List<ProcessRequest>();
-        var found = Exited(0, """[{"number":1,"url":"https://github.com/acme/widgets/pull/1"}]""");
+        var found = Exited(0, """[{"number":1,"url":"https://github.com/acme/widgets/pull/1","isCrossRepository":false}]""");
 
         _ = await PullRequests(kit, requests, Exited(0, "hostname github.com\nuser git\n"), found).RunAsync(Run(kit, PullRequestStep(), body: "b"), Token);
         _ = await PullRequests(kit, requests, Exited(255, stderr: "no ssh here"), found).RunAsync(Run(kit, PullRequestStep(), body: "b"), Token);
@@ -278,9 +278,9 @@ public sealed class PublishStepRunnerTests
         Assert.Equal(
             [
                 ["-G", "work-gh"],
-                ["pr", "list", "--state", "open", "--json", "number,url", "--limit", "1", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work"],
+                ["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work"],
                 ["-G", "work-gh"],
-                ["pr", "list", "--state", "open", "--json", "number,url", "--limit", "1", "--base", "main", "--head", "work"],
+                ["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--base", "main", "--head", "work"],
             ],
             requests.Select(request => request.Arguments.ToArray()));
     }
@@ -306,13 +306,68 @@ public sealed class PublishStepRunnerTests
             () => PullRequests(kit, requests, null, Exited(0, "[]"), new ProcessResult(-1, string.Empty, string.Empty, TimeSpan.FromMinutes(5), TimedOut: true)).RunAsync(Run(kit, PullRequestStep(), body: "b"), Token));
         await kit.Harness.RunGitAsync(kit.Main, ["remote", "set-url", "origin", temp.Combine("elsewhere.git")], Token);
         requests.Clear();
-        _ = await PullRequests(kit, requests, null, Exited(0, """[{"number":1,"url":"https://example.com/pull/1"}]""")).RunAsync(Run(kit, PullRequestStep(), body: "b"), Token);
+        _ = await PullRequests(kit, requests, null, Exited(0, """[{"number":1,"url":"https://example.com/pull/1","isCrossRepository":false}]""")).RunAsync(Run(kit, PullRequestStep(), body: "b"), Token);
 
         Assert.Equal((HarnessExit.CommandFailed, "gh answered no list of pull requests open from 'work': {}"), (unlisted.ExitCode, unlisted.Message));
         Assert.Equal((HarnessExit.CommandFailed, "gh said it opened a pull request from 'work', and named no address of one: done"), (unaddressed.ExitCode, unaddressed.Message));
         Assert.Equal(HarnessExit.Incomplete, late.ExitCode);
         Assert.Contains("did not answer within 5 minutes, so whether a pull request was opened from 'work' to 'main' is not known.", late.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("--repo", Assert.Single(requests).Arguments);
+    }
+
+    /// <summary>
+    /// A pull request open from a fork's branch of the same name is none of the run's: the forge's tool matches a head by
+    /// its branch's name in any repository, so every one it lists is read and one from another repository passed over -
+    /// the run's own found where it is open, and one opened where only a fork's is.
+    /// </summary>
+    [Fact]
+    public async Task APullRequestFromAForksBranchOfTheSameName_IsNoneOfTheRuns()
+    {
+        using var temp = new TempDirectory();
+        var kit = await ForgedAsync(temp);
+        var requests = new List<ProcessRequest>();
+        const string Fork = """{"number":9,"url":"https://github.com/acme/widgets/pull/9","isCrossRepository":true}""";
+        var created = Exited(0, "https://github.com/acme/widgets/pull/42\n");
+
+        var found = await PullRequests(kit, requests, null, Exited(0, $$"""[{{Fork}},{"number":7,"url":"https://github.com/acme/widgets/pull/7","isCrossRepository":false}]""")).RunAsync(Run(kit, PullRequestStep(), body: "b"), Token);
+        var opened = await PullRequests(kit, requests, null, Exited(0, $"[{Fork}]"), created).RunAsync(Run(kit, PullRequestStep(), body: "b"), Token);
+
+        Assert.Equal("""{"number":7,"url":"https://github.com/acme/widgets/pull/7","created":false}""", found.Output!.ToJsonString());
+        Assert.Equal("""{"number":42,"url":"https://github.com/acme/widgets/pull/42","created":true}""", opened.Output!.ToJsonString());
+        Assert.Equal(["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work"], requests[0].Arguments);
+    }
+
+    /// <summary>
+    /// A push and a pull request work on the branch the run started on alone: with the main checkout on another - a
+    /// person checked it out while the run was paused - each is refused naming both, nothing pushed and the forge never
+    /// asked; back on the run's branch, the push sends it.
+    /// </summary>
+    [Fact]
+    public async Task OffTheBranchTheRunStartedOn_APushAndAPullRequestAreRefused()
+    {
+        using var temp = new TempDirectory();
+        using var remote = new TempDirectory();
+        var kit = await PushingToAsync(temp, remote);
+        await kit.Harness.RunGitAsync(kit.Main, ["checkout", "--quiet", "-b", "main-like"], Token);
+        var requests = new List<ProcessRequest>();
+
+        var pushed = await Push(kit).RunAsync(Run(kit, PushStep(), branch: "work"), Token);
+        var opened = await PullRequests(kit, requests, null, Exited(0, "[]")).RunAsync(Run(kit, PullRequestStep() with { Base = "main" }, body: "b", branch: "work"), Token);
+
+        Assert.Equal(
+            (false, HarnessExit.Refused, "'push' works on 'work', the branch the run started on, and the main checkout is on 'main-like' now: check out 'work', then resume. Nothing was pushed."),
+            (pushed.Passed, pushed.Exit, pushed.Error));
+        Assert.Equal(
+            (false, HarnessExit.Refused, "'pr' works on 'work', the branch the run started on, and the main checkout is on 'main-like' now: check out 'work', then resume. Nothing was opened."),
+            (opened.Passed, opened.Exit, opened.Error));
+        Assert.Empty((await kit.Harness.RunGitAsync(remote.Path, ["for-each-ref"], Token)).StandardOutput);
+        Assert.Empty(requests);
+
+        await kit.Harness.RunGitAsync(kit.Main, ["checkout", "--quiet", "work"], Token);
+        var back = await Push(kit).RunAsync(Run(kit, PushStep(), branch: "work"), Token);
+
+        Assert.True(back.Passed, back.Error);
+        Assert.Equal(await HeadAsync(kit), (await kit.Harness.RunGitAsync(remote.Path, ["rev-parse", "refs/heads/work"], Token)).StandardOutput.Trim());
     }
 
     private static WorkflowStep PushStep() => new() { Name = "push", Type = "push" };
@@ -363,10 +418,10 @@ public sealed class PublishStepRunnerTests
 
     /// <summary>
     /// One run of <paramref name="step"/> on <paramref name="kit"/>'s orchestrator of <paramref name="definition"/>, else
-    /// the workflow above, the engine having read <paramref name="body"/> as its body where given; its instance is the
-    /// step's name.
+    /// the workflow above, the engine having read <paramref name="body"/> as its body where given, of a run that started on
+    /// <paramref name="branch"/> where one is given; its instance is the step's name.
     /// </summary>
-    private static FlowStepRun Run(OrchestrationKit kit, WorkflowStep step, string? body = null, WorkflowDefinition? definition = null)
+    private static FlowStepRun Run(OrchestrationKit kit, WorkflowStep step, string? body = null, WorkflowDefinition? definition = null, string? branch = null)
         => new(
             step,
             step.Name,
@@ -376,7 +431,7 @@ public sealed class PublishStepRunnerTests
             null,
             [],
             new NoEvents(),
-            Place: new FlowRunPlace(kit.Main, OrchestrationKit.Orchestrator, null, definition ?? Definition),
+            Place: new FlowRunPlace(kit.Main, OrchestrationKit.Orchestrator, null, definition ?? Definition, branch),
             Read: body is null ? null : new Dictionary<string, FlowValue> { ["body"] = FlowValue.Of(body) });
 
     /// <summary>A run's repository on a branch of its own, <c>work</c>.</summary>

@@ -3755,8 +3755,25 @@ public sealed partial class HelpTests
             workflows,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Otherwise the index must be empty and each path hold what its fold left there, and where either does not - a path edited "
-                + $"and not committed, or its fold's change undone - the step fails ({HarnessExit.Refused}) naming each, nothing staged",
+            "Otherwise it works on the branch the run started on alone: the main checkout on another - a person checked one out "
+                + $"while the run was paused - or its HEAD detached fails it ({HarnessExit.Refused}) naming both, nothing staged, as it "
+                + "does push and pull-request. The index must be empty and each path hold what its fold left there, and where either "
+                + $"does not - a path edited and not committed, or its fold's change undone - the step fails ({HarnessExit.Refused}) naming each, nothing staged",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "told by the blob git would store against HEAD's and never by git's status, which does not look at a path marked "
+                + "assume-unchanged or skip-worktree - was committed by hand, and is marked taken by HEAD; one left to stage that the "
+                + $"index marks so fails it ({HarnessExit.Refused}) naming each with its mark, since git add would not stage it.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The commit is held to the set, by what it changes against its parent: one that took more - a hook staged another "
+                + $"file - or left a path of the set out fails the step ({HarnessExit.CommandFailed}) naming each, and is left as it is "
+                + "for a person to keep or undo, the set staged in the ledger beside it. A set an attempt before left staged is "
+                + "settled first: committed where HEAD moved and holds each of its paths as the set staged it, else unstaged and "
+                + "staged again whole. It answers committed, sha, paths and ignored - each path its folds changed that git ignores, "
+                + "folded and never committed, which what the run's end leaves for a person names too",
             workflows,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -3792,26 +3809,39 @@ public sealed partial class HelpTests
             workflows,
             StringComparison.Ordinal);
         Assert.Contains(
+            "Every push step that names a remote names the same one, the remote the run's branch goes to: a definition whose push "
+                + "steps name two is refused. HEAD detached, the main checkout on another branch than the run started on, a branch "
+                + "with no commit yet, no remote it can name and one the repository does not have each refuse it",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
             $"each refuse it ({HarnessExit.Refused}), nothing pushed; the remote refusing the push - its branch moved on since - fails it "
                 + $"({HarnessExit.CommandFailed}) in git's words. A checkpoint push runs only where the workflow says pushCheckpoints, and is skipped otherwise.",
             workflows,
             StringComparison.Ordinal);
         Assert.Contains(
             $"written to the step's directory ({OrchestratorLayout.StepPullRequestBodyFileName}) for gh to read. One already open from "
-                + "that branch to that base is answered as it is, created false, and never edited: a step run again opens no second.",
+                + "that branch to that base is answered as it is, created false, and never edited: a step run again opens no second. "
+                + "One open from a fork's branch of the same name is none of the run's, as gh says of each (isCrossRepository).",
             workflows,
             StringComparison.Ordinal);
         Assert.Contains(
             $"A title blank once filled fails it ({HarnessExit.ConfigInvalid}), as a body that cannot be read or reads nothing does; "
-                + "HEAD detached, no remote, no base it can tell and a base that is its own branch each refuse it "
-                + $"({HarnessExit.Refused}), nothing opened; gh not there fails it {HarnessExit.ToolMissing}, and gh saying no {HarnessExit.CommandFailed}.",
+                + "HEAD detached, the main checkout on another branch than the run started on, no remote, no base it can tell and a "
+                + $"base that is its own branch each refuse it ({HarnessExit.Refused}), nothing opened; gh not there fails it "
+                + $"{HarnessExit.ToolMissing}, and gh saying no {HarnessExit.CommandFailed}.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "each one it opened or found is left for a person, by its address, in what the run's end says (leftForAPerson), "
+                + "as is each path its folds changed that git ignores, never committed.",
             workflows,
             StringComparison.Ordinal);
         Assert.Contains(
             "The commands commit, push and pull-request run are a closed list - git --literal-pathspecs add -- (15 minutes); "
                 + "git --literal-pathspecs rm --cached --ignore-unmatch -q -- (15 minutes); git --literal-pathspecs reset -q -- (15 minutes); "
                 + "git commit --cleanup=whitespace -F (15 minutes); git push --porcelain (5 minutes); "
-                + "gh pr list --state open --json number,url --limit 1 (5 minutes); gh pr create (5 minutes) - each given the step's "
+                + "gh pr list --state open --json number,url,isCrossRepository (5 minutes); gh pr create (5 minutes) - each given the step's "
                 + $"timeoutMinutes where it says one, else its own; one past it is not done ({HarnessExit.Incomplete}), and the step runs "
                 + "again, a commit's set left staged settled by its next attempt.",
             workflows,
@@ -4064,7 +4094,9 @@ public sealed partial class HelpTests
         Assert.Contains(Prose.Words("A reason step's pack is to be given the working sets of the step it goes on with (resume), of each step it depends on directly, a group by each reason step in it, and of its own earlier visits of the same work item, newest first"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("edited first, then by how often each was touched; a node the view no longer holds kept by its id, marked gone"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("by where its new text stands once there - every place, with replace_all - else by the lines it names"), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words("a deletion writes no lines, and is counted with the writes placed nowhere"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("a deletion writes no lines, and is counted with the writes placed nowhere, as a whole file's write is where the file does not read as the step left it."), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("A file that differs and could not be compared - over its size cap, generated, or not read, there or at the base - is named on its first line with why, and nothing in it is said unchanged."), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("body and edit reach a file only inside the tree, each link resolved, never through a link out of it."), prose, StringComparison.Ordinal);
     }
 
     /// <summary>

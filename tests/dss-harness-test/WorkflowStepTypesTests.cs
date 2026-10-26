@@ -174,7 +174,7 @@ public sealed class WorkflowStepTypesTests
                 ("anchor-citations", "passed, findings"),
                 ("ci-read", "passed, branch, matrixRan, legs, red"),
                 ("ci-wait", "passed, commit, checks, red, pending, unsettled"),
-                ("commit", "committed, sha, paths"),
+                ("commit", "committed, sha, paths, ignored"),
                 ("push", "pushed, remote, branch, sha"),
                 ("pull-request", "number, url, created"),
                 ("pause", "answer, text"),

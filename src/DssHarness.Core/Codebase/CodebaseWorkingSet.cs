@@ -83,8 +83,9 @@ public sealed record WorkingSetNode(
 /// <param name="Nodes">The nodes, at most <see cref="MostNodes"/>: edited first, then by how often each was touched, then by when first - the graph's calls before the stream's.</param>
 /// <param name="LeftOut">How many more were touched past <see cref="MostNodes"/>.</param>
 /// <param name="Unplaced">
-/// How many writes were matched to no node: a deletion, which writes no lines, and new text found nowhere it may stand -
-/// once, or at least once where it replaced every occurrence - by a call that names no lines.
+/// How many writes were matched to no node: a deletion, which writes no lines, new text found nowhere it may stand -
+/// once, or at least once where it replaced every occurrence - by a call that names no lines, and a whole file's write
+/// whose file does not read as the step left it.
 /// </param>
 public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> Nodes, int LeftOut = 0, int Unplaced = 0)
 {
@@ -247,9 +248,20 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
                     break;
 
                 case ClaudeCodeTools.Write or AgentTools.CreateFile:
-                    if (Held(input, tool) is { } whole && LinesOf(whole) is { } all)
+                    if (Held(input, tool) is not { } whole)
+                    {
+                        break;
+                    }
+
+                    // A whole file's write meets every line of the file as the step left it; one that does not read now - gone
+                    // since, or no text - meets no line it can be placed by.
+                    if (LinesOf(whole) is { } all)
                     {
                         Met(whole, [(1, all.Count)], WorkingSetUses.Edited);
+                    }
+                    else
+                    {
+                        _unplaced++;
                     }
 
                     break;

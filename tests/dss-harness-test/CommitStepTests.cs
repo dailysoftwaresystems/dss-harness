@@ -4,6 +4,7 @@ using DssHarness.Core.Git;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
+using DssHarness.Core.Schemas;
 using NSubstitute;
 
 namespace DssHarness.Tests;
@@ -45,7 +46,7 @@ public sealed class CommitStepTests
 
         Assert.True(ended.Passed, ended.Error);
         var head = await HeadAsync(kit);
-        Assert.Equal($$"""{"committed":true,"sha":"{{head}}","paths":["a.txt","new/c.txt"]}""", ended.Output!.ToJsonString());
+        Assert.Equal($$"""{"committed":true,"sha":"{{head}}","paths":["a.txt","new/c.txt"],"ignored":[]}""", ended.Output!.ToJsonString());
         Assert.Matches(@"\Acheckpoint\n\nSigned-off-by: ", await MessageAsync(kit));
         Assert.Equal([" M b.txt"], await StatusAsync(kit));
 
@@ -72,7 +73,7 @@ public sealed class CommitStepTests
         var ended = await Runner(kit, git, publisher).RunAsync(Run(kit, Step(), "items[0].fold"), Token);
 
         Assert.True(ended.Passed, ended.Error);
-        Assert.Equal("""{"committed":false,"sha":null,"paths":[]}""", ended.Output!.ToJsonString());
+        Assert.Equal("""{"committed":false,"sha":null,"paths":[],"ignored":[]}""", ended.Output!.ToJsonString());
         Assert.Empty(git.ReceivedCalls());
         Assert.Empty(publisher.ReceivedCalls());
         Assert.Empty(kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits);
@@ -136,7 +137,7 @@ public sealed class CommitStepTests
 
         var other = await Runner(kit).RunAsync(Run(kit, Step() with { Name = "other" }, "items[1].fold"), Token);
 
-        Assert.Equal("""{"committed":false,"sha":null,"paths":[]}""", other.Output!.ToJsonString());
+        Assert.Equal("""{"committed":false,"sha":null,"paths":[],"ignored":[]}""", other.Output!.ToJsonString());
     }
 
     /// <summary>
@@ -155,7 +156,7 @@ public sealed class CommitStepTests
 
         var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
 
-        Assert.Equal("""{"committed":false,"sha":null,"paths":[]}""", ended.Output!.ToJsonString());
+        Assert.Equal("""{"committed":false,"sha":null,"paths":[],"ignored":["evidence/run.txt"]}""", ended.Output!.ToJsonString());
         Assert.Equal(head, await HeadAsync(kit));
 
         var ledger = kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!;
@@ -259,7 +260,7 @@ public sealed class CommitStepTests
 
         var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold", attempt: 2), Token);
 
-        Assert.Equal($$"""{"committed":true,"sha":"{{made}}","paths":["a.txt"]}""", ended.Output!.ToJsonString());
+        Assert.Equal($$"""{"committed":true,"sha":"{{made}}","paths":["a.txt"],"ignored":[]}""", ended.Output!.ToJsonString());
         Assert.Equal(made, await HeadAsync(kit));
 
         var ledger = kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!;
@@ -314,7 +315,7 @@ public sealed class CommitStepTests
 
         var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold", attempt: 2), Token);
 
-        Assert.Equal("""{"committed":false,"sha":null,"paths":[]}""", ended.Output!.ToJsonString());
+        Assert.Equal("""{"committed":false,"sha":null,"paths":[],"ignored":[]}""", ended.Output!.ToJsonString());
         Assert.Equal(
             [(left, FlowCommitEntry.Unstaged, (string?)null), ("c2", FlowCommitEntry.Committed, head)],
             kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits.Select(commit => (commit.Id, commit.State, commit.Sha)));
@@ -367,7 +368,7 @@ public sealed class CommitStepTests
         var head = await HeadAsync(kit);
         var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
 
-        Assert.Equal($$"""{"committed":true,"sha":"{{await HeadAsync(kit)}}","paths":["b.txt"]}""", ended.Output!.ToJsonString());
+        Assert.Equal($$"""{"committed":true,"sha":"{{await HeadAsync(kit)}}","paths":["b.txt"],"ignored":[]}""", ended.Output!.ToJsonString());
 
         var ledger = kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!;
 
@@ -391,7 +392,7 @@ public sealed class CommitStepTests
         var again = await Runner(kit, publisher: publisher).RunAsync(Run(kit, Step(), "fold", attempt: 2), Token);
 
         Assert.True(again.Passed, again.Error);
-        Assert.Equal($$"""{"committed":true,"sha":"{{await HeadAsync(kit)}}","paths":["a.txt"]}""", again.Output!.ToJsonString());
+        Assert.Equal($$"""{"committed":true,"sha":"{{await HeadAsync(kit)}}","paths":["a.txt"],"ignored":[]}""", again.Output!.ToJsonString());
         Assert.Equal(first.Output!.ToJsonString(), again.Output.ToJsonString());
         Assert.Empty(publisher.ReceivedCalls());
     }
@@ -413,7 +414,7 @@ public sealed class CommitStepTests
         var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold", attempt: 2), Token);
 
         Assert.True(ended.Passed, ended.Error);
-        Assert.Equal($$"""{"committed":true,"sha":"{{await HeadAsync(kit)}}","paths":["evidence/run.txt"]}""", ended.Output!.ToJsonString());
+        Assert.Equal($$"""{"committed":true,"sha":"{{await HeadAsync(kit)}}","paths":["evidence/run.txt"],"ignored":[]}""", ended.Output!.ToJsonString());
         Assert.Equal(
             [("evidence/run.txt", "c2", (bool?)null), ("a.txt", "c1", null)],
             kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Of(fold)!.Paths.Select(path => (path.Path, path.Committed, path.Ignored)));
@@ -435,7 +436,7 @@ public sealed class CommitStepTests
         var ended = await Runner(kit).RunAsync(Run(kit, Step() with { Message = null }, "fold"), Token);
 
         Assert.True(ended.Passed, ended.Error);
-        Assert.Equal("""{"committed":false,"sha":null,"paths":[]}""", ended.Output!.ToJsonString());
+        Assert.Equal("""{"committed":false,"sha":null,"paths":[],"ignored":[]}""", ended.Output!.ToJsonString());
     }
 
     /// <summary>A path git ignores is left out whatever it holds: changed after its fold, it neither refuses the commit nor is staged.</summary>
@@ -556,6 +557,203 @@ public sealed class CommitStepTests
         Assert.StartsWith("'commit' commits the folds upstream of it, and 'fold' left a fold's intent nobody settled", refused.Error, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A staged set an attempt before left - cut off after its git add, before its git commit - whose paths the tree no
+    /// longer holds as it staged them is no commit of the step's, whatever HEAD did since: a person who put the index and
+    /// the tree back and took another's commit leaves a HEAD that moved and paths that read clean, and the set is unstaged,
+    /// never settled as taken by that commit; the fold's path is owed still, and refused as changed since.
+    /// </summary>
+    [Fact]
+    public async Task ASetLeftStaged_WhoseTreeHoldsNotWhatItStaged_IsNeverSettledByACommitThatMovedHead()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var fold = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        var left = Ledger(kit).Staging(kit.Layout, "commit", 1, await HeadAsync(kit), [new FlowCommitPath("a.txt", FileContentHash.Of("folded\n"u8))], [fold]);
+        await kit.GitAsync(kit.Main, "add", "--", "a.txt");
+
+        // The person puts the index and the tree back, then takes another's commit: HEAD moves, and nothing reads changed.
+        await kit.GitAsync(kit.Main, "reset", "--quiet", "--hard");
+        OrchestrationKit.Write(kit.Main, "other.txt", "another's\n");
+        await kit.GitAsync(kit.Main, "add", "--", "other.txt");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "another's work");
+        var foreign = await HeadAsync(kit);
+
+        var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold", attempt: 2), Token);
+
+        Assert.Equal(
+            (false, HarnessExit.Refused, "'a.txt' (folded by 'fold') has changed since; commit or restore it, then resume. Nothing was staged."),
+            (ended.Passed, ended.Exit, ended.Error));
+        Assert.Equal(foreign, await HeadAsync(kit));
+
+        var ledger = kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!;
+
+        Assert.Equal([(left, FlowCommitEntry.Unstaged, (string?)null)], ledger.Commits.Select(commit => (commit.Id, commit.State, commit.Sha)));
+        Assert.Null(ledger.Of(fold)!.Paths[0].Committed);
+    }
+
+    /// <summary>
+    /// A path git's status does not look at - marked assume-unchanged or skip-worktree - is held to HEAD by what it holds,
+    /// never by status's silence: a fold's change of it is no commit made by hand, and since git add would not stage it,
+    /// the step is refused naming each, nothing staged and nothing marked taken.
+    /// </summary>
+    [Fact]
+    public async Task APathStatusDoesNotLookAt_IsHeldToHeadByWhatItHolds_AndRefusedForItsMark()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var fold = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"), ("b.txt", "folded\n"));
+        await kit.GitAsync(kit.Main, "update-index", "--assume-unchanged", "--", "a.txt");
+        await kit.GitAsync(kit.Main, "update-index", "--skip-worktree", "--", "b.txt");
+        var head = await HeadAsync(kit);
+
+        var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
+
+        Assert.Equal(
+            (false, HarnessExit.Refused, "'commit' commits what its folds left at 'a.txt' (assume-unchanged), 'b.txt' (skip-worktree), which git add would not stage: clear each mark with git update-index --no-assume-unchanged -- <path>, or --no-skip-worktree, then resume. Nothing was staged."),
+            (ended.Passed, ended.Exit, ended.Error));
+        Assert.Equal(head, await HeadAsync(kit));
+
+        var ledger = kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!;
+
+        Assert.Empty(ledger.Commits);
+        Assert.All(ledger.Of(fold)!.Paths, path => Assert.Null(path.Committed));
+    }
+
+    /// <summary>
+    /// A staged set an attempt before left is settled by what HEAD and the tree hold, never by status's silence: where
+    /// another commit moved HEAD and a path of the set is marked assume-unchanged - the tree holding what the set staged,
+    /// HEAD not - no commit took the set, and it is unstaged.
+    /// </summary>
+    [Fact]
+    public async Task ASetLeftStaged_IsSettledByWhatHeadHolds_NeverByStatusesSilence()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var fold = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        var left = Ledger(kit).Staging(kit.Layout, "commit", 1, await HeadAsync(kit), [new FlowCommitPath("a.txt", FileContentHash.Of("folded\n"u8))], [fold]);
+        OrchestrationKit.Write(kit.Main, "other.txt", "another's\n");
+        await kit.GitAsync(kit.Main, "add", "--", "other.txt");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "another's work", "--", "other.txt");
+        await kit.GitAsync(kit.Main, "update-index", "--assume-unchanged", "--", "a.txt");
+
+        var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold", attempt: 2), Token);
+
+        Assert.Equal(
+            (false, HarnessExit.Refused, "'commit' commits what its folds left at 'a.txt' (assume-unchanged), which git add would not stage: clear each mark with git update-index --no-assume-unchanged -- <path>, or --no-skip-worktree, then resume. Nothing was staged."),
+            (ended.Passed, ended.Exit, ended.Error));
+
+        var ledger = kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!;
+
+        Assert.Equal([(left, FlowCommitEntry.Unstaged, (string?)null)], ledger.Commits.Select(commit => (commit.Id, commit.State, commit.Sha)));
+        Assert.Null(ledger.Of(fold)!.Paths[0].Committed);
+    }
+
+    /// <summary>
+    /// A commit's contents are held to its staged set: a pre-commit hook that stages another file sweeps it into the
+    /// commit, and the step fails (20) naming what the commit took besides - the commit left as it is for a person, never
+    /// undone - and the set stays staged in the ledger with what that commit took, for the next attempt to settle from what
+    /// the person did: the commit kept, the next attempt answers it as the step's.
+    /// </summary>
+    [Fact]
+    public async Task ACommitAHookSweptMoreInto_FailsTheStep20_AndIsLeftForAPerson()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var fold = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        OrchestrationKit.Write(kit.Main, "other.txt", "not the fold's\n");
+        var hook = Path.Combine(kit.Main, ".git", "hooks", "pre-commit");
+        File.WriteAllText(hook, "#!/bin/sh\ngit add other.txt\n");
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(hook, File.GetUnixFileMode(hook) | UnixFileMode.UserExecute);
+        }
+
+        var before = await HeadAsync(kit);
+
+        var swept = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
+
+        var made = await HeadAsync(kit);
+        Assert.NotEqual(before, made);
+        Assert.Equal(
+            (false, HarnessExit.CommandFailed, $"'commit' made {made[..12]}, and it is not what its folds left alone: it took 'other.txt' besides - a hook, or git, made it so. The commit is left as it is: keep it, or undo it with git reset --soft HEAD^, then resume, which settles it."),
+            (swept.Passed, swept.Exit, swept.Error));
+        Assert.Equal("a.txt\nother.txt\n", (await kit.Harness.RunGitAsync(kit.Main, ["diff-tree", "-r", "--name-only", "--no-commit-id", "HEAD"], Token)).StandardOutput);
+
+        var staged = Assert.Single(kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits);
+
+        Assert.Equal((FlowCommitEntry.Staged, (string?)null), (staged.State, staged.Sha));
+        Assert.Equal(made, staged.Strayed!.Sha);
+        Assert.Equal(["other.txt"], staged.Strayed.Besides);
+        Assert.Empty(staged.Strayed.Without);
+
+        File.Delete(hook);
+        var kept = await Runner(kit).RunAsync(Run(kit, Step(), "fold", attempt: 2), Token);
+
+        Assert.Equal($$"""{"committed":true,"sha":"{{made}}","paths":["a.txt"],"ignored":[]}""", kept.Output!.ToJsonString());
+        Assert.Equal(made, await HeadAsync(kit));
+        Assert.Equal("c1", kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Of(fold)!.Paths[0].Committed);
+    }
+
+    /// <summary>
+    /// A path git ignores is no commit's, and the step says so: it answers each one its folds changed under ignored, so a
+    /// step whose every path is ignored never reads as having had nothing to commit.
+    /// </summary>
+    [Fact]
+    public async Task EveryPathGitIgnores_IsAnsweredIgnored_NeverAsNothingToCommit()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        _ = await FoldedAsync(kit, "fold", ("evidence/run.txt", "measured\n"), ("evidence/more.txt", "measured\n"));
+        var head = await HeadAsync(kit);
+
+        var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
+
+        Assert.True(ended.Passed, ended.Error);
+        Assert.Equal("""{"committed":false,"sha":null,"paths":[],"ignored":["evidence/run.txt","evidence/more.txt"]}""", ended.Output!.ToJsonString());
+        Assert.Equal(head, await HeadAsync(kit));
+        Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("commit")!.Output!)!, ended.Output));
+    }
+
+    /// <summary>
+    /// A commit works on the branch the run started on alone: with the main checkout on another - a person checked it out
+    /// while the run was paused - or its HEAD detached, the step is refused naming both, nothing staged and nothing settled
+    /// of a set an attempt before left; back on the run's branch, it commits.
+    /// </summary>
+    [Fact]
+    public async Task OffTheBranchTheRunStartedOn_ACommitIsRefused_NothingStaged()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var other = (await kit.Harness.RunGitAsync(kit.Main, ["symbolic-ref", "--short", "HEAD"], Token)).StandardOutput.Trim();
+        await kit.GitAsync(kit.Main, "branch", "work");
+        var fold = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        var head = await HeadAsync(kit);
+        var left = Ledger(kit).Staging(kit.Layout, "commit", 1, head, [new FlowCommitPath("a.txt", FileContentHash.Of("folded\n"u8))], [fold]);
+
+        var elsewhere = await Runner(kit).RunAsync(Run(kit, Step(), "fold", branch: "work"), Token);
+        await kit.GitAsync(kit.Main, "checkout", "--quiet", "--detach");
+        var detached = await Runner(kit).RunAsync(Run(kit, Step(), "fold", branch: "work"), Token);
+
+        Assert.Equal(
+            (false, HarnessExit.Refused, $"'commit' works on 'work', the branch the run started on, and the main checkout is on '{other}' now: check out 'work', then resume. Nothing was staged."),
+            (elsewhere.Passed, elsewhere.Exit, elsewhere.Error));
+        Assert.Equal(
+            (false, HarnessExit.Refused, "'commit' works on 'work', the branch the run started on, and the main checkout has its HEAD detached now: check out 'work', then resume. Nothing was staged."),
+            (detached.Passed, detached.Exit, detached.Error));
+        Assert.Equal(head, await HeadAsync(kit));
+        Assert.Equal([" M a.txt"], await StatusAsync(kit));
+        Assert.Equal([(left, FlowCommitEntry.Staged)], kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits.Select(commit => (commit.Id, commit.State)));
+
+        await kit.GitAsync(kit.Main, "checkout", "--quiet", "work");
+        var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold", attempt: 2, branch: "work"), Token);
+
+        Assert.True(ended.Passed, ended.Error);
+        Assert.Equal(await HeadAsync(kit), (await kit.Harness.RunGitAsync(kit.Main, ["rev-parse", "refs/heads/work"], Token)).StandardOutput.Trim());
+        Assert.Equal(head, (await kit.Harness.RunGitAsync(kit.Main, ["rev-parse", $"refs/heads/{other}"], Token)).StandardOutput.Trim());
+    }
+
     private static WorkflowStep Step() => new() { Name = "commit", Type = "commit", Message = "checkpoint" };
 
     /// <summary>
@@ -647,8 +845,12 @@ public sealed class CommitStepTests
             publisher ?? kit.Harness.GitPublisher,
             kit.Harness.FileSystem);
 
-    /// <summary>One run of <paramref name="step"/> on <paramref name="kit"/>'s orchestrator, the engine having read <paramref name="folds"/> upstream of it; its instance is the step's name.</summary>
-    private static FlowStepRun Run(OrchestrationKit kit, WorkflowStep step, string folds, int attempt = 1)
+    /// <summary>
+    /// One run of <paramref name="step"/> on <paramref name="kit"/>'s orchestrator, the engine having read
+    /// <paramref name="folds"/> upstream of it, of a run that started on <paramref name="branch"/> where one is given; its
+    /// instance is the step's name.
+    /// </summary>
+    private static FlowStepRun Run(OrchestrationKit kit, WorkflowStep step, string folds, int attempt = 1, string? branch = null)
         => new(
             step,
             step.Name,
@@ -658,7 +860,7 @@ public sealed class CommitStepTests
             null,
             [],
             new NoEvents(),
-            Place: new FlowRunPlace(kit.Main, OrchestrationKit.Orchestrator, null, Definition),
+            Place: new FlowRunPlace(kit.Main, OrchestrationKit.Orchestrator, null, Definition, branch),
             Read: new Dictionary<string, FlowValue> { ["folds"] = FlowValue.Of(new JsonArray(folds)) });
 
     /// <summary>A fold of <paramref name="instance"/> that wrote each of <paramref name="writes"/> into the main tree, settled applied.</summary>
