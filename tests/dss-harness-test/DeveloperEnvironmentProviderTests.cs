@@ -137,14 +137,19 @@ public sealed class DeveloperEnvironmentProviderTests
         var token = TestContext.Current.CancellationToken;
         var older = DeveloperEnvironmentCheck.Installed(visualStudio.InstallationPath, ScriptedVisualStudio.InstallationVersion, "14.44.35207");
 
+        var oldest = DeveloperEnvironmentCheck.Installed(visualStudio.InstallationPath, ScriptedVisualStudio.InstallationVersion, "14.38.33130");
+
         var pinned = await provider.SetUpAsync("vs", older, "x86_64", NoHostEnvironment, token);
         var newest = await provider.SetUpAsync("vs", visualStudio.Found, "x86_64", NoHostEnvironment, token);
+        var other = await provider.SetUpAsync("vs", oldest, "x86_64", NoHostEnvironment, token);
         var again = await provider.SetUpAsync("vs", older, "x86_64", NoHostEnvironment, token);
 
         Assert.Equal(
-            ["amd64 -vcvars_ver=14.44.35207", "amd64"],
+            ["amd64 -vcvars_ver=14.44.35207", "amd64", "amd64 -vcvars_ver=14.38.33130"],
             visualStudio.Captures.Select(capture => capture.Environment[DeveloperEnvironmentProvider.ArgumentsVariable]));
-        Assert.Equal(("14.44.35207", ScriptedVisualStudio.ToolsVersion), (pinned.Fact!.ToolsVersion, newest.Fact!.ToolsVersion));
+        Assert.Equal(
+            ("14.44.35207", ScriptedVisualStudio.ToolsVersion, "14.38.33130"),
+            (pinned.Fact!.ToolsVersion, newest.Fact!.ToolsVersion, other.Fact!.ToolsVersion));
         Assert.Same(pinned, again);
     }
 
