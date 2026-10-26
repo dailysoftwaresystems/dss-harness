@@ -367,15 +367,27 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "the tools of the agent's capabilities and no other - read: Read, Grep, Glob; write: Write, Edit, NotebookEdit; run: Bash; web: "
-                + "none of Claude Code's - and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode.",
+                + "none of Claude Code's, but mcp__dssharness__web_fetch and mcp__dssharness__web_search of the engine's tool server beside them "
+                + "- and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode.",
             prose,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "A step with the web takes the harness's own web_fetch - and web_search, where it has a source to search - from the engine's tool "
+                + "server: the one MCP server, of type sdk, named dssharness, that the launch's --mcp-config names beside --strict-mcp-config (the "
+                + "step's claude-mcp.json), served in the engine's own process over the launch's control channel - its initialize, its tool list "
+                + "and its calls, our own code with no MCP library; each call of it is asked of the engine first, by its ask rule, and run by the "
+                + "tool runtime below as on the API clients, each address decided and recorded. A launch whose init does not show that server "
+                + "connected with its tools taken, or that connects another, never started;",
+            prose,
+            StringComparison.Ordinal);
+
+        Assert.Contains("a call of it the engine was not asked about and did not allow runs nothing and fails the step.", prose, StringComparison.Ordinal);
         Assert.Contains("The run's reporter is given Read, Grep, Glob alone.", prose, StringComparison.Ordinal);
-        Assert.Contains("Every call is asked of the engine before it runs and answered from the policy above", prose, StringComparison.Ordinal);
+        Assert.Contains("Every call its own deny rules do not refuse first is asked of the engine before it runs and answered from the policy above", prose, StringComparison.Ordinal);
         Assert.Contains("is sent back, each problem by its path, up to 2 times", prose, StringComparison.Ordinal);
         Assert.Contains("a handoff asked interrupts the turn and asks the agent for its handoff in the same launch", prose, StringComparison.Ordinal);
         Assert.Contains("Every message is held to the model asked for, a date after its id the same model", prose, StringComparison.Ordinal);
-        Assert.Contains("(CLAUDECODE and every CLAUDE_CODE_ name but CLAUDE_CODE_GIT_BASH_PATH, which says only where a program is), none of what every child of an agent loses (the tool runtime below)", prose, StringComparison.Ordinal);
+        Assert.Contains("(CLAUDECODE, CLAUDE_PID and CLAUDE_EFFORT, and every name beginning CLAUDE_CODE_, CLAUDE_AGENT_SDK_, CLAUDE_PREVIEW_ or MCP_ but CLAUDE_CODE_GIT_BASH_PATH, which says only where a program is, and a name agentPolicy.keepEnvironment gives back), none of what every child of an agent loses (the tool runtime below)", prose, StringComparison.Ordinal);
         Assert.Contains(
             "the names the engine sets: DISABLE_COMPACT=1, DISABLE_AUTOUPDATER=1, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, CLAUDE_CODE_RETRY_WATCHDOG=0, "
                 + "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1, and BASH_DEFAULT_TIMEOUT_MS and BASH_MAX_TIMEOUT_MS as agentPolicy.commandTimeoutSeconds "
@@ -383,7 +395,16 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains("A key Claude Code reports invalid is passed over, and while the step has done no work the next key is given a new launch", prose, StringComparison.Ordinal);
-        Assert.Contains("the claude-code client below asks it of every call, the tool runtime below decides by it each call of the API clients, which are what comes next, and no command of this build runs an agent yet.", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "the claude-code client below asks it of every call, the tool runtime below decides by it each call it runs - the web's of the claude-code client, served through "
+                + "the engine's tool server, and every call of the API clients, which are what comes next - and no command of this build runs an agent yet.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("a second layer, for the engine is asked about every other call and answers from this policy in its own process, and a call those rules refuse first is counted and recorded as Claude Code's own denial.", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "a call it refuses by itself that the engine refuses too - by its own deny rules, a file tool's told by its result alone - is a denial of Claude Code's, counted and recorded once;",
+            prose,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -403,7 +424,7 @@ public sealed partial class HelpTests
                 + "alone in its turn); run_command (run, alone in its turn); web_fetch (web); web_search (web).",
             prose,
             StringComparison.Ordinal);
-        Assert.Contains("built for the claude-api and glm clients to give their agents in place of a client's own - those clients are what comes next, and nothing opens a runtime yet -", prose, StringComparison.Ordinal);
+        Assert.Contains("built for the claude-api and glm clients to give their agents in place of a client's own - those clients are what comes next - and serving the claude-code client the web's through the engine's tool server,", prose, StringComparison.Ordinal);
         Assert.Contains("The run's reporter is given view_file, find_files, search_files, those that read, and no other.", prose, StringComparison.Ordinal);
         Assert.Contains("A replace or an insert needs its file viewed first, by its content: one that changed since is refused, nothing written, and an edit keeps the file's encoding (UTF-8 with or without its mark, UTF-16 by its mark), its line endings and whether it ends with a newline.", prose, StringComparison.Ordinal);
         Assert.Contains("a write inside a writable one and through no link below it (a link put in place between the check and the act is the known limit)", prose, StringComparison.Ordinal);
@@ -498,12 +519,39 @@ public sealed partial class HelpTests
 
         Assert.Contains("signs in by the client's `auth` (`agentClients.claude-code.auth`): `login`, the machine's login,", readme, StringComparison.Ordinal);
         Assert.Contains("The `claude-code` client starts Claude Code once for each launch, a new session every time", readme, StringComparison.Ordinal);
-        Assert.Contains("Every call is asked of the engine before it runs and answered from the policy", readme, StringComparison.Ordinal);
+        Assert.Contains("Every call its own deny rules do not refuse first is asked of the engine before it runs and answered from the policy", readme, StringComparison.Ordinal);
         Assert.Contains("but no hook of theirs runs: every launch's settings say `disableAllHooks`", readme, StringComparison.Ordinal);
         Assert.Contains("The client holds every launch to the protocol itself", readme, StringComparison.Ordinal);
         Assert.Contains("Its `configDir` and `executable` name the variables of the slot that hold a specific login's Claude Code directory", readme, StringComparison.Ordinal);
         Assert.Contains("A program the slot names (`CLAUDE_EXECUTABLE`, or the name the client's `executable` gives)", readme, StringComparison.Ordinal);
         Assert.Contains("and for each setting a client reads from the slot and each web-search source's key `present` or `absent` (none is needed)", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "A step with the web takes the harness's own `web_fetch` - and `web_search`, where it has a source to search - from the engine's tool server: "
+                + "the one MCP server, of type `sdk`, named `dssharness`, that the launch's `--mcp-config` names beside `--strict-mcp-config` (the step's `claude-mcp.json`)",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains("a call of it the engine did not allow runs nothing and fails the step.", readme, StringComparison.Ordinal);
+        Assert.Contains("a call those rules refuse before the engine is asked is counted and recorded as Claude Code's own denial.", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "the tool runtime below decides by it each call it runs - the web's of the `claude-code` client, served through the engine's tool "
+                + "server, and every call of the API clients, which are what comes next - and no command of this build runs an agent yet.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "`web`: none of Claude Code's, but `mcp__dssharness__web_fetch` and `mcp__dssharness__web_search` of the engine's tool server beside them)",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "served in the engine's own process over the launch's control channel; each call of it is asked of the engine first, by its ask "
+                + "rule, and run by the tool runtime below as on the API clients. A launch whose init does not show that server connected with its "
+                + "tools taken, or that connects another, never started,",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains("which the same query again is answered from; written by every client whose step searches", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "a call it refuses by itself that the engine refuses too - by its own deny rules, a file tool's told by its result alone - is a denial of Claude Code's, counted and recorded once;",
+            readme,
+            StringComparison.Ordinal);
 
         var architecture = Prose.Document("docs", "architecture.md");
 
@@ -521,6 +569,11 @@ public sealed partial class HelpTests
             nameof(DssHarness.Core.Agents.AgentAuth),
             nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeUserSettings),
             nameof(DssHarness.Core.Agents.AgentAccountLimit),
+            $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLaunch)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLaunch.McpConfiguration)}",
+            $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools.ServerTools)}",
+            $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools.ServedName)}",
+            $"{nameof(DssHarness.Core.Agents.AgentToolRunner)}.{nameof(DssHarness.Core.Agents.AgentToolRunner.Harness)}",
+            $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine.CallResult)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine.CallResult.RefusedByRule)}",
         })
         {
             Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
@@ -545,6 +598,10 @@ public sealed partial class HelpTests
             readme,
             StringComparison.Ordinal);
         Assert.Contains("the run's reporter is given those that read and no other.", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "built for the `claude-api` and `glm` clients to give their agents in place of a client's own - those clients are what comes next - and serving the `claude-code` client the web's through the engine's tool server:",
+            readme,
+            StringComparison.Ordinal);
         Assert.Contains($"its links followed (one whose links cannot be followed refused as {DssHarness.Core.Agents.Policy.AgentPolicy.UndecidedRule}) and held to the agent's roots", readme, StringComparison.Ordinal);
         Assert.Contains($"holds more than {DssHarness.Core.Agents.Runtime.AgentTools.MostDeletedEntries:N0} entries.", readme, StringComparison.Ordinal);
         Assert.Contains($"A file past {DiskSpace.Size(DssHarness.Core.Agents.Runtime.AgentTools.MostViewedBytes)} is neither viewed nor edited - it is searched, or read in part by a command.", readme, StringComparison.Ordinal);
@@ -573,6 +630,7 @@ public sealed partial class HelpTests
         var architecture = Prose.Document("docs", "architecture.md");
 
         Assert.Contains($"`Agents\\Runtime\\{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime)}`", architecture, StringComparison.Ordinal);
+        Assert.Contains($"`Agents\\Runtime\\{nameof(DssHarness.Core.Agents.Runtime.AgentToolServer)}`", architecture, StringComparison.Ordinal);
         Assert.Contains($"`Web\\{nameof(DssHarness.Core.Web.HarnessFetch)}`", architecture, StringComparison.Ordinal);
         Assert.Contains(
             $"recorded by the one `{nameof(DssHarness.Core.Agents.AgentCallRecords)}` (`{DssHarness.Core.Agents.AgentCallRecords.DenialsFileName}`, "
@@ -584,7 +642,11 @@ public sealed partial class HelpTests
 
         foreach (var owner in new[]
         {
-            nameof(DssHarness.Core.Agents.Runtime.AgentToolHost),
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolHost)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolHost.Serve)}",
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolHost)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolHost.Open)}",
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolServer)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolServer.Read)}",
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolServer)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolServer.CallAsync)}",
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime.ServeAsync)}",
             nameof(DssHarness.Core.Agents.Runtime.AgentTools),
             nameof(DssHarness.Core.Schemas.JsonSchemaSubset),
             nameof(DssHarness.Core.Agents.Runtime.ConfinedPaths),
@@ -3773,6 +3835,12 @@ public sealed partial class HelpTests
         Assert.Equal(topic, HelpText.Of("web_search").StandardOutput);
         Assert.Equal(topic, HelpText.Of("agentwebsearch").StandardOutput);
         Assert.Contains(HelpTopics.Described, described => described.Name == "web-search");
+        Assert.Contains("The claude-code client gives them a step through the engine's tool server ('help agent-clients'), and the API clients are to offer them.", prose, StringComparison.Ordinal);
+
+        // The files the web's tools leave are written by each client whose step has them ('help orchestrators').
+        var files = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+        Assert.Contains("each search source's part ('help web-search'); written by every client whose step has the web", files, StringComparison.Ordinal);
+        Assert.Contains("which the same query again is answered from; written by every client whose step searches", files, StringComparison.Ordinal);
 
         foreach (var key in DssHarness.Core.Web.Search.WebSearchSources.Keys.Concat(DssHarness.Core.Web.Search.WebSearchSource.OwnKeys))
         {

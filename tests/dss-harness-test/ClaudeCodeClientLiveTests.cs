@@ -1,15 +1,20 @@
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Agents.Runtime;
+using DssHarness.Core.Application;
+using DssHarness.Core.Composition;
+using DssHarness.Core.Output;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace DssHarness.Tests;
 
 /// <summary>
 /// The Claude Code client's smoke (slice 19b): the client itself, with every check it holds a launch to, against the
 /// machine's own <c>claude</c> - which the suite skips unless the machine says it may run it, for it signs in with the
-/// person's login, runs a live program and spends what its launches cost. It runs three steps in a scratch tree on a
-/// cheap model: one whose call is allowed and whose answer is held to a schema, one whose call the engine refuses, and
-/// one asked for its handoff before the launch took its prompt.
+/// person's login, runs a live program and spends what its launches cost. It runs four steps in a scratch tree on a
+/// cheap model: one whose call is allowed and whose answer is held to a schema, one whose call the engine refuses, one
+/// asked for its handoff before the launch took its prompt, and one that fetches a page through the engine's tool server.
 /// </summary>
 /// <remarks>
 /// Set <see cref="ProgramVariable"/> to the program npm installed (<c>&lt;npm root -g&gt;/@anthropic-ai/claude-code/bin/claude[.exe]</c>)
@@ -39,7 +44,8 @@ public sealed class ClaudeCodeClientLiveTests
     /// answer reads against the schema - and the launch's start names the user's settings and says the hooks are off.
     /// A second step's read of a credential slot is refused, and the step still completes. A third, asked for its handoff
     /// before the launch took its prompt, has the prompt dropped by the interrupt - named in its receipt by the id the
-    /// engine gave it - and its one turn is the handoff's.
+    /// engine gave it - and its one turn is the handoff's. A fourth, with the web, fetches a page by the engine's tool
+    /// server: connected before its init, the call asked of the engine and run by the harness's own fetch.
     /// </summary>
     [Fact]
     public async Task AStep_RunsThroughTheClient_OnTheMachinesClaude()
@@ -54,7 +60,10 @@ public sealed class ClaudeCodeClientLiveTests
         var work = Directory.CreateDirectory(temp.Combine("work")).FullName;
         var slot = temp.WriteFile(Path.Combine("slot", "keys.env"), "NOT_FOR_THE_AGENT=1\n");
         File.WriteAllText(Path.Combine(tree, "a.txt"), "alpha\n");
-        var client = new ClaudeCodeClient(harness.ProcessRunner, harness.FileSystem, harness.Platform, harness.ChildSessions, TimeProvider.System);
+        using var provider = new ServiceCollection()
+            .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New())
+            .BuildServiceProvider();
+        var client = new ClaudeCodeClient(harness.ProcessRunner, harness.FileSystem, harness.Platform, harness.ChildSessions, TimeProvider.System, tools: provider.GetRequiredService<AgentToolHost>());
         var runner = new AgentRunner([client], harness.FileSystem, harness.Platform, TimeProvider.System);
 
         var allowed = new Sink();
@@ -77,7 +86,21 @@ public sealed class ClaudeCodeClientLiveTests
             paused,
             Token);
 
+        var fetching = new Sink();
+        var fetched = await runner.RunAsync(
+            Step(temp.Path, tree, work, slot, program!, model, "s4", "Use the tool mcp__dssharness__web_fetch to fetch https://example.com/, then give as your answer the page's main heading.") with
+            {
+                Ground = PolicyGrounds.Of(tree, [tree, work], [tree, work], [Path.GetDirectoryName(slot)!], [], [], capabilities: [AgentCapability.Read, AgentCapability.Web]),
+            },
+            fetching,
+            Token);
+
         Record(temp.Path);
+
+        Assert.True(fetched.Status == AgentRunStatus.Completed, $"{fetched.Status}: {fetched.Error}");
+        Assert.Contains("Example Domain", fetched.StructuredOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(fetching.Events.OfType<ToolCallStarted>(), call => call.Tool == "mcp__dssharness__web_fetch" && call.Runner == AgentToolRunner.Harness);
+        Assert.True(fetched.WebRequests >= 1, "nothing was asked of the web");
 
         Assert.True(read.Status == AgentRunStatus.Completed, $"{read.Status}: {read.Error}");
         Assert.Contains("alpha", read.StructuredOutput, StringComparison.OrdinalIgnoreCase);
@@ -98,7 +121,7 @@ public sealed class ClaudeCodeClientLiveTests
         Assert.Equal([AgentMessageKind.FirstPrompt, AgentMessageKind.HandoffQuestion], paused.Events.OfType<MessageSent>().Select(message => message.Which));
 
         TestContext.Current.SendDiagnosticMessage(
-            $"claude {started.Tools.Count} tools, settings '{started.SettingsFile}' ({started.SettingsDigest}); handoff '{handed.Handoff?.Answer}'; spent {read.Usage?.Cost?.Reported} + {denied.Usage?.Cost?.Reported} + {handed.Usage?.Cost?.Reported} USD as Claude Code reports it");
+            $"claude {started.Tools.Count} tools, settings '{started.SettingsFile}' ({started.SettingsDigest}); handoff '{handed.Handoff?.Answer}'; spent {read.Usage?.Cost?.Reported} + {denied.Usage?.Cost?.Reported} + {handed.Usage?.Cost?.Reported} + {fetched.Usage?.Cost?.Reported} USD as Claude Code reports it");
     }
 
     private static AgentStepRequest Step(string root, string tree, string work, string slot, string program, string model, string step, string prompt)
@@ -149,13 +172,30 @@ public sealed class ClaudeCodeClientLiveTests
         }
     }
 
+    /// <summary>Every event a step emitted, from any number of writers - a call of the engine's tool server's among them.</summary>
     private sealed class Sink : IAgentEventSink
     {
-        public List<AgentEvent> Events { get; } = [];
+        private readonly Lock _gate = new();
+        private readonly List<AgentEvent> _events = [];
+
+        public List<AgentEvent> Events
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return [.. _events];
+                }
+            }
+        }
 
         public ValueTask EmitAsync(AgentEvent @event)
         {
-            Events.Add(@event);
+            lock (_gate)
+            {
+                _events.Add(@event);
+            }
+
             return ValueTask.CompletedTask;
         }
     }

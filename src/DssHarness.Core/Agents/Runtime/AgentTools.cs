@@ -18,8 +18,9 @@ namespace DssHarness.Core.Agents.Runtime;
 public sealed record AgentToolDefinition(string Name, AgentCapability Needs, bool Barrier, string Description, string Schema);
 
 /// <summary>
-/// The table of the harness's own tools, built for the API clients to give their agents in place of a client's own - nothing
-/// opens a runtime yet (part 03's "The tool runtime"): the one place each tool's name, capability, description and schema are said, so what a step is offered,
+/// The table of the harness's own tools, built for the API clients to give their agents in place of a client's own, and served
+/// to Claude Code's by the engine's tool server where Claude Code's own are given for none of a capability (part 03's "The
+/// tool runtime"): the one place each tool's name, capability, description and schema are said, so what a step is offered,
 /// what help prints and what the runtime runs are one list.
 /// </summary>
 public static class AgentTools

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Platform;
@@ -29,6 +30,12 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// the step had done no work yet the next key is given a new launch with the step's prompt. Work a key refused part way
 /// through leaves for the engine's fallback, which goes on from what it stored.
 /// </para>
+/// <para>
+/// A step that has the web takes the harness's own fetch and search from the engine's tool server (<see cref="AgentToolServer"/>):
+/// one MCP server of type <c>sdk</c>, the one <c>--mcp-config</c> names, served in the engine's own process over the
+/// launch's control channel. Each call of it is asked of the engine first, by its ask rule, and run by the tool runtime as
+/// on the API clients; a call the engine never allowed runs nothing and fails the step.
+/// </para>
 /// </remarks>
 /// <param name="processes">Starts the launch.</param>
 /// <param name="fileSystem">Writes what the launch is given and what it leaves beside the stream.</param>
@@ -36,13 +43,15 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// <param name="sessions">Where the contained launch records its session, so a killed engine's launch is ended by the next command.</param>
 /// <param name="clock">When each thing happened, and the bounds of a handoff.</param>
 /// <param name="environment">The tool's own environment, which a launch would otherwise inherit; the process's where none is given.</param>
+/// <param name="tools">The host of the tool runtime the engine's tool server answers from; none for a client whose steps have no web.</param>
 public sealed class ClaudeCodeClient(
     IProcessRunner processes,
     IFileSystem fileSystem,
     IHostPlatform platform,
     ChildSessions sessions,
     TimeProvider clock,
-    Func<IReadOnlyDictionary<string, string>>? environment = null) : IAgentClient
+    Func<IReadOnlyDictionary<string, string>>? environment = null,
+    AgentToolHost? tools = null) : IAgentClient
 {
     /// <summary>The client's key under <c>agentClients</c>.</summary>
     public const string ClientName = "claude-code";
@@ -62,6 +71,9 @@ public sealed class ClaudeCodeClient(
     /// <summary>The stop reason of a message the model declined to write.</summary>
     private const string Declined = "refusal";
 
+    /// <summary>The control request that carries a message of an MCP server the host serves.</summary>
+    private const string McpMessage = "mcp_message";
+
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly IProcessRunner _processes = processes ?? throw new ArgumentNullException(nameof(processes));
@@ -70,6 +82,10 @@ public sealed class ClaudeCodeClient(
     private readonly ChildSessions _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
     private readonly TimeProvider _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     private readonly Func<IReadOnlyDictionary<string, string>> _environment = environment ?? AgentChildEnvironment.Own;
+    private readonly AgentToolHost? _tools = tools;
+
+    /// <summary>The host of the tool runtime the engine's tool server answers from; none for a client whose steps have no web.</summary>
+    internal AgentToolHost? Tools => _tools;
 
     /// <summary>What this client can do, as the capabilities table states it.</summary>
     public static AgentClientCapabilities Descriptor { get; } = new(
@@ -137,9 +153,17 @@ public sealed class ClaudeCodeClient(
         var tools = ClaudeCodeTools.Of(ground.Given);
         var policy = new AgentPolicy(_fileSystem, _platform, ground);
 
+        // The runtime's tools the launch takes from the engine's tool server: the web's, on a step that has the web.
+        var served = ClaudeCodeTools.Served(AgentTools.Offered(ground, run.Commands, run.WebSearch));
+
+        if (served.Count > 0 && _tools is null)
+        {
+            return NotStarted(AgentNotStartedBecause.ConfigurationWrong, $"the step has the web, which this client serves through the engine's tool server ({string.Join(", ", served)}), and it was given no tool runtime to serve it with", run);
+        }
+
         for (var entry = 0; ; entry++)
         {
-            var launch = new Launch(this, run, model, program, events, policy, tools, keys[entry], settings, totals);
+            var launch = new Launch(this, run, model, program, events, policy, tools, served, keys[entry], settings, totals);
             var outcome = await launch.RunAsync(cancellationToken).ConfigureAwait(false);
 
             if (outcome.KeyRefused && keys[entry] is { } refused)
@@ -172,6 +196,7 @@ public sealed class ClaudeCodeClient(
             Turns = totals.Turns,
             ToolCalls = totals.Calls,
             Denials = totals.Denials,
+            WebRequests = totals.WebRequests,
             Duration = duration,
             Session = totals.Session,
             Usage = new AgentUsageReport(
@@ -206,6 +231,8 @@ public sealed class ClaudeCodeClient(
         public int Calls { get; set; }
 
         public int Denials { get; set; }
+
+        public int WebRequests { get; set; }
 
         public bool Worked { get; set; }
 
@@ -252,6 +279,12 @@ public sealed class ClaudeCodeClient(
         /// <summary>The initialize request's bound passed.</summary>
         public sealed record Uninitialized : Arrival;
 
+        /// <summary>A call of the engine's tool server answered, to send back on the request that carried it.</summary>
+        public sealed record Served(string RequestId, AgentToolServerMessage.Call Call, JsonObject Reply, AgentToolCallResult? Result) : Arrival;
+
+        /// <summary>A call of the engine's tool server the runtime failed on, a fault of the engine's own.</summary>
+        public sealed record ServeFailed(string RequestId, AgentToolServerMessage.Call Call, Exception Fault) : Arrival;
+
         /// <summary>The stall bound of a message the launch had not taken, counted from when <paramref name="Taken"/> messages were taken.</summary>
         public sealed record Untaken(int Taken) : Arrival;
     }
@@ -273,20 +306,39 @@ public sealed class ClaudeCodeClient(
         IAgentEventSink events,
         AgentPolicy policy,
         IReadOnlyList<string> tools,
+        IReadOnlyList<string> served,
         AgentKey? key,
         ClaudeUserSettings.Reading settings,
         Totals totals)
     {
+        // Every tool the launch has, as Claude Code names it: those --tools names, and those of the engine's tool server beside them.
+        private readonly IReadOnlyList<string> _given = [.. tools, .. served.Select(ClaudeCodeTools.ServedName)];
+
+        // Each call of the engine's tool server running, by its request's id, and each the server answered, by the call's
+        // id, with the file the runtime kept its whole answer in.
+        private readonly Dictionary<string, CancellationTokenSource> _serving = new(StringComparer.Ordinal);
+        private readonly List<Task> _calling = [];
+        private readonly Dictionary<string, string?> _servedFiles = new(StringComparer.Ordinal);
+        private AgentToolServer? _server;
+        private CancellationToken _ending;
+
         private readonly Channel<Arrival> _arrivals = Channel.CreateUnbounded<Arrival>(new UnboundedChannelOptions { SingleReader = true });
         private readonly Channel<string> _input = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
         private readonly Dictionary<string, (string Tool, string Input, JsonNode? Asked, long Started)> _calls = new(StringComparer.Ordinal);
         private readonly Dictionary<int, string> _callAt = [];
 
-        // Every call the engine was asked about, by its id, with whether it allowed it.
-        private readonly Dictionary<string, bool> _decided = new(StringComparer.Ordinal);
+        // Every call the engine was asked about, by its id, with the tool it was asked about and whether it allowed it.
+        private readonly Dictionary<string, (string Tool, bool Allowed)> _decided = new(StringComparer.Ordinal);
 
         // Every request of the launch's the engine answered, by its id.
         private readonly HashSet<string> _answered = new(StringComparer.Ordinal);
+
+        // Every call of the engine's tool server run, by its id: each runs once.
+        private readonly HashSet<string> _served = new(StringComparer.Ordinal);
+
+        // Every call Claude Code refused by itself, by its id: each is told once, by its permission_denied line, its
+        // result, or both.
+        private readonly HashSet<string> _refused = new(StringComparer.Ordinal);
         private readonly string _session = Guid.NewGuid().ToString("D");
         private readonly string _auth = run.Credential?.Auth ?? AgentAuth.Login;
 
@@ -321,8 +373,16 @@ public sealed class ClaudeCodeClient(
 
             var settings = Path.Combine(directory, ClaudeLaunch.SettingsFileName);
             var system = Path.Combine(directory, ClaudeLaunch.SystemFileName);
-            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(tools, run.Ground!, run.Commands, client._platform.PathComparison));
+            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(_given, run.Ground!, run.Commands, client._platform.PathComparison));
             files.WriteAllTextAtomic(system, run.Mask.Redact(run.SystemPrompt));
+
+            // The engine's tool server, named where the launch takes its tools and nowhere else.
+            var mcp = served.Count > 0 ? Path.Combine(directory, ClaudeLaunch.McpFileName) : null;
+
+            if (mcp is not null)
+            {
+                files.WriteAllTextAtomic(mcp, ClaudeLaunch.McpConfiguration);
+            }
 
             var working = run.Workspace.WorkingDirectory;
             var comparison = StringComparer.FromComparison(client._platform.PathComparison);
@@ -332,13 +392,16 @@ public sealed class ClaudeCodeClient(
 
             using var control = _control = AppendLog.Open(files, Path.Combine(directory, ClaudeLaunch.ControlFileName));
             using var records = _records = new AgentCallRecords(files, run, client._clock, events);
+            using var runtime = served.Count > 0 ? client._tools!.Serve(run, events, records, served) : null;
             using var stderr = AppendLog.Open(files, Path.Combine(directory, ClaudeLaunch.ErrorFileName));
             using var ending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _server = runtime is null ? null : new AgentToolServer(runtime);
+            _ending = ending.Token;
 
             var request = new ProcessRequest
             {
                 FileName = program,
-                Arguments = ClaudeLaunch.Arguments(run, model, _session, tools, roots, settings, system),
+                Arguments = ClaudeLaunch.Arguments(run, model, _session, tools, roots, settings, system, mcp),
                 WorkingDirectory = working,
                 Environment = ClaudeLaunch.Environment(run, key, client._environment().Keys),
                 StandardInput = ChildInput.WrittenBy((stream, exited) => Pump(_input.Reader, stream, exited)),
@@ -409,6 +472,16 @@ public sealed class ClaudeCodeClient(
                 await ending.CancelAsync().ConfigureAwait(false);
                 await Quietly(posting).ConfigureAwait(false);
 
+                // The calls of the engine's tool server still running end with the launch, before its records close: what
+                // they asked of the web and were refused is the run's, as on every client.
+                await Quietly(Task.WhenAll(_calling)).ConfigureAwait(false);
+
+                if (runtime is not null)
+                {
+                    totals.Denials += runtime.Tally.Denials;
+                    totals.WebRequests += runtime.Tally.WebRequests;
+                }
+
                 try
                 {
                     // However the launch ended - its outcome, a fault of the loop's, the hard stop - what its end left is
@@ -447,6 +520,8 @@ public sealed class ClaudeCodeClient(
                     Arrival.Untaken untaken => untaken.Taken == _taken && _pending.Count > 0 && !_inTurn
                         ? Ends(Failed(AgentRunStatus.Stalled, $"Claude Code did not take the engine's message within {run.Limits.StallSeconds} s ({Claude})"), killNow: true)
                         : null,
+                    Arrival.Served answered => OnServed(answered),
+                    Arrival.ServeFailed failed => OnServeFailed(failed),
                     _ => null,
                 };
 
@@ -462,8 +537,9 @@ public sealed class ClaudeCodeClient(
             var line = ClaudeLine.Read(text);
 
             // What the launch runs as is said by its init before it does anything: one that works before its init has
-            // given nothing its tools and its credential could be held to, and nothing it does is taken as its work.
-            if (!_started && line is ClaudeLine.User or ClaudeLine.Piece or ClaudeLine.Assistant or ClaudeLine.ControlRequest or ClaudeLine.Refusal or ClaudeLine.Result)
+            // given nothing its tools and its credential could be held to, and nothing it does is taken as its work. The
+            // engine's tool server is connected before it, as its init then says.
+            if (!_started && line is ClaudeLine.User or ClaudeLine.Piece or ClaudeLine.Assistant or ClaudeLine.ControlRequest { Subtype: not McpMessage } or ClaudeLine.Refusal or ClaudeLine.Result)
             {
                 if (line is ClaudeLine.ControlRequest early)
                 {
@@ -490,8 +566,7 @@ public sealed class ClaudeCodeClient(
 
                 case ClaudeLine.ControlRequest asked:
                     Record(asked.Node);
-                    await OnControlRequestAsync(asked).ConfigureAwait(false);
-                    return null;
+                    return await OnControlRequestAsync(asked).ConfigureAwait(false);
 
                 case ClaudeLine.ControlResponse answered when _answered.Contains(answered.RequestId):
                     // The launch writes back each answer the engine gave it: kept once, as the engine wrote it.
@@ -530,13 +605,35 @@ public sealed class ClaudeCodeClient(
 
             // What the launch runs as is held at every turn's init: no tool it was not given, and no credential but the
             // one its way of signing in gave.
-            var given = run.Output is null ? tools : [.. tools, ClaudeCodeTools.StructuredOutput];
+            var given = run.Output is null ? _given : [.. _given, ClaudeCodeTools.StructuredOutput];
 
             if (init.Tools.FirstOrDefault(tool => !given.Contains(tool, StringComparer.Ordinal)) is { } offered)
             {
                 return NotHost(ClaudeCodeTools.NeverOffered.Contains(offered, StringComparer.Ordinal)
                     ? $"{Claude} offered the tool '{offered}', which this tool never gives an agent"
                     : $"{Claude} offered the tool '{offered}', which this launch was not given");
+            }
+
+            // No MCP server but the engine's own, and that one only where the launch takes its tools: connected, every tool
+            // of it taken - a launch that did not take it has not the web it was given.
+            if (init.McpServers.Select(server => server.Name).FirstOrDefault(name => name != ClaudeCodeTools.Server || _server is null) is { } other)
+            {
+                return NotHost($"{Claude} connected the MCP server '{other}', which this launch was not given: --strict-mcp-config names none but the engine's own");
+            }
+
+            if (_server is not null)
+            {
+                var status = init.McpServers.Where(server => server.Name == ClaudeCodeTools.Server).Select(server => server.Status ?? "no status").FirstOrDefault();
+
+                if (status != "connected")
+                {
+                    return NotHost($"{Claude} did not connect the engine's tool server ({(status is null ? "its init names none" : $"it says '{status}'")}), which serves this step's {string.Join(" and ", served)}: this tool serves the web to Claude Code through it alone");
+                }
+
+                if (served.Select(ClaudeCodeTools.ServedName).FirstOrDefault(name => !init.Tools.Contains(name, StringComparer.Ordinal)) is { } untaken)
+                {
+                    return NotHost($"{Claude} did not take '{untaken}' from the engine's tool server, which serves it this launch");
+                }
             }
 
             var sources = ClaudeLaunch.ApiKeySources(_auth);
@@ -606,9 +703,21 @@ public sealed class ClaudeCodeClient(
                 }
 
                 totals.Worked = true;
-                var (content, file) = _records!.Kept(result.CallId, result.Content);
+
+                // A call the engine's tool server answered was masked, cut and kept by the runtime as it answered it: what
+                // Claude Code gives back of it is told, by the file the runtime kept the whole in.
+                var (content, file) = _servedFiles.Remove(result.CallId, out var kept)
+                    ? (Masked(result.Content), kept)
+                    : _records!.Kept(result.CallId, result.Content);
 
                 await Emit(new ToolCallFinished(result.CallId, result.Ok, client._clock.GetElapsedTime(call.Started), call.Input, content, file)).ConfigureAwait(false);
+
+                // A file tool's call Claude Code's own deny rules refused as it read the call - never asked of the engine - is
+                // told by its result alone: it is Claude Code's refusal as one its permission_denied line tells.
+                if (result.RefusedByRule && await RefusedByItselfAsync(call.Tool, result.CallId, result.Content, (call.Tool, call.Asked)).ConfigureAwait(false) is { } refused)
+                {
+                    return refused;
+                }
 
                 // Every call that ran is one the engine was asked about and allowed: one that was not ends the launch at
                 // once, its result told above, since the launch has done what nothing decided.
@@ -619,12 +728,12 @@ public sealed class ClaudeCodeClient(
 
                 totals.Acted = true;
 
-                if (!_decided.TryGetValue(result.CallId, out var allowed))
+                if (!_decided.TryGetValue(result.CallId, out var decided))
                 {
                     return new LaunchOutcome(Failed(AgentRunStatus.Failed, $"Claude Code ran '{call.Tool}' without asking the engine ({Claude})"), KillNow: true);
                 }
 
-                if (!allowed)
+                if (!decided.Allowed)
                 {
                     return new LaunchOutcome(Failed(AgentRunStatus.Failed, $"Claude Code ran '{call.Tool}' though the engine refused it ({Claude})"), KillNow: true);
                 }
@@ -729,21 +838,28 @@ public sealed class ClaudeCodeClient(
 
             _calls[id] = (tool, "{}", null, client._clock.GetTimestamp());
             totals.Calls++;
-            await Emit(new ToolCallStarted(id, tool, AgentToolRunner.ClaudeCode)).ConfigureAwait(false);
+
+            // A call of the engine's tool server is run by this harness; every other by Claude Code.
+            await Emit(new ToolCallStarted(id, tool, ClaudeCodeTools.ServedAs(tool) is null ? AgentToolRunner.ClaudeCode : AgentToolRunner.Harness)).ConfigureAwait(false);
         }
 
-        private async Task OnControlRequestAsync(ClaudeLine.ControlRequest asked)
+        private async Task<LaunchOutcome?> OnControlRequestAsync(ClaudeLine.ControlRequest asked)
         {
+            if (asked.Subtype == McpMessage)
+            {
+                return OnMcpMessage(asked);
+            }
+
             if (asked.Subtype != "can_use_tool")
             {
                 Control(Error(asked.RequestId, $"this host answers no '{asked.Subtype}' request"));
-                return;
+                return null;
             }
 
             var tool = asked.Tool ?? string.Empty;
             var answer = Decide(tool, asked.Input);
 
-            Asked(asked.CallId, answer is AgentPolicyAnswer.Allowed);
+            Asked(asked.CallId, tool, answer is AgentPolicyAnswer.Allowed);
 
             if (answer is AgentPolicyAnswer.Denied denied)
             {
@@ -751,10 +867,129 @@ public sealed class ClaudeCodeClient(
                 var subject = ClaudeToolDecider.SubjectOf(tool, asked.Input, run.Workspace.WorkingDirectory) ?? asked.Input?.ToJsonString() ?? string.Empty;
                 Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "deny", ["message"] = Masked(denied.Reason) }));
                 await _records!.DeniedAsync(tool, subject, denied).ConfigureAwait(false);
-                return;
+                return null;
             }
 
             Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = asked.Input?.DeepClone() ?? new JsonObject() }));
+            return null;
+        }
+
+        /// <summary>
+        /// A message of the engine's tool server: answered at once, but a call, which is run in the background by the tool
+        /// runtime - so the loop goes on reading the launch while it runs - where the engine was asked about it and allowed
+        /// it, and refused where it was not, which ends the launch: it called what nothing decided.
+        /// </summary>
+        private LaunchOutcome? OnMcpMessage(ClaudeLine.ControlRequest asked)
+        {
+            if (_server is not { } server || asked.Server != ClaudeCodeTools.Server)
+            {
+                Control(Error(asked.RequestId, $"this host serves no MCP server '{asked.Server}' to this launch"));
+                return null;
+            }
+
+            switch (server.Read(asked.Message))
+            {
+                case AgentToolServerMessage.Cancelled cancelled:
+                    if (_serving.TryGetValue(cancelled.RequestId, out var running))
+                    {
+                        running.Cancel();
+                    }
+
+                    Control(McpAnswer(asked.RequestId, cancelled.Reply));
+                    return null;
+
+                case AgentToolServerMessage.Call call:
+                    var name = ClaudeCodeTools.ServedName(call.Tool);
+
+                    if (Unallowed(call, name) is { } why)
+                    {
+                        Control(McpAnswer(asked.RequestId, AgentToolServer.Refused(call, $"this call was made {why}, so it does not run")));
+                        return new LaunchOutcome(Failed(AgentRunStatus.Failed, $"Claude Code called '{name}' of the engine's tool server {why} ({Claude})"), KillNow: true);
+                    }
+
+                    var serving = CancellationTokenSource.CreateLinkedTokenSource(_ending);
+                    _serving[AgentToolServer.Key(call.Id)] = serving;
+                    _calling.Add(Task.Run(() => ServeAsync(asked.RequestId, call, serving)));
+                    return null;
+
+                case AgentToolServerMessage.Answered answered:
+                    Control(McpAnswer(asked.RequestId, answered.Reply));
+                    return null;
+
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>
+        /// Why a call of the engine's tool server does not run; null for one that does. Each that runs is one the engine was
+        /// asked about, by the id Claude Code gave it, as a call of this tool, and allowed - and runs once.
+        /// </summary>
+        private string? Unallowed(AgentToolServerMessage.Call call, string name)
+        {
+            if (call.CallId is not { } id || !_decided.TryGetValue(id, out var decided) || decided.Tool != name)
+            {
+                return "without asking the engine";
+            }
+
+            if (!decided.Allowed)
+            {
+                return "though the engine refused it";
+            }
+
+            return _served.Add(id) ? null : "a second time, though the engine allowed it once";
+        }
+
+        /// <summary>Runs one call of the engine's tool server, and hands its answer, or the fault it ended on, to the loop.</summary>
+        private async Task ServeAsync(string requestId, AgentToolServerMessage.Call call, CancellationTokenSource serving)
+        {
+            try
+            {
+                var (reply, result) = await _server!.CallAsync(call, serving.Token).ConfigureAwait(false);
+                _arrivals.Writer.TryWrite(new Arrival.Served(requestId, call, reply, result));
+            }
+            catch (OperationCanceledException) when (_ending.IsCancellationRequested)
+            {
+                // The launch ended: nothing is left to answer.
+            }
+            catch (Exception ex)
+            {
+                _arrivals.Writer.TryWrite(new Arrival.ServeFailed(requestId, call, ex));
+            }
+        }
+
+        /// <summary>A call of the engine's tool server answered: its reply sent back, and the file its whole answer is kept in noted for its result.</summary>
+        private LaunchOutcome? OnServed(Arrival.Served served)
+        {
+            if (_serving.Remove(AgentToolServer.Key(served.Call.Id), out var serving))
+            {
+                serving.Dispose();
+            }
+
+            if (served.Result is { } result)
+            {
+                _servedFiles[served.Call.CallId!] = result.File;
+            }
+
+            Control(McpAnswer(served.RequestId, served.Reply));
+            return null;
+        }
+
+        /// <summary>
+        /// A call of the engine's tool server the runtime failed on by a fault of the engine's own, not of the tool: answered
+        /// as an error, and the step failed by it, as it fails on every client.
+        /// </summary>
+        private LaunchOutcome OnServeFailed(Arrival.ServeFailed failed)
+        {
+            if (_serving.Remove(AgentToolServer.Key(failed.Call.Id), out var serving))
+            {
+                serving.Dispose();
+            }
+
+            var why = $"the engine's tool server failed on '{ClaudeCodeTools.ServedName(failed.Call.Tool)}': {failed.Fault.Message.TrimEnd('.')}";
+            Control(Error(failed.RequestId, Masked(why)));
+
+            return new LaunchOutcome(Failed(AgentRunStatus.Failed, why), KillNow: true);
         }
 
         /// <summary>
@@ -771,7 +1006,7 @@ public sealed class ClaudeCodeClient(
 
             try
             {
-                return ClaudeToolDecider.Decide(policy, tools, tool, input, run.Workspace.WorkingDirectory);
+                return ClaudeToolDecider.Decide(policy, _given, tool, input, run.Workspace.WorkingDirectory);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -779,12 +1014,12 @@ public sealed class ClaudeCodeClient(
             }
         }
 
-        /// <summary>Notes that the engine was asked about the call <paramref name="callId"/>, and whether it allowed it; the last answer stands.</summary>
-        private void Asked(string? callId, bool allowed)
+        /// <summary>Notes that the engine was asked about the call <paramref name="callId"/> of <paramref name="tool"/>, and whether it allowed it; the last answer stands.</summary>
+        private void Asked(string? callId, string tool, bool allowed)
         {
             if (callId is not null)
             {
-                _decided[callId] = allowed;
+                _decided[callId] = (tool, allowed);
             }
         }
 
@@ -793,21 +1028,41 @@ public sealed class ClaudeCodeClient(
         /// time, so a call they refuse is one the engine refuses too; one the engine would have allowed was refused by a
         /// launch that did not ask its host - no call of it would ever be decided by the engine - and ends it.
         /// </summary>
-        private async Task<LaunchOutcome?> OnRefusalAsync(ClaudeLine.Refusal refusal)
+        private Task<LaunchOutcome?> OnRefusalAsync(ClaudeLine.Refusal refusal)
+            => RefusedByItselfAsync(
+                refusal.Tool,
+                refusal.CallId,
+                refusal.Message,
+                refusal.CallId is { } id && _calls.TryGetValue(id, out var call) ? (call.Tool, call.Asked) : null);
+
+        /// <summary>
+        /// One call Claude Code refused by itself, told by its <c>permission_denied</c> line or by its result: counted and
+        /// recorded once, however many say it, and held to what the engine answers of it.
+        /// </summary>
+        /// <param name="tool">The tool, as Claude Code names it.</param>
+        /// <param name="callId">The call's id, where what told it names one.</param>
+        /// <param name="message">What Claude Code said of it.</param>
+        /// <param name="call">The call's tool and input, where the call is known; none leaves it undecided by the engine.</param>
+        private async Task<LaunchOutcome?> RefusedByItselfAsync(string? tool, string? callId, string message, (string Tool, JsonNode? Asked)? call)
         {
+            if (callId is not null && !_refused.Add(callId))
+            {
+                return null;
+            }
+
             totals.Denials++;
 
             // Claude Code's own refusal is recorded as every denial is: a line of the step's denials, and its event.
-            await _records!.DeniedAsync(refusal.Tool ?? string.Empty, string.Empty, new AgentPolicyAnswer.Denied(string.Empty, AgentPolicySource.ClaudeCode, refusal.Message)).ConfigureAwait(false);
+            await _records!.DeniedAsync(tool ?? string.Empty, string.Empty, new AgentPolicyAnswer.Denied(string.Empty, AgentPolicySource.ClaudeCode, message)).ConfigureAwait(false);
 
-            if (refusal.CallId is not { } id || _decided.ContainsKey(id) || !_calls.TryGetValue(id, out var call))
+            if (callId is null || call is not { } made || _decided.ContainsKey(callId))
             {
                 return null;
             }
 
             // What the engine cannot decide it would not have allowed: such a call is a denial, as its refusal said.
-            return Decide(call.Tool, call.Asked) is AgentPolicyAnswer.Allowed
-                ? NotHost($"Claude Code refused '{call.Tool}' without asking the engine, which allows it ({Claude}): {refusal.Message}; this tool runs Claude Code only as its host")
+            return Decide(made.Tool, made.Asked) is AgentPolicyAnswer.Allowed
+                ? NotHost($"Claude Code refused '{made.Tool}' without asking the engine, which allows it ({Claude}): {message}; this tool runs Claude Code only as its host")
                 : null;
         }
 
@@ -1325,6 +1580,10 @@ public sealed class ClaudeCodeClient(
                 ["type"] = "control_response",
                 ["response"] = new JsonObject { ["subtype"] = "success", ["request_id"] = requestId, ["response"] = decision },
             };
+
+        /// <summary>The answer to an <c>mcp_message</c>: its server's reply, as the SDK answers one.</summary>
+        private static JsonObject McpAnswer(string requestId, JsonObject reply)
+            => Answer(requestId, new JsonObject { ["mcp_response"] = reply });
 
         private static JsonObject Error(string requestId, string error)
             => new()

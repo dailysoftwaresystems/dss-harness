@@ -57,8 +57,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
     /// <summary>
     /// A launch is a new session, streamed both ways, by the whole argument list and nothing else: no <c>-p</c>, the prompt
     /// never an argument but the first message on its input after the <c>initialize</c> request, a session id the engine
-    /// made and a new one for every launch, no session kept, every root but the working directory an <c>--add-dir</c>; it
-    /// runs in the agent's working directory, with the settings and the system prompt it was given beside the stream.
+    /// made and a new one for every launch, no session kept, every root but the working directory an <c>--add-dir</c>, the
+    /// engine's tool server beside <c>--strict-mcp-config</c> for a step with the web; it runs in the agent's working
+    /// directory, with the settings, the system prompt and the server it was given beside the stream.
     /// </summary>
     [Fact]
     public async Task ALaunch_IsANewSessionStreamedBothWays_ByTheOneArgumentList_InTheAgentsWorkingDirectory()
@@ -88,6 +89,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
                 "--effort", "high", "--max-turns", "30", "--max-budget-usd", "2.5",
                 "--permission-mode", "default", "--permission-prompt-tool", "stdio", "--permission-prompts", "host",
                 "--tools", "Read,Grep,Glob,Write,Edit,NotebookEdit,Bash", "--setting-sources", "user", "--strict-mcp-config",
+                "--mcp-config", Path.Combine(kit.StepDirectory, ClaudeLaunch.McpFileName),
                 "--settings", Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName),
                 "--append-system-prompt-file", Path.Combine(kit.StepDirectory, ClaudeLaunch.SystemFileName),
                 "--json-schema", Schema,
@@ -103,9 +105,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!;
         Assert.Equal(
-            ["Read", "Grep", "Glob", "Write", "Edit", "NotebookEdit", "Bash"],
+            ["Read", "Grep", "Glob", "Write", "Edit", "NotebookEdit", "Bash", "mcp__dssharness__web_fetch"],
             settings["permissions"]!["ask"]!.AsArray().Select(rule => rule!.GetValue<string>()));
         Assert.Empty(settings["fallbackModel"]!.AsArray());
+        Assert.Equal("""{"mcpServers":{"dssharness":{"type":"sdk","name":"dssharness"}}}""", File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.McpFileName)));
 
         var read = launches[0].Read;
         Assert.Equal("initialize", read[0]["request"]?["subtype"]?.GetValue<string>());
@@ -128,6 +131,11 @@ public sealed class ClaudeCodeClientTests : IDisposable
         kit.Own["CLAUDE_CODE_ENTRYPOINT"] = "claude-desktop";
         kit.Own["CLAUDE_CODE_SSE_PORT"] = "51234";
         kit.Own["CLAUDECODE"] = "1";
+        kit.Own["CLAUDE_PID"] = "4242";
+        kit.Own["CLAUDE_EFFORT"] = "max";
+        kit.Own["CLAUDE_AGENT_SDK_MCP_NO_PREFIX"] = "1";
+        kit.Own["CLAUDE_PREVIEW_CLASSIFIER_FLOOR"] = "1";
+        kit.Own["MCP_CONNECTION_NONBLOCKING"] = "true";
         kit.Own["claude_code_entrypoint_lower"] = "claude-desktop";
         kit.Own["ClaudeCode"] = "1";
         kit.Own["ZAI_API_KEY"] = "zk-ambient";
@@ -150,6 +158,13 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Null(given["CLAUDE_CODE_ENTRYPOINT"]);
         Assert.Null(given["CLAUDE_CODE_SSE_PORT"]);
         Assert.Null(given["CLAUDECODE"]);
+
+        // Its Agent SDK's, its previews' and MCP's too: a launch's MCP is the engine's server alone, connected before its init.
+        Assert.Null(given["CLAUDE_PID"]);
+        Assert.Null(given["CLAUDE_EFFORT"]);
+        Assert.Null(given["CLAUDE_AGENT_SDK_MCP_NO_PREFIX"]);
+        Assert.Null(given["CLAUDE_PREVIEW_CLASSIFIER_FLOOR"]);
+        Assert.Null(given["MCP_CONNECTION_NONBLOCKING"]);
 
         // A host session's name in another case is the same variable on Windows, and is taken away in every spelling.
         Assert.Null(given["claude_code_entrypoint_lower"]);
@@ -215,7 +230,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
     /// <summary>
     /// A launch loses what every child of an agent loses: a secret-shaped name the configuration never appointed, but one
-    /// agentPolicy.keepEnvironment gives back; a name of no secret's shape it keeps.
+    /// agentPolicy.keepEnvironment gives back - a host Claude Code session's among them, which it otherwise never
+    /// inherits; a name of no secret's shape it keeps.
     /// </summary>
     [Fact]
     public async Task ALaunch_LosesWhatEveryChildOfAnAgentLoses()
@@ -225,8 +241,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
         kit.Own["GITHUB_TOKEN"] = "ghp-1";
         kit.Own["NPM_TOKEN"] = "npm-1";
         kit.Own["PLAIN_NAME"] = "plain";
+        kit.Own["MCP_GITHUB_TOKEN"] = "mcp-1";
+        kit.Own["CLAUDE_CODE_MESSAGING_TOKEN"] = "session-1";
 
-        var result = await kit.Client().RunAsync(kit.Run() with { Commands = AgentCommandSettings.Default with { KeepEnvironment = ["NPM_TOKEN"] } }, new Sink(), Token);
+        var result = await kit.Client().RunAsync(kit.Run() with { Commands = AgentCommandSettings.Default with { KeepEnvironment = ["NPM_TOKEN", "MCP_GITHUB_TOKEN"] } }, new Sink(), Token);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
 
@@ -234,6 +252,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.False(seen.ContainsKey("GITHUB_TOKEN"), "a secret-shaped name reached a launch");
         Assert.Equal("npm-1", seen["NPM_TOKEN"]);
         Assert.Equal("plain", seen["PLAIN_NAME"]);
+        Assert.Equal("mcp-1", seen["MCP_GITHUB_TOKEN"]);
+        Assert.False(seen.ContainsKey("CLAUDE_CODE_MESSAGING_TOKEN"), "a host session's name no keep gives back reached a launch");
     }
 
     /// <summary>
@@ -290,13 +310,14 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var answers = Assert.Single(kit.Launches()).Read
             .Where(line => line["type"]?.GetValue<string>() == "control_response")
             .Select(line => line["response"]!["response"]!)
+            .Where(answer => answer["mcp_response"] is null)
             .ToList();
         Assert.Equal(4, answers.Count);
         Assert.Equal("allow", answers[0]["behavior"]!.GetValue<string>());
         Assert.Equal("a.txt", answers[0]["updatedInput"]!["file_path"]!.GetValue<string>());
         Assert.All(answers.Skip(1), answer => Assert.Equal("deny", answer["behavior"]!.GetValue<string>()));
         Assert.Equal(
-            "'Agent' is no tool this agent was given; it was given: Read, Grep, Glob, Write, Edit, NotebookEdit, Bash",
+            "'Agent' is no tool this agent was given; it was given: Read, Grep, Glob, Write, Edit, NotebookEdit, Bash, mcp__dssharness__web_fetch",
             answers[3]["message"]!.GetValue<string>());
 
         var denied = sink.Of<PermissionDenied>();
@@ -339,11 +360,22 @@ public sealed class ClaudeCodeClientTests : IDisposable
             ],
             kinds);
 
+        // The engine's tool server's messages among them, each answered: its connection, before the launch's init.
         var control = File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.ControlFileName))
             .Select(line => JsonNode.Parse(line)!)
-            .Select(line => $"{line["type"]!.GetValue<string>()}:{(line["request"]?["subtype"] ?? line["response"]?["subtype"])!.GetValue<string>()}")
+            .Select(line => (Kind: $"{line["type"]!.GetValue<string>()}:{(line["request"]?["subtype"] ?? line["response"]?["subtype"])!.GetValue<string>()}", Mcp: line["request"]?["message"]?["method"] ?? line["response"]?["response"]?["mcp_response"]?["result"]?["serverInfo"]?["name"]))
+            .Select(line => line.Mcp is null ? line.Kind : $"{line.Kind}:{line.Mcp.GetValue<string>()}")
             .ToList();
-        Assert.Equal(["control_request:initialize", "control_response:success", "control_request:can_use_tool", "control_response:success"], control);
+        Assert.Equal(
+            [
+                "control_request:initialize",
+                "control_request:mcp_message:initialize", "control_response:success:dssharness",
+                "control_response:success",
+                "control_request:mcp_message:notifications/initialized", "control_response:success",
+                "control_request:mcp_message:tools/list", "control_response:success",
+                "control_request:can_use_tool", "control_response:success",
+            ],
+            control);
     }
 
     /// <summary>
@@ -498,7 +530,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var question = sink.Of<MessageSent>().Single(message => message.Which == AgentMessageKind.HandoffQuestion);
         Assert.Equal($"The plan changed.\n\n{AgentHandoffSignal.Prompt}", question.Text);
 
-        var read = Assert.Single(kit.Launches()).Read;
+        var read = Assert.Single(kit.Launches()).Read.ToList();
         Assert.Contains(read, line => line["request"]?["subtype"]?.GetValue<string>() == "interrupt" && line["request"]!["cancel_queued"]!.GetValue<bool>());
 
         var denial = Assert.Single(sink.Of<PermissionDenied>());
@@ -1119,6 +1151,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var answers = Assert.Single(kit.Launches()).Read
             .Where(line => line["type"]?.GetValue<string>() == "control_response")
             .Select(line => line["response"]!)
+            .Where(answer => answer["response"]?["mcp_response"] is null)
             .ToList();
         Assert.Equal(2, answers.Count);
         Assert.Equal(("error", "this host answers no 'hook_callback' request"), (answers[0]["subtype"]!.GetValue<string>(), answers[0]["error"]!.GetValue<string>()));
@@ -1130,6 +1163,352 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var recorded = JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName))))!;
         Assert.Equal(("Read", "undecided", "Builtin", said), (recorded["tool"]!.GetValue<string>(), recorded["rule"]!.GetValue<string>(), recorded["source"]!.GetValue<string>(), recorded["reason"]!.GetValue<string>()));
         Assert.Equal(1, File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.ControlFileName)).Count(line => line.Contains("\"subtype\":\"error\"", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A call of the engine's tool server is asked of the engine first, then run by the tool runtime - the page fetched by
+    /// the harness's own fetch, asked of the policy and recorded - its answer the server's reply and the call's result, the
+    /// call told as the harness's; the web's requests are the result's.
+    /// </summary>
+    [Fact]
+    public async Task ACallOfTheServer_IsAskedFirst_ThenRunByTheRuntime_AndToldAsTheHarnesss()
+    {
+        using var kit = new Kit();
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("the page's text", "text/plain"));
+        kit.Endpoint = endpoint;
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = Served, ["input"] = new JsonObject { ["url"] = "https://example.test/page" } }) }]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal((1, 0, 1), (result.ToolCalls, result.Denials, result.WebRequests));
+        Assert.Contains(Served, Assert.Single(sink.Of<SessionStarted>()).Tools);
+        Assert.Equal(AgentToolRunner.Harness, Assert.Single(sink.Of<ToolCallStarted>()).Runner);
+
+        var finished = Assert.Single(sink.Of<ToolCallFinished>());
+        Assert.True(finished.Ok);
+        Assert.Contains("the page's text", finished.Result, StringComparison.Ordinal);
+        Assert.Contains("<web-page", finished.Result, StringComparison.Ordinal);
+        Assert.Equal("https://example.test/page", Assert.Single(endpoint.Asked).Address.ToString());
+
+        var read = Assert.Single(kit.Launches()).Read.ToList();
+        var asked = read.FindIndex(line => line["response"]?["response"]?["behavior"]?.GetValue<string>() == "allow");
+        var served = read.FindIndex(line => line["response"]?["response"]?["mcp_response"]?["result"]?["content"] is not null);
+        Assert.InRange(asked, 0, served - 1);
+        Assert.False(read[served]["response"]!["response"]!["mcp_response"]!["result"]!["isError"]!.GetValue<bool>());
+
+        var web = File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.WebFileName)).Select(line => JsonNode.Parse(line)!).ToList();
+        Assert.Equal(["decided", "answered"], web.Select(line => line["line"]!.GetValue<string>()));
+        Assert.All(web, line => Assert.Equal(DssHarness.Core.Agents.Runtime.AgentTools.WebFetch, line["tool"]!.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// A call of the server's whose address the policy refuses is refused by its tool as it runs, nothing sent: the model
+    /// reads the rule, and the denial is the step's - recorded, and counted in its result.
+    /// </summary>
+    [Fact]
+    public async Task ACallOfTheServerWhoseAddressIsRefused_IsTheToolsDenial_CountedInTheResult()
+    {
+        using var kit = new Kit();
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("the page's text", "text/plain"));
+        kit.Endpoint = endpoint;
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = Served, ["input"] = new JsonObject { ["url"] = "https://example.test/page" } }) }]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { Restrictions = [new AgentRestriction("Web(example.test)", AgentPolicySource.Config)] } }, sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal((1, 1), (result.Denials, result.WebRequests));
+        Assert.Empty(endpoint.Asked);
+
+        var finished = Assert.Single(sink.Of<ToolCallFinished>());
+        Assert.False(finished.Ok);
+        Assert.Contains("Web(example.test)", finished.Result, StringComparison.Ordinal);
+
+        var denied = Assert.Single(sink.Of<PermissionDenied>());
+        Assert.Equal((DssHarness.Core.Agents.Runtime.AgentTools.WebFetch, "https://example.test/page"), (denied.Tool, denied.Subject));
+        Assert.Single(File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName)));
+    }
+
+    /// <summary>
+    /// A call of the server's the engine was not asked about and did not allow - sent with no ask, naming a call never
+    /// made, naming an allowed call of another tool, or naming none - runs nothing: it is answered as refused, saying why,
+    /// and the step fails, the launch ended at once.
+    /// </summary>
+    [Theory]
+    [InlineData("calledUnasked")]
+    [InlineData("otherCallId")]
+    [InlineData("otherToolsCallId")]
+    [InlineData("noCallId")]
+    public async Task ACallOfTheServerTheEngineDidNotAllow_RunsNothing_AndFailsTheStep(string how)
+    {
+        using var kit = new Kit();
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("the page's text", "text/plain"));
+        kit.Endpoint = endpoint;
+        kit.Script([new JsonObject
+        {
+            ["calls"] = new JsonArray(
+                new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } },
+                new JsonObject { ["tool"] = Served, ["input"] = new JsonObject { ["url"] = "https://example.test/page" }, [how] = true }),
+            ["ignoreEof"] = true,
+        }]);
+
+        // The kit's launches are given ten minutes to end by themselves: one that came back in a minute was ended at once.
+        var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.Equal($"Claude Code called '{Served}' of the engine's tool server without asking the engine (claude fake)", result.Error);
+        Assert.Empty(endpoint.Asked);
+        Assert.Equal("this call was made without asking the engine, so it does not run", Refused(kit));
+    }
+
+    /// <summary>
+    /// A call of the server's the engine refused - here every call of a handoff turn - sent to the server all the same runs
+    /// nothing, and fails the step saying the engine refused it.
+    /// </summary>
+    [Fact]
+    public async Task ACallOfTheServerTheEngineRefused_SentAllTheSame_RunsNothing_AndFailsTheStep()
+    {
+        using var kit = new Kit();
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("the page's text", "text/plain"));
+        kit.Endpoint = endpoint;
+        kit.Script(
+        [
+            new JsonObject { ["hang"] = true },
+            new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = Served, ["input"] = new JsonObject { ["url"] = "https://example.test/page" }, ["calledThoughDenied"] = true }) },
+        ]);
+        var run = kit.Run();
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnStarted)
+            {
+                run.Handoff.Ask();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token);
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.Equal($"Claude Code called '{Served}' of the engine's tool server though the engine refused it (claude fake)", result.Error);
+        Assert.Empty(endpoint.Asked);
+        Assert.Equal("this call was made though the engine refused it, so it does not run", Refused(kit));
+    }
+
+    /// <summary>A call of the server's sent twice runs once: the second is refused, and fails the step.</summary>
+    [Fact]
+    public async Task ACallOfTheServerSentTwice_RunsOnce_AndFailsTheStep()
+    {
+        using var kit = new Kit();
+        var hanging = new HangingEndpoint();
+        kit.Endpoint = hanging;
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = Served, ["input"] = new JsonObject { ["url"] = "https://example.test/page" }, ["calledTwice"] = true }), ["ignoreEof"] = true }]);
+
+        var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.Equal($"Claude Code called '{Served}' of the engine's tool server a second time, though the engine allowed it once (claude fake)", result.Error);
+        Assert.Equal("this call was made a second time, though the engine allowed it once, so it does not run", Refused(kit));
+    }
+
+    /// <summary>A message naming a server the launch was not given is answered as an error, and nothing of it runs.</summary>
+    [Fact]
+    public async Task AMessageOfAServerTheLaunchWasNotGiven_IsAnsweredAsAnError()
+    {
+        using var kit = new Kit();
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("the page's text", "text/plain"));
+        kit.Endpoint = endpoint;
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = Served, ["input"] = new JsonObject { ["url"] = "https://example.test/page" }, ["otherServer"] = true }) }]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Empty(endpoint.Asked);
+        Assert.Equal("this host serves no MCP server 'other' to this launch", Assert.Single(sink.Of<ToolCallFinished>()).Result);
+    }
+
+    /// <summary>The refusal a call of the server's was answered with - kept with the control messages, the launch ended at once whether it read the answer or not.</summary>
+    private static string Refused(Kit kit)
+    {
+        var refused = Assert.Single(Control(kit), line => line["response"]?["response"]?["mcp_response"]?["result"]?["isError"] is not null)["response"]!["response"]!["mcp_response"]!["result"]!;
+        Assert.True(refused["isError"]!.GetValue<bool>());
+
+        return refused["content"]![0]!["text"]!.GetValue<string>();
+    }
+
+    /// <summary>A call of the server's its client cancels is cancelled where it runs, answered as cancelled, and the step goes on.</summary>
+    [Fact]
+    public async Task ACallOfTheServerItsClientCancels_IsCancelledWhereItRuns()
+    {
+        using var kit = new Kit();
+        var hanging = new HangingEndpoint();
+        kit.Endpoint = hanging;
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = Served, ["input"] = new JsonObject { ["url"] = "https://example.test/page" }, ["cancelCall"] = true }) }]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        var finished = Assert.Single(sink.Of<ToolCallFinished>());
+        Assert.False(finished.Ok);
+        Assert.Equal("MCP error -32800: the call of 'web_fetch' was cancelled", finished.Result);
+
+        // The cancellation's own request is answered at once, as every message of the server's is.
+        var control = Control(kit);
+        var cancelling = Assert.Single(control, line => line["request"]?["message"]?["method"]?.GetValue<string>() == "notifications/cancelled")["request_id"]!.GetValue<string>();
+        Assert.Equal("""{"jsonrpc":"2.0","result":{}}""", Assert.Single(control, line => line["response"]?["request_id"]?.GetValue<string>() == cancelling)["response"]!["response"]!["mcp_response"]!.ToJsonString());
+    }
+
+    /// <summary>
+    /// A call of the server's still running when the launch is stopped ends before the step does: what it asked of the web
+    /// and its records are the run's, never left running past it.
+    /// </summary>
+    [Fact]
+    public async Task ACallOfTheServerRunningWhenTheLaunchStops_EndsBeforeTheStepDoes()
+    {
+        using var kit = new Kit();
+        var slow = new SlowToEndEndpoint();
+        kit.Endpoint = slow;
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = Served, ["input"] = new JsonObject { ["url"] = "https://example.test/page" } }), ["ignoreEof"] = true }]);
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        _ = slow.Asked.Task.ContinueWith(_ => stop.CancelAsync(), TaskScheduler.Default);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => kit.Client().RunAsync(kit.Run(), new Sink(), stop.Token).WaitAsync(TimeSpan.FromSeconds(60), Token));
+
+        Assert.True(slow.Ended.Task.IsCompleted, "the step ended while its call of the server still ran");
+    }
+
+    /// <summary>
+    /// A call of the server's and one the engine refuses itself are denials of the one step: each a line of the one
+    /// denials file the launch's records keep, the server's runtime writing to them rather than beside them.
+    /// </summary>
+    [Fact]
+    public async Task ACallOfTheServerRefused_AndOneTheEngineRefused_AreLinesOfTheOneDenialsFile()
+    {
+        using var kit = new Kit();
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("the page's text", "text/plain"));
+        kit.Endpoint = endpoint;
+        kit.Script([new JsonObject
+        {
+            ["calls"] = new JsonArray(
+                new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = kit.Temp.Combine("elsewhere", "x.txt"), ["content"] = "x" } },
+                new JsonObject { ["tool"] = Served, ["input"] = new JsonObject { ["url"] = "https://example.test/page" } }),
+        }]);
+
+        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { Restrictions = [new AgentRestriction("Web(example.test)", AgentPolicySource.Config)] } }, new Sink(), Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(2, result.Denials);
+        Assert.Equal(
+            ["Write", DssHarness.Core.Agents.Runtime.AgentTools.WebFetch],
+            File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName)).Select(line => JsonNode.Parse(line)!["tool"]!.GetValue<string>()));
+        Assert.Empty(endpoint.Asked);
+    }
+
+    /// <summary>
+    /// A call of the server's the runtime fails on by a fault of the engine's own - no tool's failure, which is an answer -
+    /// is answered as an error, and fails the step by it, as it fails on every client.
+    /// </summary>
+    [Fact]
+    public async Task ACallOfTheServerTheEngineFaultsOn_FailsTheStep()
+    {
+        using var kit = new Kit();
+        kit.Endpoint = new WebEndpoint(_ => throw new InvalidOperationException("the endpoint broke"));
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = Served, ["input"] = new JsonObject { ["url"] = "https://example.test/page" } }) }]);
+
+        var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.StartsWith($"the engine's tool server failed on '{Served}': ", result.Error, StringComparison.Ordinal);
+        Assert.Contains("the endpoint broke", result.Error, StringComparison.Ordinal);
+        Assert.Contains(
+            Control(kit),
+            line => line["response"]?["subtype"]?.GetValue<string>() == "error" && line["response"]!["error"]!.GetValue<string>().StartsWith("the engine's tool server failed on", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A served call whose whole answer the runtime kept, for it is too large for its event, is told by that file: the
+    /// result the model was given is the runtime's cut, and the file holds the whole.
+    /// </summary>
+    [Fact]
+    public async Task ACallOfTheServerTooLargeForItsEvent_IsToldByTheFileTheRuntimeKept()
+    {
+        using var kit = new Kit();
+        var page = string.Concat(Enumerable.Repeat("a line of the page's text\n", 2_000));
+        kit.Endpoint = new WebEndpoint(_ => WebEndpoint.Page(page, "text/plain"));
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = Served, ["input"] = new JsonObject { ["url"] = "https://example.test/page" } }) }]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        var finished = Assert.Single(sink.Of<ToolCallFinished>());
+        var file = Assert.IsType<string>(finished.ResultFile);
+        Assert.Contains(page.TrimEnd('\n'), File.ReadAllText(file), StringComparison.Ordinal);
+        Assert.True(finished.Result.Length < page.Length);
+        Assert.Contains(file, finished.Result, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A launch's init is held to the engine's tool server: one that does not show it connected, that took no tool of it,
+    /// or that connects another server never started, naming what it showed.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "mcpStatus": "failed" }""", "did not connect the engine's tool server (it says 'failed'), which serves this step's web_fetch: this tool serves the web to Claude Code through it alone")]
+    [InlineData("""{ "initMcpServers": [] }""", "did not connect the engine's tool server (its init names none), which serves this step's web_fetch: this tool serves the web to Claude Code through it alone")]
+    [InlineData("""{ "initTools": ["Read"] }""", "did not take 'mcp__dssharness__web_fetch' from the engine's tool server, which serves it this launch")]
+    [InlineData("""{ "initMcpServers": [{ "name": "dssharness", "status": "connected" }, { "name": "other", "status": "connected" }] }""", "connected the MCP server 'other', which this launch was not given: --strict-mcp-config names none but the engine's own")]
+    public async Task AnInitNotHoldingTheEnginesToolServer_EndsItNeverStarted(string turn, string why)
+    {
+        using var kit = new Kit();
+        kit.Script([JsonNode.Parse(turn)!.AsObject()]);
+
+        var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
+
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ProgramMissing), (result.Status, result.NotStartedBecause));
+        Assert.Equal($"client 'claude-code' was not started: claude fake {why}", result.Error);
+    }
+
+    /// <summary>
+    /// A step without the web takes no server: no <c>--mcp-config</c>, no file naming one, nothing connected - and a launch
+    /// that connects the engine's all the same never started.
+    /// </summary>
+    [Fact]
+    public async Task AStepWithoutTheWeb_TakesNoServer()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        var run = kit.Run() with { Ground = kit.Ground() with { Capabilities = [AgentCapability.Read, AgentCapability.Write, AgentCapability.Run] } };
+
+        var result = await kit.Client().RunAsync(run, new Sink(), Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        var launch = Assert.Single(kit.Launches());
+        Assert.DoesNotContain("--mcp-config", launch.Arguments);
+        Assert.False(File.Exists(Path.Combine(kit.StepDirectory, ClaudeLaunch.McpFileName)));
+        Assert.DoesNotContain(launch.Read, line => line["response"]?["response"]?["mcp_response"] is not null);
+
+        kit.Script([new JsonObject { ["initMcpServers"] = new JsonArray(new JsonObject { ["name"] = "dssharness", ["status"] = "connected" }) }]);
+        var connected = await kit.Client().RunAsync(run, new Sink(), Token);
+
+        Assert.Equal(AgentRunStatus.NotStarted, connected.Status);
+        Assert.Equal("client 'claude-code' was not started: claude fake connected the MCP server 'dssharness', which this launch was not given: --strict-mcp-config names none but the engine's own", connected.Error);
+    }
+
+    /// <summary>A step with the web on a client given no tool runtime never starts: nothing would serve its web.</summary>
+    [Fact]
+    public async Task AStepWithTheWeb_OnAClientWithNoToolRuntime_NeverStarts()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        var client = new ClaudeCodeClient(kit.Runner, kit.Harness.FileSystem, kit.Harness.Platform, kit.Harness.ChildSessions, kit.Clock, () => kit.Own);
+
+        var result = await client.RunAsync(kit.Run(), new Sink(), Token);
+
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (result.Status, result.NotStartedBecause));
+        Assert.Equal("client 'claude-code' was not started: the step has the web, which this client serves through the engine's tool server (web_fetch), and it was given no tool runtime to serve it with", result.Error);
+        Assert.Empty(kit.Launches());
     }
 
     /// <summary>A call that ran though the engine refused it fails the step by the tool's name.</summary>
@@ -1178,6 +1557,49 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal(
             ["ClaudeCode", "ClaudeCode"],
             File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName)).Select(line => JsonNode.Parse(line)!["source"]!.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// A call Claude Code's own deny rules refused - a file tool's, told by its result alone, stamped or bare, or by a
+    /// permission_denied line and its result both - is one refusal of Claude Code's: counted once, recorded once, and the
+    /// step goes on where the engine refuses the call too.
+    /// </summary>
+    [Theory]
+    [InlineData("deniedByRule")]
+    [InlineData("deniedByRuleBare")]
+    [InlineData("deniedByRuleTold")]
+    public async Task ACallClaudeCodesOwnDenyRulesRefused_IsOneDenialOfItsOwn_HoweverItIsTold(string how)
+    {
+        using var kit = new Kit();
+        var outside = kit.Temp.Combine("elsewhere", "x.txt");
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = outside, ["content"] = "x" }, [how] = true }) }]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(1, result.Denials);
+        Assert.Equal(AgentPermissionSource.ClaudeCode, Assert.Single(sink.Of<PermissionDenied>()).Source);
+        Assert.False(Assert.Single(sink.Of<ToolCallFinished>()).Ok);
+        Assert.Equal("ClaudeCode", JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName))))!["source"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A file tool's call Claude Code's own deny rules refused where the engine allows it was refused by a launch that did
+    /// not ask its host, as one its permission_denied line tells: the launch ends.
+    /// </summary>
+    [Fact]
+    public async Task ACallClaudeCodesOwnDenyRulesRefused_ThatTheEngineAllows_EndsTheLaunch()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["deniedByRule"] = true }) }]);
+
+        var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
+
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ProgramMissing), (result.Status, result.NotStartedBecause));
+        Assert.Equal(
+            $"client 'claude-code' was not started: Claude Code refused 'Read' without asking the engine, which allows it (claude fake): {ClaudeLine.DeniedByRuleResult}; this tool runs Claude Code only as its host",
+            result.Error);
     }
 
     /// <summary>
@@ -2154,19 +2576,76 @@ public sealed class ClaudeCodeClientTests : IDisposable
     /// <summary>One launch as the fake recorded it: its start, and every line it read.</summary>
     private sealed record Recorded(IReadOnlyList<string> Arguments, string WorkingDirectory, IReadOnlyDictionary<string, string?> Environment, IReadOnlyList<JsonObject> Read);
 
-    /// <summary>A sink that keeps every event, and hands each to a test's own reaction as it comes.</summary>
+    /// <summary>
+    /// A sink that keeps every event a launch emitted, in the order taken, from any number of writers - a call of the
+    /// engine's tool server's among them - and hands each to a test's own reaction as it comes.
+    /// </summary>
     private sealed class Sink(Action<AgentEvent>? reaction = null) : IAgentEventSink
     {
+        private readonly Lock _gate = new();
+
         public List<AgentEvent> Events { get; } = [];
 
         public ValueTask EmitAsync(AgentEvent @event)
         {
-            Events.Add(@event);
+            lock (_gate)
+            {
+                Events.Add(@event);
+            }
+
             reaction?.Invoke(@event);
             return ValueTask.CompletedTask;
         }
 
-        public List<T> Of<T>() where T : AgentEvent => [.. Events.OfType<T>()];
+        public List<T> Of<T>() where T : AgentEvent
+        {
+            lock (_gate)
+            {
+                return [.. Events.OfType<T>()];
+            }
+        }
+    }
+
+    /// <summary>The control messages both ways the kit's step kept beside its stream.</summary>
+    private static List<JsonNode> Control(Kit kit)
+        => [.. File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.ControlFileName)).Select(line => JsonNode.Parse(line)!)];
+
+    /// <summary>The tool of the engine's tool server a launch with the web takes, as Claude Code names it.</summary>
+    private const string Served = "mcp__dssharness__web_fetch";
+
+    /// <summary>An address that answers nothing, and once its request is cancelled takes a moment to end, as a connection's close does.</summary>
+    private sealed class SlowToEndEndpoint : HttpMessageHandler
+    {
+        public TaskCompletionSource Asked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Ended { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Asked.TrySetResult();
+
+            try
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+            finally
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(500), CancellationToken.None);
+                Ended.TrySetResult();
+            }
+
+            throw new InvalidOperationException("an address that answers nothing answered");
+        }
+    }
+
+    /// <summary>An address that answers nothing until its asker gives up.</summary>
+    private sealed class HangingEndpoint : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new InvalidOperationException("an address that answers nothing answered");
+        }
     }
 
     /// <summary>
@@ -2350,7 +2829,23 @@ public sealed class ClaudeCodeClientTests : IDisposable
         /// none is given - and every result it answers held together as the runner holds it.
         /// </summary>
         public IAgentClient Client(IProcessRunner? processes = null)
-            => new HeldTogether(new ClaudeCodeClient(processes ?? Runner, FileSystem ?? Harness.FileSystem, Harness.Platform, Harness.ChildSessions, Clock, () => Own));
+            => new HeldTogether(new ClaudeCodeClient(processes ?? Runner, FileSystem ?? Harness.FileSystem, Harness.Platform, Harness.ChildSessions, Clock, () => Own, Tools()));
+
+        /// <summary>What the web answers the harness's own fetch with: one page of text, unless a test gives another.</summary>
+        public HttpMessageHandler Endpoint { get; set; } = new WebEndpoint(_ => WebEndpoint.Page("the page's text", "text/plain"));
+
+        /// <summary>The host of the tool runtime the engine's tool server answers from, its fetch the kit's endpoint.</summary>
+        public DssHarness.Core.Agents.Runtime.AgentToolHost Tools()
+        {
+            var fetch = new DssHarness.Core.Web.HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, Endpoint);
+            _opened.Add(fetch);
+
+            var files = FileSystem ?? Harness.FileSystem;
+
+            return new(files, Harness.Platform, Harness.GitClient, new PhaseRunner(Harness.ProcessRunner, files, Harness.Output), Harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), TimeProvider.System);
+        }
+
+        private readonly List<IDisposable> _opened = [];
 
         /// <summary>The agent runner over the kit's client, its records on the machine's disk, run as a user's process.</summary>
         public AgentRunner StepRunner() => new([Client()], Harness.FileSystem, Elevation.User, TimeProvider.System);
@@ -2439,6 +2934,14 @@ public sealed class ClaudeCodeClientTests : IDisposable
             return launches;
         }
 
-        public void Dispose() => Temp.Dispose();
+        public void Dispose()
+        {
+            foreach (var opened in _opened)
+            {
+                opened.Dispose();
+            }
+
+            Temp.Dispose();
+        }
     }
 }

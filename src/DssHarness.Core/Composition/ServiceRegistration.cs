@@ -206,11 +206,13 @@ public static class ServiceRegistration
             provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IHostPlatform>(),
             provider.GetRequiredService<ChildSessions>(),
-            provider.GetRequiredService<TimeProvider>()));
+            provider.GetRequiredService<TimeProvider>(),
+            tools: provider.GetRequiredService<Agents.Runtime.AgentToolHost>()));
         services.AddSingleton<IAgentRunner, AgentRunner>();
 
-        // The harness's own tools, built for the API clients to give their agents - nothing opens a runtime yet: the one fetch
-        // of the process, the system's own lookup of a name, and the host a runtime is opened from for each run.
+        // The harness's own tools, built for the API clients to give their agents and served to Claude Code's through the
+        // engine's tool server: the one fetch of the process, the system's own lookup of a name, and the host a runtime is
+        // opened from for each run.
         services.AddSingleton<Web.IWebNames, Web.SystemWebNames>();
         services.AddSingleton(provider => new Web.HarnessFetch(provider.GetRequiredService<IToolIdentityProvider>(), provider.GetRequiredService<Web.IWebNames>()));
 
@@ -243,6 +245,7 @@ public static class ServiceRegistration
             provider.GetRequiredService<PhaseRunner>(),
             provider.GetRequiredService<ChildSessions>(),
             provider.GetRequiredService<Web.HarnessFetch>(),
+            provider.GetRequiredService<IToolIdentityProvider>(),
             provider.GetRequiredService<TimeProvider>(),
             search: provider.GetRequiredService<Web.Search.HarnessWebSearch>()));
         services.AddSingleton<IWorkflowValidationService, WorkflowValidationService>();

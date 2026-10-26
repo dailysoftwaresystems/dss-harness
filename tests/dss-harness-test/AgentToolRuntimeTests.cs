@@ -1198,7 +1198,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         // A host given no search cannot open a step that has sources.
         var ground = PolicyGrounds.Of(_worktree, [_main], [_worktree], [], [], [], [AgentCapability.Web], null, null, null);
         using var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("x", "text/plain")));
-        var host = new AgentToolHost(_harness.FileSystem, _harness.Platform, _harness.GitClient, new PhaseRunner(_harness.ProcessRunner, _harness.FileSystem, _harness.Output), _harness.ChildSessions, fetch, TimeProvider.System);
+        var host = new AgentToolHost(_harness.FileSystem, _harness.Platform, _harness.GitClient, new PhaseRunner(_harness.ProcessRunner, _harness.FileSystem, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), TimeProvider.System);
 
         Assert.Throws<ArgumentException>(() => host.Open(AgentRuns.Of(_step, _worktree, ground: ground, webSearch: TwoSources()), _events));
     }
@@ -1325,6 +1325,9 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Same(provider.GetRequiredService<DssHarness.Core.Web.Search.HarnessWebSearch>(), provider.GetRequiredService<AgentToolHost>().Search);
         Assert.Same(provider.GetRequiredService<PhaseRunner>(), provider.GetRequiredService<AgentToolHost>().Phases);
         Assert.IsType<SystemWebNames>(provider.GetRequiredService<IWebNames>());
+
+        // The claude-code client serves its steps' web from the same host.
+        Assert.Same(provider.GetRequiredService<AgentToolHost>(), provider.GetServices<DssHarness.Core.Agents.IAgentClient>().OfType<DssHarness.Core.Agents.ClaudeCode.ClaudeCodeClient>().Single().Tools);
     }
 
     /// <summary>A fetch that reads nothing says why, and records the failure.</summary>
@@ -1464,7 +1467,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, endpoint ?? new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
         var files = fileSystem ?? _harness.FileSystem;
         var search = webSearch is null ? null : Search(fetch, clock ?? TimeProvider.System);
-        var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, clock ?? TimeProvider.System, search: search);
+        var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), clock ?? TimeProvider.System, search: search);
         var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch), _events);
 
         _opened.Add(fetch);

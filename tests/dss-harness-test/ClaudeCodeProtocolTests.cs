@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents.ClaudeCode;
 
 namespace DssHarness.Tests;
 
@@ -94,6 +95,9 @@ public sealed class ClaudeCodeProtocolTests
         var uuids = System.Text.RegularExpressions.Regex.Matches(text, "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}").Select(found => found.Value).ToList();
 
         Assert.All(ids, id => Assert.Matches("^(req|msg|toolu|srvtoolu)_[0-9]{24}$", id));
+
+        // ... and a word of the protocol is kept as written, never taken for an id and given a stand-in.
+        Assert.DoesNotMatch(@"\b(?:req|msg|toolu|srvtoolu)_[0-9]{24}_v[0-9]", text);
         Assert.All(uuids, uuid => Assert.StartsWith("00000000-0000-4000-8000-", uuid, StringComparison.Ordinal));
 
         // No path of the machine: no drive, no home directory under any of its spellings.
@@ -114,14 +118,15 @@ public sealed class ClaudeCodeProtocolTests
             .ToHashSet(StringComparer.Ordinal);
 
         Assert.All(lines.Select(ClaudeCodeProbe.AskOf).OfType<ClaudeCodeProbe.Ask>(), ask => Assert.Contains(ask.ToolUseId, made));
+        // The account's own members, each where the version writes it - a seven-day window's event on 2.1.287 leaves out the
+        // overage's two, 2.1.308 and 2.1.310 add whether it is enabled, and the later recordings say its usage as utilization.
         Assert.All(lines.Where(line => line.Kind == "rate_limit_event").Select(line => line.Node["rate_limit_info"]!.AsObject()), limit =>
         {
-            Assert.Equal("<elided: the account's own>", limit["overageStatus"]!.GetValue<string>());
-            Assert.Equal("<elided: the account's own>", limit["overageDisabledReason"]!.GetValue<string>());
+            Assert.Contains(limit, member => member.Key is "overageStatus" or "unifiedWindows" or "utilization");
 
-            if (limit.ContainsKey("unifiedWindows"))
+            foreach (var member in new[] { "overageStatus", "overageDisabledReason", "overageEnabled", "unifiedWindows", "utilization" }.Where(limit.ContainsKey))
             {
-                Assert.Equal("<elided: the account's own>", limit["unifiedWindows"]!.GetValue<string>());
+                Assert.Equal("<elided: the account's own>", limit[member]!.GetValue<string>());
             }
         });
     }
@@ -431,8 +436,113 @@ public sealed class ClaudeCodeProtocolTests
 
         var findings = ClaudeCodeProbe.FindingsOf(Fixtures(channel, "findings.jsonl"));
 
-        Assert.Equal(21, findings.Count);
+        Assert.Equal(23, findings.Count);
         Assert.All(findings.Values, found => Assert.Equal("none", found["sessionFile"]!.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// The engine's tool server is served over the control channel to a host that is no SDK, on every channel (slice 22b3,
+    /// recorded 2026-10-26 on 2.1.287, 2.1.308 and 2.1.310): an MCP server of type <c>sdk</c> that <c>--mcp-config</c>
+    /// names is connected by <c>mcp_message</c>s before the launch's init - its initialize, its notification, its tool
+    /// list - its tools stand in the init beside <c>--tools</c>, which named none of them, and the server is connected;
+    /// each call of one is asked of the host first, by its ask rule, and only then sent as <c>tools/call</c>, naming in
+    /// its <c>_meta</c> the call the host was asked about; the server's text is the call's result; and a call the host
+    /// denies is never sent.
+    /// </summary>
+    [Theory]
+    [InlineData("oldest", "2.1.287")]
+    [InlineData("stable", "2.1.308")]
+    [InlineData("latest", "2.1.310")]
+    public void TheEnginesToolServer_IsServedOverTheControlChannel(string channel, string version)
+    {
+        var lines = Lines(channel, "mcp-message.jsonl");
+        var init = lines.FindIndex(line => line.Kind == "system" && line.Node["subtype"]?.GetValue<string>() == "init");
+        var messages = lines
+            .Select((line, at) => (Line: line, At: at))
+            .Where(pair => pair.Line.Kind == "control_request" && pair.Line.Node["request"]?["subtype"]?.GetValue<string>() == "mcp_message")
+            .ToList();
+
+        Assert.Equal(["initialize", "notifications/initialized", "tools/list", "tools/call"], messages.Select(pair => pair.Line.Node["request"]!["message"]!["method"]!.GetValue<string>()));
+        Assert.All(messages, pair => Assert.Equal("dssharness", pair.Line.Node["request"]!["server_name"]!.GetValue<string>()));
+        Assert.All(messages.Take(3), pair => Assert.True(pair.At < init, $"{pair.Line.Node["request"]!["message"]!["method"]} came after the init"));
+
+        var began = Assert.IsType<ClaudeCodeProbe.Began>(ClaudeCodeProbe.BeganOf(lines[init]));
+        Assert.Equal(version, began.Version);
+        Assert.Equal(["Glob", "Grep", "Read", "StructuredOutput", "mcp__dssharness__web_fetch", "mcp__dssharness__web_search"], began.Tools.Order(StringComparer.Ordinal));
+        Assert.Equal("""[{"name":"dssharness","status":"connected","source":"sdk"}]""", lines[init].Node["mcp_servers"]!.ToJsonString());
+
+        var asks = lines.Select((line, at) => (Ask: ClaudeCodeProbe.AskOf(line), At: at)).Where(pair => pair.Ask is not null).ToList();
+        var (searched, askedAt) = Assert.Single(asks, pair => pair.Ask!.Tool == "mcp__dssharness__web_search");
+        var call = messages[3];
+        var parameters = call.Line.Node["request"]!["message"]!["params"]!;
+        Assert.True(askedAt < call.At);
+        Assert.Equal("""{"name":"dssharness","source":"sdk"}""", lines[askedAt].Node["request"]!["mcp_server"]!.ToJsonString());
+        Assert.Equal(("web_search", searched!.ToolUseId), (parameters["name"]!.GetValue<string>(), parameters["_meta"]!["claudecode/toolUseId"]!.GetValue<string>()));
+        Assert.Equal(lines[askedAt].Node["request"]!["input"]!.ToJsonString(), parameters["arguments"]!.ToJsonString());
+        Assert.Contains("PROBE_MCP_TITLE_5c2e", Assert.Single(ClaudeCodeProbe.ToolResultsOf(lines), result => result.Contains("PROBE_MCP", StringComparison.Ordinal)), StringComparison.Ordinal);
+
+        // The fetch the host denied: asked, and never sent.
+        var (_, deniedAt) = Assert.Single(asks, pair => pair.Ask!.Tool == "mcp__dssharness__web_fetch");
+        Assert.DoesNotContain(messages, pair => pair.At > deniedAt);
+
+        var found = ClaudeCodeProbe.FindingsOf(Fixtures(channel, "findings.jsonl"))["mcp-message"];
+        Assert.Equal((true, true, 0, true), (found["eachCallAskedFirst"]!.GetValue<bool>(), found["askedAboutTheDeniedCall"]!.GetValue<bool>(), found["callsAfterTheDenial"]!.GetValue<int>(), found["toldTheResult"]!.GetValue<bool>()));
+    }
+
+    /// <summary>
+    /// A call Claude Code's own deny rules refuse is never asked of the host, on every channel (recorded 2026-10-26 on
+    /// 2.1.287, 2.1.308 and 2.1.310): a file tool's - a read, a write - is refused as Claude Code reads the call's input and
+    /// told by its result alone, the same words on every version, a permission decision <c>reject</c> by a <c>rule</c>
+    /// beside it from 2.1.308 and nothing on 2.1.287; a search's and a command's by a <c>system/permission_denied</c> line
+    /// besides, and their results stamped <c>permission-rule</c>. Each reads as a call that did not run, and the file
+    /// tools' as refused by a rule.
+    /// </summary>
+    [Theory]
+    [InlineData("oldest", false)]
+    [InlineData("stable", true)]
+    [InlineData("latest", true)]
+    public void ACallClaudeCodesOwnDenyRulesRefuse_IsNeverAsked_AndReadsAsRefusedByARule(string channel, bool stampsTheDecision)
+    {
+        var lines = Lines(channel, "deny-rules.jsonl");
+        var calls = lines
+            .Where(line => line.Kind == "assistant")
+            .SelectMany(line => (line.Node["message"]?["content"] as JsonArray ?? []).OfType<JsonObject>())
+            .Where(block => block["type"]?.GetValue<string>() == "tool_use" && block["name"]?.GetValue<string>() != "StructuredOutput")
+            .Select(block => (Id: block["id"]!.GetValue<string>(), Tool: block["name"]!.GetValue<string>()))
+            .ToList();
+        var results = lines
+            .Select(line => ClaudeLine.Read(line.Node.ToJsonString()))
+            .OfType<ClaudeLine.User>()
+            .SelectMany(user => user.Results.Select(result => (Result: result, Meta: (user.Node["tool_result_meta"] as JsonArray ?? []).OfType<JsonObject>().FirstOrDefault(meta => meta["id"]?.GetValue<string>() == result.CallId))))
+            .ToDictionary(pair => pair.Result.CallId, StringComparer.Ordinal);
+        var refusals = lines.Select(line => ClaudeLine.Read(line.Node.ToJsonString())).OfType<ClaudeLine.Refusal>().ToList();
+
+        Assert.Equal(["Read", "Grep", "Write", "Bash"], calls.Select(call => call.Tool));
+        Assert.Empty(lines.Select(ClaudeCodeProbe.AskOf).OfType<ClaudeCodeProbe.Ask>());
+
+        foreach (var (id, tool) in calls)
+        {
+            var (result, meta) = results[id];
+            Assert.False(result.Ran, $"{tool} read as a call that ran");
+            Assert.False(result.Ok);
+
+            if (tool is "Read" or "Write")
+            {
+                Assert.Equal(ClaudeLine.DeniedByRuleResult, result.Content);
+                Assert.True(result.RefusedByRule, $"{tool} did not read as refused by a rule");
+                Assert.DoesNotContain(refusals, refusal => refusal.CallId == id);
+                Assert.Equal(stampsTheDecision ? """{"decision":"reject","source":"config","reason_type":"rule"}""" : null, meta?["permission_decision"]?.ToJsonString());
+                Assert.Null(meta?["non_execution_kind"]);
+            }
+            else
+            {
+                Assert.Equal(tool, Assert.Single(refusals, refusal => refusal.CallId == id).Tool);
+                Assert.Equal("permission-rule", meta?["non_execution_kind"]?.GetValue<string>());
+            }
+        }
+
+        var found = ClaudeCodeProbe.FindingsOf(Fixtures(channel, "findings.jsonl"))["deny-rules"];
+        Assert.False(found["wroteWritten"]!.GetValue<bool>());
     }
 
     /// <summary>

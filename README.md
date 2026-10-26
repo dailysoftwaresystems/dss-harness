@@ -245,7 +245,7 @@ in `config.json`.
 .orchestrators/<o>/agents/<agent>/sessions/<id>/      ignored; API clients only: one conversation with the provider, in the provider's own form
 .orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included
 .orchestrators/<o>/.../<instance>/children/<session>.json   ignored; in either kind of step, Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by stop-orchestrator --now - once the process that started it has gone
-.orchestrators/<o>/web/searches.jsonl        ignored; a run's web search: what each source found once for the run, and each query it answered, which the same query again is answered from; the API clients will write it
+.orchestrators/<o>/web/searches.jsonl        ignored; a run's web search: what each source found once for the run, and each query it answered, which the same query again is answered from; written by every client whose step searches
 .orchestrators/.web-index/<source>/          ignored; the harness's own index of a sitemap search source's site: its state, its pages and the pages it could not read, and its fill's record of each address it asked
 .mutations/                                  contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree
 .mutations/<key><mark>-<n>/                  ignored; a worker, a repository of its own, and its claim beside it
@@ -627,14 +627,16 @@ at all. For Claude Code the same policy is rendered, never re-decided, into the 
 settings: an ask rule for every tool, and the restrictions as deny rules, absolute once for each
 root in the POSIX form Claude Code matches (`//c/x` for `C:\x`), a `Write` rule as the `Edit` rule
 Claude Code holds its file tools' writes to, a read of each credential slot and Claude Code
-directory beside them. This is policy, not
+directory beside them; a call those rules refuse before the engine is asked is counted and
+recorded as Claude Code's own denial. This is policy, not
 a sandbox - a program an agent runs opens files as the user it runs as, a file of the credential
 slot among them; what it is never given is a key in its environment, and what no file tool of an
 agent touches is the slot itself, in any root. Where this tool cannot decide a call it denies it, never allows: nothing
 runs while the host that would answer is silent or gone. The policy is built and holds every
 action behind it; the `claude-code` client asks it of every call, the tool runtime below decides
-by it each call of the API clients, which are what comes next, and no command of this build runs
-an agent yet.
+by it each call it runs - the web's of the `claude-code` client, served through the engine's tool
+server, and every call of the API clients, which are what comes next - and no command of this
+build runs an agent yet.
 
 The `claude-code` client starts Claude Code once for each launch, a new session every time -
 never resumed or continued, keeping no session file (one a launch leaves all the same is removed
@@ -642,14 +644,23 @@ once it has ended, however it ended, and said) - streamed both ways: the step's 
 message on its input, never an argument, and the launch runs in the agent's working directory with
 every other root it reaches added. It is given its model and no fallback, the step's effort, turns and budget, and the tools of
 the agent's capabilities and no other (`read`: `Read`, `Grep`, `Glob`; `write`: `Write`, `Edit`,
-`NotebookEdit`; `run`: `Bash`; `web`: none of Claude Code's), never one that starts agents, loads
-skills, asks a person or plans. Every call is asked of the engine before it runs and answered from
-the policy, a denial with its rule's sentence the model reads and a line of the step's
+`NotebookEdit`; `run`: `Bash`; `web`: none of Claude Code's, but `mcp__dssharness__web_fetch` and
+`mcp__dssharness__web_search` of the engine's tool server beside them), never one that starts
+agents, loads skills, asks a person or plans. A step with the web takes the harness's own
+`web_fetch` - and `web_search`, where it has a source to search - from the engine's tool server:
+the one MCP server, of type `sdk`, named `dssharness`, that the launch's `--mcp-config` names
+beside `--strict-mcp-config` (the step's `claude-mcp.json`), served in the engine's own process
+over the launch's control channel; each call of it is asked of the engine first, by its ask rule,
+and run by the tool runtime below as on the API clients. A launch whose init does not show that
+server connected with its tools taken, or that connects another, never started, and a call of it
+the engine did not allow runs nothing and fails the step. Every call its own deny rules do not refuse first is asked of the
+engine before it runs and answered from the policy, a denial with its rule's sentence the model reads and a line of the step's
 `denials.jsonl`; an answer that does not read against the step's schema is sent back, each problem
 by its path; a message the engine gives an agent at work is written to the same launch; a handoff
 asked interrupts the turn and asks the agent for its handoff, no tool running in that turn; every
 message is held to the model asked for; the launch's environment holds nothing of a Claude Code
-session the tool was started in, none of what every child of an agent loses (the tool runtime
+session the tool was started in but a name `agentPolicy.keepEnvironment` gives back, none of what
+every child of an agent loses (the tool runtime
 below), and no credential but the one its `auth` gives; and a key Claude
 Code reports invalid is passed over, the next key given a new launch while the step has done no
 work. The user's own `settings.json` in the launch's Claude Code directory and the user's
@@ -662,15 +673,17 @@ client a directory of its own in the slot: `CLAUDE_CONFIG_DIR`, or the name
 `agentClients.claude-code.configDir` gives. The client holds every launch to the protocol itself:
 one that does not answer the host's `initialize` request within 30 s, that works before its init
 says what it runs as, whose init offers a tool it was not given or names a credential its `auth`
-did not give, or that refuses by itself a call the engine allows never started; a call it ran that the engine was
+did not give, or that refuses by itself a call the engine allows never started; a call it refuses
+by itself that the engine refuses too - by its own deny rules, a file tool's told by its result
+alone - is a denial of Claude Code's, counted and recorded once; a call it ran that the engine was
 never asked about, or refused, fails the step by the tool's name; each is ended at once. A message
 no turn takes within the stall bound stalls the step; a declined request ends it `Refused`, and
 an account at its limit `RateLimited`, with when the limit lifts where Claude Code says.
 `help agent-clients` says it whole.
 
 The tool runtime is the harness's own tools, built for the `claude-api` and `glm` clients to give
-their agents in place of a client's own - those clients are what comes next, and nothing opens a
-runtime yet: `view_file`, `find_files` and `search_files` (read),
+their agents in place of a client's own - those clients are what comes next - and serving the
+`claude-code` client the web's through the engine's tool server: `view_file`, `find_files` and `search_files` (read),
 `create_file`, `replace_in_file`, `insert_in_file`, `create_directory`, `delete_file`,
 `delete_directory` and `move_path` (write), `run_command` (run) and `web_fetch` and `web_search` (web), each under
 the capability that gives it; the run's reporter is given those that read and no other. Each

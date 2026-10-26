@@ -381,6 +381,147 @@ public sealed class ClaudeCodeProbeTests
         }
     });
 
+    /// <summary>
+    /// The engine's tool server (slice 22b3): whether Claude Code, whose host is no SDK, sends each message of an MCP server
+    /// of type <c>sdk</c> that <c>--mcp-config</c> names to its host as an <c>mcp_message</c> - the server's initialize, its
+    /// tool list, each call - and asks the host about each call of the server's tools first, by its ask rule; whether the
+    /// server's tools stand beside <c>--tools</c> or must be named in it; and whether a call the host denies is still sent.
+    /// </summary>
+    [Fact]
+    public Task TheEnginesToolServer_IsRecordedOnEveryChannel() => EveryChannelAsync(async probe =>
+    {
+        using var scratch = await Scratch.CreateAsync(Token);
+        await using var launch = Launch.Start(probe, "mcp-message", scratch, new LaunchOptions
+        {
+            Tools = ["Read", "Grep", "Glob"],
+            McpTools = [ProbeSearch, ProbeFetch],
+            McpServers = new JsonObject { ["dssharness"] = new JsonObject { ["type"] = "sdk", ["name"] = "dssharness" } },
+            Mcp = ProbeServer,
+        });
+
+        await launch.InitializeAsync(Token);
+        await launch.TurnAsync($"Use the tool {ProbeSearch} to search for: probe query. Say only the title of the first result.", Allow, Token, TimeSpan.FromSeconds(240));
+        var denied = launch.Count;
+        await launch.TurnAsync($"Use the tool {ProbeFetch} to fetch https://example.test/page and say only the marker the page holds.", Deny, Token, TimeSpan.FromSeconds(240));
+
+        var lines = launch.Lines(0);
+        var messages = launch.McpSeen();
+        var asks = lines.Select((line, at) => (line, at)).Where(pair => IsAsk(pair.line)).Select(pair => (Tool: JsonNode.Parse(pair.line)!["request"]?["tool_name"]?.GetValue<string>(), At: pair.at)).ToList();
+        var calls = messages.Where(message => (string?)message["method"] == "tools/call").ToList();
+
+        launch.Findings["mcpMethods"] = new JsonArray([.. messages.Select(message => (JsonNode?)JsonValue.Create((string?)message["method"]))]);
+        launch.Findings["mcpBeforeInit"] = new JsonArray([.. messages.Where(message => (bool?)message["beforeInit"] == true).Select(message => (JsonNode?)JsonValue.Create((string?)message["method"]))]);
+        launch.Findings["initListsTheServersTools"] = lines.Where(line => Kind(line) == "system/init").Select(line => JsonNode.Parse(line)!["tools"]!.AsArray().Select(tool => (string?)tool).ToList()).LastOrDefault() is { } listed
+            && listed.Contains(ProbeSearch) && listed.Contains(ProbeFetch);
+        launch.Findings["eachCallAskedFirst"] = calls.All(call => asks.Any(ask => ask.At < (int)call["at"]! && ask.Tool == "mcp__dssharness__" + (string?)call["tool"]));
+        launch.Findings["callsAfterTheDenial"] = calls.Count(call => (int)call["at"]! >= denied);
+        launch.Findings["askedAboutTheDeniedCall"] = asks.Any(ask => ask.At >= denied && ask.Tool == ProbeFetch);
+        launch.Findings["toldTheResult"] = lines.Any(line => IsResult(line) && line.Contains("PROBE_MCP_TITLE_5c2e", StringComparison.Ordinal));
+    });
+
+    /// <summary>
+    /// A call Claude Code's own deny rules refuse, as the engine writes them in the launch's settings beside the ask rules
+    /// (found by slice 22b3's live smoke, where a read of a credential slot was refused with nothing told the host): a read
+    /// and a search inside a directory a <c>Read</c> rule denies, a write inside one an <c>Edit</c> rule denies, and a
+    /// command a <c>Bash</c> rule denies - for each, whether it is asked of the host, whether a
+    /// <c>system/permission_denied</c> line says so, and what its result and its meta say.
+    /// </summary>
+    [Fact]
+    public Task OwnDenyRules_AreRecordedOnEveryChannel() => EveryChannelAsync(async probe =>
+    {
+        using var scratch = await Scratch.CreateAsync(Token);
+        File.WriteAllText(scratch.Outside("secret.txt"), "PROBE_SECRET_1b7e\n");
+        var denied = Path.GetDirectoryName(scratch.Outside("secret.txt"))!;
+        var rule = denied.Length > 1 && denied[1] == ':' ? $"//{char.ToLowerInvariant(denied[0])}{denied[2..].Replace('\\', '/')}" : denied;
+
+        await using var launch = Launch.Start(probe, "deny-rules", scratch, new LaunchOptions
+        {
+            Settings = settings => settings["permissions"]!["deny"] = new JsonArray($"Read({rule}/**)", $"Edit({rule}/**)", "Bash(rm:*)"),
+        });
+        await launch.InitializeAsync(Token);
+        await launch.TurnAsync($"Use the Read tool to read the file {scratch.Outside("secret.txt")} and say what it holds. If you cannot, say only: refused.", Allow, Token);
+        await launch.TurnAsync($"Use the Grep tool, and no other tool, to search the directory {denied} for the word PROBE. If you cannot, say only: refused.", Allow, Token);
+        await launch.TurnAsync($"Use the Write tool to write the text 'x' into the new file {scratch.Outside("written.txt")}. If you cannot, say only: refused.", Allow, Token);
+        await launch.TurnAsync("Run exactly this command in the Bash tool, changing nothing: rm -f probe-no-such-file.txt. If you cannot, say only: refused.", Allow, Token);
+
+        var lines = launch.Lines(0).Select(line => JsonNode.Parse(line) as JsonObject).OfType<JsonObject>().ToList();
+        var calls = new JsonArray();
+
+        foreach (var use in lines.Where(line => (string?)line["type"] == "assistant").SelectMany(line => line["message"]?["content"] as JsonArray ?? []).OfType<JsonObject>().Where(block => (string?)block["type"] == "tool_use"))
+        {
+            var id = (string?)use["id"];
+            var user = lines.FirstOrDefault(line => (string?)line["type"] == "user" && (line["message"]?["content"] as JsonArray ?? []).OfType<JsonObject>().Any(block => (string?)block["tool_use_id"] == id));
+            var result = (user?["message"]?["content"] as JsonArray ?? []).OfType<JsonObject>().FirstOrDefault(block => (string?)block["tool_use_id"] == id);
+            var meta = (user?["tool_result_meta"] as JsonArray ?? []).OfType<JsonObject>().FirstOrDefault(entry => (string?)entry["id"] == id);
+
+            calls.Add(new JsonObject
+            {
+                ["tool"] = (string?)use["name"],
+                ["asked"] = lines.Any(line => (string?)line["request"]?["subtype"] == "can_use_tool" && (string?)line["request"]?["tool_use_id"] == id),
+                ["permissionDenied"] = lines.FirstOrDefault(line => (string?)line["subtype"] == "permission_denied" && (string?)line["tool_use_id"] == id)?["message"]?.DeepClone(),
+                ["isError"] = result?["is_error"]?.DeepClone(),
+                ["result"] = result?["content"] is JsonValue text ? (string?)text : result?["content"]?.ToJsonString(),
+                ["meta"] = meta?.DeepClone(),
+            });
+        }
+
+        launch.Findings["calls"] = calls;
+        launch.Findings["wroteWritten"] = File.Exists(scratch.Outside("written.txt"));
+    });
+
+    /// <summary>The probe's own server's search tool, as Claude Code names it.</summary>
+    private const string ProbeSearch = "mcp__dssharness__web_search";
+
+    /// <summary>The probe's own server's fetch tool, as Claude Code names it.</summary>
+    private const string ProbeFetch = "mcp__dssharness__web_fetch";
+
+    /// <summary>
+    /// The probe's MCP server of type <c>sdk</c>, as the Agent SDK answers one: <c>initialize</c>, <c>tools/list</c>,
+    /// <c>tools/call</c> and <c>ping</c> answered, a notification given an empty result, any other method refused.
+    /// </summary>
+    private static JsonNode ProbeServer(string server, JsonNode message)
+    {
+        var id = message["id"]?.DeepClone();
+
+        JsonObject Result(JsonNode result) => new() { ["jsonrpc"] = "2.0", ["id"] = id, ["result"] = result };
+
+        static JsonObject Tool(string name, string argument) => new()
+        {
+            ["name"] = name,
+            ["description"] = $"The probe's own {name}: give it the {argument}.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject { [argument] = new JsonObject { ["type"] = "string" } },
+                ["required"] = new JsonArray(argument),
+            },
+        };
+
+        return (string?)message["method"] switch
+        {
+            "initialize" => Result(new JsonObject
+            {
+                ["protocolVersion"] = "2024-11-05",
+                ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
+                ["serverInfo"] = new JsonObject { ["name"] = server, ["version"] = "0" },
+            }),
+            "tools/list" => Result(new JsonObject { ["tools"] = new JsonArray(Tool("web_search", "query"), Tool("web_fetch", "url")) }),
+            "tools/call" => Result(new JsonObject
+            {
+                ["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = (string?)message["params"]?["name"] == "web_search"
+                        ? "1. PROBE_MCP_TITLE_5c2e - https://example.test/probe\n   the probe's own result"
+                        : "PROBE_MCP_PAGE_9d41",
+                }),
+            }),
+            "ping" => Result(new JsonObject()),
+            _ when id is null => new JsonObject { ["jsonrpc"] = "2.0", ["result"] = new JsonObject() },
+            var method => new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["error"] = new JsonObject { ["code"] = -32601, ["message"] = $"Method '{method}' not found" } },
+        };
+    }
+
     /// <summary>The host's answer that allows a call as asked.</summary>
     private static JsonObject? Allow(JsonNode ask) => Answer(ask, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = ask["request"]?["input"]?.DeepClone() });
 
@@ -485,6 +626,18 @@ public sealed class ClaudeCodeProbeTests
 
         public bool Print { get; init; }
 
+        /// <summary>The tools named in <c>--tools</c>, each given an ask rule.</summary>
+        public IReadOnlyList<string> Tools { get; init; } = ["Read", "Grep", "Glob", "Write", "Edit", "NotebookEdit", "Bash", "WebSearch", "WebFetch"];
+
+        /// <summary>The tools of the MCP servers, given an ask rule each beside <see cref="Tools"/> and never named in <c>--tools</c>.</summary>
+        public IReadOnlyList<string> McpTools { get; init; } = [];
+
+        /// <summary>The servers <c>--mcp-config</c> names, written as the launch's <c>claude-mcp.json</c>; no <c>--mcp-config</c> where null.</summary>
+        public JsonObject? McpServers { get; init; }
+
+        /// <summary>Answers each MCP message the child sends its host - the server's name and the JSON-RPC message - with the JSON-RPC reply.</summary>
+        public Func<string, JsonNode, JsonNode>? Mcp { get; init; }
+
         public string SettingSources { get; init; } = "user";
 
         public Action<JsonObject>? Settings { get; init; }
@@ -570,6 +723,7 @@ public sealed class ClaudeCodeProbeTests
         private readonly List<string> _stream = [];
         private readonly List<string> _written = [];
         private readonly List<string> _stderr = [];
+        private readonly List<JsonObject> _mcp = [];
         private readonly Task _reading;
         private readonly Task _failing;
         private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -597,8 +751,14 @@ public sealed class ClaudeCodeProbeTests
 
             Directory.CreateDirectory(_raw);
 
-            var settings = Settings();
+            var settings = Settings(options);
             options.Settings?.Invoke(settings);
+
+            if (options.McpServers is { } servers)
+            {
+                File.WriteAllText(Path.Combine(_raw, "claude-mcp.json"), new JsonObject { ["mcpServers"] = servers.DeepClone() }.ToJsonString() + "\n");
+            }
+
             File.WriteAllText(Path.Combine(_raw, "claude-settings.json"), settings.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }) + "\n");
             File.WriteAllText(Path.Combine(_raw, "system.md"), "You are the subject of a protocol probe. Be terse.\n");
 
@@ -651,7 +811,7 @@ public sealed class ClaudeCodeProbeTests
             Findings["environmentStripped"] = stripped;
 
             _child = Process.Start(start)!;
-            _reading = Task.Run(() => ReadAll(_child.StandardOutput, _stream, options.DiesOnTheFirstAsk ? Die : null));
+            _reading = Task.Run(() => ReadAll(_child.StandardOutput, _stream, options.DiesOnTheFirstAsk ? Die : options.Mcp is null ? null : McpAnswered));
             _failing = options.DiesOnTheFirstAsk ? Task.CompletedTask : Task.Run(() => ReadAll(_child.StandardError, _stderr, null));
         }
 
@@ -688,6 +848,15 @@ public sealed class ClaudeCodeProbeTests
             return Directory.EnumerateFiles(projects, sessionId + ".jsonl", SearchOption.AllDirectories).FirstOrDefault() is { } found
                 ? found
                 : "none";
+        }
+
+        /// <summary>Each MCP message the child sent its host, in order: its method, its tool where it is a call, the line it came at, and whether it came before the first <c>system/init</c>.</summary>
+        public List<JsonObject> McpSeen()
+        {
+            lock (_mcp)
+            {
+                return [.. _mcp.Select(message => (JsonObject)message.DeepClone())];
+            }
         }
 
         /// <summary>The lines said from <paramref name="from"/> on.</summary>
@@ -794,17 +963,71 @@ public sealed class ClaudeCodeProbeTests
         }
 
         /// <summary>Writes one line to the child's input, recording it as written.</summary>
-        public async Task WriteAsync(JsonObject message, CancellationToken cancellationToken)
+        public Task WriteAsync(JsonObject message, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Write(message);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>Writes one line to the child's input under the one lock every writer takes - the reading thread answers MCP messages - recording it as written.</summary>
+        private void Write(JsonObject message)
         {
             var line = message.ToJsonString(DssHarness.Core.FileSystem.JsonStateFile.LineOptions);
 
-            await _child.StandardInput.WriteLineAsync(line.AsMemory(), cancellationToken);
-            await _child.StandardInput.FlushAsync(cancellationToken);
-
             lock (_written)
             {
+                _child.StandardInput.WriteLine(line);
+                _child.StandardInput.Flush();
                 _written.Add(line);
             }
+        }
+
+        /// <summary>Answers an MCP message the child sent, from the reading thread, as the SDK does: the reply as the control answer's <c>mcp_response</c>.</summary>
+        private bool McpAnswered(string line)
+        {
+            if (!line.Contains("\"subtype\":\"mcp_message\"", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var node = JsonNode.Parse(line)!;
+            var request = node["request"]!;
+            var message = request["message"]!;
+            var server = (string?)request["server_name"] ?? "";
+            var lines = Lines(0);
+
+            lock (_mcp)
+            {
+                _mcp.Add(new JsonObject
+                {
+                    ["server"] = server,
+                    ["method"] = (string?)message["method"],
+                    ["tool"] = (string?)message["params"]?["name"],
+                    ["at"] = lines.Count - 1,
+                    ["beforeInit"] = !lines.Any(said => Kind(said) == "system/init"),
+                });
+            }
+
+            try
+            {
+                Write(new JsonObject
+                {
+                    ["type"] = "control_response",
+                    ["response"] = new JsonObject
+                    {
+                        ["subtype"] = "success",
+                        ["request_id"] = (string?)node["request_id"],
+                        ["response"] = new JsonObject { ["mcp_response"] = _options.Mcp!(server, message) },
+                    },
+                });
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+            {
+                // The child is gone.
+            }
+
+            return false;
         }
 
         /// <summary>Closes the child's input, the host still reading what it says.</summary>
@@ -911,14 +1134,14 @@ public sealed class ClaudeCodeProbeTests
             _child.Dispose();
         }
 
-        /// <summary>Whether a variable is a Claude Code session's own, which a child started inside one would inherit.</summary>
+        /// <summary>
+        /// Whether a variable is one a child started inside a Claude Code session would inherit and a launch is not given: a
+        /// session's own, as the client says it, the Claude Code directory and every name of the provider's.
+        /// </summary>
         private static bool IsHostSessionVariable(string variable)
-            => variable is "CLAUDECODE" or "CLAUDE_PID" or "CLAUDE_CONFIG_DIR"
-                || variable.StartsWith("CLAUDE_CODE_", StringComparison.Ordinal)
-                || variable.StartsWith("CLAUDE_AGENT_SDK_", StringComparison.Ordinal)
-                || variable.StartsWith("CLAUDE_PREVIEW_", StringComparison.Ordinal)
-                || variable.StartsWith("ANTHROPIC_", StringComparison.Ordinal)
-                || variable.StartsWith("MCP_", StringComparison.Ordinal);
+            => DssHarness.Core.Agents.ClaudeCode.ClaudeLaunch.IsSessionName(variable)
+                || variable is "CLAUDE_CONFIG_DIR"
+                || variable.StartsWith("ANTHROPIC_", StringComparison.Ordinal);
 
         /// <summary>The host's death at the first ask: its input closed and its reading end closed, from the reading thread itself, so no read is pending on it.</summary>
         private bool Die(string line)
@@ -1004,9 +1227,18 @@ public sealed class ClaudeCodeProbeTests
 
             arguments.AddRange(
             [
-                "--tools", "Read,Grep,Glob,Write,Edit,NotebookEdit,Bash,WebSearch,WebFetch",
+                "--tools", string.Join(',', _options.Tools),
                 "--setting-sources", _options.SettingSources,
                 "--strict-mcp-config",
+            ]);
+
+            if (_options.McpServers is not null)
+            {
+                arguments.AddRange(["--mcp-config", Path.Combine(_raw, "claude-mcp.json")]);
+            }
+
+            arguments.AddRange(
+            [
                 "--settings", Path.Combine(_raw, "claude-settings.json"),
                 "--append-system-prompt-file", Path.Combine(_raw, "system.md"),
                 "--json-schema", "{\"type\":\"object\",\"properties\":{\"answer\":{\"type\":\"string\"}},\"required\":[\"answer\"],\"additionalProperties\":false}",
@@ -1016,11 +1248,11 @@ public sealed class ClaudeCodeProbeTests
         }
 
         /// <summary>The launch's own settings, as the engine writes them: ask rules for every tool, the engine's env, nothing else.</summary>
-        private static JsonObject Settings()
+        private static JsonObject Settings(LaunchOptions options)
         {
             var ask = new JsonArray();
 
-            foreach (var tool in new[] { "Read", "Grep", "Glob", "Write", "Edit", "NotebookEdit", "Bash", "WebSearch", "WebFetch" })
+            foreach (var tool in options.Tools.Concat(options.McpTools))
             {
                 ask.Add(tool);
             }

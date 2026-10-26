@@ -2542,16 +2542,18 @@ public static class HelpTopics
         builder.AppendLine("once for each root in the POSIX form Claude Code matches (//c/x for C:\\x), a Write rule as");
         builder.AppendLine("the Edit rule Claude Code holds its file tools' writes to, a read of each credential slot");
         builder.AppendLine("and Claude Code directory beside them -");
-        builder.AppendLine("a second layer, for the engine is asked about every call");
-        builder.AppendLine("and answers from this policy in its own process. This is policy, not a sandbox - a");
+        builder.AppendLine("a second layer, for the engine is asked about every other call");
+        builder.AppendLine("and answers from this policy in its own process, and a call those rules refuse first is");
+        builder.AppendLine("counted and recorded as Claude Code's own denial. This is policy, not a sandbox - a");
         builder.AppendLine("program an agent runs opens files as the user it runs as, a file of the credential slot");
         builder.AppendLine("among them; what it is never given is a key in its environment, and what no file tool");
         builder.AppendLine("of an agent touches is the slot itself, in any root. Where this tool cannot decide a");
         builder.AppendLine("call it denies it, never allows: nothing runs while the host that would answer is");
         builder.AppendLine("silent or gone. The policy is built and holds every action behind it; the claude-code");
-        builder.AppendLine("client below asks it of every call, the tool runtime below decides by it each call of");
-        builder.AppendLine("the API clients, which are what comes next, and no command of this build runs an agent");
-        builder.AppendLine("yet.");
+        builder.AppendLine("client below asks it of every call, the tool runtime below decides by it each call it");
+        builder.AppendLine("runs - the web's of the claude-code client, served through the engine's tool server, and");
+        builder.AppendLine("every call of the API clients, which are what comes next - and no command of this build");
+        builder.AppendLine("runs an agent yet.");
         builder.AppendLine();
         AppendWrapped(builder, ClaudeCodeClientProse());
         builder.AppendLine();
@@ -2629,7 +2631,8 @@ public static class HelpTopics
         var tools = string.Join(
             "; ",
             Agents.ClaudeCode.ClaudeCodeTools.Table.Select(row =>
-                $"{row.Capability.ToString().ToLowerInvariant()}: {(row.Tools.Count == 0 ? "none of Claude Code's" : string.Join(", ", row.Tools.Select(tool => tool.Name)))}"));
+                $"{row.Capability.ToString().ToLowerInvariant()}: {(row.Tools.Count == 0 ? "none of Claude Code's" : string.Join(", ", row.Tools.Select(tool => tool.Name)))}"
+                + (Agents.ClaudeCode.ClaudeCodeTools.ServedOf(row.Capability) is [_, ..] served ? $", but {string.Join(" and ", served)} of the engine's tool server beside them" : string.Empty)));
         var controlled = string.Join(", ", Agents.Policy.ClaudeSettings.Controlled.Select(name => $"{name.Key}={name.Value}"));
         var output = new Agents.AgentOutput("o", "{}");
 
@@ -2641,8 +2644,15 @@ public static class HelpTopics
             + "turns and budget, and the tools of the agent's capabilities and no other - "
             + tools
             + $" - and never {string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.NeverOffered)}. The run's reporter is given "
-            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.Reporter)} alone. Every call is asked of the engine "
-            + "before it runs and answered from the policy above: a denial carries its rule's sentence, which the model "
+            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.Reporter)} alone. A step with the web takes the harness's own "
+            + $"{Agents.Runtime.AgentTools.WebFetch} - and {Agents.Runtime.AgentTools.WebSearch}, where it has a source to search - from the engine's tool server: the one MCP "
+            + $"server, of type sdk, named {Agents.ClaudeCode.ClaudeCodeTools.Server}, that the launch's --mcp-config names beside --strict-mcp-config (the step's "
+            + $"{Agents.ClaudeCode.ClaudeLaunch.McpFileName}), served in the engine's own process over the launch's control channel - its initialize, "
+            + "its tool list and its calls, our own code with no MCP library; each call of it is asked of the engine first, by its ask "
+            + "rule, and run by the tool runtime below as on the API clients, each address decided and recorded. A launch whose init "
+            + "does not show that server connected with its tools taken, or that connects another, never started; a call of it the "
+            + "engine was not asked about and did not allow runs nothing and fails the step. Every call its own deny rules do not "
+            + "refuse first is asked of the engine before it runs and answered from the policy above: a denial carries its rule's sentence, which the model "
             + $"reads, and is a line of the step's {Agents.AgentCallRecords.DenialsFileName}; a tool the launch was not given, or whose calls the engine "
             + "cannot read, is denied by name. An answer held to a step's schema that does not read is sent back, each "
             + $"problem by its path, up to {output.MaxRepairs} times; a message the engine gives an agent at work is written "
@@ -2651,8 +2661,10 @@ public static class HelpTopics
             + "taken or dropped, no tool running in that turn, a "
             + "launch that does not take the interrupt ended whole. Every message is held to the model asked for, a date "
             + "after its id the same model: one another model wrote ends the step. Its environment holds nothing of a "
-            + $"Claude Code session this tool was started in ({Agents.ClaudeCode.ClaudeLaunch.SessionVariable} and every {Agents.ClaudeCode.ClaudeLaunch.SessionPrefix} name but "
-            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.KeptNames)}, which says only where a program is), none of what every child "
+            + $"Claude Code session this tool was started in ({string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.SessionNames.SkipLast(1))} and {Agents.ClaudeCode.ClaudeLaunch.SessionNames[^1]}, and every name beginning "
+            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.SessionPrefixes.SkipLast(1))} or {Agents.ClaudeCode.ClaudeLaunch.SessionPrefixes[^1]} but "
+            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.KeptNames)}, which says only where a program is, and a name agentPolicy.keepEnvironment "
+            + "gives back), none of what every child "
             + "of an agent loses (the tool runtime below), no credential but the "
             + $"one its auth gives, and the names the engine sets: {controlled}, and {Agents.Policy.ClaudeSettings.BashTimeoutVariable} and "
             + $"{Agents.Policy.ClaudeSettings.BashMaxTimeoutVariable} as agentPolicy.commandTimeoutSeconds and maxCommandTimeoutSeconds say, in "
@@ -2670,7 +2682,9 @@ public static class HelpTopics
             + $"launch that does not answer the host's initialize request within {Agents.ClaudeCode.ClaudeCodeClient.InitializeBound.TotalSeconds:0} s, that works before its init says "
             + "what it runs as, whose init offers a tool it was not "
             + "given or names a credential its auth did not give, or that refuses by itself a call the engine allows - as one "
-            + "started without --permission-prompt-tool stdio does - never started; a call it ran that the engine was never asked "
+            + "started without --permission-prompt-tool stdio does - never started; a call it refuses by itself that the engine "
+            + "refuses too - by its own deny rules, a file tool's told by its result alone - is a denial of Claude Code's, counted "
+            + "and recorded once; a call it ran that the engine was never asked "
             + "about, or refused, fails the step by the tool's name (before Claude Code 2.1.303 a call that ran unasked and failed "
             + "as Claude Code fails a call whose input did not read cannot be told from one, and is not caught); and each is "
             + "ended at once. A message the engine writes that no turn takes within the step's stall bound - counted from "
@@ -2693,7 +2707,8 @@ public static class HelpTopics
             Agents.Runtime.AgentTools.All(defaults).Select(tool => $"{tool.Name} ({tool.Needs.ToString().ToLowerInvariant()}{(tool.Barrier ? ", alone in its turn" : string.Empty)})"));
 
         return "The tool runtime is the harness's own tools, built for the claude-api and glm clients to give their agents in "
-            + "place of a client's own - those clients are what comes next, and nothing opens a runtime yet - each under the "
+            + "place of a client's own - those clients are what comes next - and serving the claude-code client the web's through "
+            + "the engine's tool server, each under the "
             + $"capability that gives it: {tools}. The run's reporter is given "
             + $"{string.Join(", ", Agents.Runtime.AgentTools.All(defaults).Where(tool => Agents.Policy.AgentPolicyGround.ReporterCapabilities.Contains(tool.Needs)).Select(tool => tool.Name))}, "
             + "those that read, and no other. Each call is decided before it runs and recorded: a tool the step was not given, or "
@@ -2950,10 +2965,10 @@ public static class HelpTopics
                 ($"  <step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/", "a refresh or a rebase of others: what it did to each target, as above"),
                 ($"  <step>/{OrchestratorLayout.StepGraphFileName}", "a reason step that has a codebase graph: one line for each call of the graph tool - what it asked about, served and edited; the API clients will write it"),
                 ($"  <step>/{OrchestratorLayout.StepWorkingSetFileName}", "a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it ('help codebase-graph'); the API clients will write it"),
-                ($"  <step>/{Agents.AgentCallRecords.WebFileName}", "a step whose agent asks the web: each address its web_fetch and web_search decided before it was asked, what each answered, and each search source's part ('help web-search'); the API clients will write it"),
+                ($"  <step>/{Agents.AgentCallRecords.WebFileName}", "a step whose agent asks the web: each address its web_fetch and web_search decided before it was asked, what each answered, and each search source's part ('help web-search'); written by every client whose step has the web"),
                 ($"  <step>/{Agents.AgentCallRecords.DenialsFileName}", "a step whose agent's calls the engine decides, on every client: each call the policy refused, with its rule"),
                 ($"  <step>/{Agents.AgentCallRecords.ToolResultsDirectoryName}/<id>.txt", "a step whose agent's calls the engine decides, on every client: an answer longer than the cap, whole"),
-                ($"  {OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}", "the run's web search: what each source's lookups found, once for the run, and each query a source answered, which the same query again is answered from; the API clients will write it"),
+                ($"  {OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}", "the run's web search: what each source's lookups found, once for the run, and each query a source answered, which the same query again is answered from; written by every client whose step searches"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphManifestFileName}", "the run's codebase graph: the main checkout's manifest, every file it keeps with its blob, state and extract ('help codebase-graph')"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphSymbolsFileName}", "the graph's link result: every node and edge, with the digest of the manifest it was made from"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphExtractsDirectoryName}/<ab>/<name>", "one file's extract, written once, named by its blob, its path, its implementation and version"),
@@ -3391,7 +3406,7 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             $"An agent whose step has the web searches with {AgentTools.WebSearch}, and reads the pages it chooses with {AgentTools.WebFetch}. "
-            + "No step is given them yet - the API clients will offer them. "
+            + "The claude-code client gives them a step through the engine's tool server ('help agent-clients'), and the API clients are to offer them. "
             + "dssharness makes every search itself, inside the tool, over HTTP: it asks the sources the configuration declares - "
             + "search APIs that answer JSON, RSS and Atom feeds, OpenSearch descriptions, and its own index of a site's pages read "
             + "through the site's sitemap - with no key required, no provider's search and no service to install, and it never "

@@ -1618,13 +1618,15 @@ too - and the restriction rules as deny rules, absolute once for each root, but 
 pattern there would cover a root the launch writes, each path in the POSIX form Claude Code matches
 (`//c/x` for `C:\x`) and a `Write` rule as an `Edit` rule, for Claude Code holds every file tool to
 its `Read` and `Edit` rules alone - a second layer, for the engine is asked about
-every call and answers from the same policy in its own
-process. Where the policy cannot decide a call it denies it, never
+every other call and answers from the same policy in its own
+process; a call these rules refuse first is Claude Code's own denial, told by a
+`system/permission_denied` line or, for a file tool's call refused as Claude Code reads its input,
+by its result alone (`ClaudeLine.CallResult.RefusedByRule`), and counted and recorded once. Where the policy cannot decide a call it denies it, never
 allows - nothing runs while the host that would answer is silent or gone. The first client that
 asks it is `Agents\ClaudeCode\ClaudeCodeClient`, the `IAgentClient` of `claude-code`: each
 launch a new session (`ClaudeLaunch` builds its one argument list and its environment - what
 every child of an agent has (`AgentChildEnvironment`), nothing of a Claude Code session the tool
-was started in, the names `ClaudeSettings.Launched` sets -
+was started in but a name `agentPolicy.keepEnvironment` gives back, the names `ClaudeSettings.Launched` sets -
 `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` among them, so every shell command starts in the
 launch's directory, where the policy reads its relative paths, never where an earlier command's
 `cd` left it, and Claude Code's own bounds of a shell command from the command times - and the one credential an `AgentCredential` gives), streamed both ways and read line by line as
@@ -1636,7 +1638,23 @@ turn (its prompt and its refusal `AgentHandoffSignal`'s, every client's; the age
 message the engine wrote was taken or dropped - each with an id of its own, by which the
 interrupt's receipt names those it dropped), the model each message names, and a key reported
 invalid moved past with a new launch, all in one launch's loop that the stored stream
-(`AgentRunner`) records as it runs. Once a launch has ended, however it ended, a session file it
+(`AgentRunner`) records as it runs. A step with the web takes the harness's own fetch and search
+from the engine's tool server, `Agents\Runtime\AgentToolServer`: one MCP server of type `sdk`
+(`ClaudeLaunch.McpConfiguration`, the step's `claude-mcp.json`, which `--mcp-config` names beside
+`--strict-mcp-config`), whose every message Claude Code sends its host as an `mcp_message` control
+request - the probe found it does so for a host that is no SDK on every version taken, its
+`initialize`, `notifications/initialized` and `tools/list` before the launch's init, and each
+`tools/call` after the engine allowed the call, naming it in `_meta` (`claudecode/toolUseId`). The
+server is the subset of MCP a server of tools needs, our own code over `System.Text.Json`:
+`AgentToolServer.Read` sorts a message into one answered at once, a call, or a call's cancellation,
+and `AgentToolServer.CallAsync` runs a call by the runtime. The client's loop answers each message, runs a call in the
+background only where the engine was asked about it and allowed it, once - one it was not refuses
+and fails the step - cancels one its client cancels, and holds each turn's init to the server:
+connected, every tool of it taken, no other server (`ClaudeCodeTools.ServerTools`,
+`ClaudeCodeTools.ServedName`; a call of one runs by the harness, `AgentToolRunner.Harness`). Its tools' names stand beside
+`--tools`, each with an ask rule, and `ClaudeToolDecider` allows a call of one as asked: its rules
+are its tool's, each address decided and recorded as it runs, as on the API clients, and what the
+runtime refused and asked of the web is counted in the step's result. Once a launch has ended, however it ended, a session file it
 left is removed, and what its container could not reach where the runner hands its end back
 (`ProcessResult.Uncontained`) is said and kept in the result's `uncontained`; a call the engine's
 own deciding fails on is a denial like any other, by the rule `undecided`. The client holds each
@@ -1649,8 +1667,11 @@ that ran (`ClaudeLine.CallResult.Ran`) one the engine was asked about and allowe
 with an `AgentAccountLimit`. Each client's denials, requests of the web and answers too large for
 their events are recorded by the one `AgentCallRecords` (`denials.jsonl`, `web.jsonl`,
 `tool-results/`). The harness's own tools, `Agents\Runtime\AgentToolRuntime`, are built for the
-API clients - which are what comes next; nothing opens a runtime yet - each run's opened by
-`AgentToolHost`: the tools are the one
+API clients - which are what comes next - each run's opened by `AgentToolHost.Open`, and serve
+the `claude-code` client the web's through the engine's tool server (`AgentToolServer`, opened by
+`AgentToolHost.Serve` for one launch: the server's tools alone, written to the launch's own
+`AgentCallRecords`, each call answered by `AgentToolRuntime.ServeAsync`, whose end the launch's
+stream tells): the tools are the one
 table `AgentTools` holds (what a step is offered, what help prints and what runs); each call is
 held to its tool's schema (`JsonSchemaSubset`), each path to the agent's roots by `ConfinedPaths` -
 its spelling, its links followed, a write through no link below its root - before the policy is

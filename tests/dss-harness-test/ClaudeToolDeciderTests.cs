@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
 
@@ -173,8 +174,8 @@ public sealed class ClaudeToolDeciderTests : IDisposable
     /// <summary>
     /// The one table: each capability names its own tools, each once; a launch is given its capabilities' tools in the
     /// table's order and the reporter the three that read; no tool that starts agents, loads skills, asks a person or
-    /// plans is in it, nor the tool an answer arrives by; and the web names none until the engine's own tool server
-    /// serves it.
+    /// plans is in it, nor the tool an answer arrives by; and the web names none of Claude Code's: the engine's tool
+    /// server serves it.
     /// </summary>
     [Fact]
     public void TheTable_GivesEachCapabilityItsOwnTools_AndNeverAToolNoLaunchIsGiven()
@@ -192,6 +193,48 @@ public sealed class ClaudeToolDeciderTests : IDisposable
         Assert.Empty(ClaudeCodeTools.Of([AgentCapability.Web]));
         Assert.Equal(["Read", "Grep", "Glob"], ClaudeCodeTools.Reporter);
         Assert.Equal(ClaudeCodeTools.Reporter, ClaudeCodeTools.Table.Single(row => row.Capability == AgentCapability.Read).Tools.Select(tool => tool.Name));
+    }
+
+    /// <summary>
+    /// The engine's tool server's tools, as Claude Code names them: the web's, each the runtime's name behind the server's
+    /// prefix; a step's are those the runtime offers it that the server serves - its search where it has a source.
+    /// </summary>
+    [Fact]
+    public void TheServersTools_AreTheRuntimesWebTools_ByTheServersNames()
+    {
+        Assert.Equal([AgentTools.WebFetch, AgentTools.WebSearch], ClaudeCodeTools.ServerTools);
+        Assert.Equal("mcp__dssharness__web_search", ClaudeCodeTools.ServedName(AgentTools.WebSearch));
+        Assert.Equal(AgentTools.WebFetch, ClaudeCodeTools.ServedAs("mcp__dssharness__web_fetch"));
+        Assert.Null(ClaudeCodeTools.ServedAs("mcp__dssharness__view_file"));
+        Assert.Null(ClaudeCodeTools.ServedAs("mcp__other__web_fetch"));
+        Assert.Null(ClaudeCodeTools.ServedAs("web_fetch"));
+        Assert.Null(ClaudeCodeTools.ServedAs("WebFetch"));
+
+        var ground = PolicyGrounds.Of(_worktree, [_worktree], [_worktree], [], [], []);
+        var search = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
+        Assert.Equal([AgentTools.WebFetch], ClaudeCodeTools.Served(AgentTools.Offered(ground, AgentCommandSettings.Default)));
+        Assert.Equal([AgentTools.WebFetch, AgentTools.WebSearch], ClaudeCodeTools.Served(AgentTools.Offered(ground, AgentCommandSettings.Default, search)));
+        Assert.Empty(ClaudeCodeTools.Served(AgentTools.Offered(ground with { Capabilities = [AgentCapability.Read] }, AgentCommandSettings.Default, search)));
+    }
+
+    /// <summary>
+    /// A call of the engine's tool server the launch was given is allowed as asked - its tool decides each thing it does as
+    /// it runs - and one it was not given is refused by name, as every tool is.
+    /// </summary>
+    [Fact]
+    public void ACallOfTheServer_IsAllowedAsAsked_WhereTheLaunchWasGivenIt()
+    {
+        var given = All.Append("mcp__dssharness__web_fetch").ToList();
+
+        Assert.IsType<AgentPolicyAnswer.Allowed>(ClaudeToolDecider.Decide(_policy, given, "mcp__dssharness__web_fetch", new JsonObject { ["url"] = "https://example.test/" }, _worktree));
+        Assert.IsType<AgentPolicyAnswer.Allowed>(ClaudeToolDecider.Decide(_policy, given, "mcp__dssharness__web_fetch", null, _worktree));
+        Assert.Equal(
+            ClaudeToolDecider.ToolsRule,
+            Assert.IsType<AgentPolicyAnswer.Denied>(ClaudeToolDecider.Decide(_policy, given, "mcp__dssharness__web_search", new JsonObject { ["query"] = "x" }, _worktree)).Rule);
+        Assert.Contains(
+            "is a tool whose calls this tool cannot read",
+            Assert.IsType<AgentPolicyAnswer.Denied>(ClaudeToolDecider.Decide(_policy, [.. given, "mcp__other__web_fetch"], "mcp__other__web_fetch", null, _worktree)).Reason,
+            StringComparison.Ordinal);
     }
 
     private AgentPolicyAnswer Decide(string tool, JsonNode? input)

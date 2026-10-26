@@ -6,6 +6,7 @@ using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
@@ -85,12 +86,14 @@ public sealed class AgentToolTally
 }
 
 /// <summary>
-/// The harness's own tools, run for one agent's run on an API client (part 03, "The tool runtime"): each call decided
-/// before it runs - its tool among those the step is given, its input held to the tool's schema, each path held to the
-/// agent's roots (<see cref="ConfinedPaths"/>) and asked of the policy, a command and an address asked of it too - then
-/// run, its answer masked and cut to its event's bound, the whole kept beside the stream, and recorded: each denial and
-/// each request of the web by <see cref="AgentCallRecords"/>, each call's end a <see cref="ToolCallFinished"/>. The
-/// client's loop emits the call's start, as its provider's stream shows it.
+/// The harness's own tools, run for one agent's run on an API client, and for a Claude Code launch the tools it takes from
+/// the engine's tool server (part 03, "The tool runtime"): each call decided before it runs - its tool among those the step
+/// is given, its input held to the tool's schema, each path held to the agent's roots (<see cref="ConfinedPaths"/>) and
+/// asked of the policy, a command and an address asked of it too - then run, its answer masked and cut to its event's
+/// bound, the whole kept beside the stream, and recorded: each denial and each request of the web by
+/// <see cref="AgentCallRecords"/>, each call's end a <see cref="ToolCallFinished"/> (<see cref="RunAsync"/>) - or, for a
+/// client whose own stream tells it, that stream's (<see cref="ServeAsync"/>). The client's loop emits the call's start, as
+/// its provider's stream shows it.
 /// </summary>
 /// <remarks>
 /// A replace or an insert needs its file viewed first, by its content: a view records the file's hash, the runtime's own
@@ -121,13 +124,19 @@ public sealed partial class AgentToolRuntime : IDisposable
     private readonly AgentPolicy _policy;
     private readonly ConfinedPaths _paths;
     private readonly AgentCallRecords _records;
+    private readonly bool _ownsRecords;
     private readonly IReadOnlyDictionary<string, AgentToolDefinition> _tools;
     private readonly IReadOnlyDictionary<string, JsonNode> _schemas;
     private readonly ConcurrentDictionary<string, string> _viewed;
     private readonly Web.Search.WebSearchStep? _webSearch;
 
     /// <summary>The runtime of <paramref name="run"/>, its ground decided once.</summary>
-    internal AgentToolRuntime(AgentRun run, IAgentEventSink events, AgentToolHost host)
+    /// <param name="run">The run.</param>
+    /// <param name="events">Where its calls' ends are emitted.</param>
+    /// <param name="host">What its tools are run with.</param>
+    /// <param name="records">The run's records, where its client keeps them already - they are not closed with the runtime; the runtime's own where none is given.</param>
+    /// <param name="only">The tools it offers of those the step is given, by name; every one where none is given.</param>
+    internal AgentToolRuntime(AgentRun run, IAgentEventSink events, AgentToolHost host, AgentCallRecords? records = null, IReadOnlyCollection<string>? only = null)
     {
         _run = run;
         _events = events;
@@ -137,8 +146,9 @@ public sealed partial class AgentToolRuntime : IDisposable
 
         _policy = new AgentPolicy(host.FileSystem, host.Platform, ground);
         _paths = new ConfinedPaths(host.FileSystem, host.Platform, ground);
-        _records = new AgentCallRecords(host.FileSystem, run, host.Clock, events);
-        Tools = AgentTools.Offered(ground, run.Commands, run.WebSearch);
+        _records = records ?? new AgentCallRecords(host.FileSystem, run, host.Clock, events);
+        _ownsRecords = records is null;
+        Tools = [.. AgentTools.Offered(ground, run.Commands, run.WebSearch).Where(tool => only?.Contains(tool.Name) != false)];
         _tools = Tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
         _schemas = Tools.ToDictionary(tool => tool.Name, tool => JsonNode.Parse(tool.Schema)!, StringComparer.Ordinal);
         _viewed = new ConcurrentDictionary<string, string>(StringComparer.FromComparison(host.Platform.PathComparison));
@@ -170,6 +180,9 @@ public sealed partial class AgentToolRuntime : IDisposable
 
     /// <summary>What the run's calls came to so far.</summary>
     public AgentToolTally Tally { get; } = new();
+
+    /// <summary>The tool's own version, as a server of its tools names itself.</summary>
+    internal string ToolVersion => _host.Identity.Current.Version;
 
     /// <summary>
     /// Runs the calls of one turn: those that read together, at most <see cref="MostTogether"/> at once, each that writes
@@ -224,8 +237,22 @@ public sealed partial class AgentToolRuntime : IDisposable
     {
         ArgumentNullException.ThrowIfNull(call);
 
-        Tally.Called();
         var started = _host.Clock.GetTimestamp();
+
+        return await EndedAsync(call, await ServeAsync(call, cancellationToken).ConfigureAwait(false), started).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Runs one call as <see cref="RunAsync"/> does - decided first, recorded, its answer masked and cut - for a client whose
+    /// own stream tells the call's end: Claude Code's, whose calls of the engine's tool server end in its stream.
+    /// </summary>
+    /// <param name="call">The call.</param>
+    /// <param name="cancellationToken">The hard stop.</param>
+    public async Task<AgentToolCallResult> ServeAsync(AgentToolCallRequest call, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(call);
+
+        Tally.Called();
         Answer answer;
 
         try
@@ -237,7 +264,7 @@ public sealed partial class AgentToolRuntime : IDisposable
             answer = Answer.Failed($"{call.Name} failed: {ex.Message.TrimEnd('.')}");
         }
 
-        return await FinishedAsync(call, answer, started).ConfigureAwait(false);
+        return await KeptAsync(call, answer).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -254,14 +281,20 @@ public sealed partial class AgentToolRuntime : IDisposable
         Tally.Called();
         var started = _host.Clock.GetTimestamp();
 
-        return await FinishedAsync(call, Answer.Refused(call.Name, denied), started).ConfigureAwait(false);
+        return await EndedAsync(call, await KeptAsync(call, Answer.Refused(call.Name, denied)).ConfigureAwait(false), started).ConfigureAwait(false);
     }
 
-    /// <summary>Closes the run's records.</summary>
-    public void Dispose() => _records.Dispose();
+    /// <summary>Closes the run's records, where they are its own.</summary>
+    public void Dispose()
+    {
+        if (_ownsRecords)
+        {
+            _records.Dispose();
+        }
+    }
 
-    /// <summary>A call's answer recorded: a denial as every denial is, its text masked and cut, and its end emitted.</summary>
-    private async Task<AgentToolCallResult> FinishedAsync(AgentToolCallRequest call, Answer answer, long started)
+    /// <summary>A call's answer recorded: a denial as every denial is, and its text masked and cut, the whole kept beside the stream.</summary>
+    private async Task<AgentToolCallResult> KeptAsync(AgentToolCallRequest call, Answer answer)
     {
         if (answer.Denial is { } denial)
         {
@@ -273,15 +306,21 @@ public sealed partial class AgentToolRuntime : IDisposable
             ? (_run.Mask.Redact(answer.Text), kept)
             : _records.Kept(call.Id, answer.Text);
 
+        return new AgentToolCallResult(call.Id, answer.Ok, shown, file);
+    }
+
+    /// <summary>A call's end emitted, as the model is given it.</summary>
+    private async Task<AgentToolCallResult> EndedAsync(AgentToolCallRequest call, AgentToolCallResult result, long started)
+    {
         await _events.EmitAsync(new ToolCallFinished(
             call.Id,
-            answer.Ok,
+            result.Ok,
             _host.Clock.GetElapsedTime(started),
             _run.Mask.Redact(call.Input),
-            shown,
-            file)).ConfigureAwait(false);
+            result.Text,
+            result.File)).ConfigureAwait(false);
 
-        return new AgentToolCallResult(call.Id, answer.Ok, shown, file);
+        return result;
     }
 
     /// <summary>The call's answer: refused where its tool is not given or its input does not read, else its tool's.</summary>
@@ -425,7 +464,8 @@ public sealed partial class AgentToolRuntime : IDisposable
 
 /// <summary>
 /// What the harness's runtime runs on: the file system, the platform, git, the phase runner, the fetch, the clock and the
-/// tool's environment - one for the process, from which each run of an API client is to open a runtime; none opens one yet.
+/// tool's environment - one for the process, from which each run of an API client is to open a runtime (<see cref="Open"/>),
+/// and each Claude Code launch whose step has the web opens the one its engine's tool server answers from (<see cref="Serve"/>).
 /// </summary>
 /// <param name="fileSystem">Reads and writes the agent's files.</param>
 /// <param name="platform">The platform, whose paths and names compare its way.</param>
@@ -433,6 +473,7 @@ public sealed partial class AgentToolRuntime : IDisposable
 /// <param name="phases">Runs a command an agent runs as a phase, contained.</param>
 /// <param name="sessions">Where a contained command's session is recorded while it runs.</param>
 /// <param name="fetch">The harness's own fetch.</param>
+/// <param name="identity">The tool's own identity, whose version the engine's tool server names itself by.</param>
 /// <param name="clock">Times each call, and a search's pattern on each file.</param>
 /// <param name="environment">The tool's own environment, which a command would otherwise inherit; <see cref="AgentChildEnvironment.Own"/> where none is given.</param>
 /// <param name="search">The harness's own web search; none for a host whose runs search no source.</param>
@@ -443,6 +484,7 @@ public sealed class AgentToolHost(
     PhaseRunner phases,
     ChildSessions sessions,
     HarnessFetch fetch,
+    IToolIdentityProvider identity,
     TimeProvider clock,
     Func<IReadOnlyDictionary<string, string>>? environment = null,
     Web.Search.HarnessWebSearch? search = null)
@@ -465,6 +507,9 @@ public sealed class AgentToolHost(
     /// <summary>The harness's own fetch.</summary>
     internal HarnessFetch Fetch { get; } = fetch ?? throw new ArgumentNullException(nameof(fetch));
 
+    /// <summary>The tool's own identity, whose version a server of its tools names itself by.</summary>
+    internal IToolIdentityProvider Identity { get; } = identity ?? throw new ArgumentNullException(nameof(identity));
+
     /// <summary>Times each call.</summary>
     internal TimeProvider Clock { get; } = clock ?? throw new ArgumentNullException(nameof(clock));
 
@@ -484,5 +529,25 @@ public sealed class AgentToolHost(
         ArgumentNullException.ThrowIfNull(events);
 
         return new AgentToolRuntime(run, events, this);
+    }
+
+    /// <summary>
+    /// Opens the runtime of the tools a Claude Code launch of <paramref name="run"/> takes from the engine's tool server:
+    /// those of <paramref name="tools"/> the step is given, recorded in the launch's own records, each call's end told by
+    /// the launch's stream (<see cref="AgentToolRuntime.ServeAsync"/>).
+    /// </summary>
+    /// <param name="run">The run, whose ground decides every call.</param>
+    /// <param name="events">The launch's events, where what the records emit goes.</param>
+    /// <param name="records">The launch's records, which the runtime writes to and does not close.</param>
+    /// <param name="tools">The tools served, by the runtime's names.</param>
+    /// <exception cref="ArgumentException">The run was given no ground: no call runs undecided.</exception>
+    public AgentToolRuntime Serve(AgentRun run, IAgentEventSink events, AgentCallRecords records, IReadOnlyCollection<string> tools)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(events);
+        ArgumentNullException.ThrowIfNull(records);
+        ArgumentNullException.ThrowIfNull(tools);
+
+        return new AgentToolRuntime(run, events, this, records, tools);
     }
 }
