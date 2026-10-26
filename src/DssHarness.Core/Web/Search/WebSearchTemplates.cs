@@ -124,6 +124,26 @@ public sealed class WebRequestTemplate
         return WebAddresses.IsWeb(filled) ? null : $"'{key}' is an http or https address once filled, and '{text}' is not";
     }
 
+    /// <summary>
+    /// The scheme, host and port the template writes whole, as an address's authority reads (<see cref="Uri.GetLeftPart"/>):
+    /// where no name it fills stands before the path, the query or the fragment begins. <see langword="null"/> where one
+    /// does - a host a name fills is one a lookup found, which a document named - or where the template is no address.
+    /// </summary>
+    public string? Origin()
+    {
+        var head = string.Concat(_pieces.TakeWhile(piece => !piece.Name).Select(piece => piece.Text));
+        var scheme = head.IndexOf("://", StringComparison.Ordinal);
+        var end = scheme < 0 ? -1 : head.IndexOfAny(['/', '?', '#'], scheme + 3);
+
+        // A name stands in the authority where the text before it ends inside it.
+        if (scheme < 0 || (end < 0 && _pieces.Any(piece => piece.Name)))
+        {
+            return null;
+        }
+
+        return WebAddresses.IsWeb(end < 0 ? head : head[..end], out var uri) ? uri.GetLeftPart(UriPartial.Authority) : null;
+    }
+
     /// <summary>The template as an address: each name filled - the query escaped for an address, a found value as found.</summary>
     /// <param name="query">The query.</param>
     /// <param name="limit">The most results asked.</param>

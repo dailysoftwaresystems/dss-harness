@@ -225,8 +225,11 @@ public sealed class RobotsTxt
     }
 
     /// <summary>
-    /// A path or a pattern as both are compared: each character past ASCII percent-encoded as UTF-8, and every
-    /// percent-encoding's digits in upper case, as RFC 9309 asks of both before they are compared.
+    /// A path or a pattern as both are compared, as RFC 9309 (2.2.2) asks of both: each character past ASCII
+    /// percent-encoded as UTF-8; an unreserved character percent-encoded - a letter, a digit, <c>-</c>, <c>.</c>, <c>_</c>,
+    /// <c>~</c> - decoded, as an address's reader decodes it in a path, so a rule's <c>%7E</c> is the <c>~</c> of the path
+    /// it is held to; and every other percent-encoding kept, its digits in upper case, so a <c>%2F</c> is never a
+    /// <c>/</c> nor a <c>%2A</c> a wildcard.
     /// </summary>
     internal static string Normalized(string path)
     {
@@ -238,7 +241,17 @@ public sealed class RobotsTxt
 
             if (character == '%' && at + 2 < path.Length && Uri.IsHexDigit(path[at + 1]) && Uri.IsHexDigit(path[at + 2]))
             {
-                builder.Append('%').Append(char.ToUpperInvariant(path[at + 1])).Append(char.ToUpperInvariant(path[at + 2]));
+                var encoded = (char)((Uri.FromHex(path[at + 1]) << 4) | Uri.FromHex(path[at + 2]));
+
+                if (char.IsAsciiLetterOrDigit(encoded) || encoded is '-' or '.' or '_' or '~')
+                {
+                    builder.Append(encoded);
+                }
+                else
+                {
+                    builder.Append('%').Append(char.ToUpperInvariant(path[at + 1])).Append(char.ToUpperInvariant(path[at + 2]));
+                }
+
                 at += 2;
             }
             else if (character < 0x80)

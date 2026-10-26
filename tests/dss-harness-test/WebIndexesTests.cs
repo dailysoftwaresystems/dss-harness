@@ -1457,6 +1457,57 @@ public sealed class WebIndexesTests
         Assert.NotNull(again);
     }
 
+    /// <summary>
+    /// A fill whose record cannot be claimed for a failure of this machine's - a claim no system opens, as a read-only file
+    /// system's or a failing disk's - is raised as what it is, by the claim and by the search that would begin it: never
+    /// taken for a fill another run holds, which the search would say is being read for ever while nobody learns why.
+    /// </summary>
+    [Fact]
+    public void AClaimThatCouldNotBeTaken_IsNoFillHeldElsewhere()
+    {
+        using var directory = new TempDirectory();
+        var site = new SiteDouble();
+        using var harness = new Harness(site);
+        var record = Path.Combine(directory.Path, SitemapFill.RecordFileName);
+        var claim = record + PhysicalAppendFile.ClaimSuffix;
+
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(claim, claim));
+
+        var why = Assert.Throws<IOException>(() => new FileStream(claim, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)).Message;
+        var said = $"'{record}' is not opened for writing: its claim '{claim}' could not be taken ({why}). Nothing was read or written.";
+
+        Assert.Equal(said, Assert.Throws<IOException>(() => harness.Fill.Claim(directory.Path)).Message);
+        Assert.Equal(said, Assert.Throws<IOException>(() => harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open)).Message);
+        Assert.Empty(site.Asked);
+        Assert.False(File.Exists(record));
+    }
+
+    /// <summary>
+    /// A fill's record whose claim was taken, but whose torn last line could not be taken back - a disk's failure - is
+    /// raised, never taken for a fill another run holds; its claim is let go, so the next fill takes it.
+    /// </summary>
+    [Fact]
+    public void ARecordWhoseTornLineCouldNotBeTakenBack_IsNoFillHeldElsewhere()
+    {
+        using var directory = new TempDirectory();
+        var record = Path.Combine(directory.Path, SitemapFill.RecordFileName);
+        File.WriteAllText(record, "{\"a\":1}\n{\"b\"");
+
+        using (var failing = new Harness(new SiteDouble(), new Uncuttable(Files)))
+        {
+            Assert.Equal(Uncuttable.Why, Assert.Throws<IOException>(() => failing.Fill.Claim(directory.Path)).Message);
+        }
+
+        using var harness = new Harness(new SiteDouble());
+
+        using (var again = harness.Fill.Claim(directory.Path))
+        {
+            Assert.NotNull(again);
+        }
+
+        Assert.Equal("{\"a\":1}\n", File.ReadAllText(record));
+    }
+
     /// <summary>The index of a source is kept under the repository's orchestrators, beside every orchestrator, by the source's name.</summary>
     [Fact]
     public void AnIndex_IsKeptUnderTheOrchestrators()
@@ -1490,10 +1541,10 @@ public sealed class WebIndexesTests
     {
         private readonly HarnessFetch _fetch;
 
-        public Harness(SiteDouble site)
+        public Harness(SiteDouble site, IFileSystem? files = null)
         {
             _fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, site);
-            Fill = new SitemapFill(Files, _fetch, Clock, (wait, cancellationToken) =>
+            Fill = new SitemapFill(files ?? Files, _fetch, Clock, (wait, cancellationToken) =>
             {
                 if (WaitFails is { } fails)
                 {
@@ -1514,7 +1565,7 @@ public sealed class WebIndexesTests
 
                 return Task.CompletedTask;
             });
-            Indexes = new WebIndexes(Files, Fill, Clock);
+            Indexes = new WebIndexes(files ?? Files, Fill, Clock);
         }
 
         public ManualClock Clock { get; } = new(new DateTimeOffset(2026, 10, 25, 12, 0, 0, TimeSpan.Zero));
@@ -1538,6 +1589,29 @@ public sealed class WebIndexesTests
         {
             Indexes.Dispose();
             _fetch.Dispose();
+        }
+    }
+
+    /// <summary>The real file system, save that a file opened for appending cannot be cut, as a failing disk refuses it.</summary>
+    private sealed class Uncuttable(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        /// <summary>What the disk says to a cut.</summary>
+        public const string Why = "the disk would not cut the file";
+
+        public override IAppendFile OpenForAppend(string path) => new Cutting(base.OpenForAppend(path));
+
+        /// <summary>The real file, whose every cut fails.</summary>
+        private sealed class Cutting(IAppendFile file) : IAppendFile
+        {
+            public long Length => file.Length;
+
+            public void ReadExactlyAt(long position, Span<byte> buffer) => file.ReadExactlyAt(position, buffer);
+
+            public void TruncateTo(long length) => throw new IOException(Why);
+
+            public void AppendFlushed(ReadOnlySpan<byte> bytes) => file.AppendFlushed(bytes);
+
+            public void Dispose() => file.Dispose();
         }
     }
 

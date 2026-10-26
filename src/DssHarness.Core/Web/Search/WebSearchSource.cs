@@ -213,9 +213,10 @@ public sealed class WebSearchSource
 
 /// <summary>
 /// A source's key, as its <c>credential</c> says where it comes from and where it goes: a variable of the agents' <c>.env</c>
-/// slot - <c>{ "from": "env", "name": ..., "query": ... }</c> or <c>"header": ...</c> - or the token of the machine's
-/// <c>gh</c> login for its <c>host</c> - <c>{ "from": "gh" }</c>, github.com's, sent as <c>Authorization: Bearer</c> unless it
-/// says otherwise, to that host or its API alone; <c>format</c>
+/// slot - <c>{ "from": "env", "name": ..., "query": ... }</c> or <c>"header": ...</c> - sent to the scheme, host and port its
+/// source's own address writes alone, or the token of the machine's <c>gh</c> login for its <c>host</c> -
+/// <c>{ "from": "gh" }</c>, github.com's, sent as <c>Authorization: Bearer</c> unless it says otherwise, to that host or its
+/// API alone; never to a host a document the source fetched names; <c>format</c>
 /// writes what is sent, <c>{credential}</c> standing for the key. Its keys are read in any case, as the configuration's
 /// are. One owner of the shape: the configuration's check reads its problems here, and the search the key's place.
 /// </summary>
@@ -232,9 +233,10 @@ public sealed record WebSearchCredential(string From, string? Name, string? Quer
 
     /// <summary>What the key is, as help says it.</summary>
     public const string Meaning = "a key to send it, used where it is there and never required: { \"from\": \"env\", \"name\": a variable of the .env slot, "
-        + "and \"query\": a parameter or \"header\": a header } or { \"from\": \"gh\", \"host\": its host, github.com where left out }, the machine's gh "
-        + "login for that host, sent as Authorization: Bearer to it or its api. host alone; "
-        + "\"format\" writes what is sent, {credential} standing for the key";
+        + "and \"query\": a parameter or \"header\": a header }, sent to the scheme, host and port the source's own address writes alone, or "
+        + "{ \"from\": \"gh\", \"host\": its host, github.com where left out }, the machine's gh login for that host, sent as Authorization: Bearer "
+        + "to it or its api. host alone - never to a host a document the source read names; \"format\" writes what is sent, {credential} standing "
+        + "for the key";
 
     /// <summary>The name in <see cref="Format"/> that stands for the key.</summary>
     public const string Placeholder = "credential";
@@ -281,10 +283,23 @@ public sealed record WebSearchCredential(string From, string? Name, string? Quer
         return [.. forms.Concat([JsonEncodedText.Encode(key).Value, key.Replace("/", "\\/", StringComparison.Ordinal)]).Distinct(StringComparer.Ordinal)];
     }
 
-    /// <summary>The key as the fetch sends it to its source: <paramref name="key"/>, written by <see cref="Format"/>, as the header or query parameter this says.</summary>
+    /// <summary>
+    /// The key as the fetch sends it to its source: <paramref name="key"/>, written by <see cref="Format"/>, as the header or
+    /// query parameter this says, to the origins alone it may go to - a gh login's host and that host's API; else
+    /// <paramref name="origin"/>, the scheme, host and port the source's configuration writes, or none where it writes none.
+    /// </summary>
     /// <param name="key">The key.</param>
-    public WebFetchKey Fetched(string key)
-        => (Query is { } parameter ? new WebFetchKey(parameter, Sent(key), Query: true) : new WebFetchKey(Header!, Sent(key))) with { Hosts = Host is { } host ? [host, "api." + host] : null };
+    /// <param name="origin">The scheme, host and port the source's configuration writes (<see cref="IWebSearchKind.KeyOrigin"/>); <see langword="null"/> where it writes none.</param>
+    public WebFetchKey Fetched(string key, string? origin)
+    {
+        IReadOnlyList<string> origins = Host is { } host
+            ? [.. new[] { host, "api." + host }.Select(name => new Uri($"https://{name}").GetLeftPart(UriPartial.Authority))]
+            : origin is null ? [] : [origin];
+
+        return Query is { } parameter
+            ? new WebFetchKey(parameter, Sent(key), Query: true) { Origins = origins }
+            : new WebFetchKey(Header!, Sent(key)) { Origins = origins };
+    }
 
     /// <summary>Why <paramref name="value"/> is no credential, each problem one line naming its key; empty where it is one.</summary>
     /// <param name="value">The <c>credential</c> key's value.</param>

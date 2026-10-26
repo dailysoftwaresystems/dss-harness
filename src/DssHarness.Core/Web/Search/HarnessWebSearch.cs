@@ -17,7 +17,8 @@ namespace DssHarness.Core.Web.Search;
 /// harness's fetch, each address decided by the step's <c>Web(...)</c> rules and recorded before it is asked, the
 /// source's pace on this machine taken first and a pause its own answer asks for kept - or answered from what the run
 /// asked before, under the step's own rules; each request made counted against the step's <c>maxPerStep</c>; a source's
-/// key, where the step was given one, sent to it alone by the fetch, never in an address any record holds; the results held to the
+/// key, where the step was given one, sent by the fetch to the scheme, host and port its configuration writes alone - never
+/// to a host a document it fetched names - and never in an address any record holds; the results held to the
 /// step's web rules, those they refuse left out and counted. One source's failure never hides another's results, and a
 /// search none of whose sources answered is no answer.
 /// </summary>
@@ -133,9 +134,10 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
         var key = step.Keys.GetValueOrDefault(source.Name);
         WebSearchPart Part(WebSearchAnswer answer, bool cached = false) => PartOf(step, source, kind, query, answer, cached);
 
-        // What the fetch sends as the source's key, where the step was given one: an answer made with it is no answer to a
-        // step without it - nor one made without it to a step that sends it - so the run keeps each apart.
-        var sent = key?.Value is { } value && source.Credential is { } credential ? credential.Fetched(value) : null;
+        // What the fetch sends as the source's key, where the step was given one - to the scheme, host and port the source's
+        // configuration writes alone, never to one a document it fetched names: an answer made with it is no answer to a step
+        // without it - nor one made without it to a step that sends it - so the run keeps each apart.
+        var sent = key?.Value is { } value && source.Credential is { } credential ? credential.Fetched(value, kind.KeyOrigin(source)) : null;
 
         // What the run's lookups found is used under this step's own rules: each address they asked decided again, so no
         // answer made from a document this step's rules refuse is given it - whichever step of the run asked first.
@@ -401,8 +403,9 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
 
     /// <summary>
     /// Sends <paramref name="request"/> through the harness's fetch - its key where the step was given one, which the fetch
-    /// adds to what it sends to the scheme, host and port first asked alone, each address decided, counted and recorded, the
-    /// source's turn taken first - and answers what came back, or why nothing did, with each address it allowed.
+    /// adds to what it sends to the scheme, host and port first asked alone, where it is one the key may go to, each address
+    /// decided, counted and recorded, the source's turn taken first - and answers what came back, or why nothing did, with
+    /// each address it allowed.
     /// </summary>
     /// <remarks>
     /// What of its answers could not be recorded is given back rather than raised, so the caller holds the source for the

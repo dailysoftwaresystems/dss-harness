@@ -186,7 +186,8 @@ public interface IFileSystem
     /// </summary>
     /// <param name="path">The file, its directory already there.</param>
     /// <returns>The file, open for its one writer.</returns>
-    /// <exception cref="IOException">It could not be opened, or another writer holds it.</exception>
+    /// <exception cref="AppendFileHeldException">Another writer holds it.</exception>
+    /// <exception cref="IOException">It could not be opened for any other reason.</exception>
     /// <exception cref="UnauthorizedAccessException">This process may not write it.</exception>
     IAppendFile OpenForAppend(string path);
 

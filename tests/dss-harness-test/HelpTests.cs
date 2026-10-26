@@ -4161,6 +4161,11 @@ public sealed partial class HelpTests
         Assert.Contains($"{DssHarness.Core.Web.Search.WebSearchPace.FilePrefix}-<machine>.json", prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words($"the snippet at most {DssHarness.Core.Web.Search.WebSearchResult.MostSnippet.ToString(CultureInfo.InvariantCulture)} characters"), prose, StringComparison.Ordinal);
 
+        // A source's key goes where its configuration writes alone, never to a host a document it read names.
+        Assert.Contains(Prose.Words("a variable of the .env slot, sent to the scheme, host and port the source's own address writes alone, or the machine's gh login"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("a host a document the source read names, an OpenSearch description's template or what discover found, is never sent one"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("A source whose address takes its host from what discover finds is refused a key of the .env slot where the configuration is read."), prose, StringComparison.Ordinal);
+
         // The README names every built-in source, as the template holds them.
         var named = DssHarness.Core.Web.Search.WebSearchSources.BuiltIn.Sources!.Keys.ToList();
 

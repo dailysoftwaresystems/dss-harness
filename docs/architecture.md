@@ -1814,10 +1814,13 @@ sitemap source's site decided so before its index is searched and the pages its 
 the configuration's `Web(...)` rules alone, since the index outlives the step, each result held to `Web` and left out
 and counted where refused, each request made counted against `maxPerStep`, each source's `perMinute` and `perDay` held
 machine-wide by one record beside admission's and a pause it asks for kept there (`WebSearchPace`), a key read by
-`WebSearchKeys` from the slot or `gh auth token --hostname` for the source's host - a gh login sent to that host or its
-API alone (`WebFetchKey.Hosts`) - and added by the fetch to what it sends the scheme, host and port each of the source's
-search requests first asks alone - its lookups are sent none - as a header or a query parameter, over https alone, never
-to an address a record or an answer holds - a query parameter of its name is dropped from every address, a redirect's
+`WebSearchKeys` from the slot or `gh auth token --hostname` for the source's host - a slot's key sent to the scheme, host
+and port the source's own address writes alone (`IWebSearchKind.KeyOrigin`, a source whose address takes its host from
+what discover finds refused one where the configuration is read), a gh login to that host or its API alone
+(`WebFetchKey.Origins`), never a host a document the source read names - and added by the fetch to what it sends the
+scheme, host and port each of the source's search requests first asks alone, where it is one of those - its lookups are
+sent none - as a header or a query parameter, over https alone, never to an address a record or an answer holds - a
+query parameter of its name is dropped from every address, a redirect's
 that echoes it back among them, and a first address naming one refused (`WebFetchAsk.Key`) - each address it may not go
 to refused by the key's own rule (`HarnessFetch.KeyRule`) before the step's rules decide it, nothing sent, and recorded
 as theirs are - the step's mask holding each form it is sent or echoed in (`WebSearchCredential.Forms`) masking each

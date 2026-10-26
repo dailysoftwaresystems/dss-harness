@@ -100,13 +100,56 @@ public sealed class RobotsTxtTests
         Assert.Equal(allowed, robots.Allows(path));
     }
 
-    /// <summary>A path and a rule are compared percent-encoded alike: a character past ASCII as its UTF-8, an encoding's digits in either case.</summary>
+    /// <summary>
+    /// A path and a rule are compared percent-encoded alike, as RFC 9309 (2.2.2) asks: a character past ASCII as its UTF-8,
+    /// an encoding's digits in either case, and an unreserved character encoded as itself - so a rule's '%7E' refuses the '~'
+    /// an address's path holds once its reader decoded it, and the RFC's own table's paths each match what it says.
+    /// </summary>
     [Theory]
-    [InlineData("/café/menu")]
-    [InlineData("/caf%c3%a9/menu")]
-    [InlineData("/caf%C3%A9/menu")]
-    public void PercentEncodings_AreComparedAlike(string path)
-        => Assert.False(RobotsTxt.Read("User-agent: *\nDisallow: /café/\n", Agent).Allows(path));
+    [InlineData("/café/", "/café/menu")]
+    [InlineData("/café/", "/caf%c3%a9/menu")]
+    [InlineData("/café/", "/caf%C3%A9/menu")]
+    [InlineData("/foo/bar?baz=quz", "/foo/bar?baz=quz")]
+    [InlineData("/foo/bar/ツ", "/foo/bar/%E3%83%84")]
+    [InlineData("/foo/bar/%E3%83%84", "/foo/bar/ツ")]
+    [InlineData("/foo/bar/%E3%83%84", "/foo/bar/%E3%83%84")]
+    [InlineData("/foo/bar/%62%61%7A", "/foo/bar/baz")]
+    [InlineData("/foo/bar/baz", "/foo/bar/%62%61%7a")]
+    [InlineData("/%7Ejoe/", "/~joe/private")]
+    [InlineData("/%7ejoe/", "/~joe/private")]
+    [InlineData("/~joe/", "/%7Ejoe/private")]
+    [InlineData("/a%2D%2E%5F%30/", "/a-._0/x")]
+    public void PercentEncodings_AreComparedAlike(string rule, string path)
+        => Assert.False(RobotsTxt.Read($"User-agent: *\nDisallow: {rule}\n", Agent).Allows(path));
+
+    /// <summary>
+    /// Each path of RFC 9309's table (2.2.2) is compared as the table says it is matched: a character past ASCII encoded,
+    /// an encoded unreserved character decoded, the rest as written.
+    /// </summary>
+    [Theory]
+    [InlineData("/foo/bar?baz=quz", "/foo/bar?baz=quz")]
+    [InlineData("/foo/bar/ツ", "/foo/bar/%E3%83%84")]
+    [InlineData("/foo/bar/%E3%83%84", "/foo/bar/%E3%83%84")]
+    [InlineData("/foo/bar/%62%61%7A", "/foo/bar/baz")]
+    public void APath_IsComparedAsRfc9309sTableSays(string path, string compared)
+        => Assert.Equal(compared, RobotsTxt.Normalized(path));
+
+    /// <summary>
+    /// An encoding of any character but an unreserved one is kept, in either case alike: a '%2F' is no '/' of the path, a
+    /// '%2A' no wildcard and a '%24' no end, as RFC 9309 keeps a reserved character encoded.
+    /// </summary>
+    [Theory]
+    [InlineData("/a%2Fb", "/a/b")]
+    [InlineData("/a/b", "/a%2fb")]
+    [InlineData("/x%2A", "/xyz")]
+    [InlineData("/x%24", "/x")]
+    public void AnEncodingOfAReservedCharacter_IsKept(string rule, string path)
+    {
+        var robots = RobotsTxt.Read($"User-agent: *\nDisallow: {rule}\n", Agent);
+
+        Assert.True(robots.Allows(path));
+        Assert.False(robots.Allows(rule.ToLowerInvariant()));
+    }
 
     /// <summary>An empty Disallow refuses nothing; robots.txt itself is always allowed; a comment and an unknown record are passed over.</summary>
     [Fact]

@@ -865,17 +865,20 @@ search engine's results page. The built-in sources (`stackoverflow`, `github-rep
 `github-issues`, `nuget`, `npm`, `pub-dev`, `learn`, `mdn`, `wikipedia`, `hackernews`,
 `readthedocs`) are entries in the same form, which `init` writes and a repository's entry of the
 same name changes key by key; a new name adds a source, and `enabled: false` turns one off. None
-needs a key: a source's optional `credential` comes from the `.env` slot or the machine's `gh` login
-for its `host` (github.com unless it says another; sent to that host or its API alone), masked and
-sent to the scheme, host and port each search of that source first asks alone, over https - a lookup
-is sent none - never in an address a record holds. A reason step picks its sources by name or tag
-with `search` (absent, `agentWebSearch.defaults`); each query is held to the mask, each address a
-source asks to the mask and the `Web(...)` rules, each result to every rule of the web, each source
-to its `perMinute` and `perDay` on the machine and the step to `maxPerStep`, a sitemap source's
-index filled under the configuration's own `Web(...)` rules for every run; a limit a source answers
-holds it until the time it gave, told and never retried, and each source answers in its own part -
-results, none, a limit, an answer that changed, a failure, a refusal. `help web-search` lists every
-kind's keys and every built-in source.
+needs a key: a source's optional `credential` comes from the `.env` slot (sent to the scheme, host
+and port the source's own address writes alone) or the machine's `gh` login for its `host`
+(github.com unless it says another; sent to that host or its API alone), masked and sent to the
+scheme, host and port each search of that source first asks alone, where it is one of those, over
+https - a lookup is sent none, and a host a document the source read names (an OpenSearch
+template, what `discover` found) never one, its request refused with nothing sent - never in an
+address a record holds. A reason step
+picks its sources by name or tag with `search` (absent, `agentWebSearch.defaults`); each query is
+held to the mask, each address a source asks to the mask and the `Web(...)` rules, each result to
+every rule of the web, each source to its `perMinute` and `perDay` on the machine and the step to
+`maxPerStep`, a sitemap source's index filled under the configuration's own `Web(...)` rules for
+every run; a limit a source answers holds it until the time it gave, told and never retried, and
+each source answers in its own part - results, none, a limit, an answer that changed, a failure, a
+refusal. `help web-search` lists every kind's keys and every built-in source.
 
 ```bash
 dssharness validate-workflow                 # check every declared workflow

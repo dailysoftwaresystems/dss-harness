@@ -45,6 +45,14 @@ public sealed class FeedKind : IWebSearchKind
     public WebSearchFound Found(WebSearchSource source, IReadOnlyList<WebSearchResponse.Http> answers) => WebSearchFound.None;
 
     /// <inheritdoc/>
+    public string? KeyOrigin(WebSearchSource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return WebRequestTemplate.Parse(source.Text("url")!).Origin();
+    }
+
+    /// <inheritdoc/>
     public WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int limit)
     {
         ArgumentNullException.ThrowIfNull(source);

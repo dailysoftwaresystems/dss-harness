@@ -48,6 +48,10 @@ public sealed class WebIndexes : IDisposable
     /// this search - and a later search's gate is not asked.
     /// </param>
     /// <exception cref="ArgumentException"><paramref name="runGate"/> gives no turn: a fill is never unpaced.</exception>
+    /// <exception cref="IOException">
+    /// A fill is due and could not be claimed for a failure of this machine's - a read-only file system, a disk's - which
+    /// is raised as what it is, never answered as a fill another run holds.
+    /// </exception>
     public WebIndexAnswer Search(string directory, SitemapSettings settings, string query, int limit, WebFetchGate runGate)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
@@ -143,9 +147,9 @@ public sealed class WebIndexes : IDisposable
                 return true;
             }
 
+            // Another run fills it; a claim that could not be taken for any other reason is raised, never taken for one.
             if (_fill.Claim(directory) is not { } claim)
             {
-                // Another run fills it.
                 return true;
             }
 

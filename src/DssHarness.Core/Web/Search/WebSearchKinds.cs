@@ -72,8 +72,10 @@ public sealed class WebSearchKinds
     /// <summary>
     /// Why <paramref name="source"/> cannot be searched, each problem one line naming its key: no kind, or one no
     /// implementation is; a key its kind requires missing; a key neither every source's nor its kind's; what is wrong
-    /// with the values of every source's own keys (<see cref="WebSearchSource.OwnProblems"/>); and what its kind finds in
-    /// its keys' values. Empty where it can be.
+    /// with the values of every source's own keys (<see cref="WebSearchSource.OwnProblems"/>); what its kind finds in its
+    /// keys' values; and, where all of them hold, a key of the <c>.env</c> slot for a source whose address writes no scheme,
+    /// host and port of its own (<see cref="IWebSearchKind.KeyOrigin"/>), which the key could go to none of. Empty where it
+    /// can be.
     /// </summary>
     /// <param name="source">The source.</param>
     public IReadOnlyList<string> Problems(WebSearchSource source)
@@ -105,6 +107,14 @@ public sealed class WebSearchKinds
             .Select(key => $"'{key}' is no key a source of kind '{kind.Kind}' takes; it takes {string.Join(", ", taken)}"));
 
         problems.AddRange(kind.Problems(source));
+
+        // A key goes to the scheme, host and port the configuration writes alone, a gh login's to the hosts it names: a source
+        // whose address is filled from what it reads has nowhere to send one.
+        if (problems.Count == 0 && source.Credential is { Host: null } && kind.KeyOrigin(source) is null)
+        {
+            problems.Add("'credential' is sent only to the scheme, host and port the source's address writes, and its address takes them from what a "
+                + "lookup finds - a host a document names, which is never sent a key; write them whole in its address, or give it no credential");
+        }
 
         return problems;
     }

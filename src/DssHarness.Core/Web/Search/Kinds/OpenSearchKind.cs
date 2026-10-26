@@ -144,6 +144,18 @@ public sealed class OpenSearchKind : IWebSearchKind
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The description's own: the template a description names is a document's word, so a key goes to it only where it is
+    /// on the description's scheme, host and port.
+    /// </remarks>
+    public string? KeyOrigin(WebSearchSource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return WebAddresses.IsWeb(source.Text("url"), out var description) ? description.GetLeftPart(UriPartial.Authority) : null;
+    }
+
+    /// <inheritdoc/>
     public WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int limit)
     {
         ArgumentNullException.ThrowIfNull(found);

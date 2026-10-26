@@ -44,6 +44,25 @@ public sealed class WebSearchTemplatesTests
         Assert.Equal("https://a.test/?q=a%20b&t=${TOKEN}&b=}&c={x}&d=7", template.Address("a b", 5, new Dictionary<string, string> { ["_found.id"] = "7" }));
     }
 
+    /// <summary>
+    /// A request's template writes its scheme, host and port whole - as an address's authority reads, however it spells
+    /// them - where no name it fills stands before its path, query or fragment; one a name fills, a lookup's host, is none.
+    /// </summary>
+    [Theory]
+    [InlineData("https://api.example.test/search?q={query}", "https://api.example.test")]
+    [InlineData("HTTPS://API.example.test:443/search?q={query}", "https://api.example.test")]
+    [InlineData("https://api.example.test:8443/search?q={query}", "https://api.example.test:8443")]
+    [InlineData("https://api.example.test?q={query}", "https://api.example.test")]
+    [InlineData("https://api.example.test#{query}", "https://api.example.test")]
+    [InlineData("https://api.example.test", "https://api.example.test")]
+    [InlineData("{search}?q={query}", null)]
+    [InlineData("https://{tenant}.example.test/search?q={query}", null)]
+    [InlineData("https://api.example.test{path}?q={query}", null)]
+    [InlineData("https://api.example.test:{port}/search?q={query}", null)]
+    [InlineData("api.example.test/search?q={query}", null)]
+    public void ARequestsTemplate_WritesItsOriginWhole(string text, string? origin)
+        => Assert.Equal(origin, WebRequestTemplate.Parse(text).Origin());
+
     /// <summary>A field's template reads each path of the item or of the answer, joins several values with commas, and keeps a brace a quoted name holds.</summary>
     [Fact]
     public void AFieldsTemplate_ReadsItsPaths()

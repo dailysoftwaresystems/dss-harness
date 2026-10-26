@@ -21,14 +21,14 @@ namespace DssHarness.Core.Web;
 /// reduced to its text, read into its parts or kept as its markup, within the bound; no cookie, no proxy, nothing of the
 /// tool's environment and no credential of the machine's sent, under a fixed <c>User-Agent</c> that names the tool - a
 /// search source's own key alone where its asker gives one (<see cref="WebFetchAsk.Key"/>), to the scheme, host and port
-/// first asked.
+/// first asked, one its source's configuration names.
 /// </summary>
 public sealed class HarnessFetch : IDisposable
 {
     /// <summary>The most redirects one fetch follows: one more is refused.</summary>
     public const int MostRedirects = 5;
 
-    /// <summary>The rule an address a search source's key may not be sent to is refused by (<see cref="WebFetchAsk.Key"/>): https alone, its hosts alone, and no parameter of its own name.</summary>
+    /// <summary>The rule an address a search source's key may not be sent to is refused by (<see cref="WebFetchAsk.Key"/>): https alone, its origins alone, and no parameter of its own name.</summary>
     public const string KeyRule = "the source's key";
 
     /// <summary>The most bytes a page may hold: more is refused, read no further.</summary>
@@ -197,17 +197,20 @@ public sealed class HarnessFetch : IDisposable
             // way ('http:/\host') is decided as the host it reaches, never as the text's own spelling.
             current = uri.AbsoluteUri;
 
-            // A source's key goes to the scheme, host and port first asked alone: never on a redirect to another, and never
-            // in the clear - a fetch that carries one begins at an https address, else nothing is sent.
+            // A source's key goes where its source's configuration says alone - the scheme, host and port its address writes,
+            // or a gh login's host and its API - never to one a document the source fetched names, first asked or not; of
+            // those, to the one first asked alone, never on a redirect to another; and never in the clear: a fetch that
+            // carries one begins at an https address of its own, else nothing is sent.
             if (keyedTo is null && ask.Key is not null && uri.Scheme != Uri.UriSchemeHttps)
             {
                 return WebFetched.Denied(current, KeyDenial("a key is sent over https alone, and this address is no https one"));
             }
 
-            // A key that is some hosts' alone - a gh login, its host's and its API's - goes to no other, first asked or not.
-            if (keyedTo is null && ask.Key is { Hosts: { } hosts } && !hosts.Contains(uri.IdnHost, StringComparer.OrdinalIgnoreCase))
+            if (keyedTo is null && ask.Key is { Origins: var origins } && uri.GetLeftPart(UriPartial.Authority) is var origin && !origins.Contains(origin, StringComparer.OrdinalIgnoreCase))
             {
-                return WebFetched.Denied(current, KeyDenial($"its key is sent to {string.Join(" or ", hosts)} alone, and this address is {uri.IdnHost}'s"));
+                return WebFetched.Denied(current, KeyDenial(origins.Count == 0
+                    ? $"its key is sent to no scheme, host and port, for its source's configuration writes none of its own, and a host a document it read names is never sent one: this address is {origin}'s"
+                    : $"its key is sent to {string.Join(" or ", origins)} alone, and this address is {origin}'s"));
             }
 
             keyedTo ??= uri.GetLeftPart(UriPartial.Authority);
@@ -772,23 +775,29 @@ public sealed record WebFetchAsk
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
 
     /// <summary>
-    /// A search source's key, sent to the scheme, host and port first asked alone - never on a redirect to another, and
-    /// never by a page an agent fetches, which carries none - as a header or a query parameter added to what is sent, never
-    /// to the address decided, recorded or answered: a query parameter of its name is dropped from every address, and a
-    /// first address that names one is refused. A fetch that carries one begins at an https address - one of its
-    /// <see cref="WebFetchKey.Hosts"/>, where it names them - else nothing is sent: a key never travels in the clear.
+    /// A search source's key, sent to the scheme, host and port first asked alone - one of its
+    /// <see cref="WebFetchKey.Origins"/>, never on a redirect to another, and never by a page an agent fetches, which carries
+    /// none - as a header or a query parameter added to what is sent, never to the address decided, recorded or answered: a
+    /// query parameter of its name is dropped from every address, and a first address that names one is refused. A fetch
+    /// that carries one begins at an https address of its origins, else nothing is sent: a key never travels in the clear,
+    /// nor to a host a document its source fetched names.
     /// </summary>
     public WebFetchKey? Key { get; init; }
 }
 
-/// <summary>A key a search source is sent: the header or query parameter it is sent as, and its value, which no text made of it says.</summary>
+/// <summary>A key a search source is sent: the header or query parameter it is sent as, its value, which no text made of it says, and where alone it goes.</summary>
 /// <param name="Name">The header's name, or the query parameter's.</param>
 /// <param name="Value">What is sent, the key in it.</param>
 /// <param name="Query">Whether it is a query parameter rather than a header.</param>
 public sealed record WebFetchKey(string Name, string Value, bool Query = false)
 {
-    /// <summary>The hosts alone it is sent to, the first address one of them - a gh login's, its host and that host's API; any where null.</summary>
-    public IReadOnlyList<string>? Hosts { get; init; }
+    /// <summary>
+    /// The origins alone it is sent to, the first address one of them - each a scheme, host and port as an address's
+    /// authority reads (<see cref="Uri.GetLeftPart"/>), as <c>https://api.example.com</c>: its source's own address's, as
+    /// its configuration writes it, or a gh login's host and that host's API. None where the configuration writes none of
+    /// its own, and the key goes nowhere; never one a document the source fetched names.
+    /// </summary>
+    public required IReadOnlyList<string> Origins { get; init; }
 
     /// <summary>The key by where it is sent alone, so no text made of it holds the value.</summary>
     public override string ToString() => Query ? $"?{Name}" : Name;

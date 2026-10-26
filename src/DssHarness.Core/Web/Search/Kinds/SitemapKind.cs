@@ -118,6 +118,15 @@ public sealed class SitemapKind : IWebSearchKind
     public WebSearchFound Found(WebSearchSource source, IReadOnlyList<WebSearchResponse.Http> answers) => WebSearchFound.None;
 
     /// <inheritdoc/>
+    /// <remarks>The site's own, though its index's fill sends no key: its requests are no search source's own.</remarks>
+    public string? KeyOrigin(WebSearchSource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new Uri(source.Text("site")!).GetLeftPart(UriPartial.Authority);
+    }
+
+    /// <inheritdoc/>
     public WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int limit) => new WebSearchRequest.Indexed(query, limit, Settings(source));
 
     /// <inheritdoc/>

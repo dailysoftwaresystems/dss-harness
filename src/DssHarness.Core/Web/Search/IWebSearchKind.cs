@@ -45,6 +45,14 @@ public interface IWebSearchKind
     /// <param name="answers">The lookups' answers, in their order: one each, or those up to the first whose status failed, which ends them.</param>
     WebSearchFound Found(WebSearchSource source, IReadOnlyList<WebSearchResponse.Http> answers);
 
+    /// <summary>
+    /// The scheme, host and port of the address <paramref name="source"/>'s configuration writes for it, as an address's
+    /// authority reads (<see cref="Uri.GetLeftPart"/>) - the one place a key of its own is sent, never a host a document it
+    /// fetched names - or <see langword="null"/> where its configuration writes none of its own: a host a lookup finds.
+    /// </summary>
+    /// <param name="source">A source of this kind, its keys held to <see cref="Problems"/>.</param>
+    string? KeyOrigin(WebSearchSource source);
+
     /// <summary>The request <paramref name="query"/> makes of <paramref name="source"/>, asking at most <paramref name="limit"/> results.</summary>
     /// <param name="source">The source.</param>
     /// <param name="found">What its lookups found.</param>

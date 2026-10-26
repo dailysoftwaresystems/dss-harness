@@ -174,7 +174,7 @@ public sealed class HarnessFetchTests
         var endpoint = new WebEndpoint(_ => WebEndpoint.Page("x", "text/plain"));
         using var fetch = Fetch(endpoint);
         var ask = key
-            ? new WebFetchAsk { Key = new WebFetchKey("Expires", "k-secret") }
+            ? new WebFetchAsk { Key = new WebFetchKey("Expires", "k-secret") { Origins = ["https://example.com"] } }
             : new WebFetchAsk { Headers = new Dictionary<string, string> { ["Content-Language"] = "k-secret" } };
 
         var defect = await Assert.ThrowsAsync<InvalidOperationException>(() => fetch.FetchAsync("https://example.com/", ask, WebFetchGate.Open, TestContext.Current.CancellationToken));
@@ -662,7 +662,7 @@ public sealed class HarnessFetchTests
             Method = "POST",
             Body = """{"q":"x"}""",
             Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = "application/vnd.example+json", ["X-Api-Version"] = "2", ["User-Agent"] = "browser", ["Authorization"] = "Basic own", ["Cookie"] = "c=1" },
-            Key = new WebFetchKey("X-Api-Key", "k-123"),
+            Key = new WebFetchKey("X-Api-Key", "k-123") { Origins = ["https://api.example.com"] },
         };
 
         var fetched = await fetch.FetchAsync("https://api.example.com/search", ask, WebFetchGate.Open, TestContext.Current.CancellationToken);
@@ -704,7 +704,7 @@ public sealed class HarnessFetchTests
             : WebEndpoint.Page("ok", "text/plain"));
         using var fetch = Fetch(endpoint);
 
-        var (fetched, decided, hops) = await FetchAsync(fetch, "https://api.example.com/first?q=x", key: new WebFetchKey("key", Key, Query: true));
+        var (fetched, decided, hops) = await FetchAsync(fetch, "https://api.example.com/first?q=x", key: new WebFetchKey("key", Key, Query: true) { Origins = ["https://api.example.com"] });
 
         Assert.Null(fetched.Failure);
         Assert.Equal(["q=x", "key=" + Uri.EscapeDataString(Key)], endpoint.Asked[0].Address.Query.TrimStart('?').Split('&'));
@@ -713,17 +713,17 @@ public sealed class HarnessFetchTests
         Assert.Equal(["https://api.example.com/first?q=x", "https://cdn.example.net/next?page=2"], decided);
         Assert.Equal(["https://api.example.com/first?q=x", "https://cdn.example.net/next?page=2"], hops.Select(hop => hop.Address));
         Assert.Equal("https://cdn.example.net/next?page=2", fetched.Address);
-        Assert.Equal("?key", new WebFetchKey("key", Key, Query: true).ToString());
+        Assert.Equal("?key", new WebFetchKey("key", Key, Query: true) { Origins = ["https://api.example.com"] }.ToString());
 
         // An address with no query of its own is given one.
-        var (bare, _, _) = await FetchAsync(fetch, "https://api.example.com/plain", key: new WebFetchKey("key", "k", Query: true));
+        var (bare, _, _) = await FetchAsync(fetch, "https://api.example.com/plain", key: new WebFetchKey("key", "k", Query: true) { Origins = ["https://api.example.com"] });
 
         Assert.Null(bare.Failure);
         Assert.Equal("https://api.example.com/plain?key=k", endpoint.Asked[^1].Address.AbsoluteUri);
         Assert.Equal("https://api.example.com/plain", bare.Address);
 
         // A fragment, which is never sent, never holds it.
-        var (fragment, _, _) = await FetchAsync(fetch, "https://api.example.com/plain?q=y#top", key: new WebFetchKey("key", "k", Query: true));
+        var (fragment, _, _) = await FetchAsync(fetch, "https://api.example.com/plain?q=y#top", key: new WebFetchKey("key", "k", Query: true) { Origins = ["https://api.example.com"] });
 
         Assert.Null(fragment.Failure);
         Assert.Equal("?q=y&key=k", endpoint.Asked[^1].Address.Query);
@@ -750,7 +750,7 @@ public sealed class HarnessFetchTests
         var endpoint = new WebEndpoint(_ => WebEndpoint.Page("ok", "text/plain"));
         using var fetch = Fetch(endpoint);
 
-        var (fetched, decided, _) = await FetchAsync(fetch, "http://api.example.com/search?q=x", key: new WebFetchKey("key", "k", Query: true));
+        var (fetched, decided, _) = await FetchAsync(fetch, "http://api.example.com/search?q=x", key: new WebFetchKey("key", "k", Query: true) { Origins = ["https://api.example.com"] });
 
         Assert.Equal(("http://api.example.com/search?q=x", HarnessFetch.KeyRule, "a key is sent over https alone, and this address is no https one"), (fetched.Address, fetched.Denial?.Rule, fetched.Denial?.Reason));
         Assert.Empty(decided);
@@ -774,7 +774,7 @@ public sealed class HarnessFetchTests
         });
         using var fetch = Fetch(endpoint);
 
-        var fetched = await fetch.FetchAsync("https://api.example.com/first", new WebFetchAsk { Key = new WebFetchKey("Authorization", "Bearer t") }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        var fetched = await fetch.FetchAsync("https://api.example.com/first", new WebFetchAsk { Key = new WebFetchKey("Authorization", "Bearer t") { Origins = ["https://api.example.com"] } }, WebFetchGate.Open, TestContext.Current.CancellationToken);
 
         Assert.Null(fetched.Failure);
         Assert.Equal(
@@ -800,7 +800,7 @@ public sealed class HarnessFetchTests
         });
         using var fetch = Fetch(endpoint);
 
-        var (fetched, decided, hops) = await FetchAsync(fetch, "https://api.example.com/first?q=x", key: new WebFetchKey("key", Key, Query: true));
+        var (fetched, decided, hops) = await FetchAsync(fetch, "https://api.example.com/first?q=x", key: new WebFetchKey("key", Key, Query: true) { Origins = ["https://api.example.com"] });
 
         Assert.Null(fetched.Failure);
         Assert.Equal(["q=x&" + echoed, "q=x&" + echoed, "page=2"], endpoint.Asked.Select(sent => sent.Address.Query.TrimStart('?')));
@@ -816,7 +816,7 @@ public sealed class HarnessFetchTests
         var endpoint = new WebEndpoint(_ => WebEndpoint.Page("x", "text/plain"));
         using var fetch = Fetch(endpoint);
 
-        var (fetched, decided, _) = await FetchAsync(fetch, "https://api.example.com/search?q=x&page=2", key: new WebFetchKey("q", "k", Query: true));
+        var (fetched, decided, _) = await FetchAsync(fetch, "https://api.example.com/search?q=x&page=2", key: new WebFetchKey("q", "k", Query: true) { Origins = ["https://api.example.com"] });
 
         Assert.Equal((HarnessFetch.KeyRule, "'https://api.example.com/search?q=x&page=2' names 'q', the parameter its key is sent as"), (fetched.Denial?.Rule, fetched.Denial?.Reason));
         Assert.Null(fetched.Failure);
@@ -824,18 +824,32 @@ public sealed class HarnessFetchTests
         Assert.Empty(endpoint.Asked);
     }
 
-    /// <summary>A key some hosts' alone - a gh login's - is refused at any other first address, nothing sent; at one of them it is sent.</summary>
+    /// <summary>
+    /// A key goes to its origins alone - a gh login's host and its API, a source's own address's scheme, host and port - and
+    /// is refused at any other first address, another port of its host among them, nothing sent and nothing decided; one
+    /// whose source names no origin of its own is refused at every address. At one of its origins, however its address
+    /// spells it, it is sent.
+    /// </summary>
     [Fact]
-    public async Task AKeyOfSomeHosts_IsSentToThemAlone()
+    public async Task AKey_IsSentToItsOriginsAlone()
     {
         var endpoint = new WebEndpoint(_ => WebEndpoint.Page("x", "text/plain"));
         using var fetch = Fetch(endpoint);
-        var key = new WebFetchKey("Authorization", "Bearer t") { Hosts = ["github.com", "api.github.com"] };
+        var key = new WebFetchKey("Authorization", "Bearer t") { Origins = ["https://github.com", "https://api.github.com"] };
 
-        var (elsewhere, _, _) = await FetchAsync(fetch, "https://ghe.example.com/api/v3/search", key: key);
-        var (api, _, _) = await FetchAsync(fetch, "https://API.github.com/search", key: key);
+        var (elsewhere, decided, _) = await FetchAsync(fetch, "https://ghe.example.com/api/v3/search", key: key);
+        var (port, _, _) = await FetchAsync(fetch, "https://api.github.com:8443/search", key: key);
+        var (nowhere, _, _) = await FetchAsync(fetch, "https://api.github.com/search", key: key with { Origins = [] });
+        var (api, _, _) = await FetchAsync(fetch, "https://API.github.com:443/search", key: key);
 
-        Assert.Equal((HarnessFetch.KeyRule, "its key is sent to github.com or api.github.com alone, and this address is ghe.example.com's"), (elsewhere.Denial?.Rule, elsewhere.Denial?.Reason));
+        Assert.Equal(
+            [
+                (HarnessFetch.KeyRule, "its key is sent to https://github.com or https://api.github.com alone, and this address is https://ghe.example.com's"),
+                (HarnessFetch.KeyRule, "its key is sent to https://github.com or https://api.github.com alone, and this address is https://api.github.com:8443's"),
+                (HarnessFetch.KeyRule, "its key is sent to no scheme, host and port, for its source's configuration writes none of its own, and a host a document it read names is never sent one: this address is https://api.github.com's"),
+            ],
+            new[] { elsewhere, port, nowhere }.Select(fetched => (fetched.Denial?.Rule, fetched.Denial?.Reason)));
+        Assert.Empty(decided);
         Assert.Equal(("x", true), (api.Text, Assert.Single(endpoint.Asked).Authorization));
     }
 

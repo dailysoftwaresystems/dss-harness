@@ -40,6 +40,8 @@ internal sealed class AppendLog : IDisposable
     /// <param name="fileSystem">The file system the log is kept on.</param>
     /// <param name="path">The log's own path, its directory already there.</param>
     /// <returns>The log, at the end of its last whole line.</returns>
+    /// <exception cref="AppendFileHeldException">Another writer holds it, and nothing of it was read or cut.</exception>
+    /// <exception cref="IOException">It could not be opened, or a torn line taken back, for any other reason.</exception>
     public static AppendLog Open(IFileSystem fileSystem, string path)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);

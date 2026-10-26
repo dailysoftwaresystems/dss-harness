@@ -86,7 +86,10 @@ public sealed class SitemapFill
     /// <see langword="null"/> where another fill holds it.
     /// </summary>
     /// <param name="directory">The index's directory.</param>
-    /// <exception cref="IOException">The fill's record could not be reached at all - a path too long, a directory gone - which is no fill held elsewhere.</exception>
+    /// <exception cref="IOException">
+    /// The fill's record could not be opened for any reason but another fill holding it - a read-only file system, a disk's
+    /// failure, a torn line it could not take back - which is no fill held elsewhere, and is said as what it is.
+    /// </exception>
     public IDisposable? Claim(string directory)
     {
         _fileSystem.CreateDirectory(directory);
@@ -95,7 +98,7 @@ public sealed class SitemapFill
         {
             return AppendLog.Open(_fileSystem, Path.Combine(directory, RecordFileName));
         }
-        catch (IOException ex) when (ex is not (FileNotFoundException or DirectoryNotFoundException or PathTooLongException))
+        catch (AppendFileHeldException)
         {
             return null;
         }

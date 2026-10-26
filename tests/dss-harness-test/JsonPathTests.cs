@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using DssHarness.Core.Json;
 
@@ -94,6 +95,87 @@ public sealed class JsonPathTests
     [InlineData("[b-a]", "a", false)]
     [InlineData("a)", "a", false)]
     public void IRegexp_IsReadAsItsGrammarSays(string pattern, string text, bool matches)
+        => Assert.Equal(matches, IRegexp.Matches(pattern, text, whole: true));
+
+    /// <summary>
+    /// A category is a character's, one past U+FFFF too - which .NET's own classes read as two halves of no category - as
+    /// RFC 9485 reads it: alone, in a class and negated, so MATHEMATICAL BOLD CAPITAL A is a letter and nothing else.
+    /// </summary>
+    [Theory]
+    [InlineData("$[?match(@, '\\\\p{L}')]", true)]
+    [InlineData("$[?match(@, '[^\\\\p{L}]')]", false)]
+    [InlineData("$[?search(@, '\\\\P{L}')]", false)]
+    [InlineData("$[?match(@, '\\\\p{Lu}')]", true)]
+    [InlineData("$[?match(@, '\\\\P{Ll}')]", true)]
+    [InlineData("$[?search(@, '\\\\p{C}')]", false)]
+    [InlineData("$[?match(@, '[\\\\p{N}\\\\p{L}]')]", true)]
+    [InlineData("$[?match(@, '[^\\\\P{L}]')]", true)]
+    [InlineData("$[?search(@, '[퀀-]')]", false)]
+    public void ACategory_IsTheWholeCharactersPastUFFFF(string query, bool selected)
+    {
+        using var document = JsonDocument.Parse("""[ "𝐀" ]""");
+
+        Assert.Equal(selected ? ["\U0001D400"] : [], JsonPath.Parse(query).Select(document.RootElement).Select(value => value.GetString()));
+    }
+
+    /// <summary>
+    /// A character past U+FFFF is in each category, and out of it, as a character of the same category below U+FFFF is -
+    /// whose categories .NET's own classes read - for every category I-Regexp names, alone, negated and in a negated class.
+    /// </summary>
+    [Fact]
+    public void ACharacterPastUFFFF_IsInTheCategoriesOfItsKind()
+    {
+        string[] names = ["L", "Ll", "Lm", "Lo", "Lt", "Lu", "M", "Mc", "Me", "Mn", "N", "Nd", "Nl", "No", "P", "Pc", "Pd", "Pe", "Pf", "Pi", "Po", "Ps", "Z", "Zl", "Zp", "Zs", "S", "Sc", "Sk", "So", "C", "Cc", "Cf", "Cn", "Co"];
+        var first = new Dictionary<UnicodeCategory, int>();
+
+        for (var point = 0x10000; point <= 0x10FFFF; point++)
+        {
+            first.TryAdd(CharUnicodeInfo.GetUnicodeCategory(point), point);
+        }
+
+        foreach (var (category, astral) in first)
+        {
+            var bmp = (char)Enumerable.Range(0, 0x10000).First(point => point is < 0xD800 or > 0xDFFF && CharUnicodeInfo.GetUnicodeCategory(point) == category);
+
+            foreach (var pattern in names.SelectMany(name => new[] { $"\\p{{{name}}}", $"\\P{{{name}}}", $"[^\\p{{{name}}}]" }))
+            {
+                Assert.True(
+                    IRegexp.Matches(pattern, bmp.ToString(), whole: true) == IRegexp.Matches(pattern, char.ConvertFromUtf32(astral), whole: true),
+                    $"'{pattern}' reads U+{astral:X} ({category}) otherwise than U+{(int)bmp:X4}");
+            }
+        }
+
+        // The categories that have characters past U+FFFF, whatever version of Unicode the runtime holds, were compared.
+        Assert.Superset(
+            new HashSet<UnicodeCategory> { UnicodeCategory.UppercaseLetter, UnicodeCategory.LowercaseLetter, UnicodeCategory.OtherLetter, UnicodeCategory.NonSpacingMark, UnicodeCategory.DecimalDigitNumber, UnicodeCategory.OtherSymbol, UnicodeCategory.Format, UnicodeCategory.PrivateUse, UnicodeCategory.OtherNotAssigned },
+            first.Keys.ToHashSet());
+    }
+
+    /// <summary>
+    /// A pattern of hundreds of categories is built and matched in time: a category is a few parts of .NET's pattern however
+    /// many characters past U+FFFF it holds, which written out would take a hundred alternatives each and pass the most
+    /// .NET's linear matcher builds at a few dozen.
+    /// </summary>
+    [Fact]
+    public void APatternOfHundredsOfCategories_IsMatchedInTime()
+    {
+        var watch = Stopwatch.StartNew();
+
+        Assert.True(IRegexp.Matches(string.Concat(Enumerable.Repeat("\\p{L}", 400)), string.Concat(Enumerable.Repeat("\U0001D400", 400)), whole: true));
+        Assert.True(IRegexp.Matches("[\\p{L}\\p{N}_]{1,300}", string.Concat(Enumerable.Repeat("\U0001D400\U0001D7CE_", 100)), whole: true));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"took {watch.Elapsed}");
+    }
+
+    /// <summary>A character past U+FFFF is still one character: written in a pattern, repeated, and matched by '.' alone.</summary>
+    [Theory]
+    [InlineData("\U0001D400", "\U0001D400", true)]
+    [InlineData("\U0001D400+", "\U0001D400\U0001D400", true)]
+    [InlineData("a.b", "a\U0001D400b", true)]
+    [InlineData("a..b", "a\U0001D400b", false)]
+    [InlineData("[^a]\U0001D400", "\U0001D400\U0001D400", true)]
+    [InlineData("\\p{Co}", "\U000F0000", true)]
+    [InlineData("\\p{Cn}", "\U000E0080", true)]
+    public void ACharacterPastUFFFF_IsOneCharacter(string pattern, string text, bool matches)
         => Assert.Equal(matches, IRegexp.Matches(pattern, text, whole: true));
 
     /// <summary>'^' and '$' anchor the text's very start and end - a line feed at its end is the text's - as match is the whole text.</summary>

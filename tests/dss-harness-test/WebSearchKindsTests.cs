@@ -70,6 +70,29 @@ public sealed class WebSearchKindsTests
     public void ASource_IsHeldToItsKind(string keys, string problem)
         => Assert.Contains(WebSearchKinds.OfThisBuild.Problems(Source("s", keys)), said => said.StartsWith(problem, StringComparison.Ordinal));
 
+    /// <summary>
+    /// A key of the .env slot goes to the scheme, host and port a source's own address writes alone: a source whose address
+    /// takes them from what a lookup finds is refused one - a gh login, which names its hosts, is not - and one whose
+    /// address writes them, or whose description does, is given one. The kind finds that origin whole.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "kind": "json-api", "url": "{search}?q={query}", "items": "$.i", "title": "{@.t}", "link": "{@.l}", "discover": { "search": { "url": "https://index.a.test/i.json", "path": "$.s" } }, "credential": { "from": "env", "name": "KEY", "query": "key" } }""", null, true)]
+    [InlineData("""{ "kind": "json-api", "url": "{search}?q={query}", "items": "$.i", "title": "{@.t}", "link": "{@.l}", "discover": { "search": { "url": "https://index.a.test/i.json", "path": "$.s" } }, "credential": { "from": "gh" } }""", null, false)]
+    [InlineData("""{ "kind": "json-api", "url": "https://API.a.test:443/s?q={query}", "items": "$.i", "title": "{@.t}", "link": "{@.l}", "credential": { "from": "env", "name": "KEY", "query": "key" } }""", "https://api.a.test", false)]
+    [InlineData("""{ "kind": "feed", "url": "https://{query}.a.test/rss", "credential": { "from": "env", "name": "KEY", "header": "X-Key" } }""", null, true)]
+    [InlineData("""{ "kind": "feed", "url": "https://a.test:8443/rss?q={query}", "credential": { "from": "env", "name": "KEY", "header": "X-Key" } }""", "https://a.test:8443", false)]
+    [InlineData("""{ "kind": "opensearch", "url": "https://a.test/opensearch.xml", "credential": { "from": "env", "name": "KEY", "header": "X-Key" } }""", "https://a.test", false)]
+    [InlineData("""{ "kind": "sitemap", "site": "https://docs.a.test" }""", "https://docs.a.test", false)]
+    public void AKeyOfTheSlot_GoesToTheOriginASourcesAddressWrites(string keys, string? origin, bool refused)
+    {
+        var source = Source("s", keys);
+
+        Assert.Equal(origin, WebSearchKinds.OfThisBuild.Find(source.Kind)!.KeyOrigin(source));
+        Assert.Equal(
+            refused ? ["'credential' is sent only to the scheme, host and port the source's address writes, and its address takes them from what a lookup finds - a host a document names, which is never sent a key; write them whole in its address, or give it no credential"] : [],
+            WebSearchKinds.OfThisBuild.Problems(source));
+    }
+
     /// <summary>A source's own keys, in any case, are no kind's problem; its kind is found in any case.</summary>
     [Fact]
     public void ASourcesOwnKeys_AreTaken()
@@ -157,9 +180,12 @@ public sealed class WebSearchKindsTests
         Assert.Equal(new WebSearchCredential("gh", null, null, "Authorization", "Bearer {credential}", "github.com"), Of("""{ "from": "gh" }"""));
         Assert.Equal(new WebSearchCredential("gh", null, "access_token", null, "{credential}", "ghe.example.test"), Of("""{ "from": "gh", "query": "access_token", "host": "GHE.example.test" }"""));
 
-        // A gh login is sent to its host or that host's API alone; a slot's key to whatever its source first asks.
-        Assert.Equal(["github.com", "api.github.com"], Of("""{ "from": "gh" }""").Fetched("t").Hosts);
-        Assert.Null(Of("""{ "from": "env", "name": "KEY", "query": "key" }""").Fetched("t").Hosts);
+        // A gh login is sent to its host or that host's API alone, whatever its source's address; a slot's key to the origin its
+        // source's address writes alone, and nowhere where it writes none.
+        Assert.Equal(["https://github.com", "https://api.github.com"], Of("""{ "from": "gh" }""").Fetched("t", "https://elsewhere.test").Origins);
+        Assert.Equal(["https://ghe.example.test", "https://api.ghe.example.test"], Of("""{ "from": "gh", "host": "GHE.example.test" }""").Fetched("t", null).Origins);
+        Assert.Equal(["https://a.test:8443"], Of("""{ "from": "env", "name": "KEY", "query": "key" }""").Fetched("t", "https://a.test:8443").Origins);
+        Assert.Empty(Of("""{ "from": "env", "name": "KEY", "query": "key" }""").Fetched("t", null).Origins);
     }
 
     /// <summary>A sitemap source's keys are held: a site's scheme and host alone, an address for its sitemap, patterns, bounds.</summary>
@@ -258,6 +284,8 @@ public sealed class WebSearchKindsTests
         public IReadOnlyList<WebSearchRequest.Http> Lookups(WebSearchSource source) => [];
 
         public WebSearchFound Found(WebSearchSource source, IReadOnlyList<WebSearchResponse.Http> answers) => WebSearchFound.None;
+
+        public string? KeyOrigin(WebSearchSource source) => "https://a.test";
 
         public WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int limit) => WebSearchRequest.Http.Get("https://a.test/", "application/json");
 

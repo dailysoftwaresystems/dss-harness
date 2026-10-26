@@ -10,11 +10,22 @@ namespace DssHarness.Core.Json;
 /// written as .NET's, matched by characters - a pair of surrogates one - and in time linear in the text, never backtracking.
 /// </summary>
 /// <remarks>
+/// <para>
 /// What .NET reads its own way is written so it reads as I-Regexp's: <c>.</c> is any character but a line feed and a
-/// carriage return, a pair of surrogates included; a class negated takes a pair of surrogates whole; and <c>^</c> and
-/// <c>$</c> anchor the text's start and its very end, as the standard's compliance suite reads them and as RFC 9485's
-/// mapping to ECMAScript leaves them - its grammar would make them characters of their own, which no implementation does. A pattern that is no I-Regexp matches nothing, as the standard asks. A class that
-/// names a character past U+FFFF in a range is not taken, the one corner of the grammar .NET's classes cannot hold.
+/// carriage return, a pair of surrogates included; a class takes a pair of surrogates whole or not at all, and a surrogate
+/// alone never; and <c>^</c> and <c>$</c> anchor the text's start and its very end, as the standard's compliance suite
+/// reads them and as RFC 9485's mapping to ECMAScript leaves them - its grammar would make them characters of their own,
+/// which no implementation does. A pattern that is no I-Regexp matches nothing, as the standard asks. A class that names a
+/// character past U+FFFF in a range is not taken, the one corner of the grammar .NET's classes cannot hold.
+/// </para>
+/// <para>
+/// .NET's classes and categories read one UTF-16 code unit, and a character past U+FFFF is two, each a surrogate of no
+/// category but its own. So the text is matched with each such character led by a code unit that names its general
+/// category (<see cref="FirstTag"/>), and a category - alone, in a class, negated - takes a pair of surrogates led by the
+/// code unit of any category it holds: whatever the category, four of the parts .NET's linear matcher bounds a pattern by
+/// - a pattern names some five hundred - where the characters past U+FFFF it holds, written out, would take up to a hundred
+/// alternatives, and a pattern naming a few dozen categories would pass that bound.
+/// </para>
 /// </remarks>
 internal static class IRegexp
 {
@@ -27,11 +38,24 @@ internal static class IRegexp
     /// </summary>
     private const int MostPattern = 4096;
 
-    /// <summary>A character that is neither a line feed nor a carriage return: one code unit that is no surrogate, or a pair.</summary>
-    private const string AnyButNewline = @"(?:[^\n\r\uD800-\uDFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF])";
+    /// <summary>
+    /// The code unit that leads a character past U+FFFF of the first general category in the text a pattern is matched
+    /// against, each other category's the one after it in <see cref="UnicodeCategory"/>'s order: low surrogates, which never
+    /// lead a pair, so no character of the text is read as one, and no code unit a class takes below U+FFFF is one.
+    /// </summary>
+    private const char FirstTag = '\uDC00';
 
-    /// <summary>Any pair of surrogates: one character past U+FFFF, which a negated class takes whole.</summary>
-    private const string AnyPair = @"[\uD800-\uDBFF][\uDC00-\uDFFF]";
+    /// <summary>A pair of surrogates: one character past U+FFFF, which in the text matched follows the code unit naming its category.</summary>
+    private const string Pair = @"[\uD800-\uDBFF][\uDC00-\uDFFF]";
+
+    /// <summary>The two letters of each general category, in <see cref="UnicodeCategory"/>'s order.</summary>
+    private static readonly string[] CategoryNames = ["Lu", "Ll", "Lt", "Lm", "Lo", "Mn", "Mc", "Me", "Nd", "Nl", "No", "Zs", "Zl", "Zp", "Cc", "Cf", "Cs", "Co", "Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po", "Sm", "Sc", "Sk", "So", "Cn"];
+
+    /// <summary>Every general category, as bits of <see cref="UnicodeCategory"/>'s values.</summary>
+    private static readonly uint AllCategories = (1u << CategoryNames.Length) - 1;
+
+    /// <summary>A character that is neither a line feed nor a carriage return: one code unit that is no surrogate, or a pair led by its category.</summary>
+    private static readonly string AnyButNewline = $@"(?:[^\n\r\uD800-\uDFFF]|{Tags(AllCategories)}{Pair})";
 
     private static readonly ConcurrentDictionary<(string Pattern, bool Whole), Regex?> Read = new();
 
@@ -56,10 +80,10 @@ internal static class IRegexp
             }
         }
 
-        return regex?.IsMatch(text) ?? false;
+        return regex is not null && regex.IsMatch(Tagged(text));
     }
 
-    /// <summary>The .NET pattern <paramref name="pattern"/> is, or <see langword="null"/> where it is no I-Regexp.</summary>
+    /// <summary>The .NET pattern <paramref name="pattern"/> is, matched against a text as <see cref="Tagged"/> writes it; or <see langword="null"/> where it is no I-Regexp.</summary>
     internal static string? ToDotNet(string pattern)
     {
         try
@@ -92,6 +116,77 @@ internal static class IRegexp
             return null;
         }
     }
+
+    /// <summary>
+    /// <paramref name="text"/> as a pattern is matched against it: each character past U+FFFF led by the code unit naming its
+    /// general category (<see cref="FirstTag"/>), a surrogate alone left as it is, which nothing matches; the text itself
+    /// where it holds no pair.
+    /// </summary>
+    private static string Tagged(string text)
+    {
+        var first = text.AsSpan().IndexOfAnyInRange('\uD800', '\uDBFF');
+
+        if (first < 0)
+        {
+            return text;
+        }
+
+        var tagged = new StringBuilder(text.Length + 16).Append(text, 0, first);
+
+        for (var at = first; at < text.Length; at++)
+        {
+            if (char.IsHighSurrogate(text[at]) && at + 1 < text.Length && char.IsLowSurrogate(text[at + 1]))
+            {
+                tagged.Append(Tag(CharUnicodeInfo.GetUnicodeCategory(text, at))).Append(text, at, 2);
+                at++;
+            }
+            else
+            {
+                tagged.Append(text[at]);
+            }
+        }
+
+        return tagged.ToString();
+    }
+
+    /// <summary>The code unit that leads a character past U+FFFF of <paramref name="category"/> in the text matched.</summary>
+    private static char Tag(UnicodeCategory category) => (char)(FirstTag + (int)category);
+
+    /// <summary>A class of the code units that lead the characters past U+FFFF of <paramref name="categories"/>, bits of <see cref="UnicodeCategory"/>'s values, written as runs.</summary>
+    private static string Tags(uint categories)
+    {
+        var tags = new StringBuilder("[");
+
+        for (var category = 0; category < CategoryNames.Length; category++)
+        {
+            if ((categories & (1u << category)) == 0)
+            {
+                continue;
+            }
+
+            var last = category;
+
+            while (last + 1 < CategoryNames.Length && (categories & (1u << (last + 1))) != 0)
+            {
+                last++;
+            }
+
+            tags.Append(Escaped(Tag((UnicodeCategory)category)));
+
+            if (last > category)
+            {
+                tags.Append('-').Append(Escaped(Tag((UnicodeCategory)last)));
+            }
+
+            category = last;
+        }
+
+        return tags.Append(']').ToString();
+    }
+
+    /// <summary>One code unit as .NET reads it literally: a letter or digit as it is, any other by its code.</summary>
+    private static string Escaped(char character)
+        => char.IsAsciiLetterOrDigit(character) ? character.ToString() : $"\\u{(int)character:X4}";
 
     /// <summary>Reads I-Regexp by RFC 9485's grammar (section 5.3) and writes .NET's pattern of it.</summary>
     private sealed class Reader(string pattern)
@@ -222,9 +317,15 @@ internal static class IRegexp
             }
         }
 
-        /// <summary>An escape: a single character's, or a category's (<c>\p{..}</c>, <c>\P{..}</c>).</summary>
+        /// <summary>An escape: a single character's, or a category's (<c>\p{..}</c>, <c>\P{..}</c>), a class of it alone.</summary>
         private string ReadEscape()
         {
+            if (AtCategory())
+            {
+                var (member, categories) = ReadCategory();
+                return Class(member, categories, negated: false);
+            }
+
             _at++;
 
             if (_at >= pattern.Length)
@@ -234,31 +335,43 @@ internal static class IRegexp
 
             var escaped = pattern[_at++];
 
-            switch (escaped)
+            return escaped switch
             {
-                case 'n': return @"\n";
-                case 'r': return @"\r";
-                case 't': return @"\t";
-                case 'p' or 'P':
-                    Expect('{');
-                    var start = _at;
+                'n' => @"\n",
+                'r' => @"\r",
+                't' => @"\t",
+                '(' or ')' or '*' or '+' or '-' or '.' or '?' or '[' or '\\' or ']' or '^' or '{' or '|' or '}' => Literal(escaped.ToString()),
+                _ => throw new FormatException($"'\\{escaped}' is no escape"),
+            };
+        }
 
-                    while (_at < pattern.Length && char.IsAsciiLetter(pattern[_at]))
-                    {
-                        _at++;
-                    }
+        /// <summary>Whether a category's escape (<c>\p{..}</c>, <c>\P{..}</c>) begins here.</summary>
+        private bool AtCategory() => At('\\') && _at + 1 < pattern.Length && pattern[_at + 1] is 'p' or 'P';
 
-                    var category = pattern[start.._at];
-                    Expect('}');
+        /// <summary>
+        /// A category's escape (<c>\p{..}</c>, <c>\P{..}</c>): the member of a class .NET reads it as of a code unit below
+        /// U+FFFF, and the general categories of the characters past U+FFFF it holds - a <c>\P</c>'s, every one but those it
+        /// names.
+        /// </summary>
+        private (string Member, uint Categories) ReadCategory()
+        {
+            var escaped = pattern[_at + 1];
+            _at += 2;
+            Expect('{');
 
-                    return IsCategory(category) ? $@"\{escaped}{{{category}}}" : throw new FormatException($"'{category}' is no category");
+            var start = _at;
 
-                case '(' or ')' or '*' or '+' or '-' or '.' or '?' or '[' or '\\' or ']' or '^' or '{' or '|' or '}':
-                    return Literal(escaped.ToString());
-
-                default:
-                    throw new FormatException($"'\\{escaped}' is no escape");
+            while (_at < pattern.Length && char.IsAsciiLetter(pattern[_at]))
+            {
+                _at++;
             }
+
+            var name = pattern[start.._at];
+            Expect('}');
+
+            var categories = Categories(name) ?? throw new FormatException($"'{name}' is no category");
+
+            return ($@"\{escaped}{{{name}}}", escaped == 'p' ? categories : AllCategories & ~categories);
         }
 
         /// <summary><c>charClassExpr = "[" [ "^" ] ( "-" / CCE1 ) *CCE1 [ "-" ] "]"</c>.</summary>
@@ -274,6 +387,7 @@ internal static class IRegexp
             }
 
             var members = new StringBuilder();
+            var categories = 0u;
             var first = true;
 
             while (true)
@@ -299,9 +413,11 @@ internal static class IRegexp
                     continue;
                 }
 
-                if (At('\\') && _at + 1 < pattern.Length && pattern[_at + 1] is 'p' or 'P')
+                if (AtCategory())
                 {
-                    members.Append(ReadEscape());
+                    var (member, held) = ReadCategory();
+                    members.Append(member);
+                    categories |= held;
                     first = false;
                     continue;
                 }
@@ -328,9 +444,21 @@ internal static class IRegexp
                 first = false;
             }
 
-            return negated
-                ? $"(?:[^{members}\\uD800-\\uDFFF]|{AnyPair})"
-                : $"[{members}]";
+            return Class(members.ToString(), categories, negated);
+        }
+
+        /// <summary>
+        /// A class of <paramref name="members"/> - code units below U+FFFF, as .NET reads them - and of the characters past
+        /// U+FFFF of <paramref name="categories"/>, negated where <paramref name="negated"/> says: a surrogate alone is never
+        /// one of it, whatever range holds it, and a character past U+FFFF is - its pair led by the code unit naming its
+        /// category - where its category is one of the class's, or, negated, none of them.
+        /// </summary>
+        private static string Class(string members, uint categories, bool negated)
+        {
+            var below = negated ? $@"[^{members}\uD800-\uDFFF]" : $@"[{members}-[\uD800-\uDFFF]]";
+            var past = negated ? AllCategories & ~categories : categories;
+
+            return past == 0 ? below : $"(?:{below}|{Tags(past)}{Pair})";
         }
 
         /// <summary><c>CCchar</c>: a character that is no <c>-</c>, <c>[</c>, <c>\</c> or <c>]</c>, or a single character's escape.</summary>
@@ -399,28 +527,37 @@ internal static class IRegexp
 
         private bool At(char character) => _at < pattern.Length && pattern[_at] == character;
 
-        /// <summary>A character as .NET reads it literally: escaped by its code, a pair of surrogates grouped so a quantifier takes both.</summary>
+        /// <summary>
+        /// A character as .NET reads it literally: escaped by its code; a pair of surrogates led by the code unit naming its
+        /// category, as the text matched holds it, grouped so a quantifier takes all three.
+        /// </summary>
         private static string Literal(string character)
-            => character.Length == 2 ? $"(?:{Escaped(character[0])}{Escaped(character[1])})" : Escaped(character[0]);
+            => character.Length == 2
+                ? $"(?:{Escaped(Tag(CharUnicodeInfo.GetUnicodeCategory(character, 0)))}{Escaped(character[0])}{Escaped(character[1])})"
+                : Escaped(character[0]);
 
         /// <summary>A class's member: one code unit, escaped by its code; a character past U+FFFF is not taken in a class.</summary>
         private static string ClassMember(string character)
             => character.Length == 1 ? Escaped(character[0]) : throw new FormatException("a class naming a character past U+FFFF is not taken");
 
-        private static string Escaped(char character)
-            => char.IsAsciiLetterOrDigit(character) ? character.ToString() : $"\\u{(int)character:X4}";
-
-        /// <summary>Whether <paramref name="category"/> is one of the general categories I-Regexp takes: <c>L</c>, <c>Lu</c> and their kin, no block.</summary>
-        private static bool IsCategory(string category) => category switch
+        /// <summary>
+        /// The general categories <paramref name="name"/> names, as bits of <see cref="UnicodeCategory"/>'s values, where it
+        /// is one I-Regexp takes - a letter alone, every category it begins, as <c>L</c>; two, that category, as <c>Lu</c>, but
+        /// a surrogate's - and <see langword="null"/> where it names none, as a block's name does.
+        /// </summary>
+        private static uint? Categories(string name)
         {
-            "L" or "Ll" or "Lm" or "Lo" or "Lt" or "Lu" => true,
-            "M" or "Mc" or "Me" or "Mn" => true,
-            "N" or "Nd" or "Nl" or "No" => true,
-            "P" or "Pc" or "Pd" or "Pe" or "Pf" or "Pi" or "Po" or "Ps" => true,
-            "Z" or "Zl" or "Zp" or "Zs" => true,
-            "S" or "Sc" or "Sk" or "Sm" or "So" => true,
-            "C" or "Cc" or "Cf" or "Cn" or "Co" => true,
-            _ => false,
-        };
+            var named = 0u;
+
+            for (var category = 0; category < CategoryNames.Length; category++)
+            {
+                if (name.Length == 1 ? CategoryNames[category][0] == name[0] : CategoryNames[category] == name)
+                {
+                    named |= 1u << category;
+                }
+            }
+
+            return named == 0 || name == "Cs" ? null : named;
+        }
     }
 }

@@ -1153,11 +1153,10 @@ public sealed class PhysicalFileSystemTests
             // A line the first is still writing: a second writer's recovery would take it for a torn one and cut it.
             first.AppendFlushed("{\"b\""u8);
 
-            var refused = Assert.Throws<IOException>(() => disk.OpenForAppend(path));
+            // Raised as a hold, and as nothing else does: a caller leaves a held file to its writer, and only a held one.
+            var refused = Assert.Throws<AppendFileHeldException>(() => disk.OpenForAppend(path));
 
-            Assert.Equal(
-                $"'{path}' is not opened for writing: another writer holds its claim '{path}.lock', or the claim could not be taken ({refused.InnerException!.Message}). Nothing was read or written.",
-                refused.Message);
+            Assert.Equal($"'{path}' is not opened for writing: another writer holds its claim '{path}.lock'. Nothing was read or written.", refused.Message);
 
             using (var reading = new StreamReader(disk.OpenRead(path)))
             {
@@ -1172,6 +1171,26 @@ public sealed class PhysicalFileSystemTests
         using var next = disk.OpenForAppend(path);
 
         Assert.Equal(16, next.Length);
+    }
+
+    /// <summary>
+    /// A claim that cannot be taken for any reason but another writer's - here one that is a link leading to itself, which
+    /// no system opens, as a read-only file system or a failing disk refuses one - is a plain failure saying why, never a
+    /// hold: a caller that leaves a held file to its writer would wait forever on what no writer holds.
+    /// </summary>
+    [Fact]
+    public void OpenForAppend_SaysAClaimThatCouldNotBeTaken_AsNoHold()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("stream.jsonl");
+        var claim = path + PhysicalAppendFile.ClaimSuffix;
+
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(claim, claim));
+
+        var refused = Assert.Throws<IOException>(() => Create().OpenForAppend(path));
+
+        Assert.Equal($"'{path}' is not opened for writing: its claim '{claim}' could not be taken ({refused.InnerException!.Message}). Nothing was read or written.", refused.Message);
+        Assert.False(File.Exists(path));
     }
 
     /// <summary>

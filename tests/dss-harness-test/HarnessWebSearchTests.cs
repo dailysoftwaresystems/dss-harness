@@ -703,6 +703,8 @@ public sealed class HarnessWebSearchTests
 
         public WebSearchFound Found(WebSearchSource source, IReadOnlyList<WebSearchResponse.Http> answers) => found is null ? _json.Found(source, answers) : found();
 
+        public string? KeyOrigin(WebSearchSource source) => _json.KeyOrigin(source);
+
         public WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int limit) => _json.Request(source, found, query, limit);
 
         public WebSearchAnswer Read(WebSearchSource source, WebSearchFound found, WebSearchResponse response) => read is null ? throw new InvalidCastException("a defect of the kind") : read(response);
@@ -935,6 +937,78 @@ public sealed class HarnessWebSearchTests
         Assert.Equal(HarnessFetch.KeyRule, Assert.IsType<AgentPolicyAnswer.Denied>(Assert.Single(rig.Records.Decided).Answer).Rule);
         Assert.Empty(rig.Endpoint.Asked);
         Assert.Equal(0, step.Spent);
+    }
+
+    /// <summary>
+    /// A source's key goes to the scheme, host and port its configuration writes alone, never to a host a document it
+    /// fetched names: the request an OpenSearch description's template sends to another host, and the one a document
+    /// discover reads sends there, are refused by the key's own rule - nothing sent to that host, in any form, and each
+    /// lookup asked without the key - and recorded as the step's rules' refusals are.
+    /// </summary>
+    [Theory]
+    [InlineData("\"header\": \"X-Api-Key\"")]
+    [InlineData("\"query\": \"key\"")]
+    public async Task AKey_IsNeverSentToAHostAFetchedDocumentNames(string sentAs)
+    {
+        const string Key = "k+0123456789/abcdef";
+        using var rig = new Rig(request => request.RequestUri!.Host switch
+        {
+            "alpha.example.test" => WebEndpoint.Page("""<OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/"><Url type="application/atom+xml" template="https://other.example.test/search?q={searchTerms}"/></OpenSearchDescription>""", "application/opensearchdescription+xml"),
+            "index.example.test" => Json("""{ "search": "https://other.example.test/query" }"""),
+            _ => WebEndpoint.Page(Stored("atom.xml"), "application/atom+xml"),
+        });
+        var credential = "\"credential\": { \"from\": \"env\", \"name\": \"A_KEY\", " + sentAs + " }";
+        var described = Source("described", """{ "kind": "opensearch", "url": "https://alpha.example.test/opensearch.xml", """ + credential + " }");
+        var discovered = Source("discovered", Discovered.Replace("\"discover\"", credential + ", \"discover\"", StringComparison.Ordinal));
+        var keys = new Dictionary<string, WebSearchKey> { ["described"] = new(Key, null), ["discovered"] = new(Key, null) };
+        var step = rig.Step([described, discovered], keys: keys, mask: new Secrets([.. described.Credential!.Forms(Key)]));
+
+        var searched = await rig.SearchAsync(step, "x");
+
+        Assert.Equal(["alpha.example.test", "index.example.test"], rig.Endpoint.Asked.Select(sent => sent.Address.Host).Order(StringComparer.Ordinal));
+
+        // No request carried the key in any form: the lookups are sent none, and nothing reached the host they named.
+        foreach (var sent in rig.Endpoint.Asked)
+        {
+            Assert.False(sent.Headers.ContainsKey("X-Api-Key"));
+
+            foreach (var form in described.Credential.Forms(Key).Append("key="))
+            {
+                Assert.DoesNotContain(form, sent.Address.OriginalString, StringComparison.Ordinal);
+                Assert.DoesNotContain(sent.Headers.Values, value => value.Contains(form, StringComparison.Ordinal));
+            }
+        }
+
+        Assert.Equal(
+            [
+                (WebSearchOutcome.Refused, $"'https://other.example.test/search?q=x' was refused by {HarnessFetch.KeyRule}: its key is sent to https://alpha.example.test alone, and this address is https://other.example.test's"),
+                (WebSearchOutcome.Refused, $"'https://other.example.test/query?q=x' was refused by {HarnessFetch.KeyRule}: its key is sent to no scheme, host and port, for its source's configuration writes none of its own, and a host a document it read names is never sent one: this address is https://other.example.test's"),
+            ],
+            searched.Parts.Select(part => (part.Answer.Outcome, part.Answer.Why)));
+        Assert.Equal(
+            [("described", "https://other.example.test/search?q=x"), ("discovered", "https://other.example.test/query?q=x")],
+            rig.Records.Decided.Where(decided => decided.Answer is AgentPolicyAnswer.Denied { Rule: HarnessFetch.KeyRule }).Select(decided => (decided.Source, decided.Address)).OrderBy(decided => decided.Source, StringComparer.Ordinal));
+        Assert.Equal(2, step.Spent);
+    }
+
+    /// <summary>
+    /// An OpenSearch description whose template names the scheme, host and port its source's address writes is sent the key
+    /// there - the description itself asked without it.
+    /// </summary>
+    [Fact]
+    public async Task AnOpenSearchTemplateOnItsSourcesOwnHost_IsSentTheKey()
+    {
+        using var rig = new Rig(request => request.RequestUri!.AbsolutePath == "/opensearch.xml"
+            ? WebEndpoint.Page("""<OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/"><Url type="application/atom+xml" template="https://ALPHA.example.test:443/search?q={searchTerms}"/></OpenSearchDescription>""", "application/opensearchdescription+xml")
+            : WebEndpoint.Page(Stored("atom.xml"), "application/atom+xml"));
+        var described = Source("described", """{ "kind": "opensearch", "url": "https://alpha.example.test/opensearch.xml", "credential": { "from": "env", "name": "A_KEY", "header": "X-Api-Key" } }""");
+
+        var searched = await rig.SearchAsync(rig.Step([described], keys: new Dictionary<string, WebSearchKey> { ["described"] = new("k-alpha", null) }, mask: new Secrets("k-alpha")), "x");
+
+        Assert.Equal(WebSearchOutcome.Ok, searched.Parts[0].Answer.Outcome);
+        Assert.Equal(
+            [("/opensearch.xml", (string?)null), ("/search", "k-alpha")],
+            rig.Endpoint.Asked.Select(sent => (sent.Address.AbsolutePath, sent.Headers.GetValueOrDefault("X-Api-Key"))));
     }
 
     /// <summary>
@@ -1304,6 +1378,31 @@ public sealed class HarnessWebSearchTests
         Assert.Empty(rig.Records.Decided);
         Assert.Equal(0, step.Spent);
         Assert.True(File.Exists(Path.Combine(OrchestratorLayout.WebIndexDirectory(new HarnessLayout(rig.Root, rig.Root), "docs"), SitemapFill.RecordFileName)));
+    }
+
+    /// <summary>
+    /// A sitemap source whose index this machine cannot claim - a failure of its own, as a read-only file system's - fails
+    /// its part as this machine's, saying why: never told that another run is reading its index, for ever, while nobody
+    /// learns why.
+    /// </summary>
+    [Fact]
+    public async Task ASitemapSourceWhoseIndexCannotBeClaimed_FailsSayingWhy()
+    {
+        const string Docs = """{ "kind": "sitemap", "site": "https://docs.example.test" }""";
+        using var rig = new Rig(_ => WebEndpoint.Page("x", "text/plain"));
+        var record = Path.Combine(OrchestratorLayout.WebIndexDirectory(new HarnessLayout(rig.Root, rig.Root), "docs"), SitemapFill.RecordFileName);
+        var claim = record + PhysicalAppendFile.ClaimSuffix;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(record)!);
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(claim, claim));
+
+        var why = Assert.Throws<IOException>(() => new FileStream(claim, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)).Message;
+        var searched = await rig.SearchAsync(rig.Step([Source("docs", Docs)]), "flexbox");
+
+        Assert.Equal(
+            (WebSearchOutcome.Failed, $"its search failed on this machine, not at the source: '{record}' is not opened for writing: its claim '{claim}' could not be taken ({why}). Nothing was read or written."),
+            (searched.Parts[0].Answer.Outcome, searched.Parts[0].Answer.Why));
+        Assert.Empty(rig.Endpoint.Asked);
     }
 
     /// <summary>The step's rules: everything allowed but the addresses <paramref name="source"/> and the results <paramref name="result"/> refuse, each by the step's own rule.</summary>

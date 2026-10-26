@@ -3669,13 +3669,15 @@ public static class HelpTopics
             + "asked more than its perMinute in a minute, nor its perDay in a day, on this machine, whatever runs ask it - one "
             + $"record of the machine's, {Web.Search.WebSearchPace.FilePrefix}-<machine>.json in this user's directory for the "
             + "tool, beside admission's - a request past its minute waiting for it. A source's key, where it names one - a "
-            + "variable of the .env slot, or the machine's gh login for the source's host, sent to that host or its api. host "
-            + "alone - is used where it is there, and the fetch adds it to what it "
-            + "sends to the scheme, host and port each of that source's searches first asks alone - a lookup is sent none - as a "
-            + "header or a query parameter, over https alone - an address it may not go to refused, nothing sent - never to an "
-            + "address any record or answer "
-            + "holds; missing, the source is asked without it, and the record says why. One source's failure - what this "
-            + "machine could not do for it among them - is its own part's, never another's.");
+            + "variable of the .env slot, sent to the scheme, host and port the source's own address writes alone, or the "
+            + "machine's gh login for the source's host, sent to that host or its api. host alone - is used where it is there, "
+            + "and the fetch adds it to what it sends to the scheme, host and port each of that source's searches first asks "
+            + "alone, where it is one of those - a lookup is sent none, and a host a document the source read names, an "
+            + "OpenSearch description's template or what discover found, is never sent one - as a header or a query parameter, "
+            + "over https alone - an address it may not go to refused, nothing sent - never to an address any record or answer "
+            + "holds; missing, the source is asked without it, and the record says why. A source whose address takes its host "
+            + "from what discover finds is refused a key of the .env slot where the configuration is read. One source's "
+            + "failure - what this machine could not do for it among them - is its own part's, never another's.");
         builder.AppendLine();
         AppendWrapped(
             builder,
