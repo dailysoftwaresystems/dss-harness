@@ -377,6 +377,35 @@ public sealed class CommitStepTests
     }
 
     /// <summary>
+    /// Under core.autocrlf, a fold's file HEAD holds with CRLF - committed by hand, git add keeping the carriage returns
+    /// the index held - is the tree's byte for byte: taken by HEAD, nothing staged and no commit asked of git, never a
+    /// change to stage again that git add finds none in.
+    /// </summary>
+    [Fact]
+    public async Task AFileHeadHoldsWithCarriageReturnsUnderAutocrlf_CommittedByHand_IsTakenByHead()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.GitAsync(kit.Main, "config", "core.autocrlf", "false");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\r\n");
+        await kit.GitAsync(kit.Main, "add", "--", "a.txt");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "a file with carriage returns");
+        await kit.GitAsync(kit.Main, "config", "core.autocrlf", "true");
+        var fold = await FoldedAsync(kit, "fold", ("a.txt", "folded\r\n"));
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "the fold, by hand", "--", "a.txt");
+        var head = await HeadAsync(kit);
+
+        Assert.Equal("folded\r\n", (await kit.Harness.RunGitAsync(kit.Main, ["show", "HEAD:a.txt"], Token)).StandardOutput);
+
+        var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
+
+        Assert.Equal((true, HarnessExit.Success, null), (ended.Passed, ended.Exit, ended.Error));
+        Assert.Equal("""{"committed":false,"sha":null,"paths":[],"ignored":[]}""", ended.Output!.ToJsonString());
+        Assert.Equal(head, await HeadAsync(kit));
+        Assert.Equal(["c1"], kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Of(fold)!.Paths.Select(path => path.Committed));
+    }
+
+    /// <summary>
     /// Run again once it has committed - resumed after the commit, before the engine wrote the step done - the step answers
     /// the commit it made, committed true, and stages nothing.
     /// </summary>

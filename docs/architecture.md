@@ -1905,7 +1905,8 @@ out, is left for a person and kept beside the set (`FlowCommitStray`) - and mark
 it took (`FlowFoldPath.Committed`); a path git ignores marked `Ignored` and answered under `ignored`
 (`FoldLedger.IgnoredOf`); and a set an attempt before left staged settled first, committed only where the tree holds
 what it staged. Whether HEAD holds a fold's path as the tree does is one answer, `FoldLedger.DifferingAsync` - the blob
-git would store the file as against HEAD's, never git's status, which does not look at a path marked assume-unchanged or
+git add would record for the file (`IGitClient.ListStagedIdsAsync`, its carriage returns kept where the index holds the
+path with them) against HEAD's, never git's status, which does not look at a path marked assume-unchanged or
 skip-worktree - which the commit reads and so does whether a fold is committed at all (`FoldLedger.Uncommitted`, read
 before the repository's section where another run's ledger owes a path, a path git ignores left out as the commit
 leaves it out), so a commit made by hand ends a stopped run's hold as the run's own does. The texts of what a run

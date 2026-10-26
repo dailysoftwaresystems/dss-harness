@@ -686,6 +686,67 @@ public sealed class FoldLedgerTests
         Assert.Contains("run 'r1' of this repository is unfinished (stopped; 1 fold in its ledger not yet committed)", held.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Whether the tree holds a path otherwise than HEAD is told by the blob git add would record for its file - its
+    /// carriage returns kept where the index holds the path with them, as git's safer autocrlf rule keeps them - never by
+    /// a hash that reads no index: under core.autocrlf a file HEAD holds with CRLF, the tree's byte for byte, differs in
+    /// nothing. One marked assume-unchanged whose file changed differs all the same, as one gone and one HEAD does not
+    /// hold do; a path neither holds does not.
+    /// </summary>
+    [Fact]
+    public async Task WhatTheTreeHoldsOtherwiseThanHead_IsToldByTheBlobGitAddWouldRecord_ItsCarriageReturnsKept()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(temp.Path, Token);
+        _ = await harness.RunGitAsync(temp.Path, ["config", "core.autocrlf", "false"], Token);
+        File.WriteAllText(Path.Combine(temp.Path, "crlf.txt"), "one\r\ntwo\r\n");
+        File.WriteAllText(Path.Combine(temp.Path, "marked.txt"), "base\n");
+        File.WriteAllText(Path.Combine(temp.Path, "gone.txt"), "base\n");
+        _ = await harness.RunGitAsync(temp.Path, ["add", "--", "crlf.txt", "marked.txt", "gone.txt"], Token);
+        _ = await harness.RunGitAsync(temp.Path, ["commit", "--quiet", "-m", "a base"], Token);
+        _ = await harness.RunGitAsync(temp.Path, ["config", "core.autocrlf", "true"], Token);
+        File.WriteAllText(Path.Combine(temp.Path, "marked.txt"), "changed\n");
+        _ = await harness.RunGitAsync(temp.Path, ["update-index", "--assume-unchanged", "--", "marked.txt"], Token);
+        File.Delete(Path.Combine(temp.Path, "gone.txt"));
+        File.WriteAllText(Path.Combine(temp.Path, "new.txt"), "new\n");
+
+        var differing = await FoldLedger.DifferingAsync(harness.GitClient, harness.FileSystem, temp.Path, ["crlf.txt", "marked.txt", "gone.txt", "new.txt", "never.txt"], Token);
+
+        Assert.Equal(["gone.txt", "marked.txt", "new.txt"], differing.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A stopped run's fold committed by hand under core.autocrlf, of a file HEAD holds with CRLF - git add keeping the
+    /// carriage returns the index held - holds nothing in the tree: a second run starts.
+    /// </summary>
+    [Fact]
+    public async Task ARunsFoldCommittedByHandWithCarriageReturnsUnderAutocrlf_HoldsNothing()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(temp.Path, Token);
+        _ = await harness.RunGitAsync(temp.Path, ["config", "core.autocrlf", "false"], Token);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "one\r\n");
+        _ = await harness.RunGitAsync(temp.Path, ["add", "--", "a.txt"], Token);
+        _ = await harness.RunGitAsync(temp.Path, ["commit", "--quiet", "-m", "a file with carriage returns"], Token);
+        _ = await harness.RunGitAsync(temp.Path, ["config", "core.autocrlf", "true"], Token);
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n");
+        var (other, _) = await sessions.CreateAsync(layout, definition, cancellationToken: Token);
+        new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Release(other);
+        harness.OrchestrationStore.WriteFlow(other, new FlowFile(1, other.Name, "flow", Digest, new Dictionary<string, string>(), "Stopped", new FlowBudgetRecord(0, 0, 0), 0, [], [], At));
+        var ledger = new FoldLedger(harness.OrchestrationStore, harness.FileSystem, TimeProvider.System);
+        var id = await ledger.IntendAsync(other, temp.Path, "one", 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = ["a.txt"] }, Token);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "folded\r\n");
+        await ledger.SettleAsync(other, temp.Path, id, HarnessExit.Success);
+        _ = await harness.RunGitAsync(temp.Path, ["commit", "--quiet", "-m", "the fold, by hand", "--", "a.txt"], Token);
+
+        Assert.Equal("folded\r\n", (await harness.RunGitAsync(temp.Path, ["show", "HEAD:a.txt"], Token)).StandardOutput);
+        Assert.Equal("second", (await sessions.CreateAsync(layout, definition, wantedName: "second", cancellationToken: Token)).Run.Name);
+    }
+
     private const string Head = "1111111111111111111111111111111111111111";
 
     private const string Other = "2222222222222222222222222222222222222222";

@@ -392,21 +392,29 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
 
     /// <summary>
     /// Which of <paramref name="paths"/> the main tree at <paramref name="main"/> holds otherwise than its HEAD does, told by
-    /// what each holds: the blob git would store its file as (<see cref="IGitClient.HashWorkingFilesAsync"/>) against the
-    /// one HEAD holds at the path (<see cref="IGitClient.HeldAtAsync"/>), and no file against none - never by git's status,
-    /// which does not look at a path marked assume-unchanged or skip-worktree, and would read its change as none. The one
-    /// answer to whether HEAD holds a fold's path as the tree does: whether a run is unfinished (<see cref="Uncommitted"/>),
-    /// and whether a commit step finds a path committed - by hand, or by an attempt of its own a crash cut off. Nothing is
+    /// what each holds: the blob git add would record for its file (<see cref="IGitClient.ListStagedIdsAsync"/> - its
+    /// carriage returns kept where the index holds the path with them, as git keeps them) against the one HEAD holds at
+    /// the path (<see cref="IGitClient.HeldAtAsync"/>), and no file against none - never by git's status, which does not
+    /// look at a path marked assume-unchanged or skip-worktree, and would read its change as none. The one answer to
+    /// whether HEAD holds a fold's path as the tree does: whether a run is unfinished (<see cref="Uncommitted"/>), and
+    /// whether a commit step finds a path committed - by hand, or by an attempt of its own a crash cut off. Nothing is
     /// written.
     /// </summary>
     /// <param name="git">Reads HEAD, and what the files hold.</param>
+    /// <param name="fileSystem">Tells which paths hold a file.</param>
     /// <param name="main">The main tree's root.</param>
     /// <param name="paths">The paths asked about, relative to the tree and spelt with forward slashes.</param>
     /// <param name="cancellationToken">Stops the reads.</param>
     /// <exception cref="HarnessException">git could not read HEAD, or what a file holds.</exception>
-    public static async Task<IReadOnlySet<string>> DifferingAsync(IGitClient git, string main, IReadOnlyCollection<string> paths, CancellationToken cancellationToken)
+    public static async Task<IReadOnlySet<string>> DifferingAsync(
+        IGitClient git,
+        IFileSystem fileSystem,
+        string main,
+        IReadOnlyCollection<string> paths,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(git);
+        ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(paths);
 
         var asked = paths.Distinct(StringComparer.Ordinal).ToList();
@@ -419,15 +427,17 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
 
         var head = await git.ResolveCommitAsync(main, "HEAD", cancellationToken).ConfigureAwait(false);
         var held = head is null ? null : await git.HeldAtAsync(main, head, asked, cancellationToken).ConfigureAwait(false);
-        var now = await git.HashWorkingFilesAsync(main, asked, cancellationToken).ConfigureAwait(false);
+        var files = asked.Where(path => fileSystem.KindOf(Path.Combine(main, path)) == PathKind.File).ToList();
+        var stored = await git.ListStagedIdsAsync(main, files, cancellationToken).ConfigureAwait(false);
+        var now = files.Select((path, at) => (path, at)).ToDictionary(file => file.path, file => stored[file.at], StringComparer.Ordinal);
 
-        for (var at = 0; at < asked.Count; at++)
+        foreach (var path in asked)
         {
-            var then = held?.GetValueOrDefault(asked[at]) ?? GitHeld.Nothing;
+            var then = held?.GetValueOrDefault(path) ?? GitHeld.Nothing;
 
-            if (now[at] is { } blob ? !string.Equals(blob, then.Blob, StringComparison.Ordinal) : !then.IsNothing)
+            if (now.TryGetValue(path, out var blob) ? !string.Equals(blob, then.Blob, StringComparison.Ordinal) : !then.IsNothing)
             {
-                differing.Add(asked[at]);
+                differing.Add(path);
             }
         }
 

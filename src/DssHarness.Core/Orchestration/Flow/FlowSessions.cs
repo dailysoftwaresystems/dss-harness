@@ -240,7 +240,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
         var asked = owed.Distinct(StringComparer.Ordinal).ToList();
         var ignored = await _git.FindIgnoredAsync(main, asked, cancellationToken).ConfigureAwait(false);
 
-        return await FoldLedger.DifferingAsync(_git, main, [.. asked.Where(path => !ignored.Contains(path))], cancellationToken).ConfigureAwait(false);
+        return await FoldLedger.DifferingAsync(_git, _fileSystem, main, [.. asked.Where(path => !ignored.Contains(path))], cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

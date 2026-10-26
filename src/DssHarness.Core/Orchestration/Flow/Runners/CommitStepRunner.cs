@@ -104,7 +104,7 @@ public sealed class CommitStepRunner(
 
         var weighed = owed.Paths.Where(path => !ignored.Contains(path.Path)).ToList();
         var head = await git.ResolveCommitAsync(main, "HEAD", cancellationToken).ConfigureAwait(false);
-        var differing = head is null ? null : await FoldLedger.DifferingAsync(git, main, [.. weighed.Select(path => path.Path)], cancellationToken).ConfigureAwait(false);
+        var differing = head is null ? null : await FoldLedger.DifferingAsync(git, fileSystem, main, [.. weighed.Select(path => path.Path)], cancellationToken).ConfigureAwait(false);
         var staging = new List<(FoldOwedPath Path, string? Holds)>();
         var byHand = new List<(FoldOwedPath Path, string? Holds)>();
         var changed = new List<FoldOwedPath>();
@@ -239,7 +239,7 @@ public sealed class CommitStepRunner(
             if (head is not null
                 && !string.Equals(head, left.Head, StringComparison.Ordinal)
                 && await AsStagedAsync(main, left.Paths, cancellationToken).ConfigureAwait(false)
-                && (await FoldLedger.DifferingAsync(git, main, paths, cancellationToken).ConfigureAwait(false)).Count == 0)
+                && (await FoldLedger.DifferingAsync(git, fileSystem, main, paths, cancellationToken).ConfigureAwait(false)).Count == 0)
             {
                 ledger.Committed(layout, left.Id, head);
                 return Done(committed: true, head, paths, FoldLedger.IgnoredOf(store.ReadFolds(layout), upstream));
