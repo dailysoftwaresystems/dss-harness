@@ -62,6 +62,19 @@ public sealed class AgentPolicy
          "bisect", "symbolic-ref", "filter-branch", "fast-import", "replace", "notes", "reflog", "remote", "submodule", "sparse-checkout", "read-tree", "prune", "repack", "pack-refs", "maintenance"];
 
     /// <summary>
+    /// gh's own commands, as gh 2.89 lists them: the first word of a gh command that is none of them is an alias - gh's
+    /// own <c>co</c> among them, for <c>pr checkout</c> - or an extension, which gh runs as a command no rule here reads,
+    /// and the worktree rules refuse it as they refuse <c>gh alias set</c>. A command a later gh adds is refused until it is
+    /// named here.
+    /// </summary>
+    public static IReadOnlyList<string> GhCommands { get; } =
+    [
+        "agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "codespace", "completion", "config", "copilot",
+        "extension", "gist", "gpg-key", "help", "issue", "label", "licenses", "org", "pr", "preview", "project", "release",
+        "repo", "ruleset", "run", "search", "secret", "ssh-key", "status", "variable", "version", "workflow",
+    ];
+
+    /// <summary>
     /// The <c>gh</c> commands that run git's state-writing verbs (<see cref="GitStateVerbs"/>) on the repository they stand
     /// in, refused by the worktree rules beside those verbs: a pull request's branch fetched and checked out, a default
     /// repository written into git's configuration, and a fork made with its remote added or its clone.
@@ -1030,6 +1043,13 @@ public sealed class AgentPolicy
         if (words.Count < 2 || !CommandAnalysis.Name(words[0]).Equals("gh", StringComparison.OrdinalIgnoreCase))
         {
             return null;
+        }
+
+        // A word that is none of gh's own commands is an alias or an extension: a name for any command, a refused one
+        // among them, that no rule knows.
+        if (!GhCommands.Contains(words[1], StringComparer.Ordinal))
+        {
+            return $"'gh {words[1]}', an alias or an extension, a name for any command";
         }
 
         // An alias stands for any command, a refused one among them, under a name no rule knows.

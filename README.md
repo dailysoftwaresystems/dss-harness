@@ -612,7 +612,8 @@ configuration from (`HOME`, `XDG_CONFIG_HOME`, Windows' `USERPROFILE`) among it 
 it is and still the command it runs - the `gh` commands that run them (`gh pr checkout`, `gh repo set-default`,
 `gh repo fork`), and the `gh` commands that merge or start CI (`gh pr merge`, `gh pr update-branch`, `gh repo sync`,
 `gh workflow run`, `gh run rerun`), the `gh api` endpoints and GraphQL mutations that reach the
-same and `gh alias set` are refused (reading git stays allowed), git's own
+same, `gh alias set`, and a `gh` command named by none of gh's own (an alias - gh's own `co` among them - or an
+extension, a name for any command) are refused (reading git stays allowed), git's own
 files - a `.git`, file or directory, at any depth beneath a root and in any case, a nested
 repository's and a submodule's too (`Write(**/.git/**)`) - are not written by a tool whatever
 `protectedPaths` says, and an agent does not edit its own policy

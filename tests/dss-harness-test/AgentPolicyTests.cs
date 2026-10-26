@@ -2054,6 +2054,37 @@ public sealed class AgentPolicyTests
     }
 
     /// <summary>
+    /// A gh command named by none of gh's own - an alias, gh's own co for pr checkout among them, or an extension - is a
+    /// name for any command, and the worktree rules refuse it as they refuse gh alias set; gh's own commands stay as their
+    /// rules decide them.
+    /// </summary>
+    [Fact]
+    public void AGhCommandNamedByNoneOfGhsOwn_IsRefusedAsAnAliasIs()
+    {
+        foreach (var platform in new[] { PlatformId.Linux, PlatformId.Windows })
+        {
+            using var ground = Ground(platform);
+            var policy = ground.Policy();
+
+            foreach (var (command, named) in new[] { ("gh co 42", "co"), ("gh -R owner/repo co 42", "co"), ("gh my-extension run", "my-extension"), ("gh Co 42", "Co") })
+            {
+                var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
+
+                Assert.Equal(
+                    ("the merges and CI starts of gh", $"'{command}' is denied by a worktree rule of this tool: it reaches 'gh {named}', an alias or an extension, a name for any command, and never merges, never starts CI binds the agents too"),
+                    (denied.Rule, denied.Reason));
+            }
+
+            foreach (var command in new[] { "gh pr view 12", "gh issue list", "gh search code AgentPolicy", "gh --version", "gh help pr", "gh status" })
+            {
+                Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+            }
+
+            Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false).Run("gh co 42"));
+        }
+    }
+
+    /// <summary>
     /// The gh commands that run git's state-writing verbs on the repository they stand in - a pull request's branch checked
     /// out, a default repository written into git's configuration, a fork with its remote or its clone - are refused by the
     /// worktree rules beside those verbs; reading a pull request or a repository stays allowed.

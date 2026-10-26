@@ -331,7 +331,7 @@ public sealed partial class HelpTests
         Assert.Contains($"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) are refused, and so are the gh commands that run them ({string.Join(", ", AgentPolicy.GhGitStateCommands)}) - reading git", prose, StringComparison.Ordinal);
         Assert.Contains(
             $"and so are the gh commands that merge or start CI ({string.Join(", ", AgentPolicy.NeverCiCommands)}), the gh api endpoints and GraphQL "
-                + "mutations that reach the same, and gh alias set, for never merges,",
+                + $"mutations that reach the same, gh alias set, and a gh command named by none of gh's own ({string.Join(", ", AgentPolicy.GhCommands)}) - an alias, gh's own co among them, or an extension, a name for any command - for never merges,",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
