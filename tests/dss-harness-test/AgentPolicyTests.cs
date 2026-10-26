@@ -2172,6 +2172,7 @@ public sealed class AgentPolicyTests
             foreach (var command in new[]
             {
                 "gh api repos/o/r/git/refs/heads/main", "gh api -X GET repos/o/r/pulls -f state=open", "gh api repos/o/r/contents/README.md",
+                "gh api -X=GET repos/o/r/git/refs/heads/main -f per_page=5", "gh api -XGET repos/o/r/contents/README.md -f ref=main",
                 "gh api --method HEAD repos/o/r/releases", "gh api repos/o/r/releases/123/assets", "gh api repos/o/r/pulls/5/comments",
                 "gh release view v1", "gh release list",
             })

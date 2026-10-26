@@ -426,8 +426,9 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>
-    /// Whether <c>gh api</c> writes: its method, by <c>-X</c> or <c>--method</c>, any but GET or HEAD - one the shell
-    /// expands may be any - and, where it names none, gh's own POST for a request given fields or an input.
+    /// Whether <c>gh api</c> writes: its method, by <c>-X</c> or <c>--method</c>, any but GET or HEAD as written - so one
+    /// the shell expands, which may be any, writes - and, where it names none, gh's own POST for a request given fields or
+    /// an input.
     /// </summary>
     /// <param name="arguments">The words after <c>gh</c>, <c>api</c> first.</param>
     public static bool GhApiWrites(IReadOnlyList<string> arguments)
@@ -455,7 +456,7 @@ public static partial class CommandAnalysis
         }
 
         return method is not null
-            ? Expansion(method) is not null || !(method.Equals("GET", StringComparison.OrdinalIgnoreCase) || method.Equals("HEAD", StringComparison.OrdinalIgnoreCase))
+            ? !(method.Equals("GET", StringComparison.OrdinalIgnoreCase) || method.Equals("HEAD", StringComparison.OrdinalIgnoreCase))
             : GhApiFields(arguments).Any() || arguments.Any(word => word == "--input" || word.StartsWith("--input=", StringComparison.Ordinal));
     }
 
