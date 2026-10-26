@@ -11,12 +11,13 @@ namespace DssHarness.Core.Codebase.Languages.Scanning;
 /// branch and closed after the conditional ends - <c>void f(int a) {</c> under <c>#if</c>, <c>void f(int a, int b) {</c>
 /// under <c>#else</c>, one body after <c>#endif</c> - is matched as though each branch had been taken alone: each branch
 /// begins where the conditional began, and after it the brackets the branches left open at one depth are one, the
-/// first branch's, closed by the same bracket - what the group holds begins past the last of them (<see cref="Within"/>),
-/// so the head another branch writes is none of it. A brace the first branch leaves open stays open though another leaves
-/// none - <c>extern "C" {</c> under a conditional of its own, closed under another - but a parenthesis or a square
-/// bracket stays open only where every branch leaves one at that depth, a conditional with no alternative having an
-/// empty one; every other bracket a branch leaves open is stranded (<see cref="IsStranded"/>): it matches nothing and
-/// holds nothing, so text a branch leaves unbalanced never runs on over the rest of the file.
+/// first branch's, closed by the same bracket - what the group holds is what each branch writes after its own opener,
+/// the head another branch repeats before its opener none of it (<see cref="Inside"/>). A brace the first branch leaves
+/// open stays open though another leaves none - <c>extern "C" {</c> under a conditional of its own, closed under
+/// another - but a parenthesis or a square bracket stays open only where every branch leaves one at that depth, a
+/// conditional with no alternative having an empty one; every other bracket a branch leaves open is stranded
+/// (<see cref="IsStranded"/>): it matches nothing and holds nothing, so text a branch leaves unbalanced never runs on
+/// over the rest of the file.
 /// </remarks>
 internal sealed class ScannedText
 {
@@ -24,8 +25,11 @@ internal sealed class ScannedText
     private readonly bool[] _stranded;
     private readonly string? _closer;
 
-    /// <summary>For each opener joined to others - one written under each branch of a conditional - the last of them.</summary>
-    private readonly Dictionary<int, int> _lastOpeners;
+    /// <summary>
+    /// For each opener joined to others - one written under each branch of a conditional - the heads the other branches
+    /// write before theirs: from the directive each begins at to its own opener, in order.
+    /// </summary>
+    private readonly Dictionary<int, List<(int Start, int End)>> _heads;
 
     /// <summary>Scans <paramref name="tokens"/> of <paramref name="source"/>, matching their brackets.</summary>
     /// <param name="source">The text.</param>
@@ -38,7 +42,7 @@ internal sealed class ScannedText
         Source = source;
         Tokens = tokens;
         Comments = comments;
-        (_match, _stranded, _lastOpeners) = Matched(source, tokens);
+        (_match, _stranded, _heads) = Matched(source, tokens);
         Stranded = [.. Enumerable.Range(0, tokens.Count).Where(at => _stranded[at])];
     }
 
@@ -125,11 +129,35 @@ internal sealed class ScannedText
     public bool IsStranded(int at) => at >= 0 && at < _stranded.Length && _stranded[at];
 
     /// <summary>
-    /// The index of the first token the group the bracket at <paramref name="open"/> opens holds: the one past it - or,
-    /// where each branch of a conditional wrote an opener of the group, joined to it, the one past the last of those, so
-    /// the head another branch writes before its own opener is none of what the group holds.
+    /// The runs of tokens the group the bracket at <paramref name="open"/> opens holds, from past it to
+    /// <paramref name="end"/>: one run - but where each branch of a conditional wrote an opener of the group, joined to it,
+    /// the head each other branch writes, from the directive it begins at to its own opener, is left out, and what every
+    /// branch writes after its opener is kept.
     /// </summary>
-    public int Within(int open) => (_lastOpeners.TryGetValue(open, out var last) ? last : open) + 1;
+    public IEnumerable<(int Start, int End)> Inside(int open, int end)
+    {
+        var at = open + 1;
+
+        foreach (var (start, last) in _heads.GetValueOrDefault(open) ?? [])
+        {
+            if (start >= end)
+            {
+                break;
+            }
+
+            if (start > at)
+            {
+                yield return (at, start);
+            }
+
+            at = Math.Max(at, last + 1);
+        }
+
+        if (end > at)
+        {
+            yield return (at, end);
+        }
+    }
 
     /// <summary>
     /// The index past the group the bracket at <paramref name="open"/> opens: past its match; past itself where it is
@@ -371,18 +399,21 @@ internal sealed class ScannedText
         }
     }
 
-    /// <summary>One conditional being read: the index of its first directive, the brackets open where it began, and those each branch read so far left.</summary>
-    private sealed record Conditional(int At, List<Open> Start, List<List<Open>> Ends);
+    /// <summary>
+    /// One conditional being read: the index of its first directive, the brackets open where it began, those each branch
+    /// read so far left, and the index of the directive each branch after the first begins at.
+    /// </summary>
+    private sealed record Conditional(int At, List<Open> Start, List<List<Open>> Ends, List<int> Alternatives);
 
     /// <summary>
     /// The match of every bracket of <paramref name="tokens"/>, -1 where none matches it, whether each is stranded, and for
-    /// each opener joined to others the last of them.
+    /// each opener joined to others the heads the other branches write before theirs (<see cref="Inside"/>).
     /// </summary>
-    private static (int[] Match, bool[] Stranded, Dictionary<int, int> LastOpeners) Matched(string source, IReadOnlyList<ScanToken> tokens)
+    private static (int[] Match, bool[] Stranded, Dictionary<int, List<(int Start, int End)>> Heads) Matched(string source, IReadOnlyList<ScanToken> tokens)
     {
         var match = new int[tokens.Count];
         var stranded = new bool[tokens.Count];
-        var lastOpeners = new Dictionary<int, int>();
+        var heads = new Dictionary<int, List<(int Start, int End)>>();
         Array.Fill(match, -1);
 
         var open = new List<Open>();
@@ -397,18 +428,19 @@ internal sealed class ScannedText
                 switch (token.Branch)
                 {
                     case ScanBranch.Opens:
-                        conditionals.Push(new Conditional(at, Copy(open), []));
+                        conditionals.Push(new Conditional(at, Copy(open), [], []));
                         break;
 
                     // Each branch is read from where the conditional began.
                     case ScanBranch.Alternative when conditionals.TryPeek(out var conditional):
                         conditional.Ends.Add(Copy(open));
+                        conditional.Alternatives.Add(at);
                         open = Copy(conditional.Start);
                         break;
 
                     case ScanBranch.Closes when conditionals.TryPop(out var conditional):
                         conditional.Ends.Add(open);
-                        open = Counted(Ended(conditional, stranded, lastOpeners));
+                        open = Counted(Ended(conditional, stranded, heads));
                         break;
                 }
 
@@ -432,7 +464,7 @@ internal sealed class ScannedText
             }
         }
 
-        return (match, stranded, lastOpeners);
+        return (match, stranded, heads);
     }
 
     /// <summary>
@@ -472,11 +504,12 @@ internal sealed class ScannedText
     /// <summary>
     /// What is open once <paramref name="conditional"/> ends: what its first branch left, each bracket another branch left
     /// open at the same depth, of the same kind, joined to it - closed by one bracket, each of its openers recorded in
-    /// <paramref name="lastOpeners"/> with the last of them. A parenthesis or a square bracket of the first branch's own
-    /// that a branch - the empty one of a conditional with no alternative among them - did not leave open too, and each
-    /// bracket of another branch's own not joined, is stranded.
+    /// <paramref name="heads"/> with the head each other branch writes, from the directive it begins at to its own opener,
+    /// and the heads that branch's own conditionals joined in it. A parenthesis or a square bracket of the first branch's
+    /// own that a branch - the empty one of a conditional with no alternative among them - did not leave open too, and
+    /// each bracket of another branch's own not joined, is stranded.
     /// </summary>
-    private static List<Open> Ended(Conditional conditional, bool[] stranded, Dictionary<int, int> lastOpeners)
+    private static List<Open> Ended(Conditional conditional, bool[] stranded, Dictionary<int, List<(int Start, int End)>> heads)
     {
         var ends = conditional.Ends;
         var kept = ends[0];
@@ -502,19 +535,29 @@ internal sealed class ScannedText
                 continue;
             }
 
-            foreach (var other in alike.OfType<Open>())
+            // The branch alike[index] left is the one the alternative directive at that index begins.
+            var written = new List<(int Start, int End)>(heads.GetValueOrDefault(bracket.Tokens[0]) ?? []);
+
+            for (var index = 0; index < alike.Count; index++)
             {
+                if (alike[index] is not { } other)
+                {
+                    continue;
+                }
+
+                written.Add((conditional.Alternatives[index], other.Tokens[0]));
+                written.AddRange(heads.GetValueOrDefault(other.Tokens[0]) ?? []);
                 bracket.Tokens.AddRange(other.Tokens.Except(bracket.Tokens));
                 joined.Add(other);
             }
 
             if (bracket.Tokens.Count > 1)
             {
-                var last = bracket.Tokens.Max();
+                written.Sort();
 
                 foreach (var opener in bracket.Tokens)
                 {
-                    lastOpeners[opener] = last;
+                    heads[opener] = written;
                 }
             }
         }

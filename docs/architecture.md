@@ -2167,8 +2167,8 @@ alone, and the one reading of the language's comments (`CommentEnd`) its code an
 read by - and `ScannedText` matches the brackets - each branch
 of a conditional read from where the conditional began, the brackets every branch leaves open at one depth joined into
 one closed by the bracket after it (a brace the first branch leaves open kept though another leaves none, as
-`extern "C" {` is), what the joined group holds beginning past the last of its openers (`Within`), so the head another
-branch writes is none of it, every other bracket a branch leaves unbalanced stranded - matching nothing, holding
+`extern "C" {` is), what the joined group holds being what every branch writes after its own opener, the head each other
+branch repeats before its opener left out (`Inside`), every other bracket a branch leaves unbalanced stranded - matching nothing, holding
 nothing, and ending its statement with the rest of its branch - and a stray parenthesis or square bracket stopped at a
 brace so it never ends a body, a closer with nothing open it could close passed over at once, with no walk down what is
 open; it gives a group's bounds and the bracket that closes one (`CloseOf`), a statement's end - past a `;`,

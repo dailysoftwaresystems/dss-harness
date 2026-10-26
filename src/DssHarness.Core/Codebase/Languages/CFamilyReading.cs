@@ -569,8 +569,7 @@ internal sealed class CFamilyReading
             if (_scan.Is(open, "{"))
             {
                 var (inner, past) = _scan.Bounds(open, end);
-                var linked = frame.Deeper();
-                ScanFrame.Walk(_scan.Within(open), inner, next => Declaration(next, inner, linked, local));
+                Within(open, inner, frame.Deeper(), local);
                 return past;
             }
 
@@ -660,8 +659,7 @@ internal sealed class CFamilyReading
         if (written.Count == 0)
         {
             // What an anonymous namespace declares is its file's alone - but a header's, which each file that includes it holds.
-            var anonymous = frame.Deeper();
-            ScanFrame.Walk(_scan.Within(name), inner, next => Declaration(next, inner, anonymous, local: !_header));
+            Within(name, inner, frame.Deeper(), local: !_header);
             return close;
         }
 
@@ -683,9 +681,21 @@ internal sealed class CFamilyReading
             scope = qualified;
         }
 
-        var within = frame.Inside(scope, scope, parent, null);
-        ScanFrame.Walk(_scan.Within(name), inner, next => Declaration(next, inner, within, local));
+        Within(name, inner, frame.Inside(scope, scope, parent, null), local);
         return close;
+    }
+
+    /// <summary>
+    /// The declarations the brace at <paramref name="open"/> holds, to <paramref name="inner"/>, read in
+    /// <paramref name="frame"/>: what each branch of a conditional writes after its own opener of the brace, the head the
+    /// other branches repeat before theirs left out (<see cref="ScannedText.Inside"/>).
+    /// </summary>
+    private void Within(int open, int inner, ScanFrame frame, bool local)
+    {
+        foreach (var (from, to) in _scan.Inside(open, inner))
+        {
+            ScanFrame.Walk(from, to, next => Declaration(next, to, frame, local));
+        }
     }
 
     /// <summary>
@@ -800,9 +810,9 @@ internal sealed class CFamilyReading
 
     /// <summary>
     /// The head the keyword at <paramref name="at"/> begins: its tag - the last name of its run where a body or a base list
-    /// follows and each name before it is written as a macro is, an export macro's (<c>class API_EXPORT Widget {</c>);
-    /// its first where neither follows, or another name stands before the last, a variable's name after it and no body
-    /// (<c>struct sockaddr_in addr_{};</c>, a brace-initialised member) - its bases, and its body's brace.
+    /// follows, since an export macro may stand before it (<c>class DllExport Widget {</c>), but where C++'s brace
+    /// initialises that name as a variable (<see cref="Initializes"/>); its first where neither follows or the brace is
+    /// an initialiser's, a variable's name after it and no body - its bases, and its body's brace.
     /// </summary>
     private Head TypeHead(int at, int end)
     {
@@ -825,7 +835,7 @@ internal sealed class CFamilyReading
         }
 
         var defining = (_scan.Is(next, "{") || _scan.Is(next, ":") || _scan.Is(next, "final") || _scan.Is(next, "sealed"))
-            && run.SkipLast(1).All(before => IsMacroName(before.Chain));
+            && !(_cpp && _scan.Is(next, "{") && run.Count > 1 && !run.SkipLast(1).All(before => IsMacroName(before.Chain)) && Initializes(keyword, next, end));
 
         if (run.Count > 1 && !defining)
         {
@@ -854,6 +864,40 @@ internal sealed class CFamilyReading
         }
 
         return new Head(written?[(written.LastIndexOf('.') + 1)..], written, keyword, bases, _scan.Is(next, "{") ? next : -1, next);
+    }
+
+    /// <summary>
+    /// Whether the brace at <paramref name="open"/>, after <paramref name="keyword"/> and a run of names one before the last
+    /// of which is written as no macro is, initialises the last as a variable of the type the first names, as C++ alone
+    /// writes one - <c>struct timeval tv{};</c>, <c>struct sockaddr_in addr_{1, 2};</c> - rather than opening the body of a
+    /// type an export macro stands before (<c>struct DllExport Widget { int w; };</c>): after <c>struct</c> or
+    /// <c>union</c> where it holds no <c>;</c> at its top, which a member list always does and an initialiser never; after
+    /// an enumeration where it holds nothing, which an enumerator list is not; never after <c>class</c>, which C++ code
+    /// writes before no variable's type - <c>class DllExport Empty {};</c> defines Empty.
+    /// </summary>
+    private bool Initializes(string keyword, int open, int end)
+    {
+        var (inner, _) = _scan.Bounds(open, end);
+
+        if (keyword.StartsWith("enum", StringComparison.Ordinal))
+        {
+            return _scan.Next(open) >= inner;
+        }
+
+        if (keyword is not ("struct" or "union"))
+        {
+            return false;
+        }
+
+        for (var at = _scan.Next(open); at < inner; at = _scan.Opens(at) ? _scan.Past(at) : _scan.Next(at))
+        {
+            if (_scan.Is(at, ";"))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -935,11 +979,15 @@ internal sealed class CFamilyReading
         if (head.IsEnum)
         {
             // An unscoped enumeration's names are its holder's, as C and C++ read them; its node still holds them.
-            Enumerators(_scan.Within(head.Open), inner, head.Keyword == "enum class" ? frame : outer, local, typeKey ?? frame.Parent);
+            foreach (var (from, to) in _scan.Inside(head.Open, inner))
+            {
+                Enumerators(from, to, head.Keyword == "enum class" ? frame : outer, local, typeKey ?? frame.Parent);
+            }
+
             return;
         }
 
-        ScanFrame.Walk(_scan.Within(head.Open), inner, next => Declaration(next, inner, frame, local));
+        Within(head.Open, inner, frame, local);
     }
 
     /// <summary>
@@ -1239,8 +1287,8 @@ internal sealed class CFamilyReading
     /// <summary>
     /// The old-style definition at <paramref name="at"/> - K&amp;R C's, as vendored zlib writes it: names and stars, then
     /// a name and its parameters' names alone between parentheses, each of them declared after the list by declarations
-    /// of their own that end in <c>;</c>, then its body - its head and the index of its body's brace; <see langword="null"/>
-    /// where the tokens are no such definition.
+    /// of their own that end in <c>;</c> - no more of them than the names - then its body; its head and the index of its
+    /// body's brace; <see langword="null"/> where the tokens are no such definition.
     /// </summary>
     private (FunctionName Head, int Body)? OldStyle(int at, int end)
     {
@@ -1251,22 +1299,19 @@ internal sealed class CFamilyReading
             open = _scan.Next(open);
         }
 
-        if (open == at || !_scan.Is(open, "(") || _scan.Match(open) is not (var close and > 0) || close >= end || NameBefore(open) is not { } head)
+        if (open == at || !_scan.Is(open, "(") || _scan.Match(open) is not (var close and > 0) || close >= end || NameBefore(open) is not { } head
+            || OldStyleNames(open, close) is not { } names)
         {
             return null;
         }
 
-        if (ScanCalls.Split(_scan, open + 1, close, null) is not { Count: > 0 } names
-            || names.Any(piece => _scan.Code(piece.Start, piece.End).ToList() is not [var name] || !_scan.IsName(name) || _keywords.Contains(_scan.Text(name))))
-        {
-            return null;
-        }
-
+        var listed = names.ToHashSet(StringComparer.Ordinal);
         var body = _scan.Next(close);
+        var declarations = 0;
 
         while (body < end && !_scan.Is(body, "{"))
         {
-            if (!_scan.IsName(body) || ParameterDeclarationEnd(body, end) is not (var stop and >= 0))
+            if (++declarations > names.Count || ParameterDeclarationEnd(body, end, listed) is not (var stop and >= 0))
             {
                 return null;
             }
@@ -1274,35 +1319,87 @@ internal sealed class CFamilyReading
             body = _scan.Next(stop);
         }
 
-        return body < end && body > _scan.Next(close) ? (head with { Declarations = _scan.Next(close) }, body) : null;
+        return body < end && declarations > 0 ? (head with { Declarations = _scan.Next(close) }, body) : null;
     }
 
     /// <summary>
-    /// The index of the <c>;</c> that ends the declaration of an old-style definition's parameters at <paramref name="at"/>,
-    /// its groups passed over; -1 where a brace, an initializer, a bracket nothing closes or the end comes first.
+    /// The names the parentheses at <paramref name="open"/> and <paramref name="close"/> list as an old-style definition's
+    /// do: each between commas a name alone, no keyword; <see langword="null"/> where any is anything else, or none is there.
     /// </summary>
-    private int ParameterDeclarationEnd(int at, int end)
+    private List<string>? OldStyleNames(int open, int close)
     {
+        var names = new List<string>();
+
+        foreach (var (start, end) in ScanCalls.Split(_scan, open + 1, close, null))
+        {
+            if (_scan.Code(start, end).ToList() is not [var name] || !_scan.IsName(name) || _keywords.Contains(_scan.Text(name)))
+            {
+                return null;
+            }
+
+            names.Add(_scan.Text(name));
+        }
+
+        return names.Count > 0 ? names : null;
+    }
+
+    /// <summary>
+    /// The index of the <c>;</c> that ends the declaration of an old-style definition's parameters at <paramref name="at"/>:
+    /// specifiers, then declarators joined by commas, each naming one of <paramref name="listed"/> - alone, after stars, or
+    /// in parentheses (<c>(*cb)</c>) - with its brackets and its parameters after it. -1 where the tokens are no such
+    /// declaration, read no further than the first token that says so: a parenthesis right after its first name, as a
+    /// macro's call is written (<c>X(red)</c>); a group among its specifiers that names none of <paramref name="listed"/>;
+    /// a name, a star or any other token after a declarator but a comma; an end that comes first; or a declaration that
+    /// declares none of them.
+    /// </summary>
+    private int ParameterDeclarationEnd(int at, int end, IReadOnlySet<string> listed)
+    {
+        if (!_scan.IsName(at) || _scan.Is(_scan.Next(at), "("))
+        {
+            return -1;
+        }
+
+        var declared = false;
+
+        // Whether the token before ends a declarator: its name, or a group after it.
+        var after = false;
+
         for (var index = at; index < end; index = _scan.Next(index))
         {
             if (_scan.Is(index, ";"))
             {
-                return index;
+                return declared ? index : -1;
             }
 
-            if (_scan.Is(index, "{") || _scan.Is(index, "}") || _scan.Is(index, "="))
+            if (_scan.Is(index, ",") || _scan.Is(index, "*"))
             {
-                return -1;
-            }
-
-            if (_scan.Is(index, "(") || _scan.Is(index, "["))
-            {
-                if (_scan.Match(index) is not (var close and > 0) || close >= end)
+                if (after != _scan.Is(index, ","))
                 {
                     return -1;
                 }
 
+                after = false;
+            }
+            else if (_scan.Is(index, "(") || _scan.Is(index, "["))
+            {
+                if (_scan.Match(index) is not (var close and > 0) || close >= end
+                    || (!after && !(_scan.Is(index, "(") && _scan.Code(index, close).Any(name => _scan.IsName(name) && listed.Contains(_scan.Text(name))))))
+                {
+                    return -1;
+                }
+
+                declared = true;
+                after = true;
                 index = close;
+            }
+            else if (_scan.IsName(index) && !after)
+            {
+                after = listed.Contains(_scan.Text(index));
+                declared |= after;
+            }
+            else
+            {
+                return -1;
             }
         }
 
@@ -1612,7 +1709,10 @@ internal sealed class CFamilyReading
                     }
                 }
 
-                Calls(_scan, _scan.Within(body), last, key, locals, pointers, owner);
+                foreach (var (from, to) in _scan.Inside(body, last))
+                {
+                    Calls(_scan, from, to, key, locals, pointers, owner);
+                }
             }
             finally
             {
@@ -1707,7 +1807,8 @@ internal sealed class CFamilyReading
     /// </summary>
     private Parameters OldStyleParameters(FunctionName head)
     {
-        var names = ScanCalls.Split(_scan, head.Open + 1, head.Close, null).Select(piece => _scan.Text(_scan.Code(piece.Start, piece.End).First())).ToList();
+        var names = OldStyleNames(head.Open, head.Close) ?? [];
+        var listed = names.ToHashSet(StringComparer.Ordinal);
         var types = new Dictionary<string, string>(StringComparer.Ordinal);
         var spans = new List<(int, int)>();
         var locals = new Dictionary<string, string?>(StringComparer.Ordinal);
@@ -1718,7 +1819,7 @@ internal sealed class CFamilyReading
             types[name] = "int";
         }
 
-        for (var at = head.Declarations; ParameterDeclarationEnd(at, _scan.Count) is var stop and >= 0; at = _scan.Next(stop))
+        for (var at = head.Declarations; ParameterDeclarationEnd(at, _scan.Count, listed) is var stop and >= 0; at = _scan.Next(stop))
         {
             var declarators = Declarators(at, stop + 1);
 

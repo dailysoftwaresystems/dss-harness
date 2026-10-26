@@ -17,8 +17,8 @@ public sealed class StructuralScannerTests
     /// <summary>
     /// A bracket each branch of a conditional opens, left open after it, is one bracket: the one after the conditional
     /// closes every branch's, and its own match is the first branch's; what a branch opens and closes in it is its own.
-    /// What the joined group holds begins past the last of its openers, so the head another branch writes is none of it;
-    /// what any other group holds, past its own opener.
+    /// What the joined group holds is what every branch writes after its own opener, the head each other branch repeats -
+    /// from the directive it begins at to its opener - left out; any other group holds all from past its opener.
     /// </summary>
     [Fact]
     public void ABracketEachBranchLeavesOpen_IsClosedByTheOneAfterTheConditional()
@@ -26,22 +26,27 @@ public sealed class StructuralScannerTests
         var scan = CFamilyLexer.Scan("""
             #if WIDE
             void f(int a, int b) {
-            #else
+                wide();
+            #elif NARROW
             void f(int a) {
+                narrow();
+            #else
+            void f(void) {
             #endif
                 x();
             }
             """, cpp: false);
 
-        var (first, second, close) = (At(scan, "{", 1), At(scan, "{", 2), At(scan, "}", 1));
+        var (first, second, third, close) = (At(scan, "{", 1), At(scan, "{", 2), At(scan, "{", 3), At(scan, "}", 1));
+        var alternatives = Enumerable.Range(0, scan.Count).Where(at => scan[at].Branch == ScanBranch.Alternative).ToList();
 
-        Assert.Equal(close, scan.Match(first));
-        Assert.Equal(close, scan.Match(second));
+        Assert.Equal([close, close, close], new[] { first, second, third }.Select(scan.Match));
         Assert.Equal(first, scan.Match(close));
         Assert.Equal(At(scan, ")", 1), scan.Match(At(scan, "(", 1)));
         Assert.Equal(At(scan, ")", 2), scan.Match(At(scan, "(", 2)));
-        Assert.Equal((second + 1, second + 1), (scan.Within(first), scan.Within(second)));
-        Assert.Equal(At(scan, "(", 3) + 1, scan.Within(At(scan, "(", 3)));
+        Assert.Equal([(first + 1, alternatives[0]), (second + 1, alternatives[1]), (third + 1, close)], scan.Inside(first, close));
+        Assert.Equal([(first + 1, alternatives[0])], scan.Inside(first, alternatives[0] + 1));
+        Assert.Equal([(At(scan, "(", 1) + 1, At(scan, ")", 1))], scan.Inside(At(scan, "(", 1), At(scan, ")", 1)));
     }
 
     /// <summary>

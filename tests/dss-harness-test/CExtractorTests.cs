@@ -506,25 +506,67 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     }
 
     /// <summary>
-    /// A typedef's struct whose head is written under each branch of a conditional over one body is one type holding its
-    /// fields, the head another branch writes none of its body - never a nested type of its own name.
+    /// A typedef's struct or a function whose head is written under each branch of a conditional over one body is one
+    /// node holding what every branch writes after its own head - the first branch's fields and calls among them - the
+    /// head another branch repeats none of its body: never a nested type of its own name.
     /// </summary>
     [Fact]
-    public void ATypedefsStructUnderEachBranch_IsOneTypeHoldingItsFields()
+    public void AHeadUnderEachBranch_IsOneNode_HoldingWhatEveryBranchWritesAfterIt()
     {
-        var extract = Read("t.h", """
+        var extract = Read("t.c", """
             #ifdef PACKED
             typedef struct foo {
+                char pad;
             #else
             typedef struct foo {
             #endif
                 int x;
             } foo_t;
+            #ifdef _WIN32
+            int net_init(void) {
+                WSAStartup(MAKEWORD(2,2), &wsa);
+            #else
+            int net_init(void) {
+                signal_off();
+            #endif
+                return setup();
+            }
             """);
 
         Assert.Equal(
-            [("c:foo", "struct", null), ("c:foo.x", "field", "c:foo"), ("c:foo_t", "typedef", null)],
+            [("c:foo", "struct", null), ("c:foo.pad", "field", "c:foo"), ("c:foo.x", "field", "c:foo"), ("c:foo_t", "typedef", null), ("c:net_init", "function", null)],
             extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind, node.Parent)));
+        Assert.Equal(["WSAStartup", "MAKEWORD", "signal_off", "setup"], Calls(extract, "c:net_init"));
+    }
+
+    /// <summary>
+    /// In C no brace initialises a declarator's name, so a type's keyword before two names and a brace defines the last,
+    /// an attribute macro written in small letters before it: <c>struct __packed hdr { ... };</c> is hdr with its fields.
+    /// </summary>
+    [Fact]
+    public void ATypeAfterAnAttributeMacroInSmallLetters_IsDefined()
+    {
+        var extract = Read("h.c", "struct __packed hdr { int a; };\n");
+
+        Assert.Equal([("c:hdr", "struct"), ("c:hdr.a", "field")], extract.Nodes.Select(node => (node.Id, node.SubKind!)));
+    }
+
+    /// <summary>
+    /// A list of macro uses with no semicolon between them - an X-macro list, QEMU's helper definitions - is read in time
+    /// linear in its length: what probes each for an old-style definition stops at the first token none could be, never
+    /// walking on to the next semicolon or the end, and each use is marked a macro standing in a declaration's place.
+    /// </summary>
+    [Fact]
+    public void AListOfMacroUses_IsReadInLinearTime()
+    {
+        const int Uses = 20_000;
+        var text = string.Concat(Enumerable.Range(0, Uses).Select(at => at % 2 == 0 ? $"X(color{at})\n" : $"DEF_HELPER_2(helper{at}, i32, env)\n"));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var extract = Read("x.h", text);
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"took {clock.Elapsed}");
+        Assert.Empty(extract.Nodes);
+        Assert.Equal(Enumerable.Range(1, Uses), extract.Dynamic.Select(dynamic => dynamic.Line));
     }
 
     /// <summary>

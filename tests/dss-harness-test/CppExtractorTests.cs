@@ -699,9 +699,11 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
     }
 
     /// <summary>
-    /// A head written under each branch of a conditional over one body is read by its first head, the heads the other
-    /// branches write none of what the body holds: a class, an enumeration, a namespace and a linkage block each one node
-    /// holding its members - never a nested one of its own name - and a function's body calls nothing another head names.
+    /// A head written under each branch of a conditional over one body is read by its first head, and the body holds what
+    /// every branch writes after its own head - the first branch's members, enumerators, declarations and calls among
+    /// them - the head another branch repeats none of it: a class, an enumeration, a namespace and a linkage block each
+    /// one node holding its members - never a nested one of its own name - and a function's body calls nothing another
+    /// head names.
     /// </summary>
     [Fact]
     public void AHeadUnderEachBranch_IsReadByItsFirst_TheOthersNoneOfItsBody()
@@ -709,13 +711,16 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         var extract = Read("s.hpp", """
             #ifdef _WIN32
             class Sock : public A, public B {
+                SOCKET h_;
             #else
             class Sock : public A {
+                int fd_;
             #endif
                 void send();
             };
             #if WIDE
             enum class Mode : long {
+                Wide,
             #else
             enum class Mode {
             #endif
@@ -723,6 +728,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             };
             #ifdef V2
             namespace net {
+            void wide();
             #else
             namespace net {
             #endif
@@ -730,6 +736,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             }
             #ifdef C_API
             extern "C" {
+            void api();
             #else
             extern "C" {
             #endif
@@ -737,6 +744,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             }
             #ifdef FAST
             void run(int a = fast()) {
+                quick();
             #else
             void run(int a = slow()) {
             #endif
@@ -745,36 +753,49 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             """);
 
         Assert.Equal(
-            ["cpp:Mode", "cpp:Mode.On", "cpp:Sock", "cpp:Sock.send()", "cpp:closed()", "cpp:net", "cpp:net.open()", "cpp:run(int)"],
+            [
+                "cpp:Mode", "cpp:Mode.On", "cpp:Mode.Wide", "cpp:Sock", "cpp:Sock.fd_", "cpp:Sock.h_", "cpp:Sock.send()", "cpp:api()", "cpp:closed()", "cpp:net",
+                "cpp:net.open()", "cpp:net.wide()", "cpp:run(int)",
+            ],
             extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
         Assert.Equal(["A", "B"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Inherits).Select(reference => reference.Name));
-        Assert.Equal(["go"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name));
+        Assert.Equal(["quick", "go"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name));
     }
 
     /// <summary>
-    /// A type's keyword before two names declares a variable of the type the first names, its brace an initializer -
-    /// <c>struct sockaddr_in addr_{};</c> a field at a class's scope, a variable at a namespace's - but where each name
-    /// before the last is written as a macro is, an export macro's: <c>class API_EXPORT Widget { ... };</c> defines Widget.
+    /// A type's keyword before two names and a brace declares a variable of the type the first names, the brace its
+    /// initializer, where the brace is one: after <c>struct</c> or <c>union</c> holding no <c>;</c> at its top -
+    /// <c>struct sockaddr_in addr_{};</c>, <c>struct timeval tv_{1, 2};</c> - and after an enumeration holding nothing. A
+    /// brace holding a member's <c>;</c>, one after <c>class</c> - <c>class DllExport Empty {};</c> too - and one after
+    /// names each written as a macro is open the body of the last name's type, an export macro before it.
     /// </summary>
     [Fact]
-    public void ABraceInitialisedVariableOfATaggedType_IsAVariable_ButAfterAnExportMacro()
+    public void ABraceInitialisedVariableOfATaggedType_IsAVariable_ButABodyAfterAnExportMacro()
     {
         var extract = Read("n.hpp", """
             class Outer {
                 struct sockaddr_in addr_{};
+                struct timeval tv_{1, 2};
                 int n_;
             };
             namespace net { struct sockaddr_in any_{}; }
+            enum Color shade_{};
             class API_EXPORT Widget { int w_; };
+            class DllExport Gadget { void f(); };
+            struct DllExport Part { int p; };
+            class DllExport Empty {};
             """);
 
         Assert.Equal(
             [
-                ("cpp:Outer", "class"), ("cpp:Outer.addr_", "field"), ("cpp:Outer.n_", "field"), ("cpp:Widget", "class"), ("cpp:Widget.w_", "field"),
-                ("cpp:net", null), ("cpp:net.any_", "variable"),
+                ("cpp:Empty", "class"), ("cpp:Gadget", "class"), ("cpp:Gadget.f()", "method"), ("cpp:Outer", "class"), ("cpp:Outer.addr_", "field"),
+                ("cpp:Outer.n_", "field"), ("cpp:Outer.tv_", "field"), ("cpp:Part", "struct"), ("cpp:Part.p", "field"), ("cpp:Widget", "class"),
+                ("cpp:Widget.w_", "field"), ("cpp:net", null), ("cpp:net.any_", "variable"), ("cpp:shade_", "variable"),
             ],
             extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind)));
-        Assert.Equal(("sockaddr_in", "sockaddr_in"), (Node(extract, "cpp:Outer.addr_").ValueType, Node(extract, "cpp:net.any_").ValueType));
+        Assert.Equal(
+            ("sockaddr_in", "timeval", "sockaddr_in", "Color"),
+            (Node(extract, "cpp:Outer.addr_").ValueType, Node(extract, "cpp:Outer.tv_").ValueType, Node(extract, "cpp:net.any_").ValueType, Node(extract, "cpp:shade_").ValueType));
     }
 
     private static FileExtract Read(string path, string text) => new CppExtractor().Extract(new CodeFileInput(path, text));
