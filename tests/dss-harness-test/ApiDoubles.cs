@@ -189,9 +189,11 @@ internal sealed class ApiEndpoint : HttpMessageHandler
 /// <summary>The Claude API's stored answers (<c>fixtures/claude-api</c>), and the events a test writes beside them.</summary>
 internal static class ClaudeApiFixtures
 {
+    /// <summary>The folder the stored answers are in.</summary>
+    public static string Folder => Path.Combine(Prose.RepositoryRoot(), "tests", "dss-harness-test", "fixtures", "claude-api");
+
     /// <summary>The stored answer <paramref name="name"/>.</summary>
-    public static string Read(string name)
-        => File.ReadAllText(Path.Combine(Prose.RepositoryRoot(), "tests", "dss-harness-test", "fixtures", "claude-api", name));
+    public static string Read(string name) => File.ReadAllText(Path.Combine(Folder, name));
 
     /// <summary>A stream of <paramref name="events"/>, each its type and its data, as the API writes one.</summary>
     public static string Events(params (string Type, string Data)[] events)

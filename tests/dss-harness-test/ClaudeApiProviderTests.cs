@@ -597,6 +597,72 @@ public sealed class ClaudeApiProviderTests : IDisposable
     }
 
     /// <summary>
+    /// The answers slice 24b's live smoke met, curated beside the written ones, are read as those are, for all they hold
+    /// that the written ones do not: each event's data padded with spaces after it, a keep-alive written with a space,
+    /// the members the API adds - the container, the diagnostics, the service tier, the inference's region, the speed, a
+    /// null stop's details, the thinking among the output's tokens - passed over, and the counts the message's delta says
+    /// again counted once; the conversation sent on to another model answered by that model.
+    /// </summary>
+    [Fact]
+    public async Task TheAnswersALiveRunMet_AreReadAsTheWrittenOnesAre()
+    {
+        _endpoint.Then(ApiReply.Fixture("live-tool-use.sse")).Then(ApiReply.Fixture("live-thinking.sse")).Then(ApiReply.Fixture("live-sent-on.sse"));
+
+        var calling = await Sent(Request());
+        var call = Assert.IsType<ChatPart.Answered>(calling[^1]).Turn;
+        var thought = Assert.IsType<ChatPart.Answered>((await Sent(Request()))[^1]).Turn;
+        var sentOn = Assert.IsType<ChatPart.Answered>((await Sent(Request()))[^1]).Turn;
+
+        Assert.Equal(["{\"path\": \"a.txt", "\"}"], calling.OfType<ChatPart.CallInput>().Select(part => part.Fragment));
+        Assert.Equal((ChatStop.Tools, "claude-haiku-5-5", new AgentUsage(4, 50, 1209, 123, 0, 0)), (call.Stop, call.Model, call.Usage));
+        Assert.Equal([new ChatCall("toolu_000000000000000000000001", "view_file", "{\"path\": \"a.txt\"}")], call.Calls);
+        Assert.Equal(
+            """{"type":"tool_use","id":"toolu_000000000000000000000001","name":"view_file","input":{"path":"a.txt"},"caller":{"type":"direct"}}""",
+            JsonNode.Parse(call.Message)!["content"]![0]!.ToJsonString());
+
+        Assert.Equal((ChatStop.Done, "The word is **alpha**, and it contains **2** vowels (the two a's)."), (thought.Stop, thought.Text));
+        Assert.Equal("Checking \"alpha\": a-l-p-h-a, so the vowels are the two a's, giving 2.\n\n", thought.Thinking);
+        Assert.Equal(new AgentUsage(2, 133, 1332, 62, 0, 0), thought.Usage);
+        Assert.Equal("<elided: the API's signature, 1112 characters>", JsonNode.Parse(thought.Message)!["content"]![0]!["signature"]!.GetValue<string>());
+
+        Assert.Equal((ChatStop.Done, "ahpla", "claude-sonnet-5-5", new AgentUsage(4, 6, 1209, 342, 0, 0)), (sentOn.Stop, sentOn.Text, sentOn.Model, sentOn.Usage));
+    }
+
+    /// <summary>Every stored answer the tests replay, by its name.</summary>
+    public static TheoryData<string> Fixtures()
+    {
+        var data = new TheoryData<string>();
+
+        foreach (var fixture in Directory.GetFiles(ClaudeApiFixtures.Folder, "*.sse").Select(Path.GetFileName).Order(StringComparer.Ordinal))
+        {
+            data.Add(fixture!);
+        }
+
+        return data;
+    }
+
+    /// <summary>
+    /// The stored answers are the public repository's, so each keeps nothing of the account or the machine that made it
+    /// - the rules the Claude Code recordings are held to - and a live one no signature the API gave its thinking: an
+    /// answer curated without them is refused here.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Fixtures))]
+    public void AStoredAnswer_KeepsNothingOfTheAccountThatMadeIt(string fixture)
+    {
+        var text = ClaudeApiFixtures.Read(fixture);
+
+        CuratedRecordings.KeepNothingOfTheMachineOrTheAccount(text);
+
+        if (fixture.StartsWith("live-", StringComparison.Ordinal))
+        {
+            Assert.All(
+                System.Text.RegularExpressions.Regex.Matches(text, "\"signature\":\"([^\"]+)\"").Select(found => found.Groups[1].Value),
+                signature => Assert.Matches("^<elided: the API's signature, [0-9]+ characters>$", signature));
+        }
+    }
+
+    /// <summary>
     /// What a stream says is read only as the API means it: an event that is no JSON is the answer failing for now; a
     /// delta of one block's type sent to a block of another fails it, naming both; a call cut off part way keeps the
     /// input its block began with; an answer that met a stop sequence is done; a message ended that was never begun is

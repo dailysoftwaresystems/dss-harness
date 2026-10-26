@@ -5,11 +5,13 @@ server-sent events, under `anthropic-version: 2026-10-21`. The tests play them t
 stands in for the network (`ApiEndpoint`), cut into chunks of a few bytes - a character split across two of them - so
 what the client reads is what it would read off a connection.
 
-These are written from the API's reference, not recorded: a declined request, a context too full and a cut-off cannot
-be asked for, and slice 24b's live smoke is the first run against the API. Each answer a live run meets that differs
-from these is kept beside them, curated the way the Claude Code recordings are (`../claude-code/README.md`): a
-server id is its prefix (`msg_`, `toolu_`, `srvtoolu_`, `req_`, `fct_`) and 24 counting digits, in order of first
-appearance; nothing of an account and no key is ever kept.
+These are written from the API's reference, not recorded - a declined request, a context too full and a cut-off cannot
+be asked for - but the `live-` ones, which slice 24b's live smoke (`ClaudeApiClientLiveTests`) met on 2026-10-26: each
+answer a live run meets that differs from these is kept beside them, curated the way the Claude Code recordings are
+(`../claude-code/README.md`): a server id is its prefix (`msg_`, `toolu_`, `srvtoolu_`, `req_`, `fct_`) and 24
+counting digits, in order of first appearance; a thinking block's signature is `<elided: the API's signature, N
+characters>`; nothing of an account and no key is ever kept; the API's spacing, keep-alives and token counts stay as
+they came.
 
 | File | What it is |
 |---|---|
@@ -26,3 +28,6 @@ appearance; nothing of an account and no key is ever kept.
 | `stream-error.sse` | an `error` event part way, the API overloaded |
 | `server-tool.sse` | a block of a tool of the API's own, which no request declares |
 | `unknown-delta.sse` | a delta of a type the client does not put back together |
+| `live-tool-use.sse` | live, claude-haiku-5-5: a call of `view_file`; each event's data padded with spaces after it, a keep-alive written with a space, the members the API adds (`container`, `diagnostics`, `service_tier`, `inference_geo`, `speed`, a null `stop_details`, `output_tokens_details`) and the counts `message_delta` says again; `tool_use` |
+| `live-thinking.sse` | live, claude-haiku-5-5 at a high effort, in the same live form: summarized thinking, its signature elided, then text; `end_turn` |
+| `live-sent-on.sse` | live, claude-sonnet-5-5, in the same live form: the answer to that conversation, sent on to it as it was; `end_turn` |

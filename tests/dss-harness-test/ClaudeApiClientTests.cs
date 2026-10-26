@@ -248,9 +248,11 @@ public sealed class ClaudeApiClientTests : IDisposable
     }
 
     /// <summary>The messages a request sent, each as its body holds it: byte for byte.</summary>
-    private static List<string> Messages(ApiSent sent)
+    private static List<string> Messages(ApiSent sent) => Messages(sent.Body);
+
+    /// <summary>The messages <paramref name="body"/> holds, each as it holds it: byte for byte.</summary>
+    internal static List<string> Messages(string body)
     {
-        var body = sent.Body;
         var start = body.IndexOf("\"messages\":[", StringComparison.Ordinal) + "\"messages\":[".Length;
         var messages = new List<string>();
 
