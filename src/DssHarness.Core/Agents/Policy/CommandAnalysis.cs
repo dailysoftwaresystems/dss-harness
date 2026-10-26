@@ -1332,8 +1332,9 @@ public static partial class CommandAnalysis
 
             yield return ["sh", "-c", command.Any(Placeholder().IsMatch) ? script : $"{script} {quoted}"];
         }
-        else if (Is(program, "git"))
+        else if (Is(program, "git") || (program.Length > 4 && program.StartsWith("git-", StringComparison.OrdinalIgnoreCase)))
         {
+            // git-ls-remote is git ls-remote, as git's own directory holds each of its commands (Plain reads it so).
             foreach (var executed in GitExecuted(words))
             {
                 yield return executed;

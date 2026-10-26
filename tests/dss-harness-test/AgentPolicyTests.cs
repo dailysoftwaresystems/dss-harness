@@ -1249,9 +1249,12 @@ public sealed class AgentPolicyTests
 
         // Under the worktree rules a pack program reaching a pull request's merge is refused, though ls-remote is no state verb.
         var policy = ground.Policy();
-        var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git ls-remote --upload-pack='gh pr merge 5;' ."));
-        Assert.Equal("Run(gh pr merge *)", denied.Rule);
-        Assert.Equal(AgentPolicySource.Builtin, denied.Source);
+        foreach (var command in new[] { "git ls-remote --upload-pack='gh pr merge 5;' .", "git-ls-remote --upload-pack='gh pr merge 5;' .", "/usr/lib/git-core/git-fetch-pack --exec='gh pr merge 5;' ." })
+        {
+            var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
+            Assert.Equal("Run(gh pr merge *)", denied.Rule);
+            Assert.Equal(AgentPolicySource.Builtin, denied.Source);
+        }
 
         // A value an expansion names is undecided, as any script named by one is.
         Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git ls-remote --upload-pack=$CMD .")).Rule);
