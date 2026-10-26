@@ -1265,7 +1265,18 @@ public sealed class AgentPolicyTests
             Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
         }
 
-        Assert.Equal("Run(make install *)", Assert.IsType<AgentPolicyAnswer.Denied>(ruled.Run("git send-email --to-c 'make install' 0001.patch")).Rule);
+        // send-email reads its options by Getopt::Long: a prefix, one dash, any case.
+        foreach (var command in new[]
+        {
+            "git send-email --to-c 'make install' 0001.patch", "git send-email -to-cmd='make install' 0001.patch",
+            "git send-email --TO-CMD 'make install' 0001.patch", "git send-email -Sendmail-Cmd='make install' 0001.patch",
+            "git send-email -smtp-server=/usr/bin/make install 0001.patch",
+        })
+        {
+            Assert.Equal("Run(make install *)", Assert.IsType<AgentPolicyAnswer.Denied>(ruled.Run(command)).Rule);
+        }
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git send-email -TO \"Foo <foo@bar.example>\" 0001.patch"));
 
         // Plain uses of the same subcommands stay allowed: the option's value is data, not a command.
         foreach (var command in new[] { "git ls-remote origin", "git difftool --tool-help", "git grep -n foo", "git grep -O foo", "git fetch origin", "git clone ./repo ./dest" })

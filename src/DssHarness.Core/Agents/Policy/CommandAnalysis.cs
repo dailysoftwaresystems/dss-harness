@@ -1392,7 +1392,7 @@ public static partial class CommandAnalysis
         {
             foreach (var spec in specs)
             {
-                if (GitOptionValue(command, at, spec.Long, spec.Short, spec.GluedOnly, GitOptionsOfTheirOwn(subcommand)) is { } found
+                if (GitOptionValue(GetoptLong(command, at, subcommand), at, spec.Long, spec.Short, spec.GluedOnly, GitOptionsOfTheirOwn(subcommand)) is { } found
                     && (!spec.PathOnly || NamesAPath(found.Value)))
                 {
                     yield return spec.Appends ? ["sh", "-c", found.Value, InputWord] : ["sh", "-c", found.Value];
@@ -1443,6 +1443,24 @@ public static partial class CommandAnalysis
     /// </summary>
     private static IReadOnlyList<string> GitOptionsOfTheirOwn(string subcommand)
         => subcommand == "send-email" ? ["to", "cc"] : [];
+
+    /// <summary>
+    /// The words as git's option reader would have them where the subcommand reads its options by Perl's Getopt::Long, as
+    /// send-email does: a long option written with one dash or in any case (<c>-TO-CMD=x</c>) is the <c>--to-cmd=x</c> it
+    /// is, its value as written - the word at <paramref name="at"/> so respelled; every other subcommand's words as they stand.
+    /// </summary>
+    private static IReadOnlyList<string> GetoptLong(IReadOnlyList<string> command, int at, string subcommand)
+    {
+        if (subcommand != "send-email" || command[at].Length < 2 || command[at][0] != '-' || command[at] == "--")
+        {
+            return command;
+        }
+
+        var named = command[at].TrimStart('-').Split('=', 2);
+        var respelled = "--" + named[0].ToLowerInvariant() + (named.Length == 2 ? "=" + named[1] : string.Empty);
+
+        return [.. command.Take(at), respelled, .. command.Skip(at + 1)];
+    }
 
     /// <summary>
     /// The command <c>git submodule foreach</c> evaluates, the words after <c>foreach</c> joined -
