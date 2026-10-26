@@ -101,6 +101,18 @@ internal sealed class AppendLog : IDisposable
         }
     }
 
+    /// <summary>Everything the log holds, every line whole, as UTF-8 text.</summary>
+    public string ReadAll()
+    {
+        lock (_gate)
+        {
+            var bytes = new byte[checked((int)_file.Length)];
+            _file.ReadExactlyAt(0, bytes);
+
+            return Encoding.UTF8.GetString(bytes);
+        }
+    }
+
     /// <summary>Empties the log, for a log kept to a most: what it held is gone, and the next line is its first.</summary>
     public void Clear()
     {

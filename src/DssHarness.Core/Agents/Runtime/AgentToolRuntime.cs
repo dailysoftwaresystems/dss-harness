@@ -30,6 +30,37 @@ public sealed record AgentToolCallRequest(string Id, string Name, string Input);
 /// <param name="File">The file the whole answer is kept in: a command's log, and any other answer where it was cut; null where there is none.</param>
 public sealed record AgentToolCallResult(string Id, bool Ok, string Text, string? File);
 
+/// <summary>
+/// What may cut a turn's calls short - the run pausing, the step past its time, its budget spent before they began - and
+/// why it did, which every call it cut is answered with (<see cref="AgentToolRuntime.RunTurnAsync"/>). The first cut stands.
+/// </summary>
+public sealed class AgentTurnCut : IDisposable
+{
+    private readonly CancellationTokenSource _source = new();
+    private string? _why;
+
+    /// <summary>Why the turn was cut; null while it was not.</summary>
+    public string? Why => Volatile.Read(ref _why);
+
+    /// <summary>Cancelled once the turn is cut.</summary>
+    public CancellationToken Token => _source.Token;
+
+    /// <summary>Cuts the turn, for <paramref name="why"/>, where nothing cut it before.</summary>
+    /// <param name="why">Why it is cut, as each call it cuts is answered.</param>
+    public void Cut(string why)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(why);
+
+        if (Interlocked.CompareExchange(ref _why, why, null) is null)
+        {
+            _source.Cancel();
+        }
+    }
+
+    /// <summary>Lets go of what the cut holds.</summary>
+    public void Dispose() => _source.Dispose();
+}
+
 /// <summary>What a run's calls of the runtime came to, for its result: each count, and what was left running.</summary>
 public sealed class AgentToolTally
 {
@@ -142,7 +173,7 @@ public sealed partial class AgentToolRuntime : IDisposable
         _events = events;
         _host = host;
 
-        var ground = run.Ground ?? throw new ArgumentException("the run was given no policy to decide its calls by, and no call runs undecided", nameof(run));
+        var ground = run.Ground ?? throw new ArgumentException(AgentEndings.NoPolicy, nameof(run));
 
         _policy = new AgentPolicy(host.FileSystem, host.Platform, ground);
         _paths = new ConfinedPaths(host.FileSystem, host.Platform, ground);
@@ -169,14 +200,22 @@ public sealed partial class AgentToolRuntime : IDisposable
                 new SearchRecords(this))
             : null;
 
-        if (_webSearch is not null && host.Search is null)
+        if (host.Unserved(Tools) is { } unserved)
         {
-            throw new ArgumentException("the run's step has sources to search, and its host was given no web search to search them with", nameof(host));
+            throw new ArgumentException(unserved, nameof(host));
         }
     }
 
     /// <summary>The tools this run is offered, by name.</summary>
     public IReadOnlyList<AgentToolDefinition> Tools { get; }
+
+    /// <summary>What a call a cut ended in flight is answered: why its turn was cut, and that it may have run part way.</summary>
+    /// <param name="why">Why the turn was cut.</param>
+    public static string Interrupted(string why) => $"interrupted: {why}; it may have run part way";
+
+    /// <summary>What a call a cut came before is answered: it never ran.</summary>
+    /// <param name="why">Why the turn was cut.</param>
+    public static string NotRun(string why) => $"not run: {why}";
 
     /// <summary>What the run's calls came to so far.</summary>
     public AgentToolTally Tally { get; } = new();
@@ -188,20 +227,50 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// Runs the calls of one turn: those that read together, at most <see cref="MostTogether"/> at once, each that writes
     /// or runs alone, after every call before it and before every call after; the answers in the order of the calls.
     /// </summary>
+    /// <remarks>
+    /// A turn <paramref name="cut"/> cuts - the run pausing, the step past its time - still answers every call, so the
+    /// conversation it is appended to stays whole: a call in flight is cancelled, a command with all it started, and
+    /// answered <see cref="Interrupted"/>; a call not begun is never run, and answered <see cref="NotRun"/>. The hard stop
+    /// answers nothing: it ends the turn where it stands.
+    /// </remarks>
     /// <param name="calls">The turn's calls, in the order the model made them.</param>
     /// <param name="cancellationToken">The hard stop.</param>
-    public async Task<IReadOnlyList<AgentToolCallResult>> RunTurnAsync(IReadOnlyList<AgentToolCallRequest> calls, CancellationToken cancellationToken)
+    /// <param name="cut">What may cut the turn, and why; none where nothing does.</param>
+    public async Task<IReadOnlyList<AgentToolCallResult>> RunTurnAsync(IReadOnlyList<AgentToolCallRequest> calls, CancellationToken cancellationToken, AgentTurnCut? cut = null)
     {
         ArgumentNullException.ThrowIfNull(calls);
 
         var results = new AgentToolCallResult[calls.Count];
         var reads = new List<int>();
+        using var either = cut is null ? null : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cut.Token);
+        var token = either?.Token ?? cancellationToken;
+
+        async Task<AgentToolCallResult> OneAsync(AgentToolCallRequest call)
+        {
+            var started = _host.Clock.GetTimestamp();
+
+            if (cut?.Why is { } before && !cancellationToken.IsCancellationRequested)
+            {
+                Tally.Called();
+
+                return await EndedAsync(call, await KeptAsync(call, Answer.Failed(NotRun(before))).ConfigureAwait(false), started).ConfigureAwait(false);
+            }
+
+            try
+            {
+                return await RunAsync(call, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cut?.Why is { } why && !cancellationToken.IsCancellationRequested)
+            {
+                return await EndedAsync(call, await KeptAsync(call, Answer.Failed(Interrupted(why))).ConfigureAwait(false), started).ConfigureAwait(false);
+            }
+        }
 
         async Task ReadsAsync()
         {
             foreach (var chunk in reads.Chunk(MostTogether))
             {
-                var answered = await Task.WhenAll(chunk.Select(at => RunAsync(calls[at], cancellationToken))).ConfigureAwait(false);
+                var answered = await Task.WhenAll(chunk.Select(at => OneAsync(calls[at]))).ConfigureAwait(false);
 
                 for (var index = 0; index < chunk.Length; index++)
                 {
@@ -217,7 +286,7 @@ public sealed partial class AgentToolRuntime : IDisposable
             if (_tools.TryGetValue(calls[at].Name, out var tool) && tool.Barrier)
             {
                 await ReadsAsync().ConfigureAwait(false);
-                results[at] = await RunAsync(calls[at], cancellationToken).ConfigureAwait(false);
+                results[at] = await OneAsync(calls[at]).ConfigureAwait(false);
             }
             else
             {
@@ -518,6 +587,13 @@ public sealed class AgentToolHost(
 
     /// <summary>The harness's own web search; none for a host whose runs search no source.</summary>
     internal Web.Search.HarnessWebSearch? Search { get; } = search;
+
+    /// <summary>Why this host cannot run <paramref name="tools"/>; null where it can: a run offered <c>web_search</c> searches with the harness's own.</summary>
+    /// <param name="tools">The tools a run is offered.</param>
+    internal string? Unserved(IEnumerable<AgentToolDefinition> tools)
+        => Search is null && tools.Any(tool => tool.Name == AgentTools.WebSearch)
+            ? "the run's step has sources to search, and its host was given no web search to search them with"
+            : null;
 
     /// <summary>Opens the runtime of <paramref name="run"/>: its tools, its policy and its records.</summary>
     /// <param name="run">The run, whose ground decides every call.</param>

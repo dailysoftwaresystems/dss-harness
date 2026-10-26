@@ -56,6 +56,7 @@ public sealed class AgentRunnerTests
         Assert.Equal("be terse", client.Run.SystemPrompt);
         Assert.Equal(WorkDirectory(temp), client.Run.Workspace.WorkingDirectory);
         Assert.Equal(StepDirectory(temp), client.Run.StepDirectory);
+        Assert.Equal(Path.Combine(temp.Path, ".orchestrators", "r1", "agents", "a7", "sessions"), client.Run.SessionsDirectory);
 
         Assert.Equal(["runStarted", "sessionStarted", "textDelta", "assistantMessage", "runFinished"], seen.Select(Kind));
         Assert.Equal(["runStarted", "sessionStarted", "assistantMessage", "runFinished"], Lines(temp).Select(LineKind));

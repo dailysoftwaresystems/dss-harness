@@ -355,7 +355,28 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>Where one conversation <paramref name="agent"/> holds with an API client is kept.</summary>
     /// <param name="agent">The agent's name.</param>
     /// <param name="id">The conversation's id.</param>
-    public string AgentSessionDirectory(string agent, string id) => Path.Combine(AgentSessionsDirectory(agent), id);
+    public string AgentSessionDirectory(string agent, string id) => SessionDirectoryIn(AgentSessionsDirectory(agent), id);
+
+    /// <summary>Where one conversation is kept among an agent's: its own directory in <paramref name="sessions"/>, by its id.</summary>
+    /// <param name="sessions">The agent's sessions directory (<see cref="AgentSessionsDirectory"/>).</param>
+    /// <param name="id">The conversation's id: <see cref="IsSessionId"/>.</param>
+    /// <exception cref="ArgumentException">The id is no conversation's id, and would name another directory.</exception>
+    public static string SessionDirectoryIn(string sessions, string id)
+    {
+        ArgumentNullException.ThrowIfNull(sessions);
+
+        return IsSessionId(id)
+            ? Path.Combine(sessions, id)
+            : throw new ArgumentException($"'{id}' is no conversation's id: {SessionIdShape}.", nameof(id));
+    }
+
+    /// <summary>What a conversation's id is, as a refusal says it.</summary>
+    public const string SessionIdShape = "letters, digits, '-' and '_', at most 64";
+
+    /// <summary>Whether <paramref name="id"/> is a conversation's id, which names its directory: the engine's own, and a handed one alike.</summary>
+    /// <param name="id">The id.</param>
+    public static bool IsSessionId(string? id)
+        => id is { Length: > 0 and <= 64 } && id.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
     /// <summary>
     /// The handoff of one step <paramref name="agent"/> ran, kept in the step's own directory: what its agent said when

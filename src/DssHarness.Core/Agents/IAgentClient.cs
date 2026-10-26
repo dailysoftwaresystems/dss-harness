@@ -202,6 +202,37 @@ public sealed class AgentHandoffSignal(TimeSpan Bound, int MaxAnswers = 3)
     /// <summary>What every call asked in a handoff turn is answered: the turn is for the handoff alone.</summary>
     public const string ToolRefusal = "no tool runs in a handoff turn; answer with the handoff";
 
+    /// <summary>Why a run has no handoff when its bound passed before the agent answered.</summary>
+    public const string BoundPassed = "the bound passed before the agent answered";
+
+    /// <summary>Why a run has no handoff when the handoff turn itself ended <paramref name="status"/>.</summary>
+    /// <param name="status">How the turn ended.</param>
+    /// <param name="why">Why, as that ending says it.</param>
+    public static string TurnEnded(AgentRunStatus status, string? why) => $"the handoff turn ended {status}: {why}";
+
+    /// <summary>The question a handoff turn asks: what the agent is told first, where anything is, then the prompt.</summary>
+    /// <param name="lead">What the agent is told before it is asked; null where the question stands alone.</param>
+    public static string Question(string? lead) => lead is { Length: > 0 } told ? $"{told}\n\n{Prompt}" : Prompt;
+
+    /// <summary>Why a run has no handoff when its agent gave none in <paramref name="answers"/> answers.</summary>
+    /// <param name="answers">How many answers it gave.</param>
+    public static string NoneIn(int answers) => $"the agent gave no handoff in {answers} answers";
+
+    /// <summary>
+    /// The handoff an answer gives: its notes where it answered with an object that holds them, else the whole answer
+    /// held to the schema, else its text; null where that says nothing, and the agent gave no handoff.
+    /// </summary>
+    /// <param name="structured">The answer held to the run's schema, where it carries one.</param>
+    /// <param name="text">The answer's text.</param>
+    public static string? AnswerOf(System.Text.Json.Nodes.JsonNode? structured, string? text)
+    {
+        var answer = structured is System.Text.Json.Nodes.JsonObject held && held["notes"] is System.Text.Json.Nodes.JsonValue notes && notes.TryGetValue<string>(out var said)
+            ? said
+            : structured?.ToJsonString() ?? text;
+
+        return string.IsNullOrWhiteSpace(answer) ? null : answer;
+    }
+
     private readonly TaskCompletionSource<AgentHandoffAsked> _asked = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>How long the agent has to answer once asked.</summary>
@@ -318,6 +349,14 @@ public sealed class AgentMessages
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
         _messages.Writer.TryWrite(message);
     }
+
+    /// <summary>
+    /// Takes the oldest message posted and not yet taken, without waiting: for a client that gives the agent what it was
+    /// told at the points its loop reaches, rather than as each is posted (<see cref="ReadAllAsync"/>).
+    /// </summary>
+    /// <param name="message">The message; null where none waits.</param>
+    /// <returns>Whether one waited.</returns>
+    public bool TryTake([System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out string message) => _messages.Reader.TryRead(out message);
 
     /// <summary>Each message the engine has told the agent, as it is told, until the run ends.</summary>
     /// <param name="cancellationToken">Stops waiting.</param>
@@ -484,4 +523,11 @@ public sealed record AgentRun(
 
     /// <summary>The web search the agent is given: its sources, bounds and keys; <see langword="null"/> where it searches none.</summary>
     public AgentWebSearch? WebSearch { get; init; }
+
+    /// <summary>
+    /// The agent's <c>sessions/</c> directory, where a client handed a conversation keeps it, each in its own
+    /// <c>sessions/&lt;id&gt;/</c> (<see cref="Orchestration.OrchestratorLayout.SessionDirectoryIn"/>); null where the run was
+    /// given none, and such a client is not started.
+    /// </summary>
+    public string? SessionsDirectory { get; init; }
 }

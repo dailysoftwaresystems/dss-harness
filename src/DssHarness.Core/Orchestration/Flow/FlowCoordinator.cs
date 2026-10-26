@@ -750,14 +750,8 @@ public sealed class FlowCoordinator
 
         foreach (var bound in inFlight)
         {
-            try
-            {
-                bound.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                // The turn ended inside its bound already.
-            }
+            // A turn that ended inside its bound already has let go of it.
+            bound.TryCancel();
         }
     }
 
@@ -1238,15 +1232,9 @@ public sealed class FlowCoordinator
             {
                 using var timer = _clock.CreateTimer(_ =>
                 {
-                    try
-                    {
-                        boundPassed = true;
-                        boundToCancel.Cancel();
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                        // The turn answered inside its bound: the timer outlived the source it was to cancel.
-                    }
+                    // A turn answered inside its bound has let go of the source: the timer outlived it.
+                    boundPassed = true;
+                    boundToCancel.TryCancel();
                 }, null, TimeSpan.FromSeconds(seconds), TimeSpan.FromMilliseconds(-1));
 
                 // The turn is asked of the attempt the pause stopped, with every fact that attempt was asked with: a reason

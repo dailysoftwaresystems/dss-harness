@@ -90,6 +90,9 @@ public enum AgentMessageKind
 
     /// <summary>What a plan update changes for its work.</summary>
     PlanUpdate,
+
+    /// <summary>A nudge to go on with an answer the provider cut off at its length.</summary>
+    Continue,
 }
 
 /// <summary>Who ran a tool call, as the call's events name it.</summary>
@@ -268,7 +271,7 @@ public sealed record UsageReported(AgentUsage Turn, AgentUsage Cumulative) : Age
 /// <param name="Until">When the wait ends.</param>
 public sealed record WaitingToRetry(string Cause, int Attempt, int Of, TimeSpan Delay, DateTimeOffset Until) : AgentEvent;
 
-/// <summary>A partial turn was thrown away, and the turn begins again.</summary>
+/// <summary>A partial turn was thrown away - what it streamed is none of the run's - and the turn begins again unless the run ends.</summary>
 /// <param name="Why">Why it was thrown away.</param>
 public sealed record TurnRestarted(string Why) : AgentEvent;
 
@@ -299,7 +302,24 @@ public sealed record FallbackStarted(
     bool ThrewAway,
     bool CreditAsked,
     string? FromKey = null,
-    string? ToKey = null) : AgentEvent;
+    string? ToKey = null) : AgentEvent
+{
+    /// <summary>
+    /// The fallback a refused key makes, on every client: the same model of the same provider and client, on the next of
+    /// the run's keys, each named and never valued.
+    /// </summary>
+    /// <param name="model">The model.</param>
+    /// <param name="provider">Its provider.</param>
+    /// <param name="client">Its client.</param>
+    /// <param name="refused">The name of the key refused.</param>
+    /// <param name="next">The name of the key that takes over.</param>
+    /// <param name="said">What the refusal said, masked.</param>
+    /// <param name="how">How the run goes on with the next key.</param>
+    /// <param name="turn">The turn it happened on.</param>
+    /// <param name="threwAway">Whether a part of an answer was thrown away.</param>
+    public static FallbackStarted KeyRefused(string model, string provider, string client, string refused, string next, string said, string how, int turn, bool threwAway)
+        => new(model, provider, client, model, provider, client, $"key refused: {said}", how, turn, threwAway, CreditAsked: false, refused, next);
+}
 
 /// <summary>An entry of the fallback that was not taken.</summary>
 /// <param name="Model">The model not taken.</param>
@@ -329,7 +349,17 @@ public sealed record HandoffAsked(string Why, TimeSpan Bound) : AgentEvent;
 /// <summary>The handoff turn ended.</summary>
 /// <param name="Answered">Whether the agent answered.</param>
 /// <param name="WhyNot">Why it did not, where it did not; null where it answered.</param>
-public sealed record HandoffAnswered(bool Answered, string? WhyNot = null) : AgentEvent;
+public sealed record HandoffAnswered(bool Answered, string? WhyNot = null) : AgentEvent
+{
+    /// <summary>What a run's <paramref name="handoff"/> tells as the event that ends its handoff turn, on every client.</summary>
+    /// <param name="handoff">The run's handoff.</param>
+    public static HandoffAnswered Of(AgentHandoff handoff)
+    {
+        ArgumentNullException.ThrowIfNull(handoff);
+
+        return new(handoff.Answered, handoff.WhyNone);
+    }
+}
 
 /// <summary>The agent asked the person.</summary>
 /// <param name="Questions">Its questions, each with its choices and the one it recommends.</param>

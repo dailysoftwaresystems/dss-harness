@@ -1688,6 +1688,26 @@ reader's pace, waited for outside the fetch's 30 s), asks only the `http` and `h
 `WebPageText` over AngleSharp. A turn runs its reads together, at most 4 at once, a
 write or a run alone between them.
 
+The loop the API clients share is `Agents\Loop\ToolLoop`, built ahead of them and driven in its tests by a fake
+provider: one request after another over an `IChatProvider` - the provider's own wire, its form of a conversation's
+messages and tools, and what each of its failures is (`ChatFailure`) - each turn's calls run by the run's
+`AgentToolRuntime` (`AgentToolHost.Open`) through `AgentToolRuntime.RunTurnAsync`, which an `AgentTurnCut` cuts when
+the run pauses or the step runs past its time, every call it cut still answered (`AgentToolRuntime.Interrupted`,
+`AgentToolRuntime.NotRun`); a host that cannot serve the tools a run is offered says why before it starts
+(`AgentToolHost.Unserved`). The loop owns the bounds - `maxTurns` but the handoff turn's, the budget checked before every
+request against the cost `AgentPrices` counts (`AgentPrices.BudgetRefusal` refusing a start without the prices it needs),
+the duration, the stall - the keys, a refused one passed over for the next, the retries (`ToolLoop.Backoff`,
+`ToolLoopTerms`), the handoff turn (`AgentHandoffSignal`, whose question and answer the claude-code client reads the
+same way), a message to an
+agent at work (`AgentMessages.TryTake`), the output check (`StructuredOutputGate`), the model each turn names
+(`AgentModelIds`, which the claude-code client holds its messages to too) and the conversation: `StoredConversation`
+under the agent's `sessions/<id>/` (`AgentRun.SessionsDirectory`, `OrchestratorLayout.SessionDirectoryIn`), each line a
+JSON array of the provider's messages written at a point where the history is whole, each message kept and sent back
+byte for byte. The first request asks for a quarter of the model's `maxOutputTokens` (`ToolLoop.FirstMaxTokens`), a turn
+cut off while it called a tool, or before it wrote anything, doubling it. Every client ends a run in the same words, whatever its wire: a step that
+never began, a model nobody asked for, an answer outside its schema, a declined request and an account at its limit are
+each said by `AgentEndings`, and what a run used, by model, is counted by `AgentUsageTally`.
+
 The harness's own web search is built under `Web\Search`: each kind of source an implementation of `IWebSearchKind` -
 pure, asking and reading only what it is handed - found by the one scan of the core (`CoreImplementations<T>`, which
 the codebase graph's languages are found by too) into the registry `WebSearchKinds`, which refuses two kinds of one

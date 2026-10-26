@@ -398,16 +398,17 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             Withheld = step.Withheld,
             Commands = step.Commands,
             WebSearch = step.WebSearch,
+            SessionsDirectory = Layout(step).AgentSessionsDirectory(step.Agent),
         };
 
     /// <summary>The step's own directory, as the one owner of the paths spells it.</summary>
     /// <param name="step">The step.</param>
-    private static string StepDirectory(AgentStepRequest step)
-    {
-        var layout = OrchestratorLayout.Of(new HarnessLayout(step.Workspace.MainCheckout, step.Workspace.MainCheckout), step.Run);
+    private static string StepDirectory(AgentStepRequest step) => Layout(step).AgentStepDirectory(step.Agent, step.StepInstance);
 
-        return layout.AgentStepDirectory(step.Agent, step.StepInstance);
-    }
+    /// <summary>The paths of the step's run, as the one owner of them spells them.</summary>
+    /// <param name="step">The step.</param>
+    private static OrchestratorLayout Layout(AgentStepRequest step)
+        => OrchestratorLayout.Of(new HarnessLayout(step.Workspace.MainCheckout, step.Workspace.MainCheckout), step.Run);
 
     /// <summary>How long the agent has to answer a handoff: the bound the step's limits name, three minutes unless they do.</summary>
     /// <param name="step">The step.</param>

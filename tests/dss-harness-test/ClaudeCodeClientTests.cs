@@ -716,14 +716,6 @@ public sealed class ClaudeCodeClientTests : IDisposable
             finished.Result);
     }
 
-    /// <summary>A model's id with a date after it is that model, and another model is not.</summary>
-    [Theory]
-    [InlineData("claude-sonnet-5-5", "claude-sonnet-5-5", true)]
-    [InlineData("claude-sonnet-5-5", "claude-sonnet-5-5-20261001", true)]
-    [InlineData("claude-sonnet-5-5", "claude-sonnet-5-5-preview", false)]
-    [InlineData("claude-sonnet-5-5", "claude-opus-5-5", false)]
-    public void AModelsIdWithADateAfterIt_IsThatModel(string asked, string named, bool same)
-        => Assert.Equal(same, ClaudeCodeClient.Same(asked, named));
 
     /// <summary>
     /// A launch that signs in with a key is given its entry's key; a key Claude Code reports invalid is passed over, said
@@ -2404,10 +2396,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
     /// policy to decide its calls by, and no value for the key its way of signing in takes.
     /// </summary>
     [Theory]
-    [InlineData("model", AgentNotStartedBecause.ConfigurationWrong, "the step names no model, and a launch is told its model by its id")]
+    [InlineData("model", AgentNotStartedBecause.ConfigurationWrong, "the step names no model, and its client is told the model by its id")]
     [InlineData("program", AgentNotStartedBecause.ProgramMissing, "no Claude Code program was found ready for this launch")]
     [InlineData("ground", AgentNotStartedBecause.ConfigurationWrong, "the step was given no policy to decide its calls by, and no call runs undecided")]
-    [InlineData("keys", AgentNotStartedBecause.KeyMissing, "the launch signs in with auth: apiKey, and the slot holds no value for it")]
+    [InlineData("keys", AgentNotStartedBecause.KeyMissing, "the run signs in with auth: apiKey, and the slot holds no value for it")]
     public async Task ARunTheClientCannotLaunch_NeverBegan_SayingWhy(string missing, AgentNotStartedBecause because, string why)
     {
         using var kit = new Kit();

@@ -120,7 +120,7 @@ public sealed class ClaudeCodeClient(
 
         if (run.Model is not { Length: > 0 } model)
         {
-            return NotStarted(AgentNotStartedBecause.ConfigurationWrong, "the step names no model, and a launch is told its model by its id", run);
+            return NotStarted(AgentNotStartedBecause.ConfigurationWrong, AgentEndings.NoModel, run);
         }
 
         if (run.Program is not { Length: > 0 } program)
@@ -130,14 +130,14 @@ public sealed class ClaudeCodeClient(
 
         if (run.Ground is not { } ground)
         {
-            return NotStarted(AgentNotStartedBecause.ConfigurationWrong, "the step was given no policy to decide its calls by, and no call runs undecided", run);
+            return NotStarted(AgentNotStartedBecause.ConfigurationWrong, AgentEndings.NoPolicy, run);
         }
 
         IReadOnlyList<AgentKey?> keys = run.Credential is { } credential && credential.Auth != AgentAuth.Login ? [.. credential.Keys] : [null];
 
         if (keys.Count == 0)
         {
-            return NotStarted(AgentNotStartedBecause.KeyMissing, $"the launch signs in with auth: {run.Credential!.Auth}, and the slot holds no value for it", run);
+            return NotStarted(AgentNotStartedBecause.KeyMissing, AgentEndings.NoKey(run.Credential!.Auth), run);
         }
 
         // The user's settings are read by every launch: one that would give it a credential refuses the run before any
@@ -172,10 +172,10 @@ public sealed class ClaudeCodeClient(
 
                 if (entry + 1 < keys.Count && !totals.Worked)
                 {
-                    await events.EmitAsync(new FallbackStarted(
-                        model, run.Provider ?? string.Empty, ClientName, model, run.Provider ?? string.Empty, ClientName,
-                        $"key refused: Claude Code reported {refused.Name} invalid", "a new launch with the step's prompt",
-                        totals.Turns, ThrewAway: false, CreditAsked: false, refused.Name, keys[entry + 1]!.Name)).ConfigureAwait(false);
+                    await events.EmitAsync(FallbackStarted.KeyRefused(
+                        model, run.Provider ?? string.Empty, ClientName, refused.Name, keys[entry + 1]!.Name,
+                        $"Claude Code reported {refused.Name} invalid", "a new launch with the step's prompt",
+                        totals.Turns, threwAway: false)).ConfigureAwait(false);
                     continue;
                 }
             }
@@ -186,7 +186,7 @@ public sealed class ClaudeCodeClient(
 
     /// <summary>A run that never began, and why.</summary>
     private static AgentRunResult NotStarted(AgentNotStartedBecause because, string why, AgentRun run)
-        => new(AgentRunStatus.NotStarted, because, Model: run.Model, Error: run.Mask.Redact($"client '{ClientName}' was not started: {why}"));
+        => AgentEndings.NotStarted(ClientName, because, why, run.Model, run.Mask);
 
     /// <summary>A launch's result with what every launch of the run used, said, refused and left.</summary>
     private static AgentRunResult Finished(AgentRunResult result, AgentRun run, Totals totals, TimeSpan duration)
@@ -199,11 +199,8 @@ public sealed class ClaudeCodeClient(
             WebRequests = totals.WebRequests,
             Duration = duration,
             Session = totals.Session,
-            Usage = new AgentUsageReport(
-                totals.Usage,
-                [.. totals.PerModel.Select(served => new AgentModelUsage(served.Key, served.Value))],
-                new AgentCost(Reported: totals.Cost)),
-            Served = [.. totals.Served],
+            Usage = totals.Used.Report(new AgentCost(Reported: totals.Cost)),
+            Served = [.. totals.Used.Served],
             KeysRefused = [.. totals.Refused],
             SessionFilesRemoved = [.. totals.Removed],
             Uncontained = [.. totals.Uncontained],
@@ -217,11 +214,6 @@ public sealed class ClaudeCodeClient(
             name => name == ClaudeTranscripts.ConfigDirectoryVariable && run.Credential?.ConfigDirectory is { Length: > 0 } directory
                 ? directory
                 : _environment().GetValueOrDefault(name));
-
-    /// <summary>Whether a model a message names is the one asked for: the same id, or the id with a date after it.</summary>
-    internal static bool Same(string asked, string named)
-        => string.Equals(asked, named, StringComparison.Ordinal)
-            || (named.StartsWith(asked + "-", StringComparison.Ordinal) && named.Length == asked.Length + 9 && named[(asked.Length + 1)..].All(char.IsAsciiDigit));
 
     /// <summary>What every launch of a run adds to.</summary>
     private sealed class Totals
@@ -243,11 +235,7 @@ public sealed class ClaudeCodeClient(
 
         public decimal? Cost { get; set; }
 
-        public AgentUsage Usage { get; set; } = AgentUsage.None;
-
-        public Dictionary<string, AgentUsage> PerModel { get; } = new(StringComparer.Ordinal);
-
-        public List<AgentServedModel> Served { get; } = [];
+        public AgentUsageTally Used { get; } = new();
 
         public List<string> Refused { get; } = [];
 
@@ -447,7 +435,7 @@ public sealed class ClaudeCodeClient(
 
                 if (outcome.Result.Handoff is { } handoff)
                 {
-                    await Emit(new HandoffAnswered(handoff.Answer is not null, handoff.WhyNone)).ConfigureAwait(false);
+                    await Emit(HandoffAnswered.Of(handoff)).ConfigureAwait(false);
                 }
                 else if (_handing != Handing.No)
                 {
@@ -1085,13 +1073,7 @@ public sealed class ClaudeCodeClient(
         }
 
         /// <summary>The step's end at an account's limit.</summary>
-        private AgentRunResult AtLimit(AgentAccountLimit limit, string said)
-            => Failed(
-                AgentRunStatus.RateLimited,
-                $"Claude Code reported the account at its limit, {(limit.BalanceSpent ? "its balance or included usage spent" : "an allowance used up")}{(limit.Lifts is { } lifts ? $" until {lifts:u}" : string.Empty)}: {said}") with
-            {
-                Limit = limit,
-            };
+        private AgentRunResult AtLimit(AgentAccountLimit limit, string said) => AgentEndings.AtLimit("Claude Code", limit, said, run.Mask);
 
         private async Task<LaunchOutcome?> OnControlResponseAsync(ClaudeLine.ControlResponse answered)
         {
@@ -1135,9 +1117,10 @@ public sealed class ClaudeCodeClient(
         {
             _inTurn = false;
             totals.Acted = true;
-            totals.Usage = totals.Usage.Plus(result.Usage);
             var served = _held ?? model;
-            totals.PerModel[served] = totals.PerModel.TryGetValue(served, out var used) ? used.Plus(result.Usage) : result.Usage;
+
+            // The first model to serve the run serves it from its first turn: a launch's turns are all of one model.
+            totals.Used.Add(served, result.Usage, 1);
 
             if (result.CostUsd is { } cost)
             {
@@ -1146,13 +1129,8 @@ public sealed class ClaudeCodeClient(
                 _cost = cost;
             }
 
-            if (totals.Served.Count == 0)
-            {
-                totals.Served.Add(new AgentServedModel(served, 1));
-            }
-
             await Emit(new TurnFinished(totals.Turns, served, result.Usage, result.StopReason)).ConfigureAwait(false);
-            await Emit(new UsageReported(result.Usage, totals.Usage)).ConfigureAwait(false);
+            await Emit(new UsageReported(result.Usage, totals.Used.Total)).ConfigureAwait(false);
 
             switch (_handing)
             {
@@ -1196,7 +1174,7 @@ public sealed class ClaudeCodeClient(
 
             if (_repairs >= output.MaxRepairs)
             {
-                return new LaunchOutcome(Failed(AgentRunStatus.InvalidOutput, $"the answer did not read against its schema after {_repairs} repairs: {string.Join("; ", problems)}"));
+                return new LaunchOutcome(AgentEndings.InvalidOutput(_repairs, problems, run.Mask));
             }
 
             _repairs++;
@@ -1218,10 +1196,7 @@ public sealed class ClaudeCodeClient(
 
             if (_declined is not null || result.StopReason == Declined)
             {
-                return Failed(AgentRunStatus.Refused, $"the model declined the request{(_declined is { Length: > 0 } category ? $" ({category})" : string.Empty)}: {said}") with
-                {
-                    DeclinedFor = _declined is { Length: > 0 } named ? named : null,
-                };
+                return AgentEndings.Declined(_declined, said, run.Mask);
             }
 
             return (result.Subtype, result.TerminalReason) switch
@@ -1244,7 +1219,7 @@ public sealed class ClaudeCodeClient(
 
             await Emit(new HandoffAsked(asked.Why, run.Handoff.Bound)).ConfigureAwait(false);
             _lead = asked.Lead;
-            After(run.Handoff.Bound, new Arrival.Bound("the bound passed before the agent answered", Handing.Asking));
+            After(run.Handoff.Bound, new Arrival.Bound(AgentHandoffSignal.BoundPassed, Handing.Asking));
 
             if (!_inTurn && _pending.Count == 0)
             {
@@ -1291,7 +1266,7 @@ public sealed class ClaudeCodeClient(
         {
             _handing = Handing.Asking;
             _handoffAnswers++;
-            var question = _lead is { Length: > 0 } lead ? $"{lead}\n\n{AgentHandoffSignal.Prompt}" : AgentHandoffSignal.Prompt;
+            var question = AgentHandoffSignal.Question(_lead);
             await SayAsync(question, AgentMessageKind.HandoffQuestion).ConfigureAwait(false);
 
             return null;
@@ -1299,34 +1274,27 @@ public sealed class ClaudeCodeClient(
 
         private async Task<LaunchOutcome?> HandoffAnsweredAsync(ClaudeLine.Result result)
         {
-            var answer = result.Structured is { } structured && structured["notes"] is JsonValue notes && notes.TryGetValue<string>(out var text)
-                ? text
-                : result.Structured?.ToJsonString() ?? result.Text;
+            var answer = AgentHandoffSignal.AnswerOf(result.Structured, result.Text);
 
             if (Ending(result) is { } ended)
             {
-                return HandedOff(null, $"the handoff turn ended {ended.Status}: {ended.Error}");
+                return HandedOff(null, AgentHandoffSignal.TurnEnded(ended.Status, ended.Error));
             }
 
-            if (answer is { Length: > 0 })
+            if (answer is not null)
             {
                 return HandedOff(answer, null);
             }
 
             if (_handoffAnswers >= run.Handoff.MaxAnswers)
             {
-                return HandedOff(null, $"the agent gave no handoff in {_handoffAnswers} answers");
+                return HandedOff(null, AgentHandoffSignal.NoneIn(_handoffAnswers));
             }
 
             return await AskHandoffAsync().ConfigureAwait(false);
         }
 
-        private LaunchOutcome HandedOff(string? answer, string? whyNone)
-        {
-            var handoff = answer is null ? new AgentHandoff(WhyNone: whyNone) : new AgentHandoff(Masked(answer));
-
-            return new LaunchOutcome(new AgentRunResult(AgentRunStatus.HandedOff, Handoff: handoff));
-        }
+        private LaunchOutcome HandedOff(string? answer, string? whyNone) => new(AgentEndings.HandedOff(answer, whyNone, run.Mask));
 
         private async Task<LaunchOutcome?> OnPostedAsync(string text)
         {
@@ -1358,10 +1326,7 @@ public sealed class ClaudeCodeClient(
 
             if (process.Exception?.InnerException is ProgramStartException unstarted)
             {
-                return new LaunchOutcome(new AgentRunResult(
-                    AgentRunStatus.NotStarted,
-                    AgentNotStartedBecause.ProgramMissing,
-                    Error: Masked($"client '{ClientName}' was not started: {unstarted.Message}")));
+                return new LaunchOutcome(AgentEndings.NotStarted(ClientName, AgentNotStartedBecause.ProgramMissing, unstarted.Message, run.Model, run.Mask));
             }
 
             var ended = process.Exception?.InnerException is { } failure
@@ -1383,18 +1348,15 @@ public sealed class ClaudeCodeClient(
         /// <summary>Holds every message to the model asked for, ending the step where another wrote one.</summary>
         private LaunchOutcome? Served(string named, string where)
         {
-            if (_held is null || Same(_held, named))
+            if (_held is null || AgentModelIds.Same(_held, named))
             {
                 return null;
             }
 
-            return new LaunchOutcome(Failed(
-                AgentRunStatus.WrongModel,
-                $"the step asked for '{_held}' and {where} was written by '{named}'; a step's model is its configuration's and the engine's to choose, and neither chose this one"));
+            return new LaunchOutcome(AgentEndings.WrongModel(_held, named, where, run.Mask));
         }
 
-        private AgentRunResult Failed(AgentRunStatus status, string error)
-            => new(status, Error: Masked(error));
+        private AgentRunResult Failed(AgentRunStatus status, string error) => AgentEndings.Ended(status, error, run.Mask);
 
         /// <summary>
         /// A launch the engine is not the host of: never started where nothing it did stands - no call ran and no turn
@@ -1406,7 +1368,7 @@ public sealed class ClaudeCodeClient(
 
         /// <summary>The step's end <paramref name="ended"/>; in the handoff turn, the handoff that turn did not give.</summary>
         private LaunchOutcome Ends(AgentRunResult ended, bool killNow = false)
-            => (_handing == Handing.No ? new LaunchOutcome(ended) : HandedOff(null, $"the handoff turn ended {ended.Status}: {ended.Error}")) with { KillNow = killNow };
+            => (_handing == Handing.No ? new LaunchOutcome(ended) : HandedOff(null, AgentHandoffSignal.TurnEnded(ended.Status, ended.Error))) with { KillNow = killNow };
 
         /// <summary>The program, by its version where it is known, as a refusal names it.</summary>
         private string Claude => _version is { Length: > 0 } version ? $"claude {version}" : "claude";

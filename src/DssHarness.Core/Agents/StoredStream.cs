@@ -128,12 +128,20 @@ public sealed class StoredStream : IAgentEventSink, IDisposable
 
 /// <summary>
 /// A conversation the engine stores in its provider's own form, under <c>sessions/&lt;id&gt;/</c> beside an agent's
-/// steps: what it began with, sent with every request of it, and the turns as they were sent and received, appended
-/// one line at a time through the same seam the stored stream hangs off.
+/// steps: what it began with, sent with every request of it, and its messages as they were sent and received, appended
+/// through the same seam the stored stream hangs off - one line for each point where the history is whole again, so a
+/// line torn by a kill takes back a whole turn and never half of one.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Several steps append to one conversation, and one step can have had two. A Claude Code launch has none: a
 /// conversation cannot be handed to it, and its record is the step's stored stream.
+/// </para>
+/// <para>
+/// A line is a JSON array of the provider's own messages: an agent's message that called tools with the answers to
+/// them, an agent's answer, the engine's message and the turn it began. Each message is kept as its provider made it,
+/// byte for byte, and sent back so with every later request: nothing rewrites, re-serializes or masks a stored message.
+/// </para>
 /// </remarks>
 public sealed class StoredConversation : IDisposable
 {
@@ -147,16 +155,20 @@ public sealed class StoredConversation : IDisposable
     public const string ToolsFileName = "tools.json";
 
     private readonly AppendLog _log;
+    private readonly List<string> _messages;
 
-    private StoredConversation(AppendLog log, string directory)
+    private StoredConversation(AppendLog log, string directory, string systemPrompt, string tools, List<string> messages)
     {
         _log = log;
         SessionDirectory = directory;
+        SystemPrompt = systemPrompt;
+        Tools = tools;
+        _messages = messages;
     }
 
     /// <summary>
-    /// Opens a stored conversation, making its directory, writing what it began with where the conversation is new, and
-    /// taking back any torn line a killed writer left.
+    /// Opens the stored conversation kept in <paramref name="directory"/>, making it, writing what it began with where the
+    /// conversation is new, taking back any torn line a killed writer left, and reading every message it holds.
     /// </summary>
     /// <remarks>
     /// What it began with is written once, and whole: each file is put in place in one step, so a file that is there was
@@ -164,22 +176,18 @@ public sealed class StoredConversation : IDisposable
     /// conversation.
     /// </remarks>
     /// <param name="fileSystem">The file system the agent's records are kept on.</param>
-    /// <param name="layout">The run, whose agent's sessions hold the conversation.</param>
-    /// <param name="agent">The agent's name.</param>
-    /// <param name="id">The conversation's id.</param>
+    /// <param name="directory">The session's directory: <c>sessions/&lt;id&gt;/</c> of the agent's (<see cref="OrchestratorLayout.SessionDirectoryIn"/>).</param>
     /// <param name="systemPrompt">The system prompt the conversation began with, written where it is new.</param>
     /// <param name="tools">The tools as first sent, as JSON text, written where they are new.</param>
     /// <returns>The conversation, at the end of its last whole turn.</returns>
-    public static StoredConversation Open(IFileSystem fileSystem, OrchestratorLayout layout, string agent, string id, string systemPrompt, string tools)
+    /// <exception cref="InvalidDataException">A line of the conversation is no JSON array of messages: it was written by no writer of this tool's.</exception>
+    public static StoredConversation Open(IFileSystem fileSystem, string directory, string systemPrompt, string tools)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
-        ArgumentNullException.ThrowIfNull(layout);
-        ArgumentException.ThrowIfNullOrWhiteSpace(agent);
-        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         ArgumentException.ThrowIfNullOrWhiteSpace(systemPrompt);
         ArgumentException.ThrowIfNullOrWhiteSpace(tools);
 
-        var directory = layout.AgentSessionDirectory(agent, id);
         fileSystem.CreateDirectory(directory);
 
         var system = Path.Combine(directory, SystemFileName);
@@ -195,17 +203,106 @@ public sealed class StoredConversation : IDisposable
             fileSystem.WriteAllTextAtomic(given, tools);
         }
 
-        return new StoredConversation(AppendLog.Open(fileSystem, Path.Combine(directory, ConversationFileName)), directory);
+        var log = AppendLog.Open(fileSystem, Path.Combine(directory, ConversationFileName));
+
+        try
+        {
+            return new StoredConversation(log, directory, fileSystem.ReadAllText(system), fileSystem.ReadAllText(given), Messages(log));
+        }
+        catch
+        {
+            log.Dispose();
+            throw;
+        }
     }
 
     /// <summary>The conversation's directory.</summary>
     public string SessionDirectory { get; }
 
-    /// <summary>Appends one turn, as it was sent or received, whole and on the disk before the next is taken.</summary>
-    /// <param name="line">The turn, in the provider's own form, as one line of JSON holding no line break.</param>
-    /// <exception cref="ArgumentException">The line holds a line break of its own; nothing was written.</exception>
-    public void Append(string line) => _log.Append(line);
+    /// <summary>The system prompt the conversation began with, as it was written: what every request of it sends.</summary>
+    public string SystemPrompt { get; }
+
+    /// <summary>The tools the conversation began with, as they were written: what every request of it sends.</summary>
+    public string Tools { get; }
+
+    /// <summary>Every message the conversation holds, in order, each as its provider made it.</summary>
+    public IReadOnlyList<string> Messages() => [.. _messages];
+
+    /// <summary>
+    /// Appends <paramref name="messages"/> as one line - the point where the history is whole again - each kept as it is,
+    /// byte for byte, whole and on the disk before the next line is taken.
+    /// </summary>
+    /// <param name="messages">The messages, in order, each one JSON value in its provider's own form holding no line break.</param>
+    /// <exception cref="ArgumentException">There is no message, one is no JSON value of its own, or one holds a line break; nothing was written.</exception>
+    public void Append(IReadOnlyList<string> messages)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+
+        if (messages.Count == 0)
+        {
+            throw new ArgumentException("A line of a conversation holds one message at least.", nameof(messages));
+        }
+
+        var line = "[" + string.Join(",", messages) + "]";
+
+        // Read back as it would be: a message that is no JSON value of its own would be split otherwise than it was given,
+        // or the line not read at all.
+        if (!SplitsInto(line, messages))
+        {
+            throw new ArgumentException("A message of the line is no JSON value of its own, and would be read back otherwise than it was given; nothing was written.", nameof(messages));
+        }
+
+        _log.Append(line);
+        _messages.AddRange(messages);
+    }
 
     /// <summary>Closes the conversation. Its last line is whole, and the next open begins after it.</summary>
     public void Dispose() => _log.Dispose();
+
+    /// <summary>Every message the log holds, line by line, each as it was written.</summary>
+    private static List<string> Messages(AppendLog log)
+    {
+        var messages = new List<string>();
+
+        foreach (var line in log.ReadAll().Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            messages.AddRange(Split(line));
+        }
+
+        return messages;
+    }
+
+    /// <summary>Whether <paramref name="line"/> reads back as <paramref name="messages"/>, each byte for byte.</summary>
+    private static bool SplitsInto(string line, IReadOnlyList<string> messages)
+    {
+        try
+        {
+            return Split(line).SequenceEqual(messages, StringComparer.Ordinal);
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The messages of one line, each as the line holds it, byte for byte.</summary>
+    /// <exception cref="InvalidDataException">The line is no JSON array.</exception>
+    private static List<string> Split(string line)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                throw new InvalidDataException($"A line of a stored conversation is a JSON {document.RootElement.ValueKind}, and each is an array of messages.");
+            }
+
+            return [.. document.RootElement.EnumerateArray().Select(message => message.GetRawText())];
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException($"A line of a stored conversation does not read as JSON: {ex.Message}", ex);
+        }
+    }
 }

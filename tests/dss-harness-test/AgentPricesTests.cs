@@ -41,8 +41,8 @@ public sealed class AgentPricesTests
         LargePrompt = new LargePromptPrices { OverTokens = 100_000, PriceInputMiss = 0.5, PriceInputHit = 0.05, PriceOutput = 2.5 },
     };
 
-    private static AgentProviderConfig Provider(AgentModelConfig model, double? searches = null)
-        => new() { Name = "zai", Type = "zai", Api = "https://api", ApiKeyNames = ["KEY"], Client = "glm", Currency = "USD", ReadOn = "2026-10-12", PricePerThousandSearches = searches, Models = [model] };
+    private static AgentProviderConfig Provider(AgentModelConfig model, double? searches = null, string currency = "USD")
+        => new() { Name = "zai", Type = "zai", Api = "https://api", ApiKeyNames = ["KEY"], Client = "glm", Currency = currency, ReadOn = "2026-10-12", PricePerThousandSearches = searches, Models = [model] };
 
     /// <summary>Each kind of token is counted at that kind's price per million: input, cache read, output.</summary>
     [Fact]
@@ -149,6 +149,37 @@ public sealed class AgentPricesTests
 
         Assert.Null(AgentPrices.CostOf(Provider(Glm), Glm, searched));
         Assert.Equal("no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': pricePerThousandSearches)", AgentPrices.UnknownOf(Provider(Glm), Glm, searched));
+    }
+
+    /// <summary>
+    /// A budget is charged with the cost counted from the prices every request is charged at - input missed and hit, and
+    /// output - in the budget's currency: a model missing any of them, or a provider pricing in another currency, refuses
+    /// a budget, naming what to fill.
+    /// </summary>
+    [Theory]
+    [InlineData("none", null)]
+    [InlineData("miss", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss), and a budget is charged with the cost counted from them")]
+    [InlineData("hit", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputHit), and a budget is charged with the cost counted from them")]
+    [InlineData("output", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceOutput), and a budget is charged with the cost counted from them")]
+    [InlineData("all", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss, priceInputHit, priceOutput), and a budget is charged with the cost counted from them")]
+    [InlineData("cacheWrite", null)]
+    [InlineData("currency", "providers 'zai' prices its models in EUR, and a budget is counted in USD")]
+    public void ABudget_NeedsThePricesEveryRequestIsChargedAt_InItsCurrency(string missing, string? refusal)
+    {
+        var model = new AgentModelConfig
+        {
+            Code = Glm.Code,
+            Name = Glm.Name,
+            Tiers = Glm.Tiers,
+            Efforts = Glm.Efforts,
+            ContextTokens = Glm.ContextTokens,
+            MaxOutputTokens = Glm.MaxOutputTokens,
+            PriceInputMiss = missing is "miss" or "all" ? null : Glm.PriceInputMiss,
+            PriceInputHit = missing is "hit" or "all" ? null : Glm.PriceInputHit,
+            PriceOutput = missing is "output" or "all" ? null : Glm.PriceOutput,
+        };
+
+        Assert.Equal(refusal, AgentPrices.BudgetRefusal(Provider(model, currency: missing == "currency" ? "EUR" : "USD"), model));
     }
 
     /// <summary>A kind the request did not use holds no price and decides nothing.</summary>

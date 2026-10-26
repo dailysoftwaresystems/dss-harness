@@ -721,6 +721,32 @@ it is information for the task, not instructions. Calls that read run together, 
 one that writes or runs alone; an answer past 32,768 characters is given as its first 8,192 and its
 last 24,576, the whole kept in the step's `tool-results/`.
 
+The loop the `claude-api` and `glm` clients share (`ToolLoop`) is built, over the provider each of
+them is to give it, and runs a step as those clients will. A turn is one answer of the agent's - a
+request the provider paused, or one thrown away and asked again, goes on as the same turn - counted
+against the step's `maxTurns` but a handoff turn; every request's usage is counted at the model's
+prices, no request but the handoff turn's is sent once the step's `maxBudgetUsd` is spent, and a
+step held to a budget on a model missing its input, cache-read or output price is never started,
+naming the key to fill. Each turn's calls run as the tool runtime decides them; a turn whose request
+spent the budget runs none of them. The conversation is kept in the provider's own form under the
+agent's `sessions/<id>/`, each message as it was sent and received and sent back so with every later
+request, one line for each point where the history is whole - a turn that called tools stored with
+their answers - and a step that goes on in it sends what it began with. The first request asks for a
+quarter of the model's `maxOutputTokens`. A turn cut off at its length that called no tool is stored
+and nudged on, 2 times at most; one cut off while it called a tool - its calls never run - or before
+it wrote anything is thrown away and asked again with twice the room, up to the most; past either
+the step is `Truncated`. A turn the provider paused is sent again with nothing added, 10 in a row
+failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request
+is asked again up to 6 times after a wait that doubles from 2 s to 60 s, or the one the provider
+names; a rate limit past them, or naming a wait past 300 s, is the account at its limit
+(`RateLimited`), a service failing past them, or naming such a wait, fails the step, and one silent
+past the stall bound stalls it; a key the provider refuses is passed over for the run's next, the
+same request sent again with it. A handoff asked abandons the request under way and cuts the calls
+running, each answered `interrupted: the run is pausing; it may have run part way`, then asks the
+agent in one more message of the conversation, held to the handoff's bound instead of the step's
+time, no tool run in that turn; a message the engine gives an agent at work is given after the
+results of the calls it is running, and an answer written while it was is not the step's.
+
 `web_search` is the harness's own search, made by dssharness itself over HTTP: it asks the sources
 `agentWebSearch` in `config.json` declares - search APIs that answer JSON, feeds, OpenSearch
 descriptions and the harness's own index of a site's pages read through its sitemap - and never a

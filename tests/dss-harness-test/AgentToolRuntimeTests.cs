@@ -29,6 +29,21 @@ public sealed class AgentToolRuntimeTests : IDisposable
     private readonly RecordedEvents _events = new();
     private readonly List<IDisposable> _opened = [];
 
+    /// <summary>The first cut of a turn stands: what cuts it later answers no call, and a cut says why.</summary>
+    [Fact]
+    public void TheFirstCutOfATurn_Stands()
+    {
+        using var cut = new AgentTurnCut();
+
+        Assert.Equal((null, false), (cut.Why, cut.Token.IsCancellationRequested));
+
+        cut.Cut("the run is pausing");
+        cut.Cut("the step ran past its time");
+
+        Assert.Equal(("the run is pausing", true), (cut.Why, cut.Token.IsCancellationRequested));
+        Assert.Throws<ArgumentException>(() => cut.Cut(" "));
+    }
+
     /// <summary>The indexes of the last search a test opened, whose fills it waits for by disposing them.</summary>
     private DssHarness.Core.Web.Index.WebIndexes? _indexes;
     private readonly string _worktree;

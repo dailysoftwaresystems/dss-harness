@@ -213,19 +213,23 @@ public sealed class AgentStreamTests
     {
         using var temp = new TempDirectory();
         var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
-        var conversation = StoredConversation.Open(Disk(), layout, "a7", "conv1", "the system prompt", "{\"tools\": []}");
+        var conversation = StoredConversation.Open(Disk(), layout.AgentSessionDirectory("a7", "conv1"), "the system prompt", "{\"tools\": []}");
         var file = Path.Combine(conversation.SessionDirectory, StoredConversation.ConversationFileName);
 
-        conversation.Append("{\"turn\": 1}");
+        conversation.Append(["{\"turn\": 1}"]);
 
-        var broken = Assert.Throws<ArgumentException>(() => conversation.Append("{\"turn\":\n 2}"));
-        var returned = Assert.Throws<ArgumentException>(() => conversation.Append("{\"turn\": 3}\r"));
+        var broken = Assert.Throws<ArgumentException>(() => conversation.Append(["{\"turn\":\n 2}"]));
+        var returned = Assert.Throws<ArgumentException>(() => conversation.Append(["{\"turn\":\r 3}"]));
+        var unread = Assert.Throws<ArgumentException>(() => conversation.Append(["{\"turn\": 4}, {\"turn\": 5}"]));
+        var empty = Assert.Throws<ArgumentException>(() => conversation.Append([]));
 
         conversation.Dispose();
 
-        Assert.Equal($"A line of '{file}' holds a line break at character 8, and would be read back as two; nothing was written. (Parameter 'line')", broken.Message);
-        Assert.Equal($"A line of '{file}' holds a line break at character 11, and would be read back as two; nothing was written. (Parameter 'line')", returned.Message);
-        Assert.Equal("{\"turn\": 1}\n", File.ReadAllText(file));
+        Assert.Equal($"A line of '{file}' holds a line break at character 9, and would be read back as two; nothing was written. (Parameter 'line')", broken.Message);
+        Assert.Equal($"A line of '{file}' holds a line break at character 9, and would be read back as two; nothing was written. (Parameter 'line')", returned.Message);
+        Assert.Equal("A message of the line is no JSON value of its own, and would be read back otherwise than it was given; nothing was written. (Parameter 'messages')", unread.Message);
+        Assert.Equal("A line of a conversation holds one message at least. (Parameter 'messages')", empty.Message);
+        Assert.Equal("[{\"turn\": 1}]\n", File.ReadAllText(file));
     }
 
     /// <summary>
@@ -414,10 +418,9 @@ public sealed class AgentStreamTests
         var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
         var recording = new RecordingWrites(Disk());
 
-        var begun = StoredConversation.Open(recording, layout, "a7", "conv1", "the system prompt", "{\"tools\": []}");
+        var begun = StoredConversation.Open(recording, layout.AgentSessionDirectory("a7", "conv1"), "the system prompt", "{\"tools\": []}");
 
-        begun.Append("{\"role\": \"user\", \"text\": \"one\"}");
-        begun.Append("{\"role\": \"assistant\", \"text\": \"two\"}");
+        begun.Append(["{\"role\": \"user\", \"text\": \"one\"}", "{\"role\": \"assistant\", \"text\": \"two\"}"]);
 
         begun.Dispose();
 
@@ -426,20 +429,71 @@ public sealed class AgentStreamTests
         // Each written once, in one step: a file that is there is one written to its end.
         Assert.Equal([Path.Combine(directory, StoredConversation.SystemFileName), Path.Combine(directory, StoredConversation.ToolsFileName)], recording.Written);
 
-        File.AppendAllText(Path.Combine(directory, StoredConversation.ConversationFileName), "{\"role\": \"assista");
+        File.AppendAllText(Path.Combine(directory, StoredConversation.ConversationFileName), "[{\"role\": \"assista");
 
-        var again = StoredConversation.Open(recording, layout, "a7", "conv1", "a different prompt, not written", "{\"tools\": [\"not written\"]}");
+        var again = StoredConversation.Open(recording, layout.AgentSessionDirectory("a7", "conv1"), "a different prompt, not written", "{\"tools\": [\"not written\"]}");
 
-        again.Append("{\"role\": \"user\", \"text\": \"three\"}");
+        // What it holds is read back as it was written, each message byte for byte, and what it began with as it began.
+        Assert.Equal(["{\"role\": \"user\", \"text\": \"one\"}", "{\"role\": \"assistant\", \"text\": \"two\"}"], again.Messages());
+        Assert.Equal(("the system prompt", "{\"tools\": []}"), (again.SystemPrompt, again.Tools));
+
+        again.Append(["{\"role\": \"user\", \"text\": \"three\"}"]);
+
+        Assert.Equal(3, again.Messages().Count);
 
         again.Dispose();
 
         Assert.Equal(2, recording.Written.Count);
         Assert.Equal(
-            ["{\"role\": \"user\", \"text\": \"one\"}", "{\"role\": \"assistant\", \"text\": \"two\"}", "{\"role\": \"user\", \"text\": \"three\"}"],
+            ["[{\"role\": \"user\", \"text\": \"one\"},{\"role\": \"assistant\", \"text\": \"two\"}]", "[{\"role\": \"user\", \"text\": \"three\"}]"],
             File.ReadAllLines(Path.Combine(directory, StoredConversation.ConversationFileName)));
         Assert.Equal("the system prompt", File.ReadAllText(Path.Combine(directory, StoredConversation.SystemFileName)));
         Assert.Equal("{\"tools\": []}", File.ReadAllText(Path.Combine(directory, StoredConversation.ToolsFileName)));
+    }
+
+    /// <summary>
+    /// A line of a conversation holds one message at least, each one JSON value of its own on one line: anything else is
+    /// refused before a byte is written, and the conversation holds what it held.
+    /// </summary>
+    [Theory]
+    [InlineData("none")]
+    [InlineData("{\"role\": \"user\"")]
+    [InlineData("{\"a\": 1}, {\"b\": 2}")]
+    [InlineData(" {\"a\": 1}")]
+    [InlineData("{\"a\":\n1}")]
+    [InlineData("")]
+    public void AMessageThatIsNoJsonValueOfItsOwnOnOneLine_IsRefused_AndNothingIsWritten(string message)
+    {
+        using var temp = new TempDirectory();
+        var directory = Path.Combine(temp.Path, "conv1");
+        var conversation = StoredConversation.Open(Disk(), directory, "the system prompt", "[]");
+        conversation.Append(["{\"role\": \"user\"}"]);
+
+        Assert.Throws<ArgumentException>(() => conversation.Append(message == "none" ? [] : ["{\"ok\": true}", message]));
+
+        Assert.Equal(["{\"role\": \"user\"}"], conversation.Messages());
+        conversation.Dispose();
+        Assert.Equal(["[{\"role\": \"user\"}]"], File.ReadAllLines(Path.Combine(directory, StoredConversation.ConversationFileName)));
+    }
+
+    /// <summary>
+    /// A stored line that is no array of messages was written by no writer of this tool's: opening the conversation is
+    /// refused, and the conversation's file is let go of.
+    /// </summary>
+    [Theory]
+    [InlineData("{\"role\": \"user\"}")]
+    [InlineData("not json")]
+    public void AStoredLineThatIsNoArrayOfMessages_RefusesTheOpen_AndLetsGoOfTheFile(string line)
+    {
+        using var temp = new TempDirectory();
+        var directory = Path.Combine(temp.Path, "conv1");
+        Directory.CreateDirectory(directory);
+        var file = Path.Combine(directory, StoredConversation.ConversationFileName);
+        File.WriteAllText(file, line + "\n");
+
+        Assert.Throws<InvalidDataException>(() => StoredConversation.Open(Disk(), directory, "the system prompt", "[]"));
+
+        File.Delete(file);
     }
 
     /// <summary>How much of a sample is filled.</summary>

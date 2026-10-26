@@ -1,4 +1,5 @@
 using DssHarness.Core.Build;
+using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 
 namespace DssHarness.Core.Mutations;
@@ -97,9 +98,7 @@ internal sealed class WorkerSite(IFileSystem fileSystem, TimeProvider clock) : I
              left >= TimeSpan.Zero && _clock.GetElapsedTime(started) <= LongestWait + Margin;
              left = stamp - _clock.GetUtcNow().UtcDateTime)
         {
-            await Task.Delay(Min(left, LongestWait) + TimeSpan.FromMilliseconds(10), _clock, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(Waits.Shorter(LongestWait, left) + TimeSpan.FromMilliseconds(10), _clock, cancellationToken).ConfigureAwait(false);
         }
     }
-
-    private static TimeSpan Min(TimeSpan left, TimeSpan right) => left < right ? left : right;
 }

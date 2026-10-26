@@ -76,7 +76,10 @@ public sealed class WorkerSiteTests
         Assert.Null(site.Read(temp.Combine("src", "gone.cpp")));
     }
 
-    /// <summary>The wait for the clock to pass a stamp ends only once the clock says it is past it, however that takes.</summary>
+    /// <summary>
+    /// The wait for the clock to pass a stamp ends only once the clock says it is past it, however that takes, and a
+    /// moment after: no wait is longer than what is left.
+    /// </summary>
     [Fact]
     public async Task TheWait_EndsOnceTheClockIsPastTheStamp()
     {
@@ -87,6 +90,7 @@ public sealed class WorkerSiteTests
         await site.UntilPastAsync(stamp, TestContext.Current.CancellationToken);
 
         Assert.True(clock.GetUtcNow().UtcDateTime > stamp, $"the wait ended at {clock.GetUtcNow():O}, not past {stamp:O}");
+        Assert.True(clock.GetUtcNow().UtcDateTime <= stamp + TimeSpan.FromSeconds(1), $"the wait ended at {clock.GetUtcNow():O}, long past {stamp:O}");
         Assert.All(clock.Waits, wait => Assert.True(wait <= WorkerSite.LongestWait + TimeSpan.FromSeconds(1), $"one wait was {wait}"));
     }
 

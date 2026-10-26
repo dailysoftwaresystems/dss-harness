@@ -52,10 +52,39 @@ public static class AgentPrices
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(usage);
 
-        var missing = Charges(provider, model, usage).Where(charge => charge.Price is null).Select(charge => charge.Key);
-
-        return $"no price for '{model.Code}' (providers '{provider.Name}', model '{model.Code}': {string.Join(", ", missing)})";
+        return NoPrice(provider, model, [.. Charges(provider, model, usage).Where(charge => charge.Price is null).Select(charge => charge.Key)]);
     }
+
+    /// <summary>
+    /// Why a step held to a budget may not start on <paramref name="model"/>: the cost a budget is charged with is counted
+    /// from the model's prices, so a run under one needs its input, cache-read and output prices before its first request
+    /// (user, 2026-10-26), and its provider's prices in the budget's currency; null where it has them.
+    /// </summary>
+    /// <param name="provider">The model's provider, whose currency holds.</param>
+    /// <param name="model">The model the step starts on.</param>
+    /// <returns>The sentence the refusal says, naming the keys to fill; null where nothing is missing.</returns>
+    public static string? BudgetRefusal(AgentProviderConfig provider, AgentModelConfig model)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(model);
+
+        string[] missing = [.. Charges(provider, model, EveryRequestUses).Where(charge => charge.Price is null).Select(charge => charge.Key)];
+
+        return missing.Length > 0 ? $"{NoPrice(provider, model, missing)}, and a budget is charged with the cost counted from them"
+            : provider.Currency is { } currency && !string.Equals(currency, BudgetCurrency, StringComparison.Ordinal)
+                ? $"providers '{provider.Name}' prices its models in {currency}, and a budget is counted in {BudgetCurrency}"
+                : null;
+    }
+
+    /// <summary>The currency a budget is counted in: what <c>maxBudgetUsd</c> says.</summary>
+    public const string BudgetCurrency = "USD";
+
+    /// <summary>A token of each kind every request may use - input missed and hit, and output - whose prices a budget needs first.</summary>
+    private static readonly AgentUsage EveryRequestUses = new(InputTokens: 1, OutputTokens: 1, CacheReadTokens: 1, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0);
+
+    /// <summary>The sentence of a price missing: the model, and each key of its entry that would fill it.</summary>
+    private static string NoPrice(AgentProviderConfig provider, AgentModelConfig model, IReadOnlyList<string> keys)
+        => $"no price for '{model.Code}' (providers '{provider.Name}', model '{model.Code}': {string.Join(", ", keys)})";
 
     /// <summary>
     /// The one choice of a price for each kind the request used, read by the cost and by its unknown alike: the key that

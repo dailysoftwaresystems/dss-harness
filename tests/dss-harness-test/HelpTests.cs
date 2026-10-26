@@ -581,6 +581,75 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The loop the API clients share is said alike by help agent-clients and the README - each bound and number read from
+    /// the type that holds it - and the architecture names its owners by the types that are them.
+    /// </summary>
+    [Fact]
+    public void TheLoopTheApiClientsShare_IsSaidByTheHelpAndTheDocuments()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+        var readme = Prose.Document("README.md");
+        var interrupted = DssHarness.Core.Agents.Runtime.AgentToolRuntime.Interrupted(DssHarness.Core.Agents.Loop.ToolLoop.Pausing);
+        var nudges = DssHarness.Core.Agents.Loop.ToolLoop.MostNudges;
+        var pauses = DssHarness.Core.Agents.Loop.ToolLoop.MostPausesInARow;
+        var tries = DssHarness.Core.Agents.Loop.ToolLoopTerms.DefaultMaxRetries;
+        var (first, longest) = (DssHarness.Core.Agents.Loop.ToolLoop.FirstWait.TotalSeconds, DssHarness.Core.Agents.Loop.ToolLoop.LongestDoubledWait.TotalSeconds);
+        var wait = DssHarness.Core.Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds;
+
+        Assert.Contains(
+            $"A turn cut off at its length that called no tool is stored and nudged on, {nudges} times at most; one cut off while it called a tool - its calls never run - or before it wrote anything is thrown away and asked again with twice the room, up to the most; past either the step is Truncated. "
+                + $"A turn the provider paused is sent again with nothing added, {pauses} in a row failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request is asked again up to {tries} times after a wait that doubles from {first} s to {longest} s, "
+                + $"or the one the provider names; a rate limit past them, or naming a wait past {wait} s, is the account at its limit (RateLimited), a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound stalls it; "
+                + "a key the provider refuses is passed over for the run's next, the same request sent again with it. "
+                + $"A handoff asked abandons the request under way and cuts the calls running, each answered '{interrupted}', then asks the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("A turn is one answer of the agent's - a request the provider paused, or one thrown away and asked again, goes on as the same turn - counted against the step's maxTurns but a handoff turn;", prose, StringComparison.Ordinal);
+        Assert.Contains("A turn is one answer of the agent's - a request the provider paused, or one thrown away and asked again, goes on as the same turn - counted against the step's `maxTurns` but a handoff turn;", readme, StringComparison.Ordinal);
+        Assert.Contains("no request but the handoff turn's is sent once the step's maxBudgetUsd is spent, and a step held to a budget on a model missing its input, cache-read or output price is never started, naming the key to fill.", prose, StringComparison.Ordinal);
+        Assert.Contains($"under the agent's {DssHarness.Core.Orchestration.OrchestratorLayout.SessionsDirectoryName}/<id>/, each message as it was sent and received", prose, StringComparison.Ordinal);
+
+        Assert.Contains(
+            $"A turn cut off at its length that called no tool is stored and nudged on, {nudges} times at most; one cut off while it called a tool - its calls never run - or before it wrote anything is thrown away and asked again with twice the room, up to the most; past either the step is `Truncated`. "
+                + $"A turn the provider paused is sent again with nothing added, {pauses} in a row failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request is asked again up to {tries} times after a wait that doubles from {first} s to {longest} s, "
+                + $"or the one the provider names; a rate limit past them, or naming a wait past {wait} s, is the account at its limit (`RateLimited`), a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound stalls it; "
+                + "a key the provider refuses is passed over for the run's next, the same request sent again with it. "
+                + $"A handoff asked abandons the request under way and cuts the calls running, each answered `{interrupted}`, then asks the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn;",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains($"under the agent's `{DssHarness.Core.Orchestration.OrchestratorLayout.SessionsDirectoryName}/<id>/`, each message", readme, StringComparison.Ordinal);
+
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains($"`Agents\\Loop\\{nameof(DssHarness.Core.Agents.Loop.ToolLoop)}`", architecture, StringComparison.Ordinal);
+
+        foreach (var owner in new[]
+        {
+            nameof(DssHarness.Core.Agents.Loop.IChatProvider),
+            nameof(DssHarness.Core.Agents.Loop.ChatFailure),
+            nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms),
+            nameof(DssHarness.Core.Agents.Runtime.AgentTurnCut),
+            nameof(DssHarness.Core.Agents.AgentModelIds),
+            nameof(DssHarness.Core.Agents.AgentEndings),
+            nameof(DssHarness.Core.Agents.AgentUsageTally),
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolHost)}.Unserved",
+            nameof(DssHarness.Core.Agents.StoredConversation),
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime.RunTurnAsync)}",
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime.Interrupted)}",
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime.NotRun)}",
+            $"{nameof(DssHarness.Core.Agents.AgentPrices)}.{nameof(DssHarness.Core.Agents.AgentPrices.BudgetRefusal)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ToolLoop)}.{nameof(DssHarness.Core.Agents.Loop.ToolLoop.Backoff)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ToolLoop)}.{nameof(DssHarness.Core.Agents.Loop.ToolLoop.FirstMaxTokens)}",
+            $"{nameof(DssHarness.Core.Agents.AgentMessages)}.{nameof(DssHarness.Core.Agents.AgentMessages.TryTake)}",
+            $"{nameof(DssHarness.Core.Agents.AgentRun)}.{nameof(DssHarness.Core.Agents.AgentRun.SessionsDirectory)}",
+            $"{nameof(DssHarness.Core.Orchestration.OrchestratorLayout)}.{nameof(DssHarness.Core.Orchestration.OrchestratorLayout.SessionDirectoryIn)}",
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// The README says the tool runtime as the help does - each tool, each bound and default read from the type that holds
     /// it - and the architecture names its owners by the types that are them.
     /// </summary>
