@@ -83,7 +83,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `stop-orchestrator <run> [--now] [--json]` | Ask the engine running a run to stop where it stands, and wait 30 s; `--now` ends the engine's process - only on this machine, and only the process its owner names by its start |
 | `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there (`help workflows`). Nothing is run |
 | `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there; a file that cannot be written takes back what was written |
-| `list-agent-providers [--template] [--json]` | List the agent sections config.json declares: each provider, its keys' names in the order they are tried with whether the slot holds each - `present` or `missing`, never a value - its models and whether each is priced, the tiers and the clients; exit 0 whatever is missing; `--template` prints the sections as `init` writes them into a new config, to paste into an existing one (`help agent-clients`) |
+| `list-agent-providers [--template] [--json]` | List the agent sections config.json declares: each provider, its keys' names in the order they are tried with whether the slot holds each - `present` or `missing`, never a value - its models and whether each is priced, the tiers, the clients and each web-search source's key; exit 0 whatever is missing; `--template` prints the sections as `init` writes them into a new config, to paste into an existing one (`help agent-clients`) |
 | `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once no agent of it stands in the way - a live one with no worktree goes with it - and nothing is left below its directory under the worktrees root - no worktree, and no directory with a `.git` of its own, each named and refused (13) until then; its agents' evidence, transcripts, steps and sessions go only with `--delete-evidence` |
 | `check-root-litter` | Report files left loose at the root of the checkout, ignored ones included |
 | `write-anchor <id> --priority P --trigger TEXT` | Add an anchor: to the pending registry, or to done when closed |
@@ -108,7 +108,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `up <name> [--input name=value] [--json]` | Bring a set-up up on this machine: run the `up` command line `setUp` declares for it, at the root of the tree - a program and its arguments, no shell, a line per platform where they differ, its declared inputs filled in with what `--input` gives over their defaults (`help setups`) |
 | `down <name> [--input name=value] [--json]` | Bring a set-up down: run its `down` command line there, with the values it was brought up with; refused (13) while a leg of a run on this machine still uses it in that tree - in any of the repository's, for one the machine shares - whose last leg brings it down |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
-| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, workflows, the codebase graph, agent clients, anchors, layout, secrets, tools, runners, set-ups, verdicts, mutation testing and CI legs |
+| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, workflows, the codebase graph, the web search, agent clients, anchors, layout, secrets, tools, runners, set-ups, verdicts, mutation testing and CI legs |
 
 Every command takes `-C, --directory <dir>` and `-v, --verbose`.
 
@@ -245,6 +245,7 @@ in `config.json`.
 .orchestrators/<o>/agents/<agent>/sessions/<id>/      ignored; API clients only: one conversation with the provider, in the provider's own form
 .orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included
 .orchestrators/<o>/.../<instance>/children/<session>.json   ignored; in either kind of step, Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by stop-orchestrator --now - once the process that started it has gone
+.orchestrators/<o>/web/searches.jsonl        ignored; a run's web search: what each source found once for the run, and each query it answered, which the same query again is answered from; the API clients will write it
 .orchestrators/.web-index/<source>/          ignored; the harness's own index of a sitemap search source's site: its state, its pages and the pages it could not read, and its fill's record of each address it asked
 .mutations/                                  contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree
 .mutations/<key><mark>-<n>/                  ignored; a worker, a repository of its own, and its claim beside it
@@ -475,11 +476,12 @@ entry says what it takes, holds and costs, with the date its numbers were read. 
 are `apiKeyNames`, the names of the variables that hold them in the git-ignored slot
 `.harness-config/workflows/.env/`, in the order they are tried; a second key of one company is a
 second name in the list, and no key is read from the process environment - a CI machine writes the
-file. `list-agent-providers` says it all without saying one key: each provider, client and tier,
-for every appointed key and token `present` or `missing`, and for each setting a client reads from
-the slot `present` or `absent` (none is needed), exit 0 whatever is missing; `--template` prints
-the agent sections as `init` writes them into a new config, to paste into an existing one - outside
-a repository too, and where the configuration it is to repair does not load. A name
+file. `list-agent-providers` says it all without saying one key: each provider, client and tier, for
+every appointed key and token `present` or `missing`, and for each setting a client reads from the
+slot and each web-search source's key `present` or `absent` (none is needed), exit 0 whatever is
+missing; `--template` prints the agent sections as `init` writes them into a new config, to paste
+into an existing one - outside a repository too, and where the configuration it is to repair does
+not load. A name
 declared in two of the slot's files is refused as the runner's value directories refuse one, a line
 whose name is no variable's name (`[A-Z][A-Z0-9_]*`) is refused by its line number alone - it may be
 part of a key pasted on its own - and a file where the slot's directory should be is refused rather
@@ -531,17 +533,18 @@ prefix (its trailing `*` any arguments, the bare command too), `Write` and `Read
 gitignore reads them, matched against the path as it stands under each of the agent's roots, and
 `Web` one domain, the domain and every name under it, or `Web(*)` the web whole. A repository
 declares them under `agentPolicy.restrictions`, and a workflow's definitions and steps add their
-own to them, all applied together; `agentPolicy.webDomains` is the allow list beside them (left
-out, any address, the machine's own and its network's among them), and a command that runs a
-program which fetches from the network - `curl`, `wget`, `Invoke-WebRequest`, `Invoke-RestMethod`,
-`iwr`, `irm`, `http`, `https`, `gh api` - is decided as a web request too, by each address it
-names, a proxy, a `curl --connect-to`'s or `--resolve`'s target and the proxy its environment names
-among them; one that reads what it reaches from a file (`curl --config`, `wget --input-file` or
-`--execute`) is refused where the web is held to any rule. An address whose slashes after its scheme
-readers read apart - any scheme but its two slashes and a host after them (`http:/\host`,
-`gopher:/host`, `http:///host`), or no slash after an `http`, `https`, `ws`, `wss` or `ftp` scheme
-(`https:host`) - or whose host is spelled beyond ASCII (its `xn--` form is read as written), names no
-host the policy can decide, and is denied. Refused always, not configurable: the
+own to them, all applied together; `agentPolicy.webDomains` is the allow list beside them of the
+pages an agent reads and the results a search gives, a search source's own requests held to the
+`Web(...)` rules alone (left out, any address, the machine's own and its network's among them), and
+a command that runs a program which fetches from the network - `curl`, `wget`, `Invoke-WebRequest`,
+`Invoke-RestMethod`, `iwr`, `irm`, `http`, `https`, `gh api` - is decided as a web request too, by
+each address it names, a proxy, a `curl --connect-to`'s or `--resolve`'s target and the proxy its
+environment names among them; one that reads what it reaches from a file (`curl --config`,
+`wget --input-file` or `--execute`) is refused where the web is held to any rule. An address whose
+slashes after its scheme readers read apart - any scheme but its two slashes and a host after them
+(`http:/\host`, `gopher:/host`, `http:///host`), or no slash after an `http`, `https`, `ws`, `wss`
+or `ftp` scheme (`https:host`) - or whose host is spelled beyond ASCII (its `xn--` form is read as
+written), names no host the policy can decide, and is denied. Refused always, not configurable: the
 root actions (`sudo`, `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`,
 PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command
 names one), writes outside an agent's writable roots, every read and write of a credential slot or
@@ -669,7 +672,7 @@ The tool runtime is the harness's own tools, built for the `claude-api` and `glm
 their agents in place of a client's own - those clients are what comes next, and nothing opens a
 runtime yet: `view_file`, `find_files` and `search_files` (read),
 `create_file`, `replace_in_file`, `insert_in_file`, `create_directory`, `delete_file`,
-`delete_directory` and `move_path` (write), `run_command` (run) and `web_fetch` (web), each under
+`delete_directory` and `move_path` (write), `run_command` (run) and `web_fetch` and `web_search` (web), each under
 the capability that gives it; the run's reporter is given those that read and no other. Each
 call is decided before it runs and recorded: a tool the step was not given, or an input its schema
 does not hold, is refused with how the tool is called; a path is read against the agent's working
@@ -705,6 +708,25 @@ it is information for the task, not instructions. Calls that read run together, 
 one that writes or runs alone; an answer past 32,768 characters is given as its first 8,192 and its
 last 24,576, the whole kept in the step's `tool-results/`.
 
+`web_search` is the harness's own search, made by dssharness itself over HTTP: it asks the sources
+`agentWebSearch` in `config.json` declares - search APIs that answer JSON, feeds, OpenSearch
+descriptions and the harness's own index of a site's pages read through its sitemap - and never a
+search engine's results page. The built-in sources (`stackoverflow`, `github-repos`,
+`github-issues`, `nuget`, `npm`, `pub-dev`, `learn`, `mdn`, `wikipedia`, `hackernews`,
+`readthedocs`) are entries in the same form, which `init` writes and a repository's entry of the
+same name changes key by key; a new name adds a source, and `enabled: false` turns one off. None
+needs a key: a source's optional `credential` comes from the `.env` slot or the machine's `gh` login
+for its `host` (github.com unless it says another; sent to that host or its API alone), masked and
+sent to the scheme, host and port each search of that source first asks alone, over https - a lookup
+is sent none - never in an address a record holds. A reason step picks its sources by name or tag
+with `search` (absent, `agentWebSearch.defaults`); each query is held to the mask, each address a
+source asks to the mask and the `Web(...)` rules, each result to every rule of the web, each source
+to its `perMinute` and `perDay` on the machine and the step to `maxPerStep`, a sitemap source's
+index filled under the configuration's own `Web(...)` rules for every run; a limit a source answers
+holds it until the time it gave, told and never retried, and each source answers in its own part -
+results, none, a limit, an answer that changed, a failure, a refusal. `help web-search` lists every
+kind's keys and every built-in source.
+
 ```bash
 dssharness validate-workflow                 # check every declared workflow
 dssharness validate-workflow implementation  # check one
@@ -713,6 +735,7 @@ dssharness list-agent-providers --template   # the agent sections, to paste into
 dssharness export-workflow implementation --shipped --to ../mine  # the shipped one, to make your own
 dssharness help workflows                    # the file, every step type and every key
 dssharness help agent-clients                # providers, tiers, efforts and the key slot
+dssharness help web-search                   # the web search's sources, kinds and keys
 ```
 
 `export-workflow <workflow> --to <dir>` copies a workflow - its yml and every file it names, and

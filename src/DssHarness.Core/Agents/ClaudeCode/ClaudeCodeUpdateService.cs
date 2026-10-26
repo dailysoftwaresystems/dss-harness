@@ -119,7 +119,7 @@ public sealed class ClaudeCodeUpdateService(
     /// they are on, npm is asked what it holds and the change is run where it must be - never beside a session.
     /// </summary>
     /// <param name="layout">The repository's layout, where the slot is; null where no slot is to be asked.</param>
-    /// <param name="appointed">Every name the configuration appoints, of providers and clients both.</param>
+    /// <param name="appointed">Every name the configuration appoints, of providers, clients and web-search sources.</param>
     /// <param name="client">The configuration's entry for the client being made ready; null where it declares none (<see cref="UpdatesOn"/>).</param>
     /// <param name="steps">The steps that need the client, as a refusal names them; empty where the asker names none.</param>
     /// <param name="cancellationToken">Stops everything before the change; the change itself, once begun, is never stopped.</param>

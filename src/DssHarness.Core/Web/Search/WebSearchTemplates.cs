@@ -259,11 +259,11 @@ public sealed class WebItemTemplate
 
             filled.Append(string.Join(", ", values));
 
-            // No more is filled than a field is read for: a value of the answer's root, as long as it likes, is not
-            // written whole for every item.
+            // No more is filled than a field is read for, and two past it - one, where a pair would be parted - so its reader
+            // cuts it and marks the cut: a value of the answer's root, as long as it likes, is not written whole for every item.
             if (filled.Length > WebPageText.MostFieldRead)
             {
-                return Output.TextCut.Head(filled.ToString(), WebPageText.MostFieldRead);
+                return Output.TextCut.Head(filled.ToString(), WebPageText.MostFieldRead + 2);
             }
         }
 

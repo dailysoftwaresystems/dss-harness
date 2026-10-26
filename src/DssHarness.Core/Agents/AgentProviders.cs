@@ -534,11 +534,12 @@ public sealed partial class AgentProviders
     }
 
     /// <summary>
-    /// Every name the configuration appoints a value of the slot for, of providers and clients both, each with who
-    /// appoints it, what its value is and whether it is a secret: each provider's keys, in its order, and the settings a
-    /// built-in client reads where a provider of the type it reaches is declared - the program the claude-code client
-    /// starts among them. What the slot holds beyond these is appointed by nothing, which a listing and a missing key's
-    /// refusal say, where a misspelt name shows.
+    /// Every name the configuration appoints a value of the slot for, of providers, clients and web-search sources, each
+    /// with who appoints it, by which key, what its value is and whether it is a secret: each provider's keys, in its
+    /// order, the settings and token a built-in client reads where a provider of the type it reaches is declared - the
+    /// program the claude-code client starts among them - and each web-search source's key (<see cref="SourceKeys"/>).
+    /// What the slot holds beyond these is appointed by nothing, which a listing and a missing key's refusal say, where a
+    /// misspelt name shows.
     /// </summary>
     public IReadOnlyList<Secrets.AppointedKey> Appointed()
     {
@@ -546,22 +547,36 @@ public sealed partial class AgentProviders
 
         foreach (var provider in Config.Providers)
         {
-            appointed.AddRange(provider.ApiKeyNames.Select(name => new Secrets.AppointedKey(name, $"provider '{provider.Name}'", Secrets.AgentKeyStore.WhatHolds(provider))));
+            appointed.AddRange(provider.ApiKeyNames.Select(name => new Secrets.AppointedKey(name, $"provider '{provider.Name}'", Secrets.AgentKeyStore.WhatHolds(provider), "apiKeyNames")));
         }
 
         foreach (var kind in Served(Config.Providers))
         {
             appointed.AddRange(SettingsRead().Where(read => read.Client == kind.Name).Select(read => new Secrets.AppointedKey(
-                read.Name, $"client '{kind.Name}'", read.Setting.What, Secret: false)));
+                read.Name, $"client '{kind.Name}'", read.Setting.What, read.Setting.Key, Secret: false)));
 
             if (TokenOf(kind.Name) is { } token)
             {
-                appointed.Add(new Secrets.AppointedKey(token, $"client '{kind.Name}'", $"the token client '{kind.Name}' signs in with ({AuthOf(kind.Name)})"));
+                appointed.Add(new Secrets.AppointedKey(token, $"client '{kind.Name}'", $"the token client '{kind.Name}' signs in with ({AuthOf(kind.Name)})", "token"));
             }
+        }
+
+        foreach (var (source, name) in SourceKeys())
+        {
+            appointed.Add(new Secrets.AppointedKey(name, $"web-search source '{source}'", $"the key web-search source '{source}' is sent, where it is there", "credential.name"));
         }
 
         return appointed;
     }
+
+    /// <summary>
+    /// Each variable of the slot a web-search source is sent as its key, by the source, in the configuration's order:
+    /// optional, each sent to its own source alone, and as secret as a provider's.
+    /// </summary>
+    public IReadOnlyList<(string Source, string Name)> SourceKeys()
+        => [.. Web.Search.WebSearchSources.Of(Config, Web.Search.WebSearchKinds.OfThisBuild).All
+            .Where(source => source.Credential is { From: "env", Name: not null })
+            .Select(source => (source.Name, source.Credential!.Name!))];
 
     /// <summary>Whether <paramref name="client"/> is one the tool builds in and reaches <paramref name="provider"/>'s type: the one rule of reach, for a provider's own client and a step's alike.</summary>
     /// <param name="client">The client's name.</param>

@@ -214,7 +214,7 @@ public sealed class AgentProviderTests
         Assert.Equal(["CLAUDE_CODE_OAUTH_TOKEN"], oauth.KeysRead(anthropic));
         Assert.Equal(keys, oauth.KeysRead(anthropic, "claude-api"));
         Assert.Contains(
-            new Core.Secrets.AppointedKey("CLAUDE_CODE_OAUTH_TOKEN", "client 'claude-code'", "the token client 'claude-code' signs in with (oauthToken)"),
+            new Core.Secrets.AppointedKey("CLAUDE_CODE_OAUTH_TOKEN", "client 'claude-code'", "the token client 'claude-code' signs in with (oauthToken)", "token"),
             oauth.Appointed());
 
         var named = Clients(new() { ["claude-code"] = new AgentClientConfig { Auth = AgentAuth.AuthToken, Token = "GATEWAY_TOKEN" } }, [anthropic]);
@@ -222,6 +222,29 @@ public sealed class AgentProviderTests
         Assert.Equal(["GATEWAY_TOKEN"], named.KeysRead(anthropic));
         Assert.Equal("ANTHROPIC_AUTH_TOKEN", AgentAuth.TokenVariable(AgentAuth.AuthToken));
         Assert.DoesNotContain(login.Appointed(), key => key.Name is "CLAUDE_CODE_OAUTH_TOKEN" or "ANTHROPIC_AUTH_TOKEN");
+    }
+
+    /// <summary>
+    /// A web-search source's key of the slot is appointed for it, a secret like a provider's; a source that takes the
+    /// machine's gh login, as the built-in GitHub sources do, appoints none.
+    /// </summary>
+    [Fact]
+    public void AWebSearchSourcesKey_IsAppointed_AndAGhLoginIsNot()
+    {
+        var config = new HarnessConfig
+        {
+            AgentWebSearch = System.Text.Json.JsonSerializer.Deserialize<AgentWebSearchConfig>(
+                """{ "sources": { "stackoverflow": { "credential": { "from": "env", "name": "STACKEXCHANGE_KEY", "query": "key" } } } }""",
+                JsonConfigOptions.Default),
+        };
+        var (providers, problems) = AgentProviders.Resolve(config);
+
+        Assert.Empty(problems);
+        Assert.Equal(
+            [new Core.Secrets.AppointedKey("STACKEXCHANGE_KEY", "web-search source 'stackoverflow'", "the key web-search source 'stackoverflow' is sent, where it is there", "credential.name")],
+            providers!.Appointed().Where(key => key.By.StartsWith("web-search", StringComparison.Ordinal)));
+        Assert.True(providers.Appointed().Single(key => key.Name == "STACKEXCHANGE_KEY").Secret);
+        Assert.Equal([("stackoverflow", "STACKEXCHANGE_KEY")], providers.SourceKeys());
     }
 
     /// <summary>
@@ -271,10 +294,10 @@ public sealed class AgentProviderTests
         var named = Clients(new() { ["claude-code"] = new AgentClientConfig { ConfigDir = "WORK_CLAUDE_DIR", Executable = "MY_CLAUDE" } }, [anthropic]);
         Assert.Equal(("WORK_CLAUDE_DIR", "MY_CLAUDE"), (named.SettingOf("claude-code", AgentClientSetting.ConfigDirKey), named.SettingOf("claude-code", AgentClientSetting.ExecutableKey)));
         Assert.Contains(
-            new Core.Secrets.AppointedKey("WORK_CLAUDE_DIR", "client 'claude-code'", "the Claude Code directory the claude-code client signs in from and reads the user's settings in", Secret: false),
+            new Core.Secrets.AppointedKey("WORK_CLAUDE_DIR", "client 'claude-code'", "the Claude Code directory the claude-code client signs in from and reads the user's settings in", "configDir", Secret: false),
             named.Appointed());
         Assert.Contains(
-            new Core.Secrets.AppointedKey("MY_CLAUDE", "client 'claude-code'", "the program the claude-code client starts in place of npm's Claude Code", Secret: false),
+            new Core.Secrets.AppointedKey("MY_CLAUDE", "client 'claude-code'", "the program the claude-code client starts in place of npm's Claude Code", "executable", Secret: false),
             named.Appointed());
         Assert.DoesNotContain(named.Appointed(), key => key.Name is "CLAUDE_CONFIG_DIR" or "CLAUDE_EXECUTABLE");
     }

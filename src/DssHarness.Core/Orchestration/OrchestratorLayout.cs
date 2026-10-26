@@ -33,6 +33,9 @@ namespace DssHarness.Core.Orchestration;
 /// &lt;step&gt;/graph.jsonl          a reason step that has a codebase graph: one line for each call of the graph tool; nothing writes it yet
 /// &lt;step&gt;/working-set.json     a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it; nothing writes it yet
 /// &lt;step&gt;/targets/&lt;agent&gt;/     a refresh or a rebase of others: one target's fold.json
+/// &lt;step&gt;/web.jsonl            a step whose agent asks the web: each address and each search source asked, decided before it was asked and what it answered; nothing writes it yet
+/// &lt;step&gt;/denials.jsonl        a step whose agent's calls the engine decides, on every client: each call the policy refused, with its rule
+/// &lt;step&gt;/tool-results/&lt;id&gt;.txt   a step whose agent's calls the engine decides, on every client: an answer longer than the cap, whole
 /// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it
 /// flow.json                   a run's state, whole: the truth a resume goes on from
 /// workflow.json               a run's status, for a person and a client to read
@@ -44,6 +47,7 @@ namespace DssHarness.Core.Orchestration;
 /// report.md, report.json      the report of the run's last session
 /// inbox.json, stop.json       an answer, and a pause or a stop, handed to the engine running the run, until it takes them
 /// asks/                       the planned ask-orchestrator's calls; nothing writes it yet
+/// web/searches.jsonl          what each source of the web search found once for the run, and each query it answered: the same query again is answered from here; nothing writes it yet
 /// graph/graph.json            the run's codebase graph: the base's manifest, every file it keeps with its blob, state and extract
 /// graph/symbols.jsonl         the base's link result, as lines: every node and edge, with the digest of the manifest it was made from
 /// graph/extracts/&lt;ab&gt;/&lt;name&gt;   one file's extract, written once, named by its blob, its path, its implementation and version
@@ -211,6 +215,23 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The directory, beside every orchestrator, of the harness's indexes of sites: a name no orchestrator has, for none begins with a dot.</summary>
     public const string WebIndexesDirectoryName = ".web-index";
+
+    /// <summary>The directory a run keeps what its web search found in.</summary>
+    public const string WebDirectoryName = "web";
+
+    /// <summary>The name of the file, in the run's web directory, of what each source found once and each query it answered.</summary>
+    public const string WebSearchesFileName = "searches.jsonl";
+
+    /// <summary>
+    /// What the web search of the run whose directory is <paramref name="runDirectory"/> keeps: what each source found once
+    /// for the run, and each query it answered, so the same query again is answered from here with no request.
+    /// </summary>
+    /// <param name="runDirectory">The run's directory.</param>
+    public static string WebSearchesFile(string runDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runDirectory);
+        return Path.Combine(runDirectory, WebDirectoryName, WebSearchesFileName);
+    }
 
     /// <summary>
     /// Where the harness's index of the site of the web-search source named <paramref name="source"/> is kept: under the

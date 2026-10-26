@@ -19,11 +19,15 @@ public abstract record WebSearchRequest
     /// <param name="Body">A <c>POST</c>'s body, JSON; <see langword="null"/> for a <c>GET</c>.</param>
     public sealed record Http(string Method, string Address, IReadOnlyDictionary<string, string> Headers, string? Body) : WebSearchRequest
     {
-        /// <summary>The headers the request itself says - which tool asks, of which host, how much and of what type - which no source sends of its own.</summary>
-        public static IReadOnlyList<string> OwnHeaders { get; } = ["User-Agent", "Host", "Content-Length", "Content-Type"];
+        /// <summary>The headers the request itself says, which no source sends of its own: the fetch's (<see cref="HarnessFetch.RequestHeaders"/>).</summary>
+        public static IReadOnlyList<string> OwnHeaders => HarnessFetch.RequestHeaders;
 
-        /// <summary>The headers that carry a key, which a source sends only as its <c>credential</c>, kept secret.</summary>
-        public static IReadOnlyList<string> KeyHeaders { get; } = ["Authorization", "Proxy-Authorization", "Cookie"];
+        /// <summary>The headers that carry a key, which a source sends only as its <c>credential</c>, kept secret: the fetch's (<see cref="HarnessFetch.KeyHeaders"/>).</summary>
+        public static IReadOnlyList<string> KeyHeaders => HarnessFetch.KeyHeaders;
+
+        /// <summary>Whether a request carries <paramref name="name"/> of its own, never one a body says of itself: the fetch's (<see cref="HarnessFetch.IsRequestHeader"/>).</summary>
+        /// <param name="name">A header's name.</param>
+        public static bool IsRequestHeader(string name) => HarnessFetch.IsRequestHeader(name);
 
         /// <summary>A <c>GET</c> of <paramref name="address"/>, accepting <paramref name="accept"/>.</summary>
         public static Http Get(string address, string accept) => new("GET", address, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = accept }, null);
@@ -69,7 +73,8 @@ public abstract record WebSearchResponse
 
 /// <summary>
 /// What a source's lookups found - the values a kind reads once a run before its first request, as a discovered address
-/// or an OpenSearch description's template - or why they found nothing, which the source then answers every query of the run.
+/// or an OpenSearch description's template - or why they found nothing, which the source answers the query that asked
+/// them, the next one asking again.
 /// </summary>
 public sealed record WebSearchFound
 {
@@ -91,7 +96,8 @@ public sealed record WebSearchFound
 
     /// <summary>
     /// When the source may be asked again, where a lookup's answer asked to be left alone or said its requests are spent;
-    /// <see langword="null"/> where none did. Its first request waits for it, as any of its requests would.
+    /// <see langword="null"/> where none did. The source is held until then on this machine, as any of its answers would
+    /// hold it: its request after the lookup is not sent before then, and is told so.
     /// </summary>
     public DateTimeOffset? Until { get; init; }
 

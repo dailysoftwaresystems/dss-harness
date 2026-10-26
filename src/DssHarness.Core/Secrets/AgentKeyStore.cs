@@ -9,8 +9,9 @@ namespace DssHarness.Core.Secrets;
 /// <param name="Name">The variable's name, as the slot holds it.</param>
 /// <param name="By">Who appoints it, as a refusal names them - for instance <c>provider 'zai'</c>.</param>
 /// <param name="What">What its value is, as a refusal asks for it - for instance <c>the Z.AI API key</c>.</param>
+/// <param name="Under">The key of <paramref name="By"/>'s entry that appoints it, as a refusal names it - for instance <c>apiKeyNames</c>; <see langword="null"/> where none does.</param>
 /// <param name="Secret">Whether what it holds is a credential, which only its owner may read; the default, for every key.</param>
-public sealed record AppointedKey(string Name, string By, string What, bool Secret = true);
+public sealed record AppointedKey(string Name, string By, string What, string? Under, bool Secret = true);
 
 /// <summary>What reading the slot found: the names it holds, each with the file that declares it - and never a value.</summary>
 /// <param name="Files">Every file of the slot, in the order they are read.</param>
@@ -104,7 +105,7 @@ public sealed partial class AgentKeyStore(IFileSystem fileSystem, IFilePermissio
     /// blank is as absent as one not written at all.
     /// </summary>
     /// <param name="layout">The repository's layout: the slot is the main checkout's, so worktrees share it.</param>
-    /// <param name="appointed">Every name the configuration appoints, of providers and clients both, each with its kind: the refusal of a missing name ends with the names the slot holds that none of them appoints, which is where a misspelt one shows.</param>
+    /// <param name="appointed">Every name the configuration appoints, of providers, clients and web-search sources, each with its kind: the refusal of a missing name ends with the names the slot holds that none of them appoints, which is where a misspelt one shows.</param>
     /// <param name="name">The name asked, among <paramref name="appointed"/>; a name none of them appoints is taken for a secret.</param>
     public AgentKeyAnswer Value(HarnessLayout layout, IReadOnlyList<AppointedKey> appointed, string name)
     {
@@ -125,7 +126,7 @@ public sealed partial class AgentKeyStore(IFileSystem fileSystem, IFilePermissio
 
         if (where is null || declared[where] is not { Length: > 0 })
         {
-            return new AgentKeyAnswer(null, Missing(present, appointed, [name], Of(name) ?? new(name, "the configuration", "its key's value")));
+            return new AgentKeyAnswer(null, Missing(present, appointed, [name], Of(name) ?? new(name, "the configuration", "its key's value", Under: null)));
         }
 
         var file = present.Origins[where];
@@ -177,7 +178,7 @@ public sealed partial class AgentKeyStore(IFileSystem fileSystem, IFilePermissio
     /// would read and the slot lacks; a run that refuses a missing key will be refused with it.
     /// </summary>
     /// <param name="present">What the slot was read to hold.</param>
-    /// <param name="appointed">Every name the configuration appoints, of providers and clients both.</param>
+    /// <param name="appointed">Every name the configuration appoints, of providers, clients and web-search sources.</param>
     /// <param name="missing">The names to say, in the order their provider lists them.</param>
     /// <param name="of">Who appoints them and what they hold, as the sentence names both.</param>
     /// <param name="readBy">The steps that would read them, as the sentence names each; none where the asker names none.</param>
@@ -201,7 +202,7 @@ public sealed partial class AgentKeyStore(IFileSystem fileSystem, IFilePermissio
         var add = Joined(missing.Select(name => $"{name}="), "or");
 
         return $"no file under '{slot}' declares {declared}, the name{(one ? string.Empty : "s")} {of.By} appoints "
-            + $"for its key{(one ? string.Empty : "s")} (its apiKeyNames); add {add} to a file there, holding {of.What} "
+            + $"for its {(of.Secret ? "key" : "setting")}{(one ? string.Empty : "s")}{(of.Under is { } under ? $" (its {under})" : string.Empty)}; add {add} to a file there, holding {of.What} "
             + $"(it is read from this slot and nowhere else)"
             + (readBy is not [_, ..] ? string.Empty : $". The steps that would read {(one ? "it" : "one of them")}: {string.Join(", ", readBy)}")
             + (unappointed.Length == 0 ? string.Empty : $". Declared there and appointed by nothing: {unappointed}");

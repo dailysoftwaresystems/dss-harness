@@ -241,7 +241,7 @@ public sealed partial class AgentPolicy
     /// <summary>
     /// Whether an address an agent would ask the web for may be asked: no web at all where the step
     /// has none, then each <c>Web(...)</c> rule against the address's host, then
-    /// <c>agentPolicy.webDomains</c>. A page, a redirect and a search's source are each decided
+    /// <c>agentPolicy.webDomains</c>. A page, a redirect and a result a search gives are each decided
     /// here, one address at a time.
     /// </summary>
     /// <param name="address">The address as the agent's tool asks it, or as a fetcher command names it.</param>
@@ -251,7 +251,50 @@ public sealed partial class AgentPolicy
 
         try
         {
-            return WebDecided(address, address);
+            return WebDecided(address, address, domains: true, agentRules: true);
+        }
+        catch (Exception exception) when (Undecidable(exception))
+        {
+            return Undecided(address, exception);
+        }
+    }
+
+    /// <summary>
+    /// Whether an address a search's source asks for this step may be asked - its endpoint, a lookup, the site of a sitemap
+    /// source's index, each redirect of them: no web where the step has none, then each <c>Web(...)</c> rule against the
+    /// address's host. <c>agentPolicy.webDomains</c>, the list of the pages an agent may read, does not hold one back: the
+    /// source is the configuration's, asked by the harness, and the results it gives are held to the list.
+    /// </summary>
+    /// <param name="address">The address the source asks.</param>
+    public AgentPolicyAnswer WebSource(string address)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+
+        try
+        {
+            return WebDecided(address, address, domains: false, agentRules: true);
+        }
+        catch (Exception exception) when (Undecidable(exception))
+        {
+            return Undecided(address, exception);
+        }
+    }
+
+    /// <summary>
+    /// Whether a page a sitemap source's index reads may be asked, and each redirect of it: no web where the step that
+    /// began the fill has none, then each <c>Web(...)</c> rule of the configuration's - the run's, which every step of it
+    /// holds - against the address's host; never an agent's own list, nor <c>webDomains</c>. The index is the repository's,
+    /// filled for every run that searches it long after the step that began it, so no one step's rules stop it short: a
+    /// step searches only the index of a site its own rules let it ask (<see cref="WebSource"/>).
+    /// </summary>
+    /// <param name="address">The address the fill asks.</param>
+    public AgentPolicyAnswer WebFill(string address)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+
+        try
+        {
+            return WebDecided(address, address, domains: false, agentRules: false);
         }
         catch (Exception exception) when (Undecidable(exception))
         {
@@ -804,7 +847,7 @@ public sealed partial class AgentPolicy
         // are in a file this does not read is denied.
         foreach (var address in CommandAnalysis.WebAddresses(words))
         {
-            if (WebDecided(address, whole) is AgentPolicyAnswer.Denied denied)
+            if (WebDecided(address, whole, domains: true, agentRules: true) is AgentPolicyAnswer.Denied denied)
             {
                 return denied;
             }
@@ -1043,10 +1086,12 @@ public sealed partial class AgentPolicy
         return null;
     }
 
-    /// <summary>One web request, decided: no web where the step has none, then the <c>Web</c> rules, then <c>webDomains</c>.</summary>
+    /// <summary>One web request, decided: no web where the step has none, then the <c>Web</c> rules, then <c>webDomains</c> where <paramref name="domains"/>.</summary>
     /// <param name="address">The address as it was named.</param>
     /// <param name="noWebSubject">What the no-web sentence names beside the address: the address itself for a tool's ask, the command for a fetcher.</param>
-    private AgentPolicyAnswer WebDecided(string address, string noWebSubject)
+    /// <param name="domains">Whether <c>webDomains</c> holds the address: a page's, never a search source's.</param>
+    /// <param name="agentRules">Whether an agent's own <c>Web</c> rules hold it beside the configuration's: every request's but an index's fill.</param>
+    private AgentPolicyAnswer WebDecided(string address, string noWebSubject, bool domains, bool agentRules)
     {
         if (_reporterRoot is not null)
         {
@@ -1066,7 +1111,7 @@ public sealed partial class AgentPolicy
 
         var host = HostOf(address);
 
-        foreach (var (rule, declared) in _rules.Where(pair => pair.Rule.Verb is AgentRuleVerb.Web))
+        foreach (var (rule, declared) in _rules.Where(pair => pair.Rule.Verb is AgentRuleVerb.Web && (agentRules || pair.Declared.Source != AgentPolicySource.Agent)))
         {
             if (rule.MatchesHost(host))
             {
@@ -1074,7 +1119,7 @@ public sealed partial class AgentPolicy
             }
         }
 
-        if (_webDomains.Count > 0 && !_webDomains.Any(domain => host.Equals(domain, StringComparison.OrdinalIgnoreCase) || host.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase)))
+        if (domains && _webDomains.Count > 0 && !_webDomains.Any(domain => host.Equals(domain, StringComparison.OrdinalIgnoreCase) || host.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase)))
         {
             return new AgentPolicyAnswer.Denied(
                 "agentPolicy.webDomains",

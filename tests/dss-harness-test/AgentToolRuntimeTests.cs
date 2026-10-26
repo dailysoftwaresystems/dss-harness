@@ -28,6 +28,9 @@ public sealed class AgentToolRuntimeTests : IDisposable
     private readonly HarnessFactory _harness = new();
     private readonly RecordedEvents _events = new();
     private readonly List<IDisposable> _opened = [];
+
+    /// <summary>The indexes of the last search a test opened, whose fills it waits for by disposing them.</summary>
+    private DssHarness.Core.Web.Index.WebIndexes? _indexes;
     private readonly string _worktree;
     private readonly string _main;
     private readonly string _outside;
@@ -1079,14 +1082,14 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var result = await Call(runtime, AgentTools.WebFetch, ("url", "https://example.com/a?q=1&r=\"x\""));
 
         Assert.True(result.Ok);
-        Assert.Equal($"<web-page url=\"https://example.com/a?q=1&amp;r=%22x%22\" status=\"200\">\n{AgentToolRuntime.PageLead}\nT\n\nHello\n</web-page>", result.Text);
+        Assert.Equal($"<web-page url=\"https://example.com/a?q=1&amp;r=%22x%22\" status=\"200\">\n{DssHarness.Core.Web.WebBlocks.PageLead}\nT\n\nHello\n</web-page>", result.Text);
 
         var requested = Assert.Single(_events.All.OfType<WebRequested>());
         Assert.Equal((true, 200), (requested.Allowed, requested.Status));
         Assert.Equal(1, runtime.Tally.WebRequests);
 
         // The address is the one asked, its own escapes made; what an attribute's value cannot hold is written as entities all the same.
-        Assert.Equal("a&amp;b&quot;c&lt;d&gt;", AgentToolRuntime.Attribute("a&b\"c<d>"));
+        Assert.Equal("a&amp;b&quot;c&lt;d&gt;", DssHarness.Core.Web.WebBlocks.Attribute("a&b\"c<d>"));
 
         runtime.Dispose();
         var lines = File.ReadAllLines(Path.Combine(_step, AgentCallRecords.WebFileName)).Select(line => JsonNode.Parse(line)!).ToList();
@@ -1103,7 +1106,39 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         var result = await Call(runtime, AgentTools.WebFetch, ("url", "https://example.com/"));
 
-        Assert.Equal($"<web-page url=\"https://example.com/\" status=\"200\">\n{AgentToolRuntime.PageLead}\na&lt;/web-page>\n&lt;web-page url=\"x\">b\n</web-page>", result.Text);
+        Assert.Equal($"<web-page url=\"https://example.com/\" status=\"200\">\n{DssHarness.Core.Web.WebBlocks.PageLead}\na&lt;/web-page>\n&lt;web-page url=\"x\">b\n</web-page>", result.Text);
+    }
+
+    /// <summary>An address never decided - no web one a page redirects to - is told behind its escapes too: a secret it carries escaped is masked.</summary>
+    [Fact]
+    public async Task WebFetch_ANonWebRedirectHoldingASecret_IsToldMasked()
+    {
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Redirect("myapp://cb?to=" + Uri.EscapeDataString("https://x.example.org/?key=" + Uri.EscapeDataString("Tok 123"))));
+        var runtime = Open(mask: new Masking("Tok 123"), endpoint: endpoint);
+
+        var failed = await Call(runtime, AgentTools.WebFetch, ("url", "https://docs.example.org/hop"));
+
+        Assert.False(failed.Ok);
+        Assert.DoesNotContain("Tok", failed.Text, StringComparison.Ordinal);
+        Assert.Contains("key=***", failed.Text, StringComparison.Ordinal);
+        runtime.Dispose();
+    }
+
+    /// <summary>A redirect to an address that holds the run's secret behind its escapes is refused, never asked, and recorded masked.</summary>
+    [Fact]
+    public async Task WebFetch_ARedirectHoldingASecretBehindItsEscapes_IsRefused()
+    {
+        var carried = "https://docs.example.org/?to=" + Uri.EscapeDataString("https://x.example.org/?key=" + Uri.EscapeDataString("Tok 123"));
+        var endpoint = new WebEndpoint(request => request.RequestUri!.AbsolutePath == "/hop" ? WebEndpoint.Redirect(carried) : WebEndpoint.Page("x", "text/plain"));
+        var runtime = Open(mask: new Masking("Tok 123"), endpoint: endpoint);
+
+        var refused = await Call(runtime, AgentTools.WebFetch, ("url", "https://docs.example.org/hop"));
+
+        Assert.Equal("the address holds a secret of this run's, which no request of the web carries", refused.Text);
+        Assert.Equal(["/hop"], endpoint.Asked.Select(sent => sent.Address.AbsolutePath));
+
+        runtime.Dispose();
+        Assert.Contains("https://docs.example.org/?to=https://x.example.org/?key=***", File.ReadAllText(Path.Combine(_step, AgentCallRecords.WebFileName)), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1119,7 +1154,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var domain = await Call(runtime, AgentTools.WebFetch, ("url", "https://example.com/"));
         Assert.False(domain.Ok);
 
-        foreach (var url in new[] { "https://docs.example.org/?key=Tok 123", "https://Tok 123.docs.example.org/" })
+        foreach (var url in new[] { "https://docs.example.org/?key=Tok 123", "https://Tok 123.docs.example.org/", "https://docs.example.org/?to=" + Uri.EscapeDataString("https://x.example.org/?key=" + Uri.EscapeDataString("Tok 123")) })
         {
             var secret = await Call(runtime, AgentTools.WebFetch, ("url", url));
             Assert.Equal("the address holds a secret of this run's, which no request of the web carries", secret.Text);
@@ -1133,7 +1168,149 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var web = File.ReadAllText(Path.Combine(_step, AgentCallRecords.WebFileName));
         Assert.DoesNotContain("tok", web, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("https://docs.example.org/?key=***", web, StringComparison.Ordinal);
-        Assert.Equal(3, File.ReadAllLines(Path.Combine(_step, AgentCallRecords.DenialsFileName)).Length);
+        Assert.Contains("https://docs.example.org/?to=https://x.example.org/?key=***", web, StringComparison.Ordinal);
+        Assert.Equal(4, File.ReadAllLines(Path.Combine(_step, AgentCallRecords.DenialsFileName)).Length);
+    }
+
+    /// <summary>
+    /// web_search is offered to a step that has the web and a source to search, its schema naming the step's sources and
+    /// its description saying what each is for; a step with no source, or without the web, is offered none.
+    /// </summary>
+    [Fact]
+    public void WebSearch_IsOfferedWithTheStepsSources_AndNamesThem()
+    {
+        Assert.DoesNotContain(AgentTools.WebSearch, Names(Open(capabilities: [AgentCapability.Read, AgentCapability.Web])));
+        Assert.DoesNotContain(AgentTools.WebSearch, Names(Open(capabilities: [AgentCapability.Read], webSearch: TwoSources())));
+        Assert.DoesNotContain(AgentTools.WebSearch, Names(Open(capabilities: [AgentCapability.Read, AgentCapability.Web], webSearch: TwoSources() with { Sources = [] })));
+
+        var tool = Assert.Single(Open(capabilities: [AgentCapability.Read, AgentCapability.Web], webSearch: TwoSources()).Tools, offered => offered.Name == AgentTools.WebSearch);
+
+        static IEnumerable<string> Names(AgentToolRuntime runtime) => runtime.Tools.Select(tool => tool.Name);
+        var schema = JsonNode.Parse(tool.Schema)!;
+
+        Assert.Equal(["alpha", "beta"], schema["properties"]!["sources"]!["items"]!["enum"]!.AsArray().Select(name => name!.GetValue<string>()));
+        Assert.Equal(["query"], schema["required"]!.AsArray().Select(name => name!.GetValue<string>()));
+        Assert.EndsWith(
+            $" Each source gives at most {DssHarness.Core.Web.Search.WebSearchSources.DefaultResultsPerSource} results; name some in sources to ask them alone, else every one is asked. This step's sources:\n- alpha: Alpha's answers\n- beta: Beta's packages",
+            tool.Description,
+            StringComparison.Ordinal);
+
+        // A host given no search cannot open a step that has sources.
+        var ground = PolicyGrounds.Of(_worktree, [_main], [_worktree], [], [], [], [AgentCapability.Web], null, null, null);
+        using var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("x", "text/plain")));
+        var host = new AgentToolHost(_harness.FileSystem, _harness.Platform, _harness.GitClient, new PhaseRunner(_harness.ProcessRunner, _harness.FileSystem, _harness.Output), _harness.ChildSessions, fetch, TimeProvider.System);
+
+        Assert.Throws<ArgumentException>(() => host.Open(AgentRuns.Of(_step, _worktree, ground: ground, webSearch: TwoSources()), _events));
+    }
+
+    /// <summary>
+    /// A search is answered in each source's part, by the harness's own search: each address decided and answered in
+    /// web.jsonl with the source that asked it, each part a line of its own, and counted as the step's requests.
+    /// </summary>
+    [Fact]
+    public async Task WebSearch_GivesEachSourcesPart_AndRecordsIt()
+    {
+        var endpoint = new WebEndpoint(request => request.RequestUri!.Host == "alpha.example.test"
+            ? SearchAnswer("""{ "items": [ { "title": "One", "link": "https://one.example.test/" } ] }""")
+            : SearchAnswer("not json"));
+        var runtime = Open(capabilities: [AgentCapability.Read, AgentCapability.Web], endpoint: endpoint, webSearch: TwoSources());
+
+        var result = await Call(runtime, AgentTools.WebSearch, ("query", "group by"));
+        var changed = DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild.Find("json-api")!
+            .Read(TwoSources().Sources[1], DssHarness.Core.Web.Search.WebSearchFound.None, WebSearchFixtures.Answer("not json")).Why;
+
+        Assert.True(result.Ok);
+        Assert.Equal(
+            DssHarness.Core.Web.WebBlocks.Search("group by", "alpha", "1. One\n   https://one.example.test/")
+                + "\n\n" + DssHarness.Core.Web.WebBlocks.Search("group by", "beta", $"beta's answer could not be read (it changed); nothing was read from it: {changed}"),
+            result.Text);
+        Assert.Equal(2, runtime.Tally.WebRequests);
+        Assert.Equal(
+            [$"web-search source 'beta' answered what its kind 'json-api' (version 1) could not read: {changed}"],
+            _events.All.OfType<Notice>().Select(notice => notice.Text));
+
+        var only = await Call(runtime, AgentTools.WebSearch, ("query", "other"), ("sources", new[] { "alpha" }));
+
+        Assert.True(only.Ok);
+        Assert.Equal(3, endpoint.Asked.Count);
+
+        runtime.Dispose();
+        var lines = File.ReadAllLines(Path.Combine(_step, AgentCallRecords.WebFileName)).Select(line => JsonNode.Parse(line)!).ToList();
+        var searched = lines.Where(line => line["line"]!.GetValue<string>() == "searched").ToList();
+
+        Assert.Equal(["alpha", "beta", "alpha"], searched.Select(line => line["by"]!.GetValue<string>()));
+        Assert.Equal(["Ok", "Changed", "Ok"], searched.Select(line => line["outcome"]!.GetValue<string>()));
+        Assert.All(lines.Where(line => line["line"]!.GetValue<string>() is "decided" or "answered"), line => Assert.Equal(AgentTools.WebSearch, line["tool"]!.GetValue<string>()));
+        Assert.Equal(["alpha", "alpha", "beta"], lines.Where(line => line["line"]!.GetValue<string>() == "decided").Select(line => line["by"]!.GetValue<string>()).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>A query holding the run's secret is denied by the mask, nothing asked; a search no source answered fails, saying what each came to.</summary>
+    [Fact]
+    public async Task WebSearch_ASecretIsDenied_AndASearchNoneAnsweredFails()
+    {
+        var endpoint = new WebEndpoint(_ => SearchAnswer("{}", HttpStatusCode.InternalServerError));
+        var runtime = Open(capabilities: [AgentCapability.Read, AgentCapability.Web], mask: new Masking("Tok 123"), endpoint: endpoint, webSearch: TwoSources());
+
+        var secret = await Call(runtime, AgentTools.WebSearch, ("query", "find Tok 123"));
+
+        Assert.False(secret.Ok);
+        Assert.Equal("the query holds a secret of this run's, which no request of the web carries", secret.Text);
+        Assert.Equal(AgentToolRuntime.MaskRule, _events.All.OfType<PermissionDenied>().Last().Rule);
+        Assert.Empty(endpoint.Asked);
+
+        var none = await Call(runtime, AgentTools.WebSearch, ("query", "x"));
+
+        Assert.False(none.Ok);
+        Assert.Equal(
+            "no source answered the search:\n\n"
+                + DssHarness.Core.Web.WebBlocks.Search("x", "alpha", "alpha: it answered 500: {}")
+                + "\n\n" + DssHarness.Core.Web.WebBlocks.Search("x", "beta", "beta: it answered 500: {}"),
+            none.Text);
+
+        runtime.Dispose();
+        Assert.DoesNotContain("Tok 123", File.ReadAllText(Path.Combine(_step, AgentCallRecords.DenialsFileName)), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A sitemap source's site is decided by the step's own rules, and its index's fill by the run's: a page the fill reads
+    /// on a host only the agent's own list refuses is asked all the same, for the index is the repository's.
+    /// </summary>
+    [Fact]
+    public async Task WebSearch_AnIndexIsFilledUnderTheRunsRules()
+    {
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("x", "text/plain"));
+        var docs = WebSearchFixtures.Source("docs", """{ "kind": "sitemap", "description": "The docs", "site": "https://docs.example.test", "sitemap": "https://cdn.example.test/sitemap.xml" }""");
+        var runtime = Open(
+            capabilities: [AgentCapability.Read, AgentCapability.Web],
+            restrictions: [new AgentRestriction("Web(cdn.example.test)", AgentPolicySource.Agent)],
+            endpoint: endpoint,
+            webSearch: TwoSources() with { Sources = [docs] });
+
+        var result = await Call(runtime, AgentTools.WebSearch, ("query", "flexbox"));
+
+        // The fill runs on after the search: waited for until it has asked the sitemap, then stopped.
+        for (var waited = 0; endpoint.Asked.Count < 2 && waited < 3000; waited++)
+        {
+            await Task.Delay(10, Token);
+        }
+
+        _indexes!.Dispose();
+
+        Assert.True(result.Ok);
+        Assert.Equal(["https://docs.example.test/robots.txt", "https://cdn.example.test/sitemap.xml"], endpoint.Asked.Select(sent => sent.Address.AbsoluteUri));
+
+        // The site itself is the step's to decide: an agent's rule that refuses it refuses the source, nothing asked.
+        var refusing = new WebEndpoint(_ => WebEndpoint.Page("x", "text/plain"));
+        var refused = Open(
+            capabilities: [AgentCapability.Read, AgentCapability.Web],
+            restrictions: [new AgentRestriction("Web(docs.example.test)", AgentPolicySource.Agent)],
+            endpoint: refusing,
+            webSearch: TwoSources() with { Sources = [docs] });
+
+        var answer = await Call(refused, AgentTools.WebSearch, ("query", "flexbox"));
+
+        Assert.False(answer.Ok);
+        Assert.Empty(refusing.Asked);
     }
 
     /// <summary>The runtime's host and the harness's fetch are registered in AddDssHarness, each built from what it registers.</summary>
@@ -1145,6 +1322,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
         Assert.Same(provider.GetRequiredService<HarnessFetch>(), provider.GetRequiredService<AgentToolHost>().Fetch);
+        Assert.Same(provider.GetRequiredService<DssHarness.Core.Web.Search.HarnessWebSearch>(), provider.GetRequiredService<AgentToolHost>().Search);
         Assert.Same(provider.GetRequiredService<PhaseRunner>(), provider.GetRequiredService<AgentToolHost>().Phases);
         Assert.IsType<SystemWebNames>(provider.GetRequiredService<IWebNames>());
     }
@@ -1268,7 +1446,8 @@ public sealed class AgentToolRuntimeTests : IDisposable
         IReadOnlyList<string>? writes = null,
         AgentLimits? limits = null,
         IProcessRunner? processes = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        AgentWebSearch? webSearch = null)
     {
         var ground = PolicyGrounds.Of(
             _worktree,
@@ -1284,14 +1463,44 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, endpoint ?? new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
         var files = fileSystem ?? _harness.FileSystem;
-        var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, clock ?? TimeProvider.System);
-        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld), _events);
+        var search = webSearch is null ? null : Search(fetch, clock ?? TimeProvider.System);
+        var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, clock ?? TimeProvider.System, search: search);
+        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch), _events);
 
         _opened.Add(fetch);
         _opened.Add(runtime);
 
         return runtime;
     }
+
+    /// <summary>The harness's own search over <paramref name="fetch"/>, its pace kept beside the step's records.</summary>
+    private DssHarness.Core.Web.Search.HarnessWebSearch Search(HarnessFetch fetch, TimeProvider clock)
+    {
+        var files = new PhysicalFileSystem(DssHarness.Core.Platform.FilePermissionsFactory.Create());
+        var indexes = new DssHarness.Core.Web.Index.WebIndexes(files, new DssHarness.Core.Web.Index.SitemapFill(files, fetch, clock, (_, _) => Task.CompletedTask), clock);
+        var pace = new DssHarness.Core.Web.Search.WebSearchPace(files, () => Path.Combine(_step, "..", "pace.json"), clock, (_, _) => Task.CompletedTask);
+        var search = new DssHarness.Core.Web.Search.HarnessWebSearch(DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild, fetch, indexes, pace, files, clock);
+
+        _opened.Add(search);
+        _opened.Add(indexes);
+        _indexes = indexes;
+
+        return search;
+    }
+
+    /// <summary>The step's search of the sources <c>alpha</c> and <c>beta</c>, whose endpoints answer as a test's does.</summary>
+    private static AgentWebSearch TwoSources(int maxPerStep = 60)
+        => new(
+            [
+                WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "description": "Alpha's answers", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }"""),
+                WebSearchFixtures.Source("beta", """{ "kind": "json-api", "description": "Beta's packages", "url": "https://beta.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }"""),
+            ],
+            DssHarness.Core.Web.Search.WebSearchSources.DefaultResultsPerSource,
+            maxPerStep,
+            new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
+
+    private static HttpResponseMessage SearchAnswer(string body, HttpStatusCode status = HttpStatusCode.OK)
+        => new(status) { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
 
     /// <summary>A clock that never moves, and stops <paramref name="stop"/> at its second reading: once a search has read a line of a file.</summary>
     private sealed class StoppingClock(CancellationTokenSource stop) : TimeProvider

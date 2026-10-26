@@ -225,6 +225,17 @@ public static class ServiceRegistration
             return new Web.Index.SitemapFill(provider.GetRequiredService<IFileSystem>(), provider.GetRequiredService<Web.HarnessFetch>(), clock, (wait, cancellationToken) => Task.Delay(wait, clock, cancellationToken));
         });
         services.AddSingleton<Web.Index.WebIndexes>();
+
+        // Every query an agent's web_search makes, through the harness's own search: each source's pace held on the
+        // machine by one record beside admission's, and each source's key read from the slot or the machine's gh login.
+        services.AddSingleton(provider =>
+        {
+            var clock = provider.GetRequiredService<TimeProvider>();
+            var platform = provider.GetRequiredService<IHostPlatform>();
+            return new Web.Search.WebSearchPace(provider.GetRequiredService<IFileSystem>(), () => Web.Search.WebSearchPace.PathFor(platform, provider.GetRequiredService<IHarnessOutput>()), clock, (wait, cancellationToken) => Task.Delay(wait, clock, cancellationToken));
+        });
+        services.AddSingleton<Web.Search.HarnessWebSearch>();
+        services.AddSingleton<Web.Search.WebSearchKeys>();
         services.AddSingleton(provider => new Agents.Runtime.AgentToolHost(
             provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IHostPlatform>(),
@@ -232,7 +243,8 @@ public static class ServiceRegistration
             provider.GetRequiredService<PhaseRunner>(),
             provider.GetRequiredService<ChildSessions>(),
             provider.GetRequiredService<Web.HarnessFetch>(),
-            provider.GetRequiredService<TimeProvider>()));
+            provider.GetRequiredService<TimeProvider>(),
+            search: provider.GetRequiredService<Web.Search.HarnessWebSearch>()));
         services.AddSingleton<IWorkflowValidationService, WorkflowValidationService>();
         services.AddSingleton<IWorkflowExportService, WorkflowExportService>();
 

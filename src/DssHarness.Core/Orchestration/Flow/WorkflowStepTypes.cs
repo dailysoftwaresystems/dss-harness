@@ -174,6 +174,7 @@ public static class WorkflowStepTypes
                 new("resume", "the reason step whose work this one goes on with"),
                 new("independent", "never given the author's work to go on with"),
                 new("restrictions", "restrictions the agent works under, beyond the workflow's own"),
+                new("search", "the sources of agentWebSearch the step's web_search asks, by name or tag, in the order its answer gives them; absent, agentWebSearch.defaults"),
                 new("writes", "the paths a writing step may write"),
                 new("ask", "the step may put its questions to a person; one that may not writes its assumptions down"),
                 new("askRounds", "how often a step that asks may ask before it goes on with what it has, from 1 to 5; absent, 2"),

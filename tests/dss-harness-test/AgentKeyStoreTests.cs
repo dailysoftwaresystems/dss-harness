@@ -8,7 +8,7 @@ namespace DssHarness.Tests;
 
 public sealed class AgentKeyStoreTests
 {
-    private static AppointedKey ZaiKey { get; } = new("ZAI_API_KEY", "provider 'zai'", "the Z.AI API key");
+    private static AppointedKey ZaiKey { get; } = new("ZAI_API_KEY", "provider 'zai'", "the Z.AI API key", "apiKeyNames");
 
     [Fact]
     public void Present_SaysWhichNamesTheSlotDeclares_NeverAValue()
@@ -147,7 +147,7 @@ public sealed class AgentKeyStoreTests
         temp.WriteFile(".harness-config/workflows/.env/keys.env", "CLAUDE_EXECUTABLE=/opt/claude/bin/claude\n");
         var file = Path.Combine(temp.Path, ".harness-config", "workflows", ".env", "keys.env");
         var (_, store) = Store(isPrivate: false);
-        var program = new AppointedKey("CLAUDE_EXECUTABLE", "client 'claude-code'", "the program the claude-code client starts", Secret: false);
+        var program = new AppointedKey("CLAUDE_EXECUTABLE", "client 'claude-code'", "the program the claude-code client starts", "executable", Secret: false);
 
         var setting = store.Value(Layout(temp.Path), [ZaiKey, program], "CLAUDE_EXECUTABLE");
 
@@ -160,6 +160,23 @@ public sealed class AgentKeyStoreTests
 
         Assert.Null(beside.Value);
         Assert.Equal($"other users can read '{file}', and it holds ZAI_API_KEY; make it private with: chmod 600 '{file}'", beside.Problem);
+    }
+
+    /// <summary>A setting the slot does not hold is said as the setting it is, by the key of its client's entry that appoints it.</summary>
+    [Fact]
+    public void Value_OfASettingNotThere_IsSaidAsTheSettingItIs()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile(".harness-config/workflows/.env/keys.env", "ZAI_API_KEY=one\n");
+        var (_, store) = Store();
+        var program = new AppointedKey("CLAUDE_EXECUTABLE", "client 'claude-code'", "the program the claude-code client starts", "executable", Secret: false);
+
+        var missing = store.Value(Layout(temp.Path), [ZaiKey, program], "CLAUDE_EXECUTABLE");
+
+        Assert.Equal(
+            new AgentKeyAnswer(null, "no file under '.harness-config/workflows/.env/' declares 'CLAUDE_EXECUTABLE', the name client 'claude-code' appoints for its setting "
+                + "(its executable); add CLAUDE_EXECUTABLE= to a file there, holding the program the claude-code client starts (it is read from this slot and nowhere else)"),
+            missing);
     }
 
     /// <summary>On Windows the refusal of a file others can read says the command that makes it private there.</summary>
@@ -228,7 +245,7 @@ public sealed class AgentKeyStoreTests
 
         var missing = AgentKeyStore.Missing(
             store.Present(Layout(temp.Path)),
-            [ZaiKey, new("ZAI_BACKUP_KEY", "provider 'zai'", "the Z.AI API key")],
+            [ZaiKey, new("ZAI_BACKUP_KEY", "provider 'zai'", "the Z.AI API key", "apiKeyNames")],
             ["ZAI_API_KEY", "ZAI_BACKUP_KEY"],
             ZaiKey);
 
@@ -243,7 +260,7 @@ public sealed class AgentKeyStoreTests
         => new(repository, repository);
 
     /// <summary>The store over the real file system, with every answer a privacy rule needs fixed at its making.</summary>
-    private static (IFileSystem Files, AgentKeyStore Store) Store(bool isPrivate = true, bool writableByOthers = false, PlatformId platform = PlatformId.Linux)
+    internal static (IFileSystem Files, AgentKeyStore Store) Store(bool isPrivate = true, bool writableByOthers = false, PlatformId platform = PlatformId.Linux)
     {
         var permissions = new FixedPermissions(isPrivate, writableByOthers);
         var files = new PassThroughFileSystem(new PhysicalFileSystem(permissions));

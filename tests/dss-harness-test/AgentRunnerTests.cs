@@ -44,10 +44,15 @@ public sealed class AgentRunnerTests
 
         var seen = new List<AgentEvent>();
 
-        var result = await Runner(client).RunAsync(Step(temp, promptValues: new Dictionary<string, string> { ["item"] = "login form" }), new Collecting(seen), TestContext.Current.CancellationToken);
+        var search = new AgentWebSearch([], 3, 4, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
+        var step = Step(temp, promptValues: new Dictionary<string, string> { ["item"] = "login form" }) with { WebSearch = search, Withheld = ["DEPLOY_TOKEN"] };
+
+        var result = await Runner(client).RunAsync(step, new Collecting(seen), TestContext.Current.CancellationToken);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.Equal("do the login form", client.Run!.UserPrompt);
+        Assert.Same(search, client.Run.WebSearch);
+        Assert.Equal(["DEPLOY_TOKEN"], client.Run.Withheld);
         Assert.Equal("be terse", client.Run.SystemPrompt);
         Assert.Equal(WorkDirectory(temp), client.Run.Workspace.WorkingDirectory);
         Assert.Equal(StepDirectory(temp), client.Run.StepDirectory);

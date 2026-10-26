@@ -149,6 +149,7 @@ public sealed class AgentProvidersService(
             tiers,
             clients,
             [.. resolved.SettingsRead().Select(read => new AgentSettingListing(read.Client, read.Setting.Key, read.Name, Holds(read.Name)))],
+            [.. resolved.SourceKeys().Select(key => new AgentSourceKeyListing(key.Source, key.Name, Holds(key.Name)))],
             [.. present.Names.Where(name => !appointed.Any(key => string.Equals(key.Name, name, StringComparison.OrdinalIgnoreCase)))]);
     }
 }

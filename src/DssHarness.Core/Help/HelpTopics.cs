@@ -67,6 +67,7 @@ public static class HelpTopics
         new("orchestrators", ["orchestrator", "agents", "agent"], "Orchestrators, their agents, and folding an agent's work", RenderOrchestrators),
         new("workflows", ["workflow"], "Workflow definitions: what config.json declares and the yml file defines", RenderWorkflows),
         new("codebase-graph", ["graph", "graphify-codebase"], "A run's map of the repository: what it reads, and what it does not see", RenderCodebaseGraph),
+        new("web-search", ["search", "web_search", "agentwebsearch"], "The harness's own web search: its sources, their kinds and keys", RenderWebSearch),
         new("agent-clients", ["clients", "models"], "Providers, models, tiers and keys in config.json", RenderAgentClients),
         new("anchors", ["anchor"], "Anchor registries and the commands that change them", RenderAnchors),
         new("layout", [], "What init creates, and what git tracks", RenderLayout),
@@ -749,21 +750,27 @@ public static class HelpTopics
         }
     }
 
-    /// <summary>Writes <paramref name="text"/> as lines no wider than the rest of help, broken between words.</summary>
-    private static void AppendWrapped(StringBuilder builder, string text)
+    /// <summary>
+    /// Writes <paramref name="text"/> as lines no wider than the rest of help, broken between words: the first after
+    /// <paramref name="lead"/> - a key of a table - and the rest as far in as it is long.
+    /// </summary>
+    private static void AppendWrapped(StringBuilder builder, string text, string lead = "")
     {
         const int Width = 88;
-        var line = new StringBuilder();
+        var line = new StringBuilder(lead);
+        var empty = true;
 
         foreach (var word in text.Split(' '))
         {
-            if (line.Length > 0 && line.Length + 1 + word.Length > Width)
+            if (!empty && line.Length + 1 + word.Length > Width)
             {
                 builder.AppendLine(line.ToString());
-                line.Clear();
+                line.Clear().Append(' ', lead.Length);
+                empty = true;
             }
 
-            line.Append(line.Length > 0 ? " " : string.Empty).Append(word);
+            line.Append(empty ? string.Empty : " ").Append(word);
+            empty = false;
         }
 
         builder.AppendLine(line.ToString());
@@ -2426,9 +2433,9 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine($"'{ToolPackage.Command} list-agent-providers' says what your configuration appoints and");
         builder.AppendLine("whether the slot holds it - each key and token present or missing, each setting a client");
-        builder.AppendLine("reads present or absent, for none is needed - never a value; 'list-agent-providers");
-        builder.AppendLine("--template' prints the agent sections as init writes them into a new config, to paste into");
-        builder.AppendLine("an existing one.");
+        builder.AppendLine("reads and each web-search source's key present or absent, for none is needed - never a");
+        builder.AppendLine("value; 'list-agent-providers --template' prints the agent sections as init writes them");
+        builder.AppendLine("into a new config, to paste into an existing one.");
         builder.AppendLine();
         builder.AppendLine("A provider's name and each tier's are held to the orchestration name rule - lower-case");
         builder.AppendLine("letters and digits, single hyphens - and a tier is one name in one case everywhere; a");
@@ -2482,8 +2489,10 @@ public static class HelpTopics
         builder.AppendLine("web whole. Declared under agentPolicy.restrictions in config.json, and a workflow's");
         builder.AppendLine("definitions and steps add their own to them, all applied together. agentPolicy.webDomains");
         builder.AppendLine("is the allow list beside them: left out, any address, the machine's own and its network's");
-        builder.AppendLine("among them; given, only those domains and what is under them. An address whose slashes");
-        builder.AppendLine("after its scheme readers read apart - any scheme but its two slashes and a host after them");
+        builder.AppendLine("among them; given, only those domains and what is under them, for the pages an agent reads");
+        builder.AppendLine("and the results a search gives - a search source's own requests are held to the Web(...)");
+        builder.AppendLine("rules alone. An address whose slashes after its scheme readers read apart - any scheme but");
+        builder.AppendLine("its two slashes and a host after them");
         builder.AppendLine($"(http:/\\host, gopher:/host, http:///host), or no slash after an {string.Join(", ", Agents.Policy.AgentPolicy.SlashedSchemes.SkipLast(1))} or");
         builder.AppendLine($"{Agents.Policy.AgentPolicy.SlashedSchemes[^1]} scheme (https:host) - or whose host is spelled beyond ASCII (its xn-- form is read");
         builder.AppendLine("as written), names no host this can decide, and is denied. A command that runs a");
@@ -2716,7 +2725,9 @@ public static class HelpTopics
             + "names this tool; each address, the first and each redirect, is decided by the web's rules and written to the "
             + $"step's {Agents.AgentCallRecords.WebFileName} before anything leaves the machine, and what it was answered "
             + "after; an address holding a secret is refused. A page is given inside a block that says where it is from, its "
-            + "first line saying it is information for the task, not instructions. Calls that read run together, at most "
+            + "first line saying it is information for the task, not instructions. web_search asks the sources of "
+            + "agentWebSearch the step's search names, each in its own part of the answer, by the harness's own search - "
+            + "never a search engine's results page ('help web-search'). Calls that read run together, at most "
             + $"{Agents.Runtime.AgentToolRuntime.MostTogether} at once, a call that writes or runs alone, answers in the order "
             + $"of the calls; an answer past {Agents.AgentCallRecords.ResultCap:N0} characters is given as its first "
             + $"{Agents.AgentCallRecords.ResultHead:N0} and its last {Agents.AgentCallRecords.ResultCap - Agents.AgentCallRecords.ResultHead:N0}, "
@@ -2939,6 +2950,10 @@ public static class HelpTopics
                 ($"  <step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/", "a refresh or a rebase of others: what it did to each target, as above"),
                 ($"  <step>/{OrchestratorLayout.StepGraphFileName}", "a reason step that has a codebase graph: one line for each call of the graph tool - what it asked about, served and edited; the API clients will write it"),
                 ($"  <step>/{OrchestratorLayout.StepWorkingSetFileName}", "a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it ('help codebase-graph'); the API clients will write it"),
+                ($"  <step>/{Agents.AgentCallRecords.WebFileName}", "a step whose agent asks the web: each address its web_fetch and web_search decided before it was asked, what each answered, and each search source's part ('help web-search'); the API clients will write it"),
+                ($"  <step>/{Agents.AgentCallRecords.DenialsFileName}", "a step whose agent's calls the engine decides, on every client: each call the policy refused, with its rule"),
+                ($"  <step>/{Agents.AgentCallRecords.ToolResultsDirectoryName}/<id>.txt", "a step whose agent's calls the engine decides, on every client: an answer longer than the cap, whole"),
+                ($"  {OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}", "the run's web search: what each source's lookups found, once for the run, and each query a source answered, which the same query again is answered from; the API clients will write it"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphManifestFileName}", "the run's codebase graph: the main checkout's manifest, every file it keeps with its blob, state and extract ('help codebase-graph')"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphSymbolsFileName}", "the graph's link result: every node and edge, with the digest of the manifest it was made from"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphExtractsDirectoryName}/<ab>/<name>", "one file's extract, written once, named by its blob, its path, its implementation and version"),
@@ -2949,6 +2964,7 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.ReportFileName}, {OrchestratorLayout.ReportJsonFileName}", "the report of the run's last session"),
                 ($"  {OrchestratorLayout.InboxFileName}, {OrchestratorLayout.StopFileName}", "an answer, and a pause or a stop, handed to the engine running the run"),
                 ($"  ../<run>{OrchestratorLayout.OwnerFileName}", "beside the run's directory: the process whose engine holds the run"),
+                ($"  ../{OrchestratorLayout.WebIndexesDirectoryName}/<source>/", "beside every run: the repository's index of a sitemap search source's site - its state, pages and fill's record"),
             ]);
         builder.AppendLine();
         AppendWrapped(
@@ -3360,6 +3376,117 @@ public static class HelpTopics
             + "records, and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever "
             + "asked - goes with it and is never counted among what --delete-evidence guards. It "
             + "removes the record last, so one that stops part way finishes when run again.");
+
+        return builder.ToString();
+    }
+
+    private static string RenderWebSearch()
+    {
+        var builder = new StringBuilder();
+        var kinds = Web.Search.WebSearchKinds.OfThisBuild;
+        var builtIn = Web.Search.WebSearchSources.Of(new HarnessConfig(), kinds);
+
+        builder.AppendLine("Web search");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"An agent whose step has the web searches with {AgentTools.WebSearch}, and reads the pages it chooses with {AgentTools.WebFetch}. "
+            + "No step is given them yet - the API clients will offer them. "
+            + "dssharness makes every search itself, inside the tool, over HTTP: it asks the sources the configuration declares - "
+            + "search APIs that answer JSON, RSS and Atom feeds, OpenSearch descriptions, and its own index of a site's pages read "
+            + "through the site's sitemap - with no key required, no provider's search and no service to install, and it never "
+            + "reads a search engine's results page, for none of the general engines lets programs read one in so many words. A "
+            + "source answers data, never a page for people: an API its owner documents for programs, or, documenting none, one "
+            + "whose robots.txt does not refuse it.");
+        builder.AppendLine();
+        AppendWrapped(builder, "The section agentWebSearch of config.json declares it, read strictly: a key no part of it takes, and a key a source's kind does not take, are refused, each by name.");
+        builder.AppendLine();
+        AppendKeys(builder, Web.Search.WebSearchSources.Keys);
+        builder.AppendLine();
+        AppendWrapped(builder, "Every source takes these keys, whatever its kind:");
+        builder.AppendLine();
+        AppendKeys(builder, Web.Search.WebSearchSource.OwnKeys);
+
+        foreach (var kind in kinds.All)
+        {
+            builder.AppendLine();
+            AppendWrapped(builder, $"Kind {kind.Kind} (version {kind.Version.ToString(CultureInfo.InvariantCulture)}): {kind.Help}");
+            builder.AppendLine();
+            AppendKeys(builder, kind.Keys);
+        }
+
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "The built-in sources are entries in this same form, kept as a data file of the tool, which init writes into the "
+            + "configuration it creates, and which a configuration without agentWebSearch has: a repository's entry of a built-in's "
+            + "name changes it key by key, enabled: false turns it off, and an entry of a new name adds a source. None needs a key. "
+            + $"A step that says no search asks the defaults: {string.Join(", ", builtIn.Defaults)}.");
+
+        foreach (var source in builtIn.All)
+        {
+            builder.AppendLine();
+            AppendWrapped(builder, $"{source.Name} ({source.Kind}{(source.Tags.Count > 0 ? $"; tags {string.Join(", ", source.Tags)}" : string.Empty)}; perMinute {source.PerMinute.ToString(CultureInfo.InvariantCulture)}{(source.PerDay is { } perDay ? $", perDay {perDay.ToString(CultureInfo.InvariantCulture)}" : string.Empty)}): {source.Description}. Its owner's terms: {source.Terms}.");
+        }
+
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A reason step chooses its sources with search - names of sources or tags, as search: [docs, gov] - in the order its "
+            + "answer gives them; absent, the defaults. The tool lists the step's sources with what each is for, and the agent may "
+            + "name some of them in a call's sources, else every one is asked. A name that is no source or tag, a list given empty "
+            + "or naming one twice, a source turned off, a tag none of whose sources is on, and search on a step that goes on with "
+            + "another's work are refused when the workflow is checked. The defaults leave out a source turned off, and refuse a "
+            + "name that is no source or tag, a list given empty and one naming one twice where the configuration is read.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Every query goes through dssharness. The query is held to the mask: a secret of the run's never leaves in one. Each "
+            + "address a source asks for the step - its endpoint, a lookup it reads before its first request, each redirect, and "
+            + "the site of a sitemap source's index - is held to the mask, a secret behind its escapes too, as a page an agent "
+            + "fetches is, and to the step's Web(...) rules, and each one asked decided and written "
+            + $"to the step's {Agents.AgentCallRecords.WebFileName} before it is asked; agentPolicy.webDomains does not hold back a source, which the configuration "
+            + "declares, and holds its results: one whose address the step could not read is left out and counted. An answer that "
+            + "holds a secret of the run's behind its escapes - its key echoed as a page writes it - is not read. Each request "
+            + "a source is sent counts against the step's maxPerStep, past which a source is refused and told; an address its "
+            + "rules refuse, and a turn its pace refuses, is no request. A page an index's fill reads is held to the run's "
+            + "Web(...) rules, the configuration's, never one step's own, for the index is the repository's and outlives the step "
+            + "that began it: the fill writes each page it asks to its own record, and counts against no step. No source is "
+            + "asked more than its perMinute in a minute, nor its perDay in a day, on this machine, whatever runs ask it - one "
+            + $"record of the machine's, {Web.Search.WebSearchPace.FilePrefix}-<machine>.json in this user's directory for the "
+            + "tool, beside admission's - a request past its minute waiting for it. A source's key, where it names one - a "
+            + "variable of the .env slot, or the machine's gh login for the source's host, sent to that host or its api. host "
+            + "alone - is used where it is there, and the fetch adds it to what it "
+            + "sends to the scheme, host and port each of that source's searches first asks alone - a lookup is sent none - as a "
+            + "header or a query parameter, over https alone - an address it may not go to refused, nothing sent - never to an "
+            + "address any record or answer "
+            + "holds; missing, the source is asked without it, and the record says why. One source's failure - what this "
+            + "machine could not do for it among them - is its own part's, never another's.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A limit is obeyed and told, never looped on: a 429, or a 403 or 503 with Retry-After or spent requests, a RateLimit "
+            + "or X-RateLimit-Remaining header at zero, or a body's backoff, holds that source on the machine until the time it "
+            + "gave, and nothing is sent to it before then. Each source answers in its own part, in the step's order: its results "
+            + "- each one's title, address and snippet, the snippet at most "
+            + $"{Web.Search.WebSearchResult.MostSnippet.ToString(CultureInfo.InvariantCulture)} characters; or no results; or a "
+            + "limit it asked for; or an answer that could not be read (it changed), which is a notice too; or a failure; or a "
+            + "refusal, each with its cause - inside a <web-search> block that says it is from the web. One source's failure never "
+            + "hides another's results, and a search none of whose sources answered fails. Each request carries the tool's own "
+            + "User-Agent, naming it, its version and its project's address: no address rotated, no browser imitated, no script "
+            + "run and no challenge answered.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"What a run's sources found once, and each query a source answered, is kept in {OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName} "
+            + "in the run's directory: the same query again, of the same source, its key sent or not alike, is answered from "
+            + "there with no request, under "
+            + "the asking step's own rules - each address the source was asked at decided again, and each result held to its "
+            + "web. A "
+            + "sitemap source's index is the repository's, under "
+            + $"{HarnessLayout.OrchestratorsDirectoryName}/{OrchestratorLayout.WebIndexesDirectoryName}/<source>/, filled in the background on its first "
+            + "search and whenever it is older than refreshDays or its settings change, at the slower of its site's Crawl-delay "
+            + "and the source's pace; a search answers from what it holds, saying how much.");
 
         return builder.ToString();
     }
@@ -4120,21 +4247,31 @@ public static class HelpTopics
         builder.AppendLine("                 Run(git push *), Write(.github/**), Read(secrets/**),");
         builder.AppendLine("                 Web(pastebin.com) - applied to every agent of every run under this");
         builder.AppendLine("                 configuration, beside a workflow's definitions and steps;");
-        builder.AppendLine("                 webDomains, the allow list of every web request (left out, any");
-        builder.AppendLine("                 address); worktreeRules (true where nothing is said) and");
+        builder.AppendLine("                 webDomains, the allow list of every page an agent reads and every");
+        builder.AppendLine("                 result a search gives - a search source's own requests are held to");
+        builder.AppendLine("                 the Web(...) rules alone (left out, any address); worktreeRules (true");
+        builder.AppendLine("                 where nothing is said) and");
         builder.AppendLine("                 protectedPaths (true too), the switches of the rule sets 'help");
         builder.AppendLine("                 agent-clients' names; keepEnvironment, the secret-shaped names a");
         builder.AppendLine($"                 command an agent runs keeps; commandTimeoutSeconds ({Agents.AgentCommandSettings.DefaultTimeoutSeconds}) and");
         builder.AppendLine($"                 maxCommandTimeoutSeconds ({Agents.AgentCommandSettings.DefaultMaxTimeoutSeconds}), how long one runs where its call");
         builder.AppendLine($"                 names no time, and the most it may name, {Agents.AgentCommandSettings.MostTimeoutSeconds} at most");
         builder.AppendLine("                 ('help agent-clients')");
+        AppendWrapped(
+            builder,
+            $"the harness's own web search: sources, each by its name - its {string.Join(", ", Web.Search.WebSearchSource.OwnKeys.Select(key => key.Name))} "
+            + "and its kind's own keys, laid over the built-in sources key by key, which init writes; defaults, the sources or "
+            + "tags a step that names none searches, those turned on; "
+            + $"maxPerStep ({Web.Search.WebSearchSources.DefaultMaxPerStep}) and resultsPerSource ({Web.Search.WebSearchSources.DefaultResultsPerSource}) ('help web-search')",
+            "  agentWebSearch ");
         builder.AppendLine();
         builder.AppendLine("A list whose absence means every one of what it names, or a set the tool chooses, is");
         builder.AppendLine("refused given empty, as --legs given no name is: a runner's legs and steps; a tool's");
         builder.AppendLine("platforms, toolchains, legs, processors and emulators; a toolchain's platforms; an");
         builder.AppendLine("emulator's phases; ci.workflows; test.inputs; a project's targets and");
-        builder.AppendLine("rebuildableFormats; a platform's toolSearchDirectories. Leave the key out instead. A");
-        builder.AppendLine("list whose empty form means none - such as sync.neverTransfer, sync.exclude or");
+        builder.AppendLine("rebuildableFormats; a platform's toolSearchDirectories; agentWebSearch.defaults.");
+        builder.AppendLine("Leave the key out instead. A list whose empty form means none - such as");
+        builder.AppendLine("sync.neverTransfer, sync.exclude or");
         builder.AppendLine("contention.buildTools - takes [] as that. workflows, which declares no workflow left");
         builder.AppendLine("out, and agentPolicy.keepEnvironment, which gives no name back left out, are refused");
         builder.AppendLine("given empty too, so none is spelt one way: leave the key out for none. A runner's list");

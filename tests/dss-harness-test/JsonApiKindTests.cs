@@ -245,7 +245,33 @@ public sealed class JsonApiKindTests
         Assert.StartsWith("none of its 1 results gave a title", rooted.Why, StringComparison.Ordinal);
 
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { @base = new string('x', 50_000) }));
-        Assert.Equal(WebPageText.MostFieldRead, WebItemTemplate.Parse("{$.base}{$.base}").Fill(document.RootElement, document.RootElement)!.Length);
+        Assert.Equal(WebPageText.MostFieldRead + 2, WebItemTemplate.Parse("{$.base}{$.base}").Fill(document.RootElement, document.RootElement)!.Length);
+
+        // A pair the cut would part is left out whole, and what is filled still longer than a field is read for.
+        using var paired = JsonDocument.Parse(JsonSerializer.Serialize(new { @base = new string('x', WebPageText.MostFieldRead + 1) + "\uD83D\uDE00" }));
+        Assert.Equal(WebPageText.MostFieldRead + 1, WebItemTemplate.Parse("{$.base}{$.base}").Fill(paired.RootElement, paired.RootElement)!.Length);
+    }
+
+    /// <summary>Lookups that cannot be used still hold the source for every pause their answers asked for: the one that failed, and those read before it.</summary>
+    [Fact]
+    public void ALookupThatCannotBeUsed_KeepsEveryPauseAskedFor()
+    {
+        var source = Source("s", """{ "kind": "json-api", "url": "{a}{b}?q={query}", "items": "$.i", "title": "{@.t}", "link": "{@.u}", "discover": { "a": { "url": "https://a.test/a.json", "path": "$.a" }, "b": { "url": "https://a.test/b.json", "path": "$.b" } } }""");
+        var spent = Headers(("X-RateLimit-Remaining", "0"), ("X-RateLimit-Reset", "45"));
+
+        Assert.Empty(WebSearchKinds.OfThisBuild.Problems(source));
+
+        var nothing = Kind.Found(source, [Answer("{}", headers: spent), Answer("""{ "b": "/q" }""")]);
+        Assert.Equal((WebSearchOutcome.Changed, At + TimeSpan.FromSeconds(45)), (nothing.Failure!.Outcome, nothing.Until));
+
+        var gone = Kind.Found(source, [Answer("""{ "a": "https://x.test" }""", headers: spent), Answer("{}", status: 404)]);
+        Assert.Equal((WebSearchOutcome.Failed, At + TimeSpan.FromSeconds(45)), (gone.Failure!.Outcome, gone.Until));
+
+        // The lookups end at one whose status failed: what it said is the answer, and fewer answers ending otherwise are none.
+        Assert.Equal(WebSearchOutcome.Failed, Kind.Found(source, [Answer("{}", status: 500)]).Failure!.Outcome);
+        Assert.Throws<ArgumentException>(() => Kind.Found(source, [Answer("""{ "a": "https://x.test" }""")]));
+        Assert.Throws<ArgumentException>(() => Kind.Found(source, []));
+        Assert.Throws<ArgumentException>(() => Kind.Found(source, [Answer("""{ "a": "x" }"""), Answer("""{ "b": "y" }"""), Answer("{}")]));
     }
 
     /// <summary>discover takes the first text its path finds that says something.</summary>
@@ -261,6 +287,7 @@ public sealed class JsonApiKindTests
     /// <summary>A body that is no JSON, an items path that finds nothing or no array, and items none of which read are each a change - never no results.</summary>
     [Theory]
     [InlineData("<html><body>Maintenance</body></html>", "$.items", "{@.title}", "its answer is no JSON")]
+    [InlineData("{\"items\":[{\"title\":\"caf\\ud83d\",\"id\":1}]}", "$.items", "{@.title}", "its answer is no JSON: line 1: 'caf\\ud83d' spells half a character, an escape of a lone surrogate that no text can hold")]
     [InlineData("{\"results\":[]}", "$.items", "{@.title}", "'$.items' finds nothing in its answer, where it finds the array of results")]
     [InlineData("{\"items\":{\"a\":1}}", "$.items", "{@.title}", "'$.items' finds object in its answer, where it finds the array of results")]
     [InlineData("{\"items\":[{\"name\":\"a\"},{\"name\":\"b\"}]}", "$.items", "{@.title}", "none of its 2 results gave a title by '{@.title}' and an address by 'https://example.test/{@.id}'")]
@@ -346,7 +373,7 @@ public sealed class JsonApiKindTests
         Assert.False(Assert.IsType<WebSearchRequest.Http>(Kind.Request(Source("so", StackOverflow), WebSearchFound.None, "x", 1)).Headers.ContainsKey("Content-Type"));
     }
 
-    /// <summary>discover reads its document once a run: the address found fills the template, the first of several taken.</summary>
+    /// <summary>discover reads its document, kept for the run once found: the address found fills the template, the first of several taken.</summary>
     [Fact]
     public void Discover_FindsTheAddress_AndTheRequestTakesIt()
     {
@@ -372,6 +399,10 @@ public sealed class JsonApiKindTests
         var spent = Kind.Found(source, [Answer(Stored("nuget-index.json"), headers: Headers(("X-RateLimit-Remaining", "0"), ("X-RateLimit-Reset", "45")), address: lookup.Address)]);
         Assert.Equal(("https://search-primary.example-packages.test/query", At + TimeSpan.FromSeconds(45)), (spent["search"], spent.Until));
 
+        // One whose document cannot be read holds the source all the same.
+        var unread = Kind.Found(source, [Answer("not json", headers: Headers(("X-RateLimit-Remaining", "0"), ("X-RateLimit-Reset", "45")), address: lookup.Address)]);
+        Assert.Equal((WebSearchOutcome.Changed, At + TimeSpan.FromSeconds(45)), (unread.Failure!.Outcome, unread.Until));
+
         var request = Assert.IsType<WebSearchRequest.Http>(Kind.Request(source, found, "json reader", 5));
         Assert.Equal("https://search-primary.example-packages.test/query?q=json%20reader&take=5", request.Address);
 
@@ -381,12 +412,13 @@ public sealed class JsonApiKindTests
         Assert.Equal(2, answer.Total);
     }
 
-    /// <summary>A document discover cannot read is the source's answer to every query of the run: a failure, a change, a limit, each said with what was looked up.</summary>
+    /// <summary>A document discover cannot read is the answer of the query that asked it, the next one asking again: a failure, a change, a limit, each said with what was looked up.</summary>
     [Theory]
     [InlineData("{}", 404, WebSearchOutcome.Failed, "its 'search', looked up at 'https://example-packages.test/v3/index.json': it answered 404")]
     [InlineData("not json", 200, WebSearchOutcome.Changed, "its 'search', looked up at 'https://example-packages.test/v3/index.json': it is no JSON")]
     [InlineData("{\"resources\":[]}", 200, WebSearchOutcome.Changed, "its 'search', looked up at 'https://example-packages.test/v3/index.json': '$.resources[?@['@type']=='SearchQueryService']['@id']' finds no text in it")]
     [InlineData("{}", 429, WebSearchOutcome.RateLimited, "its 'search', looked up at 'https://example-packages.test/v3/index.json': it answered 429")]
+    [InlineData("{\"resources\":[{\"@type\":\"SearchQueryService\",\"@id\":\"x\\ud800\"}]}", 200, WebSearchOutcome.Changed, "its 'search', looked up at 'https://example-packages.test/v3/index.json': it is no JSON: line 1: 'x\\ud800' spells half a character, an escape of a lone surrogate that no text can hold")]
     public void ADocumentDiscoverCannotRead_IsTheSourcesAnswer(string body, int status, WebSearchOutcome outcome, string why)
     {
         var found = Kind.Found(Source("nuget", NuGet), [Answer(body, status)]);
@@ -413,6 +445,8 @@ public sealed class JsonApiKindTests
     [InlineData("""{ "headers": { "authorization": "Bearer x" } }""", "'headers' names Authorization, which carries a key: a key is sent as the source's credential, kept secret")]
     [InlineData("""{ "headers": { "Bad Name": "x" } }""", "'headers' names 'Bad Name', which is no header's name")]
     [InlineData("""{ "headers": { "a{b": "x" } }""", "'headers' names 'a{b', which is no header's name")]
+    [InlineData("""{ "headers": { "Content-Language": "en" } }""", "'headers' names 'Content-Language', which a body says of itself and no request carries")]
+    [InlineData("""{ "headers": { "expires": "0" } }""", "'headers' names 'expires', which a body says of itself and no request carries")]
     [InlineData("""{ "headers": { "Proxy-Authorization": "x" } }""", "'headers' names Proxy-Authorization, which carries a key")]
     [InlineData("""{ "backoff": "$..b" }""", "'backoff' may find several values, and finds one")]
     [InlineData("""{ "discover": { "9s": { "url": "https://a.test/", "path": "$.a" } } }""", "'discover.9s' is no name a template fills")]

@@ -6,6 +6,9 @@ namespace DssHarness.Core.Output;
 /// </summary>
 public static class TextCut
 {
+    /// <summary>What marks a text <see cref="AtWord"/> cut short.</summary>
+    public const char Ellipsis = '…';
+
     /// <summary>
     /// At most the first <paramref name="length"/> characters of <paramref name="text"/>: one fewer where the last would be
     /// the first half of a pair. The text whole where it is no longer.
@@ -46,7 +49,7 @@ public static class TextCut
         var cut = Head(text, most - 1);
         var space = cut.LastIndexOf(' ');
 
-        return (space > most / 2 ? cut[..space] : cut).TrimEnd() + "…";
+        return (space > most / 2 ? cut[..space] : cut).TrimEnd() + Ellipsis;
     }
 
     /// <summary>

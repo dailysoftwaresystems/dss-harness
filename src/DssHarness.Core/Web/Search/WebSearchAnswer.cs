@@ -88,7 +88,7 @@ public sealed record WebSearchAnswer
     /// <summary>When the source may be asked again, as it asked; <see langword="null"/> where it asked for no pause.</summary>
     public DateTimeOffset? Until { get; init; }
 
-    /// <summary>How many of the results it gave named no title or no address, and were left out.</summary>
+    /// <summary>How many of the results it gave named no title or no address, or one that holds a secret, and were left out.</summary>
     public int LeftOut { get; init; }
 
     /// <summary>What an index answered from: how much of its site it holds; <see langword="null"/> for an endpoint.</summary>
@@ -113,6 +113,29 @@ public sealed record WebSearchAnswer
 
     /// <summary>A rule refused the source before it was asked, as <paramref name="why"/> says.</summary>
     public static WebSearchAnswer Refused(string why) => new(WebSearchOutcome.Refused, [], Said(why));
+
+    /// <summary>
+    /// The same answer, each text it took from its source - why it came to none, and each result's title and snippet - as
+    /// <paramref name="said"/> says it, and each result whose link <paramref name="kept"/> refuses left out and counted
+    /// with <see cref="LeftOut"/>: results, or none where none is left; its links, total and pause as they are.
+    /// </summary>
+    /// <param name="said">How each text is said.</param>
+    /// <param name="kept">Whether a result's link is kept.</param>
+    public WebSearchAnswer Saying(Func<string, string> said, Func<string, bool> kept)
+    {
+        ArgumentNullException.ThrowIfNull(said);
+        ArgumentNullException.ThrowIfNull(kept);
+
+        var results = Results.Where(result => kept(result.Link)).Select(result => result with { Title = said(result.Title), Snippet = said(result.Snippet) }).ToList();
+
+        return new(Outcome == WebSearchOutcome.Ok && results.Count == 0 ? WebSearchOutcome.NoResults : Outcome, results, Why is null ? null : said(Why))
+        {
+            Total = Total,
+            Until = Until,
+            LeftOut = LeftOut + (Results.Count - results.Count),
+            Held = Held,
+        };
+    }
 
     /// <summary>The same answer, its cause said as part of <paramref name="what"/>: what was being read when it came to it.</summary>
     /// <param name="what">What was being read, as <c>its 'search', looked up at '...'</c>.</param>

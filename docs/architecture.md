@@ -284,10 +284,10 @@ at once, with the line it concerns where the parser knows it:
   given empty, by one rule and in one wording: a runner's `legs` and `steps`; a tool's `platforms`,
   `toolchains`, `legs`, `processors` and `emulators`; a toolchain's `platforms`; an emulator's
   `phases`; `ci.workflows`; `test.inputs`; a project's `targets` and `rebuildableFormats`; a
-  platform's `toolSearchDirectories`. Read as the key left out, a runner's `"legs": []` synced the
-  tree to every host and ran on every leg, for a list naming none, as `--legs` given no name would
-  have. Left out, each still means what it did, and a list a caller builds empty in code reads as
-  left out. A list whose empty form means none - such as `sync.neverTransfer`, `sync.exclude` or
+  platform's `toolSearchDirectories`; `agentWebSearch.defaults`. Read as the key left out, a
+  runner's `"legs": []` synced the tree to every host and ran on every leg, for a list naming
+  none, as `--legs` given no name would have. Left out, each still means what it did, and a list a
+  caller builds empty in code reads as left out. A list whose empty form means none - such as `sync.neverTransfer`, `sync.exclude` or
   `contention.buildTools` - takes `[]` as that.
 - A key nothing reads is refused, saying so: a test section's `configs`, which `init` once wrote
   and nothing ever read - each leg builds and tests the one config its `config` names - and `exec`,
@@ -1445,11 +1445,12 @@ bills nor redirects one. Where a value is read (`AgentKeyStore.Value`, which no 
 build calls yet), who may reach the file each name came from is asked by the one rule
 the host items' files are held to (`ItemEnvironment.Unprotected`): never a file others can change,
 and never one others can read while it holds a secret - a name the configuration appoints as a key,
-not a setting such as the program a client starts. `list-agent-providers` says the same configuration without saying one key: each
-provider, client and tier, every appointed key and token present or missing and each setting a
-client reads present or absent (`AgentProviders.SettingsRead`), exit 0 whatever is missing;
-`--template` the sections as `init` writes them, answered before any repository is read - outside
-one, and where the configuration it is printed to repair does not load. The Claude Code the clients will drive is npm's own:
+not a setting such as the program a client starts. `list-agent-providers` says the same configuration without saying one
+key: each provider, client and tier, every appointed key and token present or missing and each setting a client reads
+and each web-search source's key present or absent (`AgentProviders.SettingsRead`, `AgentProviders.SourceKeys`), exit 0
+whatever is missing; `--template` the sections as `init` writes them, answered before any repository is read - outside
+one, and where the configuration it is printed to repair does not load. The Claude Code the clients will drive is npm's
+own:
 `NpmClient` finds npm (a program, or on Windows what `npm.cmd` would have started - the tool never
 starts a batch file - with npm and the node that starts it looked for on one PATH by the tool's one
 walk of a PATH), `ClaudeCodeInstall` reads the package it holds and the version its program
@@ -1590,7 +1591,9 @@ shell expands is refused where it may reach a credential slot or a Claude Code d
 (`curl`, `wget`, `Invoke-WebRequest` and `Invoke-RestMethod` with `iwr` and `irm`, `http`, `https`,
 `gh api`) is decided as a web request too, by each address it names and each host it reaches (a
 proxy, curl's `--connect-to` and `--resolve` targets, the proxy of its environment), under the
-`Web(...)` rules and `agentPolicy.webDomains`, refused where the step has no web, and refused where
+`Web(...)` rules and `agentPolicy.webDomains` - the list of the pages an agent reads and the
+results a search gives, a search source's own requests held to the `Web(...)` rules alone -
+refused where the step has no web, and refused where
 the web is held to any rule when it reads what it reaches from a file. What it does not see is said
 in help: the inside of a script file a command runs. The worktree rules
 (`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs and the merges
@@ -1673,21 +1676,51 @@ own, held to the standard's compliance suite, its `match` and `search` by `IRege
 templates read by the configuration's one brace grammar (`FlowTemplate.Pieces`); `feed` and `opensearch` read feeds
 by `FeedItems` over `WebXml`, the one reader of XML from the web; a field is markup only where its source says so
 (`JsonSearchItems`' `markup`) or its format does (RSS, an Atom text by its type), reduced by `WebPageText.OfMarkup`, and
-any other is text as it stands (`OfText`), never guessed; every status and rate limit is read by `WebRateLimit`
-(no pause longer than a day), an endpoint's answer to a query by `WebSearchStatus` over it; what a site answers is read
-to bounds of its readers' own - robots.txt's 500 KiB (`RobotsTxt.MostRead`), a sitemap's 50,000 entries
-(`SitemapDocument`), a link's 2,048 characters (`WebAddresses.MostLength`), a field's 16 KiB (`WebPageText`), an
-answer's 100 items (`WebSearchAnswer.MostResults`), an I-Regexp's 4 KiB - each rule decided in one pass; and `sitemap` is answered
-by the harness's own index of a site (`Web\Index`): `WebIndex`, BM25 over `pages.jsonl` under
-`.orchestrators/.web-index/<source>/` (`OrchestratorLayout.WebIndexDirectory`) - lines that only grow, a page that could
-not be read among them, written anew under a new generation once the lines replaced outnumber those kept - filled in
-the background by `SitemapFill` (`RobotsTxt`, `SitemapDocument`, the fetch asked by `WebFetchAsk` for markup, a page's
-parts, a gzip, or text whatever type its server says; a fill that leaves nothing a search may find stops short, and why
-one stopped short is kept until one ends whole;
+any other is text as it stands (`OfText`), never guessed; every status and rate limit is read by `WebRateLimit` (no
+pause longer than a day), an endpoint's answer to a query by `WebSearchStatus` over it; what a site answers is read to
+bounds of its readers' own - robots.txt's 500 KiB (`RobotsTxt.MostRead`), a sitemap's 50,000 entries
+(`SitemapDocument`), a link's 2,048 characters (`WebAddresses.MostLength`), a field's 16 KiB, its cut marked where it
+fell in the order its reader reads it (`WebPageText`), an answer's 100 items (`WebSearchAnswer.MostResults`), an
+I-Regexp's 4 KiB - each rule decided in one pass; and `sitemap` is answered by the harness's own index of a site
+(`Web\Index`): `WebIndex`, BM25 over `pages.jsonl` under `.orchestrators/.web-index/<source>/`
+(`OrchestratorLayout.WebIndexDirectory`) - lines that only grow, a page that could not be read among them, written anew
+under a new generation once the lines replaced outnumber those kept - filled in the background by `SitemapFill`
+(`RobotsTxt`, `SitemapDocument`, the fetch asked by `WebFetchAsk` for markup, a page's parts, a gzip, or text whatever
+type its server says; a fill that leaves nothing a search may find stops short, and why one stopped short is kept until
+one ends whole;
 every page and redirect, and every sitemap of the site robots.txt does not name, held to robots.txt; each request at the
 site's crawl delay and in the source's turn the run's gate gives) through `WebIndexes`, one fill of an index at a time
 on the machine, filled again whenever the source's settings change.
-Nothing asks a search yet: the configuration's sources and the tool that sends their requests come next.
+The configuration's sources are `agentWebSearch`, laid over the built-in ones key by key (`WebSearchSources`, the one
+owner of what the sources are, from the embedded `Templates/web-search-sources.json`, which `init` writes): each held to
+its kind's keys and every source's own where the configuration is read (V56), a reason step's `search` held to them
+where the workflow is (V55). `web_search` is a tool of the runtime (`AgentTools`), offered to a step that has a source,
+its schema naming them; it asks `HarnessWebSearch`, which owns every rule that is no kind's: the query held to the mask,
+each source in its own part (`WebSearchPart`), what its lookups found read once a run and each answered query kept in
+the run's `web/searches.jsonl` as any step may be told it - masked as below, a result whose link holds a secret left out
+and counted - with each address it was asked at and whether its key was sent (`WebSearchRun`) - a later step of the run
+given it under its own rules, each of those addresses decided again, and why a lookup found nothing never kept, nor a
+pause asked for but by what the source answered - each address a source asks for the step decided by the mask - a secret
+behind its escapes too, as `web_fetch` decides (`LineMasks.HoldsUnescaped`, and recorded and told by `RedactUnescaped`)
+- then by the policy's `WebSource` - the `Web(...)` rules, never `webDomains` - and recorded before it is asked, a
+sitemap source's site decided so before its index is searched and the pages its fill reads by the policy's `WebFill`,
+the configuration's `Web(...)` rules alone, since the index outlives the step, each result held to `Web` and left out
+and counted where refused, each request made counted against `maxPerStep`, each source's `perMinute` and `perDay` held
+machine-wide by one record beside admission's and a pause it asks for kept there (`WebSearchPace`), a key read by
+`WebSearchKeys` from the slot or `gh auth token --hostname` for the source's host - a gh login sent to that host or its
+API alone (`WebFetchKey.Hosts`) - and added by the fetch to what it sends the scheme, host and port each of the source's
+search requests first asks alone - its lookups are sent none - as a header or a query parameter, over https alone, never
+to an address a record or an answer holds - a query parameter of its name is dropped from every address, a redirect's
+that echoes it back among them, and a first address naming one refused (`WebFetchAsk.Key`) - each address it may not go
+to refused by the key's own rule (`HarnessFetch.KeyRule`) before the step's rules decide it, nothing sent, and recorded
+as theirs are - the step's mask holding each form it is sent or echoed in (`WebSearchCredential.Forms`) masking each
+answer as written before its kind reads it, its form kept - one that still holds a secret behind its escapes not read,
+so no reader's cut parts one - and each text the kind read of it as the step is told it - behind its percent-escapes and
+HTML's character references too - read as a page's reader reads them, every name HTML holds and a number with no `;` -
+at most eight readings deep (`LineMasks.RedactUnescaped`), a text its reader cut short, its cut marked, cut again before
+what could be a secret's start in any reading of it, an escape the cut left unfinished dropped (`LineMasks.RedactHead`)
+- so no half of a secret is told - and each part given in a `<web-search>` block by `WebBlocks`, the one owner of how
+text from the web reaches a model, a page's `<web-page>` among them.
 
 This build checks workflow definitions and starts and drives a run of one (see "Running a workflow" below). Each
 step is given to the runner of its type

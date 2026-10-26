@@ -33,13 +33,16 @@ public interface IWebSearchKind
     /// <param name="source">A source of this kind.</param>
     IReadOnlyList<string> Problems(WebSearchSource source);
 
-    /// <summary>What is read once a run before the source's first request - a document an address is discovered in, a description; none for most kinds.</summary>
+    /// <summary>
+    /// What is read before the source's first request - a document an address is discovered in, a description; none for
+    /// most kinds - what it finds kept for the run, and one that found nothing asked again by the next query.
+    /// </summary>
     /// <param name="source">A source of this kind, its keys held to <see cref="Problems"/>.</param>
     IReadOnlyList<WebSearchRequest.Http> Lookups(WebSearchSource source);
 
     /// <summary>What the answers to <see cref="Lookups"/> give, in their order, or why they give nothing.</summary>
     /// <param name="source">The source.</param>
-    /// <param name="answers">The lookups' answers, one each, in their order.</param>
+    /// <param name="answers">The lookups' answers, in their order: one each, or those up to the first whose status failed, which ends them.</param>
     WebSearchFound Found(WebSearchSource source, IReadOnlyList<WebSearchResponse.Http> answers);
 
     /// <summary>The request <paramref name="query"/> makes of <paramref name="source"/>, asking at most <paramref name="limit"/> results.</summary>

@@ -28,6 +28,10 @@ public static class DefaultConfigFactory
         // and an existing config is never changed.
         var agents = DssHarness.Core.Agents.AgentProviderTemplates.Read();
 
+        // The web search's built-in sources and defaults, from their one template, so they too are there to be read and
+        // changed: a repository's entry of a built-in's name changes it key by key, and a config without them has them.
+        var search = DssHarness.Core.Web.Search.WebSearchSources.BuiltIn;
+
         var config = new HarnessConfig
         {
             // The default project exists exactly when a project was detected to declare.
@@ -40,6 +44,7 @@ public static class DefaultConfigFactory
             },
             Providers = [.. agents.Providers],
             TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase),
+            AgentWebSearch = new AgentWebSearchConfig { Defaults = [.. search.Defaults ?? []], Sources = new(search.Sources ?? [], StringComparer.Ordinal) },
 
             // The implementation workflow, declared by name: its definition is the file init writes under
             // workflows/implementation/, never an entry in this file.

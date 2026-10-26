@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
 
@@ -10,7 +11,9 @@ namespace DssHarness.Core.Agents;
 /// <summary>
 /// What a step's calls leave beside its stored stream, on every client: each denial a line of <c>denials.jsonl</c> and a
 /// <see cref="PermissionDenied"/>; each request of the web a line of <c>web.jsonl</c> when it is decided, before anything
-/// leaves the machine, another when it is answered, and a <see cref="WebRequested"/>; a result too large for its event
+/// leaves the machine, another when it is answered, and a <see cref="WebRequested"/>; each web search source's part a line
+/// of it too, whether or not it sent a request, and a <see cref="WebRequested"/> - a <see cref="Notice"/> where its
+/// answer could not be read; a result too large for its event
 /// kept whole in <c>tool-results/</c>, its event carrying its first quarter and its last three quarters of
 /// <see cref="ResultCap"/>. The one owner of those records, so a denial, a page and a long result read alike whoever ran
 /// the call: Claude Code's client, or the harness's own tool runtime.
@@ -22,7 +25,7 @@ public sealed class AgentCallRecords : IDisposable
     /// <summary>Each call refused, one line each.</summary>
     public const string DenialsFileName = "denials.jsonl";
 
-    /// <summary>Each request of the web, when it is decided and when it is answered, one line each.</summary>
+    /// <summary>Each request of the web, when it is decided and when it is answered, and each web search source's part, one line each.</summary>
     public const string WebFileName = "web.jsonl";
 
     /// <summary>The folder, in the step's directory, a call's result too large for its event is kept in whole.</summary>
@@ -176,7 +179,7 @@ public sealed class AgentCallRecords : IDisposable
         ArgumentNullException.ThrowIfNull(subject);
         ArgumentNullException.ThrowIfNull(denied);
 
-        var masked = _run.Mask.Redact(subject);
+        var masked = _run.Mask.RedactUnescaped(subject);
         var reason = _run.Mask.Redact(denied.Reason);
 
         _denials.Value.Append(JsonSerializer.Serialize(new
@@ -207,7 +210,7 @@ public sealed class AgentCallRecords : IDisposable
         ArgumentNullException.ThrowIfNull(address);
         ArgumentNullException.ThrowIfNull(answer);
 
-        var masked = _run.Mask.Redact(address);
+        var masked = _run.Mask.RedactUnescaped(address);
         var denied = answer as AgentPolicyAnswer.Denied;
 
         _web.Value.Append(JsonSerializer.Serialize(new
@@ -234,31 +237,74 @@ public sealed class AgentCallRecords : IDisposable
     /// its size, or why it failed, and a <see cref="WebRequested"/>.
     /// </summary>
     /// <param name="tool">The tool that asked it.</param>
+    /// <param name="by">What made it: the harness's fetch, or a search source by its name.</param>
     /// <param name="address">The address, as it was decided.</param>
     /// <param name="status">The status the server answered; null where none was read.</param>
     /// <param name="type">The type of what came back; null where none was read.</param>
     /// <param name="bytes">How many bytes came back; null where none were read.</param>
     /// <param name="failed">Why it failed, where it did.</param>
-    public async Task WebAnsweredAsync(string tool, string address, int? status, string? type, long? bytes, string? failed)
+    public async Task WebAnsweredAsync(string tool, string by, string address, int? status, string? type, long? bytes, string? failed)
     {
         ArgumentNullException.ThrowIfNull(tool);
+        ArgumentNullException.ThrowIfNull(by);
         ArgumentNullException.ThrowIfNull(address);
 
-        var masked = _run.Mask.Redact(address);
+        var masked = _run.Mask.RedactUnescaped(address);
 
         _web.Value.Append(JsonSerializer.Serialize(new
         {
             at = _clock.GetUtcNow(),
             line = failed is null ? "answered" : "failed",
             tool,
+            by,
             address = masked,
             status,
             type,
             bytes,
-            failed = failed is null ? null : _run.Mask.Redact(failed),
+            failed = failed is null ? null : _run.Mask.RedactUnescaped(failed),
         }));
 
         await _events.EmitAsync(new WebRequested(masked, AgentToolRunner.Harness, Allowed: true, status, bytes)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Records one source's part of a search: a line of <c>web.jsonl</c> - the source, its kind and version, the query,
+    /// what it came to and how many results it gave, how many the step's rules left out, whether the run's record
+    /// answered it, and why it was asked without its key where it was - and a <see cref="WebRequested"/>, so each source
+    /// asked is an event, whether or not it sent a request; a source whose answer could not be read is a
+    /// <see cref="Notice"/> too, naming its kind's version.
+    /// </summary>
+    /// <param name="part">The part.</param>
+    public async Task WebSearchedAsync(Web.Search.WebSearchPart part)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+
+        var query = _run.Mask.Redact(part.Query);
+        var answer = part.Answer;
+
+        _web.Value.Append(JsonSerializer.Serialize(new
+        {
+            at = _clock.GetUtcNow(),
+            line = "searched",
+            tool = Runtime.AgentTools.WebSearch,
+            by = part.Source,
+            kind = part.Kind,
+            version = part.Version,
+            query,
+            outcome = answer.Outcome.ToString(),
+            results = answer.Results.Count,
+            withheld = part.Withheld,
+            cached = part.Cached,
+            keyMissing = part.KeyMissing is null ? null : _run.Mask.Redact(part.KeyMissing),
+            why = answer.Why is null ? null : _run.Mask.Redact(answer.Why),
+        }));
+
+        await _events.EmitAsync(new WebRequested(query, AgentToolRunner.Harness, Allowed: answer.Outcome != Web.Search.WebSearchOutcome.Refused)).ConfigureAwait(false);
+
+        if (answer.Outcome == Web.Search.WebSearchOutcome.Changed)
+        {
+            await _events.EmitAsync(new Notice(_run.Mask.Redact($"web-search source '{part.Source}' answered what its kind '{part.Kind}' (version {part.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)}) could not read: {answer.Why}"))).ConfigureAwait(false);
+        }
     }
 
     /// <summary>Closes the records; each ends at its last whole line.</summary>

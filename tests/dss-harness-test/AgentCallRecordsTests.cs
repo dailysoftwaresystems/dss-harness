@@ -120,20 +120,85 @@ public sealed class AgentCallRecordsTests : IDisposable
         using (records)
         {
             await records.WebDecidedAsync("web_fetch", "fetch", "https://example.com/", AgentPolicyAnswer.Allow);
-            await records.WebAnsweredAsync("web_fetch", "https://example.com/", 200, "text/html", 1234, failed: null);
+            await records.WebAnsweredAsync("web_fetch", "fetch", "https://example.com/", 200, "text/html", 1234, failed: null);
             await records.WebDecidedAsync("web_fetch", "fetch", "https://pastebin.com/", new AgentPolicyAnswer.Denied("Web(pastebin.com)", AgentPolicySource.Config, "refused"));
         }
 
         var lines = File.ReadAllLines(Path.Combine(run.StepDirectory, AgentCallRecords.WebFileName)).Select(line => JsonNode.Parse(line)!).ToList();
         Assert.Equal(["decided", "answered", "decided"], lines.Select(line => line["line"]!.GetValue<string>()));
         Assert.True(lines[0]["allowed"]!.GetValue<bool>());
-        Assert.Equal(200, lines[1]["status"]!.GetValue<int>());
+        Assert.Equal((200, "fetch"), (lines[1]["status"]!.GetValue<int>(), lines[1]["by"]!.GetValue<string>()));
         Assert.False(lines[2]["allowed"]!.GetValue<bool>());
         Assert.Equal("Web(pastebin.com)", lines[2]["rule"]!.GetValue<string>());
 
         Assert.Equal(
             [new WebRequested("https://example.com/", AgentToolRunner.Harness, true, 200, 1234), new WebRequested("https://pastebin.com/", AgentToolRunner.Harness, false)],
             events.All.Cast<WebRequested>().Select(@event => @event with { At = default, Seq = 0 }));
+    }
+
+    /// <summary>
+    /// An address that holds a secret behind its escapes - carried in another address's parameter, escaped once more - is
+    /// recorded masked at the reading that undoes them, decided, answered or refused; one that holds none as it was asked.
+    /// </summary>
+    [Fact]
+    public async Task AnAddressHoldingASecretBehindItsEscapes_IsRecordedMasked()
+    {
+        const string Secret = "s3/cr+et";
+        var carried = "https://sso.example.test/login?return_to=" + Uri.EscapeDataString("https://api.example.test/?key=" + Uri.EscapeDataString(Secret));
+        const string Masked = "https://sso.example.test/login?return_to=https://api.example.test/?key=***";
+        var records = Records(out var events, out var run, new Masking(Secret, "***"));
+
+        using (records)
+        {
+            await records.WebDecidedAsync("web_search", "beta", carried, Core.Agents.Runtime.AgentToolRuntime.SecretAddress);
+            await records.WebAnsweredAsync("web_search", "beta", carried, 302, null, null, failed: null);
+            await records.WebAnsweredAsync("web_search", "beta", "https://api.example.test/", 302, null, null, failed: $"a redirect (302) to '{carried}', which reads as no address");
+            await records.DeniedAsync("web_search", carried, Core.Agents.Runtime.AgentToolRuntime.SecretAddress);
+            await records.WebDecidedAsync("web_search", "beta", "https://api.example.test/?q=a%2Fb", AgentPolicyAnswer.Allow);
+        }
+
+        var lines = File.ReadAllLines(Path.Combine(run.StepDirectory, AgentCallRecords.WebFileName)).Select(line => JsonNode.Parse(line)!).ToList();
+        var denial = JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(run.StepDirectory, AgentCallRecords.DenialsFileName))))!;
+
+        Assert.Equal([Masked, Masked, "https://api.example.test/", "https://api.example.test/?q=a%2Fb"], lines.Select(line => line["address"]!.GetValue<string>()));
+        Assert.Equal($"a redirect (302) to '{Masked}', which reads as no address", lines[2]["failed"]!.GetValue<string>());
+        Assert.Equal(Masked, denial["subject"]!.GetValue<string>());
+        Assert.Equal([Masked, Masked, "https://api.example.test/"], events.All.OfType<WebRequested>().Select(requested => requested.QueryOrAddress));
+    }
+
+    /// <summary>
+    /// A source's part of a search is a line of its own - its kind, outcome, results and why, the query and every word
+    /// masked - and an event; an answer the kind could not read is a notice too, naming the source and the kind's version.
+    /// </summary>
+    [Fact]
+    public async Task ASourcesPart_IsALineAndAnEvent_AChangeANotice()
+    {
+        var records = Records(out var events, out var run, new Masking("s3cret"));
+        var found = DssHarness.Core.Web.Search.WebSearchAnswer.Read([new("T", "https://t.example.test/", string.Empty)]);
+
+        using (records)
+        {
+            await records.WebSearchedAsync(new("alpha", "json-api", 1, "group by", found, Withheld: 2, Cached: true, KeyMissing: "ALPHA_KEY s3cret is not in the slot"));
+            await records.WebSearchedAsync(new("beta", "feed", 1, "q s3cret", DssHarness.Core.Web.Search.WebSearchAnswer.Changed("its answer is no feed: s3cret"), 0, false, null));
+            await records.WebSearchedAsync(new("gamma", "feed", 1, "q", DssHarness.Core.Web.Search.WebSearchAnswer.Refused("past the step's bound"), 0, false, null));
+        }
+
+        var text = File.ReadAllText(Path.Combine(run.StepDirectory, AgentCallRecords.WebFileName));
+        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => JsonNode.Parse(line)!).ToList();
+
+        Assert.DoesNotContain("s3cret", text, StringComparison.Ordinal);
+        Assert.All(lines, line => Assert.Equal(("searched", "web_search"), (line["line"]!.GetValue<string>(), line["tool"]!.GetValue<string>())));
+        Assert.Equal(["alpha", "beta", "gamma"], lines.Select(line => line["by"]!.GetValue<string>()));
+        Assert.Equal(("json-api", 1, "group by", "Ok", 1, 2, true), (lines[0]["kind"]!.GetValue<string>(), lines[0]["version"]!.GetValue<int>(), lines[0]["query"]!.GetValue<string>(), lines[0]["outcome"]!.GetValue<string>(), lines[0]["results"]!.GetValue<int>(), lines[0]["withheld"]!.GetValue<int>(), lines[0]["cached"]!.GetValue<bool>()));
+        Assert.Equal("ALPHA_KEY *** is not in the slot", lines[0]["keyMissing"]!.GetValue<string>());
+        Assert.Equal(("Changed", "its answer is no feed: ***"), (lines[1]["outcome"]!.GetValue<string>(), lines[1]["why"]!.GetValue<string>()));
+
+        Assert.Equal(
+            [new WebRequested("group by", AgentToolRunner.Harness, true), new WebRequested("q ***", AgentToolRunner.Harness, true), new WebRequested("q", AgentToolRunner.Harness, false)],
+            events.All.OfType<WebRequested>().Select(@event => @event with { At = default, Seq = 0 }));
+        Assert.Equal(
+            "web-search source 'beta' answered what its kind 'feed' (version 1) could not read: its answer is no feed: ***",
+            Assert.Single(events.All.OfType<Notice>()).Text);
     }
 
     /// <summary>Lines cut begin with the first, an empty one among them: a command that printed a blank line first printed it.</summary>

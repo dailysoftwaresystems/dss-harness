@@ -3267,6 +3267,36 @@ public sealed class ConfigStoreTests
         Assert.Equal("\U0001F600", config.PredefinedRunners["bench"].Description);
     }
 
+    /// <summary>
+    /// A web search that cannot be used is refused as the file is read, each problem naming its source and key (V56), and a
+    /// key no part of agentWebSearch takes is refused by name.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "agentWebSearch": { "sources": { "gov": { "kind": "feed" } } } }""", "agentWebSearch.sources.gov (feed): 'url' is missing: a source of kind 'feed' gives it - the address asked: a template whose {query} is the query, and {limit} the most results asked where the search takes one")]
+    [InlineData("""{ "agentWebSearch": { "sources": { "stackoverflow": { "perDay": -1 } } } }""", "agentWebSearch.sources.stackoverflow (json-api): 'perDay' is a whole number from 1 to 1,000,000, and is -1")]
+    [InlineData("""{ "agentWebSearch": { "defaults": ["nowhere"] } }""", "agentWebSearch.defaults names 'nowhere', which is no source or tag of agentWebSearch; sources: stackoverflow, github-repos, github-issues, nuget, npm, pub-dev, learn, mdn, wikipedia, hackernews, readthedocs; tags: qa, code, packages, dotnet, js, dart, docs, docs-web, reference, blogs, docs-rtd")]
+    [InlineData("""{ "agentWebSearch": { "maxPerStep": 0 } }""", "agentWebSearch.maxPerStep is 0; it is the most requests of sources one step makes, from 1 to 1,000")]
+    [InlineData("""{ "agentWebSearch": { "engines": {} } }""", "The JSON property 'engines' could not be mapped to any .NET member contained in type 'DssHarness.Core.Configuration.AgentWebSearchConfig'. (line 1)")]
+    public void AWebSearchThatCannotBeUsed_IsRefusedAsTheFile(string json, string expected)
+        => Assert.EndsWith($"config.json' could not be read: {expected}", LoadInvalid(json).Message, StringComparison.Ordinal);
+
+    /// <summary>A web search that holds is read as written: a built-in changed, a source added, the bounds kept.</summary>
+    [Fact]
+    public void AWebSearchThatHolds_IsRead()
+    {
+        var config = LoadValid("""
+            { "agentWebSearch": {
+                "sources": { "npm": { "enabled": false }, "gov": { "kind": "feed", "url": "https://gov.example.test/feed?q={query}" } },
+                "defaults": ["gov", "qa"], "maxPerStep": 12, "resultsPerSource": 3 } }
+            """);
+        var search = DssHarness.Core.Web.Search.WebSearchSources.Of(config, DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild);
+
+        Assert.Empty(search.Problems);
+        Assert.Equal((12, 3), (search.MaxPerStep, search.ResultsPerSource));
+        Assert.Equal(["gov", "stackoverflow"], search.Chosen(null).Select(source => source.Name));
+        Assert.False(search.Find("npm")!.Enabled);
+    }
+
     private static ConfigException LoadInvalid(string json)
     {
         using var temp = new TempDirectory();

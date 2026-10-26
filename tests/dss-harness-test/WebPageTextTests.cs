@@ -1,3 +1,4 @@
+using DssHarness.Core.Output;
 using DssHarness.Core.Web;
 
 namespace DssHarness.Tests;
@@ -105,7 +106,7 @@ public sealed class WebPageTextTests
         Assert.Equal("First\nBody\nThird one\nOuter\ninner\nGetting\nStarted\nA B", parts.Text);
     }
 
-    /// <summary>A field is read no further than its most: markup nested deep past it is never read.</summary>
+    /// <summary>A field is read no further than its most, its cut marked: markup nested deep past it is never read.</summary>
     [Fact]
     public void AField_IsReadNoFurtherThanItsMost()
     {
@@ -113,8 +114,28 @@ public sealed class WebPageTextTests
 
         Assert.True(WebPageText.OfMarkup(string.Concat(Enumerable.Repeat("<div>", 200_000)) + "x").Length <= WebPageText.MostFieldRead);
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"took {watch.Elapsed}");
-        Assert.Equal(WebPageText.MostFieldRead, WebPageText.OfMarkup(new string('x', WebPageText.MostFieldRead + 100)).Length);
-        Assert.Equal(WebPageText.MostFieldRead, WebPageText.OfText(new string('x', WebPageText.MostFieldRead + 100)).Length);
+        Assert.Equal(new string('x', WebPageText.MostFieldRead - 1) + TextCut.Ellipsis, WebPageText.OfMarkup(new string('x', WebPageText.MostFieldRead + 100)));
+        Assert.Equal(new string('x', WebPageText.MostFieldRead - 1) + TextCut.Ellipsis, WebPageText.OfText(new string('x', WebPageText.MostFieldRead + 100)));
+        Assert.Equal("a b" + TextCut.Ellipsis, WebPageText.OfMarkup("<p>a</p><p>b</p>" + new string(' ', WebPageText.MostFieldRead)));
+        Assert.Equal(new string('x', WebPageText.MostFieldRead), WebPageText.OfText(new string('x', WebPageText.MostFieldRead)));
+        Assert.Equal(string.Empty, WebPageText.OfMarkup("<p>" + new string(' ', WebPageText.MostFieldRead)));
+
+        // Cut before a reference the cut would part, which a page's reader would make another character of.
+        var parted = "<p>" + new string(' ', WebPageText.MostFieldRead - 1 - "<p>key abc&#x2".Length) + "key abc&#x2B;def</p>";
+        Assert.Equal("key abc" + TextCut.Ellipsis, WebPageText.OfMarkup(parted));
+        var words = "<p>" + new string(' ', WebPageText.MostFieldRead - 1 - "<p>Tom & Je".Length) + "Tom & Jerry</p>";
+        Assert.Equal("Tom & Je" + TextCut.Ellipsis, WebPageText.OfMarkup(words));
+        var tagged = "<p>" + new string(' ', WebPageText.MostFieldRead - 1 - "<p>key abc<".Length) + "key abc<wbr>def</p>";
+        Assert.Equal("key abc" + TextCut.Ellipsis, WebPageText.OfMarkup(tagged));
+
+        // Read to where the cut fell, in the order a page's reader reads it: a table's stray text before the table.
+        const string Table = "<table><tr><td>zz</td></tr><span hidden>";
+        const string Stray = "</span>ab<b>+c";
+        var stray = Table + new string('y', WebPageText.MostFieldRead - 1 - Table.Length - Stray.Length) + Stray + "d</b></table>";
+        Assert.Equal("ab+c" + TextCut.Ellipsis, WebPageText.OfMarkup(stray));
+
+        // A cut that fell where no text is read reads nothing of the field.
+        Assert.Equal(string.Empty, WebPageText.OfMarkup("<p>words</p><script>" + new string('x', WebPageText.MostFieldRead) + "</script>"));
     }
 
     /// <summary>A page's headings are read in the one walk of it, each node once, however deep its markup nests them.</summary>

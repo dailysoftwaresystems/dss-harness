@@ -9,7 +9,17 @@ namespace DssHarness.Tests;
 /// <param name="UserAgent">The User-Agent it named.</param>
 /// <param name="Cookie">Whether it carried a cookie.</param>
 /// <param name="Authorization">Whether it carried a credential.</param>
-internal sealed record WebSent(Uri Address, string UserAgent, bool Cookie, bool Authorization);
+internal sealed record WebSent(Uri Address, string UserAgent, bool Cookie, bool Authorization)
+{
+    /// <summary>Its method.</summary>
+    public string Method { get; init; } = "GET";
+
+    /// <summary>Its headers and its content's, by name in any case, each one's values joined.</summary>
+    public IReadOnlyDictionary<string, string> Headers { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Its body; <see langword="null"/> where it sent none.</summary>
+    public string? Body { get; init; }
+}
 
 /// <summary>An endpoint a test answers in place of the network, which keeps what each request carried.</summary>
 /// <param name="answer">What each request is answered.</param>
@@ -46,7 +56,13 @@ internal sealed class WebEndpoint(Func<HttpRequestMessage, HttpResponseMessage> 
                 request.RequestUri!,
                 request.Headers.UserAgent.ToString(),
                 request.Headers.Contains("Cookie"),
-                request.Headers.Authorization is not null));
+                request.Headers.Authorization is not null)
+            {
+                Method = request.Method.Method,
+                Headers = request.Headers.Concat(request.Content?.Headers ?? Enumerable.Empty<KeyValuePair<string, IEnumerable<string>>>())
+                    .ToDictionary(header => header.Key, header => string.Join(", ", header.Value), StringComparer.OrdinalIgnoreCase),
+                Body = request.Content?.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult(),
+            });
         }
 
         var response = answer(request);

@@ -66,7 +66,7 @@ public sealed class WebSearchKindsTests
     [InlineData("""{ "kind": 3 }""", "'kind' is the name of a kind, one of feed, json-api, opensearch, sitemap")]
     [InlineData("""{ "kind": "duckduckgo" }""", "'kind' is 'duckduckgo', which is no kind; the kinds are feed, json-api, opensearch, sitemap")]
     [InlineData("""{ "kind": "json-api", "url": "https://a.test/?q={query}", "items": "$.i", "title": "{@.t}" }""", "'link' is missing: a source of kind 'json-api' gives it")]
-    [InlineData("""{ "kind": "sitemap", "site": "https://a.test", "sitemaps": [] }""", "'sitemaps' is no key a source of kind 'sitemap' takes; it takes kind, tags, description, enabled, perMinute, perDay, credential, site, sitemap, include, exclude, maxPages, refreshDays")]
+    [InlineData("""{ "kind": "sitemap", "site": "https://a.test", "sitemaps": [] }""", "'sitemaps' is no key a source of kind 'sitemap' takes; it takes kind, tags, description, terms, enabled, perMinute, perDay, credential, site, sitemap, include, exclude, maxPages, refreshDays")]
     public void ASource_IsHeldToItsKind(string keys, string problem)
         => Assert.Contains(WebSearchKinds.OfThisBuild.Problems(Source("s", keys)), said => said.StartsWith(problem, StringComparison.Ordinal));
 
@@ -103,9 +103,12 @@ public sealed class WebSearchKindsTests
     [InlineData("""{ "credential": { "from": "env", "name": "KEY", "query": "a&b" } }""", "'credential.query' is a query parameter's name")]
     [InlineData("""{ "credential": { "from": "env", "name": "KEY", "header": "X Key" } }""", "'credential.header' is a header's name, and is 'X Key'")]
     [InlineData("""{ "credential": { "from": "env", "name": "KEY", "header": "User-Agent" } }""", "'credential.header' is User-Agent, which the request itself says")]
+    [InlineData("""{ "credential": { "from": "env", "name": "KEY", "header": "Allow" } }""", "'credential.header' is 'Allow', which a body says of itself and no request carries")]
     [InlineData("""{ "credential": { "from": "env", "name": "KEY", "header": "X-Key", "format": "Token {key}" } }""", "'credential.format' writes what is sent, naming {credential} for the key and no other name, and is 'Token {key}'")]
     [InlineData("""{ "credential": { "from": "env", "name": "KEY", "header": "X-Key", "format": "fixed" } }""", "'credential.format' writes what is sent")]
-    [InlineData("""{ "credential": { "from": "gh", "name": "KEY" } }""", "'credential' takes from, query, header, format from gh, and not 'name'")]
+    [InlineData("""{ "credential": { "from": "gh", "name": "KEY" } }""", "'credential' takes from, host, query, header, format from gh, and not 'name'")]
+    [InlineData("""{ "credential": { "from": "gh", "host": "https://github.com" } }""", "'credential.host' is the host the machine's gh login is for, as github.com, and is 'https://github.com'")]
+    [InlineData("""{ "credential": { "from": "env", "name": "KEY", "query": "key", "host": "github.com" } }""", "'credential' takes from, name, query, header, format from env, and not 'host'")]
     [InlineData("""{ "credential": { "from": "env", "name": 5, "query": "key" } }""", "'credential.name' is a text, and is 5")]
     public void ASourcesOwnKeys_AreHeld(string overrides, string problem)
     {
@@ -151,8 +154,12 @@ public sealed class WebSearchKindsTests
 
         Assert.Equal(new WebSearchCredential("env", "KEY", "key", null, "{credential}"), Of("""{ "from": "env", "name": "KEY", "query": "key" }"""));
         Assert.Equal(new WebSearchCredential("env", "KEY", null, "X-Key", "Token {credential}"), Of("""{ "from": "env", "name": "KEY", "header": "X-Key", "format": "Token {credential}" }"""));
-        Assert.Equal(new WebSearchCredential("gh", null, null, "Authorization", "Bearer {credential}"), Of("""{ "from": "gh" }"""));
-        Assert.Equal(new WebSearchCredential("gh", null, "access_token", null, "{credential}"), Of("""{ "from": "gh", "query": "access_token" }"""));
+        Assert.Equal(new WebSearchCredential("gh", null, null, "Authorization", "Bearer {credential}", "github.com"), Of("""{ "from": "gh" }"""));
+        Assert.Equal(new WebSearchCredential("gh", null, "access_token", null, "{credential}", "ghe.example.test"), Of("""{ "from": "gh", "query": "access_token", "host": "GHE.example.test" }"""));
+
+        // A gh login is sent to its host or that host's API alone; a slot's key to whatever its source first asks.
+        Assert.Equal(["github.com", "api.github.com"], Of("""{ "from": "gh" }""").Fetched("t").Hosts);
+        Assert.Null(Of("""{ "from": "env", "name": "KEY", "query": "key" }""").Fetched("t").Hosts);
     }
 
     /// <summary>A sitemap source's keys are held: a site's scheme and host alone, an address for its sitemap, patterns, bounds.</summary>

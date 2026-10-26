@@ -227,6 +227,13 @@ public sealed class HarnessConfig
     /// </summary>
     public AgentPolicyConfig? AgentPolicy { get; init; }
 
+    /// <summary>
+    /// The harness's own web search: the sources an agent's <c>web_search</c> asks, laid over the built-in ones key by
+    /// key, what a step that names none searches, and its bounds. Left out, the built-in sources hold; <c>init</c> writes
+    /// them, so that they are there to be read and changed.
+    /// </summary>
+    public AgentWebSearchConfig? AgentWebSearch { get; init; }
+
     private static Dictionary<string, TValue> Map<TValue>() => new(StringComparer.OrdinalIgnoreCase);
 }
 

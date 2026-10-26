@@ -4718,4 +4718,62 @@ public sealed class WorkflowValidatorTests
                     dependsOn: [look]
                 """));
     }
+
+    /// <summary>
+    /// V55: a reason step's search names sources or tags of agentWebSearch, each once, none of them turned off; a step that
+    /// goes on with another's work names none of its own; and where the caller gives no configuration, a name given twice
+    /// alone is refused.
+    /// </summary>
+    [Fact]
+    public void AStepsSearch_NamesSourcesOrTagsTheConfigurationHolds_EachOnce()
+    {
+        var search = WebSearchSourcesTests.Of("""{ "sources": { "mdn": { "enabled": false }, "learn": { "enabled": false } } }""");
+
+        IReadOnlyList<string> Checked(string list, bool configured = true)
+            => WorkflowValidator.Validate(Parse($$"""
+                name: default
+                steps:
+                  - name: research
+                    type: reason
+                    agent: thinker
+                    search: {{list}}
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, search: configured ? search : null);
+
+        Assert.Empty(Checked("[qa, packages, nuget, reference]"));
+        Assert.Equal(
+            [
+                "the search of step 'research' names 'qa' more than once",
+                $"step 'research' searches 'nowhere', which is no source or tag of agentWebSearch; sources: {string.Join(", ", search.All.Select(source => source.Name))}; tags: {string.Join(", ", search.Tags)}",
+                "step 'research' searches 'mdn', which is turned off (enabled: false); turn it on, or name another",
+                "step 'research' searches 'docs-web', a tag none of whose sources is on: mdn",
+            ],
+            Checked("[qa, nowhere, mdn, docs-web, qa]"));
+
+        // Under no configuration, the names are not checked, and a name given twice is refused.
+        Assert.Empty(Checked("[nowhere, mdn]", configured: false));
+        Assert.Equal(["the search of step 'research' names 'x' more than once"], Checked("[x, x]", configured: false));
+
+        // A step that goes on with another's work asks that step's sources.
+        Assert.Equal(
+            ["step 'again' resumes 'research' and says search; a step that goes on with another's work asks the sources that step's search names, and names none of its own"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: research
+                    type: reason
+                    agent: thinker
+                    search: [qa]
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: again
+                    type: reason
+                    resume: research
+                    search: [qa]
+                    dependsOn: [research]
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, search: search));
+    }
 }

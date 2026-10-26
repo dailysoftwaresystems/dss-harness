@@ -93,6 +93,7 @@ public static class AgentProviderReports
                 [],
                 [],
                 [],
+                [],
                 [])));
 
     private static string Summary(AgentProviderList list)
@@ -155,6 +156,11 @@ public static class AgentProviderReports
         foreach (var client in list.Settings.GroupBy(setting => setting.Client))
         {
             lines.Add($"client '{client.Key}' reads its settings where the slot holds them, none needed: {string.Join(", ", client.Select(setting => $"{setting.Name} ({setting.Key}), {(setting.Held ? "present" : "absent")}"))}");
+        }
+
+        foreach (var source in list.Sources)
+        {
+            lines.Add($"web-search source '{source.Source}' is sent its key where the slot holds it, none needed: {source.Name}, {(source.Held ? "present" : "absent")}");
         }
 
         if (list.Unappointed.Count > 0)
@@ -290,6 +296,7 @@ public static class AgentProviderReports
             ["tiers"] = tiers,
             ["clients"] = clients,
             ["settings"] = new JsonArray([.. list.Settings.Select(setting => new JsonObject { ["client"] = setting.Client, ["key"] = setting.Key, ["name"] = setting.Name, ["held"] = setting.Held })]),
+            ["sources"] = new JsonArray([.. list.Sources.Select(source => new JsonObject { ["source"] = source.Source, ["name"] = source.Name, ["held"] = source.Held })]),
             ["unappointed"] = new JsonArray([.. list.Unappointed.Select(name => (JsonNode?)name)]),
         };
     }

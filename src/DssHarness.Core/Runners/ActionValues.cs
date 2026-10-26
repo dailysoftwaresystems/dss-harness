@@ -123,23 +123,31 @@ public sealed class ActionValues : ILineMask
     /// <remarks>
     /// A step that prints a line longer than a line is kept whole in - megabytes of a document on one line - has it kept in
     /// pieces, each masked alone, and a secret cut in two would reach the log, and the terminal of whoever watches with
-    /// --verbose, as two halves neither of which is the secret. So the cut is made before the last characters of
-    /// <paramref name="text"/> that could still be the start of a secret - as many as the longest secret, less one - and
-    /// then moved back to the start of every secret <paramref name="text"/> holds that would still span it, until none does.
-    /// Zero only where a secret is as long as the text itself, or secrets overlap all the way back to its start: a line is
-    /// then cut where it must be, and only a secret that long can be parted.
+    /// --verbose, as two halves neither of which is the secret. So the cut is made before the longest end of
+    /// <paramref name="text"/> that is the start of a secret - what is still to come could finish it - and then moved back
+    /// to the start of every secret <paramref name="text"/> holds that would still span it, until none does: no more is
+    /// held back than could be a secret's, so a long secret never costs a text that holds none of it. Zero only where the
+    /// whole text could be the start of a secret, or secrets overlap all the way back to its start: a line is then cut
+    /// where it must be, and only a secret that long can be parted.
     /// </remarks>
     public int Cut(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        if (_secretTexts.Count == 0)
-        {
-            return text.Length;
-        }
+        var cut = text.Length;
 
-        // Longest first, as the secrets are ordered for masking.
-        var cut = text.Length - (_secretTexts[0].Length - 1);
+        foreach (var secret in _secretTexts)
+        {
+            // Its longest start the text ends with: where a secret could begin that the rest of the line finishes.
+            for (var start = Math.Min(secret.Length - 1, text.Length); start > 0; start--)
+            {
+                if (text.AsSpan().EndsWith(secret.AsSpan(0, start), StringComparison.Ordinal))
+                {
+                    cut = Math.Min(cut, text.Length - start);
+                    break;
+                }
+            }
+        }
 
         for (var moved = true; moved && cut > 0;)
         {

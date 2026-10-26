@@ -166,6 +166,46 @@ public sealed class WorkflowValidationServiceTests
     }
 
     /// <summary>
+    /// A reason step's search is checked against the configuration's web search: a source the repository turned off is
+    /// refused by name, through the service as through the validator (V55).
+    /// </summary>
+    [Fact]
+    public async Task AStepsSearch_IsCheckedAgainstTheConfigurationsSources()
+    {
+        var config = new HarnessConfig
+        {
+            Workflows = ["small"],
+            AgentWebSearch = System.Text.Json.JsonSerializer.Deserialize<AgentWebSearchConfig>("""{ "sources": { "npm": { "enabled": false } } }""", JsonConfigOptions.Default),
+        };
+        using var repository = await RepositoryAsync(config);
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: think
+                type: reason
+                agent: worker
+                model: claude-sonnet-5-5
+                search: [qa, npm]
+                prompt: prompts/work.md
+                outputs: schemas/work.json
+            """,
+            cancellationToken,
+            "agents/worker.md",
+            "prompts/work.md",
+            "schemas/work.json");
+
+        var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
+
+        Assert.False(report.Passed);
+        Assert.Contains($"{Shown("small")}: step 'think' searches 'npm', which is turned off (enabled: false); turn it on, or name another", report.Lines);
+    }
+
+    /// <summary>
     /// Every key of a provider the slot does not hold is named, the ones beside a key it holds among them - each name
     /// by the one builder of the missing-key sentence, ending with the names the slot holds that nothing appoints.
     /// </summary>
@@ -1417,6 +1457,7 @@ public sealed class WorkflowValidationServiceTests
             TestTimingRegex = given.TestTimingRegex,
             LineEndings = given.LineEndings,
             Ci = given.Ci,
+            AgentWebSearch = given.AgentWebSearch,
             Providers = given.Providers.Count == 0 ? [.. agents.Providers] : given.Providers,
             TierConfig = given.TierConfig.Count == 0 ? new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase) : given.TierConfig,
         };

@@ -32,7 +32,7 @@ public sealed class StoppedDocumentTests
     {
         ["list-worktree"] = ["exitCode", "summary", "worktrees", "elsewhere", "gone"],
         ["list-orchestrator"] = ["exitCode", "summary", "orchestrators"],
-        ["list-agent-providers"] = ["exitCode", "summary", "slot", "files", "providers", "balanceKeyUsage", "tiers", "clients", "settings", "unappointed"],
+        ["list-agent-providers"] = ["exitCode", "summary", "slot", "files", "providers", "balanceKeyUsage", "tiers", "clients", "settings", "sources", "unappointed"],
         ["run-orchestrator"] = FlowDocument,
         ["resume-orchestrator"] = FlowDocument,
         ["answer-orchestrator"] = FlowDocument,

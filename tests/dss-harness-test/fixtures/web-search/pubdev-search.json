@@ -1,0 +1,7 @@
+{
+  "packages": [
+    { "package": "http_example" },
+    { "package": "http_example_retry" }
+  ],
+  "next": "https://pub.dev/api/search?q=http&page=2"
+}

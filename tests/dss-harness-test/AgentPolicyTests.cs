@@ -1831,6 +1831,44 @@ public sealed class AgentPolicyTests
         Assert.Equal("the reporter's reads", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Read(Path.Combine(ground.Main, "README.md"))).Rule);
     }
 
+    /// <summary>
+    /// An address a search's source asks is held to the step's web and its Web(...) rules, and never to webDomains - the
+    /// source is the configuration's, asked by the harness - while a result it gives is, as any page the agent reads.
+    /// </summary>
+    [Fact]
+    public void ASourcesAddress_IsHeldToTheWebRules_AndNeverToWebDomains()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy([new("Web(pastebin.com)", AgentPolicySource.Config)], webDomains: ["docs.example.org"]);
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.WebSource("https://api.stackexchange.com/2.3/search/excerpts?q=x"));
+        Assert.Equal("agentPolicy.webDomains", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Web("https://api.stackexchange.com/2.3/search/excerpts?q=x")).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Web("https://docs.example.org/page"));
+        Assert.Equal("Web(pastebin.com)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.WebSource("https://www.pastebin.com/raw/1")).Rule);
+        Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.WebSource("http:/\\pastebin.com/raw/1")).Rule);
+        Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.WebSource(" ")).Rule);
+        Assert.IsType<AgentPolicyAnswer.Denied>(ground.Policy(web: false).WebSource("https://api.stackexchange.com/"));
+    }
+
+    /// <summary>
+    /// A page an index's fill reads is held to the step's web and the configuration's Web(...) rules - the run's - and never
+    /// to an agent's own list nor webDomains: the index is the repository's, and outlives the step that began its fill.
+    /// </summary>
+    [Fact]
+    public void AnIndexsPage_IsHeldToTheRunsWebRules_AndNoAgentsOwn()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy(
+            [new("Web(pastebin.com)", AgentPolicySource.Config), new("Web(developer.mozilla.org)", AgentPolicySource.Agent)],
+            webDomains: ["docs.example.org"]);
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.WebFill("https://developer.mozilla.org/en-US/docs/Web"));
+        Assert.Equal("Web(developer.mozilla.org)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.WebSource("https://developer.mozilla.org/")).Rule);
+        Assert.Equal("Web(pastebin.com)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.WebFill("https://www.pastebin.com/raw/1")).Rule);
+        Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.WebFill("http:/\\pastebin.com/raw/1")).Rule);
+        Assert.Equal("the web capability", Assert.IsType<AgentPolicyAnswer.Denied>(ground.Policy(web: false).WebFill("https://developer.mozilla.org/")).Rule);
+    }
+
     [Fact]
     public void WebRulesRefuseADomainAndEveryNameUnderIt()
     {

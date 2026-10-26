@@ -12,6 +12,7 @@ namespace DssHarness.Core.Agents;
 /// <param name="Tiers">Each tier the configuration defines, with its models in the order they are tried.</param>
 /// <param name="Clients">Each client a provider names, with how it signs in and the names it appoints.</param>
 /// <param name="Settings">Each setting a client reads from the slot, by the name it is read under, with whether the slot holds it.</param>
+/// <param name="Sources">Each web-search source that is sent a variable of the slot as its key, with whether the slot holds it: none is needed.</param>
 /// <param name="Unappointed">The names the slot holds that nothing appoints, in the order their files are read.</param>
 public sealed record AgentProviderList(
     string Slot,
@@ -21,7 +22,14 @@ public sealed record AgentProviderList(
     IReadOnlyList<AgentTierListing> Tiers,
     IReadOnlyList<AgentClientListing> Clients,
     IReadOnlyList<AgentSettingListing> Settings,
+    IReadOnlyList<AgentSourceKeyListing> Sources,
     IReadOnlyList<string> Unappointed);
+
+/// <summary>One web-search source's key as the listing holds it: by name alone, and one the slot need not hold.</summary>
+/// <param name="Source">The source.</param>
+/// <param name="Name">The variable it is sent.</param>
+/// <param name="Held">Whether the slot declares it, holding something.</param>
+public sealed record AgentSourceKeyListing(string Source, string Name, bool Held);
 
 /// <summary>One setting a client reads from the slot, as the listing holds it: no key, and one the slot need not hold.</summary>
 /// <param name="Client">The client that reads it.</param>

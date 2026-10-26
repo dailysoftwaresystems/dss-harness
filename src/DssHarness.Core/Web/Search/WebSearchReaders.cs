@@ -143,7 +143,7 @@ public sealed record JsonSearchItems(JsonPath Items, WebItemTemplate Title, IRea
 
         try
         {
-            document = JsonDocument.Parse(response.Body);
+            document = AnswerOf(response.Body);
         }
         catch (JsonException ex)
         {
@@ -201,6 +201,21 @@ public sealed record JsonSearchItems(JsonPath Items, WebItemTemplate Title, IRea
     /// <summary>How many results <paramref name="total"/> says the source holds: a whole number at it; <see langword="null"/> where it finds none.</summary>
     private static long? Count(JsonPath? total, JsonElement root)
         => total?.Select(root) is [{ ValueKind: JsonValueKind.Number } number] && number.TryGetInt64(out var count) && count >= 0 ? count : null;
+
+    /// <summary>
+    /// A source's JSON <paramref name="body"/>, read whole: one that spells half a character (<see cref="Json.JsonHalfCharacter"/>)
+    /// is no JSON a reader can use, refused here, before any of its texts is read.
+    /// </summary>
+    /// <exception cref="JsonException">It is no JSON, or one of its texts spells half a character.</exception>
+    internal static JsonDocument AnswerOf(string body)
+    {
+        if (Json.JsonHalfCharacter.Find(body) is var (line, spelt))
+        {
+            throw new JsonException($"line {line}: '{Output.TextCut.Head(spelt, 80)}' spells half a character, an escape of a lone surrogate that no text can hold");
+        }
+
+        return JsonDocument.Parse(body);
+    }
 
     /// <summary>When a body's <paramref name="backoff"/> - a number of seconds - lets the source be asked again; <see langword="null"/> where it asks no pause.</summary>
     internal static DateTimeOffset? Backoff(JsonPath? backoff, JsonElement root, DateTimeOffset at)

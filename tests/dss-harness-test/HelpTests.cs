@@ -177,7 +177,8 @@ public sealed partial class HelpTests
         Assert.Contains(
             "agentPolicy what an agent may do beyond the rules built into the tool: restrictions, each one rule string, that only ever refuse - "
                 + "Run(git push *), Write(.github/**), Read(secrets/**), Web(pastebin.com) - applied to every agent of every run under this "
-                + "configuration, beside a workflow's definitions and steps; webDomains, the allow list of every web request (left out, any "
+                + "configuration, beside a workflow's definitions and steps; webDomains, the allow list of every page an agent reads and every "
+                + "result a search gives - a search source's own requests are held to the Web(...) rules alone (left out, any "
                 + "address); worktreeRules (true where nothing is said) and protectedPaths (true too), the switches of the rule sets "
                 + "'help agent-clients' names; keepEnvironment, the secret-shaped names a command an agent runs keeps; "
                 + "commandTimeoutSeconds (120) and maxCommandTimeoutSeconds (3600), how long one runs where its call names no time, "
@@ -399,7 +400,7 @@ public sealed partial class HelpTests
             "each under the capability that gives it: view_file (read); find_files (read); search_files (read); create_file (write, alone "
                 + "in its turn); replace_in_file (write, alone in its turn); insert_in_file (write, alone in its turn); create_directory (write, "
                 + "alone in its turn); delete_file (write, alone in its turn); delete_directory (write, alone in its turn); move_path (write, "
-                + "alone in its turn); run_command (run, alone in its turn); web_fetch (web).",
+                + "alone in its turn); run_command (run, alone in its turn); web_fetch (web); web_search (web).",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("built for the claude-api and glm clients to give their agents in place of a client's own - those clients are what comes next, and nothing opens a runtime yet -", prose, StringComparison.Ordinal);
@@ -502,7 +503,7 @@ public sealed partial class HelpTests
         Assert.Contains("The client holds every launch to the protocol itself", readme, StringComparison.Ordinal);
         Assert.Contains("Its `configDir` and `executable` name the variables of the slot that hold a specific login's Claude Code directory", readme, StringComparison.Ordinal);
         Assert.Contains("A program the slot names (`CLAUDE_EXECUTABLE`, or the name the client's `executable` gives)", readme, StringComparison.Ordinal);
-        Assert.Contains("and for each setting a client reads from the slot `present` or `absent` (none is needed)", readme, StringComparison.Ordinal);
+        Assert.Contains("and for each setting a client reads from the slot and each web-search source's key `present` or `absent` (none is needed)", readme, StringComparison.Ordinal);
 
         var architecture = Prose.Document("docs", "architecture.md");
 
@@ -3755,5 +3756,67 @@ public sealed partial class HelpTests
         {
             Assert.Contains($"{OrchestratorLayout.GraphDirectoryName}/{file}", layout, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// The web-search topic, under each of its names, says every key of agentWebSearch and of every source, every kind this
+    /// build holds with its version, help and keys, and every built-in source with its tags, pace, description and terms -
+    /// each read from the code - and where a run's searches are kept; the config topic names the section.
+    /// </summary>
+    [Fact]
+    public void TheWebSearchTopic_SaysEveryKindKeyAndBuiltInSource_FromTheCode()
+    {
+        var topic = HelpText.Of("web-search").StandardOutput;
+        var prose = Prose.Words(topic);
+
+        Assert.Equal(topic, HelpText.Of("search").StandardOutput);
+        Assert.Equal(topic, HelpText.Of("web_search").StandardOutput);
+        Assert.Equal(topic, HelpText.Of("agentwebsearch").StandardOutput);
+        Assert.Contains(HelpTopics.Described, described => described.Name == "web-search");
+
+        foreach (var key in DssHarness.Core.Web.Search.WebSearchSources.Keys.Concat(DssHarness.Core.Web.Search.WebSearchSource.OwnKeys))
+        {
+            Assert.Contains($"  {key.Name}", topic, StringComparison.Ordinal);
+        }
+
+        foreach (var kind in DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild.All)
+        {
+            Assert.Contains(Prose.Words($"Kind {kind.Kind} (version {kind.Version.ToString(CultureInfo.InvariantCulture)}): {kind.Help}"), prose, StringComparison.Ordinal);
+            Assert.All(kind.Keys, key => Assert.Contains($"  {key.Name}", topic, StringComparison.Ordinal));
+        }
+
+        var builtIn = DssHarness.Core.Web.Search.WebSearchSources.Of(new HarnessConfig(), DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild);
+
+        foreach (var source in builtIn.All)
+        {
+            Assert.Contains(Prose.Words($"{source.Name} ({source.Kind}; tags {string.Join(", ", source.Tags)}; perMinute {source.PerMinute.ToString(CultureInfo.InvariantCulture)}"), prose, StringComparison.Ordinal);
+            Assert.Contains(Prose.Words($"{source.Description}. Its owner's terms: {source.Terms}."), prose, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(Prose.Words($"A step that says no search asks the defaults: {string.Join(", ", builtIn.Defaults)}."), prose, StringComparison.Ordinal);
+        Assert.Contains($"{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}", prose, StringComparison.Ordinal);
+        Assert.Contains($"{DssHarness.Core.Web.Search.WebSearchPace.FilePrefix}-<machine>.json", prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"the snippet at most {DssHarness.Core.Web.Search.WebSearchResult.MostSnippet.ToString(CultureInfo.InvariantCulture)} characters"), prose, StringComparison.Ordinal);
+
+        // The README names every built-in source, as the template holds them.
+        var named = DssHarness.Core.Web.Search.WebSearchSources.BuiltIn.Sources!.Keys.ToList();
+
+        Assert.Contains(
+            Prose.Words($"The built-in sources ({string.Join(", ", named.SkipLast(1).Select(name => $"`{name}`"))}, `{named[^1]}`)"),
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+
+        // The orchestrators topic lists where a run's and a step's web records are.
+        var layout = HelpText.Of("orchestrators").StandardOutput;
+
+        foreach (var file in new[] { $"<step>/{DssHarness.Core.Agents.AgentCallRecords.WebFileName}", $"<step>/{DssHarness.Core.Agents.AgentCallRecords.DenialsFileName}", $"<step>/{DssHarness.Core.Agents.AgentCallRecords.ToolResultsDirectoryName}/<id>.txt", $"{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}", $"../{OrchestratorLayout.WebIndexesDirectoryName}/<source>/" })
+        {
+            Assert.Contains($"  {file}", layout, StringComparison.Ordinal);
+        }
+
+        var config = Prose.Words(HelpText.Of("config").StandardOutput);
+
+        Assert.Contains("agentWebSearch the harness's own web search", config, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"maxPerStep ({DssHarness.Core.Web.Search.WebSearchSources.DefaultMaxPerStep}) and resultsPerSource ({DssHarness.Core.Web.Search.WebSearchSources.DefaultResultsPerSource}) ('help web-search')"), config, StringComparison.Ordinal);
     }
 }

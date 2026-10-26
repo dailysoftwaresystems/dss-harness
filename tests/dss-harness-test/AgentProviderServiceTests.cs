@@ -58,6 +58,38 @@ public sealed class AgentProviderServiceTests
     }
 
     /// <summary>
+    /// A web-search source's key of the slot is listed with its source, present or absent - none is needed - and never
+    /// among the names the slot holds that nothing appoints.
+    /// </summary>
+    [Fact]
+    public async Task AWebSearchSourcesKey_IsListedWithItsSource()
+    {
+        using var repository = await RepositoryAsync();
+        var file = Path.Combine(repository.Tree.Path, ".harness-config", "config.json");
+        var config = JsonNode.Parse(File.ReadAllText(file))!.AsObject();
+        config["agentWebSearch"]!["sources"]!["stackoverflow"]!["credential"] = JsonNode.Parse("""{ "from": "env", "name": "STACKEXCHANGE_KEY", "query": "key" }""");
+        config["agentWebSearch"]!["sources"]!["npm"]!["credential"] = JsonNode.Parse("""{ "from": "env", "name": "NPM_SEARCH_KEY", "header": "X-Key" }""");
+        File.WriteAllText(file, config.ToJsonString(DssHarness.Core.Output.ReportJson.Options));
+        repository.Tree.WriteFile(".harness-config/workflows/.env/keys.env", "STACKEXCHANGE_KEY=one\n");
+        var service = Service(repository.Harness);
+
+        var text = await service.ListAsync(repository.Tree.Path, template: false, json: false, TestContext.Current.CancellationToken);
+        var json = await service.ListAsync(repository.Tree.Path, template: false, json: true, TestContext.Current.CancellationToken);
+
+        Assert.Equal((0, 0), (text.ExitCode, json.ExitCode));
+        Assert.Equal(
+            [
+                "web-search source 'stackoverflow' is sent its key where the slot holds it, none needed: STACKEXCHANGE_KEY, present",
+                "web-search source 'npm' is sent its key where the slot holds it, none needed: NPM_SEARCH_KEY, absent",
+            ],
+            text.Details!.Where(line => line.StartsWith("web-search source", StringComparison.Ordinal)));
+        Assert.DoesNotContain(text.Details!, line => line.StartsWith("declared in the slot", StringComparison.Ordinal));
+        Assert.Equal(
+            ["stackoverflow STACKEXCHANGE_KEY true", "npm NPM_SEARCH_KEY false"],
+            JsonNode.Parse(Assert.Single(json.Data!))!["sources"]!.AsArray().Select(source => $"{source!["source"]} {source["name"]} {source["held"]}"));
+    }
+
+    /// <summary>
     /// A setting the claude-code client reads under the name its entry gives is appointed by that name, and the client's
     /// own name for it, which it then does not read, is one the slot holds that nothing appoints.
     /// </summary>

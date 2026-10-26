@@ -10,20 +10,22 @@ namespace DssHarness.Tests;
 public sealed class ActionValuesTests
 {
     /// <summary>
-    /// A line too long to keep whole is cut where no secret is parted: before the last characters that could still be the
-    /// start of one - as many as the longest, less one - and then before every secret the text holds that would still span
-    /// the cut, until none does; with no secret, where it is full. Each side masked alone then masks what the whole would.
+    /// A line too long to keep whole is cut where no secret is parted: before the longest end of it that is the start of
+    /// one, and no earlier - a long secret costs a text that holds none of it nothing - and then before every secret the
+    /// text holds that would still span the cut, until none does; with no secret, where it is full. Each side masked alone
+    /// then masks what the whole would.
     /// </summary>
     [Theory]
-    [InlineData("xxxxxxxxxxxxxxxxxxxx", 12)]
-    [InlineData("xxxxxxxxxxxxxxxxxxTOP", 13)]
-    [InlineData("xxxxxxxxxxxxxTOPSECRETxx", 13)]
+    [InlineData("xxxxxxxxxxxxxxxxxxxx", 20)]
+    [InlineData("xxxxxxxxxxxxxxxxxxTOP", 18)]
+    [InlineData("xxxxxxxxxxxxxxxxxxxKE", 19)]
+    [InlineData("xxxxxxxxTOPTOP", 11)]
+    [InlineData("xxxxxxxxxxxxxTOPSECRETxx", 24)]
     [InlineData("xxxxxxxxxxxxxxTOPSECRET", 14)]
-    [InlineData("xxxxxxxxxTOPSECRETxxxxx", 9)]
-    [InlineData("xxxxxxxTOPSECRETxxKEY12x", 16)]
-    [InlineData("xxxxxxxxxxxxKEY12xxxxxxx", 12)]
-    [InlineData("xxxxxxxxxxxxxKEY12xxxxxx", 13)]
-    [InlineData("xxxxxxxTOPSECRETKEYxxxxx", 7)]
+    [InlineData("xxxxxTOPSECRETKE", 5)]
+    [InlineData("xxxxxxxTOPSECRETxxKEY12x", 24)]
+    [InlineData("xxxxxxxTOPSECRETKEYxxxxx", 24)]
+    [InlineData("TOPSECRE", 0)]
     [InlineData("TOPSECRET", 0)]
     public void Cut_PartsNoSecret(string text, int cut)
     {

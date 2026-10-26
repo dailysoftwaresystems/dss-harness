@@ -1,0 +1,103 @@
+{
+  "agentWebSearch": {
+    "defaults": ["qa", "code", "packages", "docs", "reference", "blogs"],
+    "sources": {
+      "stackoverflow": {
+        "kind": "json-api", "tags": ["qa"],
+        "description": "Stack Overflow's questions and answers, searched through Stack Exchange's API: their titles and excerpts",
+        "terms": "a documented API; without a key a quota per address of 300 requests a day and a backoff to obey; a key raises the quota and is never required",
+        "url": "https://api.stackexchange.com/2.3/search/excerpts?order=desc&sort=relevance&q={query}&site=stackoverflow&pagesize={limit}",
+        "items": "$.items", "title": "{@.title}", "link": "https://stackoverflow.com/q/{@.question_id}", "snippet": "{@.excerpt}",
+        "total": "$.total", "markup": ["title", "snippet"], "backoff": "$.backoff",
+        "perMinute": 20, "perDay": 250
+      },
+      "github-repos": {
+        "kind": "json-api", "tags": ["code"],
+        "description": "GitHub's repositories, searched by GitHub's REST API: each repository's name and description",
+        "terms": "a documented API; up to 10 requests a minute unauthenticated, 30 with the machine's gh login, which is used where one is signed in",
+        "url": "https://api.github.com/search/repositories?q={query}&per_page={limit}",
+        "headers": { "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+        "items": "$.items", "title": "{@.full_name}", "link": "{@.html_url}", "snippet": "{@.description}", "total": "$.total_count",
+        "credential": { "from": "gh" },
+        "perMinute": 9
+      },
+      "github-issues": {
+        "kind": "json-api", "tags": ["code"],
+        "description": "GitHub's issues and pull requests, searched by GitHub's REST API: each one's title and what it says",
+        "terms": "a documented API; up to 10 requests a minute unauthenticated, 30 with the machine's gh login, which is used where one is signed in",
+        "url": "https://api.github.com/search/issues?q={query}&per_page={limit}",
+        "headers": { "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+        "items": "$.items", "title": "{@.title}", "link": "{@.html_url}", "snippet": "{@.body}", "total": "$.total_count",
+        "credential": { "from": "gh" },
+        "perMinute": 9
+      },
+      "nuget": {
+        "kind": "json-api", "tags": ["packages", "dotnet"],
+        "description": "NuGet's .NET packages, searched by NuGet's search service: each package's id and description",
+        "terms": "a documented API; its search's address is read from the service index, as the API says a client must",
+        "url": "{search}?q={query}&take={limit}",
+        "discover": { "search": { "url": "https://api.nuget.org/v3/index.json", "path": "$.resources[?@['@type']=='SearchQueryService']['@id']" } },
+        "items": "$.data", "title": "{@.id}", "link": "https://www.nuget.org/packages/{@.id}", "snippet": "{@.description}", "total": "$.totalHits",
+        "perMinute": 30
+      },
+      "npm": {
+        "kind": "json-api", "tags": ["packages", "js"],
+        "description": "npm's JavaScript packages, searched by the registry's search: each package's name and description",
+        "terms": "a documented API",
+        "url": "https://registry.npmjs.org/-/v1/search?text={query}&size={limit}",
+        "items": "$.objects", "title": "{@.package.name}", "link": "{@.package.links.npm}", "snippet": "{@.package.description}", "total": "$.total",
+        "perMinute": 30
+      },
+      "pub-dev": {
+        "kind": "json-api", "tags": ["packages", "dart"],
+        "description": "pub.dev's Dart and Flutter packages, searched by its API, which answers their names alone",
+        "terms": "its documented API, which answers names alone",
+        "url": "https://pub.dev/api/search?q={query}",
+        "items": "$.packages", "title": "{@.package}", "link": "https://pub.dev/packages/{@.package}",
+        "perMinute": 30
+      },
+      "learn": {
+        "kind": "json-api", "tags": ["docs", "dotnet"],
+        "description": "Microsoft Learn's documentation of .NET, Azure and Windows: each page's title and summary",
+        "terms": "the endpoint the site's own search uses, documented for no one; its robots.txt does not refuse it, and it may change without notice, when it is said to have changed",
+        "url": "https://learn.microsoft.com/api/search?search={query}&locale=en-us&$top={limit}",
+        "items": "$.results", "title": "{@.title}", "link": "{@.url}", "snippet": "{@.description}", "total": "$.count",
+        "perMinute": 20
+      },
+      "mdn": {
+        "kind": "sitemap", "tags": ["docs-web"],
+        "description": "MDN's reference of the web platform - HTML, CSS, JavaScript and the web's APIs - from the harness's own index of its pages",
+        "terms": "MDN's search API is not used, for its robots.txt disallows /api/ and it is documented for no one; its pages are allowed, and read through its sitemap. Not in defaults, since its first index reads thousands of pages",
+        "site": "https://developer.mozilla.org",
+        "sitemap": "https://developer.mozilla.org/sitemaps/en-us/sitemap.xml.gz",
+        "include": ["/en-US/docs/Web/**"],
+        "maxPages": 6000,
+        "perMinute": 30
+      },
+      "wikipedia": {
+        "kind": "json-api", "tags": ["reference"],
+        "description": "English Wikipedia's articles, searched by its REST API: each article's title and excerpt",
+        "terms": "its API's etiquette admits programs that name themselves in the User-Agent and send one request at a time",
+        "url": "https://en.wikipedia.org/w/rest.php/v1/search/page?q={query}&limit={limit}",
+        "items": "$.pages", "title": "{@.title}", "link": "https://en.wikipedia.org/wiki/{@.key}", "snippet": "{@.excerpt}", "markup": ["snippet"],
+        "perMinute": 30
+      },
+      "hackernews": {
+        "kind": "json-api", "tags": ["blogs"],
+        "description": "Hacker News's stories, through Algolia's official API: blog posts and write-ups, each story's own address, else its discussion",
+        "terms": "a documented public API",
+        "url": "https://hn.algolia.com/api/v1/search?query={query}&tags=story&hitsPerPage={limit}",
+        "items": "$.hits", "title": "{@.title}", "link": ["{@.url}", "https://news.ycombinator.com/item?id={@.objectID}"], "snippet": "{@.story_text}", "total": "$.nbHits", "markup": ["snippet"],
+        "perMinute": 30
+      },
+      "readthedocs": {
+        "kind": "json-api", "tags": ["docs-rtd"],
+        "description": "Read the Docs' hosted documentation: a query names its project as project:<slug> beside its words, as 'project:requests timeout'",
+        "terms": "a documented API for public projects without a login; its search needs project:<slug> in the query, so it is not in defaults, and a repository adds its own projects' entries with the project in url",
+        "url": "https://readthedocs.org/api/v3/search/?q={query}",
+        "items": "$.results", "title": "{@.title}", "link": "{@.domain}{@.path}", "snippet": "{@.blocks[0].highlights.content[0]}", "total": "$.count", "markup": ["snippet"],
+        "perMinute": 30
+      }
+    }
+  }
+}

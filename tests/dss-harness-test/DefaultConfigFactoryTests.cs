@@ -72,6 +72,36 @@ public sealed class DefaultConfigFactoryTests
     }
 
     /// <summary>
+    /// The seeded configuration holds the web search's built-in sources and defaults whole, as the tool's data file holds them,
+    /// which a repository then changes key by key; saved and loaded back, they are what was written and hold.
+    /// </summary>
+    [Fact]
+    public void TheSeededConfiguration_HoldsTheBuiltInWebSearchSources()
+    {
+        var config = DefaultConfigFactory.Create([], Os, Processor);
+        var builtIn = DssHarness.Core.Web.Search.WebSearchSources.BuiltIn;
+
+        Assert.Equal(builtIn.Defaults, config.AgentWebSearch!.Defaults);
+        Assert.Equal(builtIn.Sources!.Keys, config.AgentWebSearch.Sources!.Keys);
+        Assert.All(builtIn.Sources, source => Assert.Equal(source.Value.GetRawText(), config.AgentWebSearch.Sources[source.Key].GetRawText()));
+        Assert.Null(config.AgentWebSearch.MaxPerStep);
+        Assert.Null(config.AgentWebSearch.ResultsPerSource);
+
+        using var written = new TempDirectory();
+        var file = written.Combine("config.json");
+        var store = new JsonConfigStore(new PhysicalFileSystem(FilePermissionsFactory.Create()));
+
+        store.Save(file, config);
+        var loaded = store.Load(file);
+        var search = DssHarness.Core.Web.Search.WebSearchSources.Of(loaded, DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild);
+
+        Assert.Contains("\"agentWebSearch\"", File.ReadAllText(file), StringComparison.Ordinal);
+        Assert.Empty(search.Problems);
+        Assert.Equal(builtIn.Sources.Keys, search.All.Select(source => source.Name));
+        Assert.Equal(builtIn.Defaults, search.Defaults);
+    }
+
+    /// <summary>
     /// The seeded configuration declares the implementation workflow by name and nothing else: its definition is the file init
     /// writes under workflows/implementation/, never an entry in config.json, and the seed validates and round-trips with the
     /// declaration in it.

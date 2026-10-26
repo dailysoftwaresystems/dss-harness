@@ -151,16 +151,21 @@ public static class WorkflowValidator
     /// (<see cref="Codebase.CodeGraphExtractors.Languages"/>) - this check keeps no list of its own; or
     /// <see langword="null"/> where the caller has no registry, which leaves that one rule of V52 unchecked.
     /// </param>
+    /// <param name="search">
+    /// The configuration's web search, resolved; or <see langword="null"/> where the configuration cannot be given, which
+    /// leaves V55's names unchecked, a name given twice refused all the same.
+    /// </param>
     public static IReadOnlyList<string> Validate(
         WorkflowDefinition definition,
         bool hasCommitTemplate,
         Func<string, string?>? files,
         DssHarness.Core.Agents.AgentProviders? providers = null,
-        IReadOnlyList<string>? languages = null)
+        IReadOnlyList<string>? languages = null,
+        Web.Search.WebSearchSources? search = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        var check = new Check(definition, hasCommitTemplate, files, providers, languages);
+        var check = new Check(definition, hasCommitTemplate, files, providers, languages, search);
         return check.Problems;
     }
 
@@ -273,13 +278,15 @@ public static class WorkflowValidator
             bool hasCommitTemplate,
             Func<string, string?>? files,
             DssHarness.Core.Agents.AgentProviders? providers = null,
-            IReadOnlyList<string>? languages = null)
+            IReadOnlyList<string>? languages = null,
+            Web.Search.WebSearchSources? search = null)
         {
             _definition = definition;
             _hasCommitTemplate = hasCommitTemplate;
             _files = files;
             _providers = providers;
             _languages = languages;
+            _search = search;
 
             DefinitionRules();
             Index(definition.Steps, parent: null);
@@ -969,6 +976,23 @@ public static class WorkflowValidator
             if (step.ResumePrompt is not null && !resumesItself)
             {
                 _problems.Add($"{where} says resumePrompt and does not resume itself; resumePrompt is what a step that goes on with its own work is asked with when it runs again, and any other step is asked with its prompt");
+            }
+
+            // V55: a step's search names the sources its web_search asks. One that goes on with another's work asks the
+            // sources that step's search names, its conversation's tool listing them, and names none of its own. Whether the
+            // step's agent has the web is its definition's to say, read with the definitions.
+            if (step.Search is { } search)
+            {
+                if (resumesAnother)
+                {
+                    _problems.Add($"{where} resumes '{step.Resume}' and says search; a step that goes on with another's work asks the sources that step's search names, and names none of its own");
+                }
+                else
+                {
+                    _problems.AddRange(_search is { } sources
+                        ? sources.ListProblems(search, $"the search of {where}", $"{where} searches")
+                        : Web.Search.WebSearchSources.TwiceProblems(search, $"the search of {where}"));
+                }
             }
 
             if (step.Independent is true && step.Resume is not null)
@@ -3107,6 +3131,9 @@ public static class WorkflowValidator
 
         /// <summary>The names <c>codebaseGraph.languages</c> may hold, where the caller gave the registry's; <see langword="null"/> where it gave none.</summary>
         private readonly IReadOnlyList<string>? _languages;
+
+        /// <summary>The configuration's web search, where the caller gave it: V55's names are checked only under a configuration the caller chose.</summary>
+        private readonly Web.Search.WebSearchSources? _search;
 
         /// <summary>Each reason step's schema as a reading, by the path its <c>outputs</c> names; <see langword="null"/> where it types nothing.</summary>
         private readonly Dictionary<string, JsonSchemaSubset.Reading?> _schemas = new(StringComparer.Ordinal);

@@ -1,0 +1,22 @@
+{
+  "total_count": 4452,
+  "incomplete_results": false,
+  "items": [
+    {
+      "url": "https://api.github.com/repos/example-org/example-server/issues/70",
+      "html_url": "https://github.com/example-org/example-server/issues/70",
+      "number": 70,
+      "title": "The server can deadlock registering a file watch",
+      "state": "open",
+      "body": "Two locks are taken in opposite orders when a certificate file changes."
+    },
+    {
+      "url": "https://api.github.com/repos/example-org/example-client/issues/12",
+      "html_url": "https://github.com/example-org/example-client/pull/12",
+      "number": 12,
+      "title": "Fix a deadlock on shutdown",
+      "state": "closed",
+      "body": null
+    }
+  ]
+}

@@ -166,7 +166,8 @@ public sealed class WorkflowValidationService(
             context.Config.Commit.Template is not null,
             named => Text(named, directory, name),
             resolved.Providers,
-            _extractors.Languages));
+            _extractors.Languages,
+            Web.Search.WebSearchSources.Of(context.Config, Web.Search.WebSearchKinds.OfThisBuild)));
         problems.AddRange(Files(definition, directory, name, context.Config));
 
         // The key slot's own problems - a name declared twice, a line that defines nothing - are the configuration's,

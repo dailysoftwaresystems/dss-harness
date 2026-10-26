@@ -8,7 +8,7 @@ namespace DssHarness.Core.Web.Search.Kinds;
 
 /// <summary>
 /// <c>json-api</c>: a search API that answers JSON, asked at an address its template fills - <c>{query}</c>, <c>{limit}</c>,
-/// and any name <c>discover</c> reads once a run from another JSON document - and read by RFC 9535 JSONPath queries: the
+/// and any name <c>discover</c> reads from another JSON document, kept for the run once found - and read by RFC 9535 JSONPath queries: the
 /// array of results, each one's title, address and snippet by templates of queries of the item, how many it holds, and a
 /// pause it asks for in its body.
 /// </summary>
@@ -26,17 +26,17 @@ public sealed class JsonApiKind : IWebSearchKind
         new("url", "the address asked: a template whose {query} is the query, {limit} the most results asked, and any other name in braces a name discover reads") { Required = true },
         new("method", "GET, where none is said, or POST with body"),
         new("body", "a POST's body, JSON: each text in it a template as url's, and a text that is {limit} alone the number"),
-        new("headers", "headers to send, by name: never User-Agent, a key or what the request itself says"),
+        new("headers", "headers to send, by name: never User-Agent, a key, what the request itself says or what a body says of itself"),
         .. JsonSearchItems.Keys(required: true),
         new("backoff", "a JSONPath query of the answer that finds a number of seconds the source asks to be left alone"),
-        new("discover", "names whose values are read once a run from another JSON document: each name's url, an address, and path, a JSONPath query of it"),
+        new("discover", "names whose values are read from another JSON document, kept for the run once found: each name's url, an address, and path, a JSONPath query of it"),
     ];
 
     /// <inheritdoc/>
     public string Help => "asks a search API that answers JSON, at the address url fills, and reads its answer by JSONPath queries (RFC 9535): "
         + "items finds the array of results, and title, link and snippet are templates of queries of each item in braces - "
         + "{@.title}, https://stackoverflow.com/q/{@.question_id} - link the first of several whose queries all answer. An address "
-        + "to be found, as NuGet's search, is read once a run by discover from the document that names it.";
+        + "to be found, as NuGet's search, is read by discover from the document that names it, kept for the run once found.";
 
     /// <inheritdoc/>
     public IReadOnlyList<string> Problems(WebSearchSource source)
@@ -145,6 +145,10 @@ public sealed class JsonApiKind : IWebSearchKind
                     {
                         problems.Add($"'headers' names '{header.Name}', which is no header's name");
                     }
+                    else if (!WebSearchRequest.Http.IsRequestHeader(header.Name))
+                    {
+                        problems.Add($"'headers' names '{header.Name}', which a body says of itself and no request carries");
+                    }
                 }
             }
         }
@@ -174,7 +178,7 @@ public sealed class JsonApiKind : IWebSearchKind
 
         var discovered = Discovered(source);
 
-        if (answers.Count != discovered.Count)
+        if (answers.Count > discovered.Count)
         {
             throw new ArgumentException($"'{source.Name}' looks up {discovered.Count} document(s), and is given {answers.Count} answer(s).", nameof(answers));
         }
@@ -188,28 +192,35 @@ public sealed class JsonApiKind : IWebSearchKind
             var answer = answers[at];
             var what = $"its '{name}', looked up at '{url}'";
 
+            // A document that cannot be used still holds the source for every pause the answers read so far asked for.
             if (WebSearchStatus.Before(answer, out var pause) is { } early)
             {
-                return WebSearchFound.FailedWith(early.Of(what));
+                return WebSearchFound.FailedWith(early.Of(what) with { Until = WebRateLimit.Later(until, early.Until) });
             }
 
             until = WebRateLimit.Later(until, pause);
 
             try
             {
-                using var document = JsonDocument.Parse(answer.Body);
+                using var document = JsonSearchItems.AnswerOf(answer.Body);
 
                 if (JsonPath.Parse(path).Select(document.RootElement).Select(WebItemTemplate.TextOf).FirstOrDefault(text => !string.IsNullOrWhiteSpace(text)) is not { } value)
                 {
-                    return WebSearchFound.FailedWith(WebSearchAnswer.Changed($"'{path}' finds no text in it").Of(what));
+                    return WebSearchFound.FailedWith(WebSearchAnswer.Changed($"'{path}' finds no text in it").Of(what) with { Until = until });
                 }
 
                 values[name] = value;
             }
             catch (JsonException ex)
             {
-                return WebSearchFound.FailedWith(WebSearchAnswer.Changed($"it is no JSON: {ex.Message}").Of(what));
+                return WebSearchFound.FailedWith(WebSearchAnswer.Changed($"it is no JSON: {ex.Message}").Of(what) with { Until = until });
             }
+        }
+
+        // Fewer answers than lookups end at one whose status failed, which returned above.
+        if (answers.Count < discovered.Count)
+        {
+            throw new ArgumentException($"'{source.Name}' looks up {discovered.Count} document(s), and is given {answers.Count} answer(s), the last of which did not fail.", nameof(answers));
         }
 
         return WebSearchFound.Of(values) with { Until = until };

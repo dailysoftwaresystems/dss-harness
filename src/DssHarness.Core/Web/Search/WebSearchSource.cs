@@ -50,6 +50,7 @@ public sealed class WebSearchSource
         new("kind", "the kind of source it is, one of the kinds this tool holds") { Required = true },
         new("tags", "names a step's search may choose it by, beside its own"),
         new("description", "what the agent is told the source is for"),
+        new("terms", "what its owner's terms say of programs asking it, which help says beside it"),
         new("enabled", "false turns the source off"),
         new("perMinute", $"the most requests it is sent in a minute on this machine, from 1 to {MostPerMinute}; {DefaultPerMinute} where none is said"),
         new("perDay", $"the most requests it is sent in a day on this machine, from 1 to {MostPerDay:N0}; no bound where none is said"),
@@ -68,11 +69,30 @@ public sealed class WebSearchSource
     /// <summary>The most requests it is sent in a minute: its <c>perMinute</c>, held to <see cref="OwnProblems"/>, else <see cref="DefaultPerMinute"/>.</summary>
     public int PerMinute => Integer("perMinute") ?? DefaultPerMinute;
 
+    /// <summary>The most requests it is sent in a day: its <c>perDay</c>, held to <see cref="OwnProblems"/>; <see langword="null"/> where it names no bound.</summary>
+    public int? PerDay => Integer("perDay");
+
+    /// <summary>Whether it is used: true unless its <c>enabled</c> says false.</summary>
+    public bool Enabled => Value("enabled") is not { ValueKind: JsonValueKind.False };
+
+    /// <summary>The tags a step's search may choose it by, beside its name.</summary>
+    public IReadOnlyList<string> Tags => Texts("tags") ?? [];
+
+    /// <summary>What the agent is told it is for; <see langword="null"/> where it says nothing.</summary>
+    public string? Description => Text("description");
+
+    /// <summary>What its owner's terms say of programs asking it; <see langword="null"/> where it says nothing.</summary>
+    public string? Terms => Text("terms");
+
+    /// <summary>Its key's place and origin, where it names one that holds (<see cref="WebSearchCredential.Problems"/>); <see langword="null"/> otherwise.</summary>
+    public WebSearchCredential? Credential
+        => Value("credential") is { } credential && WebSearchCredential.Problems(credential).Count == 0 ? WebSearchCredential.Of(credential) : null;
+
     /// <summary>
     /// Why the values of the keys every source takes cannot be used, each problem one line naming its key: a key given
-    /// twice, in two spellings or one; <c>tags</c> a list of names; <c>description</c> a text that says something;
-    /// <c>enabled</c> true or false; <c>perMinute</c> and <c>perDay</c> whole numbers within their bounds; <c>credential</c>
-    /// one of its two shapes. Empty where they can be; a key not given is no problem here.
+    /// twice, in two spellings or one; <c>tags</c> a list of names; <c>description</c> and <c>terms</c> texts that say
+    /// something; <c>enabled</c> true or false; <c>perMinute</c> and <c>perDay</c> whole numbers within their bounds;
+    /// <c>credential</c> one of its two shapes. Empty where they can be; a key not given is no problem here.
     /// </summary>
     public IReadOnlyList<string> OwnProblems()
     {
@@ -88,13 +108,16 @@ public sealed class WebSearchSource
             problems.Add($"'tags' is a list of names a step's search may choose the source by, each {NameRule}");
         }
 
-        if (TextProblem("description") is { } description)
+        foreach (var (key, what) in OwnKeys.Where(own => own.Name is "description" or "terms").Select(own => (own.Name, own.Meaning)))
         {
-            problems.Add(description);
-        }
-        else if (Text("description") is { } said && string.IsNullOrWhiteSpace(said))
-        {
-            problems.Add("'description' says nothing; it is what the agent is told the source is for");
+            if (TextProblem(key) is { } text)
+            {
+                problems.Add(text);
+            }
+            else if (Text(key) is { } said && string.IsNullOrWhiteSpace(said))
+            {
+                problems.Add($"'{key}' says nothing; it is {what}");
+            }
         }
 
         if (FlagProblem("enabled") is { } enabled)
@@ -191,7 +214,8 @@ public sealed class WebSearchSource
 /// <summary>
 /// A source's key, as its <c>credential</c> says where it comes from and where it goes: a variable of the agents' <c>.env</c>
 /// slot - <c>{ "from": "env", "name": ..., "query": ... }</c> or <c>"header": ...</c> - or the token of the machine's
-/// <c>gh</c> login - <c>{ "from": "gh" }</c>, sent as <c>Authorization: Bearer</c> unless it says otherwise; <c>format</c>
+/// <c>gh</c> login for its <c>host</c> - <c>{ "from": "gh" }</c>, github.com's, sent as <c>Authorization: Bearer</c> unless it
+/// says otherwise, to that host or its API alone; <c>format</c>
 /// writes what is sent, <c>{credential}</c> standing for the key. Its keys are read in any case, as the configuration's
 /// are. One owner of the shape: the configuration's check reads its problems here, and the search the key's place.
 /// </summary>
@@ -200,11 +224,16 @@ public sealed class WebSearchSource
 /// <param name="Query">The query parameter it is sent as; <see langword="null"/> where it is a header.</param>
 /// <param name="Header">The header it is sent as; <see langword="null"/> where it is a query parameter.</param>
 /// <param name="Format">What is sent, <c>{credential}</c> standing for the key.</param>
-public sealed record WebSearchCredential(string From, string? Name, string? Query, string? Header, string Format)
+/// <param name="Host">The host whose <c>gh</c> login it is, for <c>gh</c>; <see langword="null"/> for <c>env</c>.</param>
+public sealed record WebSearchCredential(string From, string? Name, string? Query, string? Header, string Format, string? Host = null)
 {
+    /// <summary>The host a <c>gh</c> login is for where its credential says none.</summary>
+    public const string GitHubHost = "github.com";
+
     /// <summary>What the key is, as help says it.</summary>
     public const string Meaning = "a key to send it, used where it is there and never required: { \"from\": \"env\", \"name\": a variable of the .env slot, "
-        + "and \"query\": a parameter or \"header\": a header } or { \"from\": \"gh\" }, the machine's gh login sent as Authorization: Bearer; "
+        + "and \"query\": a parameter or \"header\": a header } or { \"from\": \"gh\", \"host\": its host, github.com where left out }, the machine's gh "
+        + "login for that host, sent as Authorization: Bearer to it or its api. host alone; "
         + "\"format\" writes what is sent, {credential} standing for the key";
 
     /// <summary>The name in <see cref="Format"/> that stands for the key.</summary>
@@ -219,8 +248,43 @@ public sealed record WebSearchCredential(string From, string? Name, string? Quer
         var header = query is null ? JsonObjectKeys.Text(value, "header") ?? (from == "gh" ? "Authorization" : null) : null;
         var format = JsonObjectKeys.Text(value, "format") ?? (from == "gh" && string.Equals(header, "Authorization", StringComparison.OrdinalIgnoreCase) ? $"Bearer {{{Placeholder}}}" : $"{{{Placeholder}}}");
 
-        return new WebSearchCredential(from, JsonObjectKeys.Text(value, "name"), query, header, format);
+        var host = from == "gh" ? JsonObjectKeys.Text(value, "host")?.ToLowerInvariant() ?? GitHubHost : null;
+
+        return new WebSearchCredential(from, JsonObjectKeys.Text(value, "name"), query, header, format, host);
     }
+
+    /// <summary>
+    /// What is sent for <paramref name="key"/>: <see cref="Format"/> read by the configuration's one brace grammar
+    /// (<see cref="FlowTemplate.Pieces(string)"/>), as <see cref="Problems"/> checked it - <c>{credential}</c> the key, a
+    /// doubled brace one brace.
+    /// </summary>
+    /// <param name="key">The key.</param>
+    public string Sent(string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return string.Concat(FlowTemplate.Pieces(Format).Select(piece => piece.Kind == FlowTemplate.PieceKind.Placeholder ? key : piece.Text));
+    }
+
+    /// <summary>
+    /// Every form of <paramref name="key"/> a request carries or an answer echoes, which a step's mask holds so no record,
+    /// event or answer keeps one: the key; as a query parameter, the key escaped - as an answer echoing the address it was
+    /// asked at holds it; and the key in a JSON text, as an encoder escapes it - .NET's a '+', PHP's a '/' - for an error
+    /// that quotes it is told as it was answered.
+    /// </summary>
+    /// <param name="key">The key.</param>
+    public IReadOnlyList<string> Forms(string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+
+        string[] forms = Query is null ? [key] : [key, Uri.EscapeDataString(key)];
+
+        return [.. forms.Concat([JsonEncodedText.Encode(key).Value, key.Replace("/", "\\/", StringComparison.Ordinal)]).Distinct(StringComparer.Ordinal)];
+    }
+
+    /// <summary>The key as the fetch sends it to its source: <paramref name="key"/>, written by <see cref="Format"/>, as the header or query parameter this says.</summary>
+    /// <param name="key">The key.</param>
+    public WebFetchKey Fetched(string key)
+        => (Query is { } parameter ? new WebFetchKey(parameter, Sent(key), Query: true) : new WebFetchKey(Header!, Sent(key))) with { Hosts = Host is { } host ? [host, "api." + host] : null };
 
     /// <summary>Why <paramref name="value"/> is no credential, each problem one line naming its key; empty where it is one.</summary>
     /// <param name="value">The <c>credential</c> key's value.</param>
@@ -239,7 +303,7 @@ public sealed record WebSearchCredential(string From, string? Name, string? Quer
         }
 
         var from = JsonObjectKeys.Text(value, "from")?.ToLowerInvariant();
-        string[] takes = from == "gh" ? ["from", "query", "header", "format"] : ["from", "name", "query", "header", "format"];
+        string[] takes = from == "gh" ? ["from", "host", "query", "header", "format"] : ["from", "name", "query", "header", "format"];
 
         if (from is not ("env" or "gh"))
         {
@@ -270,6 +334,11 @@ public sealed record WebSearchCredential(string From, string? Name, string? Quer
             }
         }
 
+        if (from == "gh" && JsonObjectKeys.Text(value, "host") is { } host && Uri.CheckHostName(host) != UriHostNameType.Dns)
+        {
+            problems.Add($"'credential.host' is the host the machine's gh login is for, as {GitHubHost}, and is '{host}'");
+        }
+
         var query = JsonObjectKeys.Text(value, "query");
         var header = JsonObjectKeys.Text(value, "header");
 
@@ -294,6 +363,10 @@ public sealed record WebSearchCredential(string From, string? Name, string? Quer
         else if (header is not null && WebSearchRequest.Http.OwnHeaders.FirstOrDefault(own => string.Equals(own, header, StringComparison.OrdinalIgnoreCase)) is { } own)
         {
             problems.Add($"'credential.header' is {own}, which the request itself says");
+        }
+        else if (header is not null && !WebSearchRequest.Http.IsRequestHeader(header))
+        {
+            problems.Add($"'credential.header' is '{header}', which a body says of itself and no request carries");
         }
 
         if (JsonObjectKeys.Text(value, "format") is { } format)

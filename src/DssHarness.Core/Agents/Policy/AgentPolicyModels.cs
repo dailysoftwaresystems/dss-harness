@@ -82,9 +82,11 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 /// refused, a page and a command that runs a program which fetches alike.
 /// </param>
 /// <param name="WebDomains">
-/// <c>agentPolicy.webDomains</c>: the allow list every request's host must stand under. Null where
-/// every address is allowed, the machine's own and its network's among them; never empty, for an
-/// empty list would read as no list - the configuration refuses one, and so does the ground.
+/// <c>agentPolicy.webDomains</c>: the allow list the host of every page an agent reads, and of every
+/// result a search gives, must stand under - a search source's own requests are held to the
+/// <c>Web(...)</c> rules alone. Null where every address is allowed, the machine's own and its
+/// network's among them; never empty, for an empty list would read as no list - the configuration
+/// refuses one, and so does the ground.
 /// </param>
 /// <param name="Writes">
 /// The step's <c>writes</c>, its patterns relative to its worktree: the one source that narrows,

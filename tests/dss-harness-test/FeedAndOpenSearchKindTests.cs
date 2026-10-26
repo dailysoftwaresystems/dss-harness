@@ -252,6 +252,12 @@ public sealed class FeedAndOpenSearchKindTests
 
         Assert.Equal(WebSearchOutcome.Refused, found.Failure!.Outcome);
         Assert.Equal("its description, 'https://search.example.test/opensearch.xml': it offers its results as text/html alone: a results page for people, which this tool never reads", found.Failure.Why);
+        Assert.Null(found.Until);
+
+        // One that cannot be used still holds the source for the pause its answer asked for.
+        var spent = Described.Found(Source("os", OpenSearch), [Answer(Stored("opensearch-html-only.xml"), headers: Headers(("RateLimit", "\"default\";r=0;t=30")))]);
+        Assert.Equal((WebSearchOutcome.Refused, At + TimeSpan.FromSeconds(30)), (spent.Failure!.Outcome, spent.Until));
+        Assert.Equal(At + TimeSpan.FromSeconds(30), Described.Found(Source("os", OpenSearch), [Answer("not xml", headers: Headers(("RateLimit", "\"default\";r=0;t=30")))]).Until);
     }
 
     /// <summary>A JSON template is taken where the source says how to read it - a feed's that requires a parameter this tool does not know is passed over - and read by its paths.</summary>

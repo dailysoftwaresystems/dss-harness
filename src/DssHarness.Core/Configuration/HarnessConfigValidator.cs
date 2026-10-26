@@ -2245,7 +2245,7 @@ public static partial class HarnessConfigValidator
     /// <param name="name">What to write instead, as the remedy says it: "name the legs it runs".</param>
     /// <param name="leftOut">What leaving the key out means: "every declared leg".</param>
     /// <param name="problems">Where the problem is added.</param>
-    private static void RefuseGivenEmpty<T>(IReadOnlyCollection<T>? list, string setting, string name, string leftOut, List<string> problems)
+    internal static void RefuseGivenEmpty<T>(IReadOnlyCollection<T>? list, string setting, string name, string leftOut, List<string> problems)
     {
         if (list is { Count: 0 })
         {

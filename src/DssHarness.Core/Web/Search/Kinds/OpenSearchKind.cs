@@ -8,7 +8,7 @@ using DssHarness.Core.Configuration;
 namespace DssHarness.Core.Web.Search.Kinds;
 
 /// <summary>
-/// <c>opensearch</c>: a site that describes its own search in an OpenSearch description, read once a run, whose template
+/// <c>opensearch</c>: a site that describes its own search in an OpenSearch description, kept for the run once read, whose template
 /// for results is taken where it answers a feed - Atom first, then RSS - or JSON the source says how to read; one that
 /// offers only <c>text/html</c> is refused, for that is a results page for people.
 /// </summary>
@@ -34,7 +34,7 @@ public sealed class OpenSearchKind : IWebSearchKind
     ];
 
     /// <inheritdoc/>
-    public string Help => "reads a site's OpenSearch description, at url, once a run and takes its template for results where it answers a feed - Atom, "
+    public string Help => "reads a site's OpenSearch description, at url, kept for the run once read, and takes its template for results where it answers a feed - Atom, "
         + "then RSS - or JSON, read by items, title and link as a json-api source's; a description that offers only text/html is "
         + "refused, for that is a results page for people.";
 
@@ -86,6 +86,9 @@ public sealed class OpenSearchKind : IWebSearchKind
             return WebSearchFound.FailedWith(early.Of(what));
         }
 
+        // A description that cannot be used still holds the source for the pause its answer asked for.
+        WebSearchFound Failed(WebSearchAnswer failure) => WebSearchFound.FailedWith(failure.Of(what) with { Until = pause });
+
         XElement root;
 
         try
@@ -94,12 +97,12 @@ public sealed class OpenSearchKind : IWebSearchKind
         }
         catch (XmlException ex)
         {
-            return WebSearchFound.FailedWith(WebSearchAnswer.Changed($"it is no XML: {ex.Message}").Of(what));
+            return Failed(WebSearchAnswer.Changed($"it is no XML: {ex.Message}"));
         }
 
         if (root.Name.LocalName != "OpenSearchDescription")
         {
-            return WebSearchFound.FailedWith(WebSearchAnswer.Changed($"it is no OpenSearch description: its root is <{root.Name.LocalName}>").Of(what));
+            return Failed(WebSearchAnswer.Changed($"it is no OpenSearch description: its root is <{root.Name.LocalName}>"));
         }
 
         var templates = root.Elements()
@@ -121,14 +124,14 @@ public sealed class OpenSearchKind : IWebSearchKind
         {
             var offered = templates.Select(url => url.Type).Distinct(StringComparer.Ordinal).ToList();
 
-            return WebSearchFound.FailedWith(
+            return Failed(
                 offered.Count > 0 && offered.All(type => type == "text/html")
-                    ? WebSearchAnswer.Refused("it offers its results as text/html alone: a results page for people, which this tool never reads").Of(what)
+                    ? WebSearchAnswer.Refused("it offers its results as text/html alone: a results page for people, which this tool never reads")
                     : offered.Any(IsJson)
-                        ? WebSearchAnswer.Failed("it offers its results as JSON, and the source gives no items, title and link to read them by").Of(what)
+                        ? WebSearchAnswer.Failed("it offers its results as JSON, and the source gives no items, title and link to read them by")
                         : WebSearchAnswer.Changed(offered.Count == 0
                             ? "it names no template for results that this tool can fill"
-                            : $"it offers its results as {string.Join(", ", offered)}, none a feed or JSON").Of(what));
+                            : $"it offers its results as {string.Join(", ", offered)}, none a feed or JSON"));
         }
 
         return WebSearchFound.Of(new Dictionary<string, string>(StringComparer.Ordinal)

@@ -128,7 +128,7 @@ public sealed record AgentRoot(string Path, bool Writable);
 /// <param name="MainCheckout">The main checkout.</param>
 /// <param name="ExtraRoots">The extra roots, each readable, writable where its definition says.</param>
 /// <param name="WorkingDirectory">Where the client starts the agent: the worktree, else the work directory.</param>
-/// <param name="RunDirectory">The run's directory, for the reporter.</param>
+/// <param name="RunDirectory">The run's directory: the reporter's, and where a step's web search keeps the run's record, <c>web/searches.jsonl</c>.</param>
 public sealed record AgentWorkspace(
     string? Worktree,
     string WorkDirectory,
@@ -265,6 +265,34 @@ public enum AgentCapability
 /// </param>
 public sealed record AgentCredential(string Auth, IReadOnlyList<AgentKey> Keys, string? Api = null, string? ConfigDirectory = null);
 
+/// <summary>
+/// The web search a step's agent is given: the sources its <c>web_search</c> asks, in the order its answer gives them and
+/// those turned on alone, its bounds, and each source's key where it names one, every form of which it is sent in the
+/// run's mask holds (<see cref="Web.Search.WebSearchCredential.Forms"/>).
+/// </summary>
+/// <param name="Sources">The step's sources, as its <c>search</c> picks them (<see cref="Web.Search.WebSearchSources.Chosen"/>).</param>
+/// <param name="ResultsPerSource">The most results a source gives one search.</param>
+/// <param name="MaxPerStep">The most requests of sources the step makes.</param>
+/// <param name="Keys">Each source's key, by its name, as <see cref="Web.Search.WebSearchKeys"/> read it.</param>
+public sealed record AgentWebSearch(
+    IReadOnlyList<Web.Search.WebSearchSource> Sources,
+    int ResultsPerSource,
+    int MaxPerStep,
+    IReadOnlyDictionary<string, Web.Search.WebSearchKey> Keys)
+{
+    /// <summary>The search a step whose <c>search</c> is <paramref name="search"/> is given of <paramref name="sources"/>, with <paramref name="keys"/>.</summary>
+    /// <param name="sources">The configuration's web search.</param>
+    /// <param name="search">The step's <c>search</c>; <see langword="null"/> where it names none.</param>
+    /// <param name="keys">Each source's key, by its name.</param>
+    public static AgentWebSearch Of(Web.Search.WebSearchSources sources, IReadOnlyList<string>? search, IReadOnlyDictionary<string, Web.Search.WebSearchKey> keys)
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+        ArgumentNullException.ThrowIfNull(keys);
+
+        return new(sources.Chosen(search), sources.ResultsPerSource, sources.MaxPerStep, keys);
+    }
+}
+
 /// <summary>One value a run may sign in with, by the name the slot holds it under.</summary>
 /// <param name="Name">The variable's name, which records say.</param>
 /// <param name="Value">The value, which no record says: the run's mask holds it.</param>
@@ -378,6 +406,9 @@ public sealed record AgentStepRequest(
     /// <summary>What the configuration says of the agent's commands: the names a child is given back, and their times.</summary>
     public AgentCommandSettings Commands { get; init; } = AgentCommandSettings.Default;
 
+    /// <summary>The web search the agent is given: its sources, bounds and keys; <see langword="null"/> where it searches none.</summary>
+    public AgentWebSearch? WebSearch { get; init; }
+
     /// <summary>The signal the engine raises when the run is pausing; one of the runner's own where the engine gives none.</summary>
     public AgentHandoffSignal? Handoff { get; init; }
 
@@ -450,4 +481,7 @@ public sealed record AgentRun(
 
     /// <summary>What the configuration says of the agent's commands: the names a child is given back, and their times.</summary>
     public AgentCommandSettings Commands { get; init; } = AgentCommandSettings.Default;
+
+    /// <summary>The web search the agent is given: its sources, bounds and keys; <see langword="null"/> where it searches none.</summary>
+    public AgentWebSearch? WebSearch { get; init; }
 }

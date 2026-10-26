@@ -18,13 +18,18 @@ namespace DssHarness.Core.Web;
 /// connection made only to an address that was checked, and checked again once made; <see cref="Bound"/> for the asking
 /// of them all, a decision and a turn waited for apart; <see cref="MostBytes"/> at most; text alone - <c>text/*</c>, JSON
 /// and XML, and a gzip of text where the reader asks - read as the reader asks (<see cref="WebFetchAsk"/>): a page's HTML
-/// reduced to its text, read into its parts or kept as its markup, within the bound; no cookie, no credential, no proxy and nothing of the tool's environment
-/// sent, under a fixed <c>User-Agent</c> that names the tool.
+/// reduced to its text, read into its parts or kept as its markup, within the bound; no cookie, no proxy, nothing of the
+/// tool's environment and no credential of the machine's sent, under a fixed <c>User-Agent</c> that names the tool - a
+/// search source's own key alone where its asker gives one (<see cref="WebFetchAsk.Key"/>), to the scheme, host and port
+/// first asked.
 /// </summary>
 public sealed class HarnessFetch : IDisposable
 {
     /// <summary>The most redirects one fetch follows: one more is refused.</summary>
     public const int MostRedirects = 5;
+
+    /// <summary>The rule an address a search source's key may not be sent to is refused by (<see cref="WebFetchAsk.Key"/>): https alone, its hosts alone, and no parameter of its own name.</summary>
+    public const string KeyRule = "the source's key";
 
     /// <summary>The most bytes a page may hold: more is refused, read no further.</summary>
     public const long MostBytes = 5 * 1024 * 1024;
@@ -162,6 +167,9 @@ public sealed class HarnessFetch : IDisposable
         // request's time.
         var left = _bound;
         var current = address;
+        var method = ask.Method;
+        var body = ask.Body;
+        string? keyedTo = null;
 
         for (var hop = 0; ; hop++)
         {
@@ -170,9 +178,39 @@ public sealed class HarnessFetch : IDisposable
                 return WebFetched.Refused(current, $"'{current}' is no http or https address, and this tool's fetch asks no other");
             }
 
+            // A key sent as a query parameter is the fetch's alone: a parameter of its name - a redirect that echoes it back -
+            // is dropped from every address before it is decided, so none is recorded, answered, sent elsewhere or sent twice.
+            // The address first asked naming one of its own would have what it says replaced by the key: it is refused.
+            if (ask.Key is { Query: true } parameter)
+            {
+                var without = WithoutParameter(uri, parameter.Name);
+
+                if (hop == 0 && without.AbsoluteUri != uri.AbsoluteUri)
+                {
+                    return WebFetched.Denied(uri.AbsoluteUri, KeyDenial($"'{uri.AbsoluteUri}' names '{parameter.Name}', the parameter its key is sent as"));
+                }
+
+                uri = without;
+            }
+
             // The address decided, recorded and answered is the one asked, as it was read: a text a reader reads its own
             // way ('http:/\host') is decided as the host it reaches, never as the text's own spelling.
             current = uri.AbsoluteUri;
+
+            // A source's key goes to the scheme, host and port first asked alone: never on a redirect to another, and never
+            // in the clear - a fetch that carries one begins at an https address, else nothing is sent.
+            if (keyedTo is null && ask.Key is not null && uri.Scheme != Uri.UriSchemeHttps)
+            {
+                return WebFetched.Denied(current, KeyDenial("a key is sent over https alone, and this address is no https one"));
+            }
+
+            // A key that is some hosts' alone - a gh login, its host's and its API's - goes to no other, first asked or not.
+            if (keyedTo is null && ask.Key is { Hosts: { } hosts } && !hosts.Contains(uri.IdnHost, StringComparer.OrdinalIgnoreCase))
+            {
+                return WebFetched.Denied(current, KeyDenial($"its key is sent to {string.Join(" or ", hosts)} alone, and this address is {uri.IdnHost}'s"));
+            }
+
+            keyedTo ??= uri.GetLeftPart(UriPartial.Authority);
 
             if (hop > MostRedirects)
             {
@@ -199,17 +237,25 @@ public sealed class HarnessFetch : IDisposable
 
                 try
                 {
-                    told = await AskAsync(uri, ask, bound.Token).ConfigureAwait(false);
+                    told = await AskAsync(uri, ask, method, body, ask.Key is not null && uri.GetLeftPart(UriPartial.Authority) == keyedTo, bound.Token, cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (bound.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                 {
-                    told = WebHop.Failed(current, $"no answer read within {_bound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s");
+                    told = WebHop.Failed(current, Unanswered);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     // What no answer here foresaw still leaves the address its line, for the request may have left the machine;
-                    // the defect is raised all the same.
-                    await gate.Answered(WebHop.Failed(current, ex.Message)).ConfigureAwait(false);
+                    // the defect is raised all the same - beside what failed recording it, which never hides it.
+                    try
+                    {
+                        await gate.Answered(WebHop.Failed(current, ex.Message)).ConfigureAwait(false);
+                    }
+                    catch (Exception recording)
+                    {
+                        throw new AggregateException(ex, recording);
+                    }
+
                     throw;
                 }
             }
@@ -225,12 +271,36 @@ public sealed class HarnessFetch : IDisposable
 
             if (told.Location is { } next)
             {
+                // As browsers follow one: a 303, and a 301 or 302 of what is no GET, asks the next address with a GET and no
+                // body; a 307 and a 308 ask it as the first was asked.
+                if (told.Status is 303 || (told.Status is 301 or 302 && method != "GET"))
+                {
+                    (method, body) = ("GET", null);
+                }
+
                 current = next;
                 continue;
             }
 
             return new WebFetched(current, told.Status, told.Type, told.Text, Failure: null, Denial: null) { Headers = told.Headers, Parts = told.Parts };
         }
+    }
+
+    /// <summary>
+    /// An address a search source's key may not be sent to, refused by the key's own rules for <paramref name="why"/>:
+    /// before any rule of its asker decides it, nothing sent - a refusal, as a rule's is, never a failure of the source's.
+    /// </summary>
+    private static AgentPolicyAnswer.Denied KeyDenial(string why) => new(KeyRule, AgentPolicySource.Builtin, why);
+
+    /// <summary><paramref name="uri"/> with every query parameter whose name, unescaped, is <paramref name="name"/> dropped; itself where it has none.</summary>
+    private static Uri WithoutParameter(Uri uri, string name)
+    {
+        var pairs = uri.Query.Length > 1 ? uri.Query[1..].Split('&') : [];
+        var kept = pairs.Where(pair => !string.Equals(Uri.UnescapeDataString(pair.Split('=', 2)[0]), name, StringComparison.Ordinal)).ToList();
+
+        return kept.Count == pairs.Length
+            ? uri
+            : new Uri(uri.GetLeftPart(UriPartial.Path) + (kept.Count > 0 ? "?" + string.Join('&', kept) : string.Empty) + uri.Fragment);
     }
 
     /// <summary>Closes the connections the fetch holds.</summary>
@@ -242,8 +312,31 @@ public sealed class HarnessFetch : IDisposable
         }
     }
 
-    /// <summary>Asks one address: its answer, a redirect's next address, or why it failed.</summary>
-    private async Task<WebHop> AskAsync(Uri uri, WebFetchAsk ask, CancellationToken cancellationToken)
+    /// <summary>The headers a request itself says - which tool asks, of which host, how much and of what type - which no asker sends of its own.</summary>
+    public static IReadOnlyList<string> RequestHeaders { get; } = ["User-Agent", "Host", "Content-Length", "Content-Type"];
+
+    /// <summary>The headers that carry a key, which an asker sends only as its key (<see cref="WebFetchAsk.Key"/>), kept secret.</summary>
+    public static IReadOnlyList<string> KeyHeaders { get; } = ["Authorization", "Proxy-Authorization", "Cookie"];
+
+    /// <summary>
+    /// Whether a request carries <paramref name="name"/> of its own: a header only a body says of itself - its language, its
+    /// encoding, when it expires - no request carries, so an asker that names one is refused where it is configured.
+    /// </summary>
+    /// <param name="name">A header's name.</param>
+    public static bool IsRequestHeader(string name)
+    {
+        using var request = new HttpRequestMessage();
+        return request.Headers.TryAddWithoutValidation(name, string.Empty);
+    }
+
+    /// <summary>Why an asking its bound ran out on read no answer.</summary>
+    private string Unanswered => $"no answer read within {_bound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s";
+
+    /// <summary>
+    /// Asks one address as <paramref name="method"/> with <paramref name="body"/> - the key the ask carries where <paramref name="keyed"/> - and answers its answer, a redirect's next address, or why it failed;
+    /// <paramref name="cancellationToken"/> is the asking's bound, the caller's stop among it, and <paramref name="caller"/> the caller's stop alone.
+    /// </summary>
+    private async Task<WebHop> AskAsync(Uri uri, WebFetchAsk ask, string method, string? body, bool keyed, CancellationToken cancellationToken, CancellationToken caller)
     {
         var said = uri.AbsoluteUri;
 
@@ -257,9 +350,37 @@ public sealed class HarnessFetch : IDisposable
             return WebHop.Failed(said, ex.Message);
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        using var request = new HttpRequestMessage(new HttpMethod(method), uri);
         request.Headers.UserAgent.ParseAdd(_userAgent);
-        request.Headers.Accept.ParseAdd(ask.Accept ?? "text/html, text/plain;q=0.9, application/json;q=0.9, application/xml;q=0.8, text/*;q=0.7");
+
+        var asked = ask.Headers ?? WebFetchAsk.NoHeaders;
+        var accept = asked.FirstOrDefault(header => string.Equals(header.Key, "Accept", StringComparison.OrdinalIgnoreCase)).Value;
+
+        // A key sent as a query parameter is added to what is sent alone - after the query, never inside a fragment, which
+        // is not sent: the address decided, recorded and answered is the one asked, which holds no parameter of its name.
+        if (keyed && ask.Key is { Query: true } parameter)
+        {
+            request.RequestUri = new Uri(uri.GetLeftPart(UriPartial.Query) + (uri.Query.Length > 0 ? "&" : "?") + Uri.EscapeDataString(parameter.Name) + "=" + Uri.EscapeDataString(parameter.Value));
+        }
+
+        Say(request, "Accept", accept ?? ask.Accept ?? "text/html, text/plain;q=0.9, application/json;q=0.9, application/xml;q=0.8, text/*;q=0.7");
+
+        // The asker's own headers, never one the request itself says: the body's type goes with the body.
+        foreach (var (name, value) in asked.Where(header => !string.Equals(header.Key, "Accept", StringComparison.OrdinalIgnoreCase)
+            && !RequestHeaders.Concat(KeyHeaders).Contains(header.Key, StringComparer.OrdinalIgnoreCase)))
+        {
+            Say(request, name, value);
+        }
+
+        if (body is not null)
+        {
+            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        }
+
+        if (keyed && ask.Key is { Query: false } key)
+        {
+            Say(request, key.Name, key.Value);
+        }
 
         HttpResponseMessage response;
 
@@ -279,7 +400,28 @@ public sealed class HarnessFetch : IDisposable
         {
             var headers = HeadersOf(response);
 
-            return await AnsweredAsync(said, uri, ask, response, cancellationToken).ConfigureAwait(false) with { Headers = headers };
+            try
+            {
+                return await AnsweredAsync(said, uri, ask, response, cancellationToken).ConfigureAwait(false) with { Headers = headers };
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && !caller.IsCancellationRequested)
+            {
+                // The bound ran out on the body: the status and headers already read are kept, so a pause they ask for holds.
+                return WebHop.Failed(said, Unanswered, (int)response.StatusCode, response.Content.Headers.ContentType?.MediaType) with { Headers = headers };
+            }
+        }
+    }
+
+    /// <summary>
+    /// Adds <paramref name="name"/> to what <paramref name="request"/> says: a header no request carries (<see cref="IsRequestHeader"/>)
+    /// is refused where it is configured, so one asked here is a defect, never dropped unsaid - and its value, a key's maybe, is never told.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No request carries it.</exception>
+    private static void Say(HttpRequestMessage request, string name, string value)
+    {
+        if (!request.Headers.TryAddWithoutValidation(name, value))
+        {
+            throw new InvalidOperationException($"'{name}' was asked to be sent, and is no header a request carries");
         }
     }
 
@@ -478,8 +620,9 @@ public sealed class HarnessFetch : IDisposable
             {
                 addresses = await names.ResolveAsync(host, cancellationToken).ConfigureAwait(false);
             }
-            catch (SocketException ex)
+            catch (Exception ex) when (ex is SocketException or ArgumentException)
             {
+                // A name the system's lookup takes no question of - longer than a name may be - is one no host answers.
                 throw new HttpRequestException($"'{host}' could not be looked up: {ex.Message}", ex);
             }
         }
@@ -615,6 +758,40 @@ public sealed record WebFetchAsk
     /// of which only the first 500 KiB are parsed (RFC 9309, 2.5), its reader leaving the line its cut ends in unread.
     /// </summary>
     public bool Head { get; init; }
+
+    /// <summary>The request's method: <c>GET</c> where none is said, or <c>POST</c> with <see cref="Body"/> - a search source's request.</summary>
+    public string Method { get; init; } = "GET";
+
+    /// <summary>A <c>POST</c>'s body, sent as JSON; <see langword="null"/> for a <c>GET</c>.</summary>
+    public string? Body { get; init; }
+
+    /// <summary>
+    /// The headers the asker sends beside the fetch's own <c>User-Agent</c> - a search source's, its <c>Accept</c> among
+    /// them - by name in any case; none that the request itself says, and never a key, which is <see cref="Key"/>.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Headers { get; init; }
+
+    /// <summary>
+    /// A search source's key, sent to the scheme, host and port first asked alone - never on a redirect to another, and
+    /// never by a page an agent fetches, which carries none - as a header or a query parameter added to what is sent, never
+    /// to the address decided, recorded or answered: a query parameter of its name is dropped from every address, and a
+    /// first address that names one is refused. A fetch that carries one begins at an https address - one of its
+    /// <see cref="WebFetchKey.Hosts"/>, where it names them - else nothing is sent: a key never travels in the clear.
+    /// </summary>
+    public WebFetchKey? Key { get; init; }
+}
+
+/// <summary>A key a search source is sent: the header or query parameter it is sent as, and its value, which no text made of it says.</summary>
+/// <param name="Name">The header's name, or the query parameter's.</param>
+/// <param name="Value">What is sent, the key in it.</param>
+/// <param name="Query">Whether it is a query parameter rather than a header.</param>
+public sealed record WebFetchKey(string Name, string Value, bool Query = false)
+{
+    /// <summary>The hosts alone it is sent to, the first address one of them - a gh login's, its host and that host's API; any where null.</summary>
+    public IReadOnlyList<string>? Hosts { get; init; }
+
+    /// <summary>The key by where it is sent alone, so no text made of it holds the value.</summary>
+    public override string ToString() => Query ? $"?{Name}" : Name;
 }
 
 /// <summary>How a fetch reads an answer that is HTML - within its bound, as it reads the answer's bytes.</summary>

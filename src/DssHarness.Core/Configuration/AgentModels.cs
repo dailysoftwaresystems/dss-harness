@@ -61,10 +61,11 @@ public sealed class AgentPolicyConfig
     public List<string> Restrictions { get; init; } = [];
 
     /// <summary>
-    /// The allow list of every web request an agent makes: each entry one domain, and a request is allowed only to
-    /// a domain on the list or a name under it. Left out where every address is allowed, which is the
-    /// default; given empty it is refused - leave the key out instead. A <c>Web(...)</c> restriction refuses
-    /// beside it whatever this allows.
+    /// The allow list of every page an agent reads and every result a search gives: each entry one domain, and an
+    /// address is allowed only to a domain on the list or a name under it - a search source's own requests are held
+    /// to the <c>Web(...)</c> rules alone. Left out where every address is allowed, which is the default; given
+    /// empty it is refused - leave the key out instead. A <c>Web(...)</c> restriction refuses beside it whatever
+    /// this allows.
     /// </summary>
     public List<string>? WebDomains { get; init; }
 

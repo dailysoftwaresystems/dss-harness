@@ -74,7 +74,7 @@ them.
 | `Sync` | Syncing a tree to hosts (`SyncService`, `SyncManifest`, `HostCopies`) |
 | `Testing` | `test` and ctest (`TestService`, `TestInvocationResolver`) |
 | `Tools` | `install-missing-tools` (`IToolProvisionService`), which judges each tool by the host's own survey (`IHostInspector`) |
-| `Web` | The harness's own fetch (`HarnessFetch`), the addresses it reaches (`WebAddresses`) and a page's text (`WebPageText`, over AngleSharp) |
+| `Web` | The harness's own fetch (`HarnessFetch`), the addresses it reaches (`WebAddresses`), a page's text (`WebPageText`, over AngleSharp) and how web text reaches a model (`WebBlocks`); `Web/Search` the web search - the sources (`WebSearchSources`, over the embedded `Agents/Templates/web-search-sources.json`), their kinds (`IWebSearchKind` in `Kinds/`), the search (`HarnessWebSearch`), the machine's pace (`WebSearchPace`), the run's record (`WebSearchRun`) and the keys (`WebSearchKeys`); `Web/Index` a sitemap source's index (`WebIndexes`, `SitemapFill`) |
 | `Worktrees` | Worktrees, root litter, host copies (`WorktreeService`, `RootLitterService`) |
 
 ## 3. Layering

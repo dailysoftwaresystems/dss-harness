@@ -99,6 +99,14 @@ public sealed class HarnessFetchTests
             TestContext.Current.CancellationToken));
 
         Assert.Equal(("https://example.com/defect", "a defect"), (Assert.Single(hops).Address, hops[0].Failure));
+
+        // What failed recording it never hides the defect: both are raised, the defect first.
+        var both = await Assert.ThrowsAsync<AggregateException>(() => fetch.FetchAsync(
+            "https://example.com/defect",
+            new WebFetchGate(_ => Task.FromResult<AgentPolicyAnswer>(new AgentPolicyAnswer.Allowed()), _ => throw new IOException("the disk is full")),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal([typeof(InvalidCastException), typeof(IOException)], both.InnerExceptions.Select(inner => inner.GetType()));
     }
 
     /// <summary>The fetch's bound holds the reading of a page's markup too, which markup nested deep makes long - its parts' as its text's.</summary>
@@ -123,6 +131,56 @@ public sealed class HarnessFetchTests
 
         Assert.Equal("no answer read within 1 s", fetched.Failure);
         Assert.Equal(fetched.Failure, Assert.Single(hops).Failure);
+    }
+
+    /// <summary>
+    /// An answer whose body outlives the bound keeps the status, type and headers already read: the pause a 429 asks for is
+    /// told, though its body never ended.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerWhoseBodyOutlivesTheBound_KeepsItsStatusAndHeaders()
+    {
+        using var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+        {
+            Headers = { RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(30)) },
+            Content = new StreamContent(new Stalled()) { Headers = { ContentType = new MediaTypeHeaderValue("application/json") } },
+        }), TimeSpan.FromSeconds(1));
+
+        var hops = new List<WebHop>();
+
+        var fetched = await fetch.FetchAsync(
+            "https://example.com/limited",
+            new WebFetchAsk { AnyType = true },
+            new WebFetchGate(_ => Task.FromResult(AgentPolicyAnswer.Allow), hop =>
+            {
+                hops.Add(hop);
+                return Task.CompletedTask;
+            }),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(("no answer read within 1 s", 429, "30"), (fetched.Failure, fetched.Status, fetched.Headers["Retry-After"]));
+        Assert.Equal(("no answer read within 1 s", 429, "application/json", "30"), (Assert.Single(hops).Failure, hops[0].Status, hops[0].Type, hops[0].Headers["Retry-After"]));
+    }
+
+    /// <summary>
+    /// A header no request carries - one a body says of itself - is refused where it is configured: one asked here, the
+    /// asker's or its key's, is a defect, never dropped unsaid, and its value is never told.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AHeaderNoRequestCarries_IsADefect(bool key)
+    {
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("x", "text/plain"));
+        using var fetch = Fetch(endpoint);
+        var ask = key
+            ? new WebFetchAsk { Key = new WebFetchKey("Expires", "k-secret") }
+            : new WebFetchAsk { Headers = new Dictionary<string, string> { ["Content-Language"] = "k-secret" } };
+
+        var defect = await Assert.ThrowsAsync<InvalidOperationException>(() => fetch.FetchAsync("https://example.com/", ask, WebFetchGate.Open, TestContext.Current.CancellationToken));
+
+        Assert.Equal($"'{(key ? "Expires" : "Content-Language")}' was asked to be sent, and is no header a request carries", defect.Message);
+        Assert.Empty(endpoint.Asked);
     }
 
     /// <summary>The bound is the whole asking's: each hop's time is taken from what is left of it, a redirect's among it.</summary>
@@ -587,6 +645,227 @@ public sealed class HarnessFetchTests
         Assert.NotNull(limited.Failure);
     }
 
+    /// <summary>
+    /// A POST sends its body as JSON, whatever type the asker says; the asker's headers are sent beside the fetch's own, an
+    /// Accept of theirs over the ask's, and none that the request itself says nor one that carries a key; and the key goes
+    /// to the scheme, host and port first asked.
+    /// </summary>
+    [Fact]
+    public async Task APost_SendsItsBodyAndHeaders_AndTheKeyToItsOwnHost()
+    {
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("{}", "application/json"));
+        using var fetch = Fetch(endpoint);
+        var ask = new WebFetchAsk
+        {
+            AnyType = true,
+            Accept = "text/plain",
+            Method = "POST",
+            Body = """{"q":"x"}""",
+            Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = "application/vnd.example+json", ["X-Api-Version"] = "2", ["User-Agent"] = "browser", ["Authorization"] = "Basic own", ["Cookie"] = "c=1" },
+            Key = new WebFetchKey("X-Api-Key", "k-123"),
+        };
+
+        var fetched = await fetch.FetchAsync("https://api.example.com/search", ask, WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.Null(fetched.Failure);
+        var sent = Assert.Single(endpoint.Asked);
+        Assert.Equal(("POST", """{"q":"x"}"""), (sent.Method, sent.Body));
+        Assert.Equal("application/vnd.example+json", sent.Headers["Accept"]);
+        Assert.Equal("2", sent.Headers["X-Api-Version"]);
+        Assert.Equal("application/json; charset=utf-8", sent.Headers["Content-Type"]);
+        Assert.Equal("k-123", sent.Headers["X-Api-Key"]);
+        Assert.Equal((false, false), (sent.Authorization, sent.Cookie));
+        Assert.Equal("dssharness/1.2.3 (+https://github.com/dailysoftwaresystems/dss-harness)", sent.UserAgent);
+        Assert.Equal("X-Api-Key", ask.Key.ToString());
+
+        // A type the asker says is the request's own to say: the body is JSON.
+        var typed = await fetch.FetchAsync(
+            "https://api.example.com/search",
+            ask with { Headers = new Dictionary<string, string> { ["Content-Type"] = "application/x-ndjson" }, Key = null },
+            WebFetchGate.Open,
+            TestContext.Current.CancellationToken);
+
+        Assert.Null(typed.Failure);
+        Assert.Equal("application/json; charset=utf-8", endpoint.Asked[^1].Headers["Content-Type"]);
+        Assert.False(endpoint.Asked[^1].Headers.ContainsKey("X-Api-Key"));
+    }
+
+    /// <summary>
+    /// A key sent as a query parameter is added to what is sent to the scheme, host and port first asked alone, escaped
+    /// whatever it holds: the address decided, recorded and answered is the one asked, which holds no form of it; a redirect
+    /// to another host carries none.
+    /// </summary>
+    [Fact]
+    public async Task AKeyInTheQuery_IsSentAlone_AndNoAddressHoldsIt()
+    {
+        const string Key = "a(b)*+/= c";
+        var endpoint = new WebEndpoint(request => request.RequestUri!.Host == "api.example.com" && request.RequestUri.AbsolutePath == "/first"
+            ? WebEndpoint.Redirect("https://cdn.example.net/next?page=2")
+            : WebEndpoint.Page("ok", "text/plain"));
+        using var fetch = Fetch(endpoint);
+
+        var (fetched, decided, hops) = await FetchAsync(fetch, "https://api.example.com/first?q=x", key: new WebFetchKey("key", Key, Query: true));
+
+        Assert.Null(fetched.Failure);
+        Assert.Equal(["q=x", "key=" + Uri.EscapeDataString(Key)], endpoint.Asked[0].Address.Query.TrimStart('?').Split('&'));
+        Assert.Equal(Key, Uri.UnescapeDataString(endpoint.Asked[0].Address.Query.Split("key=")[1]));
+        Assert.Equal("?page=2", endpoint.Asked[1].Address.Query);
+        Assert.Equal(["https://api.example.com/first?q=x", "https://cdn.example.net/next?page=2"], decided);
+        Assert.Equal(["https://api.example.com/first?q=x", "https://cdn.example.net/next?page=2"], hops.Select(hop => hop.Address));
+        Assert.Equal("https://cdn.example.net/next?page=2", fetched.Address);
+        Assert.Equal("?key", new WebFetchKey("key", Key, Query: true).ToString());
+
+        // An address with no query of its own is given one.
+        var (bare, _, _) = await FetchAsync(fetch, "https://api.example.com/plain", key: new WebFetchKey("key", "k", Query: true));
+
+        Assert.Null(bare.Failure);
+        Assert.Equal("https://api.example.com/plain?key=k", endpoint.Asked[^1].Address.AbsoluteUri);
+        Assert.Equal("https://api.example.com/plain", bare.Address);
+
+        // A fragment, which is never sent, never holds it.
+        var (fragment, _, _) = await FetchAsync(fetch, "https://api.example.com/plain?q=y#top", key: new WebFetchKey("key", "k", Query: true));
+
+        Assert.Null(fragment.Failure);
+        Assert.Equal("?q=y&key=k", endpoint.Asked[^1].Address.Query);
+    }
+
+    /// <summary>A host longer than a name may be is one no host answers: said, and nothing sent, as any name that cannot be looked up.</summary>
+    [Fact]
+    public async Task AHostLongerThanAName_IsNotLookedUp()
+    {
+        var host = string.Join('.', Enumerable.Repeat(new string('a', 50), 6)) + ".test";
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("ok", "text/plain"));
+        using var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), new SystemWebNames(), endpoint);
+
+        var fetched = await fetch.FetchAsync($"https://{host}/", WebFetchAsk.Page, WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith($"'{host}' could not be looked up: ", fetched.Failure, StringComparison.Ordinal);
+        Assert.Empty(endpoint.Asked);
+    }
+
+    /// <summary>A key never travels in the clear: a fetch that carries one and begins at an http address is refused by the key's rule, nothing sent, nothing decided.</summary>
+    [Fact]
+    public async Task AKey_IsNeverSentInTheClear()
+    {
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("ok", "text/plain"));
+        using var fetch = Fetch(endpoint);
+
+        var (fetched, decided, _) = await FetchAsync(fetch, "http://api.example.com/search?q=x", key: new WebFetchKey("key", "k", Query: true));
+
+        Assert.Equal(("http://api.example.com/search?q=x", HarnessFetch.KeyRule, "a key is sent over https alone, and this address is no https one"), (fetched.Address, fetched.Denial?.Rule, fetched.Denial?.Reason));
+        Assert.Empty(decided);
+        Assert.Empty(endpoint.Asked);
+    }
+
+    /// <summary>
+    /// A key is sent to the scheme, host and port first asked alone: a redirect on that host is asked with it, one to the
+    /// host over http, to another of its ports or to another host without it.
+    /// </summary>
+    [Fact]
+    public async Task AKey_IsNeverSentToAnotherSchemeHostOrPort()
+    {
+        var endpoint = new WebEndpoint(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/first" => WebEndpoint.Redirect("/second"),
+            "/second" => WebEndpoint.Redirect("http://api.example.com/third"),
+            "/third" => WebEndpoint.Redirect("https://api.example.com:8443/fourth"),
+            "/fourth" => WebEndpoint.Redirect("https://cdn.example.net/fifth"),
+            _ => WebEndpoint.Page("ok", "text/plain"),
+        });
+        using var fetch = Fetch(endpoint);
+
+        var fetched = await fetch.FetchAsync("https://api.example.com/first", new WebFetchAsk { Key = new WebFetchKey("Authorization", "Bearer t") }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.Null(fetched.Failure);
+        Assert.Equal(
+            ["https://api.example.com/first", "https://api.example.com/second", "http://api.example.com/third", "https://api.example.com:8443/fourth", "https://cdn.example.net/fifth"],
+            endpoint.Asked.Select(sent => sent.Address.AbsoluteUri));
+        Assert.Equal([true, true, false, false, false], endpoint.Asked.Select(sent => sent.Authorization));
+    }
+
+    /// <summary>
+    /// A key's query parameter is the fetch's alone: a redirect that echoes it back is followed without it - the key sent
+    /// once on its own host, never on another - and no address decided, recorded or answered holds it.
+    /// </summary>
+    [Fact]
+    public async Task AKeyEchoedByARedirect_IsDroppedFromEveryAddress()
+    {
+        const string Key = "a+b/c";
+        var echoed = "key=" + Uri.EscapeDataString(Key);
+        var endpoint = new WebEndpoint(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/first" => WebEndpoint.Redirect($"https://api.example.com/second?q=x&{echoed}"),
+            "/second" => WebEndpoint.Redirect($"https://cdn.example.net/third?{echoed}&page=2"),
+            _ => WebEndpoint.Page("ok", "text/plain"),
+        });
+        using var fetch = Fetch(endpoint);
+
+        var (fetched, decided, hops) = await FetchAsync(fetch, "https://api.example.com/first?q=x", key: new WebFetchKey("key", Key, Query: true));
+
+        Assert.Null(fetched.Failure);
+        Assert.Equal(["q=x&" + echoed, "q=x&" + echoed, "page=2"], endpoint.Asked.Select(sent => sent.Address.Query.TrimStart('?')));
+        Assert.Equal(["https://api.example.com/first?q=x", "https://api.example.com/second?q=x", "https://cdn.example.net/third?page=2"], decided);
+        Assert.Equal(decided, hops.Select(hop => hop.Address));
+        Assert.Equal("https://cdn.example.net/third?page=2", fetched.Address);
+    }
+
+    /// <summary>A first address that names the parameter its key is sent as is refused, nothing sent: the key would replace what it says.</summary>
+    [Fact]
+    public async Task AnAddressNamingTheKeysParameter_IsRefused()
+    {
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("x", "text/plain"));
+        using var fetch = Fetch(endpoint);
+
+        var (fetched, decided, _) = await FetchAsync(fetch, "https://api.example.com/search?q=x&page=2", key: new WebFetchKey("q", "k", Query: true));
+
+        Assert.Equal((HarnessFetch.KeyRule, "'https://api.example.com/search?q=x&page=2' names 'q', the parameter its key is sent as"), (fetched.Denial?.Rule, fetched.Denial?.Reason));
+        Assert.Null(fetched.Failure);
+        Assert.Empty(decided);
+        Assert.Empty(endpoint.Asked);
+    }
+
+    /// <summary>A key some hosts' alone - a gh login's - is refused at any other first address, nothing sent; at one of them it is sent.</summary>
+    [Fact]
+    public async Task AKeyOfSomeHosts_IsSentToThemAlone()
+    {
+        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("x", "text/plain"));
+        using var fetch = Fetch(endpoint);
+        var key = new WebFetchKey("Authorization", "Bearer t") { Hosts = ["github.com", "api.github.com"] };
+
+        var (elsewhere, _, _) = await FetchAsync(fetch, "https://ghe.example.com/api/v3/search", key: key);
+        var (api, _, _) = await FetchAsync(fetch, "https://API.github.com/search", key: key);
+
+        Assert.Equal((HarnessFetch.KeyRule, "its key is sent to github.com or api.github.com alone, and this address is ghe.example.com's"), (elsewhere.Denial?.Rule, elsewhere.Denial?.Reason));
+        Assert.Equal(("x", true), (api.Text, Assert.Single(endpoint.Asked).Authorization));
+    }
+
+    /// <summary>A 303 is followed as a GET with no body, as are a 301 and a 302 of a POST; a 307 and a 308 keep the method and body.</summary>
+    [Theory]
+    [InlineData(HttpStatusCode.SeeOther, "GET", null)]
+    [InlineData(HttpStatusCode.MovedPermanently, "GET", null)]
+    [InlineData(HttpStatusCode.Found, "GET", null)]
+    [InlineData(HttpStatusCode.TemporaryRedirect, "POST", "{}")]
+    [InlineData(HttpStatusCode.PermanentRedirect, "POST", "{}")]
+    public async Task ARedirectOfAPost_IsFollowedAsItsStatusSays(HttpStatusCode status, string method, string? body)
+    {
+        var endpoint = new WebEndpoint(request => request.RequestUri!.AbsolutePath == "/post"
+            ? new HttpResponseMessage(status) { Headers = { Location = new Uri("/answer", UriKind.Relative) } }
+            : WebEndpoint.Page("ok", "text/plain"));
+        using var fetch = Fetch(endpoint);
+
+        var fetched = await fetch.FetchAsync("https://example.com/post", new WebFetchAsk { Method = "POST", Body = "{}" }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.Null(fetched.Failure);
+        Assert.Equal(("POST", "{}"), (endpoint.Asked[0].Method, endpoint.Asked[0].Body));
+        Assert.Equal((method, body), (endpoint.Asked[1].Method, endpoint.Asked[1].Body));
+
+        // A GET stays a GET whatever redirects it.
+        var got = await fetch.FetchAsync("https://example.com/post", WebFetchAsk.Page, WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.Null(got.Failure);
+        Assert.Equal("GET", endpoint.Asked[^1].Method);
+    }
+
     private static HttpResponseMessage Gzipped(byte[] bytes, string type)
     {
         using var held = new MemoryStream();
@@ -602,13 +881,15 @@ public sealed class HarnessFetchTests
     private static async Task<(WebFetched Fetched, List<string> Decided, List<WebHop> Hops)> FetchAsync(
         HarnessFetch fetch,
         string address,
-        Func<string, AgentPolicyAnswer>? decide = null)
+        Func<string, AgentPolicyAnswer>? decide = null,
+        WebFetchKey? key = null)
     {
         var decided = new List<string>();
         var hops = new List<WebHop>();
 
         var fetched = await fetch.FetchAsync(
             address,
+            key is null ? WebFetchAsk.Page : WebFetchAsk.Page with { Key = key },
             new WebFetchGate(
                 asked =>
                 {
@@ -640,6 +921,41 @@ public sealed class HarnessFetchTests
 
         public override int Read(byte[] buffer, int offset, int count)
             => throw (brotli ? new InvalidOperationException("the stream's encoding does not decode") : new InvalidDataException("the stream's encoding does not decode"));
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>A body never sent: each read waits until it is given up.</summary>
+    private sealed class Stalled : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return 0;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
 
         public override void Flush()
         {

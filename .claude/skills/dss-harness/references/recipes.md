@@ -14,7 +14,8 @@ purpose: find a member by name. Sentences of `README.md` and `docs/architecture.
 - 7. Records a command writes
 - 8. A workflow
 - 9. A language of the codebase graph
-- 10. Before calling any change done
+- 10. A web search source or kind
+- 11. Before calling any change done
 
 ## 1. A command
 
@@ -143,7 +144,22 @@ and tested; embedding another takes one `EmbeddedResource` line in the test proj
    language reads and does not see is its `Help`, which `help codebase-graph` prints; `docs/architecture.md` "The
    codebase graph" says how each language's reader works, a paragraph each.
 
-## 10. Before calling any change done
+## 10. A web search source or kind
+
+1. **A built-in source** is an entry of `src/DssHarness.Core/Agents/Templates/web-search-sources.json`, in the form a
+   repository writes under `agentWebSearch.sources` - its kind, tags, description, terms, pace and its kind's keys -
+   reached only through an API its owner documents for programs, or one whose robots.txt does not refuse it; never a
+   search engine's results page. Store its owner's documented answer under `tests/dss-harness-test/fixtures/web-search/`
+   and add it to `WebSearchSourcesTests` (the names, `EachBuiltInSource_ReadsItsOwnersAnswer`); `defaults` names it, or a
+   tag of it, only where every step may ask it. `init` and help read the template; the README's sentence that names
+   the built-in sources is written out, and `HelpTests` holds it to the template, so add the name there.
+2. **A kind** is one class in `src/DssHarness.Core/Web/Search/Kinds/` implementing `IWebSearchKind`, made with no
+   argument: its `Kind` (a name of the search), `Version`, `Help` and `Keys`, and pure `Problems`, `Lookups`, `Found`,
+   `Request` and `Read`. Nothing registers it: the registry's one scan finds it (`WebSearchKindsTests`). Every rule that
+   is no kind's - the mask, the policy, the pace, the bound, the key, the run's record - is `HarnessWebSearch`'s alone.
+3. **A change of what a kind reads** raises its `Version`: a run's record (`web/searches.jsonl`) then asks again.
+
+## 11. Before calling any change done
 
 1. The whole suite passes on Windows and on Linux ([testing-and-conventions.md](testing-and-conventions.md) §1).
 2. Each new test goes red with the change reverted.

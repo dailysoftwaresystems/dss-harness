@@ -18,7 +18,8 @@ internal static class AgentRuns
         AgentPolicyGround? ground = null,
         AgentLimits? limits = null,
         AgentCommandSettings? commands = null,
-        IReadOnlyList<string>? withheld = null)
+        IReadOnlyList<string>? withheld = null,
+        AgentWebSearch? webSearch = null)
         => new(
             "system",
             "the task",
@@ -40,6 +41,7 @@ internal static class AgentRuns
             Ground = ground,
             Commands = commands ?? AgentCommandSettings.Default,
             Withheld = withheld ?? [],
+            WebSearch = webSearch,
         };
 }
 

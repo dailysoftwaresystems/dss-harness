@@ -124,6 +124,7 @@ public sealed partial class AgentToolRuntime : IDisposable
     private readonly IReadOnlyDictionary<string, AgentToolDefinition> _tools;
     private readonly IReadOnlyDictionary<string, JsonNode> _schemas;
     private readonly ConcurrentDictionary<string, string> _viewed;
+    private readonly Web.Search.WebSearchStep? _webSearch;
 
     /// <summary>The runtime of <paramref name="run"/>, its ground decided once.</summary>
     internal AgentToolRuntime(AgentRun run, IAgentEventSink events, AgentToolHost host)
@@ -137,10 +138,31 @@ public sealed partial class AgentToolRuntime : IDisposable
         _policy = new AgentPolicy(host.FileSystem, host.Platform, ground);
         _paths = new ConfinedPaths(host.FileSystem, host.Platform, ground);
         _records = new AgentCallRecords(host.FileSystem, run, host.Clock, events);
-        Tools = AgentTools.Offered(ground, run.Commands);
+        Tools = AgentTools.Offered(ground, run.Commands, run.WebSearch);
         _tools = Tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
         _schemas = Tools.ToDictionary(tool => tool.Name, tool => JsonNode.Parse(tool.Schema)!, StringComparer.Ordinal);
         _viewed = new ConcurrentDictionary<string, string>(StringComparer.FromComparison(host.Platform.PathComparison));
+
+        // The step's search, where it has a source to search: its sources' endpoints held to the Web(...) rules, an index's
+        // fill to the run's, its results to every rule of the web, webDomains among them; the indexes of its sitemap sources
+        // kept with the main checkout's.
+        _webSearch = _tools.ContainsKey(AgentTools.WebSearch) && run.WebSearch is { } search
+            ? new Web.Search.WebSearchStep(
+                search.Sources,
+                search.ResultsPerSource,
+                search.MaxPerStep,
+                run.Workspace.RunDirectory,
+                new Repository.HarnessLayout(run.Workspace.MainCheckout, run.Workspace.MainCheckout),
+                run.Mask,
+                search.Keys,
+                new Web.Search.WebSearchRules(_policy.WebSource, _policy.WebFill, _policy.Web),
+                new SearchRecords(this))
+            : null;
+
+        if (_webSearch is not null && host.Search is null)
+        {
+            throw new ArgumentException("the run's step has sources to search, and its host was given no web search to search them with", nameof(host));
+        }
     }
 
     /// <summary>The tools this run is offered, by name.</summary>
@@ -304,6 +326,7 @@ public sealed partial class AgentToolRuntime : IDisposable
             AgentTools.MovePath => MovePath(input),
             AgentTools.RunCommand => await RunCommandAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.WebFetch => await FetchAsync(input, cancellationToken).ConfigureAwait(false),
+            AgentTools.WebSearch => await WebSearchAsync(input, cancellationToken).ConfigureAwait(false),
             _ => throw new InvalidOperationException($"the runtime offers '{tool.Name}' and runs no such tool"),
         };
     }
@@ -412,6 +435,7 @@ public sealed partial class AgentToolRuntime : IDisposable
 /// <param name="fetch">The harness's own fetch.</param>
 /// <param name="clock">Times each call, and a search's pattern on each file.</param>
 /// <param name="environment">The tool's own environment, which a command would otherwise inherit; <see cref="AgentChildEnvironment.Own"/> where none is given.</param>
+/// <param name="search">The harness's own web search; none for a host whose runs search no source.</param>
 public sealed class AgentToolHost(
     IFileSystem fileSystem,
     IHostPlatform platform,
@@ -420,7 +444,8 @@ public sealed class AgentToolHost(
     ChildSessions sessions,
     HarnessFetch fetch,
     TimeProvider clock,
-    Func<IReadOnlyDictionary<string, string>>? environment = null)
+    Func<IReadOnlyDictionary<string, string>>? environment = null,
+    Web.Search.HarnessWebSearch? search = null)
 {
     /// <summary>Reads and writes the agent's files.</summary>
     internal IFileSystem FileSystem { get; } = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
@@ -445,6 +470,9 @@ public sealed class AgentToolHost(
 
     /// <summary>The tool's own environment, read as each command starts.</summary>
     internal Func<IReadOnlyDictionary<string, string>> Environment { get; } = environment ?? AgentChildEnvironment.Own;
+
+    /// <summary>The harness's own web search; none for a host whose runs search no source.</summary>
+    internal Web.Search.HarnessWebSearch? Search { get; } = search;
 
     /// <summary>Opens the runtime of <paramref name="run"/>: its tools, its policy and its records.</summary>
     /// <param name="run">The run, whose ground decides every call.</param>
