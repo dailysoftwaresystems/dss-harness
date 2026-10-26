@@ -370,13 +370,12 @@ public static partial class CommandAnalysis
         ["method", "header", "raw-field", "field", "preview", "jq", "template", "input", "cache", "hostname"];
 
     /// <summary>
-    /// The short options of <c>gh api</c>, each by its long name: <c>-i</c> takes no value, every other one takes one -
-    /// the rest of its word, after an <c>=</c> where one stands first, or the next word.
+    /// The short options of <c>gh api</c> that take a value, each by its long name: the rest of its word, after an
+    /// <c>=</c> where one stands first, or the next word. Any other letter - gh's <c>-i</c> among them - takes none.
     /// </summary>
     private static readonly Dictionary<char, string> GhApiShorts = new()
     {
         ['X'] = "method", ['H'] = "header", ['f'] = "raw-field", ['F'] = "field", ['p'] = "preview", ['q'] = "jq", ['t'] = "template",
-        ['i'] = "include",
     };
 
     /// <summary>
@@ -384,7 +383,8 @@ public static partial class CommandAnalysis
     /// an <c>=</c> or the next word, a short one's by <see cref="GhApiShorts"/> - and a cluster of short ones
     /// (<c>-iXDELETE</c>, <c>-iX DELETE</c>, <c>-if a=b</c>) read letter by letter, the first that takes a value taking
     /// the rest of the word or the next; and each word that is no option, nor an option's value, with no name. A
-    /// short letter gh does not have is read as one that takes no value, so the letters after it are read all the same.
+    /// short letter that takes no value - gh's -i, or one gh does not have - is read by itself, so the letters after it are
+    /// read all the same.
     /// </summary>
     /// <param name="arguments">The words after <c>gh</c>, <c>api</c> first.</param>
     private static IEnumerable<(string? Name, string Value)> GhApiWords(IReadOnlyList<string> arguments)
@@ -421,11 +421,9 @@ public static partial class CommandAnalysis
 
             for (var letter = 1; letter < word.Length; letter++)
             {
-                var named = GhApiShorts.GetValueOrDefault(word[letter]) ?? word[letter].ToString();
-
-                if (named is "include" || !GhApiShorts.ContainsKey(word[letter]))
+                if (!GhApiShorts.TryGetValue(word[letter], out var named))
                 {
-                    yield return (named, string.Empty);
+                    yield return (word[letter].ToString(), string.Empty);
                     continue;
                 }
 
