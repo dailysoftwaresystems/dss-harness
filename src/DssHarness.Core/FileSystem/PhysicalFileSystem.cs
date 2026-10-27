@@ -7,8 +7,12 @@ namespace DssHarness.Core.FileSystem;
 /// <inheritdoc cref="IFileSystem"/>
 public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFileSystem
 {
-    /// <summary>Attempts at the final rename before a transient refusal is reported.</summary>
-    private const int ReplaceAttempts = 10;
+    /// <summary>
+    /// Attempts at the final rename before a transient refusal is reported: about three seconds of them
+    /// (<see cref="ReplaceWait"/>). A virus scanner on a busy machine held a just-written file past the half second ten
+    /// attempts once gave.
+    /// </summary>
+    private const int ReplaceAttempts = 25;
 
     private readonly IFilePermissions _filePermissions = filePermissions;
 
@@ -628,11 +632,11 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
             }
             catch (IOException) when (attempt < ReplaceAttempts)
             {
-                Thread.Sleep(10 * attempt);
+                Thread.Sleep(ReplaceWait(attempt));
             }
             catch (UnauthorizedAccessException) when (attempt < ReplaceAttempts)
             {
-                Thread.Sleep(10 * attempt);
+                Thread.Sleep(ReplaceWait(attempt));
             }
         }
     }
@@ -642,7 +646,7 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     /// the caller does.
     /// </summary>
     /// <remarks>
-    /// The synchronous form blocks a thread-pool thread for up to 450ms per file while it waits.
+    /// The synchronous form blocks a thread-pool thread for up to three seconds per file while it waits.
     /// A tree sync writes thousands of files, and the parallel legs above it are sharing that pool:
     /// sleeping in it makes a transient lock on one file look like a stall in every other leg.
     /// </remarks>
@@ -659,10 +663,13 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < ReplaceAttempts)
             {
-                await Task.Delay(10 * attempt, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(ReplaceWait(attempt), cancellationToken).ConfigureAwait(false);
             }
         }
     }
+
+    /// <summary>The wait before the rename's next attempt: ten milliseconds more each time, a quarter second at most.</summary>
+    private static int ReplaceWait(int attempt) => Math.Min(10 * attempt, 250);
 
     /// <summary>
     /// Renames <paramref name="source"/> over <paramref name="destination"/> once: on Windows as POSIX does, so a file a

@@ -35,17 +35,19 @@ jobs:
       fail-fast: false
       #
       # Shards per runner, from what one run of the whole suite took there (11,961 tests,
-      # 2026-10-26): Linux about 5 minutes, one shard; Windows 33 (x86_64) and 50 (arm64),
-      # two; macOS 61 (arm64), two, and over 120 (x86_64), three - five macOS jobs, as many
-      # as GitHub runs at once.
+      # 2026-10-26): Linux about 5 minutes, one shard; Windows 33 (x86_64), two; Windows 50
+      # (arm64), three, since that runner's speed wanders threefold between runs; macOS 61
+      # (arm64), two, and over 120 (x86_64), three - five macOS jobs, as many as GitHub runs
+      # at once.
       matrix:
         include:
           - { os: ubuntu-latest, shard: 1, shards: 1 }           # Linux x86_64
           - { os: ubuntu-24.04-arm, shard: 1, shards: 1 }        # Linux arm64
           - { os: windows-latest, shard: 1, shards: 2 }          # Windows x86_64
           - { os: windows-latest, shard: 2, shards: 2 }
-          - { os: windows-11-vs2026-arm, shard: 1, shards: 2 }   # Windows arm64
-          - { os: windows-11-vs2026-arm, shard: 2, shards: 2 }
+          - { os: windows-11-vs2026-arm, shard: 1, shards: 3 }   # Windows arm64
+          - { os: windows-11-vs2026-arm, shard: 2, shards: 3 }
+          - { os: windows-11-vs2026-arm, shard: 3, shards: 3 }
           - { os: macos-26-intel, shard: 1, shards: 3 }          # macOS x86_64
           - { os: macos-26-intel, shard: 2, shards: 3 }
           - { os: macos-26-intel, shard: 3, shards: 3 }
