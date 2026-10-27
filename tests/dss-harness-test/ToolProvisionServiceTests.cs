@@ -1529,7 +1529,7 @@ public sealed class ToolProvisionServiceTests
                 platform,
                 identity,
                 new EmulatorProbe(platform, processes, fileSystem),
-                new DeveloperEnvironmentProbe(HostDoubles.Platform(PlatformId.Windows, "x86_64"), visualStudio),
+                new DeveloperEnvironmentProbe(HostDoubles.Platform(PlatformId.Windows, "x86_64"), visualStudio, fileSystem),
                 visualStudio.Provider(),
                 fileSystem,
                 new ProgramFloors(new LocalProgramResolver(platform, permissions, () => _path.Path), processes, platform),

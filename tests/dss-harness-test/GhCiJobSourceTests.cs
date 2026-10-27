@@ -17,7 +17,7 @@ public sealed class GhCiJobSourceTests
 
     /// <summary>
     /// Every call is started so that it cannot ask - gh, a credential manager, git - without any variable git reads a
-    /// repository from, and with the one limit of every call, five minutes.
+    /// repository from, and with its caller's limit, else gh's own five minutes.
     /// </summary>
     [Fact]
     public async Task EveryCall_CannotAsk_AndIsGivenTheLimit()
@@ -25,8 +25,8 @@ public sealed class GhCiJobSourceTests
         var requests = new List<ProcessRequest>();
         var gh = Gh(requests, Exited(0, "ok"));
 
-        _ = await gh.RunAsync("/repo", ["api", "x"], "so nothing was read", Token);
-        _ = await gh.RunAsync("/repo", ["api", "y"], "so nothing was read", Token);
+        _ = await gh.RunAsync("/repo", ["api", "x"], "so nothing was read", null, Token);
+        _ = await gh.RunAsync("/repo", ["api", "y"], "so nothing was read", TimeSpan.FromSeconds(90), Token);
 
         Assert.All(requests, request =>
         {
@@ -36,7 +36,7 @@ public sealed class GhCiJobSourceTests
             Assert.True(request.Environment.TryGetValue("GIT_DIR", out var dir) && dir is null);
             Assert.Equal("/repo", request.WorkingDirectory);
         });
-        Assert.Equal([TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5)], requests.Select(request => request.Timeout));
+        Assert.Equal([TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(90)], requests.Select(request => request.Timeout));
     }
 
     /// <summary>
@@ -47,20 +47,25 @@ public sealed class GhCiJobSourceTests
     public async Task ACallPastItsLimit_IsIncomplete_AFailedOne20_AndNoGh14()
     {
         var late = await Assert.ThrowsAsync<HarnessException>(
-            () => Gh([], new ProcessResult(-1, string.Empty, string.Empty, TimeSpan.FromMinutes(5), TimedOut: true)).RunAsync("/repo", ["api", "x"], "so CI was NOT read", Token));
+            () => Gh([], new ProcessResult(-1, string.Empty, string.Empty, TimeSpan.FromMinutes(5), TimedOut: true)).RunAsync("/repo", ["api", "x"], "so CI was NOT read", null, Token));
         var failed = await Assert.ThrowsAsync<HarnessException>(
-            () => Gh([], Exited(1, stderr: "HTTP 404: Not Found\n")).RunAsync("/repo", ["api", "x"], "so CI was NOT read", Token));
+            () => Gh([], Exited(1, stderr: "HTTP 404: Not Found\n")).RunAsync("/repo", ["api", "x"], "so CI was NOT read", null, Token));
 
         var runner = Substitute.For<IProcessRunner>();
         runner.FindExecutable(GhProcess.Executable).Returns((string?)null);
         var missing = await Assert.ThrowsAsync<HarnessException>(
-            () => new GhProcess(runner, GitLocalVariables.Fixed([]), NoVariables).RunAsync("/repo", ["api", "x"], "so CI was NOT read", Token));
+            () => new GhProcess(runner, GitLocalVariables.Fixed([]), NoVariables).RunAsync("/repo", ["api", "x"], "so CI was NOT read", null, Token));
 
         Assert.Equal(
-            (HarnessExit.Incomplete, "gh api x did not answer within 5 minutes, so CI was NOT read. Asked again, it may answer: a forge that is slow or a network that dropped says nothing of the code."),
+            (HarnessExit.Incomplete, "gh api x did not answer within 5 minutes, so CI was NOT read. Asked again, it may answer: a forge that is slow, or a network that dropped, refused nothing."),
             (late.ExitCode, late.Message));
         Assert.Equal((HarnessExit.CommandFailed, "gh api x failed, so CI was NOT read: HTTP 404: Not Found"), (failed.ExitCode, failed.Message));
         Assert.Equal(HarnessExit.ToolMissing, missing.ExitCode);
+        Assert.StartsWith(
+            "gh api x did not answer within 90 s, so CI was NOT read.",
+            (await Assert.ThrowsAsync<HarnessException>(
+                () => Gh([], new ProcessResult(-1, string.Empty, string.Empty, TimeSpan.FromSeconds(90), TimedOut: true)).RunAsync("/repo", ["api", "x"], "so CI was NOT read", TimeSpan.FromSeconds(90), Token))).Message,
+            StringComparison.Ordinal);
         await runner.DidNotReceiveWithAnyArgs().RunAsync(default!, Token);
     }
 
@@ -74,7 +79,7 @@ public sealed class GhCiJobSourceTests
         var runner = Substitute.For<IProcessRunner>();
         var gh = new GhProcess(runner, GitLocalVariables.Fixed([]), name => name == GhProcess.RepositoryOverrideVariable ? "other/repo" : null);
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => gh.RunAsync("/repo", ["api", "x"], "so CI was NOT read", Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => gh.RunAsync("/repo", ["api", "x"], "so CI was NOT read", null, Token));
 
         Assert.Equal(
             (HarnessExit.Refused, "GH_REPO is set (other/repo), so gh would answer for THAT repository, not the tree it was pointed at, so CI was NOT read. Unset it for this call."),
@@ -110,6 +115,24 @@ public sealed class GhCiJobSourceTests
             ],
             requests.Select(request => request.Arguments.ToArray()));
         Assert.All(requests, request => Assert.Equal(GhProcess.Limit, request.Timeout));
+    }
+
+    /// <summary>
+    /// A source given a limit gives it to every call it makes - a commit's checks, as every read but a log's, and a job's
+    /// log - and the source it came from keeps its own.
+    /// </summary>
+    [Fact]
+    public async Task ASourceGivenALimit_GivesItToEveryRead_AndTheOneItCameFromKeepsItsOwn()
+    {
+        var requests = new List<ProcessRequest>();
+        var gh = Gh(requests, Exited(0, """{"total_count":0,"check_runs":[]}"""), Exited(0, "log\n"), Exited(0, """{"total_count":0,"check_runs":[]}"""));
+        var source = new GhCiJobSource(gh);
+
+        _ = await source.Within(TimeSpan.FromMinutes(2)).ListCheckRunsAsync("/repo", "abc123", Token);
+        _ = await source.Within(TimeSpan.FromMinutes(2)).ReadJobLogAsync("/repo", 7, Token);
+        _ = await source.ListCheckRunsAsync("/repo", "abc123", Token);
+
+        Assert.Equal([TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(2), GhProcess.Limit], requests.Select(request => request.Timeout));
     }
 
     /// <summary>

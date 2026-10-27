@@ -357,6 +357,9 @@ public sealed class FlowCoordinator
     private readonly FlowRunPlace? _place;
     private readonly IReadOnlyDictionary<string, string> _agentModels;
 
+    /// <summary>Reads the text of a file the run's workflow names, by its name in the definition; null where the run reads none.</summary>
+    private readonly Func<string, string>? _workflowFile;
+
     /// <summary>Every agent name the session gave, a spent one's among them: never given again, though no step holds it any more.</summary>
     private readonly HashSet<string> _agentNamesGiven = new(StringComparer.Ordinal);
 
@@ -494,6 +497,11 @@ public sealed class FlowCoordinator
     /// The model each create-agent step makes its agent for, by the step's path (<see cref="WorkflowValidator.AgentModels"/>);
     /// a step it names none for is handed none, which its runner refuses.
     /// </param>
+    /// <param name="workflowFile">
+    /// Reads the text of a file the run's workflow names, by its name in the definition, throwing with why where it cannot
+    /// (<see cref="WorkflowNamedFiles.ReadText"/>): a pull request's body. Null where the run reads none, and a step that
+    /// needs one then fails 12, saying so.
+    /// </param>
     /// <exception cref="HarnessException">An input the run needs is missing, or a value is outside the ones its input takes.</exception>
     public FlowCoordinator(
         WorkflowDefinition definition,
@@ -505,7 +513,8 @@ public sealed class FlowCoordinator
         FlowResumeState? resume = null,
         string? runName = null,
         FlowRunPlace? place = null,
-        IReadOnlyDictionary<string, string>? agentModels = null)
+        IReadOnlyDictionary<string, string>? agentModels = null,
+        Func<string, string>? workflowFile = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(runner);
@@ -520,6 +529,7 @@ public sealed class FlowCoordinator
         _runName = runName;
         _place = place;
         _agentModels = agentModels ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        _workflowFile = workflowFile;
 
         foreach (var (path, _) in FlowScope.Declared(definition))
         {
@@ -740,14 +750,8 @@ public sealed class FlowCoordinator
 
         foreach (var bound in inFlight)
         {
-            try
-            {
-                bound.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                // The turn ended inside its bound already.
-            }
+            // A turn that ended inside its bound already has let go of it.
+            bound.TryCancel();
         }
     }
 
@@ -1228,15 +1232,9 @@ public sealed class FlowCoordinator
             {
                 using var timer = _clock.CreateTimer(_ =>
                 {
-                    try
-                    {
-                        boundPassed = true;
-                        boundToCancel.Cancel();
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                        // The turn answered inside its bound: the timer outlived the source it was to cancel.
-                    }
+                    // A turn answered inside its bound has let go of the source: the timer outlived it.
+                    boundPassed = true;
+                    boundToCancel.TryCancel();
                 }, null, TimeSpan.FromSeconds(seconds), TimeSpan.FromMilliseconds(-1));
 
                 // The turn is asked of the attempt the pause stopped, with every fact that attempt was asked with: a reason
@@ -2886,8 +2884,9 @@ public sealed class FlowCoordinator
                 // step's filterWhen - false gives the runner no filter and fills no template, so every test of the
                 // step's legs runs - a validate-plan's items and scope, the pull request's base orient says, an anchor
                 // check's rows or paths, a fold family step's lists of names - a fold's and a deletion's within,
-                // allow.new and allow.merge, a refresh's paths, except, stale and merge, a rebase's merge - and the
-                // commit the run last pushed for a ci-wait that names none. One that cannot be read - a filterWhen that
+                // allow.new and allow.merge, a refresh's paths, except, stale and merge, a rebase's merge - the commit
+                // the run last pushed for a ci-wait that names none, and a commit's folds upstream of it. One that cannot
+                // be read - a filterWhen that
                 // is neither true nor false among them - fails the step 12, as an unreadable when does.
                 var step = instance.Step;
                 var read = new Dictionary<string, FlowValue>(StringComparer.Ordinal);
@@ -5209,7 +5208,7 @@ public sealed class FlowCoordinator
         // it would be without visits. A member a resume holds carries its visit in its id; one made now takes the next.
         var visit = memberId is null
             ? scope.Visits.GetValueOrDefault(name) + 1
-            : FlowInstanceId.VisitOf(memberId, name);
+            : FlowInstanceId.VisitOf(memberId);
 
         var instance = new FlowInstance(
             scopeId ?? memberId ?? (visit == 1 ? MemberId(scope, declaration) : $"{MemberId(scope, declaration)}+{visit}"),
@@ -5218,6 +5217,10 @@ public sealed class FlowCoordinator
         {
             State = state,
             Visit = visit,
+
+            // One drawn ended - skipped, or failed for an unreadable when - ended as it was drawn; one drawn not run is
+            // ended by NotRun, and a resume gives back what its record says.
+            FinishedAt = state is FlowInstanceState.Skipped or FlowInstanceState.Failed ? _clock.GetUtcNow() : null,
             Failure = member && state is FlowInstanceState.Failed && !_replaying ? FlowFailure.Owed : null,
             DeclaredScope = member ? scope : null,
             GroupOf = member && scope.Group is not null ? GroupInstanceIn(scope) : null,
@@ -5458,6 +5461,9 @@ public sealed class FlowCoordinator
                 return PreviousOf(scope) is { } before ? StepRead(path, keysFrom: 0, scope, before) : new(FlowValue.Missing, 0);
             case "run":
                 return new(FlowValue.Of(RunValues()), 0);
+            case "carried":
+                // What one commit carries: read in a commit step's message and variables alone, which the validator holds it to.
+                return new(reader is { Step.Type: "commit" } ? FlowValue.Of(CarriedOf(reader)) : FlowValue.Missing, 0);
             case "source":
                 return new(source is null ? FlowValue.Missing : FlowValue.Of(SourceFacts(source, RaisedGroupOf(scope))), 0);
             default:
@@ -5645,17 +5651,21 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The run's own values, as <c>run</c> reads them, said without its always steps: only they read these, so none
     /// reads its own effect. The run is failed where a failure ended it - one its policy stopped the run on - and done
-    /// where every step that failed was passed over or handled.
+    /// where every step that failed was passed over or handled. Its texts of what it checked (<see cref="FlowChecks"/>)
+    /// are of every check of the run so far, its always steps among them.
     /// </summary>
     private JsonObject RunValues()
     {
+        var checks = _created.Where(instance => FlowChecks.IsCheck(instance.Step)).ToList();
+
         var main = _created.Where(instance => !instance.IsAlways).ToList();
         var failed = Standing(FlowFailure.EndedRun).Any(instance => !instance.IsAlways);
         var paused = _open.Count > 0 || main.Any(instance => instance.State is FlowInstanceState.Paused);
-        var leftover = string.Join("; ", _created
+        var leftover = _created
             .Where(instance => instance.Step.Repeat?.Leftover is not null && instance.Leftover is not null)
-            .Select(instance => $"'{instance.Id}' left {FlowValue.Of(instance.Leftover!.DeepClone()).AsTemplateText()}"));
-        var preExisting = string.Join("; ", _tally.Select(entry => $"{entry.State} - {entry.Line}"));
+            .Select(instance => $"'{instance.Id}' left {FlowValue.Of(instance.Leftover!.DeepClone()).AsTemplateText()}")
+            .ToList();
+        var preExisting = _tally.Select(entry => $"{entry.State} - {entry.Line}").ToList();
 
         return new JsonObject
         {
@@ -5666,9 +5676,99 @@ public sealed class FlowCoordinator
             ["paused"] = paused,
             ["stopped"] = _stopping,
             ["passedOver"] = main.Count(instance => instance.PassedOver),
-            ["leftover"] = leftover,
-            ["preExisting"] = preExisting,
+            ["leftover"] = leftover.Count > 0 ? string.Join("; ", leftover) : FlowChecks.None,
+            ["preExisting"] = preExisting.Count > 0 ? string.Join("; ", preExisting) : FlowChecks.None,
+            // What the run's agents assumed without asking: a reason step records its own (slice 31), and none does yet.
+            ["assumptions"] = FlowChecks.None,
+            ["ran"] = FlowChecks.Ran(checks.Select(CheckOf)),
+            ["notRun"] = FlowChecks.NotRun(checks.Select(CheckOf), PendingChecks(path => true, checks), passedOver: false),
+            ["red"] = FlowChecks.Red(checks.Select(CheckOf)),
         };
+    }
+
+    /// <summary>
+    /// What the commit <paramref name="commit"/> carries, as <c>carried</c> reads it: the texts of the checks upstream of
+    /// it - its ancestors in the flow, every visit and iteration of them, and never a sibling's - that ended after the
+    /// newest commit upstream of it that was done (<see cref="EndedAfter"/>) - so a later visit of a check, drawn again by
+    /// a redirect, is carried by the commit's later visit - or since the run's start where none was; with each check
+    /// upstream of it the run never drew, among what did not check.
+    /// </summary>
+    private JsonObject CarriedOf(FlowInstance commit)
+    {
+        var upstream = _created.Where(other => !ReferenceEquals(other, commit) && Upstream(other, commit)).ToList();
+
+        var before = upstream.Where(other => other.Step.Type == "commit" && other.State == FlowInstanceState.Done).Aggregate((FlowInstance?)null, (newest, other) => newest is null || EndedAfter(other, newest) ? other : newest);
+        var checks = upstream
+            .Where(other => FlowChecks.IsCheck(other.Step) && (before is null || EndedAfter(other, before)))
+            .ToList();
+
+        return new JsonObject
+        {
+            ["ran"] = FlowChecks.Ran(checks.Select(CheckOf)),
+            ["notRun"] = FlowChecks.NotRun(checks.Select(CheckOf), PendingChecks(path => FlowGraph.Waits(_definition, commit.Path, path), upstream), passedOver: true),
+            ["red"] = FlowChecks.Red(checks.Select(CheckOf)),
+        };
+    }
+
+    /// <summary>
+    /// Whether <paramref name="one"/> ended after <paramref name="other"/>: later, or at the same time and made later - what
+    /// an instance waits for is made before it, so of two that ended at once the one waited for comes first. One that has
+    /// not ended is after none that has.
+    /// </summary>
+    private bool EndedAfter(FlowInstance one, FlowInstance other)
+        => one.FinishedAt > other.FinishedAt || (one.FinishedAt == other.FinishedAt && _created.IndexOf(one) > _created.IndexOf(other));
+
+    /// <summary>
+    /// Whether <paramref name="target"/> is upstream of <paramref name="of"/>: an earlier visit or iteration of a group
+    /// both sit in holds it, or - in the same group instances - <paramref name="of"/>'s declaration waits for its own
+    /// (<see cref="FlowInstanceId.Precedes"/>, then <see cref="FlowGraph.Waits"/>). Another item of a <c>forEach</c> is a
+    /// sibling, never upstream.
+    /// </summary>
+    private bool Upstream(FlowInstance target, FlowInstance of)
+        => FlowInstanceId.Precedes(target.Id, of.Id) ?? FlowGraph.Waits(_definition, of.Path, target.Path);
+
+    /// <summary>One instance of a check, as <see cref="FlowChecks"/> reads it.</summary>
+    private static FlowCheck CheckOf(FlowInstance instance)
+        => new(
+            instance.Id,
+            FlowChecks.KindOf(instance.Step),
+            WorksInOf(instance),
+            instance.State,
+            instance.Output,
+            instance.Exit,
+            instance.SkippedBecause ?? instance.NotRunBecause ?? instance.Error,
+            instance.PassedOver,
+            instance.HandledBy,
+            instance.FinishedAt);
+
+    /// <summary>
+    /// The checks the definition holds that no instance <paramref name="drawn"/> holds has ended - done, failed, skipped or
+    /// never reached - by step name as <c>step (kind)</c>, since the instances still to come are not known yet,
+    /// among the steps <paramref name="counted"/> takes: those the schedule draws - never a handler, a step raised for an
+    /// issue, a step of the recovery, nor one inside any of those, which run only where something raises them.
+    /// </summary>
+    private IEnumerable<string> PendingChecks(Func<string, bool> counted, IReadOnlyList<FlowInstance> drawn)
+    {
+        var raised = new List<string>();
+
+        foreach (var (path, step) in FlowScope.Declared(_definition))
+        {
+            if (path == FlowScope.Recovery || path.StartsWith(FlowScope.Recovery + ".", StringComparison.Ordinal) || step.On is not null || step.Raised is not null)
+            {
+                raised.Add(path);
+                continue;
+            }
+
+            if (raised.Any(around => path.StartsWith(around + ".", StringComparison.Ordinal))
+                || !FlowChecks.IsCheck(step)
+                || !counted(path)
+                || drawn.Any(instance => instance.Path == path && instance.State is FlowInstanceState.Done or FlowInstanceState.Failed or FlowInstanceState.Skipped or FlowInstanceState.NotRun))
+            {
+                continue;
+            }
+
+            yield return $"{path} ({FlowChecks.KindOf(step)})";
+        }
     }
 
     /// <summary>The run's inputs as one object.</summary>
@@ -5843,9 +5943,10 @@ public sealed class FlowCoordinator
     /// a rebase's <c>merge</c>, each where it gives an expression, as the list of names its expression yields - one that
     /// may read nothing reads none where it does, or reads null, and one that yields anything but a list of names cannot
     /// be read; an <c>orient</c> step's <c>base</c>, the flow's pull request's base filled as the run's start fills it,
-    /// where a pull-request step names one; and a <c>ci-wait</c> step's <c>commit</c> where it names none, the commit the
-    /// run last pushed - the output of the push step that ended done last - where it pushed one. Why one could not be
-    /// read, as the step's record keeps it; null where each was.
+    /// where a pull-request step names one; a <c>ci-wait</c> step's <c>commit</c> where it names none, the commit the
+    /// run last pushed - the output of the push step that ended done last - where it pushed one; and a <c>commit</c>
+    /// step's <c>folds</c>, the instances of the steps that fold upstream of it (<see cref="Upstream"/>). Why one could not
+    /// be read, as the step's record keeps it; null where each was.
     /// </summary>
     private string? ReadAtStart(FlowInstance instance, Dictionary<string, FlowValue> read)
     {
@@ -5919,6 +6020,37 @@ public sealed class FlowCoordinator
         if (step.Type == "ci-wait" && step.Commit is null && LastPushed() is { } pushed)
         {
             read["commit"] = FlowValue.Of(pushed);
+        }
+
+        if (step.Type == "commit")
+        {
+            read["folds"] = FlowValue.Of(new JsonArray([.. _created
+                .Where(other => WorkflowStepTypes.Folds(other.Step) && Upstream(other, instance))
+                .Select(other => (JsonNode?)other.Id)]));
+        }
+
+        if (step.Type == "pull-request" && step.Body is { } body)
+        {
+            // The body's file is read as the step starts, live as every file a workflow names is, and filled by the one
+            // grammar as a template key is: its reads are the step's.
+            string text;
+
+            try
+            {
+                text = _workflowFile?.Invoke(body)
+                    ?? throw new HarnessException(HarnessExit.ConfigInvalid, $"'{body}', its body, is a file of the workflow, and this run reads none");
+            }
+            catch (HarnessException unread)
+            {
+                return Unreadable("body", instance.Id, unread.Message);
+            }
+
+            if (Filled(instance, text, out var unfilled) is not { } filled)
+            {
+                return Unreadable("body", instance.Id, unfilled!);
+            }
+
+            read["body"] = FlowValue.Of(filled);
         }
 
         if (step.Type == "orient")
@@ -6268,7 +6400,64 @@ public sealed class FlowCoordinator
             read,
             instance.Made is { } made ? new FlowMadeAgent(made, instance.MadeModel) : null,
             WorksInOf(instance),
-            instance.Step.Others is null ? null : CurrentTarget(instance)?.Agent);
+            instance.Step.Others is null ? null : CurrentTarget(instance)?.Agent,
+            WorkedFromOf(instance));
+
+    /// <summary>
+    /// The instances whose working sets a reason step's pack is seeded from (value 372), in order: the step it goes on
+    /// with, each step it depends on directly - its own <c>dependsOn</c> and <c>on</c> and each group's around it, as the
+    /// run holds them now, a group by each reason step in it - then its own earlier visits of the same work item, newest
+    /// first; each a reason step that began, once. None for every other step.
+    /// </summary>
+    private IReadOnlyList<FlowWorkedFrom> WorkedFromOf(FlowInstance instance)
+    {
+        if (instance.Step.Type != "reason")
+        {
+            return [];
+        }
+
+        var sources = new List<FlowInstance>();
+
+        // A step that goes on with its own work finds itself here, and is left out below: its earlier visits are its sources.
+        if (instance.Step.Resume is { } resumed && DeclaredOf(instance, resumed, "reason") is { } goesOnWith)
+        {
+            sources.Add(goesOnWith);
+        }
+
+        for (var at = instance; at is not null; at = at.GroupOf)
+        {
+            if (at.DeclaredScope is not { } scope)
+            {
+                continue;
+            }
+
+            foreach (var name in at.Step.DependsOn.Concat(at.Step.On is { } raised ? [raised.Step] : []))
+            {
+                if (scope.Members.TryGetValue(name, out var dependency))
+                {
+                    sources.AddRange(ReasonStepsOf(dependency));
+                }
+            }
+        }
+
+        sources.AddRange(_created
+            .TakeWhile(other => !ReferenceEquals(other, instance))
+            .Where(other => FlowInstanceId.SameStep(other.Id, instance.Id))
+            .Reverse());
+
+        return [.. sources
+            .Where(source => !ReferenceEquals(source, instance) && source.Step.Type == "reason" && source.StartedAt is not null)
+            .Distinct<FlowInstance>(ReferenceEqualityComparer.Instance)
+            .Select(source => new FlowWorkedFrom(source.Id, WorksInOf(source)))];
+    }
+
+    /// <summary>The steps <paramref name="instance"/> is or holds: itself, or each member of a group, at every level, as the run holds them now - in each scope the definition's order.</summary>
+    private IEnumerable<FlowInstance> ReasonStepsOf(FlowInstance instance)
+        => !instance.Step.IsGroup
+            ? [instance]
+            : ScopesUnder(instance).SelectMany(scope => DeclarationsOf(scope)
+                .Select(declared => scope.Members.GetValueOrDefault(declared.Name))
+                .OfType<FlowInstance>());
 
     /// <summary>What one instance waits on, where it waits: the question it asked, the resume, or what admission says keeps it - a dependency, the quiet an alone step waits for, a claim, a counter, a redirect, the resume.</summary>
     private static IReadOnlyList<string> WaitsOnOf(FlowInstance instance, IReadOnlyDictionary<FlowInstance, Admission> walk)

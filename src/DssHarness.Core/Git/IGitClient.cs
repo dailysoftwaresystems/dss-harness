@@ -205,6 +205,16 @@ public interface IGitClient
     Task<IReadOnlyList<byte[]?>> ReadBlobsAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The size in bytes of each blob <paramref name="objects"/> names, in order, asked of one git process without reading
+    /// any; <see langword="null"/> for one that is no blob git holds.
+    /// </summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="objects">Blob ids, or names git reads as one, none holding a line break.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git could not answer, or answered other than it was asked.</exception>
+    Task<IReadOnlyList<long?>> ReadBlobSizesAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// What git's attributes declare for each of <paramref name="paths"/> in the work tree at <paramref name="directory"/>:
     /// for each path, each of <paramref name="attributes"/> with what <c>git check-attr</c> answers for it - its value, or
     /// one of <see cref="GitAttributes"/>. Asked of git rather than parsed: git's own precedence between patterns,
@@ -652,5 +662,20 @@ public interface IGitClient
         string directory,
         IReadOnlyList<string> arguments,
         bool echoOutput = false,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs a git subcommand as <see cref="RunAsync"/> does, ended where it has not finished within
+    /// <paramref name="limit"/>: what it was asked is then not done, and the result says it timed out
+    /// (<see cref="GitCommandResult.TimedOut"/>).
+    /// </summary>
+    /// <param name="directory">The directory git runs in.</param>
+    /// <param name="arguments">Its arguments.</param>
+    /// <param name="limit">How long it may take.</param>
+    /// <param name="cancellationToken">Stops git.</param>
+    Task<GitCommandResult> RunWithinAsync(
+        string directory,
+        IReadOnlyList<string> arguments,
+        TimeSpan limit,
         CancellationToken cancellationToken = default);
 }

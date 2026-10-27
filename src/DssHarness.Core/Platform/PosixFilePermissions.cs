@@ -56,6 +56,21 @@ public sealed class PosixFilePermissions : IFilePermissions
         }
     }
 
+    public void CopyMode(string from, string to)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(from);
+        ArgumentException.ThrowIfNullOrWhiteSpace(to);
+
+        try
+        {
+            File.SetUnixFileMode(to, File.GetUnixFileMode(from));
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // Nothing is there to keep the mode of.
+        }
+    }
+
     public bool IsPrivate(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

@@ -83,7 +83,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `stop-orchestrator <run> [--now] [--json]` | Ask the engine running a run to stop where it stands, and wait 30 s; `--now` ends the engine's process - only on this machine, and only the process its owner names by its start |
 | `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there (`help workflows`). Nothing is run |
 | `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there; a file that cannot be written takes back what was written |
-| `list-agent-providers [--template] [--json]` | List the agent sections config.json declares: each provider, its keys' names in the order they are tried with whether the slot holds each - `present` or `missing`, never a value - its models and whether each is priced, the tiers and the clients; exit 0 whatever is missing; `--template` prints the sections as `init` writes them into a new config, to paste into an existing one (`help agent-clients`) |
+| `list-agent-providers [--template] [--json]` | List the agent sections config.json declares: each provider, its keys' names in the order they are tried with whether the slot holds each - `present` or `missing`, never a value - its models and whether each is priced, the tiers, the clients and each web-search source's key; exit 0 whatever is missing; `--template` prints the sections as `init` writes them into a new config, to paste into an existing one (`help agent-clients`) |
 | `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once no agent of it stands in the way - a live one with no worktree goes with it - and nothing is left below its directory under the worktrees root - no worktree, and no directory with a `.git` of its own, each named and refused (13) until then; its agents' evidence, transcripts, steps and sessions go only with `--delete-evidence` |
 | `check-root-litter` | Report files left loose at the root of the checkout, ignored ones included |
 | `write-anchor <id> --priority P --trigger TEXT` | Add an anchor: to the pending registry, or to done when closed |
@@ -103,11 +103,12 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `run <runner> [--legs a,b] [--time] [--input name=value] [--set-up]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run; `--set-up` brings up the set-ups the runner and its run checks' runners name around each leg's work, and down after (`help setups`). A run line names what only the tool knows of a leg - its build directory, the file its build makes, and the compiler its build identified, `{compiler_C}` or `{compiler_CXX}`, which is gcc on one leg and cl on another - and a step naming one of those has its leg built first (`help runners`) |
 | `check-mutations [--legs a,b] [--arms a,b] [--self-test] [--list] [--pending]` | Prove each selected leg's tests can fail: in worker copies of its tree, mutate each arm the registry declares, build it, witness every object depending on the site rebuilt, run its test binary whole and judge what reddened; `--self-test` sweeps the fixture the tool carries instead, through each leg's toolchain; `--list` says, without sweeping, each arm's last verdict on each leg and whether anything it was judged on has moved - of what a test binary reads at run time, only the files `mutations.runReads` names for its runner; `--pending` sweeps only the arms with no passed that still holds, and with nothing pending passes, sweeping nothing (`help mutations`) |
 | `stop-run <run> [--now] [--json]` | Stop a `build`, `test`, `run` or `check-mutations` run from another terminal, typed in the tree that ran it: asked of its dispatcher, which stops every leg where it stands as an interrupt does and writes its ledger, and waited for 60 s - said stopped only where its dispatcher took the stop; `--now` ends the dispatcher's process where it stands, with all it started - only on this machine, and only the process its owner file names by its start. On Windows a dispatcher that ends in any way, a kill among them, ends its local legs with it |
+| `query-codebase-graph <run> (--find <query> \| --node <symbol> \| --related <symbol> --relation <relation> [--depth <n>] \| --outline [<path or symbol>] \| --body <symbol>...) [--agent <agent>] [--json]` | Read a run's codebase graph by hand: one of the `graph` tool's read operations on the base or an agent's view, printing the answer an agent would be given - each node with its handle and `path:start-end #hash` - or with `--json` the same in one document. It reads only: no sync, no lock, nothing written; a view not made yet is said and the base answered; 13 where the run has no graph |
 | `clean [--legs a,b] [--dry-run] [--former-workers]` | Remove each selected leg's build directory, the mutation workers its sweeps and self-tests keep in its tree, and the copies of its tree it works in (`.legs`), wherever the leg runs, so a full disk can be freed; `--dry-run` says what each holds and exits as the clean would; `--former-workers` removes only the workers an earlier version kept beside the repository's trees, here and on each host (`help space`) |
 | `up <name> [--input name=value] [--json]` | Bring a set-up up on this machine: run the `up` command line `setUp` declares for it, at the root of the tree - a program and its arguments, no shell, a line per platform where they differ, its declared inputs filled in with what `--input` gives over their defaults (`help setups`) |
 | `down <name> [--input name=value] [--json]` | Bring a set-up down: run its `down` command line there, with the values it was brought up with; refused (13) while a leg of a run on this machine still uses it in that tree - in any of the repository's, for one the machine shares - whose last leg brings it down |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
-| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, workflows, the codebase graph, agent clients, anchors, layout, secrets, tools, runners, set-ups, verdicts, mutation testing and CI legs |
+| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, workflows, the codebase graph, the web search, agent clients, anchors, layout, secrets, tools, runners, set-ups, verdicts, mutation testing and CI legs |
 
 Every command takes `-C, --directory <dir>` and `-v, --verbose`.
 
@@ -244,6 +245,8 @@ in `config.json`.
 .orchestrators/<o>/agents/<agent>/sessions/<id>/      ignored; API clients only: one conversation with the provider, in the provider's own form
 .orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included
 .orchestrators/<o>/.../<instance>/children/<session>.json   ignored; in either kind of step, Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by stop-orchestrator --now - once the process that started it has gone
+.orchestrators/<o>/web/searches.jsonl        ignored; a run's web search: what each source found once for the run, and each query it answered, which the same query again is answered from; written by every client whose step searches
+.orchestrators/.web-index/<source>/          ignored; the harness's own index of a sitemap search source's site: its state, its pages and the pages it could not read, and its fill's record of each address it asked
 .mutations/                                  contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree
 .mutations/<key><mark>-<n>/                  ignored; a worker, a repository of its own, and its claim beside it
 .legs/                                       contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree
@@ -366,6 +369,26 @@ it starts. The leg's line names the environment -
 `developer environment: visualStudio (Visual Studio 18.0.11205.157, MSVC 14.50.35717, amd64)` - and
 `--json` carries it as `developerEnvironment`.
 
+A developer environment may also hold its legs to one MSVC toolset, with the optional
+`toolsVersion`, named as `VC\Tools\MSVC` names its toolsets: by two numbers (`14.44`), for the
+newest of that line, or by all three (`14.44.35207`), for that one - for a compiler that accepts
+only some MSVC releases, such as a CUDA toolkit's `nvcc`, which refuses one newer than it knows.
+Left out, `vcvarsall.bat` sets up the instance's default toolset. Only its form is checked when
+`config.json` is read: no toolset is built into the tool. The survey then takes the newest instance
+holding a toolset it names, with the newest of those, and a host with none turns the leg away as a
+tool missing, naming what each instance holds. `vcvarsall.bat` is run with `-vcvars_ver=` and that
+toolset, and one that sets up another fails the leg; the leg's line names the MSVC set up. Two
+environments of one kind keep two toolsets apart on one machine:
+
+```json
+{
+  "developerEnvironments": {
+    "visualStudio": { "kind": "visualStudio" },
+    "cuda": { "kind": "visualStudio", "toolsVersion": "14.44" }
+  }
+}
+```
+
 An ssh host's connection data lives in its own directory under `.harness-config/sshItems/`,
 which git ignores: an `.env` naming the address, the user and the port, a `.key`, and a
 `known_hosts`. `config.json` declares only the directory names, under `sshItems`, so the
@@ -456,9 +479,9 @@ shown in the pull request's body and the handoff. Where a workflow has such a st
 engine raises the triage and keeps the list; until the reasoning step runner is built, no step reports an issue.
 
 A reasoning step's `effort` is one level for every model it may run on, or a map giving each its own -
-`all` for the rest and a model's code for one, so the shipped workflow's heaviest steps run their
-Claude models at `xhigh` and GLM 5.3 at `max`, which is the highest it takes, and its other agents
-every model at one level - `high`, or `low` on the `fast` tier. Each model's level is checked against
+`all` for the rest and a model's code for one; the shipped workflow runs its heaviest steps at
+`xhigh` and its other agents at `high`, or `low` on the `fast` tier, every model of a step's tier at
+the one level. Each model's level is checked against
 what that model takes, and `validate-workflow` says, under the line that says a definition holds,
 every step's models and levels, each provider's prices for the models its steps may run on and the
 date they were read, and each key a step's model would read that the slot lacks. A `test` step's
@@ -473,11 +496,12 @@ entry says what it takes, holds and costs, with the date its numbers were read. 
 are `apiKeyNames`, the names of the variables that hold them in the git-ignored slot
 `.harness-config/workflows/.env/`, in the order they are tried; a second key of one company is a
 second name in the list, and no key is read from the process environment - a CI machine writes the
-file. `list-agent-providers` says it all without saying one key: each provider, client and tier,
-for every appointed key and token `present` or `missing`, and for each setting a client reads from
-the slot `present` or `absent` (none is needed), exit 0 whatever is missing; `--template` prints
-the agent sections as `init` writes them into a new config, to paste into an existing one - outside
-a repository too, and where the configuration it is to repair does not load. A name
+file. `list-agent-providers` says it all without saying one key: each provider, client and tier, for
+every appointed key and token `present` or `missing`, and for each setting a client reads from the
+slot and each web-search source's key `present` or `absent` (none is needed), exit 0 whatever is
+missing; `--template` prints the agent sections as `init` writes them into a new config, to paste
+into an existing one - outside a repository too, and where the configuration it is to repair does
+not load. A name
 declared in two of the slot's files is refused as the runner's value directories refuse one, a line
 whose name is no variable's name (`[A-Z][A-Z0-9_]*`) is refused by its line number alone - it may be
 part of a key pasted on its own - and a file where the slot's directory should be is refused rather
@@ -529,19 +553,26 @@ prefix (its trailing `*` any arguments, the bare command too), `Write` and `Read
 gitignore reads them, matched against the path as it stands under each of the agent's roots, and
 `Web` one domain, the domain and every name under it, or `Web(*)` the web whole. A repository
 declares them under `agentPolicy.restrictions`, and a workflow's definitions and steps add their
-own to them, all applied together; `agentPolicy.webDomains` is the allow list beside them (left
-out, any address, the machine's own and its network's among them), and a command that runs a
-program which fetches from the network - `curl`, `wget`, `Invoke-WebRequest`, `Invoke-RestMethod`,
-`iwr`, `irm`, `http`, `https`, `gh api` - is decided as a web request too, by each address it
-names, a proxy, a `curl --connect-to`'s or `--resolve`'s target and the proxy its environment names
-among them; one that reads what it reaches from a file (`curl --config`, `wget --input-file` or
-`--execute`) is refused where the web is held to any rule. Refused always, not configurable: the
+own to them, all applied together; `agentPolicy.webDomains` is the allow list beside them of the
+pages an agent reads and the results a search gives, a search source's own requests held to the
+`Web(...)` rules alone (left out, any address, the machine's own and its network's among them), and
+a command that runs a program which fetches from the network - `curl`, `wget`, `Invoke-WebRequest`,
+`Invoke-RestMethod`, `iwr`, `irm`, `http`, `https`, `gh api` - is decided as a web request too, by
+each address it names, a proxy, a `curl --connect-to`'s or `--resolve`'s target and the proxy its
+environment names among them; one that reads what it reaches from a file (`curl --config`,
+`wget --input-file` or `--execute`) is refused where the web is held to any rule. An address whose
+slashes after its scheme readers read apart - any scheme but its two slashes and a host after them
+(`http:/\host`, `gopher:/host`, `http:///host`), or no slash after an `http`, `https`, `ws`, `wss`
+or `ftp` scheme (`https:host`) - or whose host is spelled beyond ASCII (its `xn--` form is read as
+written), names no host the policy can decide, and is denied. Refused always, not configurable: the
 root actions (`sudo`, `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`,
 PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command
 names one), writes outside an agent's writable roots, every read and write of a credential slot or
 a Claude Code directory of the run's and every search over one, any command naming one - by `~` or
 `$HOME`, as a redirect's file or an option's value too - and this tool's own verbs and
-`run-side-task`, run by any program or from a response file, whatever any switch says. No agent
+`run-side-task`, run by any program or from a response file, whatever any switch says - and so are the `gh`
+commands that hand an agent's work to another agent or install what the next launch loads (`gh copilot`,
+`gh agent-task create`, `gh skill install`, `gh skill update`, `gh skill publish`). No agent
 starts while this tool itself runs elevated: its step is recorded never started, saying so, before
 any client is taken. A path is decided as asked and as resolved, and a refusal's places compare in
 any case on every system, a Windows short name read as its long one. On Windows a device prefix
@@ -549,38 +580,71 @@ any case on every system, a Windows short name read as its long one. On Windows 
 no drive and no share, a volume by its id or a pipe, is a place it cannot tell, and denied - and a
 shell's spelling of a drive (`/c/x`, `/cygdrive/c/x`, `/mnt/c/x`) is read both as the drive (`C:\x`)
 and as the directory it names on the current drive, an action allowed only where both are; a `cd`
-is followed the same way, from every place the command reached before it, up to 64 places, past
-which the command is denied. A
+is followed the same way - `pushd`, PowerShell's `Set-Location` and `Push-Location`, and the
+directory `env -C` or `pwsh -WorkingDirectory` starts its command in, each word it may go to -
+from every place the command reached before it, up to 64 places, past which the command is
+denied. A
 shell command is read whole before it is matched, as the shell's own parser reads it - split on
 `;`, `&&`, `||`, `|`, `&` and line ends, a comment and a here-document's lines never commands, the
 bodies of `$(...)`, backticks, `<(...)`, subshells, functions, loops and branches read as commands
 of their own, each substitution's word kept as the expansion it is, a `for`'s word list read for
-the paths it hands its body, a redirect kept apart wherever it stands, the `NAME=value` words
-before a program kept as its environment and a variable naming a program git or another tool runs
+the paths it hands its body, a redirect kept apart wherever it stands - decided by the file it
+names, never among the words a rule meets, and a quoted word spelled as one a word - the `NAME=value`
+(and `NAME+=value`) words before a program kept as its environment and a variable - so set, or
+declared by `export` and its kind, cmd's `set`, fish's `set`, csh's `setenv`, `setx` or PowerShell's
+`env:` items - naming a program git or another tool runs
 (`GIT_SSH_COMMAND`, `GIT_PAGER`, `EDITOR` and their kind) read as that program's command line, as
 is the value of git's own setting (`-c`, `--config-env`, `GIT_CONFIG_*`) of a key git runs as one,
 wrappers (`env`, `nohup`, `time`, `timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`,
-`eval`, `busybox`, `Invoke-Expression`) stripped, and it goes into `sh -c` and every other
-shell's, a here-string or here-document a shell reads, `cmd /c`, `powershell -Command` and a
+`eval`, `busybox`) stripped, and it goes into `sh -c` and every other
+shell's (fish's `-C` scripts too, its options read as fish reads them), the here-string, here-document or file a shell reads as the last input its descriptor 0
+is given (`/dev/stdin` and PowerShell's `-` among its names), `cmd /c`, `powershell -Command` and a
 decoded `-EncodedCommand`, and what `trap`, `watch`, `script` and `flock` run, by each shell's own
-quoting, to four levels, and into a shell another program runs with its script
-(`find -exec sh -c`) - so `git -C x push` is `git push`, and `env A=1 git push` and
+quoting - PowerShell by a reader of its own grammar: its commands, pipelines, strings, here-strings,
+variables, `$(...)`, `@(...)`, `(...)`, script blocks, hashtables, assignments and keywords'
+conditions and blocks, each statement a block holds read as one that may run, `Invoke-Expression`'s
+one string - by whatever name it is called, the call operator's string or a module's name before
+it among them - read as a script of its own - to four levels, and into a shell another program runs with its script
+(`find -exec sh -c`, find's words read to their `;`), a command `find -exec`, `fd -x`,
+`rg --pre` or `--hostname-bin`, `parallel` or an option of a git subcommand runs - a pack program a transport runs
+(`--upload-pack`, `--receive-pack`, `--exec`, clone's `-u`), difftool's `--extcmd`, rebase's `--exec`, grep's
+`--open-files-in-pager`, `bisect run`, `submodule foreach`, filter-branch's filters and send-email's commands - read as its
+own, each word it fills in an expansion, `env -S`'s
+string split by env's own rules, and `$((...))`, `((...))` and `$[...]` read as arithmetic, their
+substitutions as commands - so `git -C x push` is `git push`, and `env A=1 git push` and
 `A=1 /usr/bin/git push` are too; every word of a command is tried as the program of the words
-after it, a program read by its name. A word the shell expands where a rule reads a literal one
+after it - but a word of a program that runs none of its words, its data (`grep`, `rg`, `echo`,
+`cat`, `which` and their kind) - a program read by its name in any case, a cmd line's `@` dropped, `git-push` read as `git push`. A word the shell expands where a rule reads a literal one
 makes the command one the rule may be, refused as such (`git $VERB` under `Run(git push *)`), and
 a pattern, a brace or a `file://` address that may name a credential slot or a Claude Code
 directory is refused as naming it. What it cannot read whole it denies, said in help, not guessed
 at: a script nested past four levels, a shell that reads its script from its input
-(`curl ... | sh`) or a process substitution, a program named by a variable, a substitution, a
-pattern or a brace, and an option of git's or gh's own before its command that it does not know;
+(`curl ... | sh`), a process substitution or another open descriptor (`/dev/fd/3`, `<&3`), an
+`env -S` string holding a backslash, whose escapes are env's own, an alias it gives, a script another
+program fills in (`find -exec sh -c 'echo {}'`), PowerShell's code no word spells (a static
+method, an instance method but a string's, a collection's or a date's, a function's or an alias's
+text, a class, `using`, its stop-parsing `--%`, a script `Invoke-Expression` is handed by no one
+string, and a command line `Start-Process`, WMI, the task
+scheduler or `Add-Type` is handed), a
+program named by a variable, a substitution, a
+pattern or a brace, and an option of git's, gh's, fish's or Windows PowerShell's own before its command that it does not know;
 what it does not see is the inside of a script file a command runs. The worktree rules
 (`agentPolicy.worktreeRules`, on unless turned off) keep an agent's worktree a thing the engine
 can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
 `help agent-clients`) - a git configured where it runs, by `-c` or `--config-env` of any key but
-the ones that only shape what git prints, or by its environment, the `git config` it is and
-still the command it runs -
-and `gh pr merge`, `gh workflow run`, `gh run rerun`, the `gh api` endpoints and GraphQL mutations
-that merge or start CI and `gh alias set` are refused (reading git stays allowed), git's own
+the ones that only shape what git prints, by clone's own `-c` or `--config` and clone's and init's `--template`, or by
+its environment - a home it reads its global
+configuration from (`HOME`, `XDG_CONFIG_HOME`, Windows' `USERPROFILE`) among it - the `git config`
+it is and still the command it runs - the `gh` commands that run them or write gh's own configuration
+(`gh pr checkout`, `gh pr close`, `gh issue develop`, `gh repo set-default`, `gh repo fork`, `gh repo create`,
+`gh repo rename`, `gh auth setup-git`, `gh config set`; a command by one of gh's own aliases - `gh pr co` - read as
+the command it names, and `GH_CONFIG_DIR` or another place gh reads its configuration from, set for a command, the
+`gh config set` it is), and the `gh` commands that merge or start CI (`gh pr merge`, `gh pr update-branch`, `gh repo sync`,
+`gh workflow run`, `gh run rerun`, `gh pr create`, `gh release create`, `gh release edit`), the `gh api` endpoints and
+GraphQL mutations that reach the same - a ref, a file, a pull request or a release written through the API among them - `gh alias set`, `gh extension exec`, and a `gh` command named by none of gh's own (an alias - gh's own `co` among them - or an
+extension, a name for any command, where `gh` runs - its command's own program, or behind one that runs the words
+after it, `setsid`, `stdbuf`, `ssh`, `wsl` and the others `CommandAnalysis.CommandRunners` names) are refused (reading
+git stays allowed), git's own
 files - a `.git`, file or directory, at any depth beneath a root and in any case, a nested
 repository's and a submodule's too (`Write(**/.git/**)`) - are not written by a tool whatever
 `protectedPaths` says, and an agent does not edit its own policy
@@ -600,13 +664,16 @@ at all. For Claude Code the same policy is rendered, never re-decided, into the 
 settings: an ask rule for every tool, and the restrictions as deny rules, absolute once for each
 root in the POSIX form Claude Code matches (`//c/x` for `C:\x`), a `Write` rule as the `Edit` rule
 Claude Code holds its file tools' writes to, a read of each credential slot and Claude Code
-directory beside them. This is policy, not
+directory beside them; a call those rules refuse before the engine is asked is counted and
+recorded as Claude Code's own denial. This is policy, not
 a sandbox - a program an agent runs opens files as the user it runs as, a file of the credential
 slot among them; what it is never given is a key in its environment, and what no file tool of an
 agent touches is the slot itself, in any root. Where this tool cannot decide a call it denies it, never allows: nothing
 runs while the host that would answer is silent or gone. The policy is built and holds every
-action behind it; the `claude-code` client asks it of every call, the API clients are what comes
-next, and no command of this build runs an agent yet.
+action behind it; the `claude-code` client asks it of every call, the tool runtime below decides
+by it each call it runs - the web's of the `claude-code` client, served through the engine's tool
+server, and every call of the API clients, the `claude-api` and `glm` clients below - and no
+command of this build runs an agent yet.
 
 The `claude-code` client starts Claude Code once for each launch, a new session every time -
 never resumed or continued, keeping no session file (one a launch leaves all the same is removed
@@ -614,14 +681,24 @@ once it has ended, however it ended, and said) - streamed both ways: the step's 
 message on its input, never an argument, and the launch runs in the agent's working directory with
 every other root it reaches added. It is given its model and no fallback, the step's effort, turns and budget, and the tools of
 the agent's capabilities and no other (`read`: `Read`, `Grep`, `Glob`; `write`: `Write`, `Edit`,
-`NotebookEdit`; `run`: `Bash`; `web`: none of Claude Code's), never one that starts agents, loads
-skills, asks a person or plans. Every call is asked of the engine before it runs and answered from
-the policy, a denial with its rule's sentence the model reads and a line of the step's
-`denials.jsonl`; an answer that does not read against the step's schema is sent back, each problem
-by its path; a message the engine gives an agent at work is written to the same launch; a handoff
+`NotebookEdit`; `run`: `Bash`; `web`: none of Claude Code's, but `mcp__dssharness__web_fetch` and
+`mcp__dssharness__web_search` of the engine's tool server beside them), never one that starts
+agents, loads skills, asks a person or plans. A step with the web takes the harness's own
+`web_fetch` - and `web_search`, where it has a source to search - from the engine's tool server:
+the one MCP server, of type `sdk`, named `dssharness`, that the launch's `--mcp-config` names
+beside `--strict-mcp-config` (the step's `claude-mcp.json`), served in the engine's own process
+over the launch's control channel; each call of it is asked of the engine first, by its ask rule,
+and run by the tool runtime below as on the API clients. A launch whose init does not show that
+server connected with its tools taken, or that connects another, never started, and a call of it
+the engine did not allow runs nothing and fails the step. Every call its own deny rules do not refuse first is asked of the
+engine before it runs and answered from the policy, a denial with its rule's sentence the model reads and a line of the step's
+`denials.jsonl`; an answer sent back (below) and a message the engine gives an agent at work are
+written to the same launch; a handoff
 asked interrupts the turn and asks the agent for its handoff, no tool running in that turn; every
 message is held to the model asked for; the launch's environment holds nothing of a Claude Code
-session the tool was started in and no credential but the one its `auth` gives; and a key Claude
+session the tool was started in but a name `agentPolicy.keepEnvironment` gives back, none of what
+every child of an agent loses (the tool runtime
+below), and no credential but the one its `auth` gives; and a key Claude
 Code reports invalid is passed over, the next key given a new launch while the step has done no
 work. The user's own `settings.json` in the launch's Claude Code directory and the user's
 `CLAUDE.md` reach every agent on this client, but no hook of theirs runs: every launch's settings
@@ -633,11 +710,207 @@ client a directory of its own in the slot: `CLAUDE_CONFIG_DIR`, or the name
 `agentClients.claude-code.configDir` gives. The client holds every launch to the protocol itself:
 one that does not answer the host's `initialize` request within 30 s, that works before its init
 says what it runs as, whose init offers a tool it was not given or names a credential its `auth`
-did not give, or that refuses by itself a call the engine allows never started; a call it ran that the engine was
+did not give, or that refuses by itself a call the engine allows never started; a call it refuses
+by itself that the engine refuses too - by its own deny rules, a file tool's told by its result
+alone - is a denial of Claude Code's, counted and recorded once; a call it ran that the engine was
 never asked about, or refused, fails the step by the tool's name; each is ended at once. A message
 no turn takes within the stall bound stalls the step; a declined request ends it `Refused`, and
 an account at its limit `RateLimited`, with when the limit lifts where Claude Code says.
 `help agent-clients` says it whole.
+
+The tool runtime is the harness's own tools, built for the API clients to give their agents in
+place of a client's own - the `claude-api` and `glm` clients below - and serving
+the `claude-code` client the web's through the engine's tool server: `view_file`, `find_files` and `search_files` (read),
+`create_file`, `replace_in_file`, `insert_in_file`, `create_directory`, `delete_file`,
+`delete_directory` and `move_path` (write), `run_command` (run) and `web_fetch` and `web_search` (web), each under
+the capability that gives it; the run's reporter is given those that read and no other. Each
+call is decided before it runs and recorded: a tool the step was not given, or an input its schema
+does not hold, is refused with how the tool is called; a path is read against the agent's working
+directory - refused spelled empty, with a NUL or a leading `~`, and on Windows a share or a
+device's prefix, a device's name (`CON`, `NUL`, `COM1` and the rest), a drive's own directory
+(`C:x`) or an alternate data stream -
+its links followed (one whose links cannot be followed refused as undecided) and held to the
+agent's roots: a read inside one of them, a write inside a
+writable one and through no link below it (a link put in place between the check and the act is
+the known limit); then the policy is asked of it, a deleting or moving tool a write to every path it
+touches, at both ends of a move. A directory deleted or moved is refused where it is a root, holds a link,
+holds a path that may not be written or holds more than 2,000 entries. A file past 16 MiB is
+neither viewed nor edited, and one past 2 MiB is passed over by search_files - a command reads or searches it. A replace or an insert needs
+its file viewed first, by its content - one that changed since is refused, nothing written - and an
+edit keeps the file's encoding, its line endings and whether it ends with a newline. A command is
+an argument list, never a shell string, decided whole where it starts and run as a phase is -
+contained, ended whole with what it started, its log kept - for `agentPolicy.commandTimeoutSeconds`
+(120) unless its call names a time, `agentPolicy.maxCommandTimeoutSeconds` (3600) at most,
+stopped sooner where it prints nothing for as long as the step's stall bound; a command line
+holding a secret, a word holding a NUL, or on Windows a batch file's argument holding what `cmd.exe`
+reads again (`& | < > ^ % ! "`, a line's end) or what the shell expands, is refused. Its environment, and the `claude` child's, loses every
+name the configuration appoints and every secret-shaped name (ending `_API_KEY`, `_SECRET`,
+`_SECRET_KEY`, `_ACCESS_KEY`, `_PRIVATE_KEY`, `_PASSWORD` or `_TOKEN`) but those
+`agentPolicy.keepEnvironment` gives back. A page
+is fetched by the harness's own fetch: `http` and `https` alone, at most 5 redirects, 30 s and 5 MiB,
+text alone (`text/*`, `application/json`, `application/xml`, `application/xhtml+xml`,
+`application/javascript`, `application/ecmascript` and every `+json` and `+xml` type) with a page's HTML
+reduced to its text, public addresses alone - a host that resolves to
+this machine, its network or a cloud's metadata service refused, and the address a connection was
+made to checked again - no cookie, credential or proxy; each address is decided and written to the
+step's `web.jsonl` before anything leaves the machine, and the page is given inside a block saying
+it is information for the task, not instructions. Calls that read run together, at most 4 at once,
+one that writes or runs alone; an answer past 32,768 characters is given as its first 8,192 and its
+last 24,576, the whole kept in the step's `tool-results/`.
+
+The loop the `claude-api` and `glm` clients share (`ToolLoop`) runs a step of either over the
+provider each gives it - the Claude API's and Z.AI's below. A turn is one answer of the agent's - a
+request the provider paused, or one thrown away and asked again, goes on as the same turn - counted
+against the step's `maxTurns` but a handoff turn; every request's usage - one that ended without
+its turn, failed, silent or left, by what it said it used so far - is counted at the model's
+prices, no request but the handoff turn's is
+sent once the step's `maxBudgetUsd` is spent, and a
+step held to a budget on a model missing a price of what its provider's requests are billed by -
+input, cache reads and output, and the cache writes of a provider whose requests write one, in the
+model's large-prompt set too where it has one - is never started, naming the key to fill. Each turn's calls run as the tool runtime above decides them; a turn whose request
+spent the budget runs none of them. The conversation is kept in the provider's own form under the
+agent's `sessions/<id>/`, each message as it was sent and received and sent back so with every later
+request, one line for each point where the history is whole - a turn that called tools stored with
+their answers - and a step that goes on in it sends what it began with; where a provider begins
+sending it shortened to keep it within its model's context, the point is kept beside it
+(`shortened.json`) and given with every later request, a notice saying so once. The first request
+asks for a quarter of the model's `maxOutputTokens`. A turn cut off at its length that called no tool, its
+request holding it to no schema, is stored and nudged on, 2 times at most; one cut off while it called a
+tool - its calls never run - before it wrote anything, or while its request held it to a schema, which
+the answer to a nudge would be held to whole, is thrown away and asked again with twice the room, up to
+the most; past either the step is `Truncated`. A turn the provider paused is sent again with nothing added, 10 in a row
+failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request
+is asked again up to 6 times after a wait that doubles from 2 s to 60 s, or the one the provider
+names; a rate limit past them, or naming a wait past 300 s, is the account at its limit
+(`RateLimited`) - the model's on the key it was sent with, or the key's whole where its balance is
+spent, each named - a service failing past them, or naming such a wait, fails the step, and one
+silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it;
+a model the provider does not serve the key never starts the
+step before its first answer and fails it after; a key the provider refuses is passed over for the
+run's next, the same request sent again with it. A handoff asked abandons the request under way and cuts the calls
+running, each answered `interrupted: the run is pausing; it may have run part way`, then asks the
+agent in one more message of the conversation, held to the handoff's bound instead of the step's
+time, no tool run in that turn; a message the engine gives an agent at work is given after the
+results of the calls it is running, and an answer written while it was is not the step's.
+
+The `claude-api` client works a step through the Claude API by the loop above, every call run by
+the tool runtime: each request is posted to its provider's `api` with `/v1/messages` after it,
+signed with a key of the provider's (`x-api-key`), under `anthropic-version: 2026-10-21`, and its
+answer streamed. It is given the run's entries - its provider, its model and, where the
+configuration declares one, its own entry under `agentClients`, every key at its default where it
+declares none - and never starts without the first two, or on a provider of a type but `anthropic`. A
+request sends the model, the system prompt as one block, the tools - each streaming its input as it
+is written - and the messages as the conversation stored them; adaptive thinking, its summary
+shown; the step's effort as `output_config.effort`; old tool uses cleared by the server as the
+context fills (`clear_tool_uses_20250919`, under the `context-management-2025-06-27` beta), each
+clearing said in a notice; and the system prompt and the conversation cached for
+`agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said), so a budget needs the
+model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour. A
+step with a fallback that can go on here sends the `fallback-credit-2026-07-01` beta, and a request
+the model declines ends the step `Refused`, with its category and the credit the API gave for it on
+the result; no request carries `fallbacks` or a `server-side-fallback-*` beta, for the engine's
+fallback is the only one a step has. Two keys are `claude-api`'s alone: `betas`, sent beside the
+tool's own, each one word and never the API's fallback's, and `cacheTtl`; three are both API
+clients': `requestExtras`, an object merged into every request's body - a member it adds sent as
+given, an object's members merged into the tool's own - refused where it sets what the tool sends
+itself or, here, `fallbacks` or a sampling parameter (`temperature`, `top_p`, `top_k`), which
+`anthropic-version 2026-10-21` refuses on every model, and free to add a tool choice or
+`thinking.budget_tokens` where the step's model takes one; and `maxRetries` and
+`maxRetryWaitSeconds`, the loop's tries and longest wait (6 and 300 where nothing is said). A
+spend limit reached - the organization's monthly cap, a 429 whose error names
+`enforced_spend_limit_reached`, or one the organization or a workspace set, a 400 that says so - is
+the key's limit, the step `RateLimited` at once until the date the API names; a 401 is a key
+refused, passed over for the next; a 402 the key's balance spent, the step
+`RateLimited` at once; a 429 the model's limit on that key, waited out within those tries and the
+step `RateLimited` past them; a 413, a prompt too long or an answer the model's
+context could hold no more of is the context exhausted (`ContextExhausted`); a 403, a 404, or a 400
+answering a conversation's first request - a model the key's organization is not given, such as one
+that needs a data retention the organization does not keep - is a model the provider does not serve
+the key, naming it; an overload, a server's error, a request timed out, a conflict, a network that
+failed and a stream cut or ended before its message are asked again; and any other 400 fails the
+step, said in the API's own words with the request it names.
+
+The `glm` client works a step through Z.AI by the loop above, every call run by the tool runtime:
+each request is posted to its provider's `api` with `/chat/completions` after it, signed with a key
+of the provider's (`Authorization: Bearer`), and its answer streamed. It is given the run's entries
+as the `claude-api` client is, and never starts without its provider and model, or on a provider of
+a type but `zai`. A request sends the model; the system prompt as the first message and every
+message as the conversation stored it - the engine's as a user message of text, an answer's calls
+each answered by a tool message, in order; the tools as functions, their calls' arguments streamed
+(`tool_stream`); the model's thinking on, the step's effort as `reasoning_effort` (`low`, `medium`,
+`high`, `xhigh`, `max`); and `max_tokens` - no sampling parameter or tool choice of the tool's own,
+which `requestExtras` may add, and no tool of Z.AI's, for the web is the harness's own. Z.AI caches what a request repeats by itself
+and bills no write, so a budget needs the model's input, cached-input and output prices. Each
+answer's reasoning is stored with it and sent back; Z.AI leaves it out of what the model reads in
+later turns unless `agentClients.glm.preserveThinking` is true (false where nothing is said), which
+keeps it (`thinking.clear_thinking: false`). Z.AI clears nothing of a conversation itself, so once
+what the model last read and wrote passes 70% of the model's `contextTokens`, the answers to the
+calls of every turn but the last 6 that called tools go out in a short form that says so, from that
+request on - the calls and the reasoning as they were, and what is stored whole; past 90% after
+that, the context is exhausted (`ContextExhausted`). Three keys are both API clients' -
+`requestExtras`, refused where it sets what the tool sends itself, and `maxRetries` and
+`maxRetryWaitSeconds`, as the `claude-api` client's above - and one is `glm`'s alone:
+`preserveThinking`. A failure is read by Z.AI's code first: a key it does not take (1000, 1001,
+1003, 1005) is a key refused, passed over for the next; an empty balance (1113) is the key's limit,
+its balance spent, the step `RateLimited` at once; a usage limit that names when it resets (1308,
+1310, 1316, 1317, 1318, 1319, 1320, 1321) is the key's limit, the step `RateLimited` at once; a
+rate limit (1302) is the
+model's limit on that key, waited out within the tries and the step `RateLimited` past them; an
+overload, a network error or a call failed on its side (1305, 1234, 1200, 1230) is asked again; a
+prompt too long (1261) is the context exhausted (`ContextExhausted`); content it will not answer
+(1301) ends the step `Refused`; a model unknown, an API the key may not call or a plan without the
+model (1211, 1220, 1311) is a model the provider does not serve the key; a plan that does not cover
+the call or has ended (1309, 1313, 1314, 1315) fails the step. A code that list does not hold is
+read by the status: a 401 is a key refused, passed over for the next; a 429 is the model's limit on
+that key, waited out within the tries and the step `RateLimited` past them; a 413 is the context
+exhausted (`ContextExhausted`); a 403 or a 404 is a model the provider does not serve the key; a
+request timed out, a conflict or a server's error is asked again, and any other fails the step. An
+answer Z.AI ends as sensitive ends the step `Refused`, one it ends for its context the context is
+exhausted and one it ends for a network error is asked again; a failure Z.AI names is said in its
+own words.
+
+Where a step names an output, every client asks the agent for one envelope - `notes`, `output`,
+`assumptions`, and `questions` where the step may ask and has rounds left - and the harness's own
+validator holds the answer to it, whatever a client was sent. The notes are not empty, and are kept,
+masked, as the step's `notes.md` beside its result; the output is read against the step's whole
+schema, each problem named by its path under `$.output`, a text an `enum` or a `const` holds in
+another case read as the schema spells it; each assumption is `{about, assumed, why}`; each question
+is `{question, problem, tried, means, options, recommended, why}`, with at least 2 options, no two
+alike, recommending one of them word for word; no text of either is empty. The output is null only
+in a handoff, whose notes are the
+handoff, or where the answer asks, and the step then ends `Asked` with its questions; an answer with
+both is sent back, and so is one that asks where the step may not or has asked as often as it may,
+told to write what it would have asked under assumptions. The `claude-code` client holds the answer
+to the envelope by `--json-schema`; the `claude-api` client sends it as `output_config.format` on
+every request, the handoff's too, each array's `minItems` above 1 and every `maxItems` moved into
+the array's description in words, for structured outputs take no other - and where the API refuses
+it as more than it compiles, the run's later requests carry no format, and a message of the
+conversation says it in words, the system prompt untouched; the `glm` client, whose wire holds no answer to a schema, says it in words in the step's
+first message, and asks an answer that read as no JSON again in JSON alone - no tool offered,
+`response_format` a JSON object. An answer that does not read is sent back in the same conversation,
+2 times at most, and the step is then `InvalidOutput`.
+
+`web_search` is the harness's own search, made by dssharness itself over HTTP: it asks the sources
+`agentWebSearch` in `config.json` declares - search APIs that answer JSON, feeds, OpenSearch
+descriptions and the harness's own index of a site's pages read through its sitemap - and never a
+search engine's results page. The built-in sources (`stackoverflow`, `github-repos`,
+`github-issues`, `nuget`, `npm`, `pub-dev`, `learn`, `mdn`, `wikipedia`, `hackernews`,
+`readthedocs`) are entries in the same form, which `init` writes and a repository's entry of the
+same name changes key by key; a new name adds a source, and `enabled: false` turns one off. None
+needs a key: a source's optional `credential` comes from the `.env` slot (sent to the scheme, host
+and port the source's own address writes alone) or the machine's `gh` login for its `host`
+(github.com unless it says another; sent to that host or its API alone), masked and sent to the
+scheme, host and port each search of that source first asks alone, where it is one of those, over
+https - a lookup is sent none, and a host a document the source read names (an OpenSearch
+template, what `discover` found) never one, its request refused with nothing sent - never in an
+address a record holds. A reason step
+picks its sources by name or tag with `search` (absent, `agentWebSearch.defaults`); each query is
+held to the mask, each address a source asks to the mask and the `Web(...)` rules, each result to
+every rule of the web, each source to its `perMinute` and `perDay` on the machine and the step to
+`maxPerStep`, a sitemap source's index filled under the configuration's own `Web(...)` rules for
+every run; a limit a source answers holds it until the time it gave, told and never retried, and
+each source answers in its own part - results, none, a limit, an answer that changed, a failure, a
+refusal. `help web-search` lists every kind's keys and every built-in source.
 
 ```bash
 dssharness validate-workflow                 # check every declared workflow
@@ -647,6 +920,7 @@ dssharness list-agent-providers --template   # the agent sections, to paste into
 dssharness export-workflow implementation --shipped --to ../mine  # the shipped one, to make your own
 dssharness help workflows                    # the file, every step type and every key
 dssharness help agent-clients                # providers, tiers, efforts and the key slot
+dssharness help web-search                   # the web search's sources, kinds and keys
 ```
 
 `export-workflow <workflow> --to <dir>` copies a workflow - its yml and every file it names, and
@@ -680,12 +954,12 @@ update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`
 rest), which a template reads and an expression does not. The engine starts and drives a run of a workflow
 (`run-orchestrator`, `dssharness help orchestrators`), from the main checkout's HEAD on a branch of its own: a start is
 refused where HEAD is detached, where the checkout is on the branch the run's pull request goes to, where a merge is under
-way and where changes are staged. Sixteen steps are served so far: `orient`, which reads what the repository is and has once
+way and where changes are staged. Nineteen steps are served so far: `orient`, which reads what the repository is and has once
 (its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
 CI, mutation arms, what is dirty, the open agents and who holds the tree); `graphify-codebase`, which syncs the run's one map
 of the repository - every file a node, each declaration a language's implementation reads with its lines, its header and
 the first sentence the code writes of itself (C# through the compiler's own parser, MSBuild's projects and solutions,
-Markdown's headings; every other file by its name and size), and the edges between them, each saying how sure it is - under the run's
+C and C++ through a structural scanner that reads every branch of a conditional, Dart through the same scanner - a library and its parts one scope, its private names its own - and each Dart package's `pubspec.yaml` with the root its `package:` imports resolve through, JavaScript and TypeScript through it too - a module one scope, what it does not export its own, its imports by the forms ESM, CommonJS and TypeScript write, each tried as Node and TypeScript try a path, JSX's components and a test framework's tests - with each `package.json`, `tsconfig.json` and `jsconfig.json` and the roots their bare imports resolve through, PHP through it too - its code between its tags, each namespace a scope, every name written out by its `use` declarations, the files it includes, PHPUnit's and Pest's tests - with each `composer.json`, Markdown's headings; every other file by its name and size), and the edges between them, each saying how sure it is - under the run's
 `graph/`, reading again only the files whose content, reader, reader's version, size limit or languages changed and those it could not read, and starting a run's first
 graph from the newest earlier run's - or, with `in`, the view of that agent's worktree, held against the main checkout's
 graph as an overlay of what the worktree holds otherwise, so no file is read whose extract either made; the engine syncs
@@ -707,11 +981,27 @@ none appeared, some are still running, or one ended neither green nor red; and t
 `refresh` and `rebase` - which make their verb's dry run first, read what it stood, typed, and ask what it lacks - a
 consent, a path outside a fold's `within`, conflicting merges - with what it is about, a fold and a deletion applying
 only what it named, write each path a fold means to write to the run's ledger of its folds (`folds.json`) before the
-verb and what it left after, and, of `others`, work on each other open agent of the run in turn. A check that finds red
+verb and what it left after, and, of `others`, work on each other open agent of the run in turn; and `commit`, which
+commits the folds upstream of it and no other work - each path they changed that no commit of the run took, held to what
+its fold left there (a path edited or restored since, a path the index marks assume-unchanged or skip-worktree, the
+main checkout off the branch the run started on, or a fold upstream whose intent nobody settled, fails it, and nothing
+is staged), on an empty index, by explicit path, with the configuration's `commit.template` filled or the step's own
+message, the commit held to that set (one a hook made take more, or less, fails it, 20, left for a person) - answers the
+paths git ignores, which it never commits, and with nothing owed is done and runs no git; any template reads what the run checked (`{run.ran}`, `{run.notRun}`, `{run.red}`), and a commit's message what
+checked what it carries (`{carried.ran}`, `{carried.notRun}`, `{carried.red}`); `push`, which pushes the main checkout's
+HEAD to its branch on the remote the run's branch goes to (or the step's), a fast-forward never forced, and answers
+whether the branch moved (a detached HEAD, the main checkout off the branch the run started on, or no remote it can name
+refuses it, 13; the remote refusing fails it, 20; push steps that name two remotes are refused); and
+`pull-request`, which opens the run's branch's pull request against its base - the step's, else the remote's default -
+on the repository the remote's address names, its body the workflow's file filled where the step starts, and answers an
+open one as it is (`created` false) so a step run again opens no second, and never one from a fork's branch of the same
+name; the run never merges it, and its end leaves each pull request, and each folded path git ignores, for a person. A check that finds red
 fails its step under `failOn: red`, every check's default but `ci-read`'s. Every text a step hands on is filled where it
-starts, and one that reads nothing fails the step (12). Every call of `gh` is started so it cannot ask, and ended after
-five minutes, or with its step where the step passes its `timeoutMinutes` first (21). A step of any other type fails,
-saying no runner serves its type; the rest are the next thing the tool grows. A step that works in or on an agent
+starts, and one that reads nothing fails the step (12). Every call of `gh` and every git command is started so it
+cannot ask, and each command a step runs on the forge or to publish - a read of CI, a commit's, a push, a pull
+request's - is ended after its step's `timeoutMinutes` where the step says one, else its own (5 minutes for `gh` and
+a push, 15 minutes for a commit's), and is not done (21). A step of any other type fails, saying no runner serves its type;
+the rest are the next thing the tool grows. A step that works in or on an agent
 waits for the create-agent step that makes it, and is not run where that step did not make it. Run
 `dssharness help workflows` for the whole of it.
 

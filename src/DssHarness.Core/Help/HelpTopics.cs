@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
@@ -15,6 +16,7 @@ using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
@@ -65,6 +67,7 @@ public static class HelpTopics
         new("orchestrators", ["orchestrator", "agents", "agent"], "Orchestrators, their agents, and folding an agent's work", RenderOrchestrators),
         new("workflows", ["workflow"], "Workflow definitions: what config.json declares and the yml file defines", RenderWorkflows),
         new("codebase-graph", ["graph", "graphify-codebase"], "A run's map of the repository: what it reads, and what it does not see", RenderCodebaseGraph),
+        new("web-search", ["search", "web_search", "agentwebsearch"], "The harness's own web search: its sources, their kinds and keys", RenderWebSearch),
         new("agent-clients", ["clients", "models"], "Providers, models, tiers and keys in config.json", RenderAgentClients),
         new("anchors", ["anchor"], "Anchor registries and the commands that change them", RenderAnchors),
         new("layout", [], "What init creates, and what git tracks", RenderLayout),
@@ -747,21 +750,27 @@ public static class HelpTopics
         }
     }
 
-    /// <summary>Writes <paramref name="text"/> as lines no wider than the rest of help, broken between words.</summary>
-    private static void AppendWrapped(StringBuilder builder, string text)
+    /// <summary>
+    /// Writes <paramref name="text"/> as lines no wider than the rest of help, broken between words: the first after
+    /// <paramref name="lead"/> - a key of a table - and the rest as far in as it is long.
+    /// </summary>
+    private static void AppendWrapped(StringBuilder builder, string text, string lead = "")
     {
         const int Width = 88;
-        var line = new StringBuilder();
+        var line = new StringBuilder(lead);
+        var empty = true;
 
         foreach (var word in text.Split(' '))
         {
-            if (line.Length > 0 && line.Length + 1 + word.Length > Width)
+            if (!empty && line.Length + 1 + word.Length > Width)
             {
                 builder.AppendLine(line.ToString());
-                line.Clear();
+                line.Clear().Append(' ', lead.Length);
+                empty = true;
             }
 
-            line.Append(line.Length > 0 ? " " : string.Empty).Append(word);
+            line.Append(empty ? string.Empty : " ").Append(word);
+            empty = false;
         }
 
         builder.AppendLine(line.ToString());
@@ -1746,11 +1755,13 @@ public static class HelpTopics
         builder.AppendLine("and which steps build and test it are what config.json's ci section declares, and");
         builder.AppendLine($"until they are, it refuses ({HarnessExit.Refused}) and names what to set.");
         builder.AppendLine();
-        builder.AppendLine("Every call of gh, whoever makes it, is started so that it cannot ask anything");
-        builder.AppendLine("(GH_PROMPT_DISABLED, GCM_INTERACTIVE, GIT_TERMINAL_PROMPT) and is ended where it has");
-        builder.AppendLine($"not answered within {GhProcess.Limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, or with the workflow step that made it, where that");
-        builder.AppendLine("step passes its timeoutMinutes first: a read that did not answer in time is not done");
-        builder.AppendLine($"({HarnessExit.Incomplete}), and asked again it may answer.");
+        AppendWrapped(
+            builder,
+            "Every call of gh, whoever makes it, and every git command is started so that it cannot ask anything "
+            + $"({string.Join(", ", UnattendedCommands.Variables.Keys)}), and a call of gh is ended where it has not answered within the "
+            + "timeoutMinutes of the workflow step that made it, where the step says one, else within "
+            + $"{ReportText.Limit(GhProcess.Limit)}: a call that did not answer in time is not done "
+            + $"({HarnessExit.Incomplete}), and asked again it may answer.");
         builder.AppendLine();
         builder.AppendLine("""  "ci": {""");
         builder.AppendLine("""    "workflows": [".github/workflows/ci.yml"],""");
@@ -1857,6 +1868,20 @@ public static class HelpTopics
         builder.AppendLine("leg as a tool missing, named, before anything of it starts. Each leg's line names it:");
         builder.AppendLine("'developer environment: visualStudio (Visual Studio 18.0.11205.157, MSVC 14.50.35717,");
         builder.AppendLine("amd64)', and developerEnvironment in --json. A sync starts nothing there, and needs none.");
+        builder.AppendLine();
+        builder.AppendLine("toolsVersion, optional, holds an environment's legs to one MSVC toolset, named as");
+        builder.AppendLine(@"VC\Tools\MSVC names its toolsets: by two numbers, for the newest of that line, or");
+        builder.AppendLine("by all three, for that one - for a compiler such as a CUDA toolkit's nvcc, which");
+        builder.AppendLine("refuses an MSVC newer than it knows. Left out, vcvarsall.bat sets up the instance's");
+        builder.AppendLine("default toolset. Only its form is checked when the file is read: no toolset is built");
+        builder.AppendLine("into this tool. The survey then takes the newest instance holding a toolset it names,");
+        builder.AppendLine("with the newest of those, and a host with none turns the leg away as a tool missing,");
+        builder.AppendLine("naming what each instance holds. vcvarsall.bat is run with -vcvars_ver= and that");
+        builder.AppendLine("toolset, and one that sets up another fails the leg; the leg's line names the MSVC");
+        builder.AppendLine("set up. Two environments of one kind keep two toolsets apart on one machine:");
+        builder.AppendLine();
+        builder.AppendLine("  \"developerEnvironments\": { \"visualStudio\": { \"kind\": \"visualStudio\" },");
+        builder.AppendLine("    \"cuda\": { \"kind\": \"visualStudio\", \"toolsVersion\": \"14.44\" } }");
         builder.AppendLine();
         builder.AppendLine("Selected legs run at once and the command waits for all of them, reporting each");
         builder.AppendLine("live. Legs are chunked by the PHYSICAL machine they run on: this machine and every");
@@ -2369,7 +2394,7 @@ public static class HelpTopics
     /// <summary>
     /// The agent sections of config.json: the companies whose models the tool reaches, their keys in the git-ignored
     /// slot, the tiers a step runs on and the effort forms, the agents' policy and the claude-code client - said where a
-    /// person reads them, before the API clients and the step runners are built (nothing here runs a step).
+    /// person reads them, before the step runners are built (nothing here runs a step).
     /// </summary>
     private static string RenderAgentClients()
     {
@@ -2422,9 +2447,9 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine($"'{ToolPackage.Command} list-agent-providers' says what your configuration appoints and");
         builder.AppendLine("whether the slot holds it - each key and token present or missing, each setting a client");
-        builder.AppendLine("reads present or absent, for none is needed - never a value; 'list-agent-providers");
-        builder.AppendLine("--template' prints the agent sections as init writes them into a new config, to paste into");
-        builder.AppendLine("an existing one.");
+        builder.AppendLine("reads and each web-search source's key present or absent, for none is needed - never a");
+        builder.AppendLine("value; 'list-agent-providers --template' prints the agent sections as init writes them");
+        builder.AppendLine("into a new config, to paste into an existing one.");
         builder.AppendLine();
         builder.AppendLine("A provider's name and each tier's are held to the orchestration name rule - lower-case");
         builder.AppendLine("letters and digits, single hyphens - and a tier is one name in one case everywhere; a");
@@ -2478,7 +2503,13 @@ public static class HelpTopics
         builder.AppendLine("web whole. Declared under agentPolicy.restrictions in config.json, and a workflow's");
         builder.AppendLine("definitions and steps add their own to them, all applied together. agentPolicy.webDomains");
         builder.AppendLine("is the allow list beside them: left out, any address, the machine's own and its network's");
-        builder.AppendLine("among them; given, only those domains and what is under them. A command that runs a");
+        builder.AppendLine("among them; given, only those domains and what is under them, for the pages an agent reads");
+        builder.AppendLine("and the results a search gives - a search source's own requests are held to the Web(...)");
+        builder.AppendLine("rules alone. An address whose slashes after its scheme readers read apart - any scheme but");
+        builder.AppendLine("its two slashes and a host after them");
+        builder.AppendLine($"(http:/\\host, gopher:/host, http:///host), or no slash after an {string.Join(", ", Agents.Policy.AgentPolicy.SlashedSchemes.SkipLast(1))} or");
+        builder.AppendLine($"{Agents.Policy.AgentPolicy.SlashedSchemes[^1]} scheme (https:host) - or whose host is spelled beyond ASCII (its xn-- form is read");
+        builder.AppendLine("as written), names no host this can decide, and is denied. A command that runs a");
         builder.AppendLine("program which fetches from the network - curl, wget, Invoke-WebRequest, Invoke-RestMethod,");
         builder.AppendLine("iwr, irm, http, https, gh api - is decided as a web request too, by each address it names,");
         builder.AppendLine("a proxy, a curl --connect-to's or --resolve's target and the proxy its environment names");
@@ -2491,7 +2522,9 @@ public static class HelpTopics
         builder.AppendLine("credential slot or a Claude Code directory of the run's and every search over one, any");
         builder.AppendLine("command naming one - by ~ or $HOME, as a redirect's file or an option's value too - and");
         builder.AppendLine("this tool's own verbs and run-side-task, run by any program or from a response file,");
-        builder.AppendLine("whatever any switch says: an agent does not move its own run, nor leave its step's limits.");
+        builder.AppendLine("whatever any switch says: an agent does not move its own run, nor leave its step's limits -");
+        builder.AppendLine("nor do the gh commands that hand its work to another agent or install what the next launch");
+        builder.AppendLine($"loads ({string.Join(", ", Agents.Policy.AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too.");
         builder.AppendLine("No agent starts while this tool itself runs elevated: its step is recorded never started,");
         builder.AppendLine("saying so, before any client is taken. A path is decided as asked and as resolved, and a");
         builder.AppendLine("refusal's places compare in any case on every system, a Windows short name read as its long");
@@ -2499,9 +2532,10 @@ public static class HelpTopics
         builder.AppendLine("the runtime makes of it - one naming no drive and no share, a volume by its id or a pipe, is");
         builder.AppendLine("a place it cannot tell, and denied - and a shell's spelling of a drive (/c/x, /cygdrive/c/x,");
         builder.AppendLine("/mnt/c/x) is read both as the drive (C:\\x) and as the directory it names on the current");
-        builder.AppendLine("drive, an action allowed only where both are; a cd is followed the same way, from every");
-        builder.AppendLine($"place the command reached before it, up to {Agents.Policy.AgentPolicy.MaxPlaces} places, past which the command is");
-        builder.AppendLine("denied.");
+        builder.AppendLine("drive, an action allowed only where both are; a cd is followed the same way - pushd,");
+        builder.AppendLine("PowerShell's Set-Location and Push-Location, and the directory env -C or pwsh");
+        builder.AppendLine("-WorkingDirectory starts its command in, each word it may go to - from every place the");
+        builder.AppendLine($"command reached before it, up to {Agents.Policy.AgentPolicy.MaxPlaces} places, past which the command is denied.");
         AppendWrapped(builder, ShellReadingProse());
         builder.AppendLine("The protected paths (agentPolicy.protectedPaths, true where nothing is said) are the");
         builder.AppendLine("writes Claude Code guards, refused on every client so a role is not stopped on one where");
@@ -2525,25 +2559,34 @@ public static class HelpTopics
         builder.AppendLine("once for each root in the POSIX form Claude Code matches (//c/x for C:\\x), a Write rule as");
         builder.AppendLine("the Edit rule Claude Code holds its file tools' writes to, a read of each credential slot");
         builder.AppendLine("and Claude Code directory beside them -");
-        builder.AppendLine("a second layer, for the engine is asked about every call");
-        builder.AppendLine("and answers from this policy in its own process. This is policy, not a sandbox - a");
+        builder.AppendLine("a second layer, for the engine is asked about every other call");
+        builder.AppendLine("and answers from this policy in its own process, and a call those rules refuse first is");
+        builder.AppendLine("counted and recorded as Claude Code's own denial. This is policy, not a sandbox - a");
         builder.AppendLine("program an agent runs opens files as the user it runs as, a file of the credential slot");
         builder.AppendLine("among them; what it is never given is a key in its environment, and what no file tool");
         builder.AppendLine("of an agent touches is the slot itself, in any root. Where this tool cannot decide a");
         builder.AppendLine("call it denies it, never allows: nothing runs while the host that would answer is");
         builder.AppendLine("silent or gone. The policy is built and holds every action behind it; the claude-code");
-        builder.AppendLine("client below asks it of every call, the API clients are what it builds next, and no");
-        builder.AppendLine("command of this build runs an agent yet.");
+        builder.AppendLine("client below asks it of every call, the tool runtime below decides by it each call it");
+        builder.AppendLine("runs - the web's of the claude-code client, served through the engine's tool server, and");
+        builder.AppendLine("every call of the API clients, the claude-api and glm clients below -");
+        builder.AppendLine("and no command of this build runs an agent yet.");
         builder.AppendLine();
         AppendWrapped(builder, ClaudeCodeClientProse());
+        builder.AppendLine();
+        AppendWrapped(builder, ToolRuntimeProse());
+        builder.AppendLine();
+        AppendWrapped(builder, ToolLoopProse());
+        builder.AppendLine();
+        AppendWrapped(builder, ClaudeApiClientProse());
+        builder.AppendLine();
+        AppendWrapped(builder, ZaiApiClientProse());
+        builder.AppendLine();
+        AppendWrapped(builder, StructuredOutputProse());
 
         return builder.ToString();
     }
 
-    /// <summary>
-    /// What the claude-code client does with a launch, its tools from the one table that gives them, the names it sets
-    /// from the one list of them, and its bounds from the types that hold them.
-    /// </summary>
     /// <summary>
     /// How the agents' policy reads a shell command, what it refuses as undecided, and the worktree rules - git's
     /// verbs named from <see cref="Agents.Policy.AgentPolicy.GitStateVerbs"/>, so the list said is the list refused.
@@ -2553,34 +2596,62 @@ public static class HelpTopics
             + "|, & and line ends; a comment and a here-document's lines never read as commands; the bodies of $(...), "
             + "backticks, <(...), subshells, functions, loops and branches read as commands of their own, each "
             + "substitution before the command it stands in, whose word keeps it as the expansion it is; a for's word list "
-            + "read for the paths it hands its body; a redirect kept apart from the words, wherever it stands; the "
-            + "NAME=value words before a program kept as its environment, and a variable whose value is a program git or "
+            + "read for the paths it hands its body; a redirect kept apart from the words, wherever it stands, decided by "
+            + "the file it names and never among the words a rule meets - a quoted word spelled as one is a word; the "
+            + "NAME=value (and NAME+=value) words before a program kept as its environment, and a variable - so set, or "
+            + "declared by export and its kind, cmd's set, fish's set, csh's setenv, setx or PowerShell's env: items - whose value is a program git or "
             + "another tool runs (GIT_SSH_COMMAND, GIT_PAGER, GIT_EDITOR, EDITOR, PAGER and their kind) read as that "
             + "program's command line, as is the value of git's own setting of a key git runs as one (core.pager, "
             + "core.sshCommand, a diff or merge driver, a filter, an alias and their kind) - a -c, a --config-env's "
             + "variable, GIT_CONFIG_VALUE_n, GIT_CONFIG_PARAMETERS - an alias's '!' taken off; wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, "
-            + "busybox, Invoke-Expression) stripped, what xargs reads an expansion among the words it runs; and it goes "
-            + "into sh -c and every other shell's, a here-string or here-document a shell reads, cmd /c, "
+            + "busybox) stripped, what xargs reads an expansion among the words it runs; and it goes "
+            + "into sh -c and every other shell's (fish's -C scripts too, its options read as fish reads them), the here-string, here-document or file a shell reads as the last input "
+            + "its descriptor 0 is given (/dev/stdin and PowerShell's '-' among its names), cmd /c, "
             + "powershell -Command and a decoded -EncodedCommand, and the command lines trap, watch, script and flock run, "
-            + "by each shell's own quoting, to four levels, and into a shell another program runs with its script "
-            + "(find -exec sh -c) - so 'git -C x push' is git push, and 'env A=1 git push' and 'A=1 /usr/bin/git push' "
-            + "are too. Every word of a command is tried as the program of the words after it, a program read by its "
-            + "name, its directories and a Windows end (.exe, .cmd, .dll) folded away. A word the shell expands where a "
+            + "by each shell's own quoting - PowerShell by a reader of its own grammar: its commands, pipelines, strings, "
+            + "here-strings, variables, $(...), @(...), (...), script blocks, hashtables, assignments and keywords' "
+            + "conditions and blocks, each statement a block holds read as one that may run, Invoke-Expression's one string - "
+            + "by whatever name it is called, the call operator's string or a module's name before it among them - "
+            + "read as a script of its own - to four levels, and into a shell another program runs with its script "
+            + "(find -exec sh -c, find's words read to their ';'), a command find -exec, fd -x, rg --pre or --hostname-bin, parallel "
+            + "or an option of a git subcommand runs - a pack program a transport runs (--upload-pack, --receive-pack, --exec, clone's -u), "
+            + "difftool's --extcmd, rebase's --exec, grep's --open-files-in-pager, bisect run, submodule foreach, filter-branch's filters and "
+            + "send-email's commands - read as its own, each word it fills in an expansion, env -S's string split by env's own rules, and "
+            + "$((...)), ((...)) and $[...] read as arithmetic, their substitutions as commands - so "
+            + "'git -C x push' is git push, and 'env A=1 git push' and 'A=1 /usr/bin/git push' are too. Every word of a command is tried as the program of the words after it - but a word of a program "
+            + "that runs none of its words, its data (grep, rg, echo, cat, which and their kind) - a program read by its "
+            + "name in any case, its directories and a Windows end (.exe, .cmd, .dll) folded away, a cmd line's '@' dropped, git-push read as git push. A word the shell expands where a "
             + "rule reads a literal one makes the command one the rule may be, refused as such ('git $VERB' under "
             + "Run(git push *)); a pattern or a brace that may name a credential slot or a Claude Code directory is "
             + "refused as naming it, and a file:// address is read as the path it names. What it cannot read whole it "
             + "denies, said here, not guessed at: a script nested past four levels, a shell that reads its script from "
-            + "its input (curl ... | sh) or from a process substitution, and a program named by a variable, a "
-            + "substitution, a pattern or a brace, a brace that spells more than 64 words, and an option of git's or "
-            + "gh's own before its command that this does not know; what it does not see is the inside of a script file "
+            + "its input (curl ... | sh), from a process substitution or from another open descriptor (/dev/fd/3, <&3), "
+            + "an env -S string holding a backslash, whose escapes are env's own, an alias it gives, a script another program fills in "
+            + "(find -exec sh -c 'echo {}'), PowerShell's code no word spells (a static method, an instance method "
+            + "but a string's, a collection's or a date's, a function's or an alias's text, a class, using, its stop-parsing --%, "
+            + "a script Invoke-Expression is handed by no one string, and a command line Start-Process, WMI, the task scheduler or Add-Type is handed), and a program named by a variable, a "
+            + "substitution, a pattern or a brace, a brace that spells more than 64 words, and an option of git's, "
+            + "gh's, fish's or Windows PowerShell's own before its command that this does not know; what it does not see is the inside of a script file "
             + "a command runs, and a program another runs from words that do not name it. The worktree rules "
             + "(agentPolicy.worktreeRules, true where nothing is said) keep an agent's worktree a thing the engine can "
             + $"measure: git's state-writing verbs ({string.Join(", ", Agents.Policy.AgentPolicy.GitStateVerbs)}) are "
-            + "refused - reading git (status, diff, log, show, blame, grep) stays allowed, and a git configured where it "
-            + "runs (a -c or --config-env of any key but the ones that only shape what git prints, --exec-path, "
-            + "GIT_CONFIG and the names through which git finds its programs and hooks) is the git config it is - and so "
-            + "are gh pr merge, gh workflow run and gh run rerun, the gh api endpoints and GraphQL mutations that merge "
-            + "or start CI, and gh alias set, for never merges, never starts CI binds the agents too; git's own files - a "
+            + $"refused, and so are the gh commands that run them or write gh's own configuration ({string.Join(", ", Agents.Policy.AgentPolicy.GhStateCommands)}; "
+            + "a command gh names by an alias of its own, pr co for pr checkout among them, read as the command it names, and "
+            + "where gh reads its configuration from - GH_CONFIG_DIR, XDG_CONFIG_HOME, AppData, HOME - set for a command the gh config set it is) "
+            + "- reading git (status, diff, log, show, blame, grep) stays allowed, and a git configured where it "
+            + "runs (a -c or --config-env of any key but the ones that only shape what git prints, --exec-path, clone's own "
+            + "-c or --config and clone's and init's --template, "
+            + "GIT_CONFIG, the names through which git finds its programs and hooks, and the homes it reads its global "
+            + "configuration from - HOME, XDG_CONFIG_HOME, and the HOMEDRIVE, HOMEPATH and USERPROFILE git on Windows takes "
+            + "one from) is the git "
+            + "config it is - and so are the gh commands that merge or start CI "
+            + $"({string.Join(", ", Agents.Policy.AgentPolicy.NeverCiCommands)}), the gh api endpoints and GraphQL "
+            + "mutations that reach the same, gh alias set, gh extension exec, and a gh command named by none of gh's own "
+            + $"({string.Join(", ", Agents.Policy.AgentPolicy.GhCommands)}) - an alias, gh's own co among them, or an extension, "
+            + "a name for any command, where gh runs - its command's own program, or past one that runs the words after it "
+            + $"({string.Join(", ", Agents.Policy.CommandAnalysis.CommandRunners)}), never among another program's words, its data - "
+            + "and, where the request writes, the gh api endpoints that push, open a pull request or make a release - "
+            + "for never merges, never starts CI binds the agents too; git's own files - a "
             + ".git, file or directory, at any depth beneath a root and in any case, a nested repository's and a "
             + $"submodule's too ({Agents.Policy.AgentPolicy.GitsOwnRule}) - are not written by a tool, whatever "
             + "protectedPaths says; and an agent does not edit its own policy or what the next launch loads: "
@@ -2591,14 +2662,18 @@ public static class HelpTopics
             + "the tool's own state, in any root, is written by its verbs alone - a place of the agent's own within it, "
             + "as its work directory is, the one exception.";
 
+    /// <summary>
+    /// What the claude-code client does with a launch, its tools from the one table that gives them, the names it sets
+    /// from the one list of them, and its bounds from the types that hold them.
+    /// </summary>
     private static string ClaudeCodeClientProse()
     {
         var tools = string.Join(
             "; ",
             Agents.ClaudeCode.ClaudeCodeTools.Table.Select(row =>
-                $"{row.Capability.ToString().ToLowerInvariant()}: {(row.Tools.Count == 0 ? "none of Claude Code's" : string.Join(", ", row.Tools.Select(tool => tool.Name)))}"));
+                $"{row.Capability.ToString().ToLowerInvariant()}: {(row.Tools.Count == 0 ? "none of Claude Code's" : string.Join(", ", row.Tools.Select(tool => tool.Name)))}"
+                + (Agents.ClaudeCode.ClaudeCodeTools.ServedOf(row.Capability) is [_, ..] served ? $", but {string.Join(" and ", served)} of the engine's tool server beside them" : string.Empty)));
         var controlled = string.Join(", ", Agents.Policy.ClaudeSettings.Controlled.Select(name => $"{name.Key}={name.Value}"));
-        var output = new Agents.AgentOutput("o", "{}");
 
         return "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed "
             + "and never continued, keeping no session file (one a launch leaves all the same is removed once it has ended, "
@@ -2608,19 +2683,30 @@ public static class HelpTopics
             + "turns and budget, and the tools of the agent's capabilities and no other - "
             + tools
             + $" - and never {string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.NeverOffered)}. The run's reporter is given "
-            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.Reporter)} alone. Every call is asked of the engine "
-            + "before it runs and answered from the policy above: a denial carries its rule's sentence, which the model "
-            + $"reads, and is a line of the step's {Agents.ClaudeCode.ClaudeLaunch.DenialsFileName}; a tool the launch was not given, or whose calls the engine "
-            + "cannot read, is denied by name. An answer held to a step's schema that does not read is sent back, each "
-            + $"problem by its path, up to {output.MaxRepairs} times; a message the engine gives an agent at work is written "
-            + "to the same launch, and a result written before the launch took it is not the answer; a handoff asked "
+            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.Reporter)} alone. A step with the web takes the harness's own "
+            + $"{Agents.Runtime.AgentTools.WebFetch} - and {Agents.Runtime.AgentTools.WebSearch}, where it has a source to search - from the engine's tool server: the one MCP "
+            + $"server, of type sdk, named {Agents.ClaudeCode.ClaudeCodeTools.Server}, that the launch's --mcp-config names beside --strict-mcp-config (the step's "
+            + $"{Agents.ClaudeCode.ClaudeLaunch.McpFileName}), served in the engine's own process over the launch's control channel - its initialize, "
+            + "its tool list and its calls, our own code with no MCP library; each call of it is asked of the engine first, by its ask "
+            + "rule, and run by the tool runtime below as on the API clients, each address decided and recorded. A launch whose init "
+            + "does not show that server connected with its tools taken, or that connects another, never started; a call of it the "
+            + "engine was not asked about and did not allow runs nothing and fails the step. Every call its own deny rules do not "
+            + "refuse first is asked of the engine before it runs and answered from the policy above: a denial carries its rule's sentence, which the model "
+            + $"reads, and is a line of the step's {Agents.AgentCallRecords.DenialsFileName}; a tool the launch was not given, or whose calls the engine "
+            + "cannot read, is denied by name. An answer sent back (below) and a message the engine gives an agent at work are "
+            + "written to the same launch, and a result written before the launch took it is not the answer; a handoff asked "
             + "interrupts the turn and asks the agent for its handoff in the same launch once every message it was given was "
             + "taken or dropped, no tool running in that turn, a "
             + "launch that does not take the interrupt ended whole. Every message is held to the model asked for, a date "
             + "after its id the same model: one another model wrote ends the step. Its environment holds nothing of a "
-            + $"Claude Code session this tool was started in ({Agents.ClaudeCode.ClaudeLaunch.SessionVariable} and every {Agents.ClaudeCode.ClaudeLaunch.SessionPrefix} name but "
-            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.KeptNames)}, which says only where a program is), no credential but the "
-            + $"one its auth gives, and the names the engine sets: {controlled}. A key Claude Code reports invalid is passed "
+            + $"Claude Code session this tool was started in ({string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.SessionNames.SkipLast(1))} and {Agents.ClaudeCode.ClaudeLaunch.SessionNames[^1]}, and every name beginning "
+            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.SessionPrefixes.SkipLast(1))} or {Agents.ClaudeCode.ClaudeLaunch.SessionPrefixes[^1]} but "
+            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.KeptNames)}, which says only where a program is, and a name agentPolicy.keepEnvironment "
+            + "gives back), none of what every child "
+            + "of an agent loses (the tool runtime below), no credential but the "
+            + $"one its auth gives, and the names the engine sets: {controlled}, and {Agents.Policy.ClaudeSettings.BashTimeoutVariable} and "
+            + $"{Agents.Policy.ClaudeSettings.BashMaxTimeoutVariable} as agentPolicy.commandTimeoutSeconds and maxCommandTimeoutSeconds say, in "
+            + "milliseconds, so a shell command it runs is held to the times of every command an agent runs. A key Claude Code reports invalid is passed "
             + "over, and while the step has done no work the next key is given a new launch with the step's prompt; the "
             + $"control messages both ways are kept in the step's {Agents.ClaudeCode.ClaudeLaunch.ControlFileName} beside its stored stream. "
             + $"Its own settings outrank the user's, which it still reads: the user's {Agents.ClaudeCode.ClaudeUserSettings.FileName} in its Claude Code directory and the "
@@ -2634,7 +2720,9 @@ public static class HelpTopics
             + $"launch that does not answer the host's initialize request within {Agents.ClaudeCode.ClaudeCodeClient.InitializeBound.TotalSeconds:0} s, that works before its init says "
             + "what it runs as, whose init offers a tool it was not "
             + "given or names a credential its auth did not give, or that refuses by itself a call the engine allows - as one "
-            + "started without --permission-prompt-tool stdio does - never started; a call it ran that the engine was never asked "
+            + "started without --permission-prompt-tool stdio does - never started; a call it refuses by itself that the engine "
+            + "refuses too - by its own deny rules, a file tool's told by its result alone - is a denial of Claude Code's, counted "
+            + "and recorded once; a call it ran that the engine was never asked "
             + "about, or refused, fails the step by the tool's name (before Claude Code 2.1.303 a call that ran unasked and failed "
             + "as Claude Code fails a call whose input did not read cannot be told from one, and is not caught); and each is "
             + "ended at once. A message the engine writes that no turn takes within the step's stall bound - counted from "
@@ -2644,6 +2732,248 @@ public static class HelpTopics
             + "that says rejected, or a turn Claude Code ends on rate_limit or billing_error after its own tries - ends it "
             + $"{nameof(Agents.AgentRunStatus.RateLimited)}, with when the limit lifts where it says; an overloaded service is no limit of the account's.";
     }
+
+    /// <summary>
+    /// The harness's own tools, built for the API clients: each from the one table that gives them, its bounds from the
+    /// types that hold them, the paths, the commands and the fetch each from its owner.
+    /// </summary>
+    private static string ToolRuntimeProse()
+    {
+        var defaults = Agents.AgentCommandSettings.Default;
+        var tools = string.Join(
+            "; ",
+            Agents.Runtime.AgentTools.All(defaults).Select(tool => $"{tool.Name} ({tool.Needs.ToString().ToLowerInvariant()}{(tool.Barrier ? ", alone in its turn" : string.Empty)})"));
+
+        return "The tool runtime is the harness's own tools, built for the API clients to give their agents in place of a "
+            + "client's own - the claude-api and glm clients below - and serving the claude-code client the web's through "
+            + "the engine's tool server, each under the "
+            + $"capability that gives it: {tools}. The run's reporter is given "
+            + $"{string.Join(", ", Agents.Runtime.AgentTools.All(defaults).Where(tool => Agents.Policy.AgentPolicyGround.ReporterCapabilities.Contains(tool.Needs)).Select(tool => tool.Name))}, "
+            + "those that read, and no other. Each call is decided before it runs and recorded: a tool the step was not given, or "
+            + "an input its schema does not hold, is refused with how the tool is called; a path is read against the agent's "
+            + "working directory, refused spelled empty, with a NUL or a leading ~ - on Windows also a share or a device's "
+            + $"prefix, a device's name ({string.Join(", ", Agents.Runtime.ConfinedPaths.DeviceNames.Take(4))} and the rest), "
+            + "a drive's own directory (C:x) or an alternate data stream - its links followed (one whose links cannot be followed refused as undecided) and held to the agent's roots, each compared as its own file "
+            + "system names it: a read inside one of them, a write inside a writable one and through no link below it (a "
+            + "link put in place between the check and the act is the known limit); then the policy above is asked of it, and "
+            + "a deleting or moving tool is a write to every path it touches, at both ends of a move. A directory deleted or "
+            + $"moved is refused where it is a root, holds a link, holds a path that may not be written or holds more than "
+            + $"{Agents.Runtime.AgentTools.MostDeletedEntries:N0} entries. A file past {DiskSpace.Size(Agents.Runtime.AgentTools.MostViewedBytes)} is "
+            + $"neither viewed nor edited, and one past {DiskSpace.Size(Agents.Runtime.AgentFiles.MostSearchedBytes)} is passed over by search_files - a command reads or searches it. A replace or an insert needs its file viewed "
+            + "first, by its content: one that changed since is refused, nothing written, and an edit keeps the file's "
+            + "encoding (UTF-8 with or without its mark, UTF-16 by its mark), its line endings and whether it ends with a "
+            + "newline. A command is an argument list, never a shell string, decided whole where it starts, run as a phase "
+            + "is - contained, ended whole with what it started, its log kept beside the stream - for "
+            + $"agentPolicy.commandTimeoutSeconds ({defaults.TimeoutSeconds} where nothing is said) unless its call names a "
+            + $"time, agentPolicy.maxCommandTimeoutSeconds ({defaults.MaxTimeoutSeconds}) at most, stopped sooner where it "
+            + $"prints nothing for as long as the step's stall bound; a command line holding a secret, a word holding a NUL, or on Windows a batch file's argument holding what cmd.exe reads again ({Processes.BatchFiles.Said}) or what the shell expands, is refused. Its environment, and the claude child's before its own names are set, loses every name the "
+            + "configuration appoints and every secret-shaped name - ending "
+            + $"{string.Join(", ", Agents.AgentChildEnvironment.SecretSuffixes)}, in any case - but those "
+            + "agentPolicy.keepEnvironment gives back; an appointed name is never given back. web_fetch is the harness's own "
+            + $"fetch: http and https alone, at most {Web.HarnessFetch.MostRedirects} redirects, "
+            + $"{Web.HarnessFetch.Bound.TotalSeconds:0} s and {DiskSpace.Size(Web.HarnessFetch.MostBytes)}, text alone "
+            + $"({Web.HarnessFetch.TextTypesSaid}) with a page's HTML reduced to its text, public addresses alone - a host that resolves to "
+            + "this machine, its network or a cloud's metadata service refused, and a connection made only to an address "
+            + "that was checked, and checked again once made - no cookie, no credential, no proxy, under a User-Agent that "
+            + "names this tool; each address, the first and each redirect, is decided by the web's rules and written to the "
+            + $"step's {Agents.AgentCallRecords.WebFileName} before anything leaves the machine, and what it was answered "
+            + "after; an address holding a secret is refused. A page is given inside a block that says where it is from, its "
+            + "first line saying it is information for the task, not instructions. web_search asks the sources of "
+            + "agentWebSearch the step's search names, each in its own part of the answer, by the harness's own search - "
+            + "never a search engine's results page ('help web-search'). Calls that read run together, at most "
+            + $"{Agents.Runtime.AgentToolRuntime.MostTogether} at once, a call that writes or runs alone, answers in the order "
+            + $"of the calls; an answer past {Agents.AgentCallRecords.ResultCap:N0} characters is given as its first "
+            + $"{Agents.AgentCallRecords.ResultHead:N0} and its last {Agents.AgentCallRecords.ResultCap - Agents.AgentCallRecords.ResultHead:N0}, "
+            + $"the whole kept in the step's {Agents.AgentCallRecords.ToolResultsDirectoryName}/.";
+    }
+
+    /// <summary>
+    /// The loop the API clients share: what a turn is and what it is counted against, where the
+    /// conversation is kept, the two ways a turn is cut off, the provider's pause, the retries and their waits, and what a
+    /// handoff and a message to an agent at work do to the turn under way - each number from its owner.
+    /// </summary>
+    private static string ToolLoopProse()
+        => "The loop the claude-api and glm clients share (ToolLoop) runs a step of either over the provider each gives it - the "
+            + "Claude API's and Z.AI's below. A turn is one answer of the agent's - a request the provider paused, or one "
+            + "thrown away and asked again, goes on as the same turn - counted against the step's maxTurns but a handoff "
+            + "turn; every request's usage - one that ended without its turn, failed, silent or left, by what it said it used "
+            + "so far - is counted at the model's "
+            + "prices, no request but the handoff turn's is sent "
+            + "once the step's maxBudgetUsd is spent, and a step held to a budget on a model missing a price of what its "
+            + "provider's requests are billed by - input, cache reads and output, and the cache writes of a provider whose "
+            + "requests write one, in the model's large-prompt set too where it has one - is never started, naming the key to fill. Each turn's calls run as the tool runtime above decides them; a turn whose request spent "
+            + "the budget runs none of them. The conversation is kept in the provider's own form under the agent's "
+            + $"{OrchestratorLayout.SessionsDirectoryName}/<id>/, each message as it was sent and received and sent back so with "
+            + "every later request, one line for each point where the history is whole - a turn that called tools stored with "
+            + "their answers - and a step that goes on in it sends what it began with; where a provider begins sending it "
+            + $"shortened to keep it within its model's context, the point is kept beside it ({Agents.StoredConversation.ShortenedFileName}) "
+            + "and given with every later request, a notice saying so once. The first request asks for a quarter of "
+            + "the model's maxOutputTokens. A turn cut off at its length that called no tool, its request holding it to no "
+            + $"schema, is stored and nudged on, {Agents.Loop.ToolLoop.MostNudges} times at most; one cut off while it called a "
+            + "tool - its calls never run - before it wrote anything, or while its request held it to a schema, which the answer "
+            + "to a nudge would be held to whole, is thrown away and asked again with twice the room, up to the most; "
+            + $"past either the step is {nameof(Agents.AgentRunStatus.Truncated)}. A turn the provider paused is sent again with "
+            + $"nothing added, {Agents.Loop.ToolLoop.MostPausesInARow} in a row failing the step. An answer gone on from, cut off "
+            + "or paused, is every piece of it. A failed request is asked again "
+            + $"up to {Agents.Loop.ToolLoopTerms.DefaultMaxRetries} times after a wait that doubles from "
+            + $"{Agents.Loop.ToolLoop.FirstWait.TotalSeconds:0} s to {Agents.Loop.ToolLoop.LongestDoubledWait.TotalSeconds:0} s, "
+            + "or the one the provider names; a rate limit past them, or naming a wait past "
+            + $"{Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds:0} s, is the account at its limit "
+            + $"({nameof(Agents.AgentRunStatus.RateLimited)}) - the model's on the key it was sent with, or the key's whole where its "
+            + "balance is spent, each named - a service failing past them, or naming such a wait, fails the "
+            + "step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
+            + "a model the provider does not serve the key never starts the "
+            + "step before its first answer and fails it after; a key the provider refuses is passed over for the run's "
+            + "next, the same request sent again with it. A handoff asked abandons the request under way and cuts the calls "
+            + $"running, each answered '{Agents.Runtime.AgentToolRuntime.Interrupted(Agents.Loop.ToolLoop.Pausing)}', then asks "
+            + "the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn; "
+            + "a message the engine gives an agent at work is given after "
+            + "the results of the calls it is running, and an answer written while it was is not the step's.";
+
+    /// <summary>
+    /// The claude-api client: what each request is and carries - the version, the betas, the cache, what the tool sends
+    /// itself and what the client's own keys add - and what each of the API's failures is to a step, each name and number
+    /// from its owner.
+    /// </summary>
+    private static string ClaudeApiClientProse()
+    {
+        const string Client = Agents.ClaudeApi.ClaudeApiClient.ClientName;
+
+        return $"The {Client} client works a step through the Claude API by the loop above, every call run by the tool "
+            + $"runtime: each request is posted to its provider's api with /{Agents.ClaudeApi.ClaudeApiRequest.MessagesPath} "
+            + "after it, signed with a key of the provider's (x-api-key), under anthropic-version: "
+            + $"{Agents.ClaudeApi.ClaudeApiRequest.Version}, and its answer streamed. It is given the run's entries - its "
+            + "provider, its model and, where the configuration declares one, its own entry under agentClients, every key "
+            + "at its default where it declares none - and never starts without the first two, or on a provider "
+            + $"of a type but '{Agents.ClaudeApi.ClaudeApiClient.Descriptor.ProviderType}'. A request sends the model, the "
+            + "system prompt as one block, the tools - each streaming its input as it is written - and the messages as the "
+            + "conversation stored them; adaptive thinking, its summary shown; the step's effort as output_config.effort; "
+            + $"old tool uses cleared by the server as the context fills ({Agents.ClaudeApi.ClaudeApiRequest.ClearToolUses}, "
+            + $"under the {Agents.ClaudeApi.ClaudeApiRequest.ContextManagementBeta} beta), each clearing said in a notice; and "
+            + $"the system prompt and the conversation cached for agentClients.{Client}.cacheTtl "
+            + $"({string.Join(" or ", Agents.ClaudeApi.ClaudeApiRequest.CacheTtls)}, {Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes} "
+            + "where nothing is said), so a budget needs the model's price of that cache's writes too: priceCacheWrite, or "
+            + "priceCacheWrite1h for an hour. A step with a fallback that can go on here sends the "
+            + $"{Agents.ClaudeApi.ClaudeApiRequest.FallbackCreditBeta} beta, and a request the model declines ends the step "
+            + $"{nameof(Agents.AgentRunStatus.Refused)}, with its category and the credit the API gave for it on the result; "
+            + $"no request carries fallbacks or a {Agents.ClaudeApi.ClaudeApiRequest.ServerSideFallbackPrefix}* beta, for the "
+            + $"engine's fallback is the only one a step has. Two keys are {Client}'s alone: betas, sent beside the tool's own, "
+            + "each one word and never the API's fallback's, and cacheTtl; three are both API clients': requestExtras, an "
+            + "object merged into every request's body - a member it adds sent as given, an object's members merged into the "
+            + "tool's own - refused where it sets what the tool sends itself or, here, fallbacks or a sampling parameter "
+            + $"(temperature, top_p, top_k), which anthropic-version {Agents.ClaudeApi.ClaudeApiRequest.Version} refuses on every "
+            + "model, and free to add a tool choice or thinking.budget_tokens where the step's model takes one; and maxRetries and "
+            + $"maxRetryWaitSeconds, the loop's tries and longest wait ({Agents.Loop.ToolLoopTerms.DefaultMaxRetries} and "
+            + $"{Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds:0} where nothing is said). A spend limit reached "
+            + $"- the organization's monthly cap, a 429 whose error names {Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}, or one "
+            + "the organization or a workspace set, a 400 that says so - is the key's limit, the step "
+            + $"{nameof(Agents.AgentRunStatus.RateLimited)} at once until the date the API names; a 401 is a key "
+            + "refused, passed over for the next; a 402 the key's balance spent, the step "
+            + $"{nameof(Agents.AgentRunStatus.RateLimited)} at once; a 429 the model's limit on that key, waited out within "
+            + "those tries and the step RateLimited past them; a 413, a prompt too long or an answer the model's context could hold no more "
+            + $"of is the context exhausted ({nameof(Agents.AgentRunStatus.ContextExhausted)}); a 403, a 404, or a 400 "
+            + "answering a conversation's first request - a model the key's organization is not given, such as one that "
+            + "needs a data retention the organization does not keep - is a model the provider does not serve the key, "
+            + "naming it; an overload, a server's error, a request timed out, a conflict, a network that failed and a "
+            + "stream cut or ended before its message are asked again; and any other 400 fails the step, said in the "
+            + "API's own words with the request it names.";
+    }
+
+    /// <summary>
+    /// The glm client: what each request to Z.AI is and carries, the one rewrite that keeps a conversation within its
+    /// model's context, its keys, and what each of Z.AI's failures is to a step - its codes from the one table of them, each
+    /// name and number from its owner.
+    /// </summary>
+    private static string ZaiApiClientProse()
+    {
+        const string Client = Agents.ZaiApi.ZaiApiClient.ClientName;
+        var efforts = Agents.AgentProviders.ClientKinds.First(kind => kind.Name == Client).Efforts;
+        var codes = string.Join(
+            "; ",
+            Agents.ZaiApi.ZaiApiFailures.Codes.Select(row => $"{row.What} ({string.Join(", ", row.Codes)}) {FailureSaid(row.Kind, row.BalanceSpent)}"));
+        var statuses = string.Join(
+            "; ",
+            Agents.ZaiApi.ZaiApiFailures.Statuses.Select(row => $"{string.Join(" or ", row.Statuses.Select(status => $"a {status.ToString(CultureInfo.InvariantCulture)}"))} {FailureSaid(row.Kind, false)}"));
+
+        return $"The {Client} client works a step through Z.AI by the loop above, every call run by the tool runtime: each "
+            + $"request is posted to its provider's api with /{Agents.ZaiApi.ZaiApiRequest.CompletionsPath} after it, signed "
+            + "with a key of the provider's (Authorization: Bearer), and its answer streamed. It is given the run's entries as "
+            + $"the {Agents.ClaudeApi.ClaudeApiClient.ClientName} client is, and never starts without its provider and model, or on a provider of a type but "
+            + $"'{Agents.ZaiApi.ZaiApiClient.Descriptor.ProviderType}'. A request sends the model; the system prompt as the "
+            + "first message and every message as the conversation stored it - the engine's as a user message of text, an "
+            + "answer's calls each answered by a tool message, in order; the tools as functions, their calls' arguments "
+            + "streamed (tool_stream); the model's thinking on, the step's effort as reasoning_effort "
+            + $"({string.Join(", ", efforts)}); and max_tokens - no sampling parameter or tool choice of the tool's own, which "
+            + "requestExtras may add, and no tool of Z.AI's, for the web is the harness's own. Z.AI caches what a request repeats by itself and bills "
+            + "no write, so a budget needs the model's input, cached-input and output prices. Each answer's reasoning is "
+            + "stored with it and sent back; Z.AI leaves it out of what the model reads in later turns unless "
+            + $"agentClients.{Client}.preserveThinking is true (false where nothing is said), which keeps it "
+            + "(thinking.clear_thinking: false). Z.AI clears nothing of a conversation itself, so once what the model last "
+            + $"read and wrote passes {Percent(Agents.ZaiApi.ZaiApiProvider.ShortenAt)} of the model's contextTokens, the "
+            + $"answers to the calls of every turn but the last {Agents.ZaiApi.ZaiApiProvider.WholeTurns} that called tools "
+            + "go out in a short form that says so, from that request on - the calls and the reasoning as they were, and "
+            + "what is stored whole; past "
+            + $"{Percent(Agents.ZaiApi.ZaiApiProvider.FullAt)} after that, the context is exhausted "
+            + $"({nameof(Agents.AgentRunStatus.ContextExhausted)}). Three keys are both API clients' - requestExtras, "
+            + $"refused where it sets what the tool sends itself, and maxRetries and maxRetryWaitSeconds, as the {Agents.ClaudeApi.ClaudeApiClient.ClientName} "
+            + $"client's above - and one is {Client}'s alone: preserveThinking. A failure is read by Z.AI's code first: "
+            + codes
+            + ". A code that list does not hold is read by the status: "
+            + statuses
+            + "; a request timed out, a conflict or a server's error is asked again, and any other fails the step. An answer "
+            + $"Z.AI ends as sensitive ends the step {nameof(Agents.AgentRunStatus.Refused)}, one it ends for its context the "
+            + "context is exhausted and one it ends for a network error is asked again; a failure Z.AI names is said in its own "
+            + "words.";
+    }
+
+    /// <summary>
+    /// The envelope every client asks for where a step names an output, what the gate holds it to, and how each client
+    /// asks for it - each member, file, bound and number from its owner.
+    /// </summary>
+    private static string StructuredOutputProse()
+    {
+        var output = new Agents.AgentOutput("o", "{}");
+        static string Members(System.Text.Json.Nodes.JsonObject shape) => string.Join(", ", shape["properties"]!.AsObject().Select(member => member.Key));
+
+        return $"Where a step names an output, every client asks the agent for one envelope - {Agents.AgentEnvelope.Notes}, "
+            + $"{Agents.AgentEnvelope.Output}, {Agents.AgentEnvelope.Assumptions}, and {Agents.AgentEnvelope.Questions} where the step may ask and has rounds "
+            + "left - and the harness's own validator holds the answer to it, whatever a client was sent. The notes are not "
+            + $"empty, and are kept, masked, as the step's {OrchestratorLayout.StepNotesFileName} beside its result; the output is read "
+            + "against the step's whole schema, each problem named by its path under $.output, a text an enum or a const holds "
+            + $"in another case read as the schema spells it; each assumption is {{{Members(Agents.AgentEnvelope.Assumption())}}}; each question is "
+            + $"{{{Members(Agents.AgentEnvelope.Question())}}}, with at least "
+            + $"{Agents.AgentEnvelope.FewestOptions} options, no two alike, recommending one of them word for word; no text of "
+            + "either is empty. The output is null only in a "
+            + "handoff, whose notes are the handoff, or where the answer asks, and the step then ends "
+            + $"{nameof(Agents.AgentRunStatus.Asked)} with its questions; an answer with both is sent back, and so is one that asks "
+            + "where the step may not or has asked as often as it may, told to write what it would have asked under assumptions. "
+            + $"The {Agents.ClaudeCode.ClaudeCodeClient.ClientName} client holds the answer to the envelope by --json-schema; the "
+            + $"{Agents.ClaudeApi.ClaudeApiClient.ClientName} client sends it as output_config.format on every request, the "
+            + $"handoff's too, each array's minItems above {Agents.ClaudeApi.ClaudeApiRequest.MostLeastItems} and every maxItems moved "
+            + "into the array's description in words, for structured outputs take no other - and where the API refuses it as "
+            + "more than it compiles, the run's later requests carry no format, and a message of the conversation says it in "
+            + "words, the system prompt untouched; the "
+            + $"{Agents.ZaiApi.ZaiApiClient.ClientName} client, whose wire holds no answer to a schema, says it in words in the "
+            + "step's first message, and asks an answer that read as no JSON again in JSON alone - no tool offered, "
+            + "response_format a JSON object. An answer that does not read is sent back in the same conversation, "
+            + $"{output.MaxRepairs} times at most, and the step is then {nameof(Agents.AgentRunStatus.InvalidOutput)}.";
+    }
+
+    /// <summary>What a failure of <paramref name="kind"/> is to a step, as the loop acts on it.</summary>
+    private static string FailureSaid(Agents.Loop.ChatFailureKind kind, bool balanceSpent) => kind switch
+    {
+        Agents.Loop.ChatFailureKind.KeyRefused => "is a key refused, passed over for the next",
+        Agents.Loop.ChatFailureKind.AccountLimit => $"is the key's limit{(balanceSpent ? ", its balance spent" : string.Empty)}, the step {nameof(Agents.AgentRunStatus.RateLimited)} at once",
+        Agents.Loop.ChatFailureKind.RateLimited => $"is the model's limit on that key, waited out within the tries and the step {nameof(Agents.AgentRunStatus.RateLimited)} past them",
+        Agents.Loop.ChatFailureKind.Transient => "is asked again",
+        Agents.Loop.ChatFailureKind.ContextFull => $"is the context exhausted ({nameof(Agents.AgentRunStatus.ContextExhausted)})",
+        Agents.Loop.ChatFailureKind.Declined => $"ends the step {nameof(Agents.AgentRunStatus.Refused)}",
+        Agents.Loop.ChatFailureKind.Unserved => "is a model the provider does not serve the key",
+        _ => "fails the step",
+    };
+
+    /// <summary>A share as the help says it: 0.7 as 70%.</summary>
+    private static string Percent(double share) => $"{(int)Math.Round(share * 100)}%";
 
     /// <summary>
     /// The sample file for the slot, from the names the providers the configuration init writes appoint: one comment
@@ -2854,9 +3184,17 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.WorkflowStatusFileName}", "a run's status for a person: each step of its definition, its instances, progress and what it waits on"),
                 ($"  {OrchestratorLayout.DefinitionFileName}", "the workflow's definition as the run began with it"),
                 ($"  {OrchestratorLayout.QuestionsFileName}", "every question the run raised, its answers, and who gave each"),
-                ($"  {OrchestratorLayout.FoldsFileName}", "the ledger of the run's folds: each path a fold means to write, what the main tree held there before it and what it left"),
+                ($"  {OrchestratorLayout.FoldsFileName}", "the ledger of the run's folds: each path a fold means to write, what the main tree held there before it and what it left, and each commit a commit step staged of them and what became of it"),
+                ($"  <step>/{OrchestratorLayout.StepCommitMessageFileName}", "a commit step: the message it commits with"),
+                ($"  <step>/{OrchestratorLayout.StepPullRequestBodyFileName}", "a pull-request step that opened one: the body it opened it with"),
                 ($"  <step>/{OrchestratorLayout.StepFoldFileName}", "a fold, delete-agent, refresh or rebase step: what its dry run named and stood, the question it asked, each consent given by name, how its apply ended"),
                 ($"  <step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/", "a refresh or a rebase of others: what it did to each target, as above"),
+                ($"  <step>/{OrchestratorLayout.StepGraphFileName}", "a reason step that has a codebase graph: one line for each call of the graph tool - what it asked about, served and edited; the API clients will write it"),
+                ($"  <step>/{OrchestratorLayout.StepWorkingSetFileName}", "a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it ('help codebase-graph'); the API clients will write it"),
+                ($"  <step>/{Agents.AgentCallRecords.WebFileName}", "a step whose agent asks the web: each address its web_fetch and web_search decided before it was asked, what each answered, and each search source's part ('help web-search'); written by every client whose step has the web"),
+                ($"  <step>/{Agents.AgentCallRecords.DenialsFileName}", "a step whose agent's calls the engine decides, on every client: each call the policy refused, with its rule"),
+                ($"  <step>/{Agents.AgentCallRecords.ToolResultsDirectoryName}/<id>.txt", "a step whose agent's calls the engine decides, on every client: an answer longer than the cap, whole"),
+                ($"  {OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}", "the run's web search: what each source's lookups found, once for the run, and each query a source answered, which the same query again is answered from; written by every client whose step searches"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphManifestFileName}", "the run's codebase graph: the main checkout's manifest, every file it keeps with its blob, state and extract ('help codebase-graph')"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphSymbolsFileName}", "the graph's link result: every node and edge, with the digest of the manifest it was made from"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphExtractsDirectoryName}/<ab>/<name>", "one file's extract, written once, named by its blob, its path, its implementation and version"),
@@ -2867,6 +3205,7 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.ReportFileName}, {OrchestratorLayout.ReportJsonFileName}", "the report of the run's last session"),
                 ($"  {OrchestratorLayout.InboxFileName}, {OrchestratorLayout.StopFileName}", "an answer, and a pause or a stop, handed to the engine running the run"),
                 ($"  ../<run>{OrchestratorLayout.OwnerFileName}", "beside the run's directory: the process whose engine holds the run"),
+                ($"  ../{OrchestratorLayout.WebIndexesDirectoryName}/<source>/", "beside every run: the repository's index of a sitemap search source's site - its state, pages and fill's record"),
             ]);
         builder.AppendLine();
         AppendWrapped(
@@ -3282,6 +3621,119 @@ public static class HelpTopics
         return builder.ToString();
     }
 
+    private static string RenderWebSearch()
+    {
+        var builder = new StringBuilder();
+        var kinds = Web.Search.WebSearchKinds.OfThisBuild;
+        var builtIn = Web.Search.WebSearchSources.Of(new HarnessConfig(), kinds);
+
+        builder.AppendLine("Web search");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"An agent whose step has the web searches with {AgentTools.WebSearch}, and reads the pages it chooses with {AgentTools.WebFetch}. "
+            + "The claude-code client gives them a step through the engine's tool server ('help agent-clients'), and the API clients are to offer them. "
+            + "dssharness makes every search itself, inside the tool, over HTTP: it asks the sources the configuration declares - "
+            + "search APIs that answer JSON, RSS and Atom feeds, OpenSearch descriptions, and its own index of a site's pages read "
+            + "through the site's sitemap - with no key required, no provider's search and no service to install, and it never "
+            + "reads a search engine's results page, for none of the general engines lets programs read one in so many words. A "
+            + "source answers data, never a page for people: an API its owner documents for programs, or, documenting none, one "
+            + "whose robots.txt does not refuse it.");
+        builder.AppendLine();
+        AppendWrapped(builder, "The section agentWebSearch of config.json declares it, read strictly: a key no part of it takes, and a key a source's kind does not take, are refused, each by name.");
+        builder.AppendLine();
+        AppendKeys(builder, Web.Search.WebSearchSources.Keys);
+        builder.AppendLine();
+        AppendWrapped(builder, "Every source takes these keys, whatever its kind:");
+        builder.AppendLine();
+        AppendKeys(builder, Web.Search.WebSearchSource.OwnKeys);
+
+        foreach (var kind in kinds.All)
+        {
+            builder.AppendLine();
+            AppendWrapped(builder, $"Kind {kind.Kind} (version {kind.Version.ToString(CultureInfo.InvariantCulture)}): {kind.Help}");
+            builder.AppendLine();
+            AppendKeys(builder, kind.Keys);
+        }
+
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "The built-in sources are entries in this same form, kept as a data file of the tool, which init writes into the "
+            + "configuration it creates, and which a configuration without agentWebSearch has: a repository's entry of a built-in's "
+            + "name changes it key by key, enabled: false turns it off, and an entry of a new name adds a source. None needs a key. "
+            + $"A step that says no search asks the defaults: {string.Join(", ", builtIn.Defaults)}.");
+
+        foreach (var source in builtIn.All)
+        {
+            builder.AppendLine();
+            AppendWrapped(builder, $"{source.Name} ({source.Kind}{(source.Tags.Count > 0 ? $"; tags {string.Join(", ", source.Tags)}" : string.Empty)}; perMinute {source.PerMinute.ToString(CultureInfo.InvariantCulture)}{(source.PerDay is { } perDay ? $", perDay {perDay.ToString(CultureInfo.InvariantCulture)}" : string.Empty)}): {source.Description}. Its owner's terms: {source.Terms}.");
+        }
+
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A reason step chooses its sources with search - names of sources or tags, as search: [docs, gov] - in the order its "
+            + "answer gives them; absent, the defaults. The tool lists the step's sources with what each is for, and the agent may "
+            + "name some of them in a call's sources, else every one is asked. A name that is no source or tag, a list given empty "
+            + "or naming one twice, a source turned off, a tag none of whose sources is on, and search on a step that goes on with "
+            + "another's work are refused when the workflow is checked. The defaults leave out a source turned off, and refuse a "
+            + "name that is no source or tag, a list given empty and one naming one twice where the configuration is read.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Every query goes through dssharness. The query is held to the mask: a secret of the run's never leaves in one. Each "
+            + "address a source asks for the step - its endpoint, a lookup it reads before its first request, each redirect, and "
+            + "the site of a sitemap source's index - is held to the mask, a secret behind its escapes too, as a page an agent "
+            + "fetches is, and to the step's Web(...) rules, and each one asked decided and written "
+            + $"to the step's {Agents.AgentCallRecords.WebFileName} before it is asked; agentPolicy.webDomains does not hold back a source, which the configuration "
+            + "declares, and holds its results: one whose address the step could not read is left out and counted. An answer that "
+            + "holds a secret of the run's behind its escapes - its key echoed as a page writes it - is not read. Each request "
+            + "a source is sent counts against the step's maxPerStep, past which a source is refused and told; an address its "
+            + "rules refuse, and a turn its pace refuses, is no request. A page an index's fill reads is held to the run's "
+            + "Web(...) rules, the configuration's, never one step's own, for the index is the repository's and outlives the step "
+            + "that began it: the fill writes each page it asks to its own record, and counts against no step. No source is "
+            + "asked more than its perMinute in a minute, nor its perDay in a day, on this machine, whatever runs ask it - one "
+            + $"record of the machine's, {Web.Search.WebSearchPace.FilePrefix}-<machine>.json in this user's directory for the "
+            + "tool, beside admission's - a request past its minute waiting for it. A source's key, where it names one - a "
+            + "variable of the .env slot, sent to the scheme, host and port the source's own address writes alone, or the "
+            + "machine's gh login for the source's host, sent to that host or its api. host alone - is used where it is there, "
+            + "and the fetch adds it to what it sends to the scheme, host and port each of that source's searches first asks "
+            + "alone, where it is one of those - a lookup is sent none, and a host a document the source read names, an "
+            + "OpenSearch description's template or what discover found, is never sent one - as a header or a query parameter, "
+            + "over https alone - an address it may not go to refused, nothing sent - never to an address any record or answer "
+            + "holds; missing, the source is asked without it, and the record says why. A source whose address takes its host "
+            + "from what discover finds is refused a key of the .env slot where the configuration is read. One source's "
+            + "failure - what this machine could not do for it among them - is its own part's, never another's.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A limit is obeyed and told, never looped on: a 429, or a 403 or 503 with Retry-After or spent requests, a RateLimit "
+            + "or X-RateLimit-Remaining header at zero, or a body's backoff, holds that source on the machine until the time it "
+            + "gave, and nothing is sent to it before then. Each source answers in its own part, in the step's order: its results "
+            + "- each one's title, address and snippet, the snippet at most "
+            + $"{Web.Search.WebSearchResult.MostSnippet.ToString(CultureInfo.InvariantCulture)} characters; or no results; or a "
+            + "limit it asked for; or an answer that could not be read (it changed), which is a notice too; or a failure; or a "
+            + "refusal, each with its cause - inside a <web-search> block that says it is from the web. One source's failure never "
+            + "hides another's results, and a search none of whose sources answered fails. Each request carries the tool's own "
+            + "User-Agent, naming it, its version and its project's address: no address rotated, no browser imitated, no script "
+            + "run and no challenge answered.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"What a run's sources found once, and each query a source answered, is kept in {OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName} "
+            + "in the run's directory: the same query again, of the same source, its key sent or not alike, is answered from "
+            + "there with no request, under "
+            + "the asking step's own rules - each address the source was asked at decided again, and each result held to its "
+            + "web. A "
+            + "sitemap source's index is the repository's, under "
+            + $"{HarnessLayout.OrchestratorsDirectoryName}/{OrchestratorLayout.WebIndexesDirectoryName}/<source>/, filled in the background on its first "
+            + "search and whenever it is older than refreshDays or its settings change, at the slower of its site's Crawl-delay "
+            + "and the source's pace; a search answers from what it holds, saying how much.");
+
+        return builder.ToString();
+    }
+
     private static string RenderCodebaseGraph()
     {
         var builder = new StringBuilder();
@@ -3416,6 +3868,58 @@ public static class HelpTopics
             + $"runs in the engine's process on one of every {CodebaseGraphService.ReadShare} of the machine's processors, so a build beside it is not starved; it "
             + "runs no leg and counts against no limit; with in, its view is that agent's - the base for one that only reads - "
             + "and its output's view names the one it synced.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "What an agent asks of the graph is one tool, graph, whose op says what is asked: "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Find)} - the nodes a query's words match, best first, generated code after every other, a tie broken by how near the step's own work each is - its context pack or a working set it was given, a file it writes, a file its agent changed, a path or a name its prompt holds - then by id, at most {CodebaseGraphTool.FindLines} ({CodebaseGraphTool.FindMost} with limit); "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Node)} - a node's card and its edges by kind, {CodebaseGraphTool.NodeLinesAKind} of each with the count of the rest; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Related)} - the nodes one relation ({string.Join(", ", GraphRelations.All)}) reaches, 1 to {CodebaseGraphTool.MostDepth} hops, at most {CodebaseGraphTool.RelatedLines}, a node with more edges of that kind than the view's 99th percentile, and at least {CodebaseGraphQueries.CrowdFloor}, given and not gone through; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Outline)} - a file's or a type's declarations, or the repository's, at most {CodebaseGraphTool.OutlineLines}; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Body)} - the lines of 1 to {CodebaseGraphTool.BodySymbols} nodes, read fresh and numbered as view_file numbers them, a type's members' bodies left out unless full - each member's signature line kept - at most {CodebaseGraphTool.BodyLines} in all; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Edit)} - a node's lines replaced where the hash given is its hash now - a node spread over files in the part that hash names - the file's encoding, line endings and final newline kept, and nothing written where it changed; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.WholeFile)} - the narrowing of reads lifted for one file, with why. "
+            + "body and edit reach a file only inside the tree, each link resolved, never through a link out of it. "
+            + "No step is given the tool yet - the API clients will offer it - and query-codebase-graph below runs its read operations; a step is to be given the read operations, edit only where it may write and wholeFile only where its reads are narrowed, its schema naming those alone. An operation given a member it does not read, one of the wrong type, or missing one it needs, is refused with a usage line. "
+            + "Every node an answer names carries path:start-end - a declaration # with the first eight characters of its digest too, a file its lines - every answer ends naming the files whose extract the graph no longer holds, if any, and every answer is cut at a whole line past "
+            + $"{(CodebaseGraphTool.MostCharacters / 1024).ToString(CultureInfo.InvariantCulture)} KB, saying how to ask for the rest with offset. Where the graph is not sure - no node matched, a name it does not hold, "
+            + $"an edge of {CodeConfidences.Candidates}, a node named with external or unresolved callees or in a file dynamic or generated - the answer adds text: at most {CodebaseGraphTool.TextHits} lines that hold the name as a whole word, "
+            + "searched as search_files searches, each path:line with no hash, saying how many more there were and the files it did not read; a path or a path:line is searched for by no word.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A reason step is to be given, at its start, its context pack - the API clients will give it - the part of the graph its work touches, made from its view and what the step says alone, "
+            + "so the same step on the same tree is given the same pack. Its seeds are what its prompt names exactly - a symbol or a path in backquotes, a qualified name or its last parts (Order.Total), "
+            + $"a handle, a path:line as a stack frame or a compiler writes one - the working sets it is given, the declarations of the files its writes covers, and the {CodebaseContextPack.WordSeeds} nodes its words match best. "
+            + $"The walk goes {CodebaseContextPack.NamedHops} hops from a node named or worked with and {CodebaseContextPack.OtherHops} from the others, over calls both ways, the type relations, tests and the types a node names, each node scored by its seed's weight "
+            + $"halved at each hop and weighed by each edge's confidence ({string.Join(", ", CodeConfidences.All.Select(confidence => $"{confidence} {CodebaseContextPack.Confidence(confidence).ToString(CultureInfo.InvariantCulture)}"))}), "
+            + $"and not gone through along a kind it has more edges of than the view's 99th percentile, and at least {CodebaseGraphQueries.CrowdFloor}, which its line says. It is written best first by file, "
+            + $"one line each as find gives it with how it stands to the node it was reached from, within its cap ({CodebaseContextPack.DefaultTokens.ToString(CultureInfo.InvariantCulture)} estimated tokens - bytes over {EstimatedTokens.BytesPerToken} - by default), "
+            + "what did not fit left out whole and counted on its last line, and none at all where the cap cannot hold its first and last lines. A step that starts from its changes is packed first from "
+            + "the declarations its tree changed against its base - an agent's where its worktree was made or last moved to, the main checkout's the run's start - each with where its lines differ, "
+            + "one moved between files and one taken out as the base held it, then their tests and those of their direct callers, then their callers to two hops, overrides, implementations and "
+            + "dispatches, and derived types; where nothing changed, its first line says so and the task's seeds stand in. A file that differs and could not be compared - over its size cap, "
+            + "generated, or not read, there or at the base - is named on its first line with why, and nothing in it is said unchanged.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"When a reason step that has a graph ends, the engine is to write its working set, {OrchestratorLayout.StepWorkingSetFileName} - the API clients will - never the model: "
+            + $"each node it {string.Join(", ", WorkingSetUses.All.SkipLast(1))} or {WorkingSetUses.All[^1]}, with its handle, file, lines and hash at the step's end, at most {CodebaseWorkingSet.MostNodes}, "
+            + "edited first, then by how often each was touched; a node the view no longer holds kept by its id, marked gone. It is made from the step's "
+            + $"{OrchestratorLayout.StepGraphFileName} - each node a graph call asked about by name (found), a line of which body gave (served), or an edit wrote, by its lines - and the tool calls its stored stream holds, "
+            + "on every client's form: a read (Read, view_file) by where the lines its answer gave stand once in the file as the step left it, else by their numbers, a write "
+            + "(Edit, replace_in_file, insert_in_file) by where its new text stands once there - every place, with replace_all - else by the lines it names, a whole file's "
+            + "write (Write, create_file) by every line - each matched to the declarations whose own lines it meets, a member's lines never its type's; a deletion writes "
+            + "no lines, and is counted with the writes placed nowhere, as a whole file's write is where the file does not read as the step left it. A reason step's pack is to be given the working sets of the step it goes on with (resume), of each step it depends on "
+            + "directly, a group by each reason step in it, and of its own earlier visits of the same work item, newest first: each node a seed named exactly, an edited one above the rest.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"{ToolPackage.Command} {CodebaseGraphQueryService.CommandName} <run> runs one of the read operations by hand - --find <query>, --node <symbol>, "
+            + "--related <symbol> --relation <relation> [--depth <n>], --outline [<path or symbol>] or --body <symbol>... - on the run's graph, the base or with "
+            + "--agent <agent> that agent's view, and prints the answer an agent would be given; --json the same in one document. It reads only - no sync, "
+            + "no lock, nothing written - the main checkout's run and configuration wherever it is typed, a misuse told before anything is read, and a view not made yet said and the base answered. It ends 0, "
+            + $"{HarnessExit.Refused} where the run has no graph, and {HarnessExit.UsageError} for a usage error; no host is asked to run it.");
 
         return builder.ToString();
     }
@@ -3507,7 +4011,7 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
         builder.AppendLine("may run on, or a map giving each its own - all for the rest, a model's code for one, so a");
-        builder.AppendLine("step can run its Claude model at xhigh and GLM 5.3 at max, the highest it takes. Each");
+        builder.AppendLine("step can run one model at xhigh and another at max, where that is the highest it takes. Each");
         builder.AppendLine("model's level is checked against what that model takes when the definition is checked");
         builder.AppendLine("against the configuration's providers ('help agent-clients'), and validate-workflow says");
         builder.AppendLine("every step's models and levels under the line that says it holds. A test step's filterWhen");
@@ -3560,7 +4064,8 @@ public static class HelpTopics
             // orient takes nothing beyond the common keys: its line stands alone.
             var said = new[]
             {
-                type.IsCheck ? $"a check; failOn {type.FailOnDefault} by default" : null,
+                type.IsCheck ? $"a check; failOn {type.FailOnDefault} by default"
+                    : type.ChecksAsOutput ? "a check, which answers in its output and never fails" : null,
                 type.DefaultTimeoutMinutes is { } minutes ? $"timeoutMinutes {minutes.ToString(CultureInfo.InvariantCulture)} by default" : null,
             }.OfType<string>().ToList();
 
@@ -3647,12 +4152,11 @@ public static class HelpTopics
             + "checks as they are, its passed true only where they are green. A check that finds red is red: under failOn red - every check's default but "
             + "ci-read's, never - it fails with its check's code "
             + $"(an anchor finding {AnchorExit.Findings}, a red CI leg {CiExit.LegRed} and no matrix run {CiExit.MatrixDidNotRun}, a red "
-            + $"check {CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given "
-            + $"{GhProcess.Limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - the step's timeoutMinutes bounds "
-            + "its attempt, and a read in flight ends with it - and one past "
-            + $"it ends the step incomplete ({HarnessExit.Incomplete}), which runs it again; a ci-wait reads again at its next poll where "
-            + $"a read failed or passed it, saying each, and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running "
-            + "or its wait is spent.");
+            + $"check {CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given the "
+            + $"step's timeoutMinutes where it says one, else {ReportText.Limit(GhProcess.Limit)}, and never outlasts the step's attempt, "
+            + $"which ends a read in flight with it: a ci-read's read past its limit ends the step incomplete ({HarnessExit.Incomplete}), "
+            + "which runs it again; a ci-wait reads again at its next poll where a read failed or passed its limit, saying each, "
+            + $"and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running or its wait is spent.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -3674,8 +4178,9 @@ public static class HelpTopics
             + $"path they mean to write, with what the main tree holds there, to the run's ledger ({OrchestratorLayout.FoldsFileName}) "
             + "before the verb is called, and what they left after - an intent a crash cut off is settled from the tree by the "
             + "next attempt - and answer written, deleted, registries and rows; a run stopped with a fold in its ledger whose "
-            + "change no commit took yet - a path it changed that the main tree still holds otherwise than its HEAD, whoever "
-            + "commits it - is unfinished, as one with an agent open is. A deletion run again once its agent is deleted - its "
+            + "change no commit took yet - a path it changed that no commit step of the run took, that git does not ignore and "
+            + "that the main tree still holds otherwise than its HEAD, whoever commits it - is unfinished, as one with an agent "
+            + "open is. A deletion run again once its agent is deleted - its "
             + "ending cut off before it was recorded - is done, with what its directory kept of its apply. A refresh refused for conflicting merges alone hands every "
             + "other path first, then asks foldConflicts of those it left; its paths expression yielding none, it is done, having "
             + "weighed nothing. A rebase moves the base whole or not at all. A refresh or a rebase of others works on every "
@@ -3684,6 +4189,79 @@ public static class HelpTopics
             + $"({OrchestratorLayout.StepTargetsDirectoryName}/<agent>/), one closed before its turn passed over; a target that "
             + "fails ends its own turn, and the step ends done, or failed with the code of the first that failed, once each has "
             + $"had its turn. Each step keeps what its dry run named and how its apply ended in its directory ({OrchestratorLayout.StepFoldFileName}).");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "commit commits the folds upstream of it in the flow - every visit and iteration of them, never another work item's - "
+            + "and no other work: each path one of them changed that no commit of the run took yet, holding what the newest fold "
+            + "that names it left there, so a registry two items' folds wrote is taken whole. A fold upstream whose intent "
+            + "nobody settled - a crash cut it off, and its step has not run again - leaves what it wrote untold, and fails the "
+            + $"step ({HarnessExit.Refused}) naming it, nothing staged. With none owed it is done, "
+            + "committed false, and runs no git at all. Otherwise it works on the branch the run started on alone: the main "
+            + "checkout on another - a person checked one out while the run was paused - or its HEAD detached fails it "
+            + $"({HarnessExit.Refused}) naming both, nothing staged, as it does push and pull-request. The index must be empty and "
+            + "each path hold what its fold left there, and where either does not - a path edited and not committed, or its "
+            + $"fold's change undone - the step fails ({HarnessExit.Refused}) naming each, nothing staged, for a commit of the rest "
+            + "would be half a fold. A path git ignores is left out and marked so in the ledger, git asked again each time, and "
+            + "one HEAD holds as the tree does - what its fold left, or a person's later change of it, told by the blob git would "
+            + "store against HEAD's and never by git's status, which does not look at a path marked assume-unchanged or "
+            + "skip-worktree - was committed by hand, and is marked taken by HEAD; one left to stage that the index marks so fails "
+            + $"it ({HarnessExit.Refused}) naming each with its mark, since git add would not stage it. With anything left, its message is the "
+            + "configuration's commit.template, read by the one brace grammar, each {variable} filled with the step's value for "
+            + "it, else its default, where one is declared, and else the step's own message - none, or a blank one, fails it "
+            + $"({HarnessExit.ConfigInvalid}) - and the rest is written to the ledger "
+            + "as one staged set before the first git add, staged by explicit path, never with -A, committed once - the message "
+            + $"written to the step's directory ({OrchestratorLayout.StepCommitMessageFileName}), with -s where commit.signOff - "
+            + "and marked committed with each fold path it took; git refusing, a hook among the reasons, unstages it and fails "
+            + $"the step ({HarnessExit.CommandFailed}). The commit is held to the set, by what it changes against its parent: one "
+            + "that took more - a hook staged another file - or left a path of the set out fails the step "
+            + $"({HarnessExit.CommandFailed}) naming each, and is left as it is for a person to keep or undo, the set staged in the "
+            + "ledger beside it. A set an attempt before left staged is settled first: committed where HEAD moved and holds each "
+            + "of its paths as the set staged it, else unstaged and staged again whole. It answers committed, sha, paths and "
+            + "ignored - each path its folds changed that git ignores, folded and never committed, which what the run's end "
+            + "leaves for a person names too - run again once it has committed, the commit it made. What a run checked "
+            + "is text any template reads: {run.ran}, every check that ended so far, a line each with where it ran and its "
+            + "verdict, each leg's for a step that runs legs; {run.notRun}, each check not run yet, by its step's name, and each "
+            + "skipped or never reached, with why; and {run.red}, each red result not seen green since by a later visit of the "
+            + "same step - a red leg, a red check of CI, an anchor check's findings, a plan's problems, a failure - each 'none' "
+            + "where it names nothing. The checks are the steps of type "
+            + $"{string.Join(", ", WorkflowStepTypes.All.Where(type => type.Checks).Select(type => type.Type))} and a reason step "
+            + "marked independent, whatever each is named. A commit's message and variables read {carried.ran}, "
+            + "{carried.notRun} and {carried.red} besides: the same three of the checks upstream of it that ended since the "
+            + "newest commit upstream of it was done, a check whose failure was passed over among those that did not check. "
+            + "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (no "
+            + "step records an assumption yet) and the issues it found there before - say 'none' alike where they name nothing.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "push pushes the commit the main checkout's HEAD names to the branch of its name on a remote - the step's remote, "
+            + "else the one the run's branch goes to (the push step's, else the one the branch tracks, else origin, else the only "
+            + "one) - as a fast-forward and never forced, and answers pushed - false where the remote's branch named that commit "
+            + "already, so a push run again is done - remote, branch and sha, the commit a ci-wait that names none waits for. Every "
+            + "push step that names a remote names the same one, the remote the run's branch goes to: a definition whose push "
+            + "steps name two is refused. HEAD detached, the main checkout on another branch than the run started on, a branch "
+            + "with no commit yet, no remote it can name and one the repository does not have each refuse it "
+            + $"({HarnessExit.Refused}), nothing pushed; the remote refusing the push - its branch moved on since - fails it "
+            + $"({HarnessExit.CommandFailed}) in git's words. A checkpoint push runs only where the workflow says pushCheckpoints, "
+            + "and is skipped otherwise. pull-request opens the pull request of the branch the main checkout is on, on the "
+            + "repository the address of the remote the run's branch goes to names - its host, owner and name, the host of one "
+            + "over ssh as ssh's configuration names it (ssh -G, an alias for one account among several), an address of no forge "
+            + "or a host ssh cannot name leaving gh to read the remotes itself - against its base, filled from the run's inputs "
+            + "and its name, else "
+            + "the remote's default branch, with its title filled and its body the file it names in the workflow's directory, "
+            + "read and filled where the step starts as a template is and written to the step's directory "
+            + $"({OrchestratorLayout.StepPullRequestBodyFileName}) for gh to read. One already open from that branch to that base "
+            + "is answered as it is, created false, and never edited: a step run again opens no second. One open from a fork's "
+            + "branch of the same name is none of the run's, as gh says of each (isCrossRepository). It answers number, url "
+            + $"and created. A title blank once filled fails it ({HarnessExit.ConfigInvalid}), as a body that cannot be read or reads "
+            + "nothing does; HEAD detached, the main checkout on another branch than the run started on, no remote, no base it "
+            + $"can tell and a base that is its own branch each refuse it ({HarnessExit.Refused}), nothing opened; gh not there fails "
+            + $"it {HarnessExit.ToolMissing}, and gh saying no {HarnessExit.CommandFailed}. The run never merges a pull request: "
+            + "each one it opened or found is left for a person, by its address, in what the run's end says (leftForAPerson), "
+            + "as is each path its folds changed that git ignores, never committed. The commands commit, push and pull-request run are a "
+            + $"closed list - {string.Join("; ", PublisherCommands.All.Select(command => $"{command.Shown} ({ReportText.Limit(command.Limit)})"))} - "
+            + "each given the step's timeoutMinutes where it says one, else its own; one past it is not done "
+            + $"({HarnessExit.Incomplete}), and the step runs again, a commit's set left staged settled by its next attempt.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -3876,7 +4454,8 @@ public static class HelpTopics
         builder.AppendLine("  emulators      ways to run programs for another processor on a host: qemu,");
         builder.AppendLine("                 Rosetta, Prism");
         builder.AppendLine("  developerEnvironments  what a toolchain's legs start in, set up on the host");
-        builder.AppendLine("                 that runs them: visualStudio runs that instance's vcvarsall.bat");
+        builder.AppendLine("                 that runs them: visualStudio runs that instance's vcvarsall.bat,");
+        builder.AppendLine("                 for the MSVC toolset an optional toolsVersion names ('help legs')");
         builder.AppendLine("  legs           units of work: os + processor (+ emulator) + project + toolchain");
         builder.AppendLine("                 + config (+ sanitizer), and localCopy, where a leg this machine");
         builder.AppendLine("                 runs itself works ('help legs'); buildSpaceGiB, the room a leg's");
@@ -3912,7 +4491,7 @@ public static class HelpTopics
         builder.AppendLine("  balanceKeyUsage  off unless turned on: a provider's keys balanced by what each");
         builder.AppendLine("                 spent in the last seven days, a step starting on the one that spent");
         builder.AppendLine("                 least");
-        builder.AppendLine("  agentClients   the clients the tool builds in (claude-code, claude-api, glm), each");
+        builder.AppendLine($"  agentClients   the clients the tool builds in ({string.Join(", ", Agents.AgentProviders.ClientKinds.Select(kind => kind.Name))}), each");
         builder.AppendLine("                 by its name: update, claude-code's alone, says whether the tool");
         builder.AppendLine("                 installs and updates Claude Code with npm; auth, claude-code's");
         builder.AppendLine($"                 alone, how it signs in ({string.Join(", ", Agents.AgentAuth.All)}, {Agents.AgentAuth.Login}");
@@ -3920,6 +4499,12 @@ public static class HelpTopics
         builder.AppendLine($"                 {Agents.AgentClientSetting.ConfigDirKey} and {Agents.AgentClientSetting.ExecutableKey}, claude-code's alone, the variables");
         builder.AppendLine("                 that hold a specific login's Claude Code directory and the program");
         builder.AppendLine($"                 it starts ({Orchestration.ClaudeTranscripts.ConfigDirectoryVariable}, {Agents.ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable} where none is named);");
+        builder.AppendLine("                 maxRetries, maxRetryWaitSeconds and requestExtras, the API");
+        builder.AppendLine($"                 clients' ({string.Join(", ", Agents.AgentProviders.ApiClients)}), their tries, longest wait and the");
+        builder.AppendLine("                 fields merged into each request; cacheTtl and betas, claude-api's");
+        builder.AppendLine("                 alone, how long its requests are cached and the betas sent beside");
+        builder.AppendLine("                 the tool's own; preserveThinking, glm's alone, whether Z.AI keeps");
+        builder.AppendLine("                 the model's reasoning across turns;");
         builder.AppendLine("                 a client holds no model, size or price - contextTokens and");
         builder.AppendLine("                 maxOutputTokens are a model's ('help agent-clients')");
         builder.AppendLine("  agentPolicy    what an agent may do beyond the rules built into the tool:");
@@ -3927,21 +4512,36 @@ public static class HelpTopics
         builder.AppendLine("                 Run(git push *), Write(.github/**), Read(secrets/**),");
         builder.AppendLine("                 Web(pastebin.com) - applied to every agent of every run under this");
         builder.AppendLine("                 configuration, beside a workflow's definitions and steps;");
-        builder.AppendLine("                 webDomains, the allow list of every web request (left out, any");
-        builder.AppendLine("                 address); worktreeRules (true where nothing is said) and");
+        builder.AppendLine("                 webDomains, the allow list of every page an agent reads and every");
+        builder.AppendLine("                 result a search gives - a search source's own requests are held to");
+        builder.AppendLine("                 the Web(...) rules alone (left out, any address); worktreeRules (true");
+        builder.AppendLine("                 where nothing is said) and");
         builder.AppendLine("                 protectedPaths (true too), the switches of the rule sets 'help");
-        builder.AppendLine("                 agent-clients' names ('help agent-clients')");
+        builder.AppendLine("                 agent-clients' names; keepEnvironment, the secret-shaped names a");
+        builder.AppendLine($"                 command an agent runs keeps; commandTimeoutSeconds ({Agents.AgentCommandSettings.DefaultTimeoutSeconds}) and");
+        builder.AppendLine($"                 maxCommandTimeoutSeconds ({Agents.AgentCommandSettings.DefaultMaxTimeoutSeconds}), how long one runs where its call");
+        builder.AppendLine($"                 names no time, and the most it may name, {Agents.AgentCommandSettings.MostTimeoutSeconds} at most");
+        builder.AppendLine("                 ('help agent-clients')");
+        AppendWrapped(
+            builder,
+            $"the harness's own web search: sources, each by its name - its {string.Join(", ", Web.Search.WebSearchSource.OwnKeys.Select(key => key.Name))} "
+            + "and its kind's own keys, laid over the built-in sources key by key, which init writes; defaults, the sources or "
+            + "tags a step that names none searches, those turned on; "
+            + $"maxPerStep ({Web.Search.WebSearchSources.DefaultMaxPerStep}) and resultsPerSource ({Web.Search.WebSearchSources.DefaultResultsPerSource}) ('help web-search')",
+            "  agentWebSearch ");
         builder.AppendLine();
         builder.AppendLine("A list whose absence means every one of what it names, or a set the tool chooses, is");
         builder.AppendLine("refused given empty, as --legs given no name is: a runner's legs and steps; a tool's");
         builder.AppendLine("platforms, toolchains, legs, processors and emulators; a toolchain's platforms; an");
         builder.AppendLine("emulator's phases; ci.workflows; test.inputs; a project's targets and");
-        builder.AppendLine("rebuildableFormats; a platform's toolSearchDirectories. Leave the key out instead. A");
-        builder.AppendLine("list whose empty form means none - such as sync.neverTransfer, sync.exclude or");
+        builder.AppendLine("rebuildableFormats; a platform's toolSearchDirectories; agentWebSearch.defaults.");
+        builder.AppendLine("Leave the key out instead. A list whose empty form means none - such as");
+        builder.AppendLine("sync.neverTransfer, sync.exclude or");
         builder.AppendLine("contention.buildTools - takes [] as that. workflows, which declares no workflow left");
-        builder.AppendLine("out, is refused given empty too, so none is spelt one way: leave the key out for no");
-        builder.AppendLine("workflow. A runner's list under mutations.runReads, which would say nothing given");
-        builder.AppendLine("empty, is refused so: leave the runner out instead.");
+        builder.AppendLine("out, and agentPolicy.keepEnvironment, which gives no name back left out, are refused");
+        builder.AppendLine("given empty too, so none is spelt one way: leave the key out for none. A runner's list");
+        builder.AppendLine("under mutations.runReads, which would say nothing given empty, is refused so: leave the");
+        builder.AppendLine("runner out instead.");
         builder.AppendLine();
         builder.AppendLine("A toolchain, a build config and a sanitizer overlay compose: each contributes");
         builder.AppendLine("environment and cache variables, so clang x debug x asan needs no entry of its");

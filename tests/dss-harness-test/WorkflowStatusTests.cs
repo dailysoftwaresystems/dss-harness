@@ -331,6 +331,46 @@ public sealed class WorkflowStatusTests
         Assert.Equal(2, status.Steps["gate"].Instances["gate"].Attempt);
     }
 
+    /// <summary>
+    /// A step whose only instance was drawn ended - skipped where its when read false, or not run where what it waits on
+    /// failed - has finished: its time is when it was drawn, never left null as though it had not ended.
+    /// </summary>
+    [Fact]
+    public async Task AStepDrawnEnded_HasFinished()
+    {
+        using var temp = new TempDirectory();
+        var clock = new ManualClock();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+              - name: two
+                type: orient
+                when: 'false'
+                dependsOn: [one]
+              - name: three
+                type: orient
+              - name: four
+                type: orient
+                dependsOn: [three]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition, clock);
+        var runner = new DoneRunner().On("three", _ => FlowStepResult.Ended(passed: false, DssHarness.Core.Results.HarnessExit.CommandFailed, error: "no"));
+
+        using (records)
+        {
+            await new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records).RunAsync(TestContext.Current.CancellationToken);
+        }
+
+        var status = harness.OrchestrationStore.ReadWorkflowStatus(layout)!;
+
+        Assert.Equal(("Skipped", "NotRun"), (status.Steps["two"].Status, status.Steps["four"].Status));
+        Assert.All(new[] { status.Steps["two"], status.Steps["four"] }, step => Assert.NotNull(step.FinishedAt));
+        Assert.Equal(status.Steps["two"].FinishedAt, status.Steps["two"].Instances["two"].FinishedAt);
+        Assert.Equal(status.Steps["four"].FinishedAt, status.Steps["four"].Instances["four"].FinishedAt);
+    }
+
     /// <summary>A runner that answers every step as asked, holding open any step whose test wants to time it.</summary>
     private sealed class DoneRunner : IFlowStepRunner
     {

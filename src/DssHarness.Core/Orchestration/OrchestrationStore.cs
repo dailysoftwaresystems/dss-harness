@@ -68,6 +68,15 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     /// <summary>What a fold family step's record is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
     public const string FoldRecordKind = "a fold family step's record";
 
+    /// <summary>What a step's working set is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string WorkingSetKind = "a step's working set";
+
+    /// <summary>What a step's lines of its codebase graph's calls are, as their refusals name them.</summary>
+    public const string GraphStepLinesKind = "a step's lines of its graph's calls";
+
+    /// <summary>What a step's stored stream is, as its refusals name it.</summary>
+    public const string StepStreamKind = "a step's stream";
+
     /// <summary>What the base's manifest of a run's codebase graph is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
     public const string GraphManifestKind = "the manifest of the run's codebase graph";
 
@@ -87,8 +96,9 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     private readonly IHarnessOutput _output = output;
 
     /// <summary>
-    /// Each graph's sync log, by its path: syncs of different views run side by side in one process, and the log's claim
-    /// refuses a second writer rather than wait, so this process's appends to one log take turns.
+    /// Each graph's sync log and each step's <c>graph.jsonl</c>, by its path: syncs of different views, and a step's reads
+    /// of its graph, run side by side in one process, and a log's claim refuses a second writer rather than wait, so this
+    /// process's appends to one log take turns.
     /// </summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, object> _syncLogs = new(StringComparer.Ordinal);
 
@@ -600,6 +610,83 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         Write(Path.Combine(directory, OrchestratorLayout.StepFoldFileName), FoldRecordKind, record, record.Problem());
     }
 
+    /// <summary>A step's working set, kept in its directory, or null where it keeps none.</summary>
+    /// <param name="directory">The step's directory.</param>
+    /// <exception cref="HarnessException">The record cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public Codebase.CodebaseWorkingSet? ReadWorkingSet(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        return Read<Codebase.CodebaseWorkingSet>(Path.Combine(directory, OrchestratorLayout.StepWorkingSetFileName), WorkingSetKind, record => record.Problem());
+    }
+
+    /// <summary>Writes a step's working set whole, in its directory.</summary>
+    /// <param name="directory">The step's directory.</param>
+    /// <param name="record">The working set, which must be one.</param>
+    public void WriteWorkingSet(string directory, Codebase.CodebaseWorkingSet record)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        ArgumentNullException.ThrowIfNull(record);
+        Write(Path.Combine(directory, OrchestratorLayout.StepWorkingSetFileName), WorkingSetKind, record, record.Problem());
+    }
+
+    /// <summary>Appends one line to a step's <c>graph.jsonl</c>, in its directory, whole and on the disk before it returns.</summary>
+    /// <param name="directory">The step's directory.</param>
+    /// <param name="line">The line, which must be one.</param>
+    public void AppendGraphStepLine(string directory, Agents.Runtime.GraphStepLine line)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        ArgumentNullException.ThrowIfNull(line);
+
+        var path = Path.Combine(directory, OrchestratorLayout.StepGraphFileName);
+
+        if (line.Problem() is { } problem)
+        {
+            throw new InvalidOperationException($"Refusing to append to '{path}' a line that would not read back: {problem}.");
+        }
+
+        _fileSystem.CreateDirectory(directory);
+
+        lock (_syncLogs.GetOrAdd(path, _ => new object()))
+        {
+            using var log = DssHarness.Core.Agents.AppendLog.Open(_fileSystem, path);
+            log.Append(JsonSerializer.Serialize(line, JsonStateFile.LineOptions));
+        }
+    }
+
+    /// <summary>The lines of a step's <c>graph.jsonl</c>, in order - a torn last line a killed writer left set aside - or none where it keeps none.</summary>
+    /// <param name="directory">The step's directory.</param>
+    /// <exception cref="HarnessException">A whole line cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public IReadOnlyList<Agents.Runtime.GraphStepLine> ReadGraphStepLines(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        return ReadLog<Agents.Runtime.GraphStepLine>(Path.Combine(directory, OrchestratorLayout.StepGraphFileName), GraphStepLinesKind, line => line.Problem());
+    }
+
+    /// <summary>
+    /// The events of a step's stored stream (<see cref="Agents.StoredStream"/>), every attempt's in order - a torn last line
+    /// a killed writer left set aside - or none where it keeps none: what its records are made from once it ends.
+    /// </summary>
+    /// <param name="directory">The step's directory.</param>
+    /// <exception cref="HarnessException">A whole line cannot be read as an event (<see cref="HarnessExit.Refused"/>).</exception>
+    public IReadOnlyList<Agents.AgentEvent> ReadStepStream(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        return ReadLog<DssHarness.Core.Agents.AgentEvent>(Path.Combine(directory, DssHarness.Core.Agents.StoredStream.FileName), StepStreamKind, _ => null);
+    }
+
+    /// <summary>The records of a log a step's writer appends to, each whole line read as <paramref name="problem"/> says, or refused by its number.</summary>
+    private IReadOnlyList<T> ReadLog<T>(string path, string what, Func<T, string?> problem)
+    {
+        try
+        {
+            return JsonStateFile.ReadLog<T>(_fileSystem, path, (read, _) => problem(read), (line, why) => Unreadable(path, what, $"line {line.ToString(System.Globalization.CultureInfo.InvariantCulture)}: {why}")).Records;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, $"'{path}', {what}, could not be read: {ex.Message.TrimEnd('.')}. Nothing was changed.");
+        }
+    }
+
     /// <summary>The base's manifest of the run's codebase graph, or null where it has none.</summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <exception cref="HarnessException">The manifest cannot be read as one, or as one of this build's schema (<see cref="HarnessExit.Refused"/>).</exception>
@@ -758,6 +845,12 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         try
         {
             record = read();
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // Removed between the look and the read - a run's owner released as a stop watches for it - the record is
+            // not there, as one never written is not.
+            return null;
         }
         catch (JsonException ex)
         {

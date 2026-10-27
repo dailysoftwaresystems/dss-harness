@@ -112,10 +112,9 @@ public sealed class CheckStepRunnerTests : IDisposable
     }
 
     /// <summary>
-    /// A CI read reads its branch's newest runs as check-ci-legs does, each read given gh's own limit - never the step's time
-    /// limit, which bounds the attempt - and answers
-    /// each leg as check-ci-legs --json gives it: red where a leg is red (1) or the matrix never ran (2), passed where
-    /// every leg is green.
+    /// A CI read reads its branch's newest runs as check-ci-legs does, each read given the step's time limit where it says
+    /// one - gh's own five minutes where it does not - and answers each leg as check-ci-legs --json gives it: red where a
+    /// leg is red (1) or the matrix never ran (2), passed where every leg is green.
     /// </summary>
     [Fact]
     public async Task ACiRead_AnswersItsLegs_RedWhereOneIsOrNoneRan()
@@ -134,12 +133,13 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         var redLeg = await runner.RunAsync(Run(step, repository.Path), Token);
         var noMatrix = await runner.RunAsync(Run(step, repository.Path), Token);
-        var allGreen = await runner.RunAsync(Run(step, repository.Path), Token);
+        var allGreen = await runner.RunAsync(Run(step with { TimeoutMinutes = null }, repository.Path), Token);
 
-        await legs.Received(3).CheckAsync(
+        await legs.Received(2).CheckAsync(
             repository.Path,
-            Arg.Is<CiLegsRequest>(request => request.Branch == "release" && request.Limit == 3 && request.Runs.Count == 0),
+            Arg.Is<CiLegsRequest>(request => request.Branch == "release" && request.Limit == 3 && request.Runs.Count == 0 && request.ReadTimeLimit == TimeSpan.FromMinutes(7)),
             Arg.Any<CancellationToken>());
+        await legs.Received(1).CheckAsync(repository.Path, Arg.Is<CiLegsRequest>(request => request.ReadTimeLimit == null), Arg.Any<CancellationToken>());
         Assert.Equal((true, CiExit.LegRed), (redLeg.Red, redLeg.Exit));
         Assert.Equal(["linux"], redLeg.Output!["red"]!.AsArray().Select(leg => leg!["leg"]!.GetValue<string>()));
         Assert.Equal(["linux", "mac"], redLeg.Output!["legs"]!.AsArray().Select(leg => leg!["leg"]!.GetValue<string>()));
@@ -150,9 +150,8 @@ public sealed class CheckStepRunnerTests : IDisposable
 
     /// <summary>
     /// A wait for checks waits for its commit - the one the run last pushed where it names none - with the step's keys,
-    /// each read given gh's own limit, never the step's time limit, so a read that stalls is ended and read again at the
-    /// next poll while the wait goes on; one that names no commit in a run that pushed none is refused (13) and reads
-    /// nothing. None found, some still running, or one unsettled asks; all green passes; and accepted, it reads once more,
+    /// each read given the step's time limit - gh's own five minutes where it says none; one that names no commit in a run
+    /// that pushed none is refused (13) and reads nothing. None found, some still running, or one unsettled asks; all green passes; and accepted, it reads once more,
     /// waiting for nothing, and is done with the checks as they are - none, some still running, all green by then - its
     /// passed true only where they are green.
     /// </summary>
@@ -197,6 +196,7 @@ public sealed class CheckStepRunnerTests : IDisposable
                 && request.Wait == TimeSpan.FromMinutes(20)
                 && request.Poll == TimeSpan.FromSeconds(15)
                 && request.Ignore.SequenceEqual(new[] { "lint" })
+                && request.ReadTimeLimit == TimeSpan.FromMinutes(30)
                 && !request.Once),
             Arg.Any<CancellationToken>());
         Assert.Equal(
@@ -206,6 +206,8 @@ public sealed class CheckStepRunnerTests : IDisposable
         var noneYet = Substitute.For<ICiChecksService>();
         noneYet.WaitAsync(Arg.Any<string>(), Arg.Any<CiChecksRequest>(), Arg.Any<CancellationToken>()).Returns(new CiChecksReading("named", CiChecksFound.None, [], []));
         Assert.Equal("no check appeared on named within 60 s", (await Runner(harness, noneYet).RunAsync(Run(step with { Commit = "named", AppearSeconds = 600, WaitMinutes = 1 }, repository.Path), Token)).ChecksDetail);
+        _ = await Runner(harness, noneYet).RunAsync(Run(step with { Commit = "named", TimeoutMinutes = null }, repository.Path), Token);
+        await noneYet.Received(1).WaitAsync(repository.Path, Arg.Is<CiChecksRequest>(request => request.ReadTimeLimit == null), Arg.Any<CancellationToken>());
         Assert.Equal(("pending", "1 check(s) (deploy) still running on named after 1200 s"), (pending.Checks, pending.ChecksDetail));
         Assert.Equal(("unsettled", "1 check(s) (e2e) on named ended neither green nor red"), (unsettled.Checks, unsettled.ChecksDetail));
         Assert.All([acceptedNone, acceptedPending, acceptedGreen], accepted => Assert.Equal((true, HarnessExit.Success, null), (accepted.Passed, accepted.Exit, accepted.Checks)));

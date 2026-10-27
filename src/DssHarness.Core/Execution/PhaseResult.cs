@@ -106,6 +106,13 @@ public sealed record PhaseResult(
     public IReadOnlyList<string> LastLines { get; init; } = [];
 
     /// <summary>
+    /// What a contained phase's container could not reach when the phase ended, and why
+    /// (<see cref="Processes.ProcessResult.Uncontained"/>), for what it started may still run; null where it reached everything, and
+    /// for a phase that was not contained.
+    /// </summary>
+    public string? Uncontained { get; init; }
+
+    /// <summary>
     /// <see cref="LastLines"/> where the phase did not pass; empty where it did. What a reader who cannot
     /// open the log - another host's, which stays on that host - needs first.
     /// </summary>

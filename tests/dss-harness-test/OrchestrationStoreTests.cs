@@ -1,5 +1,7 @@
 using DssHarness.Core.Orchestration;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
@@ -10,6 +12,25 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class OrchestrationStoreTests
 {
+    /// <summary>
+    /// A record removed between the look and the read - a run's owner released by its engine as a stop watches for it - is
+    /// a record that is not there, as one never written: never one that could not be read.
+    /// </summary>
+    [Fact]
+    public void ARecordGoneBetweenTheLookAndTheRead_IsNotThere()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "run");
+
+        harness.OrchestrationStore.WriteOwner(layout, new RunOwner("this-machine", 42, DateTimeOffset.UtcNow, "its start"));
+
+        var store = new OrchestrationStore(new GoneAtOpen(harness.FileSystem, layout.OwnerFile), harness.Output);
+
+        Assert.Null(store.ReadOwner(layout));
+        Assert.False(File.Exists(layout.OwnerFile));
+    }
+
     /// <summary>
     /// Every record an orchestrator and its agents keep, and every line of their logs, is told to a front end as it is
     /// written - what it is, and its own path - so one following a run reads the files it is handed and puts no path

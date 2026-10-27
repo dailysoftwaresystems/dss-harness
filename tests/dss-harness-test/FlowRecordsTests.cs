@@ -13,6 +13,33 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class FlowRecordsTests
 {
+    /// <summary>
+    /// A numbered id is its kind's letter and a place from 1, written plainly - no sign, no leading zero, nothing a number
+    /// would not be written back as - so each id is written one way only.
+    /// </summary>
+    [Theory]
+    [InlineData("c1", true)]
+    [InlineData("c12", true)]
+    [InlineData("f1", false)]
+    [InlineData("c", false)]
+    [InlineData("c0", false)]
+    [InlineData("c01", false)]
+    [InlineData("c+1", false)]
+    [InlineData("c-1", false)]
+    [InlineData("c 1", false)]
+    [InlineData("C1", false)]
+    [InlineData("c99999999999", false)]
+    [InlineData(null, false)]
+    public void ANumberedId_IsItsLetterAndAPlaceWrittenPlainly(string? id, bool numbered)
+    {
+        Assert.Equal(numbered, OrchestrationRules.IsNumbered(id, 'c'));
+
+        if (numbered)
+        {
+            Assert.Equal(id, OrchestrationRules.Numbered('c', int.Parse(id![1..], System.Globalization.CultureInfo.InvariantCulture)));
+        }
+    }
+
     private static WorkflowDefinition Parse(string text)
         => WorkflowFileParser.Parse("workflows/flow/flow.yml", text);
 
@@ -230,6 +257,21 @@ public sealed class FlowRecordsTests
         Assert.Equal(DssHarness.Core.Results.HarnessExit.Refused, corrupt.ExitCode);
         Assert.StartsWith($"line 2 of '{file}', the run's events, does not read as its next event: ", corrupt.Message, StringComparison.Ordinal);
         Assert.Throws<DssHarness.Core.Results.HarnessException>(() => FlowEventLog.Open(files, file));
+    }
+
+    /// <summary>A whole line that reads as JSON but is no event a run writes is refused by its number.</summary>
+    [Fact]
+    public void AWholeLineThatIsNoEvent_IsRefusedByItsNumber()
+    {
+        using var temp = new TempDirectory();
+        var files = Files();
+        var file = temp.Combine("events.jsonl");
+
+        files.WriteAllTextAtomic(file, """{"seq": 1, "at": "2026-10-19 12:00:00", "kind": "nonsense"}""" + "\n");
+
+        var refused = Assert.Throws<DssHarness.Core.Results.HarnessException>(() => FlowEventLog.Read(files, file));
+
+        Assert.StartsWith($"line 1 of '{file}', the run's events, does not read as its next event: 'nonsense' is not an event a run writes. ", refused.Message, StringComparison.Ordinal);
     }
 
     /// <summary>A whole line whose seq is not the one after the line before it is refused by its number: a reopened log never numbers from an earlier event.</summary>

@@ -128,7 +128,7 @@ public sealed record AgentRoot(string Path, bool Writable);
 /// <param name="MainCheckout">The main checkout.</param>
 /// <param name="ExtraRoots">The extra roots, each readable, writable where its definition says.</param>
 /// <param name="WorkingDirectory">Where the client starts the agent: the worktree, else the work directory.</param>
-/// <param name="RunDirectory">The run's directory, for the reporter.</param>
+/// <param name="RunDirectory">The run's directory: the reporter's, and where a step's web search keeps the run's record, <c>web/searches.jsonl</c>.</param>
 public sealed record AgentWorkspace(
     string? Worktree,
     string WorkDirectory,
@@ -137,11 +137,35 @@ public sealed record AgentWorkspace(
     string WorkingDirectory,
     string RunDirectory);
 
-/// <summary>The output a run is to produce, where its step names one.</summary>
+/// <summary>
+/// The output a run is to produce, where its step names one: what its answer's envelope holds as its output
+/// (<see cref="AgentEnvelope"/>), and whether the envelope offers the agent questions for the person.
+/// </summary>
 /// <param name="Name">Its name, as the step's outputs name it.</param>
 /// <param name="Schema">The JSON schema it must read against.</param>
-/// <param name="MaxRepairs">How many times a schema problem is sent back; two unless given.</param>
-public sealed record AgentOutput(string Name, string Schema, int MaxRepairs = 2);
+/// <param name="MaxRepairs">How many times a schema problem is sent back; two unless given, and never below naught.</param>
+/// <param name="AskRounds">
+/// How many more times the agent may ask the person in this attempt - the step's <c>askRounds</c> less the times it has
+/// asked - offered questions only while some are left; zero where it has asked as often as it may, and null where the
+/// step may not ask: an answer that asks all the same is sent back, told so. Never below naught: a count below it would
+/// read as asked out, which it is not.
+/// </param>
+public sealed record AgentOutput(string Name, string Schema, int MaxRepairs = 2, int? AskRounds = null)
+{
+    /// <inheritdoc cref="AgentOutput" path="/param[@name='MaxRepairs']"/>
+    public int MaxRepairs { get; init => field = Counted(value, nameof(MaxRepairs)); } = Counted(MaxRepairs, nameof(MaxRepairs));
+
+    /// <inheritdoc cref="AgentOutput" path="/param[@name='AskRounds']"/>
+    public int? AskRounds { get; init => field = value is { } rounds ? Counted(rounds, nameof(AskRounds)) : null; } = AskRounds is { } rounds ? Counted(rounds, nameof(AskRounds)) : null;
+
+    /// <summary>A count, as given; refused below naught, which no count of repairs or rounds is.</summary>
+    private static int Counted(int value, string name)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(value, name);
+
+        return value;
+    }
+}
 
 /// <summary>A stored conversation a run appends to, where its client is handed one.</summary>
 /// <param name="Client">The client's key.</param>
@@ -201,6 +225,38 @@ public sealed class AgentHandoffSignal(TimeSpan Bound, int MaxAnswers = 3)
 
     /// <summary>What every call asked in a handoff turn is answered: the turn is for the handoff alone.</summary>
     public const string ToolRefusal = "no tool runs in a handoff turn; answer with the handoff";
+
+    /// <summary>Why a run has no handoff when its bound passed before the agent answered.</summary>
+    public const string BoundPassed = "the bound passed before the agent answered";
+
+    /// <summary>Why a run has no handoff when the handoff turn itself ended <paramref name="status"/>.</summary>
+    /// <param name="status">How the turn ended.</param>
+    /// <param name="why">Why, as that ending says it.</param>
+    public static string TurnEnded(AgentRunStatus status, string? why) => $"the handoff turn ended {status}: {why}";
+
+    /// <summary>The question a handoff turn asks: what the agent is told first, where anything is, then the prompt.</summary>
+    /// <param name="lead">What the agent is told before it is asked; null where the question stands alone.</param>
+    public static string Question(string? lead) => lead is { Length: > 0 } told ? $"{told}\n\n{Prompt}" : Prompt;
+
+    /// <summary>Why a run has no handoff when its agent gave none in <paramref name="answers"/> answers.</summary>
+    /// <param name="answers">How many answers it gave.</param>
+    public static string NoneIn(int answers) => $"the agent gave no handoff in {answers} answers";
+
+    /// <summary>
+    /// The handoff an answer gives: its notes where it answered with an envelope that holds them
+    /// (<see cref="AgentEnvelope.Notes"/>), else the whole answer held to the schema, else its text; null where that says
+    /// nothing, and the agent gave no handoff.
+    /// </summary>
+    /// <param name="structured">The answer held to the run's schema, where it carries one.</param>
+    /// <param name="text">The answer's text.</param>
+    public static string? AnswerOf(System.Text.Json.Nodes.JsonNode? structured, string? text)
+    {
+        var answer = structured is System.Text.Json.Nodes.JsonObject held && held[AgentEnvelope.Notes] is System.Text.Json.Nodes.JsonValue notes && notes.TryGetValue<string>(out var said)
+            ? said
+            : structured?.ToJsonString() ?? text;
+
+        return string.IsNullOrWhiteSpace(answer) ? null : answer;
+    }
 
     private readonly TaskCompletionSource<AgentHandoffAsked> _asked = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -265,6 +321,34 @@ public enum AgentCapability
 /// </param>
 public sealed record AgentCredential(string Auth, IReadOnlyList<AgentKey> Keys, string? Api = null, string? ConfigDirectory = null);
 
+/// <summary>
+/// The web search a step's agent is given: the sources its <c>web_search</c> asks, in the order its answer gives them and
+/// those turned on alone, its bounds, and each source's key where it names one, every form of which it is sent in the
+/// run's mask holds (<see cref="Web.Search.WebSearchCredential.Forms"/>).
+/// </summary>
+/// <param name="Sources">The step's sources, as its <c>search</c> picks them (<see cref="Web.Search.WebSearchSources.Chosen"/>).</param>
+/// <param name="ResultsPerSource">The most results a source gives one search.</param>
+/// <param name="MaxPerStep">The most requests of sources the step makes.</param>
+/// <param name="Keys">Each source's key, by its name, as <see cref="Web.Search.WebSearchKeys"/> read it.</param>
+public sealed record AgentWebSearch(
+    IReadOnlyList<Web.Search.WebSearchSource> Sources,
+    int ResultsPerSource,
+    int MaxPerStep,
+    IReadOnlyDictionary<string, Web.Search.WebSearchKey> Keys)
+{
+    /// <summary>The search a step whose <c>search</c> is <paramref name="search"/> is given of <paramref name="sources"/>, with <paramref name="keys"/>.</summary>
+    /// <param name="sources">The configuration's web search.</param>
+    /// <param name="search">The step's <c>search</c>; <see langword="null"/> where it names none.</param>
+    /// <param name="keys">Each source's key, by its name.</param>
+    public static AgentWebSearch Of(Web.Search.WebSearchSources sources, IReadOnlyList<string>? search, IReadOnlyDictionary<string, Web.Search.WebSearchKey> keys)
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+        ArgumentNullException.ThrowIfNull(keys);
+
+        return new(sources.Chosen(search), sources.ResultsPerSource, sources.MaxPerStep, keys);
+    }
+}
+
 /// <summary>One value a run may sign in with, by the name the slot holds it under.</summary>
 /// <param name="Name">The variable's name, which records say.</param>
 /// <param name="Value">The value, which no record says: the run's mask holds it.</param>
@@ -290,6 +374,14 @@ public sealed class AgentMessages
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
         _messages.Writer.TryWrite(message);
     }
+
+    /// <summary>
+    /// Takes the oldest message posted and not yet taken, without waiting: for a client that gives the agent what it was
+    /// told at the points its loop reaches, rather than as each is posted (<see cref="ReadAllAsync"/>).
+    /// </summary>
+    /// <param name="message">The message; null where none waits.</param>
+    /// <returns>Whether one waited.</returns>
+    public bool TryTake([System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out string message) => _messages.Reader.TryRead(out message);
 
     /// <summary>Each message the engine has told the agent, as it is told, until the run ends.</summary>
     /// <param name="cancellationToken">Stops waiting.</param>
@@ -327,8 +419,6 @@ public sealed class AgentMessages
 /// <param name="Output">The output it is to produce, where its step names one.</param>
 /// <param name="Conversation">The stored conversation to append to, where the client is handed one.</param>
 /// <param name="Limits">The bounds it is held to.</param>
-/// <param name="MayAsk">Whether it may ask the person.</param>
-/// <param name="AskRounds">How many times it may ask.</param>
 /// <param name="Mask">What masks the secrets its lines may carry; null where the step carries none.</param>
 public sealed record AgentStepRequest(
     string Run,
@@ -350,8 +440,6 @@ public sealed record AgentStepRequest(
     AgentOutput? Output,
     AgentSessionRef? Conversation,
     AgentLimits Limits,
-    bool MayAsk,
-    int AskRounds,
     ILineMask? Mask)
 {
     /// <summary>
@@ -375,11 +463,20 @@ public sealed record AgentStepRequest(
     /// </summary>
     public IReadOnlyList<string> Withheld { get; init; } = [];
 
+    /// <summary>What the configuration says of the agent's commands: the names a child is given back, and their times.</summary>
+    public AgentCommandSettings Commands { get; init; } = AgentCommandSettings.Default;
+
+    /// <summary>The web search the agent is given: its sources, bounds and keys; <see langword="null"/> where it searches none.</summary>
+    public AgentWebSearch? WebSearch { get; init; }
+
     /// <summary>The signal the engine raises when the run is pausing; one of the runner's own where the engine gives none.</summary>
     public AgentHandoffSignal? Handoff { get; init; }
 
     /// <summary>What the engine tells the agent while it works; one of the runner's own where the engine gives none.</summary>
     public AgentMessages? Messages { get; init; }
+
+    /// <summary>The configuration's entries the step's model is reached by, as the engine resolved them; null where it gave none.</summary>
+    public AgentEntries? Entries { get; init; }
 }
 
 /// <summary>
@@ -444,4 +541,32 @@ public sealed record AgentRun(
 
     /// <summary>The names a child the run starts never inherits: every name the configuration appoints a value of the slot for.</summary>
     public IReadOnlyList<string> Withheld { get; init; } = [];
+
+    /// <summary>What the configuration says of the agent's commands: the names a child is given back, and their times.</summary>
+    public AgentCommandSettings Commands { get; init; } = AgentCommandSettings.Default;
+
+    /// <summary>The web search the agent is given: its sources, bounds and keys; <see langword="null"/> where it searches none.</summary>
+    public AgentWebSearch? WebSearch { get; init; }
+
+    /// <summary>
+    /// The agent's <c>sessions/</c> directory, where a client handed a conversation keeps it, each in its own
+    /// <c>sessions/&lt;id&gt;/</c> (<see cref="Orchestration.OrchestratorLayout.SessionDirectoryIn"/>); null where the run was
+    /// given none, and such a client is not started.
+    /// </summary>
+    public string? SessionsDirectory { get; init; }
+
+    /// <summary>
+    /// The configuration's entries the run's model is reached by - its provider's, its own and its client's - as the engine
+    /// resolved them; null where it gave none, and a client that builds every request from them is not started.
+    /// </summary>
+    public AgentEntries? Entries { get; init; }
 }
+
+/// <summary>
+/// The configuration's entries a run's model is reached by: its provider - the API's address and the currency of its
+/// prices - the model's own - what it holds and costs - and its client's, where the configuration declares one.
+/// </summary>
+/// <param name="Provider">The provider's entry.</param>
+/// <param name="Model">The model's entry, one of the provider's.</param>
+/// <param name="Client">The client's entry under <c>agentClients</c>; null where the configuration declares none, and every key is its default.</param>
+public sealed record AgentEntries(Configuration.AgentProviderConfig Provider, Configuration.AgentModelConfig Model, Configuration.AgentClientConfig? Client);

@@ -247,7 +247,7 @@ Every release stands on this check: neither Deploy nor Package Pipeline runs a s
 | Workflow | Fires on | Does |
 |---|---|---|
 | `pipeline-pr.yml` | pull request, push to `main` | Runs `test.yml`; packs, installs and runs the tool; uploads the package, kept for the repository's artifact retention period; posts the `Pipeline / ci-check result` status |
-| `test.yml` | called by `pipeline-pr.yml` | Builds and tests on Linux, Windows and macOS, each on x86_64 and arm64 |
+| `test.yml` | called by `pipeline-pr.yml` | Builds and tests on Linux, Windows and macOS, each on x86_64 and arm64; the suite split into shards of whole test classes on the runners too slow to run it in one job |
 | `deploy.yml` | manual | Checks, bumps the version, promotes with the deploy app's token, starts `pipeline-pkg.yml`; runs no suite |
 | `pipeline-pkg.yml` | dispatched by `deploy.yml`, or manual | Checks, builds, packs, verifies and tags; publishes stable to nuget.org; releases on GitHub, as a prerelease for beta; resumes a run that stopped part way |
 | `cleanup-cache.yml` | pull request closed | Evicts that pull request's caches |

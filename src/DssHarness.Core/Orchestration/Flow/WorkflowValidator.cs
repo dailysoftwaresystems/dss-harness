@@ -151,16 +151,21 @@ public static class WorkflowValidator
     /// (<see cref="Codebase.CodeGraphExtractors.Languages"/>) - this check keeps no list of its own; or
     /// <see langword="null"/> where the caller has no registry, which leaves that one rule of V52 unchecked.
     /// </param>
+    /// <param name="search">
+    /// The configuration's web search, resolved; or <see langword="null"/> where the configuration cannot be given, which
+    /// leaves V55's names unchecked, a name given twice refused all the same.
+    /// </param>
     public static IReadOnlyList<string> Validate(
         WorkflowDefinition definition,
         bool hasCommitTemplate,
         Func<string, string?>? files,
         DssHarness.Core.Agents.AgentProviders? providers = null,
-        IReadOnlyList<string>? languages = null)
+        IReadOnlyList<string>? languages = null,
+        Web.Search.WebSearchSources? search = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        var check = new Check(definition, hasCommitTemplate, files, providers, languages);
+        var check = new Check(definition, hasCommitTemplate, files, providers, languages, search);
         return check.Problems;
     }
 
@@ -273,13 +278,15 @@ public static class WorkflowValidator
             bool hasCommitTemplate,
             Func<string, string?>? files,
             DssHarness.Core.Agents.AgentProviders? providers = null,
-            IReadOnlyList<string>? languages = null)
+            IReadOnlyList<string>? languages = null,
+            Web.Search.WebSearchSources? search = null)
         {
             _definition = definition;
             _hasCommitTemplate = hasCommitTemplate;
             _files = files;
             _providers = providers;
             _languages = languages;
+            _search = search;
 
             DefinitionRules();
             Index(definition.Steps, parent: null);
@@ -297,6 +304,7 @@ public static class WorkflowValidator
             AgentPrompts();
             Outputs();
             PullRequests();
+            Pushes();
         }
 
         internal IReadOnlyList<string> Problems => _problems;
@@ -634,7 +642,7 @@ public static class WorkflowValidator
                         // not used: one definition then holds under a configuration with a template and one without.
                         if (entry.Step.Message is null && !_hasCommitTemplate)
                         {
-                            _problems.Add($"{where} names no message and the configuration declares no commit.template; one of the two writes the commit's message");
+                            _problems.Add($"{where} {Configuration.CommitTemplate.NoMessage}");
                         }
 
                         CommitVariablesWithoutATemplate(entry);
@@ -969,6 +977,23 @@ public static class WorkflowValidator
             if (step.ResumePrompt is not null && !resumesItself)
             {
                 _problems.Add($"{where} says resumePrompt and does not resume itself; resumePrompt is what a step that goes on with its own work is asked with when it runs again, and any other step is asked with its prompt");
+            }
+
+            // V55: a step's search names the sources its web_search asks. One that goes on with another's work asks the
+            // sources that step's search names, its conversation's tool listing them, and names none of its own. Whether the
+            // step's agent has the web is its definition's to say, read with the definitions.
+            if (step.Search is { } search)
+            {
+                if (resumesAnother)
+                {
+                    _problems.Add($"{where} resumes '{step.Resume}' and says search; a step that goes on with another's work asks the sources that step's search names, and names none of its own");
+                }
+                else
+                {
+                    _problems.AddRange(_search is { } sources
+                        ? sources.ListProblems(search, $"the search of {where}", $"{where} searches")
+                        : Web.Search.WebSearchSources.TwiceProblems(search, $"the search of {where}"));
+                }
             }
 
             if (step.Independent is true && step.Resume is not null)
@@ -2618,7 +2643,7 @@ public static class WorkflowValidator
         }
 
         /// <summary>The effort ladder by capability, lowest first: the order a refusal names the nearest level a model takes.</summary>
-        private static readonly string[] CapabilityLadder = ["low", "medium", "high", "xhigh", "max"];
+        private static readonly IReadOnlyList<string> CapabilityLadder = DssHarness.Core.Agents.AgentProviders.EffortLevels;
 
         private void AgentRules(
             DssHarness.Core.Agents.AgentProviders providers,
@@ -2784,9 +2809,9 @@ public static class WorkflowValidator
         /// </summary>
         private static string Nearest(DssHarness.Core.Configuration.AgentModelConfig model, string asked)
         {
-            var at = Array.IndexOf(CapabilityLadder, asked);
+            var at = CapabilityLadder.ToList().IndexOf(asked);
 
-            foreach (var level in CapabilityLadder.Skip(at < 0 ? CapabilityLadder.Length : at))
+            foreach (var level in CapabilityLadder.Skip(at < 0 ? CapabilityLadder.Count : at))
             {
                 if (model.Efforts.Contains(level, StringComparer.Ordinal))
                 {
@@ -3107,6 +3132,9 @@ public static class WorkflowValidator
 
         /// <summary>The names <c>codebaseGraph.languages</c> may hold, where the caller gave the registry's; <see langword="null"/> where it gave none.</summary>
         private readonly IReadOnlyList<string>? _languages;
+
+        /// <summary>The configuration's web search, where the caller gave it: V55's names are checked only under a configuration the caller chose.</summary>
+        private readonly Web.Search.WebSearchSources? _search;
 
         /// <summary>Each reason step's schema as a reading, by the path its <c>outputs</c> names; <see langword="null"/> where it types nothing.</summary>
         private readonly Dictionary<string, JsonSchemaSubset.Reading?> _schemas = new(StringComparer.Ordinal);
@@ -3808,6 +3836,21 @@ public static class WorkflowValidator
             }
 
             static string Base(Entry request) => request.Step.Base is { } named ? $"'{named}'" : "the remote's default branch";
+        }
+
+        /// <summary>
+        /// The remote the run's branch goes to (<see cref="FlowCheckout.Remote"/>), which its pushes send it to and its pull
+        /// request is opened on, is one: every push step that names a remote names the same one, so which repository that is
+        /// never turns on which push step is declared first. A push step that names none goes to that one.
+        /// </summary>
+        private void Pushes()
+        {
+            var named = _entries.Where(entry => entry.Step.Type == "push" && entry.Step.Remote is not null).ToList();
+
+            foreach (var other in named.Skip(1).Where(other => !string.Equals(other.Step.Remote, named[0].Step.Remote, StringComparison.Ordinal)))
+            {
+                _problems.Add($"steps '{named[0].Path}' and '{other.Path}' push to different remotes, '{named[0].Step.Remote}' and '{other.Step.Remote}'; the run's branch goes to one remote, which every push sends it to and its pull request is opened on");
+            }
         }
     }
 }

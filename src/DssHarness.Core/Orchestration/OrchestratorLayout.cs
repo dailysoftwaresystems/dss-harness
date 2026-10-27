@@ -28,24 +28,33 @@ namespace DssHarness.Core.Orchestration;
 /// &lt;step&gt;/ledger.json          a leg step: its legs' ledger, as --json gives it
 /// &lt;step&gt;/logs/                a leg step in an agent's worktree: each red leg's phase log that did not pass; a ci-wait: each red job's log
 /// &lt;step&gt;/fold.json            a fold family step: what its dry run named and stood, its question, each consent given, how its apply ended
+/// &lt;step&gt;/commit-message.txt   a commit step: the message it commits with
+/// &lt;step&gt;/pull-request-body.md  a pull-request step: the body it opens the pull request with, its file filled
+/// &lt;step&gt;/graph.jsonl          a reason step that has a codebase graph: one line for each call of the graph tool; nothing writes it yet
+/// &lt;step&gt;/working-set.json     a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it; nothing writes it yet
 /// &lt;step&gt;/targets/&lt;agent&gt;/     a refresh or a rebase of others: one target's fold.json
+/// &lt;step&gt;/web.jsonl            a step whose agent asks the web: each address and each search source asked, decided before it was asked and what it answered; written by every client whose step has the web
+/// &lt;step&gt;/denials.jsonl        a step whose agent's calls the engine decides, on every client: each call the policy refused, with its rule
+/// &lt;step&gt;/tool-results/&lt;id&gt;.txt   a step whose agent's calls the engine decides, on every client: an answer longer than the cap, whole
 /// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it
 /// flow.json                   a run's state, whole: the truth a resume goes on from
 /// workflow.json               a run's status, for a person and a client to read
 /// definition.json             the workflow's definition, frozen as the run began with it
 /// questions.json              every question the run raised and every answer it was given
-/// folds.json                  the run's write-ahead ledger of its folds
+/// folds.json                  the run's write-ahead ledger of its folds, and of each commit a commit step staged of them
 /// pre-existing-issues.json    each pre-existing issue the run listed
 /// events.jsonl                the run's events, one JSON object to a line
 /// report.md, report.json      the report of the run's last session
 /// inbox.json, stop.json       an answer, and a pause or a stop, handed to the engine running the run, until it takes them
 /// asks/                       the planned ask-orchestrator's calls; nothing writes it yet
+/// web/searches.jsonl          what each source of the web search found once for the run, and each query it answered: the same query again is answered from here; written by every client whose step searches
 /// graph/graph.json            the run's codebase graph: the base's manifest, every file it keeps with its blob, state and extract
 /// graph/symbols.jsonl         the base's link result, as lines: every node and edge, with the digest of the manifest it was made from
 /// graph/extracts/&lt;ab&gt;/&lt;name&gt;   one file's extract, written once, named by its blob, its path, its implementation and version
 /// graph/sync.jsonl            one line for each sync of the graph
 /// graph/views/&lt;agent&gt;.json    an agent's view of the graph: what its worktree holds that the base does not
 /// ../&lt;run&gt;.owner.json        beside the run's directory: the process whose engine holds the run
+/// ../.web-index/&lt;source&gt;/    beside every orchestrator: the harness's index of a sitemap source's site, its state, pages and fill's record
 /// </code>
 /// The orchestrator's name and each agent's are the directories they are kept in, and an agent is never named as its
 /// orchestrator, since the two would share a log and a plans directory.
@@ -147,6 +156,12 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The name of the file a step's output is kept in, validated, in its directory.</summary>
     public const string StepOutputFileName = "output.json";
 
+    /// <summary>
+    /// The name of the file a reason step's notes are kept in, masked, in its directory: what its agent left for whoever
+    /// goes on, as its answer's envelope said it.
+    /// </summary>
+    public const string StepNotesFileName = "notes.md";
+
     /// <summary>The name of the file a leg step keeps its legs' ledger in, as <c>--json</c> gives it, in its directory.</summary>
     public const string StepLedgerFileName = "ledger.json";
 
@@ -156,14 +171,29 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// </summary>
     public const string StepLogsDirectoryName = "logs";
 
-    /// <summary>The name of the run's write-ahead ledger of its folds.</summary>
+    /// <summary>The name of the run's write-ahead ledger of its folds, and of each commit a commit step staged of them.</summary>
     public const string FoldsFileName = "folds.json";
+
+    /// <summary>The name of the file a <c>commit</c> step writes the message it commits with to, in its directory, as <c>git commit -F</c> reads it.</summary>
+    public const string StepCommitMessageFileName = "commit-message.txt";
+
+    /// <summary>The name of the file a <c>pull-request</c> step writes its body to, filled, in its directory, as the forge's tool reads it.</summary>
+    public const string StepPullRequestBodyFileName = "pull-request-body.md";
 
     /// <summary>
     /// The name of the file a fold family step keeps in its directory - or in its target's, for a step of <c>others</c>:
     /// what its dry run named and stood, the question it asked, each consent it was given and how its apply ended.
     /// </summary>
     public const string StepFoldFileName = "fold.json";
+
+    /// <summary>The name of the file a reason step that has a codebase graph keeps a line for each call of the <c>graph</c> tool in, in its directory; nothing writes it yet.</summary>
+    public const string StepGraphFileName = "graph.jsonl";
+
+    /// <summary>
+    /// The name of the file a reason step that has a codebase graph keeps its working set in, in its directory: the nodes it
+    /// edited, served, read and found, which seed the packs of the steps after it; nothing writes it yet.
+    /// </summary>
+    public const string StepWorkingSetFileName = "working-set.json";
 
     /// <summary>The name of the directory a refresh or a rebase of <c>others</c> keeps one directory for each target in, in its own.</summary>
     public const string StepTargetsDirectoryName = "targets";
@@ -188,6 +218,45 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The extension of a file's extract.</summary>
     public const string GraphExtractExtension = ".json";
+
+    /// <summary>The directory, beside every orchestrator, of the harness's indexes of sites: a name no orchestrator has, for none begins with a dot.</summary>
+    public const string WebIndexesDirectoryName = ".web-index";
+
+    /// <summary>The directory a run keeps what its web search found in.</summary>
+    public const string WebDirectoryName = "web";
+
+    /// <summary>The name of the file, in the run's web directory, of what each source found once and each query it answered.</summary>
+    public const string WebSearchesFileName = "searches.jsonl";
+
+    /// <summary>
+    /// What the web search of the run whose directory is <paramref name="runDirectory"/> keeps: what each source found once
+    /// for the run, and each query it answered, so the same query again is answered from here with no request.
+    /// </summary>
+    /// <param name="runDirectory">The run's directory.</param>
+    public static string WebSearchesFile(string runDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runDirectory);
+        return Path.Combine(runDirectory, WebDirectoryName, WebSearchesFileName);
+    }
+
+    /// <summary>
+    /// Where the harness's index of the site of the web-search source named <paramref name="source"/> is kept: under the
+    /// repository's orchestrators, so every run of the repository searches it and a later run starts from it.
+    /// </summary>
+    /// <param name="layout">The repository.</param>
+    /// <param name="source">The source's name.</param>
+    /// <exception cref="ArgumentException"><paramref name="source"/> is no source's name, which a directory is named by.</exception>
+    public static string WebIndexDirectory(HarnessLayout layout, string source)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
+        if (!Web.Search.WebSearchSource.IsName(source))
+        {
+            throw new ArgumentException($"'{source}' is no web-search source's name: {Web.Search.WebSearchSource.NameRule}.", nameof(source));
+        }
+
+        return Path.Combine(layout.OrchestratorsDirectory, WebIndexesDirectoryName, source);
+    }
 
     /// <summary>Where the orchestrator named <paramref name="name"/> of the repository at <paramref name="layout"/> is kept.</summary>
     /// <param name="layout">The repository.</param>
@@ -292,7 +361,28 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>Where one conversation <paramref name="agent"/> holds with an API client is kept.</summary>
     /// <param name="agent">The agent's name.</param>
     /// <param name="id">The conversation's id.</param>
-    public string AgentSessionDirectory(string agent, string id) => Path.Combine(AgentSessionsDirectory(agent), id);
+    public string AgentSessionDirectory(string agent, string id) => SessionDirectoryIn(AgentSessionsDirectory(agent), id);
+
+    /// <summary>Where one conversation is kept among an agent's: its own directory in <paramref name="sessions"/>, by its id.</summary>
+    /// <param name="sessions">The agent's sessions directory (<see cref="AgentSessionsDirectory"/>).</param>
+    /// <param name="id">The conversation's id: <see cref="IsSessionId"/>.</param>
+    /// <exception cref="ArgumentException">The id is no conversation's id, and would name another directory.</exception>
+    public static string SessionDirectoryIn(string sessions, string id)
+    {
+        ArgumentNullException.ThrowIfNull(sessions);
+
+        return IsSessionId(id)
+            ? Path.Combine(sessions, id)
+            : throw new ArgumentException($"'{id}' is no conversation's id: {SessionIdShape}.", nameof(id));
+    }
+
+    /// <summary>What a conversation's id is, as a refusal says it.</summary>
+    public const string SessionIdShape = "letters, digits, '-' and '_', at most 64";
+
+    /// <summary>Whether <paramref name="id"/> is a conversation's id, which names its directory: the engine's own, and a handed one alike.</summary>
+    /// <param name="id">The id.</param>
+    public static bool IsSessionId(string? id)
+        => id is { Length: > 0 and <= 64 } && id.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
     /// <summary>
     /// The handoff of one step <paramref name="agent"/> ran, kept in the step's own directory: what its agent said when
@@ -349,7 +439,10 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>Every question the run raised and every answer it was given, the open ones among them: the one owner of what a question said.</summary>
     public string QuestionsFile => Path.Combine(Directory, QuestionsFileName);
 
-    /// <summary>The run's write-ahead ledger of its folds: each path a fold means to write, the digest it held before and the one the fold left.</summary>
+    /// <summary>
+    /// The run's write-ahead ledger of its folds: each path a fold means to write, the digest it held before and the one
+    /// the fold left; and of each commit a commit step staged of them, and what became of it.
+    /// </summary>
     public string FoldsFile => Path.Combine(Directory, FoldsFileName);
 
     /// <summary>The run's codebase graph: derived from the tree, so removed with the run and kept by nothing else.</summary>
@@ -425,6 +518,14 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <param name="stepDirectory">The step's own directory.</param>
     /// <param name="agent">The target's name.</param>
     public static string TargetDirectory(string stepDirectory, string agent) => Path.Combine(stepDirectory, StepTargetsDirectoryName, agent);
+
+    /// <summary>The message a <c>commit</c> step commits with, in its own directory: a commit step names no agent.</summary>
+    /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
+    public string InstanceCommitMessageFile(string instance) => Path.Combine(InstanceDirectory(instance, null), StepCommitMessageFileName);
+
+    /// <summary>The body a <c>pull-request</c> step opens its pull request with, in its own directory: the step names no agent.</summary>
+    /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
+    public string InstancePullRequestBodyFile(string instance) => Path.Combine(InstanceDirectory(instance, null), StepPullRequestBodyFileName);
 
     /// <summary>The handoff of one step instance, in its own directory (<see cref="InstanceDirectory"/>).</summary>
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>

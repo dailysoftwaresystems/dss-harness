@@ -748,6 +748,12 @@ public sealed class WorkflowFileParserTests
               - name: cites
                 type: anchor-citations
                 paths: []
+              - name: research
+                type: reason
+                agent: thinker
+                search: []
+                prompt: prompts/think.md
+                outputs: schemas/think.json
             """);
 
         Assert.Equal(
@@ -756,6 +762,7 @@ public sealed class WorkflowFileParserTests
                 "line 10, column 13: 'checks.ignore' is given empty, which is never read as every check counted: name the checks it does not count, or leave the key out for every check counted.",
                 "line 13, column 11: 'balance.rows' is given empty, which is never read as the whole tree judged: name the rows it is held to, or leave the key out for the whole tree judged.",
                 "line 16, column 12: 'cites.paths' is given empty, which is never read as the whole tree judged: name the files it is held to, or leave the key out for the whole tree judged.",
+                "line 20, column 13: 'research.search' is given empty, which is never read as agentWebSearch.defaults: name sources or tags, or leave the key out for agentWebSearch.defaults.",
             ],
             problems);
     }

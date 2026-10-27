@@ -130,6 +130,16 @@ public sealed class LineSplitterTests
         var whole = new StreamTail(4);
         whole.Add("ab" + face + "cd");
         Assert.Equal(face + "cd", whole.ToString());
+
+        // Cut back as it fills, a pair whose first half went with the cut is no character of the end either.
+        var filled = new StreamTail(3);
+
+        foreach (var chunk in new[] { "ab", "c" + face, "xy" })
+        {
+            filled.Add(chunk);
+        }
+
+        Assert.Equal("xy", filled.ToString());
     }
 
     /// <summary>The lines <paramref name="text"/> is cut into, fed a character at a time where it is not fed <paramref name="whole"/>.</summary>

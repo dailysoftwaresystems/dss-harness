@@ -14,7 +14,7 @@ public static class CodeNodeKinds
     /// <summary>A file the tree lists, whatever reads it. Made by the core for every file it keeps, never by an implementation.</summary>
     public const string File = "file";
 
-    /// <summary>A project file that names others: a <c>.csproj</c>, a <c>.slnx</c>, a Dart package's <c>pubspec.yaml</c>.</summary>
+    /// <summary>A project file that names others: a <c>.csproj</c>, a <c>.slnx</c>, a Dart package's <c>pubspec.yaml</c>, a Node package's <c>package.json</c>, a <c>tsconfig.json</c>, a Composer package's <c>composer.json</c>.</summary>
     public const string Project = "project";
 
     /// <summary>A namespace of a language that has them.</summary>
@@ -28,6 +28,12 @@ public static class CodeNodeKinds
 
     /// <summary>A Markdown heading and the lines under it, so one section can be served alone.</summary>
     public const string Section = "section";
+
+    /// <summary>
+    /// The kinds that are declarations - a type, a member, a section of a document - rather than a file, a project or a
+    /// namespace, whose lines hold others': what a change is told by, and what a context pack seeds from a file.
+    /// </summary>
+    public static IReadOnlyList<string> Declarations { get; } = [Type, Member, Section];
 
     /// <summary>Every kind an implementation may give a node of its extract: all but <see cref="File"/>, which is the core's.</summary>
     public static IReadOnlyList<string> Extracted { get; } = [Project, Namespace, Type, Member, Section];
@@ -206,6 +212,63 @@ public static class CodeGraphIds
     /// <summary>The name of the file <paramref name="path"/> names: its last part, which an exact claim and an import by a path's ending read.</summary>
     /// <param name="path">A path, relative to the tree's root with forward separators.</param>
     public static string FileName(string path) => path[(path.LastIndexOf('/') + 1)..];
+
+    /// <summary>
+    /// The path <paramref name="relative"/> names beside the file <paramref name="path"/> - in its directory, with its
+    /// <c>.</c> and <c>..</c> taken out - as an import by a relative path and an address root name one; <see langword="null"/>
+    /// where it climbs out of the tree.
+    /// </summary>
+    /// <param name="path">A file's path, relative to the tree's root with forward separators.</param>
+    /// <param name="relative">A path relative to that file's directory.</param>
+    public static string? Beside(string path, string relative)
+        => Normalize(path.LastIndexOf('/') is var slash and >= 0 ? $"{path[..slash]}/{relative}" : relative);
+
+    /// <summary><paramref name="path"/> with its <c>.</c> and <c>..</c> taken out; <see langword="null"/> where it climbs out of the tree.</summary>
+    /// <param name="path">A path relative to the tree's root, with either separator.</param>
+    public static string? Normalize(string path) => Parts(path, climbs: false) is { } parts ? string.Join('/', parts) : null;
+
+    /// <summary>
+    /// <paramref name="path"/>, relative to a directory, with its <c>.</c> and <c>..</c> taken out and forward separators -
+    /// a <c>..</c> kept only where it climbs above that directory - and <c>.</c> where nothing is left: a path as a
+    /// project file's extract writes one relative to its own directory.
+    /// </summary>
+    /// <param name="path">A path relative to a directory, with either separator.</param>
+    public static string Clean(string path) => Parts(path, climbs: true) is { Count: > 0 } parts ? string.Join('/', parts) : ".";
+
+    /// <summary>The parts of <paramref name="path"/> once its <c>.</c> and <c>..</c> are taken out; <see langword="null"/> where it climbs above where it begins and <paramref name="climbs"/> does not keep that.</summary>
+    private static List<string>? Parts(string path, bool climbs)
+    {
+        var parts = new List<string>();
+
+        foreach (var part in path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (part == ".")
+            {
+                continue;
+            }
+
+            if (part == "..")
+            {
+                if (parts.Count == 0 || parts[^1] == "..")
+                {
+                    if (!climbs)
+                    {
+                        return null;
+                    }
+
+                    parts.Add(part);
+                    continue;
+                }
+
+                parts.RemoveAt(parts.Count - 1);
+                continue;
+            }
+
+            parts.Add(part);
+        }
+
+        return parts;
+    }
 
     /// <summary>
     /// Each of <paramref name="ids"/>'s handle: the first <see cref="HandleLength"/> hexadecimal characters of its

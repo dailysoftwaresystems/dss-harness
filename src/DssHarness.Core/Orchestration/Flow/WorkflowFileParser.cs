@@ -1107,11 +1107,14 @@ public static class WorkflowFileParser
                     Raised = EnumIn(keys, $"{where}.raised", problems, [WorkflowStep.RaisedByPreExisting]),
                     OnAddress = EnumIn(keys, $"{where}.onAddress", problems, [WorkflowStep.Recover]),
                     Restrictions = StringListIn(keys, $"{where}.restrictions", problems) ?? [],
+                    Search = NodeIn(keys, "search") is { } search ? RequireStringList(search, $"{where}.search", problems) : null,
                     Writes = FlowListIn(keys, $"{where}.writes", problems),
                     Ask = BooleanIn(keys, $"{where}.ask", problems),
                     AskRounds = IntIn(keys, $"{where}.askRounds", problems),
                     BackoffSeconds = IntIn(keys, $"{where}.backoffSeconds", problems),
                 };
+
+                RefuseGivenEmpty(keys, $"{where}.search", "name sources or tags", "agentWebSearch.defaults", problems);
                 break;
 
             case "build":

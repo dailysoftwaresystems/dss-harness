@@ -96,6 +96,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         var recordLost = false;
         Exception? unclosed = null;
 
+        // The step's directory is every attempt's, and notes beside a result are that result's: an attempt begins with none
+        // an earlier one left, before it does anything - so a file that cannot go fails it there, never its own record.
+        _fileSystem.DeleteFile(Path.Combine(directory, OrchestratorLayout.StepNotesFileName));
         var stream = StoredStream.Open(_fileSystem, directory, mask);
 
         try
@@ -353,7 +356,11 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             ? _clients.FirstOrDefault(client => string.Equals(client.Name, named, StringComparison.Ordinal))
             : _clients.Count == 1 ? _clients[0] : null;
 
-    /// <summary>Writes the run's own record beside its stream, in one step, so that one there is one written whole.</summary>
+    /// <summary>
+    /// Writes the run's own record beside its stream, in one step, so that one there is one written whole - and, where its
+    /// answer left notes, the notes before it (<see cref="OrchestratorLayout.StepNotesFileName"/>), so a result that holds
+    /// notes is never read without them beside it.
+    /// </summary>
     /// <param name="directory">The step's own directory.</param>
     /// <param name="result">How the run ended.</param>
     /// <exception cref="InvalidOperationException">The result does not hold together, which none the runner makes does.</exception>
@@ -362,6 +369,11 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         if (result.Problem() is { } problem)
         {
             throw new InvalidOperationException($"Refusing to write a result that does not read back: {problem}.");
+        }
+
+        if (result.Notes is { } notes)
+        {
+            _fileSystem.WriteAllTextAtomic(Path.Combine(directory, OrchestratorLayout.StepNotesFileName), notes);
         }
 
         JsonStateFile.Write(_fileSystem, Path.Combine(directory, ResultFileName), result);
@@ -396,16 +408,20 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             Program = step.Program,
             ProgramVersion = step.ProgramVersion,
             Withheld = step.Withheld,
+            Commands = step.Commands,
+            WebSearch = step.WebSearch,
+            SessionsDirectory = Layout(step).AgentSessionsDirectory(step.Agent),
+            Entries = step.Entries,
         };
 
     /// <summary>The step's own directory, as the one owner of the paths spells it.</summary>
     /// <param name="step">The step.</param>
-    private static string StepDirectory(AgentStepRequest step)
-    {
-        var layout = OrchestratorLayout.Of(new HarnessLayout(step.Workspace.MainCheckout, step.Workspace.MainCheckout), step.Run);
+    private static string StepDirectory(AgentStepRequest step) => Layout(step).AgentStepDirectory(step.Agent, step.StepInstance);
 
-        return layout.AgentStepDirectory(step.Agent, step.StepInstance);
-    }
+    /// <summary>The paths of the step's run, as the one owner of them spells them.</summary>
+    /// <param name="step">The step.</param>
+    private static OrchestratorLayout Layout(AgentStepRequest step)
+        => OrchestratorLayout.Of(new HarnessLayout(step.Workspace.MainCheckout, step.Workspace.MainCheckout), step.Run);
 
     /// <summary>How long the agent has to answer a handoff: the bound the step's limits name, three minutes unless they do.</summary>
     /// <param name="step">The step.</param>
@@ -416,7 +432,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <param name="template">The template.</param>
     /// <param name="values">Its values.</param>
     /// <remarks>
-    /// Read by the one template grammar (<see cref="Orchestration.Flow.FlowTemplate.Pieces"/>): a brace doubled stands for
+    /// Read by the one template grammar (<see cref="Orchestration.Flow.FlowTemplate.Pieces(string)"/>): a brace doubled stands for
     /// one, another expander's <c>${...}</c> is left as written, and a placeholder this step has no value for stands as
     /// written, as does the rest of a template from a placeholder never closed. The template is read once, so a value
     /// that names another value is never filled in its turn.

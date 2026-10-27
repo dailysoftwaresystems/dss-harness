@@ -186,27 +186,80 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowStepTypeRunner, DeleteAgentStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, RefreshStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, RebaseStepRunner>();
+        services.AddSingleton<IGitPublisher, GitPublisher>();
+        services.AddSingleton<SshHostNames>();
+        services.AddSingleton<IFlowStepTypeRunner, CommitStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, PushStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, PullRequestStepRunner>();
         services.AddSingleton<IFlowStepRunner, FlowStepRunners>();
 
         // The codebase graph: every implementation of its contract the core holds, found by the one scan, so a new language
         // is registered by being written; the registry built from them refuses two that would claim one file by order.
-        foreach (var extractor in Codebase.CodeGraphExtractors.Implementations)
-        {
-            services.AddSingleton(typeof(Codebase.ICodeGraphExtractor), extractor);
-        }
-
+        services.AddCoreImplementationsOf<Codebase.ICodeGraphExtractor>();
         services.AddSingleton<Codebase.CodeGraphExtractors>();
         services.AddSingleton<Codebase.ICodebaseGraphService, Codebase.CodebaseGraphService>();
 
         // The one way an agent's step is worked, whatever the client is: each client built in is registered here as its
-        // slice lands - claude-code first - and a test registers its fake the same way.
+        // slice lands - claude-code, then claude-api over the one connection the API clients share - and a test registers
+        // its fake the same way.
         services.AddSingleton<IAgentClient>(provider => new Agents.ClaudeCode.ClaudeCodeClient(
             provider.GetRequiredService<IProcessRunner>(),
             provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IHostPlatform>(),
             provider.GetRequiredService<ChildSessions>(),
-            provider.GetRequiredService<TimeProvider>()));
+            provider.GetRequiredService<TimeProvider>(),
+            tools: provider.GetRequiredService<Agents.Runtime.AgentToolHost>()));
+        services.AddSingleton(provider => new Agents.Http.ApiConnection(provider.GetRequiredService<TimeProvider>()));
+        services.AddSingleton<IAgentClient>(provider => new Agents.ClaudeApi.ClaudeApiClient(
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<Agents.Runtime.AgentToolHost>(),
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<Agents.Http.ApiConnection>()));
+        services.AddSingleton<IAgentClient>(provider => new Agents.ZaiApi.ZaiApiClient(
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<Agents.Runtime.AgentToolHost>(),
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<Agents.Http.ApiConnection>()));
         services.AddSingleton<IAgentRunner, AgentRunner>();
+
+        // The harness's own tools, built for the API clients to give their agents and served to Claude Code's through the
+        // engine's tool server: the one fetch of the process, the system's own lookup of a name, and the host a runtime is
+        // opened from for each run.
+        services.AddSingleton<Web.IWebNames, Web.SystemWebNames>();
+        services.AddSingleton(provider => new Web.HarnessFetch(provider.GetRequiredService<IToolIdentityProvider>(), provider.GetRequiredService<Web.IWebNames>()));
+
+        // The harness's web search: every kind of source the core holds, found by the one scan, so a new kind is registered
+        // by being written, and the registry built from them refuses two of one name; and the indexes of the sites a
+        // sitemap source searches, each filled in the background through the harness's fetch at the site's pace.
+        services.AddCoreImplementationsOf<Web.Search.IWebSearchKind>();
+        services.AddSingleton<Web.Search.WebSearchKinds>();
+        services.AddSingleton(provider =>
+        {
+            var clock = provider.GetRequiredService<TimeProvider>();
+            return new Web.Index.SitemapFill(provider.GetRequiredService<IFileSystem>(), provider.GetRequiredService<Web.HarnessFetch>(), clock, (wait, cancellationToken) => Task.Delay(wait, clock, cancellationToken));
+        });
+        services.AddSingleton<Web.Index.WebIndexes>();
+
+        // Every query an agent's web_search makes, through the harness's own search: each source's pace held on the
+        // machine by one record beside admission's, and each source's key read from the slot or the machine's gh login.
+        services.AddSingleton(provider =>
+        {
+            var clock = provider.GetRequiredService<TimeProvider>();
+            var platform = provider.GetRequiredService<IHostPlatform>();
+            return new Web.Search.WebSearchPace(provider.GetRequiredService<IFileSystem>(), () => Web.Search.WebSearchPace.PathFor(platform, provider.GetRequiredService<IHarnessOutput>()), clock, (wait, cancellationToken) => Task.Delay(wait, clock, cancellationToken));
+        });
+        services.AddSingleton<Web.Search.HarnessWebSearch>();
+        services.AddSingleton<Web.Search.WebSearchKeys>();
+        services.AddSingleton(provider => new Agents.Runtime.AgentToolHost(
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<IHostPlatform>(),
+            provider.GetRequiredService<IGitClient>(),
+            provider.GetRequiredService<PhaseRunner>(),
+            provider.GetRequiredService<ChildSessions>(),
+            provider.GetRequiredService<Web.HarnessFetch>(),
+            provider.GetRequiredService<IToolIdentityProvider>(),
+            provider.GetRequiredService<TimeProvider>(),
+            search: provider.GetRequiredService<Web.Search.HarnessWebSearch>()));
         services.AddSingleton<IWorkflowValidationService, WorkflowValidationService>();
         services.AddSingleton<IWorkflowExportService, WorkflowExportService>();
 
@@ -303,6 +356,7 @@ public static class ServiceRegistration
         services.AddSingleton<IWslPageCache, WslPageCache>();
         services.AddSingleton<RunStops>();
         services.AddSingleton<RunStopService>();
+        services.AddSingleton<Codebase.CodebaseGraphQueryService>();
         services.AddSingleton<LegRunService>();
         services.AddSingleton<CleanService>();
 

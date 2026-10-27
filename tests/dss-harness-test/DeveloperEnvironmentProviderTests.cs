@@ -55,8 +55,9 @@ public sealed class DeveloperEnvironmentProviderTests
 
     /// <summary>
     /// The batch file is started by a relative path from a directory of its own, under the host's
-    /// environment, with vcvarsall.bat and the architecture handed over in variables rather than in
-    /// its text; the directory is gone afterwards.
+    /// environment, with vcvarsall.bat and its arguments - the architecture alone, where the survey
+    /// found no toolset to ask for - handed over in variables rather than in its text; the directory
+    /// is gone afterwards.
     /// </summary>
     [Fact]
     public async Task TheCapture_RunsUnderTheHostsEnvironment_AndLeavesNothingBehind()
@@ -73,8 +74,103 @@ public sealed class DeveloperEnvironmentProviderTests
         Assert.Equal(
             Path.Combine(visualStudio.InstallationPath, "VC", "Auxiliary", "Build", "vcvarsall.bat"),
             capture.Environment[DeveloperEnvironmentProvider.ScriptVariable]);
-        Assert.Equal("amd64", capture.Environment[DeveloperEnvironmentProvider.ArchitectureVariable]);
+        Assert.Equal("amd64", capture.Environment[DeveloperEnvironmentProvider.ArgumentsVariable]);
         Assert.False(Directory.Exists(capture.WorkingDirectory), "the capture's directory is removed once read");
+    }
+
+    /// <summary>
+    /// The toolset the survey found is asked of vcvarsall.bat as <c>-vcvars_ver=</c> after the architecture,
+    /// and is what the leg's line names: the MSVC its legs build with, not the instance's default.
+    /// </summary>
+    [Fact]
+    public async Task TheToolsetTheSurveyFound_IsAskedOfVcvarsall_AndNamedOnTheLegsLine()
+    {
+        using var visualStudio = new ScriptedVisualStudio();
+        var found = DeveloperEnvironmentCheck.Installed(visualStudio.InstallationPath, ScriptedVisualStudio.InstallationVersion, "14.44.35207");
+
+        var setUp = await visualStudio.Provider().SetUpAsync("cuda", found, "x86_64", NoHostEnvironment, TestContext.Current.CancellationToken);
+
+        Assert.Equal("amd64 -vcvars_ver=14.44.35207", Assert.Single(visualStudio.Captures).Environment[DeveloperEnvironmentProvider.ArgumentsVariable]);
+        Assert.Null(setUp.Failure);
+        Assert.Equal("14.44.35207", setUp.Environment["VCToolsVersion"]);
+        Assert.Equal(
+            new DeveloperEnvironmentFact("cuda", visualStudio.InstallationPath, ScriptedVisualStudio.InstallationVersion, "14.44.35207", "amd64"),
+            setUp.Fact);
+        Assert.Equal(
+            $"developer environment: cuda (Visual Studio {ScriptedVisualStudio.InstallationVersion}, MSVC 14.44.35207, amd64)",
+            setUp.Fact!.Describe());
+    }
+
+    /// <summary>
+    /// A vcvarsall.bat asked for one toolset that comes out with another - or with none - without a word is refused,
+    /// naming both: the build it would start is the one the environment names its toolset to keep out. Held to the
+    /// toolset exactly, never to one whose name it begins.
+    /// </summary>
+    [Theory]
+    [InlineData("14.51.36231")]
+    [InlineData("14.44.3520")]
+    [InlineData("14.44.352071")]
+    [InlineData("")]
+    public async Task AVcvarsallThatSetsUpAnotherToolset_IsRefused_NamingBoth(string reported)
+    {
+        using var visualStudio = new ScriptedVisualStudio { ReportedToolsVersion = reported };
+        var found = DeveloperEnvironmentCheck.Installed(visualStudio.InstallationPath, ScriptedVisualStudio.InstallationVersion, "14.44.35207");
+
+        var setUp = await visualStudio.Provider().SetUpAsync("cuda", found, "x86_64", NoHostEnvironment, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            $"developer environment 'cuda': vcvarsall.bat amd64 -vcvars_ver=14.44.35207 set up VCToolsVersion '{reported}', where '14.44.35207' was asked for",
+            setUp.Failure);
+        Assert.Empty(setUp.Environment);
+    }
+
+    /// <summary>
+    /// What vcvarsall.bat is asked for besides the architecture - a toolset, or none for its default - is part of what a
+    /// capture is shared by: an environment set up with one toolset is never handed to a leg asking for another, or for
+    /// the default, however much else they share.
+    /// </summary>
+    [Fact]
+    public async Task TheToolsetAskedFor_IsPartOfWhatACaptureIsSharedBy()
+    {
+        using var visualStudio = new ScriptedVisualStudio();
+        var provider = visualStudio.Provider();
+        var token = TestContext.Current.CancellationToken;
+        var older = DeveloperEnvironmentCheck.Installed(visualStudio.InstallationPath, ScriptedVisualStudio.InstallationVersion, "14.44.35207");
+
+        var oldest = DeveloperEnvironmentCheck.Installed(visualStudio.InstallationPath, ScriptedVisualStudio.InstallationVersion, "14.38.33130");
+
+        var pinned = await provider.SetUpAsync("vs", older, "x86_64", NoHostEnvironment, token);
+        var newest = await provider.SetUpAsync("vs", visualStudio.Found, "x86_64", NoHostEnvironment, token);
+        var other = await provider.SetUpAsync("vs", oldest, "x86_64", NoHostEnvironment, token);
+        var again = await provider.SetUpAsync("vs", older, "x86_64", NoHostEnvironment, token);
+
+        Assert.Equal(
+            ["amd64 -vcvars_ver=14.44.35207", "amd64", "amd64 -vcvars_ver=14.38.33130"],
+            visualStudio.Captures.Select(capture => capture.Environment[DeveloperEnvironmentProvider.ArgumentsVariable]));
+        Assert.Equal(
+            ("14.44.35207", ScriptedVisualStudio.ToolsVersion, "14.38.33130"),
+            (pinned.Fact!.ToolsVersion, newest.Fact!.ToolsVersion, other.Fact!.ToolsVersion));
+        Assert.Same(pinned, again);
+    }
+
+    /// <summary>
+    /// A toolset that is no toolset's name never reaches vcvarsall.bat's command line, where call's own pass would read
+    /// it: the call is refused as it is made, and nothing is run. No survey answers one.
+    /// </summary>
+    [Theory]
+    [InlineData("14.44")]
+    [InlineData("14.44.35207 & calc")]
+    [InlineData("14.44.35207\"")]
+    [InlineData("")]
+    public void AToolsetThatIsNoToolsetsName_IsRefusedAsTheCallIsMade(string toolset)
+    {
+        using var visualStudio = new ScriptedVisualStudio();
+        var found = DeveloperEnvironmentCheck.Installed(visualStudio.InstallationPath, ScriptedVisualStudio.InstallationVersion, toolset);
+
+        Assert.Throws<ArgumentException>(
+            "found",
+            () => { _ = visualStudio.Provider().SetUpAsync("vs", found, "x86_64", NoHostEnvironment, TestContext.Current.CancellationToken); });
+        Assert.Empty(visualStudio.Captures);
     }
 
     /// <summary>
@@ -450,6 +546,48 @@ public sealed class DeveloperEnvironmentProviderTests
         }
     }
 
+    /// <summary>
+    /// The toolset reaches vcvarsall.bat as the arguments it reads one - <c>-vcvars_ver</c>, then the toolset, after the
+    /// architecture, since cmd.exe splits call's arguments at '=' as well as at spaces - and an environment naming no
+    /// toolset passes the architecture alone. Run by this machine's own cmd.exe; skipped where there is none.
+    /// </summary>
+    [Fact]
+    public async Task TheToolset_ReachesVcvarsallAsTheArgumentsItReads()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "cmd.exe runs the capture on Windows alone.");
+
+        using var temp = new TempDirectory();
+        var platform = HostDoubles.Platform(PlatformId.Windows, "x86_64");
+        var processes = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram);
+        var provider = new DeveloperEnvironmentProvider(platform, processes, new PhysicalFileSystem(FilePermissionsFactory.Create()), new HarnessFactory().Output);
+
+        // Sets what it was given, argument by argument, as vcvarsall.bat's own parser reads them.
+        temp.WriteFile(
+            Path.Combine("VC", "Auxiliary", "Build", "vcvarsall.bat"),
+            "@echo off\r\nset \"VSCMD_ARG_TGT_ARCH=x64\"\r\nset \"GIVEN=[%1][%2][%3][%4]\"\r\n"
+            + "if /I \"%2\"==\"-vcvars_ver\" set \"VCToolsVersion=%3\"\r\nexit /b 0\r\n");
+
+        var pinned = await provider.SetUpAsync(
+            "cuda",
+            DeveloperEnvironmentCheck.Installed(temp.Path, "18.0.0", "14.44.35207"),
+            "x86_64",
+            NoHostEnvironment,
+            TestContext.Current.CancellationToken);
+        var unpinned = await provider.SetUpAsync(
+            "vs",
+            DeveloperEnvironmentCheck.Installed(temp.Path, "18.0.0"),
+            "x86_64",
+            NoHostEnvironment,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(pinned.HasFailed, pinned.Failure);
+        Assert.Equal("[amd64][-vcvars_ver][14.44.35207][]", pinned.Environment["GIVEN"]);
+        Assert.Equal("14.44.35207", pinned.Fact.ToolsVersion);
+        Assert.False(unpinned.HasFailed, unpinned.Failure);
+        Assert.Equal("[amd64][][][]", unpinned.Environment["GIVEN"]);
+        Assert.False(unpinned.Environment.ContainsKey("VCToolsVersion"), "an environment naming no toolset asks for none");
+    }
+
     /// <summary>A file system in which no directory can be made, as where the temporary directory cannot be written.</summary>
     private sealed class UnwritableScratch(IFileSystem inner) : PassThroughFileSystem(inner)
     {
@@ -511,7 +649,8 @@ public sealed class DeveloperEnvironmentProviderTests
     {
         var platform = new HostPlatform();
         var processes = new ProcessRunner(platform, FilePermissionsFactory.Create(), CliRunner.CliProgram);
-        var probe = new DeveloperEnvironmentProbe(platform, processes);
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var probe = new DeveloperEnvironmentProbe(platform, processes, fileSystem);
         var token = TestContext.Current.CancellationToken;
 
         var found = await probe.CheckAsync(VisualStudio, token);
@@ -521,7 +660,7 @@ public sealed class DeveloperEnvironmentProviderTests
             BuildTools.Lacks($"This machine has no Visual Studio with the C++ build tools: {found.Reason}", couldHold: OperatingSystem.IsWindows());
         }
 
-        var provider = new DeveloperEnvironmentProvider(platform, processes, new PhysicalFileSystem(FilePermissionsFactory.Create()), new HarnessFactory().Output);
+        var provider = new DeveloperEnvironmentProvider(platform, processes, fileSystem, new HarnessFactory().Output);
         var setUp = await provider.SetUpAsync("vs", found, platform.Processor, NoHostEnvironment, token);
 
         Assert.Null(setUp.Failure);
@@ -533,5 +672,62 @@ public sealed class DeveloperEnvironmentProviderTests
         Assert.Equal(VisualStudioArchitecture.For(platform.Processor, platform.Processor), setUp.Fact!.Architecture);
         Assert.NotEqual("unknown", setUp.Fact.ToolsVersion);
         Assert.Equal(found.InstallationPath, setUp.Fact.InstallationPath);
+    }
+
+    /// <summary>
+    /// Visual Studio as it is installed on this machine, held to a toolset it holds - its oldest, by its line's two
+    /// numbers, which is not the default wherever the instance holds two - by the survey and by vcvarsall.bat: the
+    /// environment set up is that toolset's, its cl first on PATH. Skipped, or failed, as the test above is.
+    /// </summary>
+    [Fact]
+    public async Task TheVisualStudioOnThisMachine_SetsUpTheToolsetNamed()
+    {
+        var platform = new HostPlatform();
+        var processes = new ProcessRunner(platform, FilePermissionsFactory.Create(), CliRunner.CliProgram);
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var probe = new DeveloperEnvironmentProbe(platform, processes, fileSystem);
+        var token = TestContext.Current.CancellationToken;
+
+        var newest = await probe.CheckAsync(VisualStudio, token);
+
+        if (!newest.CanSetUp)
+        {
+            BuildTools.Lacks($"This machine has no Visual Studio with the C++ build tools: {newest.Reason}", couldHold: OperatingSystem.IsWindows());
+        }
+
+        // The oldest line whose newest toolset builds for this machine's processor on it: a toolset installed for other
+        // processors alone has no cl for this one, and setting it up would say so rather than test anything.
+        var msvc = Path.Combine(newest.InstallationPath!, "VC", "Tools", "MSVC");
+        var toolsets = VisualStudioToolsets.Of(fileSystem.EnumerateDirectories(msvc).Select(Path.GetFileName).OfType<string>());
+        var target = VisualStudioArchitecture.Target(VisualStudioArchitecture.For(platform.Processor, platform.Processor)!);
+        var line = toolsets
+            .Select(toolset => string.Join('.', toolset.Split('.')[..2]))
+            .Distinct(StringComparer.Ordinal)
+            .LastOrDefault(line => File.Exists(Path.Combine(msvc, VisualStudioToolsets.Newest(line, toolsets)!, "bin", "Host" + target, target, "cl.exe")));
+
+        if (line is null)
+        {
+            BuildTools.Lacks($"No MSVC toolset in '{msvc}' builds for {platform.Processor} on it.", couldHold: OperatingSystem.IsWindows());
+        }
+
+        var found = await probe.CheckAsync(new DeveloperEnvironmentConfig { Kind = DeveloperEnvironmentKinds.VisualStudio, ToolsVersion = line }, token);
+
+        Assert.True(found.CanSetUp, found.Reason);
+        Assert.StartsWith(line + ".", found.ToolsVersion, StringComparison.Ordinal);
+
+        var setUp = await new DeveloperEnvironmentProvider(platform, processes, fileSystem, new HarnessFactory().Output)
+            .SetUpAsync("pinned", found, platform.Processor, NoHostEnvironment, token);
+
+        Assert.Null(setUp.Failure);
+        Assert.Equal(found.ToolsVersion, setUp.Fact!.ToolsVersion);
+        Assert.Equal(found.ToolsVersion, setUp.Environment["VCToolsVersion"]);
+        Assert.Equal(found.InstallationPath, setUp.Fact.InstallationPath);
+
+        // The first cl on the PATH it set up is that toolset's own.
+        var cl = setUp.Environment["PATH"].Split(';', StringSplitOptions.RemoveEmptyEntries).First(directory => File.Exists(Path.Combine(directory, "cl.exe")));
+        Assert.StartsWith(
+            Path.Combine(found.InstallationPath!, "VC", "Tools", "MSVC", found.ToolsVersion!) + Path.DirectorySeparatorChar,
+            cl,
+            StringComparison.OrdinalIgnoreCase);
     }
 }

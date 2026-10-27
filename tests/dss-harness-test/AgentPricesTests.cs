@@ -41,8 +41,8 @@ public sealed class AgentPricesTests
         LargePrompt = new LargePromptPrices { OverTokens = 100_000, PriceInputMiss = 0.5, PriceInputHit = 0.05, PriceOutput = 2.5 },
     };
 
-    private static AgentProviderConfig Provider(AgentModelConfig model, double? searches = null)
-        => new() { Name = "zai", Type = "zai", Api = "https://api", ApiKeyNames = ["KEY"], Client = "glm", Currency = "USD", ReadOn = "2026-10-12", PricePerThousandSearches = searches, Models = [model] };
+    private static AgentProviderConfig Provider(AgentModelConfig model, double? searches = null, string currency = "USD")
+        => new() { Name = "zai", Type = "zai", Api = "https://api", ApiKeyNames = ["KEY"], Client = "glm", Currency = currency, ReadOn = "2026-10-12", PricePerThousandSearches = searches, Models = [model] };
 
     /// <summary>Each kind of token is counted at that kind's price per million: input, cache read, output.</summary>
     [Fact]
@@ -151,6 +151,55 @@ public sealed class AgentPricesTests
         Assert.Equal("no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': pricePerThousandSearches)", AgentPrices.UnknownOf(Provider(Glm), Glm, searched));
     }
 
+    /// <summary>
+    /// A budget is charged with the cost counted from the prices every request is charged at - input missed and hit, and
+    /// output, and the cache write a provider's requests make - in the budget's currency: a model missing any of them, or
+    /// a provider pricing in another currency, refuses a budget, naming what to fill; a write no request makes needs no price.
+    /// </summary>
+    [Theory]
+    [InlineData("none", "none", null)]
+    [InlineData("miss", "none", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss), and a budget is charged with the cost counted from them")]
+    [InlineData("hit", "none", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputHit), and a budget is charged with the cost counted from them")]
+    [InlineData("output", "none", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceOutput), and a budget is charged with the cost counted from them")]
+    [InlineData("all", "none", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss, priceInputHit, priceOutput), and a budget is charged with the cost counted from them")]
+    [InlineData("cacheWrite", "none", null)]
+    [InlineData("cacheWrite", "5m", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceCacheWrite), and a budget is charged with the cost counted from them")]
+    [InlineData("cacheWrite", "1h", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceCacheWrite1h), and a budget is charged with the cost counted from them")]
+    [InlineData("currency", "none", "providers 'zai' prices its models in EUR, and a budget is counted in USD")]
+    [InlineData("largeHit", "none", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': largePrompt.priceInputHit), and a budget is charged with the cost counted from them")]
+    [InlineData("largeWhole", "none", null)]
+    [InlineData("largeWhole", "5m", "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceCacheWrite, largePrompt.priceCacheWrite), and a budget is charged with the cost counted from them")]
+    public void ABudget_NeedsThePricesEveryRequestIsChargedAt_InItsCurrency(string missing, string writes, string? refusal)
+    {
+        var uses = writes switch
+        {
+            "5m" => AgentPrices.EveryRequestUses with { CacheWriteTokens = 1 },
+            "1h" => AgentPrices.EveryRequestUses with { CacheWrite1hTokens = 1 },
+            _ => AgentPrices.EveryRequestUses,
+        };
+
+        var model = new AgentModelConfig
+        {
+            Code = Glm.Code,
+            Name = Glm.Name,
+            Tiers = Glm.Tiers,
+            Efforts = Glm.Efforts,
+            ContextTokens = Glm.ContextTokens,
+            MaxOutputTokens = Glm.MaxOutputTokens,
+            PriceInputMiss = missing is "miss" or "all" ? null : Glm.PriceInputMiss,
+            PriceInputHit = missing is "hit" or "all" ? null : Glm.PriceInputHit,
+            PriceOutput = missing is "output" or "all" ? null : Glm.PriceOutput,
+            LargePrompt = missing switch
+            {
+                "largeHit" => new LargePromptPrices { OverTokens = 200_000, PriceInputMiss = 2.8, PriceOutput = 8.8 },
+                "largeWhole" => new LargePromptPrices { OverTokens = 200_000, PriceInputMiss = 2.8, PriceInputHit = 0.52, PriceOutput = 8.8 },
+                _ => null,
+            },
+        };
+
+        Assert.Equal(refusal, AgentPrices.BudgetRefusal(Provider(model, currency: missing == "currency" ? "EUR" : "USD"), model, uses));
+    }
+
     /// <summary>A kind the request did not use holds no price and decides nothing.</summary>
     [Fact]
     public void AKindTheRequestDidNotUse_DecidesNothing()
@@ -233,42 +282,4 @@ public sealed class AgentModelTests
         Assert.NotNull(resolved);
         Assert.Empty(WorkflowValidator.Validate(WorkflowTemplates.ShippedDefinition(), hasCommitTemplate: false, files: null, resolved));
     }
-
-    /// <summary>The line of each of the shipped workflow's <c>glm-5.3</c> effort entries, by its index in the file.</summary>
-    public static TheoryData<int> GlmEffortEntries()
-    {
-        var lines = WorkflowTemplates.TextOf("implementation.yml")!.Split('\n');
-
-        return [.. Enumerable.Range(0, lines.Length).Where(index => lines[index].TrimStart().StartsWith("glm-5.3:", StringComparison.Ordinal))];
-    }
-
-    /// <summary>
-    /// The shipped workflow fails V38 with any one of its <c>glm-5.3: max</c> entries taken out - each of them, alone:
-    /// GLM 5.3 would run at the xhigh <c>all</c> gives it, which it does not take, and the one refusal names the level to
-    /// give it. Every entry is one a step needs, none a level the check would let go.
-    /// </summary>
-    [Theory]
-    [MemberData(nameof(GlmEffortEntries))]
-    public void TheShippedWorkflow_FailsWithAnyOneOfItsGlmMaxEntriesTakenOut(int at)
-    {
-        var (resolved, problems) = AgentProviders.Resolve(DefaultConfigFactory.Create([], "windows", "x64"));
-
-        Assert.Empty(problems);
-
-        var lines = WorkflowTemplates.TextOf("implementation.yml")!.Split('\n');
-
-        Assert.Equal("glm-5.3: max    # GLM 5.3, which takes no xhigh", lines[at].Trim());
-
-        var parsed = WorkflowFileParser.Parse("implementation.yml", string.Join("\n", lines.Where((_, index) => index != at)));
-        var refusal = Assert.Single(WorkflowValidator.Validate(parsed, hasCommitTemplate: false, files: WorkflowTemplates.TextOf, resolved));
-
-        Assert.Matches(
-            @"^workflow 'implementation' step '[a-z.\-]+' runs 'glm-5\.3' \(tier '(best|high|balanced|fast)'\) at effort 'xhigh', which it does not take\. It takes: low, high, max\. Give it a level of its own under effort: glm-5\.3: max$",
-            refusal);
-    }
-
-    /// <summary>The shipped workflow holds its thirteen glm-5.3 entries, so the theory above takes each one out.</summary>
-    [Fact]
-    public void TheShippedWorkflow_HoldsItsThirteenGlmEffortEntries()
-        => Assert.Equal(13, GlmEffortEntries().Count);
 }

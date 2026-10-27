@@ -1627,6 +1627,49 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// The toolset the survey found for a developer environment that names one is the one the leg is set up in: vcvarsall.bat
+    /// is asked for it, and the leg is handed it and names it.
+    /// </summary>
+    [Fact]
+    public async Task ALegWhoseDeveloperEnvironmentNamesAToolset_IsSetUpInTheToolsetTheSurveyFound()
+    {
+        using var temp = new TempDirectory();
+        using var visualStudio = new ScriptedVisualStudio().Carrying("x64", "cl", "cmake");
+        var harness = new HarnessFactory();
+        var pinned = DeveloperEnvironmentCheck.Installed(visualStudio.InstallationPath, ScriptedVisualStudio.InstallationVersion, "14.44.35207");
+        DeveloperEnvironmentFact? handed = null;
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            MsvcLeg(),
+            new RecordingInspector(host => new HostReport
+            {
+                Host = host,
+                Os = "windows",
+                Processor = "x86_64",
+                DeveloperEnvironments = new Dictionary<string, DeveloperEnvironmentCheck>(StringComparer.OrdinalIgnoreCase) { ["vs"] = pinned },
+            }),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildOnly },
+            work: leg =>
+            {
+                handed = leg.DeveloperEnvironment;
+                return new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed };
+            },
+            developerEnvironments: visualStudio.Provider());
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(
+            "amd64 -vcvars_ver=14.44.35207",
+            Assert.Single(visualStudio.Captures).Environment[DeveloperEnvironmentProvider.ArgumentsVariable]);
+        Assert.Equal("14.44.35207", handed?.ToolsVersion);
+        Assert.Contains(
+            $"native: passed (developer environment: vs (Visual Studio {ScriptedVisualStudio.InstallationVersion}, MSVC 14.44.35207, amd64))",
+            harness.StandardOutput.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A developer environment the survey found that will not set up where the leg runs fails the leg,
     /// saying why, before anything of it starts: as a program that will not start once a leg began
     /// does, never as a skip a gate accepting an incomplete run would pass.
@@ -3478,7 +3521,25 @@ public sealed class LegRunServiceTests
         var harness = new HarnessFactory();
 
         SetUpScripts.Write(temp.Path);
-        stop.CancelAfter(TimeSpan.FromMilliseconds(700));
+
+        // Interrupted once the up line has started - its log begun - whatever the machine's pace: a timer from the test's
+        // start, run late on a busy machine, once landed after the up line had finished. Watched from a thread of its
+        // own, as an interrupt comes, so no busy pool holds it back.
+        var run = RunId.New();
+        var upLog = new LegRecords(new HarnessLayout(temp.Path, temp.Path).RunDirectory(run.Value), "native").PhaseLog(PhaseLogs.NameFor("set-up a up"));
+        var watching = new Thread(() =>
+        {
+            var since = Stopwatch.GetTimestamp();
+
+            while (!File.Exists(upLog) && Stopwatch.GetElapsedTime(since) < TimeSpan.FromMinutes(1))
+            {
+                Thread.Sleep(10);
+            }
+
+            stop.Cancel();
+        }) { IsBackground = true };
+
+        watching.Start();
 
         var outcome = await OutcomeAsync(
             temp,
@@ -3488,9 +3549,10 @@ public sealed class LegRunServiceTests
             new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a") with { SetUp = true } },
             work: _ => throw new InvalidOperationException("the leg's work started while its set-up came up"),
             setUps: SetUpsFor(harness, state).SetUps,
-            cancellationToken: stop.Token);
+            cancellationToken: stop.Token,
+            runId: run);
 
-        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.True(HarnessExit.Cancelled == outcome.ExitCode, $"{outcome.ExitCode}: {outcome.Message} | {harness.StandardOutput}{harness.StandardError}");
         Assert.Equal<string>(["down-a"], SetUpScripts.Logged(temp.Path));
         Assert.DoesNotContain("did not bring set-up", outcome.Message, StringComparison.Ordinal);
     }

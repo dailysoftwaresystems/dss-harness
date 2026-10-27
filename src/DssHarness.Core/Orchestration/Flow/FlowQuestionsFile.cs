@@ -101,23 +101,6 @@ public sealed record FlowAnswerRecord(
     string? Did = null,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? ReplacedAt = null);
 
-/// <summary>One question a step's output wrote or an agent asked, in the shape every question holds; empty for the engine's own.</summary>
-/// <param name="Question">What is asked.</param>
-/// <param name="Problem">What is open or stands in the way.</param>
-/// <param name="Tried">Where the agent looked before it asked.</param>
-/// <param name="Means">What depends on the answer.</param>
-/// <param name="Options">The choices, at least two, each a sentence that says what it leads to.</param>
-/// <param name="Recommended">The one recommended, word for word as it stands among the choices.</param>
-/// <param name="Why">Why, by the bar the agent was given.</param>
-public sealed record FlowAgentQuestion(
-    string Question,
-    string Problem,
-    IReadOnlyList<string> Options,
-    string Recommended,
-    string Why,
-    string? Tried = null,
-    string? Means = null);
-
 /// <summary>
 /// One question a run raised, as <c>questions.json</c> holds it: its id, kind and state, who raised it, the problem
 /// as it was shown, the options each with what it does, the recommendation and who wrote it, and every answer it was
@@ -142,7 +125,7 @@ public sealed record FlowQuestionEntry(
     string State,
     string Kind,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset RaisedAt,
-    IReadOnlyList<FlowAgentQuestion> Questions,
+    IReadOnlyList<Agents.AgentQuestion> Questions,
     IReadOnlyList<FlowQuestionOption> Options,
     IReadOnlyList<FlowAnswerRecord> Answers,
     FlowQuestionRaisedBy? RaisedBy = null,
@@ -153,13 +136,17 @@ public sealed record FlowQuestionEntry(
     /// <summary>The states a question stands in.</summary>
     public static readonly IReadOnlyList<string> States = ["open", "answered", "withdrawn"];
 
-    /// <summary>What is wrong with this entry; null when nothing is.</summary>
+    /// <summary>
+    /// What is wrong with this entry; null when nothing is. The questions an agent or a step's output wrote are held to
+    /// their record's own rule (<see cref="Agents.AgentQuestion.Problems"/>), as the answer that held them was.
+    /// </summary>
     public string? Problem()
         => !FlowQuestionIds.IsWellFormed(Id) ? $"'{Id}' is not a question's id"
             : !States.Contains(State, StringComparer.Ordinal) ? $"'{State}' is not a state a question stands in"
             : string.IsNullOrWhiteSpace(Kind) ? "its kind is empty"
             : Options.Count < 2 ? $"it takes {Options.Count.ToString(CultureInfo.InvariantCulture)} answers, and a question takes at least two"
             : Options.Any(option => string.IsNullOrWhiteSpace(option.Answer)) ? "an answer it takes is empty"
+            : Agents.AgentQuestion.ProblemIn(Questions ?? []) is { } asked ? $"its {asked}"
             : null;
 }
 
@@ -167,11 +154,10 @@ public sealed record FlowQuestionEntry(
 public static class FlowQuestionIds
 {
     /// <summary>Whether <paramref name="id"/> is a question's id as this build spells it.</summary>
-    public static bool IsWellFormed(string? id)
-        => id is { Length: > 1 } && id[0] == 'q' && int.TryParse(id[1..], NumberStyles.None, CultureInfo.InvariantCulture, out var n) && n > 0;
+    public static bool IsWellFormed(string? id) => OrchestrationRules.IsNumbered(id, 'q');
 
     /// <summary>The id the <paramref name="n"/>-th question of a run takes.</summary>
-    public static string Of(int n) => $"q{n.ToString(CultureInfo.InvariantCulture)}";
+    public static string Of(int n) => OrchestrationRules.Numbered('q', n);
 }
 
 /// <summary>

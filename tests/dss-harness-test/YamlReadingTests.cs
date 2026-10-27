@@ -36,6 +36,32 @@ public sealed class YamlReadingTests
     }
 
     /// <summary>
+    /// Loading says where and why a text is no document of one mapping - its fault's line and column, a bound's, the top
+    /// that is no mapping - and the whole file's where it is empty or of several documents: what Root's refusals say.
+    /// </summary>
+    [Fact]
+    public void Loading_SaysWhereAndWhyATextIsNoMapping()
+    {
+        Assert.NotNull(YamlReading.Load("a: 1\n", "one", Bounds, out var none));
+        Assert.Null(none);
+
+        Assert.Null(YamlReading.Load("a: [\n", "one", null, out var broken));
+        Assert.Equal((2, 1), (broken!.Line, broken.Column));
+
+        Assert.Null(YamlReading.Load("a: &x 1\nb: *x\n", "one", Bounds, out var alias));
+        Assert.Equal((2, 4, "the alias '*x' repeats a part of the file by reference; a test file writes each part out."), (alias!.Line, alias.Column, alias.Why));
+
+        Assert.Null(YamlReading.Load("- a\n", "one", null, out var list));
+        Assert.Equal((1, 1, "the file's top level is not a mapping of keys."), (list!.Line, list.Column, list.Why));
+
+        Assert.Null(YamlReading.Load("", "one", null, out var empty));
+        Assert.Equal((0, 0, "the file is empty."), (empty!.Line, empty.Column, empty.Why));
+
+        Assert.Null(YamlReading.Load("a: 1\n---\nb: 2\n", "a test file is one document", null, out var several));
+        Assert.Equal((0, 0, "the file holds 2 YAML documents; a test file is one document."), (several!.Line, several.Column, several.Why));
+    }
+
+    /// <summary>
     /// Nesting past the bound a reader asks is refused before the file is read into nodes, at the place it passes the
     /// bound; nesting to the bound is read, and nesting past it is read where no bounds are asked.
     /// </summary>

@@ -37,8 +37,11 @@ internal static class Win32Files
     /// <summary>FILE_RENAME_FLAG_REPLACE_IF_EXISTS and FILE_RENAME_FLAG_POSIX_SEMANTICS.</summary>
     private const uint ReplacePosix = 0x1 | 0x2;
 
-    /// <summary>ERROR_INVALID_FUNCTION, ERROR_NOT_SUPPORTED and ERROR_INVALID_PARAMETER: what a volume or a Windows that cannot rename as POSIX does answers.</summary>
-    private static readonly int[] Unsupported = [1, 50, 87];
+    /// <summary>
+    /// ERROR_INVALID_FUNCTION, ERROR_NOT_SUPPORTED and ERROR_INVALID_PARAMETER: what a volume or a Windows that cannot rename
+    /// as POSIX does answers; and ERROR_NOT_SAME_DEVICE, a file to go to another volume, which no rename takes it to.
+    /// </summary>
+    private static readonly int[] Unsupported = [1, 17, 50, 87];
 
     /// <summary>
     /// Opens <paramref name="path"/> itself, sharing everything, a link as the link. The handle is invalid where it
@@ -105,7 +108,10 @@ internal static class Win32Files
     /// </summary>
     /// <param name="source">The file to put in place, fully qualified.</param>
     /// <param name="destination">Where to put it, fully qualified.</param>
-    /// <returns>False where the volume or this Windows cannot rename so - a FAT volume, a share - for the caller to replace it Windows' own way.</returns>
+    /// <returns>
+    /// False where the volume or this Windows cannot rename so - a FAT volume, a share - or the file is to go to another
+    /// volume, for the caller to replace it Windows' own way, which copies it there.
+    /// </returns>
     /// <exception cref="UnauthorizedAccessException">Windows refused the rename, as a file held without its deletion shared is.</exception>
     /// <exception cref="IOException">It failed for any other reason.</exception>
     internal static bool TryReplace(string source, string destination) => TryReplace(source, destination, Rename);

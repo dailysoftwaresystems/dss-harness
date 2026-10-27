@@ -61,7 +61,7 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
     public FlowQuestionRaisedBy RaisedBy { get; internal set; } = Instance == FlowQuestions.RunsOwn ? new("engine") : new("step", Instance);
 
     /// <summary>The questions an agent or a step's output wrote, where there are any; empty for the engine's own.</summary>
-    public IReadOnlyList<FlowAgentQuestion> AgentQuestions { get; internal set; } = [];
+    public IReadOnlyList<Agents.AgentQuestion> AgentQuestions { get; internal set; } = [];
 
     /// <summary>The recommendation the question carries, and who wrote it - or the plain statement that none was sought.</summary>
     public FlowRecommendation Recommendation { get; internal set; } = FlowRecommendation.NotSought;

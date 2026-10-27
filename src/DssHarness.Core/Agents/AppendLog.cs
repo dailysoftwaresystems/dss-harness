@@ -40,6 +40,8 @@ internal sealed class AppendLog : IDisposable
     /// <param name="fileSystem">The file system the log is kept on.</param>
     /// <param name="path">The log's own path, its directory already there.</param>
     /// <returns>The log, at the end of its last whole line.</returns>
+    /// <exception cref="AppendFileHeldException">Another writer holds it, and nothing of it was read or cut.</exception>
+    /// <exception cref="IOException">It could not be opened, or a torn line taken back, for any other reason.</exception>
     public static AppendLog Open(IFileSystem fileSystem, string path)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
@@ -69,16 +71,19 @@ internal sealed class AppendLog : IDisposable
 
     /// <summary>Appends one line, whole, and has it on the disk before any other line may be written.</summary>
     /// <param name="line">The line, without its newline, and holding none.</param>
-    /// <exception cref="ArgumentException">The line holds a line break of its own; nothing was written.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The line holds a line break of its own, which no line a writer here makes holds - a guard against its writer's
+    /// defect, raised as one; nothing was written.
+    /// </exception>
     public void Append(string line)
     {
         ArgumentNullException.ThrowIfNull(line);
 
         if (line.AsSpan().IndexOfAny('\n', '\r') is var at and >= 0)
         {
-            throw new ArgumentException(
-                $"A line of '{FilePath}' holds a line break at character {at}, and would be read back as two; nothing was written.",
-                nameof(line));
+            throw new ArgumentOutOfRangeException(
+                nameof(line),
+                $"A line of '{FilePath}' holds a line break at character {at}, and would be read back as two; nothing was written.");
         }
 
         var bytes = Encoding.UTF8.GetBytes(line + "\n");
@@ -86,6 +91,39 @@ internal sealed class AppendLog : IDisposable
         lock (_gate)
         {
             _file.AppendFlushed(bytes);
+        }
+    }
+
+    /// <summary>How many bytes the log holds, its last line whole.</summary>
+    public long Length
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _file.Length;
+            }
+        }
+    }
+
+    /// <summary>Everything the log holds, every line whole, as UTF-8 text.</summary>
+    public string ReadAll()
+    {
+        lock (_gate)
+        {
+            var bytes = new byte[checked((int)_file.Length)];
+            _file.ReadExactlyAt(0, bytes);
+
+            return Encoding.UTF8.GetString(bytes);
+        }
+    }
+
+    /// <summary>Empties the log, for a log kept to a most: what it held is gone, and the next line is its first.</summary>
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            _file.TruncateTo(0);
         }
     }
 

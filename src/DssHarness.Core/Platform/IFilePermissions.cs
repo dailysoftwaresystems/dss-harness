@@ -29,6 +29,15 @@ public interface IFilePermissions
     void SetExecutable(string path, bool executable);
 
     /// <summary>
+    /// Gives the file at <paramref name="to"/> the mode of the one at <paramref name="from"/>, where one is there, as the
+    /// platform keeps it with a file: on Unix its mode bits - a script's execute bit, a secret's owner alone. On Windows
+    /// nothing is changed, since a file's access there is its directory's to give.
+    /// </summary>
+    /// <param name="from">The file whose mode is kept; nothing is done where none is there.</param>
+    /// <param name="to">The file given it.</param>
+    void CopyMode(string from, string to);
+
+    /// <summary>
     /// Whether <paramref name="path"/> is a file no other user can open: the condition ssh sets for
     /// a private key, which it ignores otherwise. A file that does not exist is not private.
     /// </summary>

@@ -64,6 +64,18 @@ public static class WorkflowStepTypes
         /// <summary>Whether the type checks something, so that its verdicts can be red.</summary>
         public bool IsCheck => FailOnDefault is not null;
 
+        /// <summary>
+        /// Whether the type checks something it answers in its output and never as a failure, so it takes no <c>failOn</c>:
+        /// <c>validate-plan</c>. A check all the same, which <see cref="Checks"/> counts.
+        /// </summary>
+        public bool ChecksAsOutput { get; init; }
+
+        /// <summary>
+        /// Whether the type is one the plan's <c>Checks</c> column marks: what a run's texts of what it checked, did not
+        /// check and knows to be red count (<see cref="FlowChecks"/>), whatever a step of it is named.
+        /// </summary>
+        public bool Checks => IsCheck || ChecksAsOutput;
+
         /// <summary>Which of the type's own keys the step must name: those <see cref="Keys"/> marks required.</summary>
         public IReadOnlyList<string> Required => [.. Keys.Where(key => key.Required).Select(key => key.Name)];
 
@@ -162,6 +174,7 @@ public static class WorkflowStepTypes
                 new("resume", "the reason step whose work this one goes on with"),
                 new("independent", "never given the author's work to go on with"),
                 new("restrictions", "restrictions the agent works under, beyond the workflow's own"),
+                new("search", "the sources of agentWebSearch the step's web_search asks, by name or tag, in the order its answer gives them; absent, agentWebSearch.defaults"),
                 new("writes", "the paths a writing step may write"),
                 new("ask", "the step may put its questions to a person; one that may not writes its assumptions down"),
                 new("askRounds", "how often a step that asks may ask before it goes on with what it has, from 1 to 5; absent, 2"),
@@ -242,7 +255,7 @@ public static class WorkflowStepTypes
             "PlanCheckRunner: PlanValidator with FlowRunPaths over IPathBudget.Check and CopyPathBudget",
             ["read main"],
             null,
-            ObjectOf(("ok", Flag), ("problems", ListOf(Text)), ("items", UntypedList))),
+            ObjectOf(("ok", Flag), ("problems", ListOf(Text)), ("items", UntypedList))) { ChecksAsOutput = true },
         new(
             "anchor-balance",
             [new("base", "the commit it measures from"), new("rows", "the row ids it is held to; absent, the whole tree"), new("failOn", "what a red finding does: red (the default) or never")],
@@ -291,16 +304,16 @@ public static class WorkflowStepTypes
             [new("message", "the commit message it writes; required where the config declares no commit.template, and not used where it declares one"), new("variables", "the values the message template reads")],
             ["message", "variables"],
             null,
-            "IGitPublisher",
+            "CommitStepRunner: FoldLedger.Owed, CommitTemplate, IGitPublisher over IGitClient.RunWithinAsync",
             ["write main"],
             null,
-            ObjectOf(("committed", Flag), ("sha", TextOrNull), ("paths", ListOf(Text)))),
+            ObjectOf(("committed", Flag), ("sha", TextOrNull), ("paths", ListOf(Text)), ("ignored", ListOf(Text)))),
         new(
             "push",
-            [new("remote", "the remote it pushes to; absent, the tracked one"), new("checkpoint", "push a checkpoint commit")],
+            [new("remote", "the remote it pushes to; absent, the one the run's branch goes to"), new("checkpoint", "a push made before the run's end, which runs only where the workflow says pushCheckpoints")],
             [],
             null,
-            "IGitPublisher",
+            "PushStepRunner: FlowCheckout, IGitPublisher.PushAsync over IGitClient.RunWithinAsync",
             ["the remote resource"],
             null,
             ObjectOf(("pushed", Flag), ("remote", Text), ("branch", Text), ("sha", Text))),
@@ -314,7 +327,7 @@ public static class WorkflowStepTypes
            ],
             ["title", "base"],
             null,
-            "IGitPublisher",
+            "PullRequestStepRunner: FlowCheckout, IGitPublisher over GhProcess",
             ["the remote resource"],
             null,
             ObjectOf(("number", WholeNumber), ("url", Text), ("created", Flag))),
@@ -367,6 +380,15 @@ public static class WorkflowStepTypes
         ArgumentNullException.ThrowIfNull(step);
         return step.TimeoutMinutes ?? (step.Type is { } type ? Find(type)?.DefaultTimeoutMinutes : null);
     }
+
+    /// <summary>
+    /// The time limit each git or <c>gh</c> command of <paramref name="step"/> is given: the step's own
+    /// (<see cref="TimeLimitOf"/>) where it has one; <see langword="null"/> where it has none, and each command then takes
+    /// its own (<see cref="Git.PublisherCommands"/>, <see cref="Ci.GhProcess.Limit"/>).
+    /// </summary>
+    /// <param name="step">A step of a workflow.</param>
+    public static TimeSpan? CommandLimitOf(WorkflowStep step)
+        => TimeLimitOf(step) is { } minutes ? TimeSpan.FromMinutes(minutes) : null;
 
     /// <summary>The type <paramref name="type"/> names, or <see langword="null"/> where none does.</summary>
     /// <param name="type">The value of a step's <c>type</c> key.</param>

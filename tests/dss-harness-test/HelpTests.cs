@@ -14,7 +14,9 @@ using DssHarness.Core.Legs;
 using DssHarness.Core.Mutations;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
@@ -167,7 +169,10 @@ public sealed partial class HelpTests
                 + "whether the tool installs and updates Claude Code with npm; auth, claude-code's alone, how it signs in (login, apiKey, "
                 + "oauthToken, authToken, login where nothing is said), and token the variable a token is held under; configDir and "
                 + "executable, claude-code's alone, the variables that hold a specific login's Claude Code directory and the program it "
-                + "starts (CLAUDE_CONFIG_DIR, CLAUDE_EXECUTABLE where none is named); a client holds no "
+                + "starts (CLAUDE_CONFIG_DIR, CLAUDE_EXECUTABLE where none is named); maxRetries, maxRetryWaitSeconds and requestExtras, "
+                + "the API clients' (claude-api, glm), their tries, longest wait and the fields merged into each request; cacheTtl and "
+                + "betas, claude-api's alone, how long its requests are cached and the betas sent beside the tool's own; "
+                + "preserveThinking, glm's alone, whether Z.AI keeps the model's reasoning across turns; a client holds no "
                 + "model, size or price - contextTokens and maxOutputTokens are a model's ('help agent-clients')",
             config,
             StringComparison.Ordinal);
@@ -175,9 +180,12 @@ public sealed partial class HelpTests
         Assert.Contains(
             "agentPolicy what an agent may do beyond the rules built into the tool: restrictions, each one rule string, that only ever refuse - "
                 + "Run(git push *), Write(.github/**), Read(secrets/**), Web(pastebin.com) - applied to every agent of every run under this "
-                + "configuration, beside a workflow's definitions and steps; webDomains, the allow list of every web request (left out, any "
+                + "configuration, beside a workflow's definitions and steps; webDomains, the allow list of every page an agent reads and every "
+                + "result a search gives - a search source's own requests are held to the Web(...) rules alone (left out, any "
                 + "address); worktreeRules (true where nothing is said) and protectedPaths (true too), the switches of the rule sets "
-                + "'help agent-clients' names ('help agent-clients')",
+                + "'help agent-clients' names; keepEnvironment, the secret-shaped names a command an agent runs keeps; "
+                + "commandTimeoutSeconds (120) and maxCommandTimeoutSeconds (3600), how long one runs where its call names no time, "
+                + "and the most it may name, 2147483 at most ('help agent-clients')",
             config,
             StringComparison.Ordinal);
 
@@ -282,36 +290,80 @@ public sealed partial class HelpTests
         Assert.Contains("psexec, PowerShell's -Verb RunAs, wsl -u root, systemd-run, schtasks with /ru, wherever", prose, StringComparison.Ordinal);
         Assert.Contains("writes outside an agent's writable roots, every read and write of a", prose, StringComparison.Ordinal);
         Assert.Contains("this tool's own verbs and run-side-task, run by any program or from a response file, whatever any switch says: an agent", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            $"nor leave its step's limits - nor do the gh commands that hand its work to another agent or install what the next launch loads ({string.Join(", ", AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too.",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains("every read and write of a credential slot or a Claude Code directory of the run's and every search over one", prose, StringComparison.Ordinal);
         Assert.Contains("a refusal's places compare in any case on every system, a Windows short name read as its long one", prose, StringComparison.Ordinal);
         Assert.Contains(
             @"On Windows a device prefix (\\?\, \\.\, \??\) is dropped from a path and from what the runtime makes of it - one naming no "
                 + "drive and no share, a volume by its id or a pipe, is a place it cannot tell, and denied - and a shell's "
                 + @"spelling of a drive (/c/x, /cygdrive/c/x, /mnt/c/x) is read both as the drive (C:\x) and as the directory it names on the "
-                + "current drive, an action allowed only where both are; a cd is followed the same way, from every place the command reached "
-                + "before it, up to 64 places, past which the command is denied.",
+                + "current drive, an action allowed only where both are; a cd is followed the same way - pushd, PowerShell's Set-Location and "
+                + "Push-Location, and the directory env -C or pwsh -WorkingDirectory starts its command in, each word it may go to - from every "
+                + "place the command reached before it, up to 64 places, past which the command is denied.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("No agent starts while this tool itself runs elevated: its step is recorded never started, saying so, before any client is taken.", prose, StringComparison.Ordinal);
         Assert.Contains("a comment and a here-document's lines never read as commands", prose, StringComparison.Ordinal);
         Assert.Contains(
-            "wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, busybox, Invoke-Expression) stripped, what "
-                + "xargs reads an expansion among the words it runs; and it goes into sh -c and every other shell's",
+            "wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, busybox) stripped, what "
+                + "xargs reads an expansion among the words it runs; and it goes into sh -c and every other shell's (fish's -C scripts too, "
+                + "its options read as fish reads them)",
             prose,
             StringComparison.Ordinal);
-        Assert.Contains("a variable whose value is a program git or another tool runs (GIT_SSH_COMMAND, GIT_PAGER,", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "a variable - so set, or declared by export and its kind, cmd's set, fish's set, csh's setenv, setx or PowerShell's env: items - "
+                + "whose value is a program git or another tool runs (GIT_SSH_COMMAND, GIT_PAGER,",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains("refused as such ('git $VERB' under Run(git push *))", prose, StringComparison.Ordinal);
         Assert.Contains("a file:// address is read as the path it names", prose, StringComparison.Ordinal);
         Assert.Contains(
             "What it cannot read whole it denies, said here, not guessed at: a script nested past four levels, a shell that reads its "
-                + "script from its input (curl ... | sh) or from a process substitution, and a program named by a variable, a substitution, "
-                + "a pattern or a brace, a brace that spells more than 64 words, and an option of git's or gh's own",
+                + "script from its input (curl ... | sh), from a process substitution or from another open descriptor (/dev/fd/3, <&3), "
+                + "an env -S string holding a backslash, whose escapes are env's own, an alias it gives, a script another program fills in "
+                + "(find -exec sh -c 'echo {}'), PowerShell's code no word spells (a static method, an instance method "
+                + "but a string's, a collection's or a date's, a function's or an alias's text, a class, using, its stop-parsing --%, "
+                + "a script Invoke-Expression is handed by no one string, and a command line Start-Process, WMI, the task scheduler or Add-Type is handed), and a program named by a variable, a substitution, "
+                + "a pattern or a brace, a brace that spells more than 64 words, and an option of git's, gh's, fish's or Windows PowerShell's own",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("the inside of a script file a command runs", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "a command find -exec, fd -x, rg --pre or --hostname-bin, parallel or an option of a git subcommand runs - a pack "
+                + "program a transport runs (--upload-pack, --receive-pack, --exec, clone's -u), difftool's --extcmd, rebase's "
+                + "--exec, grep's --open-files-in-pager, bisect run, submodule foreach, filter-branch's filters and send-email's "
+                + "commands - read as its own",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains("The worktree rules (agentPolicy.worktreeRules, true where nothing is said)", prose, StringComparison.Ordinal);
-        Assert.Contains($"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) are refused", prose, StringComparison.Ordinal);
-        Assert.Contains("gh pr merge, gh workflow run and gh run rerun, the gh api endpoints and GraphQL mutations that merge or start CI, and gh alias set, for never merges,", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            $"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) are refused, and so are the gh commands that run them or write gh's own configuration ({string.Join(", ", AgentPolicy.GhStateCommands)}; "
+                + "a command gh names by an alias of its own, pr co for pr checkout among them, read as the command it names, and "
+                + "where gh reads its configuration from - GH_CONFIG_DIR, XDG_CONFIG_HOME, AppData, HOME - set for a command the gh config set it is) - reading git",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"and so are the gh commands that merge or start CI ({string.Join(", ", AgentPolicy.NeverCiCommands)}), the gh api endpoints and GraphQL "
+                + $"mutations that reach the same, gh alias set, gh extension exec, and a gh command named by none of gh's own ({string.Join(", ", AgentPolicy.GhCommands)}) - an alias, gh's own co among them, or an extension, a name for any command, where gh runs - its command's own program, or past one that runs the words after it "
+                + $"({string.Join(", ", CommandAnalysis.CommandRunners)}), never among another program's words, its data - and, where the request writes, the gh api endpoints "
+                + "that push, open a pull request or make a release - for never merges,",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a -c or --config-env of any key but the ones that only shape what git prints, --exec-path, clone's own -c or "
+                + "--config and clone's and init's --template, GIT_CONFIG, the names through which git finds its programs and "
+                + "hooks, and the homes it reads its global configuration from - "
+                + "HOME, XDG_CONFIG_HOME, and the HOMEDRIVE, HOMEPATH and USERPROFILE git on Windows takes one from) is the git config it is",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Invoke-Expression's one string - by whatever name it is called, the call operator's string or a module's name before it among "
+                + "them - read as a script of its own",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains(
             "git's own files - a .git, file or directory, at any depth beneath a root and in any case, a nested repository's and a "
                 + "submodule's too (Write(**/.git/**)) - are not written by a tool, whatever protectedPaths says",
@@ -353,22 +405,81 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "the tools of the agent's capabilities and no other - read: Read, Grep, Glob; write: Write, Edit, NotebookEdit; run: Bash; web: "
-                + "none of Claude Code's - and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode.",
+                + "none of Claude Code's, but mcp__dssharness__web_fetch and mcp__dssharness__web_search of the engine's tool server beside them "
+                + "- and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode.",
             prose,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "A step with the web takes the harness's own web_fetch - and web_search, where it has a source to search - from the engine's tool "
+                + "server: the one MCP server, of type sdk, named dssharness, that the launch's --mcp-config names beside --strict-mcp-config (the "
+                + "step's claude-mcp.json), served in the engine's own process over the launch's control channel - its initialize, its tool list "
+                + "and its calls, our own code with no MCP library; each call of it is asked of the engine first, by its ask rule, and run by the "
+                + "tool runtime below as on the API clients, each address decided and recorded. A launch whose init does not show that server "
+                + "connected with its tools taken, or that connects another, never started;",
+            prose,
+            StringComparison.Ordinal);
+
+        Assert.Contains("a call of it the engine was not asked about and did not allow runs nothing and fails the step.", prose, StringComparison.Ordinal);
         Assert.Contains("The run's reporter is given Read, Grep, Glob alone.", prose, StringComparison.Ordinal);
-        Assert.Contains("Every call is asked of the engine before it runs and answered from the policy above", prose, StringComparison.Ordinal);
-        Assert.Contains("is sent back, each problem by its path, up to 2 times", prose, StringComparison.Ordinal);
+        Assert.Contains("Every call its own deny rules do not refuse first is asked of the engine before it runs and answered from the policy above", prose, StringComparison.Ordinal);
+        Assert.Contains("An answer sent back (below) and a message the engine gives an agent at work are written to the same launch, and a result written before the launch took it is not the answer;", prose, StringComparison.Ordinal);
+        Assert.DoesNotContain("each problem by its path, up to", prose, StringComparison.Ordinal);
         Assert.Contains("a handoff asked interrupts the turn and asks the agent for its handoff in the same launch", prose, StringComparison.Ordinal);
         Assert.Contains("Every message is held to the model asked for, a date after its id the same model", prose, StringComparison.Ordinal);
-        Assert.Contains("(CLAUDECODE and every CLAUDE_CODE_ name but CLAUDE_CODE_GIT_BASH_PATH, which says only where a program is)", prose, StringComparison.Ordinal);
+        Assert.Contains("(CLAUDECODE, CLAUDE_PID and CLAUDE_EFFORT, and every name beginning CLAUDE_CODE_, CLAUDE_AGENT_SDK_, CLAUDE_PREVIEW_ or MCP_ but CLAUDE_CODE_GIT_BASH_PATH, which says only where a program is, and a name agentPolicy.keepEnvironment gives back), none of what every child of an agent loses (the tool runtime below)", prose, StringComparison.Ordinal);
         Assert.Contains(
             "the names the engine sets: DISABLE_COMPACT=1, DISABLE_AUTOUPDATER=1, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, CLAUDE_CODE_RETRY_WATCHDOG=0, "
-                + "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1.",
+                + "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1, and BASH_DEFAULT_TIMEOUT_MS and BASH_MAX_TIMEOUT_MS as agentPolicy.commandTimeoutSeconds "
+                + "and maxCommandTimeoutSeconds say, in milliseconds, so a shell command it runs is held to the times of every command an agent runs.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("A key Claude Code reports invalid is passed over, and while the step has done no work the next key is given a new launch", prose, StringComparison.Ordinal);
-        Assert.Contains("the claude-code client below asks it of every call, the API clients are what it builds next", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "the claude-code client below asks it of every call, the tool runtime below decides by it each call it runs - the web's of the claude-code client, served through "
+                + "the engine's tool server, and every call of the API clients, the claude-api and glm clients below - and no command of this build runs an agent yet.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("a second layer, for the engine is asked about every other call and answers from this policy in its own process, and a call those rules refuse first is counted and recorded as Claude Code's own denial.", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "a call it refuses by itself that the engine refuses too - by its own deny rules, a file tool's told by its result alone - is a denial of Claude Code's, counted and recorded once;",
+            prose,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The agent-clients topic says what the tool runtime is: each tool from the one table, the paths' refusals, the
+    /// commands' environment and times, the fetch's bounds and records, the calls of a turn and the answer's cut - each
+    /// name and bound read from the type that holds it.
+    /// </summary>
+    [Fact]
+    public void AgentClientsTopic_SaysWhatTheToolRuntimeIs()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains(
+            "each under the capability that gives it: view_file (read); find_files (read); search_files (read); create_file (write, alone "
+                + "in its turn); replace_in_file (write, alone in its turn); insert_in_file (write, alone in its turn); create_directory (write, "
+                + "alone in its turn); delete_file (write, alone in its turn); delete_directory (write, alone in its turn); move_path (write, "
+                + "alone in its turn); run_command (run, alone in its turn); web_fetch (web); web_search (web).",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("built for the API clients to give their agents in place of a client's own - the claude-api and glm clients below - and serving the claude-code client the web's through the engine's tool server,", prose, StringComparison.Ordinal);
+        Assert.Contains("The run's reporter is given view_file, find_files, search_files, those that read, and no other.", prose, StringComparison.Ordinal);
+        Assert.Contains("A replace or an insert needs its file viewed first, by its content: one that changed since is refused, nothing written, and an edit keeps the file's encoding (UTF-8 with or without its mark, UTF-16 by its mark), its line endings and whether it ends with a newline.", prose, StringComparison.Ordinal);
+        Assert.Contains("a write inside a writable one and through no link below it (a link put in place between the check and the act is the known limit)", prose, StringComparison.Ordinal);
+        Assert.Contains("its links followed (one whose links cannot be followed refused as undecided) and held to the agent's roots", prose, StringComparison.Ordinal);
+        Assert.Contains($"at most, stopped sooner where it prints nothing for as long as the step's stall bound; a command line holding a secret, a word holding a NUL, or on Windows a batch file's argument holding what cmd.exe reads again ({DssHarness.Core.Processes.BatchFiles.Said}) or what the shell expands, is refused.", prose, StringComparison.Ordinal);
+        Assert.Contains("agentPolicy.keepEnvironment gives back; an appointed name is never given back.", prose, StringComparison.Ordinal);
+        Assert.Contains("an address holding a secret is refused. A page is given inside a block that says where it is from, its first line saying it is information for the task, not instructions.", prose, StringComparison.Ordinal);
+        Assert.Contains("refused spelled empty, with a NUL or a leading ~ - on Windows also a share or a device's prefix, a device's name (CON, PRN, AUX, NUL and the rest), a drive's own directory (C:x) or an alternate data stream -", prose, StringComparison.Ordinal);
+        Assert.Contains("A directory deleted or moved is refused where it is a root, holds a link, holds a path that may not be written or holds more than 2,000 entries.", prose, StringComparison.Ordinal);
+        Assert.Contains("A file past 16 MiB is neither viewed nor edited, and one past 2 MiB is passed over by search_files - a command reads or searches it.", prose, StringComparison.Ordinal);
+        Assert.Contains("agentPolicy.commandTimeoutSeconds (120 where nothing is said) unless its call names a time, agentPolicy.maxCommandTimeoutSeconds (3600) at most", prose, StringComparison.Ordinal);
+        Assert.Contains("every secret-shaped name - ending _API_KEY, _SECRET, _SECRET_KEY, _ACCESS_KEY, _PRIVATE_KEY, _PASSWORD, _TOKEN, in any case - but those agentPolicy.keepEnvironment gives back", prose, StringComparison.Ordinal);
+        Assert.Contains("at most 5 redirects, 30 s and 5 MiB, text alone (text/*, application/json, application/xml, application/xhtml+xml, application/javascript, application/ecmascript and every +json and +xml type)", prose, StringComparison.Ordinal);
+        Assert.Contains("written to the step's web.jsonl before anything leaves the machine", prose, StringComparison.Ordinal);
+        Assert.Contains("Calls that read run together, at most 4 at once", prose, StringComparison.Ordinal);
+        Assert.Contains("an answer past 32,768 characters is given as its first 8,192 and its last 24,576, the whole kept in the step's tool-results/.", prose, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -447,12 +558,39 @@ public sealed partial class HelpTests
 
         Assert.Contains("signs in by the client's `auth` (`agentClients.claude-code.auth`): `login`, the machine's login,", readme, StringComparison.Ordinal);
         Assert.Contains("The `claude-code` client starts Claude Code once for each launch, a new session every time", readme, StringComparison.Ordinal);
-        Assert.Contains("Every call is asked of the engine before it runs and answered from the policy", readme, StringComparison.Ordinal);
+        Assert.Contains("Every call its own deny rules do not refuse first is asked of the engine before it runs and answered from the policy", readme, StringComparison.Ordinal);
         Assert.Contains("but no hook of theirs runs: every launch's settings say `disableAllHooks`", readme, StringComparison.Ordinal);
         Assert.Contains("The client holds every launch to the protocol itself", readme, StringComparison.Ordinal);
         Assert.Contains("Its `configDir` and `executable` name the variables of the slot that hold a specific login's Claude Code directory", readme, StringComparison.Ordinal);
         Assert.Contains("A program the slot names (`CLAUDE_EXECUTABLE`, or the name the client's `executable` gives)", readme, StringComparison.Ordinal);
-        Assert.Contains("and for each setting a client reads from the slot `present` or `absent` (none is needed)", readme, StringComparison.Ordinal);
+        Assert.Contains("and for each setting a client reads from the slot and each web-search source's key `present` or `absent` (none is needed)", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "A step with the web takes the harness's own `web_fetch` - and `web_search`, where it has a source to search - from the engine's tool server: "
+                + "the one MCP server, of type `sdk`, named `dssharness`, that the launch's `--mcp-config` names beside `--strict-mcp-config` (the step's `claude-mcp.json`)",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains("a call of it the engine did not allow runs nothing and fails the step.", readme, StringComparison.Ordinal);
+        Assert.Contains("a call those rules refuse before the engine is asked is counted and recorded as Claude Code's own denial.", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "the tool runtime below decides by it each call it runs - the web's of the `claude-code` client, served through the engine's tool "
+                + "server, and every call of the API clients, the `claude-api` and `glm` clients below - and no command of this build runs an agent yet.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "`web`: none of Claude Code's, but `mcp__dssharness__web_fetch` and `mcp__dssharness__web_search` of the engine's tool server beside them)",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "served in the engine's own process over the launch's control channel; each call of it is asked of the engine first, by its ask "
+                + "rule, and run by the tool runtime below as on the API clients. A launch whose init does not show that server connected with its "
+                + "tools taken, or that connects another, never started,",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains("which the same query again is answered from; written by every client whose step searches", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "a call it refuses by itself that the engine refuses too - by its own deny rules, a file tool's told by its result alone - is a denial of Claude Code's, counted and recorded once;",
+            readme,
+            StringComparison.Ordinal);
 
         var architecture = Prose.Document("docs", "architecture.md");
 
@@ -470,6 +608,376 @@ public sealed partial class HelpTests
             nameof(DssHarness.Core.Agents.AgentAuth),
             nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeUserSettings),
             nameof(DssHarness.Core.Agents.AgentAccountLimit),
+            $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLaunch)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLaunch.McpConfiguration)}",
+            $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools.ServerTools)}",
+            $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools.ServedName)}",
+            $"{nameof(DssHarness.Core.Agents.AgentToolRunner)}.{nameof(DssHarness.Core.Agents.AgentToolRunner.Harness)}",
+            $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine.CallResult)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine.CallResult.RefusedByRule)}",
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The loop the API clients share is said alike by help agent-clients and the README - each bound and number read from
+    /// the type that holds it - and the architecture names its owners by the types that are them.
+    /// </summary>
+    [Fact]
+    public void TheLoopTheApiClientsShare_IsSaidByTheHelpAndTheDocuments()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+        var readme = Prose.Document("README.md");
+        var interrupted = DssHarness.Core.Agents.Runtime.AgentToolRuntime.Interrupted(DssHarness.Core.Agents.Loop.ToolLoop.Pausing);
+        var nudges = DssHarness.Core.Agents.Loop.ToolLoop.MostNudges;
+        var pauses = DssHarness.Core.Agents.Loop.ToolLoop.MostPausesInARow;
+        var tries = DssHarness.Core.Agents.Loop.ToolLoopTerms.DefaultMaxRetries;
+        var (first, longest) = (DssHarness.Core.Agents.Loop.ToolLoop.FirstWait.TotalSeconds, DssHarness.Core.Agents.Loop.ToolLoop.LongestDoubledWait.TotalSeconds);
+        var wait = DssHarness.Core.Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds;
+
+        Assert.Contains(
+            $"A turn cut off at its length that called no tool, its request holding it to no schema, is stored and nudged on, {nudges} times at most; one cut off while it called a tool - its calls never run - before it wrote anything, or while its request held it to a schema, which the answer to a nudge would be held to whole, is thrown away and asked again with twice the room, up to the most; past either the step is Truncated. "
+                + $"A turn the provider paused is sent again with nothing added, {pauses} in a row failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request is asked again up to {tries} times after a wait that doubles from {first} s to {longest} s, "
+                + $"or the one the provider names; a rate limit past them, or naming a wait past {wait} s, is the account at its limit (RateLimited) - the model's on the key it was sent with, or the key's whole where its balance is spent, each named - a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
+                + "a model the provider does not serve the key never starts the step before its first answer and fails it after; a key the provider refuses is passed over for the run's next, the same request sent again with it. "
+                + $"A handoff asked abandons the request under way and cuts the calls running, each answered '{interrupted}', then asks the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("A turn is one answer of the agent's - a request the provider paused, or one thrown away and asked again, goes on as the same turn - counted against the step's maxTurns but a handoff turn;", prose, StringComparison.Ordinal);
+        Assert.Contains("A turn is one answer of the agent's - a request the provider paused, or one thrown away and asked again, goes on as the same turn - counted against the step's `maxTurns` but a handoff turn;", readme, StringComparison.Ordinal);
+        Assert.Contains("no request but the handoff turn's is sent once the step's maxBudgetUsd is spent, and a step held to a budget on a model missing a price of what its provider's requests are billed by - input, cache reads and output, and the cache writes of a provider whose requests write one, in the model's large-prompt set too where it has one - is never started, naming the key to fill.", prose, StringComparison.Ordinal);
+        Assert.Contains("and a step held to a budget on a model missing a price of what its provider's requests are billed by - input, cache reads and output, and the cache writes of a provider whose requests write one, in the model's large-prompt set too where it has one - is never started, naming the key to fill.", readme, StringComparison.Ordinal);
+        Assert.Contains("The loop the claude-api and glm clients share (ToolLoop) runs a step of either over the provider each gives it - the Claude API's and Z.AI's below.", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            $"a step that goes on in it sends what it began with; where a provider begins sending it shortened to keep it within its model's context, the point is kept beside it ({DssHarness.Core.Agents.StoredConversation.ShortenedFileName}) and given with every later request, a notice saying so once.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"a step that goes on in it sends what it began with; where a provider begins sending it shortened to keep it within its model's context, the point is kept beside it (`{DssHarness.Core.Agents.StoredConversation.ShortenedFileName}`) and given with every later request, a notice saying so once.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains($"under the agent's {DssHarness.Core.Orchestration.OrchestratorLayout.SessionsDirectoryName}/<id>/, each message as it was sent and received", prose, StringComparison.Ordinal);
+
+        Assert.Contains(
+            $"A turn cut off at its length that called no tool, its request holding it to no schema, is stored and nudged on, {nudges} times at most; one cut off while it called a tool - its calls never run - before it wrote anything, or while its request held it to a schema, which the answer to a nudge would be held to whole, is thrown away and asked again with twice the room, up to the most; past either the step is `Truncated`. "
+                + $"A turn the provider paused is sent again with nothing added, {pauses} in a row failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request is asked again up to {tries} times after a wait that doubles from {first} s to {longest} s, "
+                + $"or the one the provider names; a rate limit past them, or naming a wait past {wait} s, is the account at its limit (`RateLimited`) - the model's on the key it was sent with, or the key's whole where its balance is spent, each named - a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
+                + "a model the provider does not serve the key never starts the step before its first answer and fails it after; a key the provider refuses is passed over for the run's next, the same request sent again with it. "
+                + $"A handoff asked abandons the request under way and cuts the calls running, each answered `{interrupted}`, then asks the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn;",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains($"under the agent's `{DssHarness.Core.Orchestration.OrchestratorLayout.SessionsDirectoryName}/<id>/`, each message", readme, StringComparison.Ordinal);
+
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains($"`Agents\\Loop\\{nameof(DssHarness.Core.Agents.Loop.ToolLoop)}`", architecture, StringComparison.Ordinal);
+
+        foreach (var owner in new[]
+        {
+            nameof(DssHarness.Core.Agents.Loop.IChatProvider),
+            nameof(DssHarness.Core.Agents.Loop.ChatFailure),
+            $"{nameof(DssHarness.Core.Agents.Loop.IChatProvider)}.{nameof(DssHarness.Core.Agents.Loop.IChatProvider.Uses)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ChatPart)}.{nameof(DssHarness.Core.Agents.Loop.ChatPart.Heard)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ChatPart)}.{nameof(DssHarness.Core.Agents.Loop.ChatPart.Used)}",
+            nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms),
+            nameof(DssHarness.Core.Agents.Runtime.AgentTurnCut),
+            nameof(DssHarness.Core.Agents.AgentModelIds),
+            nameof(DssHarness.Core.Agents.AgentEndings),
+            nameof(DssHarness.Core.Agents.AgentUsageTally),
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolHost)}.Unserved",
+            nameof(DssHarness.Core.Agents.StoredConversation),
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime.RunTurnAsync)}",
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime.Interrupted)}",
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime.NotRun)}",
+            $"{nameof(DssHarness.Core.Agents.AgentPrices)}.{nameof(DssHarness.Core.Agents.AgentPrices.BudgetRefusal)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ToolLoop)}.{nameof(DssHarness.Core.Agents.Loop.ToolLoop.Backoff)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ToolLoop)}.{nameof(DssHarness.Core.Agents.Loop.ToolLoop.FirstMaxTokens)}",
+            $"{nameof(DssHarness.Core.Agents.AgentMessages)}.{nameof(DssHarness.Core.Agents.AgentMessages.TryTake)}",
+            $"{nameof(DssHarness.Core.Agents.AgentRun)}.{nameof(DssHarness.Core.Agents.AgentRun.SessionsDirectory)}",
+            $"{nameof(DssHarness.Core.Orchestration.OrchestratorLayout)}.{nameof(DssHarness.Core.Orchestration.OrchestratorLayout.SessionDirectoryIn)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ChatPart)}.{nameof(DssHarness.Core.Agents.Loop.ChatPart.Shortened)}",
+            $"{nameof(DssHarness.Core.Agents.StoredConversation)}.{nameof(DssHarness.Core.Agents.StoredConversation.Shorten)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ChatRequest)}.{nameof(DssHarness.Core.Agents.Loop.ChatRequest.ShortenedBefore)}",
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The claude-api client is said by the help and the README alike - its version, its betas, its cache, its keys, what
+    /// each failure is - each name and number read from the type that holds it, and the architecture names its owners.
+    /// </summary>
+    [Fact]
+    public void TheClaudeApiClient_IsSaidByTheHelpAndTheDocuments()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+        var (tries, wait) = (DssHarness.Core.Agents.Loop.ToolLoopTerms.DefaultMaxRetries, DssHarness.Core.Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds);
+        const string Version = DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.Version;
+        const string Context = DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.ContextManagementBeta;
+        const string Credit = DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.FallbackCreditBeta;
+        const string Clear = DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.ClearToolUses;
+
+        Assert.Contains(
+            $"each request is posted to its provider's api with /{DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.MessagesPath} after it, signed with a key of the provider's (x-api-key), under anthropic-version: {Version}, and its answer streamed.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains($"old tool uses cleared by the server as the context fills ({Clear}, under the {Context} beta), each clearing said in a notice;", prose, StringComparison.Ordinal);
+        Assert.Contains("the system prompt and the conversation cached for agentClients.claude-api.cacheTtl (5m or 1h, 5m where nothing is said), so a budget needs the model's price of that cache's writes too: priceCacheWrite, or priceCacheWrite1h for an hour.", prose, StringComparison.Ordinal);
+        Assert.Contains($"A step with a fallback that can go on here sends the {Credit} beta, and a request the model declines ends the step Refused, with its category and the credit the API gave for it on the result; no request carries fallbacks or a server-side-fallback-* beta,", prose, StringComparison.Ordinal);
+        Assert.Contains("Two keys are claude-api's alone: betas, sent beside the tool's own, each one word and never the API's fallback's, and cacheTtl; three are both API clients':", prose, StringComparison.Ordinal);
+        Assert.Contains($"refused where it sets what the tool sends itself or, here, fallbacks or a sampling parameter (temperature, top_p, top_k), which anthropic-version {Version} refuses on every model, and free to add a tool choice or thinking.budget_tokens where the step's model takes one; and maxRetries and maxRetryWaitSeconds, the loop's tries and longest wait ({tries} and {wait} where nothing is said).", prose, StringComparison.Ordinal);
+        Assert.Contains("a 403, a 404, or a 400 answering a conversation's first request - a model the key's organization is not given, such as one that needs a data retention the organization does not keep - is a model the provider does not serve the key, naming it;", prose, StringComparison.Ordinal);
+        Assert.Contains($"A spend limit reached - the organization's monthly cap, a 429 whose error names {DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}, or one the organization or a workspace set, a 400 that says so - is the key's limit, the step RateLimited at once until the date the API names; a 401 is a key refused, passed over for the next; a 402 the key's balance spent, the step RateLimited at once; a 429 the model's limit on that key, waited out within those tries and the step RateLimited past them;", prose, StringComparison.Ordinal);
+        Assert.Contains("every request's usage - one that ended without its turn, failed, silent or left, by what it said it used so far - is counted at the model's prices,", prose, StringComparison.Ordinal);
+
+        Assert.Contains(
+            $"signed with a key of the provider's (`x-api-key`), under `anthropic-version: {Version}`, and its answer streamed.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains($"old tool uses cleared by the server as the context fills (`{Clear}`, under the `{Context}` beta), each clearing said in a notice;", readme, StringComparison.Ordinal);
+        Assert.Contains("`agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said), so a budget needs the model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour.", readme, StringComparison.Ordinal);
+        Assert.Contains($"A step with a fallback that can go on here sends the `{Credit}` beta, and a request the model declines ends the step `Refused`,", readme, StringComparison.Ordinal);
+        Assert.Contains("Two keys are `claude-api`'s alone: `betas`, sent beside the tool's own, each one word and never the API's fallback's, and `cacheTtl`; three are both API clients':", readme, StringComparison.Ordinal);
+        Assert.Contains($"refused where it sets what the tool sends itself or, here, `fallbacks` or a sampling parameter (`temperature`, `top_p`, `top_k`), which `anthropic-version {Version}` refuses on every model, and free to add a tool choice or `thinking.budget_tokens` where the step's model takes one; and `maxRetries` and `maxRetryWaitSeconds`, the loop's tries and longest wait ({tries} and {wait} where nothing is said).", readme, StringComparison.Ordinal);
+        Assert.Contains("a 403, a 404, or a 400 answering a conversation's first request - a model the key's organization is not given, such as one that needs a data retention the organization does not keep - is a model the provider does not serve the key, naming it;", readme, StringComparison.Ordinal);
+        Assert.Contains($"A spend limit reached - the organization's monthly cap, a 429 whose error names `{DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}`, or one the organization or a workspace set, a 400 that says so - is the key's limit, the step `RateLimited` at once until the date the API names; a 401 is a key refused, passed over for the next; a 402 the key's balance spent, the step `RateLimited` at once; a 429 the model's limit on that key, waited out within those tries and the step `RateLimited` past them;", readme, StringComparison.Ordinal);
+        Assert.Contains("every request's usage - one that ended without its turn, failed, silent or left, by what it said it used so far - is counted at the model's prices,", readme, StringComparison.Ordinal);
+
+        Assert.Contains($"`Agents\\ClaudeApi\\{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiClient)}`", architecture, StringComparison.Ordinal);
+        Assert.Contains($"`Agents\\Http\\{nameof(DssHarness.Core.Agents.Http.ApiConnection)}`", architecture, StringComparison.Ordinal);
+
+        foreach (var owner in new[]
+        {
+            nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiProvider),
+            nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest),
+            nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures),
+            nameof(DssHarness.Core.Agents.AgentEntries),
+            nameof(DssHarness.Core.Agents.Http.ApiEvent),
+            $"{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest)}.{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.Owned)}",
+            nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.ExtrasProblems),
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The envelope every client asks for where a step names an output is said alike by help agent-clients and the README -
+    /// each member, file, bound and number from its owner - and the architecture names its owners by the types that are them.
+    /// </summary>
+    [Fact]
+    public void TheEnvelope_IsSaidByTheHelpAndTheDocuments()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+        var repairs = new DssHarness.Core.Agents.AgentOutput("o", "{}").MaxRepairs;
+        static string Members(System.Text.Json.Nodes.JsonObject shape) => string.Join(", ", shape["properties"]!.AsObject().Select(member => member.Key));
+        var (assumption, question) = (Members(DssHarness.Core.Agents.AgentEnvelope.Assumption()), Members(DssHarness.Core.Agents.AgentEnvelope.Question()));
+
+        Assert.Contains("Where a step names an output, every client asks the agent for one envelope - notes, output, assumptions, and questions where the step may ask and has rounds left - and the harness's own validator holds the answer to it, whatever a client was sent.", prose, StringComparison.Ordinal);
+        Assert.Contains("Where a step names an output, every client asks the agent for one envelope - `notes`, `output`, `assumptions`, and `questions` where the step may ask and has rounds left - and the harness's own validator holds the answer to it, whatever a client was sent.", readme, StringComparison.Ordinal);
+        Assert.Contains($"The notes are not empty, and are kept, masked, as the step's {DssHarness.Core.Orchestration.OrchestratorLayout.StepNotesFileName} beside its result;", prose, StringComparison.Ordinal);
+        Assert.Contains($"the output is read against the step's whole schema, each problem named by its path under $.output, a text an enum or a const holds in another case read as the schema spells it; each assumption is {{{assumption}}}; each question is {{{question}}}, with at least {DssHarness.Core.Agents.AgentEnvelope.FewestOptions} options, no two alike, recommending one of them word for word; no text of either is empty.", prose, StringComparison.Ordinal);
+        Assert.Contains($"the output is read against the step's whole schema, each problem named by its path under `$.output`, a text an `enum` or a `const` holds in another case read as the schema spells it; each assumption is `{{{assumption}}}`; each question is `{{{question}}}`, with at least {DssHarness.Core.Agents.AgentEnvelope.FewestOptions} options, no two alike, recommending one of them word for word; no text of either is empty.", readme, StringComparison.Ordinal);
+        Assert.Contains("The output is null only in a handoff, whose notes are the handoff, or where the answer asks, and the step then ends Asked with its questions; an answer with both is sent back, and so is one that asks where the step may not or has asked as often as it may, told to write what it would have asked under assumptions.", prose, StringComparison.Ordinal);
+        Assert.Contains("The output is null only in a handoff, whose notes are the handoff, or where the answer asks, and the step then ends `Asked` with its questions; an answer with both is sent back, and so is one that asks where the step may not or has asked as often as it may, told to write what it would have asked under assumptions.", readme, StringComparison.Ordinal);
+        Assert.Contains("The claude-code client holds the answer to the envelope by --json-schema;", prose, StringComparison.Ordinal);
+        Assert.Contains("The `claude-code` client holds the answer to the envelope by `--json-schema`;", readme, StringComparison.Ordinal);
+        Assert.Contains("an answer sent back (below) and a message the engine gives an agent at work are written to the same launch;", readme, StringComparison.Ordinal);
+        Assert.Contains($"the claude-api client sends it as output_config.format on every request, the handoff's too, each array's minItems above {DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.MostLeastItems} and every maxItems moved into the array's description in words, for structured outputs take no other - and where the API refuses it as more than it compiles, the run's later requests carry no format, and a message of the conversation says it in words, the system prompt untouched;", prose, StringComparison.Ordinal);
+        Assert.Contains($"the `claude-api` client sends it as `output_config.format` on every request, the handoff's too, each array's `minItems` above {DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.MostLeastItems} and every `maxItems` moved into the array's description in words, for structured outputs take no other - and where the API refuses it as more than it compiles, the run's later requests carry no format, and a message of the conversation says it in words, the system prompt untouched;", readme, StringComparison.Ordinal);
+        Assert.Contains("and asks an answer that read as no JSON again in JSON alone - no tool offered, response_format a JSON object.", prose, StringComparison.Ordinal);
+        Assert.Contains("and asks an answer that read as no JSON again in JSON alone - no tool offered, `response_format` a JSON object.", readme, StringComparison.Ordinal);
+        Assert.Contains($"An answer that does not read is sent back in the same conversation, {repairs} times at most, and the step is then InvalidOutput.", prose, StringComparison.Ordinal);
+        Assert.Contains($"An answer that does not read is sent back in the same conversation, {repairs} times at most, and the step is then `InvalidOutput`.", readme, StringComparison.Ordinal);
+
+        foreach (var owner in new[]
+        {
+            nameof(DssHarness.Core.Agents.AgentEnvelope),
+            nameof(DssHarness.Core.Agents.AgentAssumption),
+            nameof(DssHarness.Core.Agents.AgentQuestion),
+            nameof(DssHarness.Core.Agents.StructuredOutputGate),
+            $"{nameof(DssHarness.Core.Agents.AgentOutput)}.{nameof(DssHarness.Core.Agents.AgentOutput.AskRounds)}",
+            $"{nameof(DssHarness.Core.Schemas.JsonSchemaSubset)}.{nameof(DssHarness.Core.Schemas.JsonSchemaSubset.Respelled)}",
+            $"{nameof(DssHarness.Core.Schemas.JsonSchemaSubset)}.{nameof(DssHarness.Core.Schemas.JsonSchemaSubset.SchemasIn)}",
+            $"{nameof(DssHarness.Core.Orchestration.OrchestratorLayout)}.{nameof(DssHarness.Core.Orchestration.OrchestratorLayout.StepNotesFileName)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ChatRequest)}.{nameof(DssHarness.Core.Agents.Loop.ChatRequest.Schema)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ChatRequest)}.{nameof(DssHarness.Core.Agents.Loop.ChatRequest.JsonAlone)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.IChatProvider)}.{nameof(DssHarness.Core.Agents.Loop.IChatProvider.SendsSchema)}",
+            $"{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest)}.{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.Sent)}",
+            $"{nameof(DssHarness.Core.Agents.AgentEnvelope)}.{nameof(DssHarness.Core.Agents.AgentEnvelope.InWords)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ChatFailureKind)}.{nameof(DssHarness.Core.Agents.Loop.ChatFailureKind.SchemaRefused)}",
+            $"{nameof(DssHarness.Core.Agents.AgentMessageKind)}.{nameof(DssHarness.Core.Agents.AgentMessageKind.EnvelopeInWords)}",
+            $"{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures)}.{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.RefusesTheFormat)}",
+            $"{nameof(DssHarness.Core.Agents.AgentAssumption)}.{nameof(DssHarness.Core.Agents.AgentAssumption.Problems)}",
+            $"{nameof(DssHarness.Core.Agents.AgentQuestion)}.{nameof(DssHarness.Core.Agents.AgentQuestion.Problems)}",
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The glm client is said by the help and the README alike - its request, its efforts, the reasoning it keeps, where
+    /// it sends a conversation shortened, its keys and each of Z.AI's codes from the one table of them - each name and
+    /// number read from the type that holds it, and the architecture names its owners.
+    /// </summary>
+    [Fact]
+    public void TheGlmClient_IsSaidByTheHelpAndTheDocuments()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+        var (shorten, full, whole) = (Percent(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.ShortenAt), Percent(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.FullAt), DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.WholeTurns);
+        const string Path = DssHarness.Core.Agents.ZaiApi.ZaiApiRequest.CompletionsPath;
+
+        Assert.Contains($"each request is posted to its provider's api with /{Path} after it, signed with a key of the provider's (Authorization: Bearer), and its answer streamed.", prose, StringComparison.Ordinal);
+        Assert.Contains($"each request is posted to its provider's `api` with `/{Path}` after it, signed with a key of the provider's (`Authorization: Bearer`), and its answer streamed.", readme, StringComparison.Ordinal);
+        Assert.Contains("the model's thinking on, the step's effort as reasoning_effort (low, medium, high, xhigh, max); and max_tokens - no sampling parameter or tool choice of the tool's own, which requestExtras may add, and no tool of Z.AI's, for the web is the harness's own.", prose, StringComparison.Ordinal);
+        Assert.Contains("the model's thinking on, the step's effort as `reasoning_effort` (`low`, `medium`, `high`, `xhigh`, `max`); and `max_tokens` - no sampling parameter or tool choice of the tool's own, which `requestExtras` may add, and no tool of Z.AI's, for the web is the harness's own.", readme, StringComparison.Ordinal);
+        Assert.Contains("unless agentClients.glm.preserveThinking is true (false where nothing is said), which keeps it (thinking.clear_thinking: false).", prose, StringComparison.Ordinal);
+        Assert.Contains("unless `agentClients.glm.preserveThinking` is true (false where nothing is said), which keeps it (`thinking.clear_thinking: false`).", readme, StringComparison.Ordinal);
+        Assert.Contains($"passes {shorten} of the model's contextTokens, the answers to the calls of every turn but the last {whole} that called tools go out in a short form that says so, from that request on - the calls and the reasoning as they were, and what is stored whole; past {full} after that, the context is exhausted (ContextExhausted).", prose, StringComparison.Ordinal);
+        Assert.Contains($"passes {shorten} of the model's `contextTokens`, the answers to the calls of every turn but the last {whole} that called tools go out in a short form that says so, from that request on - the calls and the reasoning as they were, and what is stored whole; past {full} after that, the context is exhausted (`ContextExhausted`).", readme, StringComparison.Ordinal);
+        Assert.Contains("and one is glm's alone: preserveThinking.", prose, StringComparison.Ordinal);
+        Assert.Contains("and one is `glm`'s alone: `preserveThinking`.", readme, StringComparison.Ordinal);
+
+        // Every row of the codes' table is said, in its order, with what the loop takes it for.
+        foreach (var row in DssHarness.Core.Agents.ZaiApi.ZaiApiFailures.Codes)
+        {
+            Assert.Contains($"{row.What} ({string.Join(", ", row.Codes)})", prose, StringComparison.Ordinal);
+            Assert.Contains($"{row.What} ({string.Join(", ", row.Codes)})", readme, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("a usage limit that names when it resets (1308, 1310, 1316, 1317, 1318, 1319, 1320, 1321) is the key's limit, the step RateLimited at once;", prose, StringComparison.Ordinal);
+        Assert.Contains("a model unknown, an API the key may not call or a plan without the model (1211, 1220, 1311) is a model the provider does not serve the key;", prose, StringComparison.Ordinal);
+        Assert.Contains("a plan that does not cover the call or has ended (1309, 1313, 1314, 1315) fails the step. A code that list does not hold is read by the status:", prose, StringComparison.Ordinal);
+        Assert.Contains("read by the status: a 401 is a key refused, passed over for the next; a 429 is the model's limit on that key, waited out within the tries and the step RateLimited past them; a 413 is the context exhausted (ContextExhausted); a 403 or a 404 is a model the provider does not serve the key; a request timed out, a conflict or a server's error is asked again, and any other fails the step.", prose, StringComparison.Ordinal);
+        Assert.Contains("read by the status: a 401 is a key refused, passed over for the next; a 429 is the model's limit on that key, waited out within the tries and the step `RateLimited` past them; a 413 is the context exhausted (`ContextExhausted`); a 403 or a 404 is a model the provider does not serve the key; a request timed out, a conflict or a server's error is asked again, and any other fails the step.", readme, StringComparison.Ordinal);
+        Assert.Contains("a failure Z.AI names is said in its own words.", prose, StringComparison.Ordinal);
+        Assert.Contains("a failure Z.AI names is said in its own words.", readme, StringComparison.Ordinal);
+
+        // Every row of the statuses' table is said, with what the loop takes it for.
+        foreach (var row in DssHarness.Core.Agents.ZaiApi.ZaiApiFailures.Statuses)
+        {
+            Assert.Contains($"{string.Join(" or ", row.Statuses.Select(status => $"a {status}"))} is ", prose, StringComparison.Ordinal);
+        }
+        Assert.Contains("a plan that does not cover the call or has ended (1309, 1313, 1314, 1315) fails the step. A code that list does not hold is read by the status:", readme, StringComparison.Ordinal);
+        Assert.Contains($"(1211, 1220, 1311) is a model the provider does not serve the key;", readme, StringComparison.Ordinal);
+
+        Assert.Contains($"`Agents\\ZaiApi\\{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiClient)}`", architecture, StringComparison.Ordinal);
+
+        foreach (var owner in new[]
+        {
+            nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider),
+            nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest),
+            nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures),
+            nameof(DssHarness.Core.Agents.Http.ApiBody),
+            nameof(DssHarness.Core.Agents.Http.ApiAnswers),
+            nameof(DssHarness.Core.Agents.Http.OwnedMember),
+            $"{nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms)}.{nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms.Of)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms)}.{nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms.Unstartable)}",
+            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest.Owned)}",
+            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest.ShortAnswer)}",
+            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.ShortenAt)}",
+            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.FullAt)}",
+            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures.Codes)}",
+            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures.Statuses)}",
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
+
+        static string Percent(double share) => $"{(int)Math.Round(share * 100)}%";
+    }
+
+    /// <summary>
+    /// The README says the tool runtime as the help does - each tool, each bound and default read from the type that holds
+    /// it - and the architecture names its owners by the types that are them.
+    /// </summary>
+    [Fact]
+    public void TheDocumentsSayTheToolRuntime()
+    {
+        var readme = Prose.Document("README.md");
+        var defaults = DssHarness.Core.Agents.AgentCommandSettings.Default;
+        var suffixes = DssHarness.Core.Agents.AgentChildEnvironment.SecretSuffixes.Select(suffix => $"`{suffix}`").ToList();
+
+        Assert.All(DssHarness.Core.Agents.Runtime.AgentTools.All(defaults), tool => Assert.Contains($"`{tool.Name}`", readme, StringComparison.Ordinal));
+        var schemes = DssHarness.Core.Agents.Policy.AgentPolicy.SlashedSchemes.Select(scheme => $"`{scheme}`").ToList();
+        Assert.Contains(
+            $"An address whose slashes after its scheme readers read apart - any scheme but its two slashes and a host after them (`http:/\\host`, `gopher:/host`, `http:///host`), or no slash after an {schemes[0]}, {string.Join(", ", schemes.Skip(1).SkipLast(1))} or {schemes[^1]} scheme (`https:host`) - or whose host is spelled beyond ASCII (its `xn--` form is read as written), names no host the policy can decide, and is denied.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains("the run's reporter is given those that read and no other.", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "built for the API clients to give their agents in place of a client's own - the `claude-api` and `glm` clients below - and serving the `claude-code` client the web's through the engine's tool server:",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains($"its links followed (one whose links cannot be followed refused as {DssHarness.Core.Agents.Policy.AgentPolicy.UndecidedRule}) and held to the agent's roots", readme, StringComparison.Ordinal);
+        Assert.Contains($"holds more than {DssHarness.Core.Agents.Runtime.AgentTools.MostDeletedEntries:N0} entries.", readme, StringComparison.Ordinal);
+        Assert.Contains($"A file past {DiskSpace.Size(DssHarness.Core.Agents.Runtime.AgentTools.MostViewedBytes)} is neither viewed nor edited, and one past {DiskSpace.Size(DssHarness.Core.Agents.Runtime.AgentFiles.MostSearchedBytes)} is passed over by search_files - a command reads or searches it.", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            $"`agentPolicy.commandTimeoutSeconds` ({defaults.TimeoutSeconds}) unless its call names a time, `agentPolicy.maxCommandTimeoutSeconds` "
+                + $"({defaults.MaxTimeoutSeconds}) at most, stopped sooner where it prints nothing for as long as the step's stall bound; a command "
+                + $"line holding a secret, a word holding a NUL, or on Windows a batch file's argument holding what `cmd.exe` reads again (`{DssHarness.Core.Processes.BatchFiles.Said.Replace(", a", "`, a", StringComparison.Ordinal)}) or what the shell expands, is refused.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains($"(ending {string.Join(", ", suffixes[..^1])} or {suffixes[^1]}) but those `agentPolicy.keepEnvironment` gives back.", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            $"at most {DssHarness.Core.Web.HarnessFetch.MostRedirects} redirects, {DssHarness.Core.Web.HarnessFetch.Bound.TotalSeconds} s and "
+                + $"{DiskSpace.Size(DssHarness.Core.Web.HarnessFetch.MostBytes)}, text alone (`text/*`, "
+                + $"{string.Join(", ", DssHarness.Core.Web.HarnessFetch.TextTypes.Select(type => $"`{type}`"))} and every `+json` and `+xml` type)",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains($"written to the step's `{DssHarness.Core.Agents.AgentCallRecords.WebFileName}` before anything leaves the machine", readme, StringComparison.Ordinal);
+        Assert.Contains($"Calls that read run together, at most {DssHarness.Core.Agents.Runtime.AgentToolRuntime.MostTogether} at once", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            $"an answer past {DssHarness.Core.Agents.AgentCallRecords.ResultCap:N0} characters is given as its first {DssHarness.Core.Agents.AgentCallRecords.ResultHead:N0} "
+                + $"and its last {DssHarness.Core.Agents.AgentCallRecords.ResultCap - DssHarness.Core.Agents.AgentCallRecords.ResultHead:N0}, the whole kept in the step's "
+                + $"`{DssHarness.Core.Agents.AgentCallRecords.ToolResultsDirectoryName}/`.",
+            readme,
+            StringComparison.Ordinal);
+
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains($"`Agents\\Runtime\\{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime)}`", architecture, StringComparison.Ordinal);
+        Assert.Contains($"`Agents\\Runtime\\{nameof(DssHarness.Core.Agents.Runtime.AgentToolServer)}`", architecture, StringComparison.Ordinal);
+        Assert.Contains($"`Web\\{nameof(DssHarness.Core.Web.HarnessFetch)}`", architecture, StringComparison.Ordinal);
+        Assert.Contains(
+            $"recorded by the one `{nameof(DssHarness.Core.Agents.AgentCallRecords)}` (`{DssHarness.Core.Agents.AgentCallRecords.DenialsFileName}`, "
+                + $"`{DssHarness.Core.Agents.AgentCallRecords.WebFileName}`, `{DssHarness.Core.Agents.AgentCallRecords.ToolResultsDirectoryName}/`)",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains($"A turn runs its reads together, at most {DssHarness.Core.Agents.Runtime.AgentToolRuntime.MostTogether} at once", architecture, StringComparison.Ordinal);
+        Assert.Contains($"the names `{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings)}.{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings.Launched)}` sets", architecture, StringComparison.Ordinal);
+
+        foreach (var owner in new[]
+        {
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolHost)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolHost.Serve)}",
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolHost)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolHost.Open)}",
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolServer)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolServer.Read)}",
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolServer)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolServer.CallAsync)}",
+            $"{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime.ServeAsync)}",
+            nameof(DssHarness.Core.Agents.Runtime.AgentTools),
+            nameof(DssHarness.Core.Schemas.JsonSchemaSubset),
+            nameof(DssHarness.Core.Agents.Runtime.ConfinedPaths),
+            nameof(DssHarness.Core.Agents.Runtime.AgentFiles),
+            nameof(EditedText),
+            nameof(EncodedText),
+            $"{nameof(DssHarness.Core.Codebase.CodeFileText)}.{nameof(DssHarness.Core.Codebase.CodeFileText.Spans)}",
+            nameof(PhaseRunner),
+            nameof(DssHarness.Core.Agents.AgentCommandSettings),
+            nameof(DssHarness.Core.Web.WebAddresses),
+            nameof(DssHarness.Core.Web.WebPageText),
+            nameof(DssHarness.Core.Agents.AgentCallRecords),
+            $"{nameof(DssHarness.Core.Agents.AgentChildEnvironment)}.{nameof(DssHarness.Core.Agents.AgentChildEnvironment.Own)}",
+            nameof(DssHarness.Core.Web.SystemWebNames),
+            $"{nameof(DssHarness.Core.Web.HarnessFetch)}.{nameof(DssHarness.Core.Web.HarnessFetch.Connecting)}",
+            $"{nameof(IFilePermissions)}.{nameof(IFilePermissions.CopyMode)}",
         })
         {
             Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
@@ -2390,6 +2898,54 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The legs topic says a developer environment may hold its legs to one MSVC toolset with the optional toolsVersion -
+    /// what it names, that it is optional and only its form is read, with no toolset built in - and how the survey and
+    /// the setup hold a leg to it; the config topic names it beside developerEnvironments.
+    /// </summary>
+    [Fact]
+    public void LegsTopic_SaysADeveloperEnvironmentMayHoldItsLegsToOneToolset()
+    {
+        var legs = Prose.Words(HelpText.Of("legs").StandardOutput);
+
+        Assert.Contains(
+            @"toolsVersion, optional, holds an environment's legs to one MSVC toolset, named as VC\Tools\MSVC names its toolsets: "
+            + "by two numbers, for the newest of that line, or by all three, for that one - for a compiler such as a CUDA "
+            + "toolkit's nvcc, which refuses an MSVC newer than it knows. Left out, vcvarsall.bat sets up the instance's default "
+            + "toolset. Only its form is checked when the file is read: no toolset is built into this tool. The survey then "
+            + "takes the newest instance holding a toolset it names, with the newest of those, and a host with none turns the "
+            + "leg away as a tool missing, naming what each instance holds. vcvarsall.bat is run with -vcvars_ver= and that "
+            + "toolset, and one that sets up another fails the leg; the leg's line names the MSVC set up. Two environments of "
+            + "one kind keep two toolsets apart on one machine:",
+            legs,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"developerEnvironments\": { \"visualStudio\": { \"kind\": \"visualStudio\" }, \"cuda\": { \"kind\": \"visualStudio\", "
+            + "\"toolsVersion\": \"14.44\" } }",
+            legs,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "developerEnvironments what a toolchain's legs start in, set up on the host that runs them: visualStudio runs that "
+            + "instance's vcvarsall.bat, for the MSVC toolset an optional toolsVersion names ('help legs')",
+            Prose.Words(HelpText.Of("config").StandardOutput),
+            StringComparison.Ordinal);
+
+        // The README and the architecture say the same: optional, its form alone checked, and held to on both sides.
+        Assert.Contains(
+            "Left out, `vcvarsall.bat` sets up the instance's default toolset. Only its form is checked when `config.json` is "
+            + "read: no toolset is built into the tool.",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "**A developer environment may hold its legs to one MSVC toolset**, with the optional `toolsVersion`",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "and fails the leg where `VCToolsVersion` comes out as anything else.",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The legs topic says what a wake window retries and what it never does, with the delay the code uses.
     /// </summary>
     [Fact]
@@ -2484,13 +3040,13 @@ public sealed partial class HelpTests
         Assert.Contains("with {leg} standing for the leg's", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("A green leg past 80% of its", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains(
-            "Every call of gh, whoever makes it, is started so that it cannot ask anything (GH_PROMPT_DISABLED, GCM_INTERACTIVE, "
-                + $"GIT_TERMINAL_PROMPT) and is ended where it has not answered within {GhProcess.Limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, "
-                + $"or with the workflow step that made it, where that step passes its timeoutMinutes first: a read that did not answer in time is not done ({HarnessExit.Incomplete}), "
-                + "and asked again it may answer.",
+            "Every call of gh, whoever makes it, and every git command is started so that it cannot ask anything (GH_PROMPT_DISABLED, "
+                + "GCM_INTERACTIVE, GIT_TERMINAL_PROMPT), and a call of gh is ended where it has not answered within the timeoutMinutes of "
+                + $"the workflow step that made it, where the step says one, else within {ReportText.Limit(GhProcess.Limit)}: "
+                + $"a call that did not answer in time is not done ({HarnessExit.Incomplete}), and asked again it may answer.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
-        Assert.Equal(GhProcess.NeverAsks.Keys.Order(StringComparer.Ordinal), ["GCM_INTERACTIVE", "GH_PROMPT_DISABLED", "GIT_TERMINAL_PROMPT"]);
+        Assert.Equal(UnattendedCommands.Variables.Keys.Order(StringComparer.Ordinal), ["GCM_INTERACTIVE", "GH_PROMPT_DISABLED", "GIT_TERMINAL_PROMPT"]);
 
         // The example reads what it says it reads: a leg and its budget from a whole job name, and the leg from one
         // the forge cut short, which it would otherwise not read at all.
@@ -2846,7 +3402,7 @@ public sealed partial class HelpTests
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
+            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase, commit, push, pull-request ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
             orchestrators,
             StringComparison.Ordinal);
     }
@@ -3241,10 +3797,11 @@ public sealed partial class HelpTests
         Assert.Null(typeof(RebaseAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
         Assert.NotNull(typeof(DeleteAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
 
-        // Whether a fold is committed is the main tree's to say, whoever committed it.
+        // Whether a fold is committed is the run's commits' and the main tree's to say, whoever committed it.
         Assert.Contains(
-            "a run stopped with a fold in its ledger whose change no commit took yet - a path it changed that the main tree still "
-                + "holds otherwise than its HEAD, whoever commits it - is unfinished, as one with an agent open is. A deletion run again "
+            "a run stopped with a fold in its ledger whose change no commit took yet - a path it changed that no commit step of the "
+                + "run took, that git does not ignore and that the main tree still holds otherwise than its HEAD, whoever commits it - "
+                + "is unfinished, as one with an agent open is. A deletion run again "
                 + "once its agent is deleted - its ending cut off before it was recorded - is done, with what its directory kept of its apply.",
             workflows,
             StringComparison.Ordinal);
@@ -3255,9 +3812,112 @@ public sealed partial class HelpTests
                 + $"directory ({OrchestratorLayout.StepFoldFileName}).",
             workflows,
             StringComparison.Ordinal);
+        // What a commit step does, held to the codes it ends with, the file it writes and the types that are checks.
+        Assert.Contains(
+            "commit commits the folds upstream of it in the flow - every visit and iteration of them, never another work item's - "
+                + "and no other work: each path one of them changed that no commit of the run took yet, holding what the newest fold "
+                + "that names it left there, so a registry two items' folds wrote is taken whole. A fold upstream whose intent "
+                + "nobody settled - a crash cut it off, and its step has not run again - leaves what it wrote untold, and fails the "
+                + $"step ({HarnessExit.Refused}) naming it, nothing staged. With none owed it is done, "
+                + "committed false, and runs no git at all.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Otherwise it works on the branch the run started on alone: the main checkout on another - a person checked one out "
+                + $"while the run was paused - or its HEAD detached fails it ({HarnessExit.Refused}) naming both, nothing staged, as it "
+                + "does push and pull-request. The index must be empty and each path hold what its fold left there, and where either "
+                + $"does not - a path edited and not committed, or its fold's change undone - the step fails ({HarnessExit.Refused}) naming each, nothing staged",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "told by the blob git would store against HEAD's and never by git's status, which does not look at a path marked "
+                + "assume-unchanged or skip-worktree - was committed by hand, and is marked taken by HEAD; one left to stage that the "
+                + $"index marks so fails it ({HarnessExit.Refused}) naming each with its mark, since git add would not stage it.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The commit is held to the set, by what it changes against its parent: one that took more - a hook staged another "
+                + $"file - or left a path of the set out fails the step ({HarnessExit.CommandFailed}) naming each, and is left as it is "
+                + "for a person to keep or undo, the set staged in the ledger beside it. A set an attempt before left staged is "
+                + "settled first: committed where HEAD moved and holds each of its paths as the set staged it, else unstaged and "
+                + "staged again whole. It answers committed, sha, paths and ignored - each path its folds changed that git ignores, "
+                + "folded and never committed, which what the run's end leaves for a person names too",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"else the step's own message - none, or a blank one, fails it ({HarnessExit.ConfigInvalid}) - and the rest is written to the ledger",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"the message written to the step's directory ({OrchestratorLayout.StepCommitMessageFileName}), with -s where commit.signOff - "
+                + $"and marked committed with each fold path it took; git refusing, a hook among the reasons, unstages it and fails the step ({HarnessExit.CommandFailed}).",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"The checks are the steps of type {string.Join(", ", WorkflowStepTypes.All.Where(type => type.Checks).Select(type => type.Type))} and a reason step marked independent, whatever each is named.",
+            workflows,
+            StringComparison.Ordinal);
         Assert.Contains($"{OrchestratorLayout.FoldsFileName} the ledger of the run's folds:", orchestrators, StringComparison.Ordinal);
+        Assert.Contains("and each commit a commit step staged of them and what became of it", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepCommitMessageFileName} a commit step: the message it commits with", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepPullRequestBodyFileName} a pull-request step that opened one: the body it opened it with", orchestrators, StringComparison.Ordinal);
+
+        // What push and pull-request do, held to the codes they end with, the file one writes and the closed list of
+        // commands the publishing steps run, each with its own limit.
+        Assert.Contains(
+            "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (no step "
+                + "records an assumption yet) and the issues it found there before - say 'none' alike where they name nothing.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Equal(WorkflowExpressions.RunTexts.Order(StringComparer.Ordinal), ["assumptions", "leftover", "notRun", "preExisting", "ran", "red"]);
+        Assert.Contains(
+            "push pushes the commit the main checkout's HEAD names to the branch of its name on a remote - the step's remote, else "
+                + "the one the run's branch goes to (the push step's, else the one the branch tracks, else origin, else the only one) - "
+                + "as a fast-forward and never forced, and answers pushed",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Every push step that names a remote names the same one, the remote the run's branch goes to: a definition whose push "
+                + "steps name two is refused. HEAD detached, the main checkout on another branch than the run started on, a branch "
+                + "with no commit yet, no remote it can name and one the repository does not have each refuse it",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"each refuse it ({HarnessExit.Refused}), nothing pushed; the remote refusing the push - its branch moved on since - fails it "
+                + $"({HarnessExit.CommandFailed}) in git's words. A checkpoint push runs only where the workflow says pushCheckpoints, and is skipped otherwise.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"written to the step's directory ({OrchestratorLayout.StepPullRequestBodyFileName}) for gh to read. One already open from "
+                + "that branch to that base is answered as it is, created false, and never edited: a step run again opens no second. "
+                + "One open from a fork's branch of the same name is none of the run's, as gh says of each (isCrossRepository).",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"A title blank once filled fails it ({HarnessExit.ConfigInvalid}), as a body that cannot be read or reads nothing does; "
+                + "HEAD detached, the main checkout on another branch than the run started on, no remote, no base it can tell and a "
+                + $"base that is its own branch each refuse it ({HarnessExit.Refused}), nothing opened; gh not there fails it "
+                + $"{HarnessExit.ToolMissing}, and gh saying no {HarnessExit.CommandFailed}.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "each one it opened or found is left for a person, by its address, in what the run's end says (leftForAPerson), "
+                + "as is each path its folds changed that git ignores, never committed.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The commands commit, push and pull-request run are a closed list - git --literal-pathspecs add -- (15 minutes); "
+                + "git --literal-pathspecs rm --cached --ignore-unmatch -q -- (15 minutes); git --literal-pathspecs reset -q -- (15 minutes); "
+                + "git commit --cleanup=whitespace -F (15 minutes); git push --porcelain (5 minutes); "
+                + "gh pr list --state open --json number,url,isCrossRepository (5 minutes); gh pr create (5 minutes) - each given the step's "
+                + $"timeoutMinutes where it says one, else its own; one past it is not done ({HarnessExit.Incomplete}), and the step runs "
+                + "again, a commit's set left staged settled by its next attempt.",
+            workflows,
+            StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepFoldFileName} a fold, delete-agent, refresh or rebase step:", orchestrators, StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/ a refresh or a rebase of others:", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepGraphFileName} a reason step that has a codebase graph: one line for each call of the graph tool", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepWorkingSetFileName} a reason step that has a codebase graph: the nodes it edited, served, read and found", orchestrators, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -3280,7 +3940,7 @@ public sealed partial class HelpTests
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
                 + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, graphify-codebase, validate-plan, "
                 + "create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, "
-                + "refresh, rebase, each below; a step of "
+                + "refresh, rebase, commit, push, pull-request, each below; a step of "
                 + "any other type fails, saying no runner serves its type.",
             prose,
             StringComparison.Ordinal);
@@ -3376,11 +4036,11 @@ public sealed partial class HelpTests
                 + "A check that finds red is "
                 + "red: under failOn red - every check's default but ci-read's, never - it fails with its check's code "
                 + $"(an anchor finding {AnchorExit.Findings}, a red CI leg {CiExit.LegRed} and no matrix run {CiExit.MatrixDidNotRun}, a red check "
-                + $"{CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given "
-                + $"{GhProcess.Limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - the step's timeoutMinutes bounds its "
-                + "attempt, and a read in flight ends with it - and one past it ends the step incomplete "
-                + $"({HarnessExit.Incomplete}), which runs it again; a ci-wait reads again at its next poll where a read failed or passed it, "
-                + $"saying each, and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running or its wait is spent.",
+                + $"{CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given the step's "
+                + $"timeoutMinutes where it says one, else {ReportText.Limit(GhProcess.Limit)}, and never outlasts the step's attempt, which "
+                + $"ends a read in flight with it: a ci-read's read past its limit ends the step incomplete ({HarnessExit.Incomplete}), which "
+                + "runs it again; a ci-wait reads again at its next poll where a read failed or passed its limit, saying each, and ends with "
+                + $"that read's code only where {CiChecksService.FailedReadsInARow} did running or its wait is spent.",
             prose,
             StringComparison.Ordinal);
 
@@ -3470,11 +4130,11 @@ public sealed partial class HelpTests
             Prose.Words(layout.StandardOutput),
             StringComparison.Ordinal);
 
-        // workflows is refused given empty though leaving it out means none, which neither of the other two kinds of list
-        // the topic names is: said apart from both, with the spelling the refusal itself asks for.
+        // workflows and keepEnvironment are refused given empty though leaving each out means none, which neither of the
+        // other two kinds of list the topic names is: said apart from both, with the spelling the refusal itself asks for.
         Assert.Contains(
-            "workflows, which declares no workflow left out, is refused given empty too, so none is spelt one way: leave the key "
-                + "out for no workflow.",
+            "workflows, which declares no workflow left out, and agentPolicy.keepEnvironment, which gives no name back left out, "
+                + "are refused given empty too, so none is spelt one way: leave the key out for none.",
             Prose.Words(config.StandardOutput),
             StringComparison.Ordinal);
     }
@@ -3482,6 +4142,30 @@ public sealed partial class HelpTests
     /// <summary>A step key shown as it is written, then what it does: '  outputs: [&lt;path&gt;, ...]  what it writes'.</summary>
     [GeneratedRegex(@"^  (?<key>[A-Za-z]+): \S.*?  +(?<meaning>\S.*)$")]
     private static partial Regex SpeltKeyLine();
+
+    /// <summary>The codebase-graph topic says the context pack's seeds, walk, weights and cap, and find's ties, as the code holds them.</summary>
+    [Fact]
+    public void TheCodebaseGraphTopic_SaysTheContextPacksSeedsWalkAndCap_FromTheCode()
+    {
+        var prose = Prose.Words(HelpText.Of("codebase-graph").StandardOutput);
+
+        Assert.Contains(Prose.Words($"the {DssHarness.Core.Codebase.CodebaseContextPack.WordSeeds} nodes its words match best"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"The walk goes {DssHarness.Core.Codebase.CodebaseContextPack.NamedHops} hops from a node named or worked with and {DssHarness.Core.Codebase.CodebaseContextPack.OtherHops} from the others"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"({string.Join(", ", DssHarness.Core.Codebase.CodeConfidences.All.Select(confidence => $"{confidence} {DssHarness.Core.Codebase.CodebaseContextPack.Confidence(confidence).ToString(System.Globalization.CultureInfo.InvariantCulture)}"))})"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"more edges of than the view's 99th percentile, and at least {DssHarness.Core.Codebase.CodebaseGraphQueries.CrowdFloor}, which its line says"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("none at all where the cap cannot hold its first and last lines"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("A step that starts from its changes is packed first from the declarations its tree changed against its base - an agent's where its worktree was made or last moved to, the main checkout's the run's start - each with where its lines differ"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("then their tests and those of their direct callers, then their callers to two hops, overrides, implementations and dispatches, and derived types; where nothing changed, its first line says so and the task's seeds stand in."), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"within its cap ({DssHarness.Core.Codebase.CodebaseContextPack.DefaultTokens} estimated tokens - bytes over {DssHarness.Core.Codebase.EstimatedTokens.BytesPerToken} - by default)"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("a tie broken by how near the step's own work each is - its context pack or a working set it was given, a file it writes, a file its agent changed, a path or a name its prompt holds - then by id"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"each node it {string.Join(", ", DssHarness.Core.Codebase.WorkingSetUses.All.SkipLast(1))} or {DssHarness.Core.Codebase.WorkingSetUses.All[^1]}, with its handle, file, lines and hash at the step's end, at most {DssHarness.Core.Codebase.CodebaseWorkingSet.MostNodes},"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("A reason step's pack is to be given the working sets of the step it goes on with (resume), of each step it depends on directly, a group by each reason step in it, and of its own earlier visits of the same work item, newest first"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("edited first, then by how often each was touched; a node the view no longer holds kept by its id, marked gone"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("by where its new text stands once there - every place, with replace_all - else by the lines it names"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("a deletion writes no lines, and is counted with the writes placed nowhere, as a whole file's write is where the file does not read as the step left it."), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("A file that differs and could not be compared - over its size cap, generated, or not read, there or at the base - is named on its first line with why, and nothing in it is said unchanged."), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("body and edit reach a file only inside the tree, each link resolved, never through a link out of it."), prose, StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// The codebase-graph topic, under each of its names, says every implementation this build holds - its version, what it
@@ -3529,5 +4213,78 @@ public sealed partial class HelpTests
         {
             Assert.Contains($"{OrchestratorLayout.GraphDirectoryName}/{file}", layout, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// The web-search topic, under each of its names, says every key of agentWebSearch and of every source, every kind this
+    /// build holds with its version, help and keys, and every built-in source with its tags, pace, description and terms -
+    /// each read from the code - and where a run's searches are kept; the config topic names the section.
+    /// </summary>
+    [Fact]
+    public void TheWebSearchTopic_SaysEveryKindKeyAndBuiltInSource_FromTheCode()
+    {
+        var topic = HelpText.Of("web-search").StandardOutput;
+        var prose = Prose.Words(topic);
+
+        Assert.Equal(topic, HelpText.Of("search").StandardOutput);
+        Assert.Equal(topic, HelpText.Of("web_search").StandardOutput);
+        Assert.Equal(topic, HelpText.Of("agentwebsearch").StandardOutput);
+        Assert.Contains(HelpTopics.Described, described => described.Name == "web-search");
+        Assert.Contains("The claude-code client gives them a step through the engine's tool server ('help agent-clients'), and the API clients are to offer them.", prose, StringComparison.Ordinal);
+
+        // The files the web's tools leave are written by each client whose step has them ('help orchestrators').
+        var files = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+        Assert.Contains("each search source's part ('help web-search'); written by every client whose step has the web", files, StringComparison.Ordinal);
+        Assert.Contains("which the same query again is answered from; written by every client whose step searches", files, StringComparison.Ordinal);
+
+        foreach (var key in DssHarness.Core.Web.Search.WebSearchSources.Keys.Concat(DssHarness.Core.Web.Search.WebSearchSource.OwnKeys))
+        {
+            Assert.Contains($"  {key.Name}", topic, StringComparison.Ordinal);
+        }
+
+        foreach (var kind in DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild.All)
+        {
+            Assert.Contains(Prose.Words($"Kind {kind.Kind} (version {kind.Version.ToString(CultureInfo.InvariantCulture)}): {kind.Help}"), prose, StringComparison.Ordinal);
+            Assert.All(kind.Keys, key => Assert.Contains($"  {key.Name}", topic, StringComparison.Ordinal));
+        }
+
+        var builtIn = DssHarness.Core.Web.Search.WebSearchSources.Of(new HarnessConfig(), DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild);
+
+        foreach (var source in builtIn.All)
+        {
+            Assert.Contains(Prose.Words($"{source.Name} ({source.Kind}; tags {string.Join(", ", source.Tags)}; perMinute {source.PerMinute.ToString(CultureInfo.InvariantCulture)}"), prose, StringComparison.Ordinal);
+            Assert.Contains(Prose.Words($"{source.Description}. Its owner's terms: {source.Terms}."), prose, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(Prose.Words($"A step that says no search asks the defaults: {string.Join(", ", builtIn.Defaults)}."), prose, StringComparison.Ordinal);
+        Assert.Contains($"{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}", prose, StringComparison.Ordinal);
+        Assert.Contains($"{DssHarness.Core.Web.Search.WebSearchPace.FilePrefix}-<machine>.json", prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"the snippet at most {DssHarness.Core.Web.Search.WebSearchResult.MostSnippet.ToString(CultureInfo.InvariantCulture)} characters"), prose, StringComparison.Ordinal);
+
+        // A source's key goes where its configuration writes alone, never to a host a document it read names.
+        Assert.Contains(Prose.Words("a variable of the .env slot, sent to the scheme, host and port the source's own address writes alone, or the machine's gh login"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("a host a document the source read names, an OpenSearch description's template or what discover found, is never sent one"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("A source whose address takes its host from what discover finds is refused a key of the .env slot where the configuration is read."), prose, StringComparison.Ordinal);
+
+        // The README names every built-in source, as the template holds them.
+        var named = DssHarness.Core.Web.Search.WebSearchSources.BuiltIn.Sources!.Keys.ToList();
+
+        Assert.Contains(
+            Prose.Words($"The built-in sources ({string.Join(", ", named.SkipLast(1).Select(name => $"`{name}`"))}, `{named[^1]}`)"),
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+
+        // The orchestrators topic lists where a run's and a step's web records are.
+        var layout = HelpText.Of("orchestrators").StandardOutput;
+
+        foreach (var file in new[] { $"<step>/{DssHarness.Core.Agents.AgentCallRecords.WebFileName}", $"<step>/{DssHarness.Core.Agents.AgentCallRecords.DenialsFileName}", $"<step>/{DssHarness.Core.Agents.AgentCallRecords.ToolResultsDirectoryName}/<id>.txt", $"{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}", $"../{OrchestratorLayout.WebIndexesDirectoryName}/<source>/" })
+        {
+            Assert.Contains($"  {file}", layout, StringComparison.Ordinal);
+        }
+
+        var config = Prose.Words(HelpText.Of("config").StandardOutput);
+
+        Assert.Contains("agentWebSearch the harness's own web search", config, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"maxPerStep ({DssHarness.Core.Web.Search.WebSearchSources.DefaultMaxPerStep}) and resultsPerSource ({DssHarness.Core.Web.Search.WebSearchSources.DefaultResultsPerSource}) ('help web-search')"), config, StringComparison.Ordinal);
     }
 }

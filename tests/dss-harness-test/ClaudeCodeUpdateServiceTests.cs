@@ -887,7 +887,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         kit.Temp.WriteFile(".harness-config/workflows/.env/named.env", $"MY_CLAUDE={named}\nCLAUDE_EXECUTABLE={ignored}\n");
         kit.Runner.Versions[$"{named} --version"] = Says("2.1.296");
         var client = new AgentClientConfig { Executable = "MY_CLAUDE" };
-        AppointedKey[] appointed = [new("MY_CLAUDE", "agentClients.claude-code", "the program's path", Secret: false)];
+        AppointedKey[] appointed = [new("MY_CLAUDE", "agentClients.claude-code", "the program's path", "executable", Secret: false)];
 
         var answer = await kit.Service().ReadyAsync(kit.Layout, appointed, client, steps: string.Empty, Token);
 
@@ -920,11 +920,15 @@ public sealed class ClaudeCodeUpdateServiceTests
             answer.Message);
     }
 
-    [Fact]
-    public async Task AProgramTheSlotNames_AsABatchFile_IsRefused()
+    /// <summary>A program the slot names that is a batch file or a PowerShell script - by its extension in any case, the dots a name ends in dropped - is refused.</summary>
+    [Theory]
+    [InlineData("claude.cmd")]
+    [InlineData("claude.BAT.")]
+    [InlineData("claude.ps1")]
+    public async Task AProgramTheSlotNames_AsABatchFile_IsRefused(string name)
     {
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
-        var named = kit.Temp.WriteFile("claude.cmd", "@echo off\n");
+        var named = kit.Temp.WriteFile(name, "@echo off\n");
         kit.Temp.WriteFile(".harness-config/workflows/.env/named.env", $"CLAUDE_EXECUTABLE={named}\n");
 
         var answer = await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, steps: string.Empty, Token);
@@ -935,7 +939,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     }
 
     private static AppointedKey Named()
-        => new(ClaudeCodeUpdateService.ExecutableVariable, "agentClients.claude-code", "the program's path", Secret: false);
+        => new(ClaudeCodeUpdateService.ExecutableVariable, "agentClients.claude-code", "the program's path", "executable", Secret: false);
 
     /// <summary>What Claude Code prints for its --version: the version, then its name.</summary>
     private static ProcessResult Says(string version)
@@ -1166,6 +1170,10 @@ public sealed class ClaudeCodeUpdateServiceTests
         public bool IsExecutable(string path) => File.Exists(path);
 
         public void SetExecutable(string path, bool executable)
+        {
+        }
+
+        public void CopyMode(string from, string to)
         {
         }
 

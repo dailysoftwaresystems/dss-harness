@@ -17,7 +17,8 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// </para>
 /// <para>
 /// <c>--permission-prompt-tool stdio</c> is what sends a call's ask to the host - the probe found it alone does, on every
-/// version measured - so every call of every tool the launch has is asked of the engine, which decides it.
+/// version measured - so every call of every tool the launch has that its own deny rules do not refuse first is asked of
+/// the engine, which decides it.
 /// <c>--permission-prompts host</c> is the documented name for where the prompts go, and is carried beside it.
 /// </para>
 /// </remarks>
@@ -35,17 +36,30 @@ public static class ClaudeLaunch
     /// <summary>What the launch wrote on its standard error, masked.</summary>
     public const string ErrorFileName = "claude-stderr.log";
 
-    /// <summary>Each call the engine refused, one line each.</summary>
-    public const string DenialsFileName = "denials.jsonl";
+    /// <summary>The MCP servers <c>--mcp-config</c> names, as sent, in the step's directory: the engine's tool server alone, where the launch has its tools.</summary>
+    public const string McpFileName = "claude-mcp.json";
 
-    /// <summary>The folder, in the step's directory, a call's result too large for its event is kept in whole.</summary>
-    public const string ToolResultsDirectoryName = "tool-results";
+    /// <summary>
+    /// What <see cref="McpFileName"/> holds: the one server, the engine's tool server, of type <c>sdk</c> - served in the
+    /// engine's own process, every message of it sent to the host as an <c>mcp_message</c> control request.
+    /// </summary>
+    public static string McpConfiguration { get; } = new System.Text.Json.Nodes.JsonObject
+    {
+        ["mcpServers"] = new System.Text.Json.Nodes.JsonObject
+        {
+            [ClaudeCodeTools.Server] = new System.Text.Json.Nodes.JsonObject { ["type"] = "sdk", ["name"] = ClaudeCodeTools.Server },
+        },
+    }.ToJsonString();
 
-    /// <summary>The name a Claude Code session sets in the environment of everything it starts.</summary>
-    public const string SessionVariable = "CLAUDECODE";
+    /// <summary>The names a Claude Code session sets, whole, in the environment of everything it starts.</summary>
+    public static IReadOnlyList<string> SessionNames { get; } = ["CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT"];
 
-    /// <summary>What every name of Claude Code's own begins with, a session's among them.</summary>
-    public const string SessionPrefix = "CLAUDE_CODE_";
+    /// <summary>
+    /// What every other name of a Claude Code session's own begins with: Claude Code's, its Agent SDK's, its previews', and
+    /// MCP's, by which a session tunes its servers' connections - one that would let a launch's init come before the
+    /// engine's tool server is connected among them - where a launch's MCP is the engine's server alone.
+    /// </summary>
+    public static IReadOnlyList<string> SessionPrefixes { get; } = ["CLAUDE_CODE_", "CLAUDE_AGENT_SDK_", "CLAUDE_PREVIEW_", "MCP_"];
 
     /// <summary>
     /// The names of Claude Code's own a child keeps from the tool's environment: each says where a program Claude Code
@@ -53,6 +67,22 @@ public static class ClaudeLaunch
     /// is, what it may do or what it runs as. Every other is a session's, and is not inherited.
     /// </summary>
     public static IReadOnlyList<string> KeptNames { get; } = ["CLAUDE_CODE_GIT_BASH_PATH"];
+
+    /// <summary>
+    /// Whether <paramref name="name"/> is a Claude Code session's own, which a launch inherits only where
+    /// <c>agentPolicy.keepEnvironment</c> gives it back by name: one of
+    /// <see cref="SessionNames"/>, or beginning one of <see cref="SessionPrefixes"/> but <see cref="KeptNames"/>. Told in any
+    /// case, as the runner takes a name away in every spelling: on Windows a name in another case is the same variable to
+    /// the program that reads it.
+    /// </summary>
+    /// <param name="name">The variable's name.</param>
+    public static bool IsSessionName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+
+        return SessionNames.Contains(name, StringComparer.OrdinalIgnoreCase)
+            || (SessionPrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) && !KeptNames.Contains(name, StringComparer.OrdinalIgnoreCase));
+    }
 
     /// <summary>The variable a key a launch signs in with is given under.</summary>
     public const string KeyVariable = "ANTHROPIC_API_KEY";
@@ -96,6 +126,7 @@ public static class ClaudeLaunch
     /// <param name="otherRoots">Every root of the agent's other than its working directory, each an <c>--add-dir</c>.</param>
     /// <param name="settingsFile">The launch's settings file.</param>
     /// <param name="systemFile">The system prompt's file.</param>
+    /// <param name="mcpFile">The file naming the engine's tool server, where the launch takes its tools; null where it takes none.</param>
     public static IReadOnlyList<string> Arguments(
         AgentRun run,
         string model,
@@ -103,7 +134,8 @@ public static class ClaudeLaunch
         IReadOnlyList<string> tools,
         IReadOnlyList<string> otherRoots,
         string settingsFile,
-        string systemFile)
+        string systemFile,
+        string? mcpFile = null)
     {
         ArgumentNullException.ThrowIfNull(run);
 
@@ -142,13 +174,22 @@ public static class ClaudeLaunch
             "--tools", string.Join(',', tools),
             "--setting-sources", "user",
             "--strict-mcp-config",
+        ]);
+
+        if (mcpFile is not null)
+        {
+            arguments.AddRange(["--mcp-config", mcpFile]);
+        }
+
+        arguments.AddRange(
+        [
             "--settings", settingsFile,
             "--append-system-prompt-file", systemFile,
         ]);
 
         if (run.Output is { } output)
         {
-            arguments.AddRange(["--json-schema", output.Schema]);
+            arguments.AddRange(["--json-schema", AgentEnvelope.Schema(output)]);
         }
 
         foreach (var root in otherRoots)
@@ -160,10 +201,12 @@ public static class ClaudeLaunch
     }
 
     /// <summary>
-    /// The environment one launch is given, as overrides of the tool's own (null removes a name): nothing of a Claude Code
-    /// session the engine was started in, no name that says who the launch is but what its way of signing in gives, no
-    /// name the configuration appoints a value for, the names the engine controls, and the Claude Code directory whose
-    /// login and settings it reads.
+    /// The environment one launch is given, as overrides of the tool's own (null removes a name): what every child of an
+    /// agent loses (<see cref="AgentChildEnvironment"/> - every name the configuration appoints a value for, and every
+    /// secret-shaped name not given back), nothing of a Claude Code session the engine was started in but what is given
+    /// back, no name that says
+    /// who the launch is but what its way of signing in gives, the names the engine controls, and the Claude Code directory
+    /// whose login and settings it reads.
     /// </summary>
     /// <param name="run">The run.</param>
     /// <param name="key">The value it signs in with, where its way of signing in takes one; null for the machine's login.</param>
@@ -173,23 +216,23 @@ public static class ClaudeLaunch
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(own);
 
-        var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+        // What every child of an agent loses, its own names set after it: the key its way of signing in gives among them.
+        var known = own.ToList();
+        var environment = AgentChildEnvironment.Of(known, run.Withheld, run.Commands.KeepEnvironment);
 
-        // A host session's own names would outrank the launch's settings, the probe found: none of them is inherited. Told
-        // in any case, as every environment this tool hands a child names its variables and as the runner takes a name
-        // away in every spelling: on Windows a name in another case is the same variable to the program that reads it.
-        foreach (var name in own.Where(name => string.Equals(name, SessionVariable, StringComparison.OrdinalIgnoreCase)
-            || (name.StartsWith(SessionPrefix, StringComparison.OrdinalIgnoreCase) && !KeptNames.Contains(name, StringComparer.OrdinalIgnoreCase))))
+        // A host session's own names would outrank the launch's settings, the probe found: none of them is inherited but a
+        // secret-shaped one agentPolicy.keepEnvironment gives back, as it gives it back to every child of an agent.
+        foreach (var name in known.Where(name => IsSessionName(name) && !run.Commands.KeepEnvironment.Contains(name, StringComparer.OrdinalIgnoreCase)))
         {
             environment[name] = null;
         }
 
-        foreach (var name in IdentityNames.Concat(run.Withheld))
+        foreach (var name in IdentityNames)
         {
             environment[name] = null;
         }
 
-        foreach (var (name, value) in ClaudeSettings.Controlled)
+        foreach (var (name, value) in ClaudeSettings.Launched(run.Commands))
         {
             environment[name] = value;
         }

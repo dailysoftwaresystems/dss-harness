@@ -96,59 +96,21 @@ public sealed class FlowEventLog : IDisposable
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentException.ThrowIfNullOrWhiteSpace(file);
 
-        if (fileSystem.KindOf(file) != PathKind.File)
-        {
-            return ([], null);
-        }
+        var (events, torn) = JsonStateFile.ReadLog<FlowEvent>(
+            fileSystem,
+            file,
+            (read, before) => read.Problem() ?? (read.Seq != before.Count + 1
+                ? $"its seq is {read.Seq.ToString(CultureInfo.InvariantCulture)}, and the event before it was {before.Count.ToString(CultureInfo.InvariantCulture)}"
+                : null),
+            (line, why) => Corrupt(file, line, why));
 
-        string? torn = null;
-        var events = new List<FlowEvent>();
-        var at = 0;
-
-        // A line at a time: the log grows with its run.
-        foreach (var (text, ended) in FileLines.Read(fileSystem, file))
-        {
-            if (!ended)
-            {
-                torn = $"the log's last line has no newline and was set aside: '{text}'";
-                break;
-            }
-
-            var line = text.TrimEnd('\r');
-            var number = (++at).ToString(CultureInfo.InvariantCulture);
-            FlowEvent? read;
-
-            try
-            {
-                read = JsonSerializer.Deserialize<FlowEvent>(line, JsonStateFile.LineOptions);
-            }
-            catch (JsonException ex)
-            {
-                throw Corrupt(file, number, ex.Message.TrimEnd('.'));
-            }
-
-            var problem = read is null ? "it holds null" : read.Problem();
-
-            if (problem is null && read!.Seq != events.Count + 1)
-            {
-                problem = $"its seq is {read.Seq.ToString(CultureInfo.InvariantCulture)}, and the event before it was {events.Count.ToString(CultureInfo.InvariantCulture)}";
-            }
-
-            if (problem is not null)
-            {
-                throw Corrupt(file, number, problem);
-            }
-
-            events.Add(read!);
-        }
-
-        return (events, torn);
+        return (events, torn is null ? null : $"the log's last line has no newline and was set aside: '{torn}'");
     }
 
     /// <summary>The refusal of a whole line of the log that is not the next event: history is never guessed at either.</summary>
-    private static HarnessException Corrupt(string file, string line, string why)
+    private static HarnessException Corrupt(string file, int line, string why)
         => new(
             HarnessExit.Refused,
-            $"line {line} of '{file}', the run's events, does not read as its next event: {why}. Nothing was changed: an event is never guessed at, "
+            $"line {line.ToString(CultureInfo.InvariantCulture)} of '{file}', the run's events, does not read as its next event: {why}. Nothing was changed: an event is never guessed at, "
             + "and the run's state files - not its events - are what a resume reads; move the file aside to go on with a log of its own.");
 }

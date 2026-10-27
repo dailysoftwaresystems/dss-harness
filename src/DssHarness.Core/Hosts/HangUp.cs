@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using DssHarness.Core.Execution;
 
 namespace DssHarness.Core.Hosts;
 
@@ -27,15 +28,7 @@ public static class HangUp
         return PosixSignalRegistration.Create(PosixSignal.SIGHUP, signal =>
         {
             signal.Cancel = true;
-
-            try
-            {
-                source.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                // What it would have cancelled has finished.
-            }
+            source.TryCancel();
         });
     }
 }

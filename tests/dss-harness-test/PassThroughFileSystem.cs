@@ -43,6 +43,8 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
 
     public virtual IEnumerable<string> EnumerateFiles(string path, bool recursive) => inner.EnumerateFiles(path, recursive);
 
+    public virtual IEnumerable<string> EnumerateReachableFiles(string path, Action<string, Exception> unread) => inner.EnumerateReachableFiles(path, unread);
+
     public virtual IEnumerable<WrittenFile> EnumerateWrittenFiles(string path) => inner.EnumerateWrittenFiles(path);
 
     public virtual IEnumerable<string> EnumerateDirectoryLinks(string path) => inner.EnumerateDirectoryLinks(path);
@@ -112,6 +114,25 @@ internal sealed class Held(IFileSystem inner, string path, bool denied = false) 
         => Path.GetFullPath(open) != Path.GetFullPath(path) ? base.OpenForAppend(open)
             : denied ? throw new UnauthorizedAccessException(Why)
             : throw new IOException(Why);
+}
+
+/// <summary>
+/// The real file system, save that <paramref name="path"/> is removed the moment it is opened to be read - as a file
+/// another process deletes between a reader's look and its read - so the read finds it gone.
+/// </summary>
+/// <param name="inner">The file system every member passes through to.</param>
+/// <param name="path">The file removed as it is opened.</param>
+internal sealed class GoneAtOpen(IFileSystem inner, string path) : PassThroughFileSystem(inner)
+{
+    public override Stream OpenRead(string read)
+    {
+        if (Path.GetFullPath(read) == Path.GetFullPath(path))
+        {
+            File.Delete(path);
+        }
+
+        return base.OpenRead(read);
+    }
 }
 
 /// <summary>

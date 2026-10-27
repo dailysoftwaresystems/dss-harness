@@ -2757,14 +2757,20 @@ public sealed class GitClientProtocolTests
 {
     private const string NotARepository = "fatal: not a git repository (or any of the parent directories): .git";
 
+    /// <summary>
+    /// Every command is told nobody can answer a prompt - git's own, a credential manager's window - as every call of the
+    /// forge's tool is; one run within a limit is ended there, and any other runs as long as it takes.
+    /// </summary>
     [Fact]
-    public async Task EveryCommand_TellsGitNobodyCanAnswerAPrompt()
+    public async Task EveryCommand_TellsGitNobodyCanAnswerAPrompt_AndOneRunWithinALimitIsGivenIt()
     {
         var (git, requests) = Scripted(Exited(0));
 
         await git.RunAsync("/repo", ["fetch"], cancellationToken: TestContext.Current.CancellationToken);
+        await git.RunWithinAsync("/repo", ["push"], TimeSpan.FromMinutes(3), TestContext.Current.CancellationToken);
 
-        Assert.Equal("0", Assert.Single(requests).Environment["GIT_TERMINAL_PROMPT"]);
+        Assert.All(requests, request => Assert.All(UnattendedCommands.Variables, variable => Assert.Equal(variable.Value, request.Environment[variable.Key])));
+        Assert.Equal([null, TimeSpan.FromMinutes(3)], requests.Select(request => request.Timeout));
     }
 
     [Fact]

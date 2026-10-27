@@ -83,10 +83,18 @@ public sealed class GlobPattern
         var written = pattern.Replace('\\', '/');
 
         return new GlobPattern(
-            PathPatterns.Normalize(pattern).Split('/'),
+            Folded(PathPatterns.Normalize(pattern).Split('/')),
             anchored: written.TrimEnd('/').Contains('/', StringComparison.Ordinal),
             directoriesOnly: written.EndsWith('/'));
     }
+
+    /// <summary>
+    /// <paramref name="segments"/> with each run of <c>**</c> made one: two runs of any number of segments side by side
+    /// are one, and a trailing run of one or more after any number is one or more still. A matcher then goes no deeper
+    /// into a pattern than into the path it is matched against.
+    /// </summary>
+    private static string[] Folded(string[] segments)
+        => [.. segments.Where((segment, at) => !(segment == "**" && at + 1 < segments.Length && segments[at + 1] == "**"))];
 
     /// <summary>
     /// Why <paramref name="pattern"/> cannot be read, or <see langword="null"/> when it can.
@@ -137,6 +145,24 @@ public sealed class GlobPattern
     }
 
     /// <summary>
+    /// Whether <paramref name="relativePath"/> is a path <see cref="Matches"/> reads: one inside the tree spelled as its
+    /// owner spells one - neither blank nor the root alone, with no <c>.</c> or <c>..</c> segment or doubled separator, a
+    /// <c>\</c> read as a separator. A name a POSIX system holds can fail it: <c>a\..\b</c> is one file there.
+    /// </summary>
+    /// <param name="relativePath">A path relative to what a pattern is matched against.</param>
+    public static bool Reads(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            return false;
+        }
+
+        var candidate = PathPatterns.Normalize(relativePath);
+
+        return !(candidate.Length == 0 || candidate == "." || PlatformPaths.ClimbsOut(relativePath) || PathPatterns.Misspelling(relativePath) is not null);
+    }
+
+    /// <summary>
     /// Whether <paramref name="relativePath"/> is matched: whole path from the root where the
     /// pattern is anchored, any one segment of it where it is not - and so everything beneath a
     /// matched name, as gitignore reads it, which matches a directory by matching what is written
@@ -167,7 +193,7 @@ public sealed class GlobPattern
 
         var candidate = PathPatterns.Normalize(relativePath);
 
-        if (candidate.Length == 0 || candidate == "." || PlatformPaths.ClimbsOut(relativePath) || PathPatterns.Misspelling(relativePath) is not null)
+        if (!Reads(relativePath))
         {
             throw new ArgumentException(
                 $"'{relativePath}' is not a path inside the tree spelled as its owner spells one: it is the root alone, or "
@@ -191,54 +217,35 @@ public sealed class GlobPattern
 
         // A directory the pattern matches is matched all the way down, so each directory above the
         // path is tried as the match itself: 'src/cache/x.tmp' is covered by '**/cache' as
-        // gitignore covers it, through the 'src/cache' the pattern matches.
-        for (var depth = 1; depth <= deepest; depth++)
+        // gitignore covers it, through the 'src/cache' the pattern matches. Every depth at once, each
+        // place in the pattern against each place in the path decided once, in one pass from their
+        // ends: the ways a pattern of many '**' splits a path among them are past counting, the places
+        // are not.
+        var covers = new bool[_segments.Length + 1, deepest + 1];
+
+        for (var candidateIndex = 1; candidateIndex <= deepest; candidateIndex++)
         {
-            if (Covers(0, 0, segments, depth, comparison))
+            covers[_segments.Length, candidateIndex] = true;
+        }
+
+        for (var patternIndex = _segments.Length - 1; patternIndex >= 0; patternIndex--)
+        {
+            for (var candidateIndex = deepest; candidateIndex >= 0; candidateIndex--)
             {
-                return true;
+                covers[patternIndex, candidateIndex] = _segments[patternIndex] == "**"
+
+                    // A trailing '**' stands for one segment or more, never for the path itself: see the
+                    // class remarks. A '**' anywhere else stands for any number of segments, none included.
+                    ? patternIndex == _segments.Length - 1
+                        ? candidateIndex < deepest
+                        : covers[patternIndex + 1, candidateIndex] || (candidateIndex < deepest && covers[patternIndex, candidateIndex + 1])
+                    : candidateIndex < deepest
+                        && SegmentMatches(_segments[patternIndex], segments[candidateIndex], comparison)
+                        && covers[patternIndex + 1, candidateIndex + 1];
             }
         }
 
-        return false;
-    }
-
-    /// <summary>
-    /// Whether <paramref name="candidate"/>'s segments from <paramref name="candidateIndex"/> up to
-    /// <paramref name="depth"/> match the pattern's from <paramref name="patternIndex"/> to their
-    /// ends.
-    /// </summary>
-    private bool Covers(int patternIndex, int candidateIndex, string[] candidate, int depth, StringComparison comparison)
-    {
-        if (patternIndex == _segments.Length)
-        {
-            return candidateIndex == depth;
-        }
-
-        if (_segments[patternIndex] == "**")
-        {
-            if (patternIndex == _segments.Length - 1)
-            {
-                // A trailing '**' stands for one segment or more, never for the path itself: see the
-                // class remarks.
-                return candidateIndex < depth;
-            }
-
-            // A '**' anywhere else stands for any number of segments, none included.
-            for (var taken = candidateIndex; taken <= depth; taken++)
-            {
-                if (Covers(patternIndex + 1, taken, candidate, depth, comparison))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        return candidateIndex < depth
-            && SegmentMatches(_segments[patternIndex], candidate[candidateIndex], comparison)
-            && Covers(patternIndex + 1, candidateIndex + 1, candidate, depth, comparison);
+        return covers[0, 0];
     }
 
     /// <summary>
@@ -366,15 +373,17 @@ public sealed class GlobPattern
 
         while (candidateAt < candidate.Length)
         {
-            if (patternAt < pattern.Length && (pattern[patternAt] == '?' || Same(pattern[patternAt], candidate[candidateAt], comparison)))
-            {
-                patternAt++;
-                candidateAt++;
-            }
-            else if (patternAt < pattern.Length && pattern[patternAt] == '*')
+            // A '*' of the pattern is one before it is a character: a name may hold a '*' of its own, which it meets as any
+            // other character, never as the place a run begins.
+            if (patternAt < pattern.Length && pattern[patternAt] == '*')
             {
                 star = patternAt++;
                 starAt = candidateAt;
+            }
+            else if (patternAt < pattern.Length && (pattern[patternAt] == '?' || Same(pattern[patternAt], candidate[candidateAt], comparison)))
+            {
+                patternAt++;
+                candidateAt++;
             }
             else if (star >= 0)
             {

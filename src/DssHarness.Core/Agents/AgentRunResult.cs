@@ -121,7 +121,20 @@ public sealed record AgentUsageReport(AgentUsage Total, IReadOnlyList<AgentModel
 /// </summary>
 /// <param name="BalanceSpent">Whether what is spent is its balance or its included usage, which time alone does not give back.</param>
 /// <param name="Lifts">When the limit lifts, where the provider says; null where it does not.</param>
-public sealed record AgentAccountLimit(bool BalanceSpent, DateTimeOffset? Lifts = null);
+/// <param name="Key">The key whose limit it is, by its name and never its value; null for a client's login.</param>
+/// <param name="Model">
+/// The model whose limit on that key it is - a rate limit is a model's on a key - where the limit is no other model's;
+/// null where it is the key's whole, every model it signs: its balance, its plan.
+/// </param>
+public sealed record AgentAccountLimit(bool BalanceSpent, DateTimeOffset? Lifts = null, string? Key = null, string? Model = null);
+
+/// <summary>
+/// What a declined request leaves the step's next model, where the provider gives it: a token the same request sent
+/// again on that model carries, so what the declined one had cached is billed as read rather than written again.
+/// </summary>
+/// <param name="Token">The provider's token, opaque, good for minutes.</param>
+/// <param name="PrefillClaim">Whether the request sent again may carry what the declined answer wrote, for the next model to go on from.</param>
+public sealed record AgentFallbackCredit(string Token, bool PrefillClaim);
 
 /// <summary>The agent's answer to the handoff turn, or why there is none.</summary>
 /// <param name="Answer">The answer, masked; null where the agent gave none.</param>
@@ -140,7 +153,10 @@ public sealed record AgentHandoff(string? Answer = null, string? WhyNone = null)
 /// <param name="NotStartedBecause">Why, where it never began; null otherwise.</param>
 /// <param name="FinalText">The agent's answer as text.</param>
 /// <param name="StructuredOutput">Its answer against the schema, where one was named and it read; null otherwise.</param>
-/// <param name="Notes">What the agent left for whoever goes on, masked.</param>
+/// <param name="Notes">
+/// What the agent left for whoever goes on, masked: the notes of an answer's envelope, where the run answered in one; null
+/// otherwise - a run that did not reach its answer leaves none, and its handoff stands in their place.
+/// </param>
 /// <param name="Session">The session the run worked as, where the client names one.</param>
 /// <param name="Model">The model the step asked for.</param>
 /// <param name="Usage">What it used and what that cost.</param>
@@ -174,8 +190,8 @@ public sealed record AgentRunResult(
     AgentHandoff? Handoff = null,
     string? Error = null)
 {
-    /// <summary>What it assumed where a person could have told it; empty where it assumed nothing.</summary>
-    public IReadOnlyList<string> Assumptions { get; init; } = [];
+    /// <summary>What it assumed where a person could have told it, masked, as its answer said it; empty where it assumed nothing.</summary>
+    public IReadOnlyList<AgentAssumption> Assumptions { get; init; } = [];
 
     /// <summary>What it asks the person, where the step may ask and it did; empty where it asked nothing.</summary>
     public IReadOnlyList<AgentQuestion> Questions { get; init; } = [];
@@ -208,6 +224,12 @@ public sealed record AgentRunResult(
     public string? DeclinedFor { get; init; }
 
     /// <summary>
+    /// The credit a declined request left for the step's next model, where the run ended <see cref="AgentRunStatus.Refused"/>
+    /// and the provider gave one: what the engine's fallback sends the same request again with.
+    /// </summary>
+    public AgentFallbackCredit? Credit { get; init; }
+
+    /// <summary>
     /// What the container of a child the client started could not reach when that child ended, and why - one entry for
     /// each child whose container missed some of what it held, for what that child started may still run. Empty where
     /// every child was ended whole.
@@ -220,14 +242,18 @@ public sealed record AgentRunResult(
     /// <see cref="AgentRunStatus.RateLimited"/>, what a declined request was of to <see cref="AgentRunStatus.Refused"/>, an
     /// answer read against its schema to <see cref="AgentRunStatus.Completed"/>, a handoff to
     /// <see cref="AgentRunStatus.HandedOff"/>, questions to <see cref="AgentRunStatus.Asked"/> - and each ending that
-    /// carries one says it; a run that completed says no error, no count is below naught, and every list is written.
+    /// carries one says it, and notes and assumptions to an answer that read - <see cref="AgentRunStatus.Completed"/> or
+    /// <see cref="AgentRunStatus.Asked"/>; a run that completed says no error, no count is below naught, every list is
+    /// written, none holds a null, and each assumption and question holds together by its record's own rule
+    /// (<see cref="AgentAssumption.Problems"/>, <see cref="AgentQuestion.Problems"/>).
     /// </summary>
     public string? Problem()
     {
-        var lists = new (string Name, object? List)[]
+        var lists = new (string Name, string Item, IEnumerable<object?>? List)[]
         {
-            ("assumptions", Assumptions), ("questions", Questions), ("served", Served), ("files", Files),
-            ("keysRefused", KeysRefused), ("sessionFilesRemoved", SessionFilesRemoved), ("uncontained", Uncontained),
+            ("assumptions", "an assumption", Assumptions), ("questions", "a question", Questions), ("served", "a model that served it", Served),
+            ("files", "a file", Files), ("keysRefused", "a key refused", KeysRefused), ("sessionFilesRemoved", "a session file removed", SessionFilesRemoved),
+            ("uncontained", "an uncontained child", Uncontained),
         };
 
         var counts = new (string Name, int Count)[]
@@ -238,6 +264,7 @@ public sealed record AgentRunResult(
 
         return !Enum.IsDefined(Status) ? $"its status {(int)Status} is no ending a run has"
             : lists.FirstOrDefault(list => list.List is null) is { Name: { } unwritten } ? $"its {unwritten} is null, and that list is always written"
+            : lists.FirstOrDefault(list => list.List!.Any(item => item is null)) is { Item: { } nulled } ? $"it names {nulled} as null"
             : counts.FirstOrDefault(count => count.Count < 0) is { Name: { } below } named ? $"its {below} is {named.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)}, and a count is never below naught"
             : Duration < TimeSpan.Zero ? $"its duration is {Duration}, and a run never ran for less than naught"
             : Status == AgentRunStatus.NotStarted && NotStartedBecause is null ? "it never began, and says not why"
@@ -246,6 +273,7 @@ public sealed record AgentRunResult(
             : Status == AgentRunStatus.RateLimited && Limit is null ? "it ended RateLimited, and names no account's limit"
             : Status != AgentRunStatus.RateLimited && Limit is not null ? $"it ended {Status}, and names an account's limit, which only a run that ended RateLimited does"
             : Status != AgentRunStatus.Refused && DeclinedFor is not null ? $"it ended {Status}, and names what a declined request was of, which only a run that ended Refused does"
+            : Status != AgentRunStatus.Refused && Credit is not null ? $"it ended {Status}, and holds a declined request's credit, which only a run that ended Refused does"
             : Status != AgentRunStatus.Completed && StructuredOutput is not null ? $"it ended {Status}, and holds an answer read against its schema, which only a run that completed does"
             : Status == AgentRunStatus.HandedOff && Handoff is null ? "it ended HandedOff, and says not whether its agent answered the handoff"
             : Status != AgentRunStatus.HandedOff && Handoff is not null ? $"it ended {Status}, and holds a handoff, which only a run that handed off does"
@@ -253,15 +281,19 @@ public sealed record AgentRunResult(
             : Handoff is { Answer: null, WhyNone: null } ? "its handoff holds neither an answer nor why there is none, and it holds one of them"
             : Status == AgentRunStatus.Asked && Questions.Count == 0 ? "it ended Asked, and asks nothing"
             : Status != AgentRunStatus.Asked && Questions.Count > 0 ? $"it ended {Status}, and asks the person, which only a run that ended Asked does"
+            : Status is not (AgentRunStatus.Completed or AgentRunStatus.Asked) && Notes is not null ? $"it ended {Status}, and holds notes, which only a run whose answer read does"
+            : Status is not (AgentRunStatus.Completed or AgentRunStatus.Asked) && Assumptions.Count > 0 ? $"it ended {Status}, and holds assumptions, which only a run whose answer read does"
+            : AgentAssumption.ProblemIn(Assumptions) is { } assumed ? $"its {assumed}"
+            : AgentQuestion.ProblemIn(Questions) is { } asked ? $"its {asked}"
             : Status == AgentRunStatus.Completed && Error is not null ? "it completed, and says why it failed"
-            : Served.Any(served => served is null) ? "it names a model that served it as null"
             : Served.FirstOrDefault(served => served.FromTurn < 1) is { } early ? $"it names '{early.Model}' as serving from turn {early.FromTurn.ToString(System.Globalization.CultureInfo.InvariantCulture)}, and turns are counted from one"
             : null;
     }
 
     /// <summary>
     /// This run as one that failed for <paramref name="error"/>: what only another ending carries - why it never began, an
-    /// account's limit, what a declined request was of, an answer read against its schema, its questions, its handoff -
+    /// account's limit, what a declined request was of and its credit, an answer read against its schema, its notes, what it
+    /// assumed, its questions, its handoff -
     /// is not a failed run's, and goes; what it did and what it used stay.
     /// </summary>
     /// <param name="error">Why it failed, masked.</param>
@@ -271,10 +303,13 @@ public sealed record AgentRunResult(
             Status = AgentRunStatus.Failed,
             NotStartedBecause = null,
             StructuredOutput = null,
+            Notes = null,
             Handoff = null,
+            Assumptions = [],
             Questions = [],
             Limit = null,
             DeclinedFor = null,
+            Credit = null,
             Error = error,
         };
 

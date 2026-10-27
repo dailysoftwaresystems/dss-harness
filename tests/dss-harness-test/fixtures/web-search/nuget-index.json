@@ -1,0 +1,9 @@
+{
+  "version": "3.0.0",
+  "resources": [
+    { "@id": "https://example-packages.test/registration/", "@type": "RegistrationsBaseUrl", "comment": "registrations" },
+    { "@id": "https://search-primary.example-packages.test/query", "@type": "SearchQueryService", "comment": "primary search" },
+    { "@id": "https://search-secondary.example-packages.test/query", "@type": "SearchQueryService", "comment": "secondary search" },
+    { "@id": "https://search-primary.example-packages.test/query", "@type": "SearchQueryService/3.5.0", "comment": "versioned search" }
+  ]
+}

@@ -102,8 +102,8 @@ public sealed class FlowStepStartTests
         }
     }
 
-    private static FlowCoordinator Coordinator(WorkflowDefinition definition, Runner runner, IFlowRecords? records = null, IReadOnlyDictionary<string, string>? models = null, IReadOnlyDictionary<string, string>? inputs = null, FlowRunPlace? place = null, HarnessConfig? config = null)
-        => new(definition, runner, new ConfiguredRunnerFacts(config ?? new HarnessConfig()), new JumpingClock(), inputs, records, runName: "r1", place: place, agentModels: models);
+    private static FlowCoordinator Coordinator(WorkflowDefinition definition, Runner runner, IFlowRecords? records = null, IReadOnlyDictionary<string, string>? models = null, IReadOnlyDictionary<string, string>? inputs = null, FlowRunPlace? place = null, HarnessConfig? config = null, Func<string, string>? workflowFile = null)
+        => new(definition, runner, new ConfiguredRunnerFacts(config ?? new HarnessConfig()), new JumpingClock(), inputs, records, runName: "r1", place: place, agentModels: models, workflowFile: workflowFile);
 
     /// <summary>
     /// A create-agent step is named a1 and given the model resolved for it, both written to its record before its runner
@@ -717,6 +717,73 @@ public sealed class FlowStepStartTests
         Assert.Equal(HarnessExit.ConfigInvalid, orient.Exit);
         Assert.Equal("expression 'base' of 'orient': '{input.x}' reads nothing", orient.Error);
         Assert.Empty(runner.Runs);
+    }
+
+    /// <summary>
+    /// A pull request's body is its file's text, read as the step starts and filled by the one grammar - the run's texts
+    /// among what it reads, each 'none' where it names nothing - and handed to its runner under body.
+    /// </summary>
+    [Fact]
+    public async Task APullRequestsBody_IsItsFileFilledWhereTheStepStarts()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: pr
+                type: pull-request
+                title: the work
+                body: body.md
+            """);
+        var runner = new Runner();
+        var asked = new List<string>();
+        var coordinator = Coordinator(definition, runner, workflowFile: name =>
+        {
+            asked.Add(name);
+            return "# {run.name}\n\nchecked: {run.ran}; left: {run.leftover}; assumed: {run.assumptions}; found: {run.preExisting}\n";
+        });
+
+        _ = await coordinator.RunAsync(Token);
+
+        Assert.Equal(["body.md"], asked);
+        Assert.Equal("# r1\n\nchecked: none; left: none; assumed: none; found: none\n", FlowStepKeys.TextAtStart(runner.Runs.Single(), "body"));
+    }
+
+    /// <summary>
+    /// A pull request's body that cannot be read - its file not there, a run that reads no file of its workflow - or that
+    /// reads nothing fails the step as an unreadable expression does (12), and its runner is never asked.
+    /// </summary>
+    [Fact]
+    public async Task APullRequestsBodyThatCannotBeRead_FailsTheStep_AndItsRunnerIsNeverAsked()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: pr
+                type: pull-request
+                title: the work
+                body: body.md
+            """);
+
+        async Task<FlowInstance> PullRequestAsync(Func<string, string>? workflowFile)
+        {
+            var runner = new Runner();
+            var coordinator = Coordinator(definition, runner, workflowFile: workflowFile);
+
+            _ = await coordinator.RunAsync(Token);
+
+            Assert.Empty(runner.Runs);
+            return coordinator.Instances["pr"];
+        }
+
+        var unread = await PullRequestAsync(null);
+        var missing = await PullRequestAsync(_ => throw new HarnessException(HarnessExit.ConfigInvalid, "'body.md', a pull request's body, is not there"));
+        var empty = await PullRequestAsync(_ => "{input.x}");
+
+        Assert.Equal(
+            (FlowInstanceState.Failed, HarnessExit.ConfigInvalid, "expression 'body' of 'pr': 'body.md', its body, is a file of the workflow, and this run reads none"),
+            (unread.State, unread.Exit, unread.Error));
+        Assert.Equal((FlowInstanceState.Failed, "expression 'body' of 'pr': 'body.md', a pull request's body, is not there"), (missing.State, missing.Error));
+        Assert.Equal((FlowInstanceState.Failed, "expression 'body' of 'pr': '{input.x}' reads nothing"), (empty.State, empty.Error));
     }
 
     /// <summary>The next agent's name: one past the highest a&lt;N&gt; there, names of another shape counting for none.</summary>

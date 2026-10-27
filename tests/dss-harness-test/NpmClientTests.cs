@@ -251,6 +251,10 @@ public sealed class NpmClientTests
         {
         }
 
+        public void CopyMode(string from, string to)
+        {
+        }
+
         public bool IsPrivate(string path) => true;
 
         public bool IsWritableByOthers(string path) => false;

@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Application;
 using DssHarness.Core.Composition;
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
@@ -44,13 +45,21 @@ public sealed class AgentRunnerTests
 
         var seen = new List<AgentEvent>();
 
-        var result = await Runner(client).RunAsync(Step(temp, promptValues: new Dictionary<string, string> { ["item"] = "login form" }), new Collecting(seen), TestContext.Current.CancellationToken);
+        var search = new AgentWebSearch([], 3, 4, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
+        var entries = new AgentEntries(new AgentProviderConfig { Name = "anthropic" }, new AgentModelConfig { Code = "model-x" }, new AgentClientConfig { MaxRetries = 2 });
+        var step = Step(temp, promptValues: new Dictionary<string, string> { ["item"] = "login form" }) with { WebSearch = search, Withheld = ["DEPLOY_TOKEN"], Entries = entries };
+
+        var result = await Runner(client).RunAsync(step, new Collecting(seen), TestContext.Current.CancellationToken);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.Equal("do the login form", client.Run!.UserPrompt);
+        Assert.Same(search, client.Run.WebSearch);
+        Assert.Same(entries, client.Run.Entries);
+        Assert.Equal(["DEPLOY_TOKEN"], client.Run.Withheld);
         Assert.Equal("be terse", client.Run.SystemPrompt);
         Assert.Equal(WorkDirectory(temp), client.Run.Workspace.WorkingDirectory);
         Assert.Equal(StepDirectory(temp), client.Run.StepDirectory);
+        Assert.Equal(Path.Combine(temp.Path, ".orchestrators", "r1", "agents", "a7", "sessions"), client.Run.SessionsDirectory);
 
         Assert.Equal(["runStarted", "sessionStarted", "textDelta", "assistantMessage", "runFinished"], seen.Select(Kind));
         Assert.Equal(["runStarted", "sessionStarted", "assistantMessage", "runFinished"], Lines(temp).Select(LineKind));
@@ -1035,13 +1044,29 @@ public sealed class AgentRunnerTests
             (new(AgentRunStatus.HandedOff, Handoff: new AgentHandoff()), "its handoff holds neither an answer nor why there is none, and it holds one of them"),
             (new(AgentRunStatus.HandedOff, Handoff: new AgentHandoff("a", "b")), "its handoff holds both an answer and why there is none, and it holds one of them"),
             (new(AgentRunStatus.Asked), "it ended Asked, and asks nothing"),
-            (new(AgentRunStatus.Completed) { Questions = [new AgentQuestion("which?", ["a", "b"])] }, "it ended Completed, and asks the person, which only a run that ended Asked does"),
+            (new(AgentRunStatus.Completed) { Questions = [new AgentQuestion("which?", "two stand", "the task", "the build", ["a", "b"], "a", "it is shorter")] }, "it ended Completed, and asks the person, which only a run that ended Asked does"),
             (new(AgentRunStatus.Completed, Error: "x"), "it completed, and says why it failed"),
             (new(AgentRunStatus.Completed, Turns: -1), "its turns is -1, and a count is never below naught"),
             (new(AgentRunStatus.Completed, Duration: TimeSpan.FromSeconds(-1)), "its duration is -00:00:01, and a run never ran for less than naught"),
             (new(AgentRunStatus.Completed) { Served = [new AgentServedModel("m", 0)] }, "it names 'm' as serving from turn 0, and turns are counted from one"),
             (new(AgentRunStatus.Completed) { Files = null! }, "its files is null, and that list is always written"),
             (new((AgentRunStatus)99), "its status 99 is no ending a run has"),
+            (new(AgentRunStatus.Failed, Notes: "n", Error: "x"), "it ended Failed, and holds notes, which only a run whose answer read does"),
+            (new(AgentRunStatus.HandedOff, Notes: "n", Handoff: new AgentHandoff("a")), "it ended HandedOff, and holds notes, which only a run whose answer read does"),
+            (new(AgentRunStatus.InvalidOutput, Error: "x") { Assumptions = [new AgentAssumption("a", "b", "c")] }, "it ended InvalidOutput, and holds assumptions, which only a run whose answer read does"),
+            (new(AgentRunStatus.Completed) { Assumptions = [null!] }, "it names an assumption as null"),
+            (new(AgentRunStatus.Asked) { Questions = [null!] }, "it names a question as null"),
+            (new(AgentRunStatus.Completed) { Served = [null!] }, "it names a model that served it as null"),
+            (new(AgentRunStatus.Completed) { Files = ["a.txt", null!] }, "it names a file as null"),
+            (new(AgentRunStatus.Completed) { KeysRefused = [null!] }, "it names a key refused as null"),
+            (new(AgentRunStatus.Completed) { SessionFilesRemoved = [null!] }, "it names a session file removed as null"),
+            (new(AgentRunStatus.Completed) { Uncontained = [null!] }, "it names an uncontained child as null"),
+            (new(AgentRunStatus.Completed, Notes: "n") { Assumptions = [new AgentAssumption("a", " ", "c")] }, "its assumptions[0].assumed: is empty; say it, as the schema describes it"),
+            (
+                new(AgentRunStatus.Asked, Notes: "n") { Questions = [new AgentQuestion("q", "p", "t", "m", ["a", "b"], "a", "w"), new AgentQuestion("q", "p", "t", "m", ["Do X", "Do X"], "Do X", "w")] },
+                "its questions[1].options[1]: \"Do X\" stands at options[0] already; each option is a choice of its own"
+            ),
+            (new(AgentRunStatus.Asked, Notes: "n") { Questions = [new AgentQuestion("q", "p", "t", "m", ["a", "b"], "c", "w")] }, "its questions[0].recommended: \"c\" is none of the 2 options; recommend one of them, word for word"),
         };
 
         Assert.Equal(cases.Select(@case => @case.Problem), cases.Select(@case => @case.Result.Problem()));
@@ -1051,12 +1076,41 @@ public sealed class AgentRunnerTests
             new(AgentRunStatus.NotStarted, AgentNotStartedBecause.KeyMissing, Error: "x"),
             new(AgentRunStatus.RateLimited, Error: "x") { Limit = limit },
             new(AgentRunStatus.Refused, Error: "x") { DeclinedFor = "cyber" },
-            new(AgentRunStatus.Completed, StructuredOutput: "{}"),
+            new(AgentRunStatus.Completed, StructuredOutput: "{}", Notes: "n") { Assumptions = [new AgentAssumption("a", "b", "c")] },
+            new(AgentRunStatus.Asked, Notes: "n") { Questions = [new AgentQuestion("q", "p", "t", "m", ["a", "b"], "a", "w")], Assumptions = [new AgentAssumption("a", "b", "c")] },
             new(AgentRunStatus.HandedOff, Handoff: new AgentHandoff(WhyNone: "y")),
         };
 
         Assert.All(endings, ending => Assert.Null(ending.Problem()));
         Assert.All(endings, ending => Assert.Equal((AgentRunStatus.Failed, "lost", null), (ending.FailedFor("lost").Status, ending.FailedFor("lost").Error, ending.FailedFor("lost").Problem())));
+    }
+
+    /// <summary>
+    /// The notes an answer left are written, as the client masked them, beside the result as the step's notes.md - before
+    /// it, so a result that holds notes is never read without them - and what it assumed is in the result; a run that left
+    /// no notes writes none, and a later attempt begins by removing an earlier one's.
+    /// </summary>
+    [Fact]
+    public async Task TheNotesAnAnswerLeft_AreWrittenBesideTheResult()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient { Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Completed, Notes: "done; *** kept out") { Assumptions = [new AgentAssumption("a", "b", "c")] }) };
+
+        var result = await Runner(client).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
+
+        var written = JsonNode.Parse(File.ReadAllText(ResultFile(temp)))!;
+        Assert.Equal("done; *** kept out", File.ReadAllText(Path.Combine(StepDirectory(temp), DssHarness.Core.Orchestration.OrchestratorLayout.StepNotesFileName)));
+        Assert.Equal((result.Notes, """[{"about":"a","assumed":"b","why":"c"}]"""), (written["notes"]!.GetValue<string>(), written["assumptions"]!.ToJsonString()));
+
+        using var other = new TempDirectory();
+        await Runner(new FakeClient()).RunAsync(Step(other), events: null, TestContext.Current.CancellationToken);
+
+        Assert.False(File.Exists(Path.Combine(StepDirectory(other), DssHarness.Core.Orchestration.OrchestratorLayout.StepNotesFileName)));
+
+        // The step's directory is every attempt's: one that leaves no notes begins without the ones an earlier one left.
+        await Runner(new FakeClient()).RunAsync(Step(temp, attempt: 2), events: null, TestContext.Current.CancellationToken);
+
+        Assert.False(File.Exists(Path.Combine(StepDirectory(temp), DssHarness.Core.Orchestration.OrchestratorLayout.StepNotesFileName)));
     }
 
     /// <summary>
@@ -1107,7 +1161,7 @@ public sealed class AgentRunnerTests
         Assert.Equal(Enumerable.Range(1, posted).Select(count => (long)count), seen);
     }
 
-    /// <summary>The runner is registered as the one way an agent's step is worked, with no client built in yet.</summary>
+    /// <summary>The runner is registered as the one way an agent's step is worked, with every client built in so far: claude-code, then claude-api.</summary>
     [Fact]
     public void TheRunnerIsRegistered_InAddDssHarness()
     {
@@ -1116,6 +1170,7 @@ public sealed class AgentRunnerTests
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
         Assert.IsType<AgentRunner>(provider.GetRequiredService<IAgentRunner>());
+        Assert.Equal(["claude-code", "claude-api", "glm"], provider.GetServices<IAgentClient>().Select(client => client.Name));
     }
 
     /// <summary>The scripted work: a launch, a message with its delta.</summary>
@@ -1195,8 +1250,6 @@ public sealed class AgentRunnerTests
             Output: null,
             Conversation: null,
             new AgentLimits(MaxTurns: 10, MaxBudgetUsd: null, MaxDuration: null, StallSeconds: 7, HandoffSeconds: handoffSeconds),
-            MayAsk: false,
-            AskRounds: 0,
             Mask: null);
 
     /// <summary>The agent's work directory, the only place it writes.</summary>

@@ -956,6 +956,7 @@ public sealed class HostAgentServiceTests
                 FlowService.RunCommand,
                 FlowService.StopCommand,
                 DssHarness.Core.Runs.RunStopService.CommandName,
+                DssHarness.Core.Codebase.CodebaseGraphQueryService.CommandName,
             }.Order(StringComparer.Ordinal),
             HostAgentProtocol.NotForwardable.Order(StringComparer.Ordinal));
 
@@ -1185,7 +1186,7 @@ public sealed class HostAgentServiceTests
         var run = new HostAgentRequest { Kind = HostAgentRequestKind.Run };
         var read = JsonSerializer.Deserialize<HostAgentRequest>(JsonSerializer.Serialize(run, HostAgentProtocol.JsonOptions), HostAgentProtocol.JsonOptions)!;
 
-        Assert.Equal(11, HostAgentProtocol.Version);
+        Assert.Equal(12, HostAgentProtocol.Version);
         Assert.Equal(15, read.BeatSeconds);
         Assert.Equal(new InputBeat(TimeSpan.FromSeconds(15), "host-agent: beat"), HostAgentProtocol.BeatOf(read));
         Assert.Null(HostAgentProtocol.BeatOf(new HostAgentRequest { Kind = HostAgentRequestKind.Run, BeatSeconds = 0 }));
@@ -1464,7 +1465,7 @@ public sealed class HostAgentServiceTests
             platform,
             identity,
             new EmulatorProbe(platform, processRunner, fileSystem),
-            new DeveloperEnvironmentProbe(platform, processRunner),
+            new DeveloperEnvironmentProbe(platform, processRunner, fileSystem),
             new DeveloperEnvironmentProvider(platform, processRunner, fileSystem, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
             fileSystem,
             HostDoubles.Floors(platform, processRunner),

@@ -84,16 +84,18 @@ public sealed class DeveloperEnvironmentSetup
 
 /// <summary>
 /// Sets up a developer environment on the machine that runs the leg: runs the <c>vcvarsall.bat</c> of
-/// the Visual Studio instance the survey of this machine found, for the leg's processor, and keeps
-/// what that changed in the environment - once per environment, instance, architecture and host
-/// environment, however many legs share them.
+/// the Visual Studio instance the survey of this machine found, for the leg's processor and with the
+/// MSVC toolset the survey found where the environment names one, and keeps what that changed in the
+/// environment - once per environment, instance, toolset, architecture and host environment, however
+/// many legs share them.
 /// </summary>
 /// <remarks>
 /// <para>
 /// What <c>vcvarsall.bat</c> sets is read from <c>cmd.exe</c> itself, running a batch file the
 /// harness writes for the purpose: <c>set</c> before, <c>call vcvarsall.bat</c>, its exit code, and
 /// <c>set</c> after, each to a file of its own in UTF-16 (<c>/u</c>), so a path the console's code
-/// page cannot spell arrives whole. The instance's path and the architecture reach the batch file in
+/// page cannot spell arrives whole. The instance's path and vcvarsall.bat's arguments - the
+/// architecture, and <c>-vcvars_ver=</c> with the toolset where there is one - reach the batch file in
 /// its environment rather than in its text, and are expanded only by <c>call</c>'s own, last pass -
 /// written <c>%%NAME%%</c>, which the first pass turns into <c>%NAME%</c> - so a path holding
 /// <c>%</c>, <c>^</c> or <c>&amp;</c> is used as it is, never expanded twice or read as syntax. This
@@ -101,8 +103,10 @@ public sealed class DeveloperEnvironmentSetup
 /// </para>
 /// <para>
 /// vcvarsall.bat can report a failure and exit 0, so its own output is read for its
-/// <c>[ERROR</c> lines as well as its exit code, and <c>VSCMD_ARG_TGT_ARCH</c> must name the
-/// processor asked for: an environment set up for another processor builds code for that one.
+/// <c>[ERROR</c> lines as well as its exit code, <c>VSCMD_ARG_TGT_ARCH</c> must name the
+/// processor asked for - an environment set up for another processor builds code for that one - and
+/// <c>VCToolsVersion</c> the toolset asked for, where one was: a build with another is the one the
+/// environment names its toolset to keep out.
 /// </para>
 /// </remarks>
 public sealed class DeveloperEnvironmentProvider(
@@ -120,8 +124,12 @@ public sealed class DeveloperEnvironmentProvider(
     /// <summary>What the batch file is given the instance's vcvarsall.bat in.</summary>
     internal const string ScriptVariable = "DSSHARNESS_VCVARSALL";
 
-    /// <summary>What the batch file is given the architecture in.</summary>
-    internal const string ArchitectureVariable = "DSSHARNESS_VCVARSALL_ARCH";
+    /// <summary>
+    /// What the batch file is given vcvarsall.bat's arguments in: the architecture, then
+    /// <c>-vcvars_ver=</c> and the toolset where one is set up. Only letters, digits and
+    /// <c>_ - = .</c> and spaces, so call's expansion of it reads nothing in it as syntax.
+    /// </summary>
+    internal const string ArgumentsVariable = "DSSHARNESS_VCVARSALL_ARGUMENTS";
 
     /// <summary>
     /// The batch file: each <c>set</c> to its own file beside it, and the exit code redirected first,
@@ -131,7 +139,7 @@ public sealed class DeveloperEnvironmentProvider(
     internal const string CaptureScript =
         "@echo off\r\n"
         + "set > \"%~dp0before.env\"\r\n"
-        + "call \"%%" + ScriptVariable + "%%\" %%" + ArchitectureVariable + "%% > \"%~dp0vcvarsall.log\" 2>&1\r\n"
+        + "call \"%%" + ScriptVariable + "%%\" %%" + ArgumentsVariable + "%% > \"%~dp0vcvarsall.log\" 2>&1\r\n"
         + "> \"%~dp0exit.txt\" echo %ERRORLEVEL%\r\n"
         + "set > \"%~dp0after.env\"\r\n";
 
@@ -139,7 +147,7 @@ public sealed class DeveloperEnvironmentProvider(
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
-    private readonly ConcurrentDictionary<(string Name, string Instance, string Architecture, string Over), Lazy<Task<DeveloperEnvironmentSetup>>> _captured = new();
+    private readonly ConcurrentDictionary<(string Name, string Instance, string Toolset, string Architecture, string Over), Lazy<Task<DeveloperEnvironmentSetup>>> _captured = new();
 
     /// <summary>
     /// Sets up the developer environment <paramref name="name"/> from the instance
@@ -152,11 +160,13 @@ public sealed class DeveloperEnvironmentProvider(
     /// <param name="hostEnvironment">What the host declares under <c>env</c>, which it is set up over.</param>
     /// <param name="cancellationToken">Stops the setup.</param>
     /// <remarks>
-    /// From the survey's answer rather than a look of its own, so the instance set up is the one the
-    /// survey reported and placed the leg by. One removed since is refused here, its vcvarsall.bat gone.
+    /// From the survey's answer rather than a look of its own, so the instance and toolset set up are
+    /// the ones the survey reported and placed the leg by. One removed since is refused here, by
+    /// vcvarsall.bat gone or by vcvarsall.bat itself.
     /// </remarks>
     /// <exception cref="ArgumentException">
-    /// <paramref name="found"/> names no instance: a leg is only ever placed where one was found.
+    /// <paramref name="found"/> names no instance - a leg is only ever placed where one was found - or
+    /// a toolset by what is no toolset's name, which no survey answers.
     /// </exception>
     public Task<DeveloperEnvironmentSetup> SetUpAsync(
         string name,
@@ -173,6 +183,13 @@ public sealed class DeveloperEnvironmentProvider(
         if (!found.CanSetUp || found.InstallationPath is not { } instance)
         {
             throw new ArgumentException($"Developer environment '{name}' was set up where the survey found no instance of it.", nameof(found));
+        }
+
+        // Expanded by call's own pass into vcvarsall.bat's command line, so held to a toolset's name here, whoever made
+        // the answer: nothing else may reach that line.
+        if (found.ToolsVersion is { } toolset && !VisualStudioToolsets.IsToolset(toolset))
+        {
+            throw new ArgumentException($"Developer environment '{name}' was set up with toolset '{toolset}', which is no MSVC toolset's name.", nameof(found));
         }
 
         return SetUpCoreAsync(name, found, instance, processor, hostEnvironment, cancellationToken);
@@ -207,19 +224,23 @@ public sealed class DeveloperEnvironmentProvider(
                 $"developer environment '{name}' has no vcvarsall.bat architecture for a {processor} leg on a {_platform.Processor} host");
         }
 
-        // Once per environment, instance, architecture and the environment it is set up over: legs
-        // sharing them share what vcvarsall.bat set, and running it again for each would only take
-        // longer to say the same thing. The host's environment is part of the key because what
-        // vcvarsall.bat sets is built on it - a PATH it puts Visual Studio's directories ahead of is the
-        // PATH it was given - and the name is, because what was set up is reported, and refused, under it.
-        var key = (name, instance, architecture, Over(hostEnvironment));
+        var vcvars = new VcvarsCall(architecture, found.ToolsVersion);
+
+        // Once per environment, instance, toolset, architecture and the environment it is set up over:
+        // legs sharing them share what vcvarsall.bat set, and running it again for each would only take
+        // longer to say the same thing. The toolset is part of the key because it is what vcvarsall.bat
+        // is asked for besides the architecture - none, for its default - and the host's environment
+        // because what vcvarsall.bat sets is built on it: a PATH it puts Visual Studio's directories
+        // ahead of is the PATH it was given. The name is, because what was set up is reported, and
+        // refused, under it.
+        var key = (name, instance, vcvars.Toolset ?? string.Empty, architecture, Over(hostEnvironment));
 
         while (true)
         {
             var captured = _captured.GetOrAdd(
                 key,
                 _ => new Lazy<Task<DeveloperEnvironmentSetup>>(
-                    () => CaptureAsync(name, instance, found.InstallationVersion, architecture, hostEnvironment, cancellationToken)));
+                    () => CaptureAsync(name, instance, found.InstallationVersion, vcvars, hostEnvironment, cancellationToken)));
 
             try
             {
@@ -229,7 +250,7 @@ public sealed class DeveloperEnvironmentProvider(
             {
                 // Stopped by the caller that started it, not by this one, which still wants it: that
                 // capture is forgotten - only if it is still the one kept - and this caller runs its own.
-                _captured.TryRemove(new KeyValuePair<(string, string, string, string), Lazy<Task<DeveloperEnvironmentSetup>>>(key, captured));
+                _captured.TryRemove(new KeyValuePair<(string, string, string, string, string), Lazy<Task<DeveloperEnvironmentSetup>>>(key, captured));
             }
         }
     }
@@ -251,7 +272,7 @@ public sealed class DeveloperEnvironmentProvider(
         string name,
         string instance,
         string? version,
-        string architecture,
+        VcvarsCall vcvars,
         IReadOnlyDictionary<string, string> hostEnvironment,
         CancellationToken cancellationToken)
     {
@@ -270,7 +291,7 @@ public sealed class DeveloperEnvironmentProvider(
 
         try
         {
-            return await CaptureInAsync(name, instance, version, architecture, vcvarsall, scratch.Path, hostEnvironment, cancellationToken)
+            return await CaptureInAsync(name, instance, version, vcvars, vcvarsall, scratch.Path, hostEnvironment, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -278,7 +299,7 @@ public sealed class DeveloperEnvironmentProvider(
             // A temporary directory this user cannot write, or a disk that is full: said, naming the
             // directory, rather than escaping as a defect in this tool.
             return DeveloperEnvironmentSetup.Failed(
-                $"developer environment '{name}': the capture of vcvarsall.bat {architecture} in '{scratch.Path}' could not be "
+                $"developer environment '{name}': the capture of vcvarsall.bat {vcvars.Arguments} in '{scratch.Path}' could not be "
                 + $"written or read: {ex.Message}");
         }
     }
@@ -288,7 +309,7 @@ public sealed class DeveloperEnvironmentProvider(
         string name,
         string instance,
         string? version,
-        string architecture,
+        VcvarsCall vcvars,
         string vcvarsall,
         string scratch,
         IReadOnlyDictionary<string, string> hostEnvironment,
@@ -305,7 +326,7 @@ public sealed class DeveloperEnvironmentProvider(
         }
 
         environment[ScriptVariable] = vcvarsall;
-        environment[ArchitectureVariable] = architecture;
+        environment[ArgumentsVariable] = vcvars.Arguments;
 
         var shell = System.Environment.GetEnvironmentVariable("ComSpec") is { Length: > 0 } comSpec ? comSpec : "cmd.exe";
         ProcessResult result;
@@ -330,10 +351,10 @@ public sealed class DeveloperEnvironmentProvider(
         catch (ProgramStartException ex)
         {
             return DeveloperEnvironmentSetup.Failed(
-                $"developer environment '{name}': vcvarsall.bat {architecture} could not be run, because '{shell}' could not be started: {ex.Message}");
+                $"developer environment '{name}': vcvarsall.bat {vcvars.Arguments} could not be run, because '{shell}' could not be started: {ex.Message}");
         }
 
-        return Read(name, instance, version, architecture, scratch, result);
+        return Read(name, instance, version, vcvars, scratch, result);
     }
 
     /// <summary>What one run of the batch file left beside it, read into a setup or a refusal.</summary>
@@ -341,7 +362,7 @@ public sealed class DeveloperEnvironmentProvider(
         string name,
         string instance,
         string? version,
-        string architecture,
+        VcvarsCall vcvars,
         string scratch,
         ProcessResult result)
     {
@@ -350,13 +371,13 @@ public sealed class DeveloperEnvironmentProvider(
         if (result.TimedOut)
         {
             return DeveloperEnvironmentSetup.Failed(
-                $"developer environment '{name}': vcvarsall.bat {architecture} did not finish within {CaptureBudget.TotalSeconds:0} seconds");
+                $"developer environment '{name}': vcvarsall.bat {vcvars.Arguments} did not finish within {CaptureBudget.TotalSeconds:0} seconds");
         }
 
         if (!_fileSystem.FileExists(Written("before.env")) || !_fileSystem.FileExists(Written("after.env")) || !_fileSystem.FileExists(Written("exit.txt")))
         {
             return DeveloperEnvironmentSetup.Failed(
-                $"developer environment '{name}': vcvarsall.bat {architecture} could not be run: {HostProbes.Failure("cmd.exe", result)}");
+                $"developer environment '{name}': vcvarsall.bat {vcvars.Arguments} could not be run: {HostProbes.Failure("cmd.exe", result)}");
         }
 
         var log = _fileSystem.FileExists(Written("vcvarsall.log")) ? ReadBytes(Written("vcvarsall.log")) : [];
@@ -367,25 +388,38 @@ public sealed class DeveloperEnvironmentProvider(
             var said = Said(log);
 
             return DeveloperEnvironmentSetup.Failed(
-                $"developer environment '{name}': vcvarsall.bat {architecture} exited {exit}"
+                $"developer environment '{name}': vcvarsall.bat {vcvars.Arguments} exited {exit}"
                 + (said.Length > 0 ? $": {said}" : " and printed nothing"));
         }
 
         if (ReportsAnError(log))
         {
             return DeveloperEnvironmentSetup.Failed(
-                $"developer environment '{name}': vcvarsall.bat {architecture} reported an error: {Said(log)}");
+                $"developer environment '{name}': vcvarsall.bat {vcvars.Arguments} reported an error: {Said(log)}");
         }
 
         var before = Variables(Unicode(ReadBytes(Written("before.env"))));
         var after = Variables(Unicode(ReadBytes(Written("after.env"))));
-        var target = VisualStudioArchitecture.Target(architecture);
+        var target = VisualStudioArchitecture.Target(vcvars.Architecture);
 
         if (!after.TryGetValue("VSCMD_ARG_TGT_ARCH", out var reported) || !string.Equals(reported, target, StringComparison.OrdinalIgnoreCase))
         {
             return DeveloperEnvironmentSetup.Failed(
-                $"developer environment '{name}': vcvarsall.bat {architecture} set up VSCMD_ARG_TGT_ARCH '{reported ?? string.Empty}', "
+                $"developer environment '{name}': vcvarsall.bat {vcvars.Arguments} set up VSCMD_ARG_TGT_ARCH '{reported ?? string.Empty}', "
                 + $"where '{target}' was asked for");
+        }
+
+        var toolsVersion = after.GetValueOrDefault("VCToolsVersion");
+
+        // The toolset asked for, exactly as the survey found it. vcvarsall.bat given one it lacks says so, as an
+        // [ERROR; one that set up another without a word - a vcvarsall.bat older than -vcvars_ver, or one handed a
+        // VCToolsVersion it kept - would build every target of the leg with the compiler the environment names its
+        // toolset to keep out.
+        if (vcvars.Toolset is { } toolset && !string.Equals(toolsVersion, toolset, StringComparison.Ordinal))
+        {
+            return DeveloperEnvironmentSetup.Failed(
+                $"developer environment '{name}': vcvarsall.bat {vcvars.Arguments} set up VCToolsVersion '{toolsVersion ?? string.Empty}', "
+                + $"where '{toolset}' was asked for");
         }
 
         // What it added or changed, and nothing else: the process's own environment is inherited by
@@ -401,8 +435,8 @@ public sealed class DeveloperEnvironmentProvider(
                 name,
                 instance,
                 version ?? after.GetValueOrDefault("VSCMD_VER") ?? "unknown",
-                after.GetValueOrDefault("VCToolsVersion") ?? "unknown",
-                architecture));
+                toolsVersion ?? "unknown",
+                vcvars.Architecture));
     }
 
     private byte[] ReadBytes(string path)
@@ -453,6 +487,23 @@ public sealed class DeveloperEnvironmentProvider(
         => HostProbes.Excerpt(Encoding.Latin1.GetString(log).Replace("\0", string.Empty, StringComparison.Ordinal));
 
     private static bool Contains(byte[] haystack, byte[] needle) => haystack.AsSpan().IndexOf(needle) >= 0;
+}
+
+/// <summary>What vcvarsall.bat is asked for: an architecture, and an MSVC toolset where one is.</summary>
+/// <param name="Architecture">
+/// The architecture: <c>amd64</c> for a leg built for the machine's own processor, or the two joined, such as
+/// <c>amd64_arm64</c>, to cross-compile.
+/// </param>
+/// <param name="Toolset">
+/// The toolset, as <c>VC\Tools\MSVC</c> names it, or <see langword="null"/> for the one vcvarsall.bat sets up by default.
+/// </param>
+internal sealed record VcvarsCall(string Architecture, string? Toolset)
+{
+    /// <summary>
+    /// vcvarsall.bat's arguments, as the batch file hands them over and a refusal names them: the architecture alone, or
+    /// then <c>-vcvars_ver=</c> and the toolset.
+    /// </summary>
+    public string Arguments => Toolset is null ? Architecture : $"{Architecture} -vcvars_ver={Toolset}";
 }
 
 /// <summary>What vcvarsall.bat is asked for, and what it reports having set up.</summary>

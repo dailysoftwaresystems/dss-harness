@@ -84,6 +84,25 @@ public sealed class MachineWideFileTests
     }
 
     /// <summary>
+    /// A file removed between the look and the read - another process's deleting it - is nothing there to read, as where
+    /// the look found none: never a file that could not be read.
+    /// </summary>
+    [Fact]
+    public void AFileGoneBetweenTheLookAndTheRead_IsNothingThere()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("kept.json");
+        File.WriteAllText(path, """{ "name": "first", "count": 3 }""");
+
+        var read = MachineWideFile.TryRead<Kept>(new GoneAtOpen(new HarnessFactory().FileSystem, path), path, out var value, out var unread);
+
+        Assert.True(read);
+        Assert.Null(value);
+        Assert.Null(unread);
+        Assert.False(File.Exists(path));
+    }
+
+    /// <summary>
     /// The read that refuses is the same read: it refuses exactly what the other could not read, in its caller's words
     /// made from that failure, and gives what the other gives everywhere else.
     /// </summary>

@@ -242,14 +242,14 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                 return;
             }
 
-            var qualified = Join(scope, written);
+            var qualified = ExtractText.Qualify(scope, written);
 
             // Each name a declaration such as `namespace A.B` opens is a scope inside the one before it.
             var at = scope;
 
             foreach (var part in written.Split('.'))
             {
-                var opened = Join(at, part);
+                var opened = ExtractText.Qualify(at, part);
                 Scope(opened, at);
                 at = opened;
             }
@@ -283,7 +283,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
             var list = (declared as TypeDeclarationSyntax)?.TypeParameterList;
             var name = Generic(identifier, list?.Parameters.Count ?? 0);
-            var qualified = Join(scope, name);
+            var qualified = ExtractText.Qualify(scope, name);
             var typeParameters = With(outer?.TypeParameters, list);
             var (idName, local) = Named(outer, declared.Modifiers, name, qualified);
 
@@ -398,7 +398,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             }
 
             var name = Generic(identifier, declared.TypeParameterList?.Parameters.Count ?? 0);
-            var qualified = Join(scope, name);
+            var qualified = ExtractText.Qualify(scope, name);
             var typeParameters = With(outer?.TypeParameters, declared.TypeParameterList);
             var (idName, local) = Named(outer, declared.Modifiers, name, qualified);
 
@@ -526,7 +526,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
                 case EnumMemberDeclarationSyntax constant when constant.Identifier.ValueText is { Length: > 0 } name:
                 {
-                    var node = Add(new ExtractNode(Id($"{type.IdName}.{name}"), CodeNodeKinds.Member, name, $"{type.Node.Qualified}.{name}", Line(constant.SpanStart), EndLine(constant), Header(constant, default))
+                    var node = Add(new ExtractNode(Id(ExtractText.Qualify(type.IdName, name)), CodeNodeKinds.Member, name, ExtractText.Qualify(type.Node.Qualified, name), Line(constant.SpanStart), EndLine(constant), Header(constant, default))
                     {
                         SubKind = "constant",
                         Scope = type.Node.Qualified,
@@ -554,7 +554,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             }
 
             var opens = body is not null ? body.OpenBraceToken : arrow is not null ? arrow.ArrowToken : member.SemicolonToken;
-            var made = new ExtractNode(MemberId(type, tail), CodeNodeKinds.Member, name, $"{type.Node.Qualified}.{name}", Line(member.SpanStart), EndLine(member), Header(member, opens))
+            var made = new ExtractNode(MemberId(type, tail), CodeNodeKinds.Member, name, ExtractText.Qualify(type.Node.Qualified, name), Line(member.SpanStart), EndLine(member), Header(member, opens))
             {
                 SubKind = subKind,
                 Scope = type.Node.Qualified,
@@ -596,7 +596,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             var opens = accessors is not null ? accessors.OpenBraceToken : arrow?.ArrowToken ?? default;
             var arity = parameters is null ? (null, null) : Arity(parameters, 0, 0);
 
-            var node = Add(new ExtractNode(MemberId(type, tail), CodeNodeKinds.Member, name, $"{type.Node.Qualified}.{name}", Line(member.SpanStart), EndLine(member), Header(member, opens))
+            var node = Add(new ExtractNode(MemberId(type, tail), CodeNodeKinds.Member, name, ExtractText.Qualify(type.Node.Qualified, name), Line(member.SpanStart), EndLine(member), Header(member, opens))
             {
                 SubKind = subKind,
                 Scope = type.Node.Qualified,
@@ -633,7 +633,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                     continue;
                 }
 
-                var node = Add(new ExtractNode(Id($"{type.IdName}.{name}"), CodeNodeKinds.Member, name, $"{type.Node.Qualified}.{name}", Line(field.SpanStart), EndLine(field), ExtractText.Signature(ExtractText.Flat($"{Header(field, field.Declaration.Variables[0].Identifier)} {name}")))
+                var node = Add(new ExtractNode(Id(ExtractText.Qualify(type.IdName, name)), CodeNodeKinds.Member, name, ExtractText.Qualify(type.Node.Qualified, name), Line(field.SpanStart), EndLine(field), ExtractText.Signature(ExtractText.Flat($"{Header(field, field.Declaration.Variables[0].Identifier)} {name}")))
                 {
                     SubKind = subKind,
                     Scope = type.Node.Qualified,
@@ -703,7 +703,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         private void Positional(ParameterSyntax parameter, RecordDeclarationSyntax record, TypeFrame type)
         {
             var name = parameter.Identifier.ValueText;
-            var node = Add(new ExtractNode(MemberId(type, name), CodeNodeKinds.Member, name, $"{type.Node.Qualified}.{name}", Line(parameter.SpanStart), EndLine(parameter), ExtractText.Signature(ExtractText.Flat(parameter.ToString())))
+            var node = Add(new ExtractNode(MemberId(type, name), CodeNodeKinds.Member, name, ExtractText.Qualify(type.Node.Qualified, name), Line(parameter.SpanStart), EndLine(parameter), ExtractText.Signature(ExtractText.Flat(parameter.ToString())))
             {
                 SubKind = "property",
                 Scope = type.Node.Qualified,
@@ -889,7 +889,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             switch (receiver)
             {
                 case ObjectCreationExpressionSyntax created when NameOf(created.Type) is { } made:
-                    return new ExtractQualifier(CodeQualifierKinds.Type, Join(made.Qualifier, made.Name));
+                    return new ExtractQualifier(CodeQualifierKinds.Type, ExtractText.Qualify(made.Qualifier, made.Name));
 
                 case ParenthesizedExpressionSyntax { Expression: CastExpressionSyntax cast } when Key(cast.Type) is { } to:
                     return new ExtractQualifier(CodeQualifierKinds.Type, to);
@@ -1285,7 +1285,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         /// it - holds its file's path, as the statements at a file's top do, since many files may each have one alike.
         /// </summary>
         private (string IdName, bool Local) Named(TypeFrame? outer, SyntaxTokenList modifiers, string name, string qualified)
-            => outer is not null ? ($"{outer.IdName}.{name}", outer.Local)
+            => outer is not null ? (ExtractText.Qualify(outer.IdName, name), outer.Local)
                 : modifiers.Any(SyntaxKind.FileKeyword) ? ($"{path}:{qualified}", true)
                 : (qualified, false);
 
@@ -1535,9 +1535,9 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     {
         IdentifierNameSyntax identifier when identifier.Identifier.ValueText.Length > 0 => identifier.Identifier.ValueText,
         GenericNameSyntax generic when generic.Identifier.ValueText.Length > 0 => Generic(generic.Identifier.ValueText, generic.TypeArgumentList.Arguments.Count),
-        QualifiedNameSyntax qualified when Written(qualified.Left) is { } left && Written(qualified.Right) is { } right => $"{left}.{right}",
+        QualifiedNameSyntax qualified when Written(qualified.Left) is { } left && Written(qualified.Right) is { } right => ExtractText.Qualify(left, right),
         AliasQualifiedNameSyntax aliased => Written(aliased.Name),
-        MemberAccessExpressionSyntax access when access.IsKind(SyntaxKind.SimpleMemberAccessExpression) && Written(access.Expression) is { } left && Written(access.Name) is { } right => $"{left}.{right}",
+        MemberAccessExpressionSyntax access when access.IsKind(SyntaxKind.SimpleMemberAccessExpression) && Written(access.Expression) is { } left && Written(access.Name) is { } right => ExtractText.Qualify(left, right),
         PredefinedTypeSyntax predefined => predefined.Keyword.ValueText,
         _ => null,
     };
@@ -1557,6 +1557,4 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     /// <c>IShape</c>, not <c>IOException</c>.
     /// </summary>
     private static bool LooksLikeInterface(string name) => name.Length > 2 && name[0] == 'I' && char.IsUpper(name[1]) && char.IsLower(name[2]);
-
-    private static string Join(string? scope, string name) => scope is null ? name : $"{scope}.{name}";
 }

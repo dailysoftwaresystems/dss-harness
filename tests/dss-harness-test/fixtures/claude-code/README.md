@@ -19,7 +19,11 @@ In each:
   `print-prompts-host-only` (the `-p` half), `input-closed` and `host-dead` (the host gone),
   `prompt-tool-only`, `prompts-host-only` and `no-prompt-flag` (which flag sends an ask),
   `fallback-below` and `fallback-emptied`, `env-project`, `env-user` and
-  `env-desktop-entrypoint`, and `model-<id>` for each built-in model id but the scenario's.
+  `env-desktop-entrypoint`, `model-<id>` for each built-in model id but the scenario's,
+  `mcp-message` (the engine's tool server over the control channel: an MCP server of type `sdk`,
+  its connection, a call allowed and one denied) and `deny-rules` (a read, a search, a write and a
+  command Claude Code's own deny rules refuse) - the two recorded 2026-10-26 on 2.1.287, the
+  `stable` tag's 2.1.308 and the `latest` tag's 2.1.310, the launches of another day.
 - `findings.jsonl` — what the probe found beside each launch's stream, one line a launch: files
   written or not, whether the child exited and with what, the session file it looked for, a
   hook's output.
@@ -54,15 +58,16 @@ is committed:
   and a server tool's `srvtoolu_…`) — is its prefix and 24 digits counting from one, for each
   prefix, in the order each first appears; the same stand-in wherever the recording names the same
   id, a member's name included (`wire_tool_inputs`), so a call, its ask, its result and its denial
-  still pair up.
-- The account's own members of `rate_limit_info` — `overageStatus`, `overageDisabledReason` and
-  `unifiedWindows` (its usage) — are `<elided: the account's own>`; `status`, `rateLimitType` and
-  `isUsingOverage` stay as the event's shape.
+  still pair up. An id is its prefix and 16 or more letters and digits: a word of the protocol such
+  as `msg_lifecycle_v1` is kept as written.
+- The account's own members of `rate_limit_info` — `overageStatus`, `overageDisabledReason`,
+  `overageEnabled`, `unifiedWindows` and `utilization` (its usage), each where the version writes
+  it — are `<elided: the account's own>`; `status`, `rateLimitType` and `isUsingOverage` stay as the event's shape.
 - A `stream_event` whose event shape (its event type, and its content block's or delta's type)
   already appeared in the file is dropped: the first of each shape stays, whole. The probe's own
   large files, read to fill the context, are `<elided: the probe's big file, N lines>`.
 - `findings.jsonl` keeps each launch's findings without the argument list, the session id and
-  the names of the variables the launch cleared.
+  the names of the variables the launch cleared, its paths and ids under the stream's own rules.
 - Timestamps, durations, token counts and costs stay as recorded: they say nothing of who ran the
   probe.
 

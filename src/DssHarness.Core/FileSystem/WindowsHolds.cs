@@ -6,7 +6,8 @@ namespace DssHarness.Core.FileSystem;
 
 /// <summary>
 /// Whether another program holds a file or directory so that Windows would not delete it, asked by opening it as
-/// a deletion opens it and letting it go at once. Nothing is changed.
+/// a deletion opens it and letting it go at once - and whether an open Windows refused was refused for another handle's
+/// hold. Nothing is changed.
 /// </summary>
 /// <remarks>
 /// Measured on Windows 11: a deletion is refused where a handle to the entry does not share deleting it - a
@@ -43,8 +44,27 @@ internal static class WindowsHolds
     /// <summary>ERROR_SHARING_VIOLATION: another handle refuses what this one asks for.</summary>
     private const int SharingViolation = 32;
 
+    /// <summary>ERROR_LOCK_VIOLATION: another handle has locked a part of the file this one asks for.</summary>
+    private const int LockViolation = 33;
+
     /// <summary>What Windows says of a sharing violation, in the language it speaks here.</summary>
     private static readonly string SharingViolationMessage = new Win32Exception(SharingViolation).Message;
+
+    /// <summary>
+    /// Whether <paramref name="refusal"/> - what .NET raised for an open Windows refused, its <see cref="Exception.HResult"/>
+    /// the system's error as an HRESULT - says another handle holds the file: a sharing or a lock violation, never any
+    /// other reason the open was refused.
+    /// </summary>
+    /// <param name="refusal">What the open raised.</param>
+    public static bool HeldBy(IOException refusal)
+    {
+        ArgumentNullException.ThrowIfNull(refusal);
+
+        return refusal.HResult == HResultOf(SharingViolation) || refusal.HResult == HResultOf(LockViolation);
+    }
+
+    /// <summary>The HRESULT .NET gives a Win32 <paramref name="error"/>: its code in the Win32 facility, marked a failure.</summary>
+    private static int HResultOf(int error) => unchecked((int)0x80070000) | error;
 
     /// <summary>The entry at <paramref name="path"/> where another program holds it; otherwise <see langword="null"/>.</summary>
     /// <param name="path">A fully qualified path.</param>

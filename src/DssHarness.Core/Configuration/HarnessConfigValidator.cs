@@ -867,6 +867,18 @@ public static partial class HarnessConfigValidator
             {
                 problems.Add($"developer environment '{name}' requiresComponent is blank; leave it out for the C++ build tools");
             }
+
+            // Its form alone: which toolset a build needs is the repository's to say, and whether a host
+            // holds it is the survey's to find.
+            if (environment.ToolsVersion is { } toolsVersion && !VisualStudioToolsets.IsToolsVersion(toolsVersion))
+            {
+                problems.Add(
+                    string.IsNullOrWhiteSpace(toolsVersion)
+                        ? $"developer environment '{name}' toolsVersion is blank; leave it out for the toolset vcvarsall.bat sets up by default"
+                        : $"developer environment '{name}' toolsVersion '{toolsVersion}' names no MSVC toolset; name one as "
+                            + @"VC\Tools\MSVC does, by its first two numbers or all three - such as 14.44 or 14.44.35207 - "
+                            + "or leave it out for the toolset vcvarsall.bat sets up by default");
+            }
         }
     }
 
@@ -1787,9 +1799,9 @@ public static partial class HarnessConfigValidator
     }
 
     /// <summary>
-    /// Checks that the commit template and its variables agree. A placeholder nobody declared is
-    /// written into a message literally, and a variable the template never uses is a value asked
-    /// for and then dropped; both are found here instead of in a commit someone has already pushed.
+    /// Checks that the commit template and its variables agree. A placeholder nobody declared leaves
+    /// a commit step no message it can fill, and a variable the template never uses is a value asked
+    /// for and then dropped; both are found here instead of when a run commits.
     /// </summary>
     private static void ValidateCommit(CommitConfig commit, List<string> problems)
     {
@@ -1825,14 +1837,17 @@ public static partial class HarnessConfigValidator
             return;
         }
 
-        var used = Regex.Matches(template, @"\{(?<name>[^{}]*)\}", RegexOptions.CultureInvariant)
-            .Select(match => match.Groups["name"].Value)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        if (CommitTemplate.GrammarProblem(template) is { } broken)
+        {
+            problems.Add(broken);
+            return;
+        }
+
+        var used = CommitTemplate.Placeholders(template);
 
         foreach (var placeholder in used.Where(placeholder => !commit.Variables.ContainsKey(placeholder)))
         {
-            problems.Add($"commit.template uses {{{placeholder}}}, which is not declared in commit.variables");
+            problems.Add(CommitTemplate.Undeclared(placeholder));
         }
 
         foreach (var name in commit.Variables.Keys.Where(name => !used.Contains(name, StringComparer.OrdinalIgnoreCase)))
@@ -2242,7 +2257,7 @@ public static partial class HarnessConfigValidator
     /// <param name="name">What to write instead, as the remedy says it: "name the legs it runs".</param>
     /// <param name="leftOut">What leaving the key out means: "every declared leg".</param>
     /// <param name="problems">Where the problem is added.</param>
-    private static void RefuseGivenEmpty<T>(IReadOnlyCollection<T>? list, string setting, string name, string leftOut, List<string> problems)
+    internal static void RefuseGivenEmpty<T>(IReadOnlyCollection<T>? list, string setting, string name, string leftOut, List<string> problems)
     {
         if (list is { Count: 0 })
         {

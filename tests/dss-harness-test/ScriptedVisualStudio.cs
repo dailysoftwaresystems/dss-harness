@@ -60,6 +60,12 @@ internal sealed class ScriptedVisualStudio : IProcessRunner, IDisposable
     /// <summary>What <c>VSCMD_ARG_TGT_ARCH</c> says after; the processor asked for, when left out.</summary>
     public string? ReportedTarget { get; init; }
 
+    /// <summary>
+    /// What <c>VCToolsVersion</c> says after; when left out, the toolset <c>-vcvars_ver=</c> asked for, or
+    /// <see cref="ToolsVersion"/> where none was.
+    /// </summary>
+    public string? ReportedToolsVersion { get; init; }
+
     /// <summary>Whether cmd.exe never ran the batch file, and so wrote nothing beside it.</summary>
     public bool WritesNothing { get; init; }
 
@@ -122,6 +128,21 @@ internal sealed class ScriptedVisualStudio : IProcessRunner, IDisposable
         return this;
     }
 
+    /// <summary>
+    /// Installs the MSVC toolsets <paramref name="toolsets"/> in the instance, each a directory of its own under
+    /// <c>VC\Tools\MSVC</c>, as Visual Studio's installer lays them out side by side.
+    /// </summary>
+    /// <param name="toolsets">The toolsets, as the directories are named.</param>
+    public ScriptedVisualStudio WithToolsets(params string[] toolsets)
+    {
+        foreach (var toolset in toolsets)
+        {
+            Directory.CreateDirectory(Path.Combine(InstallationPath, "VC", "Tools", "MSVC", toolset));
+        }
+
+        return this;
+    }
+
     /// <summary>The INCLUDE vcvarsall.bat sets.</summary>
     public string Include => Path.Combine(InstallationPath, "VC", "Tools", "MSVC", ToolsVersion, "include");
 
@@ -171,8 +192,12 @@ internal sealed class ScriptedVisualStudio : IProcessRunner, IDisposable
         }
 
         var directory = request.WorkingDirectory!;
-        var architecture = request.Environment[DeveloperEnvironmentProvider.ArchitectureVariable]!;
-        var target = VisualStudioArchitecture.Target(architecture);
+
+        // Split as cmd.exe splits call's arguments, at spaces and at '=': vcvarsall.bat reads -vcvars_ver and then the
+        // toolset as two arguments.
+        var arguments = request.Environment[DeveloperEnvironmentProvider.ArgumentsVariable]!.Split([' ', '='], StringSplitOptions.RemoveEmptyEntries);
+        var target = VisualStudioArchitecture.Target(arguments[0]);
+        var asked = arguments.Length == 3 && string.Equals(arguments[1], "-vcvars_ver", StringComparison.Ordinal) ? arguments[2] : null;
 
         var before = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["PATH"] = ShellPath, ["PROMPT"] = "$P$G" };
 
@@ -189,7 +214,7 @@ internal sealed class ScriptedVisualStudio : IProcessRunner, IDisposable
             ["PATH"] = BinFor(target) + System.IO.Path.PathSeparator + before["PATH"],
             ["INCLUDE"] = Include,
             ["LIB"] = Path.Combine(InstallationPath, "VC", "Tools", "MSVC", ToolsVersion, "lib", target),
-            ["VCToolsVersion"] = ToolsVersion,
+            ["VCToolsVersion"] = ReportedToolsVersion ?? asked ?? ToolsVersion,
             ["VSCMD_ARG_TGT_ARCH"] = ReportedTarget ?? target,
             ["VSCMD_VER"] = "18.0.0",
         };
@@ -221,6 +246,11 @@ internal sealed class ScriptedVisualStudio : IProcessRunner, IDisposable
             this,
             fileSystem ?? new PhysicalFileSystem(FilePermissionsFactory.Create()),
             output ?? new HarnessFactory().Output);
+
+    /// <summary>A survey of a Windows machine on which this is how Visual Studio's installer and instances answer.</summary>
+    /// <param name="fileSystem">What the instances' toolsets are listed through; the real one when left out.</param>
+    public DeveloperEnvironmentProbe Probe(IFileSystem? fileSystem = null)
+        => new(HostDoubles.Platform(PlatformId.Windows), this, fileSystem ?? new PhysicalFileSystem(FilePermissionsFactory.Create()));
 
     /// <summary>What <c>set</c> lists: one <c>NAME=value</c> to a line.</summary>
     private static string Listing(Dictionary<string, string> variables)

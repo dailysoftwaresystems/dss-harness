@@ -1,0 +1,6 @@
+data: {"id":"202610260000000000000000000001","created":1793020912,"object":"chat.completion.chunk","model":"glm-5.3","choices":[{"index":0,"delta":{"role":"assistant","content":"To begin"}}]}
+
+data: {"id":"202610260000000000000000000001","created":1793020912,"object":"chat.completion.chunk","model":"glm-5.3","choices":[{"index":0,"finish_reason":"sensitive","delta":{"role":"assistant","content":""}}],"usage":{"prompt_tokens":206,"completion_tokens":3,"total_tokens":209,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}
+
+data: [DONE]
+

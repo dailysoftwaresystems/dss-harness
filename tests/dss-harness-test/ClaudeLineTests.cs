@@ -72,8 +72,19 @@ public sealed class ClaudeLineTests
                         break;
                     case ClaudeLine.ControlRequest request:
                         Assert.Equal("control_request", type);
-                        Assert.Equal("can_use_tool", request.Subtype);
-                        Assert.False(string.IsNullOrEmpty(request.RequestId) || string.IsNullOrEmpty(request.Tool));
+                        Assert.False(string.IsNullOrEmpty(request.RequestId));
+
+                        // An ask names its call's tool; a message of an MCP server the host serves names the server.
+                        if (request.Subtype == "mcp_message")
+                        {
+                            Assert.False(string.IsNullOrEmpty(request.Server) || request.Message is not JsonObject);
+                        }
+                        else
+                        {
+                            Assert.Equal("can_use_tool", request.Subtype);
+                            Assert.False(string.IsNullOrEmpty(request.Tool));
+                        }
+
                         break;
                     case ClaudeLine.ControlResponse response:
                         Assert.Equal("control_response", type);
@@ -85,7 +96,7 @@ public sealed class ClaudeLineTests
                         break;
                     case ClaudeLine.RateLimit limit:
                         Assert.Equal("rate_limit_event", type);
-                        Assert.Equal("allowed", limit.Status);
+                        Assert.Contains(limit.Status, (string[])["allowed", "allowed_warning"]);
                         Assert.NotNull(limit.ResetsAt);
                         Assert.False(string.IsNullOrEmpty(limit.Window));
                         break;
@@ -138,11 +149,49 @@ public sealed class ClaudeLineTests
         var stamped = lines.OfType<ClaudeLine.User>()
             .SelectMany(user => user.Results.Select(result => (Result: result, Meta: (user.Node["tool_result_meta"] as JsonArray)?.SingleOrDefault(meta => meta?["id"]?.GetValue<string>() == result.CallId))))
             .ToList();
-        Assert.All(stamped, pair => Assert.Equal(pair.Meta?["non_execution_kind"] is null && (pair.Result.Ok || pair.Meta?["permission_decision"] is not null || !pair.Result.Content.StartsWith(ClaudeLine.InputErrorMark, StringComparison.Ordinal)), pair.Result.Ran));
+        Assert.All(stamped, pair => Assert.Equal(
+            pair.Meta?["non_execution_kind"] is null
+                && pair.Meta?["permission_decision"]?["decision"]?.GetValue<string>() != "reject"
+                && (pair.Result.Ok || pair.Meta?["permission_decision"] is not null || !pair.Result.Content.StartsWith(ClaudeLine.InputErrorMark, StringComparison.Ordinal)),
+            pair.Result.Ran));
         Assert.Contains(stamped, pair => pair.Result.Ran);
         Assert.Contains(stamped, pair => !pair.Result.Ran);
         Assert.Contains(lines, line => line is ClaudeLine.User { Replay: true });
         Assert.Contains(lines, line => line is ClaudeLine.User { Results: [{ Ok: false }, ..] });
+    }
+
+    /// <summary>
+    /// A call Claude Code's own deny rules refused reads as refused by a rule and not run - by its result alone on a version
+    /// that stamps nothing, by its result and a rejected decision on one that does - and a call that ran and said those
+    /// same words reads as what it is: a call that ran, refused by nothing.
+    /// </summary>
+    [Theory]
+    [InlineData(null, false, true)]
+    [InlineData("""{"decision":"reject","source":"config","reason_type":"rule"}""", false, true)]
+    [InlineData("""{"decision":"accept","source":"user_temporary"}""", true, false)]
+    public void AResultInTheDenyRulesWords_IsARefusalByARule_OnlyWhereItDidNotRun(string? decision, bool ran, bool refused)
+    {
+        var meta = new JsonObject { ["id"] = "toolu_1" };
+
+        if (decision is not null)
+        {
+            meta["permission_decision"] = JsonNode.Parse(decision);
+        }
+
+        var line = new JsonObject
+        {
+            ["type"] = "user",
+            ["message"] = new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = new JsonArray(new JsonObject { ["type"] = "tool_result", ["tool_use_id"] = "toolu_1", ["content"] = ClaudeLine.DeniedByRuleResult, ["is_error"] = !ran }),
+            },
+            ["tool_result_meta"] = new JsonArray(meta),
+        };
+
+        var result = Assert.Single(Assert.IsType<ClaudeLine.User>(ClaudeLine.Read(line.ToJsonString())).Results);
+
+        Assert.Equal((ran, refused), (result.Ran, result.RefusedByRule));
     }
 
     /// <summary>
@@ -253,6 +302,23 @@ public sealed class ClaudeLineTests
         Assert.Equal(["u2", "u3"], receipt.Cancelled);
 
         Assert.Equal("r3", Assert.IsType<ClaudeLine.ControlCancel>(ClaudeLine.Read("""{"type":"control_cancel_request","request_id":"r3"}""")).RequestId);
+
+        var mcp = Assert.IsType<ClaudeLine.ControlRequest>(ClaudeLine.Read(
+            """{"type":"control_request","request_id":"r4","request":{"subtype":"mcp_message","server_name":"dssharness","message":{"method":"tools/list","jsonrpc":"2.0","id":1}}}"""));
+        Assert.Equal(("r4", "mcp_message", "dssharness"), (mcp.RequestId, mcp.Subtype, mcp.Server));
+        Assert.Equal("tools/list", mcp.Message!["method"]!.GetValue<string>());
+        Assert.Null(ask.Server);
+    }
+
+    /// <summary>An init reads each MCP server the launch has, by its name and its status; one that names none reads none.</summary>
+    [Fact]
+    public void AnInit_ReadsItsMcpServers()
+    {
+        var init = Assert.IsType<ClaudeLine.Init>(ClaudeLine.Read(
+            """{"type":"system","subtype":"init","tools":["Read"],"mcp_servers":[{"name":"dssharness","status":"connected","source":"sdk"},{"name":"other"}]}"""));
+        Assert.Equal([("dssharness", "connected"), ("other", (string?)null)], init.McpServers);
+
+        Assert.Empty(Assert.IsType<ClaudeLine.Init>(ClaudeLine.Read("""{"type":"system","subtype":"init","tools":[]}""")).McpServers);
     }
 
     /// <summary>A retry reads its try, its bound, its wait and its cause; a refusal its tool and what it said.</summary>

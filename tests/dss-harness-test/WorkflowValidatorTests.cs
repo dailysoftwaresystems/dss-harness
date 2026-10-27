@@ -3121,6 +3121,30 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// What a reason step's agent assumed is a list of the envelope's assumptions, each its about, what it assumed and
+    /// why: a member of one is read, and a member none holds is refused.
+    /// </summary>
+    [Fact]
+    public void WhatAReasonStepAssumed_IsTypedAsTheEnvelopesAssumptions()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: think
+                type: reason
+                agent: thinker
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+              - name: c
+                type: orient
+                when: 'any(think.assumptions, it.about == ''cache'' || it.assumed == it.why) && any(think.assumptions, it.nope == ''x'')'
+            """);
+
+        Assert.Equal(["'c.when' reads 'it.nope', and each item of 'think.assumptions' has no property 'nope'"], problems);
+    }
+
+    /// <summary>
     /// A name is looked up from the inside out, so an inner step never takes a name it can see from outside by bare name
     /// - a step beside a group around it, declared before or after, or that group itself; and the recovery's steps,
     /// which see the flow's top level by bare name, take none of its names. Steps of the same name in two groups neither
@@ -4529,6 +4553,55 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// Every push step that names a remote names the same one: the run's branch goes to one remote, which its pushes send
+    /// it to and its pull request is opened on, so which repository that is never turns on which push step is declared
+    /// first. A push step that names none goes to that one, and is refused nothing.
+    /// </summary>
+    [Fact]
+    public void PushStepsThatNameDifferentRemotes_AreRefused()
+    {
+        Assert.Equal(
+            [
+                "steps 'first' and 'third' push to different remotes, 'origin' and 'upstream'; the run's branch goes to one remote, which every push sends it to and its pull request is opened on",
+            ],
+            Problems(
+                """
+                name: flow
+                steps:
+                  - name: first
+                    type: push
+                    remote: origin
+                  - name: second
+                    type: push
+                    dependsOn: [first]
+                  - name: third
+                    type: push
+                    dependsOn: [second]
+                    remote: upstream
+                  - name: fourth
+                    type: push
+                    dependsOn: [third]
+                    remote: origin
+                """));
+
+        Assert.Empty(Problems(
+            """
+            name: flow
+            steps:
+              - name: first
+                type: push
+                remote: upstream
+              - name: second
+                type: push
+                dependsOn: [first]
+              - name: third
+                type: push
+                dependsOn: [second]
+                remote: upstream
+            """));
+    }
+
+    /// <summary>
     /// A prompt's own placeholders - a reason step's prompt and resumePrompt, a pull request's body - are checked against
     /// what the step can read from where it sits, each said at the line it first stands on: a name nothing provides, a
     /// path no schema holds, and in a prompt, which the first iteration is asked with too, the iteration before; a
@@ -4717,5 +4790,63 @@ public sealed class WorkflowValidatorTests
                     in: look
                     dependsOn: [look]
                 """));
+    }
+
+    /// <summary>
+    /// V55: a reason step's search names sources or tags of agentWebSearch, each once, none of them turned off; a step that
+    /// goes on with another's work names none of its own; and where the caller gives no configuration, a name given twice
+    /// alone is refused.
+    /// </summary>
+    [Fact]
+    public void AStepsSearch_NamesSourcesOrTagsTheConfigurationHolds_EachOnce()
+    {
+        var search = WebSearchSourcesTests.Of("""{ "sources": { "mdn": { "enabled": false }, "learn": { "enabled": false } } }""");
+
+        IReadOnlyList<string> Checked(string list, bool configured = true)
+            => WorkflowValidator.Validate(Parse($$"""
+                name: default
+                steps:
+                  - name: research
+                    type: reason
+                    agent: thinker
+                    search: {{list}}
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, search: configured ? search : null);
+
+        Assert.Empty(Checked("[qa, packages, nuget, reference]"));
+        Assert.Equal(
+            [
+                "the search of step 'research' names 'qa' more than once",
+                $"step 'research' searches 'nowhere', which is no source or tag of agentWebSearch; sources: {string.Join(", ", search.All.Select(source => source.Name))}; tags: {string.Join(", ", search.Tags)}",
+                "step 'research' searches 'mdn', which is turned off (enabled: false); turn it on, or name another",
+                "step 'research' searches 'docs-web', a tag none of whose sources is on: mdn",
+            ],
+            Checked("[qa, nowhere, mdn, docs-web, qa]"));
+
+        // Under no configuration, the names are not checked, and a name given twice is refused.
+        Assert.Empty(Checked("[nowhere, mdn]", configured: false));
+        Assert.Equal(["the search of step 'research' names 'x' more than once"], Checked("[x, x]", configured: false));
+
+        // A step that goes on with another's work asks that step's sources.
+        Assert.Equal(
+            ["step 'again' resumes 'research' and says search; a step that goes on with another's work asks the sources that step's search names, and names none of its own"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: research
+                    type: reason
+                    agent: thinker
+                    search: [qa]
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: again
+                    type: reason
+                    resume: research
+                    search: [qa]
+                    dependsOn: [research]
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, search: search));
     }
 }

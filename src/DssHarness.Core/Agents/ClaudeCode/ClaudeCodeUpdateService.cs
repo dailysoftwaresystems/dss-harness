@@ -106,11 +106,12 @@ public sealed class ClaudeCodeUpdateService(
     private readonly ClaudeCodeInstall _install = install ?? new ClaudeCodeInstall(fileSystem, processRunner);
     private readonly ProgramUpdate _updates = new(processRunner, platform);
 
-    /// <summary>What a program a person names is refused with, when it is not one this tool can start.</summary>
-    private static readonly string[] BatchExtensions = [".cmd", ".bat", ".ps1"];
-
+    /// <summary>
+    /// Whether a program a person names is one this tool does not start as Claude Code: a batch file (<see cref="BatchFiles"/>),
+    /// whose arguments cmd.exe reads again, or a PowerShell script, which only PowerShell starts.
+    /// </summary>
     private static bool IsBatch(string program)
-        => BatchExtensions.Contains(Path.GetExtension(program), StringComparer.OrdinalIgnoreCase);
+        => BatchFiles.Is(program) || Path.GetExtension(program.TrimEnd('.', ' ')).Equals(".ps1", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Makes the Claude Code a run needs ready, or the refusal that says why it cannot be: a program a person named
@@ -118,7 +119,7 @@ public sealed class ClaudeCodeUpdateService(
     /// they are on, npm is asked what it holds and the change is run where it must be - never beside a session.
     /// </summary>
     /// <param name="layout">The repository's layout, where the slot is; null where no slot is to be asked.</param>
-    /// <param name="appointed">Every name the configuration appoints, of providers and clients both.</param>
+    /// <param name="appointed">Every name the configuration appoints, of providers, clients and web-search sources.</param>
     /// <param name="client">The configuration's entry for the client being made ready; null where it declares none (<see cref="UpdatesOn"/>).</param>
     /// <param name="steps">The steps that need the client, as a refusal names them; empty where the asker names none.</param>
     /// <param name="cancellationToken">Stops everything before the change; the change itself, once begun, is never stopped.</param>

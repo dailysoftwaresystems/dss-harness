@@ -85,6 +85,14 @@ internal static class MachineWideFile
 
             return true;
         }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // Removed between the look and the read: nothing is there to read, as where the look found none.
+            value = null;
+            unread = null;
+
+            return true;
+        }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
             value = null;

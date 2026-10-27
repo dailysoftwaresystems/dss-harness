@@ -897,8 +897,9 @@ public sealed class HostInspectorTests
     }
 
     /// <summary>
-    /// The developer environments a host is asked about travel to it, what it found comes back under
-    /// the names they were asked by, and each one gives the host the time vswhere may take to answer.
+    /// The developer environments a host is asked about travel to it - the toolset one names with it, for the host's own
+    /// survey to look for - what it found comes back under the names they were asked by, with the toolset it found, and
+    /// each one gives the host the time vswhere may take to answer.
     /// </summary>
     [Fact]
     public async Task DeveloperEnvironmentsTravelToTheHost_AndWhatItFoundComesBack()
@@ -906,6 +907,7 @@ public sealed class HostInspectorTests
         var environments = new Dictionary<string, DeveloperEnvironmentConfig>(StringComparer.OrdinalIgnoreCase)
         {
             ["vs"] = new() { Kind = DeveloperEnvironmentKinds.VisualStudio, RequiresComponent = "Microsoft.VisualStudio.Component.VC.Tools.ARM64" },
+            ["cuda"] = new() { Kind = DeveloperEnvironmentKinds.VisualStudio, ToolsVersion = "14.44" },
         };
         var budgets = new List<TimeSpan?>();
 
@@ -916,7 +918,9 @@ public sealed class HostInspectorTests
 
             var checks = request!.DeveloperEnvironments.ToDictionary(
                 pair => pair.Key,
-                pair => DeveloperEnvironmentCheck.Nowhere($"no Visual Studio instance there has the component '{pair.Value.RequiresComponent}'"),
+                pair => pair.Value.ToolsVersion is { } toolsVersion
+                    ? DeveloperEnvironmentCheck.Installed(@"C:\VS", "18.11.0", toolsVersion + ".35207")
+                    : DeveloperEnvironmentCheck.Nowhere($"no Visual Studio instance there has the component '{pair.Value.RequiresComponent}'"),
                 StringComparer.OrdinalIgnoreCase);
 
             return HostResults.Ok(JsonSerializer.Serialize(
@@ -931,7 +935,9 @@ public sealed class HostInspectorTests
         Assert.Equal(
             "no Visual Studio instance there has the component 'Microsoft.VisualStudio.Component.VC.Tools.ARM64'",
             report.DeveloperEnvironments["VS"].Reason);
-        Assert.Equal(DeveloperEnvironmentProbe.ProbeBudget, budgets[0] - budgets[1]);
+        Assert.Null(report.DeveloperEnvironments["vs"].ToolsVersion);
+        Assert.Equal(DeveloperEnvironmentCheck.Installed(@"C:\VS", "18.11.0", "14.44.35207"), report.DeveloperEnvironments["cuda"]);
+        Assert.Equal(DeveloperEnvironmentProbe.ProbeBudget * 2, budgets[0] - budgets[1]);
     }
 
     /// <summary>
@@ -1580,7 +1586,7 @@ public sealed class HostInspectorTests
                 platform,
                 identity,
                 new EmulatorProbe(platform, processRunner, fileSystem),
-                new DeveloperEnvironmentProbe(platform, processRunner),
+                new DeveloperEnvironmentProbe(platform, processRunner, fileSystem),
                 new DeveloperEnvironmentProvider(platform, processRunner, fileSystem, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
                 fileSystem,
                 HostDoubles.Floors(platform, processRunner),

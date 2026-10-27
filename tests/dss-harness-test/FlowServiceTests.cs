@@ -1773,6 +1773,36 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
+    /// Every step of a run is handed the branch the run started on, as its records keep it - by the session that started
+    /// it and by every one that resumes it, whatever the main checkout is on by then - which its commits, pushes and pull
+    /// request are held to.
+    /// </summary>
+    [Fact]
+    public async Task EveryStep_IsHandedTheBranchTheRunStartedOn_ThroughEverySession()
+    {
+        var (repository, service, runner) = await ServiceAsync();
+        using var disposed = repository;
+        await repository.Harness.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "feature"], Token);
+
+        runner.On("one", FlowStepResult.Ended(passed: true, 0));
+        runner.Holds("two", new TaskCompletionSource().Task);
+
+        var driving = service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token);
+
+        await runner.WaitStartedAsync("two");
+
+        _ = await service.StopAsync(repository.Path, "r1", now: false, json: false, Token).WaitAsync(Bound, Token);
+        _ = await driving.WaitAsync(Bound, Token);
+        await repository.Harness.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "elsewhere"], Token);
+        runner.On("two", FlowStepResult.Ended(passed: true, 0));
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, resumed.ExitCode);
+        Assert.Equal([("one", "feature"), ("two", "feature"), ("two", "feature")], runner.Asked.Select(run => (run.Instance, run.Place!.Branch)));
+    }
+
+    /// <summary>
     /// <c>--again</c> finds the question it would change - an answered one, which the run's file keeps with every answer
     /// it was given through every later session - and is refused for the plan update it would raise, never for a
     /// question the file lost or for being answered.

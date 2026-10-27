@@ -3,7 +3,10 @@ using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
-/// <summary>How a step's runner reads a key that takes a list of names: written out, or as the engine read it where the step started.</summary>
+/// <summary>
+/// How a step's runner reads what the engine read for it where it started: a key that takes a list of names, written out
+/// or as its expression yielded, and a text the engine filled.
+/// </summary>
 internal static class FlowStepKeys
 {
     /// <summary>
@@ -26,10 +29,35 @@ internal static class FlowStepKeys
             return null;
         }
 
-        if (list.Expression is null)
-        {
-            return list.Written;
-        }
+        return list.Expression is null ? list.Written : ReadAtStart(run, key);
+    }
+
+    /// <summary>The text the engine read for <paramref name="key"/> where the step started - a pull request's body, its file filled.</summary>
+    /// <param name="run">The step's run, with what the engine read where it started.</param>
+    /// <param name="key">The key the engine read it under.</param>
+    /// <exception cref="HarnessException">The engine handed on no text: its own fault (70).</exception>
+    public static string TextAtStart(FlowStepRun run, string key)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        return run.Read is not null
+            && run.Read.TryGetValue(key, out var value)
+            && value.ToNode() is JsonValue text
+            && text.GetValueKind() == System.Text.Json.JsonValueKind.String
+                ? text.GetValue<string>()
+                : throw new HarnessException(HarnessExit.InternalError, $"'{run.Instance}' was handed no {key} read where it started");
+    }
+
+    /// <summary>The names the engine read for <paramref name="key"/> where the step started - a fold's, an anchor check's, a commit's folds upstream of it.</summary>
+    /// <param name="run">The step's run, with what the engine read where it started.</param>
+    /// <param name="key">The key the engine read them under.</param>
+    /// <exception cref="HarnessException">
+    /// The engine handed on no list of names: its own fault (70), never read as naming nothing, which would judge nothing
+    /// and pass.
+    /// </exception>
+    public static IReadOnlyList<string> ReadAtStart(FlowStepRun run, string key)
+    {
+        ArgumentNullException.ThrowIfNull(run);
 
         return run.Read is not null
             && run.Read.TryGetValue(key, out var value)

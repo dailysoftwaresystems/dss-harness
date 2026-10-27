@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using DssHarness.Core.Configuration;
 
 namespace DssHarness.Core.Agents;
@@ -16,12 +17,18 @@ namespace DssHarness.Core.Agents;
 /// otherwise - rather than signing each request with its provider's key, as an API client does.
 /// </param>
 /// <param name="Settings">The names of the slot it reads that hold no key - a setting, such as the program it starts - each by the entry's key that renames it.</param>
+/// <param name="ExtrasProblems">
+/// What is wrong with the fields its entry's <c>requestExtras</c> merge into every request, each said in full, given the
+/// value and where it is - for an API client, which writes each request itself and takes the API clients' keys; null for
+/// a client that writes none (claude-code), which takes none of them.
+/// </param>
 public sealed record AgentClientKind(
     string Name,
     string ProviderType,
     IReadOnlyList<string> Efforts,
     bool SignsIn,
-    IReadOnlyList<AgentClientSetting> Settings);
+    IReadOnlyList<AgentClientSetting> Settings,
+    Func<JsonElement, string, IEnumerable<string>>? ExtrasProblems = null);
 
 /// <summary>
 /// A setting a client reads from the slot - a value that is no key, such as the program it starts - under the name its
@@ -108,21 +115,30 @@ public static class AgentAuth
 /// </summary>
 public sealed partial class AgentProviders
 {
+    /// <summary>
+    /// The levels of effort the tool says, lowest first: what each client says a step's effort in, and the ladder a level
+    /// a model does not take is checked along.
+    /// </summary>
+    public static readonly IReadOnlyList<string> EffortLevels = ["low", "medium", "high", "xhigh", "max"];
+
     /// <summary>The client kinds the tool builds in, each naming no model.</summary>
     public static readonly IReadOnlyList<AgentClientKind> ClientKinds =
     [
         new(
             ClaudeCode.ClaudeCodeClient.ClientName,
             "anthropic",
-            ["low", "medium", "high", "xhigh", "max"],
+            EffortLevels,
             SignsIn: true,
             [
                 new(AgentClientSetting.ExecutableKey, ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable, "the program the claude-code client starts in place of npm's Claude Code"),
                 new(AgentClientSetting.ConfigDirKey, Orchestration.ClaudeTranscripts.ConfigDirectoryVariable, "the Claude Code directory the claude-code client signs in from and reads the user's settings in"),
             ]),
-        new("claude-api", "anthropic", ["low", "medium", "high", "xhigh", "max"], SignsIn: false, []),
-        new("glm", "zai", ["low", "high", "max"], SignsIn: false, []),
+        new(ClaudeApi.ClaudeApiClient.ClientName, "anthropic", EffortLevels, SignsIn: false, [], ClaudeApi.ClaudeApiRequest.ExtrasProblems),
+        new(ZaiApi.ZaiApiClient.ClientName, "zai", EffortLevels, SignsIn: false, [], ZaiApi.ZaiApiRequest.ExtrasProblems),
     ];
+
+    /// <summary>The API clients, by name: the client kinds that write each request themselves, and take the API clients' keys.</summary>
+    public static IEnumerable<string> ApiClients => ClientKinds.Where(kind => kind.ExtrasProblems is not null).Select(kind => kind.Name);
 
     private readonly Dictionary<string, (AgentProviderConfig Provider, AgentModelConfig Model)> _models = new(StringComparer.Ordinal);
 
@@ -246,13 +262,18 @@ public sealed partial class AgentProviders
             problems.Add($"agentClients '{client}' is not a client this tool builds in: {string.Join(", ", ClientKinds.Select(kind => $"'{kind.Name}'"))}");
         }
 
-        foreach (var (client, entry) in config.AgentClients.Where(entry => entry.Value.Update is not null && entry.Key != ClaudeCode.ClaudeCodeClient.ClientName))
+        // The rules of each client's keys read the entries of the clients the tool builds in: an entry of any other name is
+        // refused above, whole, and nothing of it is said again.
+        List<KeyValuePair<string, AgentClientConfig>> builtIn = [.. config.AgentClients.Where(entry => KindOf(entry.Key) is not null)];
+
+        foreach (var (client, entry) in builtIn.Where(entry => entry.Value.Update is not null && entry.Key != ClaudeCode.ClaudeCodeClient.ClientName))
         {
             problems.Add($"agentClients '{client}' names update, a key of the claude-code client alone: whether the tool installs Claude Code with npm and brings one up to date");
         }
 
-        AuthRules(config, problems);
-        AppointedNameRules(config, providers, problems);
+        AuthRules(builtIn, problems);
+        RequestRules(builtIn, problems);
+        AppointedNameRules(builtIn, providers, problems);
 
         foreach (var (provider, at) in providers.Select((entry, at) => (entry, at)))
         {
@@ -343,9 +364,9 @@ public sealed partial class AgentProviders
     /// signs each request with its provider's key - <c>auth</c> one of its ways, and <c>token</c> read only by a way that
     /// reads one, and a variable's name. That it is appointed once is <see cref="AppointedNameRules"/>'.
     /// </summary>
-    private static void AuthRules(HarnessConfig config, List<string> problems)
+    private static void AuthRules(List<KeyValuePair<string, AgentClientConfig>> clients, List<string> problems)
     {
-        foreach (var (client, entry) in config.AgentClients)
+        foreach (var (client, entry) in clients)
         {
             var signsIn = KindOf(client) is { SignsIn: true };
 
@@ -378,22 +399,105 @@ public sealed partial class AgentProviders
     }
 
     /// <summary>
+    /// What an API client's entry says of its requests, each key held to the clients it is of - so a key that loads is a
+    /// key that is read - and to what it can be: the API clients' tries, none or more, their longest wait, a second or
+    /// more, and the fields they add, setting nothing their tool sends itself; claude-api's cache lifetime, one of
+    /// <see cref="ClaudeApi.ClaudeApiRequest.CacheTtls"/>, and its betas, each one word, named once, none the API's own
+    /// fallback's; and glm's <c>preserveThinking</c>.
+    /// </summary>
+    private static void RequestRules(List<KeyValuePair<string, AgentClientConfig>> clients, List<string> problems)
+    {
+        const string Claude = ClaudeApi.ClaudeApiClient.ClientName;
+        const string Glm = ZaiApi.ZaiApiClient.ClientName;
+        string[] apis = [.. ApiClients];
+
+        foreach (var (client, entry) in clients)
+        {
+            var where = $"agentClients '{client}'";
+            (string Key, bool Named, string What, string[] Of)[] keys =
+            [
+                ("maxRetries", entry.MaxRetries is not null, "how many times a failed request is asked again", apis),
+                ("maxRetryWaitSeconds", entry.MaxRetryWaitSeconds is not null, "the longest wait before a failed request is asked again", apis),
+                ("requestExtras", entry.RequestExtras is not null, "the fields merged into every request's body", apis),
+                ("cacheTtl", entry.CacheTtl is not null, "how long what a request caches is kept", [Claude]),
+                ("betas", entry.Betas is not null, "the beta headers sent beside the tool's own", [Claude]),
+                ("preserveThinking", entry.PreserveThinking is not null, "whether Z.AI keeps the model's reasoning across turns", [Glm]),
+            ];
+
+            foreach (var (key, _, what, of) in keys.Where(key => key.Named && !key.Of.Contains(client, StringComparer.Ordinal)))
+            {
+                problems.Add(of is [var alone]
+                    ? $"{where} names {key}, a key of the {alone} client alone: {what}"
+                    : $"{where} names {key}, a key of the API clients alone ({string.Join(", ", of)}): {what}");
+            }
+
+            if (KindOf(client) is not { ExtrasProblems: { } extrasProblems })
+            {
+                continue;
+            }
+
+            if (entry.MaxRetries is < 0)
+            {
+                problems.Add($"{where} maxRetries is {entry.MaxRetries.Value.ToString(CultureInfo.InvariantCulture)}; how many times a failed request is asked again is none or more");
+            }
+
+            if (entry.MaxRetryWaitSeconds is < 1)
+            {
+                problems.Add($"{where} maxRetryWaitSeconds is {entry.MaxRetryWaitSeconds.Value.ToString(CultureInfo.InvariantCulture)}; the longest wait before a failed request is asked again is a second or more");
+            }
+
+            if (entry.RequestExtras is { } extras)
+            {
+                problems.AddRange(extrasProblems(extras, $"{where} requestExtras"));
+            }
+
+            if (client != Claude)
+            {
+                continue;
+            }
+
+            if (entry.CacheTtl is { } ttl && !ClaudeApi.ClaudeApiRequest.CacheTtls.Contains(ttl, StringComparer.Ordinal))
+            {
+                problems.Add($"{where} cacheTtl '{ttl}' is none of: {string.Join(", ", ClaudeApi.ClaudeApiRequest.CacheTtls)}");
+            }
+
+            foreach (var beta in entry.Betas ?? [])
+            {
+                if (beta.Length == 0 || beta.Any(character => char.IsWhiteSpace(character) || character == ','))
+                {
+                    problems.Add($"{where} betas '{beta}' is no beta's name: one word, sent in a header beside the tool's own");
+                }
+                else if (beta.StartsWith(ClaudeApi.ClaudeApiRequest.ServerSideFallbackPrefix, StringComparison.Ordinal))
+                {
+                    problems.Add($"{where} betas '{beta}' is refused: the API's own fallback is never asked for, for the engine's fallback is the only one a step has");
+                }
+            }
+
+            foreach (var twice in (entry.Betas ?? []).GroupBy(beta => beta, StringComparer.Ordinal).Where(group => group.Count() > 1))
+            {
+                problems.Add($"{where} lists '{twice.Key}' twice in betas: each beta is listed once");
+            }
+        }
+    }
+
+    /// <summary>
     /// The names a client appoints in the slot - its token, where it signs in with one, and each setting it reads - each by
     /// the name its entry gives or its own where it gives none, and each appointed once, beside every provider's keys and
     /// the client's other names, for a name holds one value. A setting's key is one of the client that reads it alone,
     /// and the name it gives is a variable's name.
     /// </summary>
-    private static void AppointedNameRules(HarnessConfig config, List<AgentProviderConfig> providers, List<string> problems)
+    private static void AppointedNameRules(List<KeyValuePair<string, AgentClientConfig>> builtIn, List<AgentProviderConfig> providers, List<string> problems)
     {
         var keys = ClientKinds.SelectMany(kind => kind.Settings).Select(setting => setting.Key).Distinct(StringComparer.Ordinal).ToList();
-        var clients = config.AgentClients.Keys.Concat(Served(providers).Select(kind => kind.Name)).Distinct(StringComparer.OrdinalIgnoreCase);
+        var clients = builtIn.Select(entry => entry.Key).Concat(Served(providers).Select(kind => kind.Name)).Distinct(StringComparer.Ordinal);
 
         foreach (var client in clients)
         {
-            var entry = config.AgentClients.GetValueOrDefault(client);
-            var kind = KindOf(client);
+            // builtIn holds only entries named as a client exactly: one of another case is no client's, and is said once above.
+            var entry = builtIn.FirstOrDefault(each => each.Key == client).Value;
+            var kind = KindOf(client)!;
 
-            foreach (var key in keys.Where(key => kind?.Settings.Any(own => own.Key == key) is not true))
+            foreach (var key in keys.Where(key => !kind.Settings.Any(own => own.Key == key)))
             {
                 var owner = ClientKinds.First(other => other.Settings.Any(own => own.Key == key));
                 var setting = owner.Settings.First(own => own.Key == key);
@@ -402,11 +506,6 @@ public sealed partial class AgentProviders
                 {
                     problems.Add($"agentClients '{client}' names {key}, a key of the {owner.Name} client alone: the variable that holds {setting.What}");
                 }
-            }
-
-            if (kind is null)
-            {
-                continue;
             }
 
             var names = new List<(string For, string Name)>();
@@ -534,11 +633,12 @@ public sealed partial class AgentProviders
     }
 
     /// <summary>
-    /// Every name the configuration appoints a value of the slot for, of providers and clients both, each with who
-    /// appoints it, what its value is and whether it is a secret: each provider's keys, in its order, and the settings a
-    /// built-in client reads where a provider of the type it reaches is declared - the program the claude-code client
-    /// starts among them. What the slot holds beyond these is appointed by nothing, which a listing and a missing key's
-    /// refusal say, where a misspelt name shows.
+    /// Every name the configuration appoints a value of the slot for, of providers, clients and web-search sources, each
+    /// with who appoints it, by which key, what its value is and whether it is a secret: each provider's keys, in its
+    /// order, the settings and token a built-in client reads where a provider of the type it reaches is declared - the
+    /// program the claude-code client starts among them - and each web-search source's key (<see cref="SourceKeys"/>).
+    /// What the slot holds beyond these is appointed by nothing, which a listing and a missing key's refusal say, where a
+    /// misspelt name shows.
     /// </summary>
     public IReadOnlyList<Secrets.AppointedKey> Appointed()
     {
@@ -546,22 +646,36 @@ public sealed partial class AgentProviders
 
         foreach (var provider in Config.Providers)
         {
-            appointed.AddRange(provider.ApiKeyNames.Select(name => new Secrets.AppointedKey(name, $"provider '{provider.Name}'", Secrets.AgentKeyStore.WhatHolds(provider))));
+            appointed.AddRange(provider.ApiKeyNames.Select(name => new Secrets.AppointedKey(name, $"provider '{provider.Name}'", Secrets.AgentKeyStore.WhatHolds(provider), "apiKeyNames")));
         }
 
         foreach (var kind in Served(Config.Providers))
         {
             appointed.AddRange(SettingsRead().Where(read => read.Client == kind.Name).Select(read => new Secrets.AppointedKey(
-                read.Name, $"client '{kind.Name}'", read.Setting.What, Secret: false)));
+                read.Name, $"client '{kind.Name}'", read.Setting.What, read.Setting.Key, Secret: false)));
 
             if (TokenOf(kind.Name) is { } token)
             {
-                appointed.Add(new Secrets.AppointedKey(token, $"client '{kind.Name}'", $"the token client '{kind.Name}' signs in with ({AuthOf(kind.Name)})"));
+                appointed.Add(new Secrets.AppointedKey(token, $"client '{kind.Name}'", $"the token client '{kind.Name}' signs in with ({AuthOf(kind.Name)})", "token"));
             }
+        }
+
+        foreach (var (source, name) in SourceKeys())
+        {
+            appointed.Add(new Secrets.AppointedKey(name, $"web-search source '{source}'", $"the key web-search source '{source}' is sent, where it is there", "credential.name"));
         }
 
         return appointed;
     }
+
+    /// <summary>
+    /// Each variable of the slot a web-search source is sent as its key, by the source, in the configuration's order:
+    /// optional, each sent to its own source alone, and as secret as a provider's.
+    /// </summary>
+    public IReadOnlyList<(string Source, string Name)> SourceKeys()
+        => [.. Web.Search.WebSearchSources.Of(Config, Web.Search.WebSearchKinds.OfThisBuild).All
+            .Where(source => source.Credential is { From: "env", Name: not null })
+            .Select(source => (source.Name, source.Credential!.Name!))];
 
     /// <summary>Whether <paramref name="client"/> is one the tool builds in and reaches <paramref name="provider"/>'s type: the one rule of reach, for a provider's own client and a step's alike.</summary>
     /// <param name="client">The client's name.</param>

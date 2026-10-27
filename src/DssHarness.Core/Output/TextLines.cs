@@ -40,4 +40,13 @@ internal static class TextLines
 
         return lines;
     }
+
+    /// <summary><paramref name="text"/> as one line: each of its lines trimmed, the empty ones dropped, joined by a space - a message said inside another line.</summary>
+    /// <param name="text">The text.</param>
+    public static string OneLine(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        return string.Join(' ', Split(text).Select(line => line.Text.Trim()).Where(line => line.Length > 0));
+    }
 }

@@ -1,0 +1,7 @@
+{
+  "totalHits": 2,
+  "data": [
+    { "id": "Example.Json", "version": "2.1.0", "description": "Reads JSON fast.", "totalDownloads": 100 },
+    { "id": "Example.Json.Extensions", "version": "1.0.0", "description": "Extensions for Example.Json.", "totalDownloads": 10 }
+  ]
+}

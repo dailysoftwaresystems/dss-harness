@@ -31,13 +31,27 @@ namespace DssHarness.Tests;
 /// call was asked. A call can run <c>unasked</c> (or fail after running unasked, <c>unaskedFailed</c>, with Claude
 /// Code's input-error mark, <c>unaskedFailedMarked</c>, or <c>unaskedFailedBare</c> as a version that stamps nothing
 /// beside a result), fail on its input before anything is asked (<c>invalidInput</c>), be refused by Claude Code itself
-/// (<c>refusedByClaude</c>), run though the host denied it (<c>ranThoughDenied</c>), or be cut by the interrupt while
+/// (<c>refusedByClaude</c>), by its own deny rule as a file tool's call is - told by its result alone, stamped as 2.1.308
+/// stamps it (<c>deniedByRule</c>) or bare as 2.1.287 writes it (<c>deniedByRuleBare</c>) - or told by a
+/// <c>permission_denied</c> line and that result both (<c>deniedByRuleTold</c>), run though the host denied it (<c>ranThoughDenied</c>), or be cut by the interrupt while
 /// it is asked, whatever the host answered (<c>cutWhileAsked</c>: the ask withdrawn, the call stamped
 /// <c>user-rejected</c>, as 2.1.296 was seen to do). A turn can be <c>declined</c> (the category, or empty for none;
 /// said where <c>declinedBy</c> names, or everywhere), and can carry a <c>rateLimit</c> event's info first, a
 /// <c>controlRequest</c> of its own that it does not wait on, and take <c>slowMs</c> before it plays. Each answer of
 /// the host's to a call is written back, as the CLI writes it. Its <c>ignoreEof</c> keeps the process running once its
 /// input is closed, as a launch that does not end by itself.
+/// <para>
+/// Where <c>--mcp-config</c> names a server of type <c>sdk</c>, it connects it before its first init as the probe saw
+/// Claude Code do - <c>initialize</c>, <c>notifications/initialized</c>, <c>tools/list</c>, each an <c>mcp_message</c> it
+/// waits on - and its init lists the server, <c>connected</c>, and its tools as <c>mcp__&lt;server&gt;__&lt;tool&gt;</c>. A
+/// call of one is asked of the host, and once allowed sent to the server as <c>tools/call</c> with the call's id in its
+/// <c>_meta</c>, its result the server's text. The first turn's <c>mcpStatus</c> connects nothing and says that status; a
+/// turn's <c>initMcpServers</c> is what its init says of them; a call's <c>calledUnasked</c> sends <c>tools/call</c> with no
+/// ask, its <c>calledThoughDenied</c> sends it though the host denied it, its <c>otherCallId</c> names another call in it -
+/// one never made - its <c>otherToolsCallId</c> the turn's call before it, of another tool, its <c>noCallId</c> none, its
+/// <c>calledTwice</c> sends it twice, its <c>otherServer</c> names a server it was not given, and its <c>cancelCall</c>
+/// cancels it as it is sent.
+/// </para>
 /// </remarks>
 internal static class FakeClaude
 {
@@ -68,6 +82,13 @@ internal static class FakeClaude
         var tools = (Option(arguments, "--tools") ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries).ToList();
         var first = turns.Count > 0 ? turns[0] as JsonObject : null;
         var ids = 0;
+
+        // The servers --mcp-config names of type sdk, connected before the first init; what each request of theirs awaits.
+        var servers = McpServers(Option(arguments, "--mcp-config"));
+        var serverTools = new List<string>();
+        var connected = servers.Count == 0 || first?["mcpStatus"] is not null;
+        var awaited = new Dictionary<string, string>(StringComparer.Ordinal);
+        var rpc = 1;
 
         if (record is not null)
         {
@@ -173,6 +194,47 @@ internal static class FakeClaude
             Say(line);
         }
 
+        // An MCP message of the server's, sent to the host and waited on as what it is.
+        string Mcp(string server, JsonObject message, string answer)
+        {
+            var request = Id("mcp-");
+            awaited[request] = answer;
+            Say(new JsonObject
+            {
+                ["type"] = "control_request",
+                ["request_id"] = request,
+                ["request"] = new JsonObject { ["subtype"] = "mcp_message", ["server_name"] = server, ["message"] = message },
+            });
+
+            return request;
+        }
+
+        // A call of the server's tool sent to it, its id in its _meta as Claude Code names it there.
+        void CallServer(JsonObject call, string tool)
+        {
+            var server = tool.Split("__")[1];
+            var parameters = new JsonObject { ["name"] = tool[$"mcp__{server}__".Length..], ["arguments"] = call["input"]?.DeepClone() ?? new JsonObject() };
+
+            if (!Flag(call, "noCallId"))
+            {
+                var named = Flag(call, "otherCallId") ? Id("toolu_") : Flag(call, "otherToolsCallId") ? Text(calls[callAt - 1]["id"]) : Text(call["id"]);
+                parameters["_meta"] = new JsonObject { ["claudecode/toolUseId"] = named, ["progressToken"] = 2 };
+            }
+
+            var id = ++rpc;
+            Mcp(Flag(call, "otherServer") ? "other" : server, new JsonObject { ["method"] = "tools/call", ["params"] = parameters, ["jsonrpc"] = "2.0", ["id"] = id }, "call");
+
+            if (Flag(call, "calledTwice"))
+            {
+                Mcp(server, new JsonObject { ["method"] = "tools/call", ["params"] = parameters.DeepClone(), ["jsonrpc"] = "2.0", ["id"] = ++rpc }, "again");
+            }
+
+            if (Flag(call, "cancelCall"))
+            {
+                Mcp(server, new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "notifications/cancelled", ["params"] = new JsonObject { ["requestId"] = id, ["reason"] = "the fake cancelled it" } }, "ack");
+            }
+        }
+
         // The echo of a message taken, by the id the host gave it.
         void Echo(string content, string? id)
             => Say(new JsonObject
@@ -216,9 +278,29 @@ internal static class FakeClaude
                     return;
                 }
 
-                if (Flag(call, "unasked") || Flag(call, "unaskedFailed") || Flag(call, "unaskedFailedMarked") || Flag(call, "unaskedFailedBare") || Flag(call, "invalidInput") || Flag(call, "refusedByClaude"))
+                if (Flag(call, "calledUnasked"))
                 {
-                    if (Flag(call, "refusedByClaude"))
+                    // A call of the server's sent with no ask: its result is the server's answer.
+                    CallServer(call, tool);
+                    return;
+                }
+
+                if (Flag(call, "unasked") || Flag(call, "unaskedFailed") || Flag(call, "unaskedFailedMarked") || Flag(call, "unaskedFailedBare") || Flag(call, "invalidInput") || Flag(call, "refusedByClaude")
+                    || Flag(call, "deniedByRule") || Flag(call, "deniedByRuleBare") || Flag(call, "deniedByRuleTold"))
+                {
+                    if (Flag(call, "deniedByRule") || Flag(call, "deniedByRuleBare"))
+                    {
+                        // As every version refuses a file tool's call its deny rules refuse: as it reads the input, the host
+                        // never asked, nothing said but the result.
+                        ToolResult(id, ok: false, DssHarness.Core.Agents.ClaudeCode.ClaudeLine.DeniedByRuleResult, Flag(call, "deniedByRule") ? Meta(id, null, "reject", "config", "rule") : null);
+                    }
+                    else if (Flag(call, "deniedByRuleTold"))
+                    {
+                        // Told twice: by a permission_denied line, as a search's refusal is, and by the file tool's result.
+                        Say(new JsonObject { ["type"] = "system", ["subtype"] = "permission_denied", ["tool_name"] = tool, ["tool_use_id"] = id, ["decision_reason_type"] = "rule", ["message"] = "Permission to read the file has been denied.", ["session_id"] = session });
+                        ToolResult(id, ok: false, DssHarness.Core.Agents.ClaudeCode.ClaudeLine.DeniedByRuleResult, Meta(id, "permission-rule", "reject", "config", "rule"));
+                    }
+                    else if (Flag(call, "refusedByClaude"))
                     {
                         // As a launch without --permission-prompt-tool stdio refuses a call: by itself, the host never asked.
                         const string Refused = "Claude requested permissions to use this tool, but you haven't granted it yet.";
@@ -340,7 +422,7 @@ internal static class FakeClaude
 
             if (schema)
             {
-                answer = entry.ContainsKey("answer") ? entry["answer"]?.DeepClone() : new JsonObject { ["answer"] = "alpha" };
+                answer = entry.ContainsKey("answer") ? entry["answer"]?.DeepClone() : Envelopes.Of(new JsonObject { ["answer"] = "alpha" });
                 var structured = Id("toolu_");
                 Say(new JsonObject { ["type"] = "stream_event", ["event"] = new JsonObject { ["type"] = "message_start", ["message"] = new JsonObject { ["model"] = Model(entry) } }, ["session_id"] = session });
                 Say(new JsonObject { ["type"] = "stream_event", ["event"] = new JsonObject { ["type"] = "content_block_start", ["index"] = 0, ["content_block"] = new JsonObject { ["type"] = "tool_use", ["id"] = structured, ["name"] = "StructuredOutput", ["input"] = new JsonObject() } }, ["session_id"] = session });
@@ -377,8 +459,9 @@ internal static class FakeClaude
         // The next message taken, where one waits and no turn is under way: a turn of its own.
         void Next()
         {
-            // A message taken for its turn as the interrupt came holds the turn: the rest wait behind it.
-            if (busy || late is not null || !queued.TryDequeue(out var taken))
+            // A message taken for its turn as the interrupt came holds the turn: the rest wait behind it; and no turn begins
+            // before the servers are connected.
+            if (!connected || busy || late is not null || !queued.TryDequeue(out var taken))
             {
                 return;
             }
@@ -400,7 +483,8 @@ internal static class FakeClaude
                     ["subtype"] = "init",
                     ["session_id"] = session,
                     ["model"] = Text(playing["initModel"]) ?? model,
-                    ["tools"] = playing["initTools"]?.DeepClone() ?? new JsonArray([.. tools.Concat(schema ? ["StructuredOutput"] : []).Select(tool => (JsonNode)tool)]),
+                    ["tools"] = playing["initTools"]?.DeepClone() ?? new JsonArray([.. tools.Concat(serverTools).Concat(schema ? ["StructuredOutput"] : []).Select(tool => (JsonNode)tool)]),
+                    ["mcp_servers"] = playing["initMcpServers"]?.DeepClone() ?? new JsonArray([.. servers.Select(server => (JsonNode)new JsonObject { ["name"] = server, ["status"] = Text(first?["mcpStatus"]) ?? "connected", ["source"] = "sdk" })]),
                     ["apiKeySource"] = Text(playing["apiKeySource"]) ?? (Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") is { Length: > 0 } ? "ANTHROPIC_API_KEY" : "none"),
                     ["claude_code_version"] = "fake",
                 });
@@ -453,6 +537,18 @@ internal static class FakeClaude
             }
 
             Play();
+        }
+
+        if (!connected)
+        {
+            // Each server is connected as the launch starts, before anything is read: its initialize first.
+            Mcp(servers[0], new JsonObject
+            {
+                ["method"] = "initialize",
+                ["params"] = new JsonObject { ["protocolVersion"] = "2025-11-25", ["capabilities"] = new JsonObject(), ["clientInfo"] = new JsonObject { ["name"] = "claude-code", ["version"] = "fake" } },
+                ["jsonrpc"] = "2.0",
+                ["id"] = 0,
+            }, "initialize");
         }
 
         using var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom);
@@ -579,6 +675,37 @@ internal static class FakeClaude
                 queued.Enqueue((content, id));
                 Next();
             }
+            else if (kind == "control_response" && Text(node["response"]?["request_id"]) is { } answeredId && awaited.Remove(answeredId, out var step))
+            {
+                // The host's answer to a message of the server's, written back as the CLI writes every answer.
+                Say(node);
+                var reply = node["response"]?["response"]?["mcp_response"];
+
+                switch (step)
+                {
+                    case "initialize":
+                        Mcp(servers[0], new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "notifications/initialized" }, "initialized");
+                        break;
+                    case "initialized":
+                        Mcp(servers[0], new JsonObject { ["method"] = "tools/list", ["jsonrpc"] = "2.0", ["id"] = 1 }, "list");
+                        break;
+                    case "list":
+                        serverTools.AddRange((reply?["result"]?["tools"] as JsonArray ?? []).Select(tool => $"mcp__{servers[0]}__{Text(tool?["name"])}"));
+                        connected = true;
+                        Next();
+                        break;
+                    case "call":
+                        var served = calls[callAt];
+                        var servedId = Text(served["id"])!;
+                        var failed = Text(node["response"]?["subtype"]) == "error" ? Text(node["response"]?["error"]) : reply?["error"] is { } error ? $"MCP error {error["code"]}: {Text(error["message"])}" : null;
+                        var said = failed ?? string.Join('\n', (reply?["result"]?["content"] as JsonArray ?? []).Select(block => Text(block?["text"])));
+                        var isError = failed is not null || (reply?["result"]?["isError"] is JsonValue flagged && flagged.GetValue<bool>());
+                        ToolResult(servedId, ok: !isError, said, Meta(servedId, null, "accept", "user_temporary"));
+                        callAt++;
+                        Play();
+                        break;
+                }
+            }
             else if (kind == "control_response" && waitingOn is not null && Text(node["response"]?["request_id"]) == waitingOn)
             {
                 // As the CLI does, the host's answer is written back on the stream.
@@ -586,15 +713,28 @@ internal static class FakeClaude
                 waitingOn = null;
                 var call = calls[callAt];
                 var id = Text(call["id"])!;
+                var tool = Text(call["tool"]) ?? "Read";
                 var behavior = Text(node["response"]?["response"]?["behavior"]);
 
                 if (Text(node["response"]?["subtype"]) == "error")
                 {
                     ToolResult(id, ok: false, "Tool permission request failed: Error: " + Text(node["response"]?["error"]), Meta(id, "permission-rule", "reject", "config"));
                 }
+                else if (behavior == "allow" && tool.StartsWith("mcp__", StringComparison.Ordinal) && servers.Contains(tool.Split("__")[1]))
+                {
+                    // A call of the server's, allowed: sent to it, its result its answer.
+                    CallServer(call, tool);
+                    continue;
+                }
                 else if (behavior == "allow")
                 {
                     ToolResult(id, ok: true, Text(call["result"]) ?? "ran", Meta(id, null, "accept", "user_temporary"));
+                }
+                else if (Flag(call, "calledThoughDenied") && tool.StartsWith("mcp__", StringComparison.Ordinal))
+                {
+                    // A call of the server's the host denied, sent to it all the same.
+                    CallServer(call, tool);
+                    continue;
                 }
                 else if (Flag(call, "ranThoughDenied"))
                 {
@@ -624,11 +764,17 @@ internal static class FakeClaude
         return 0;
     }
 
+    /// <summary>The servers of type <c>sdk</c> an <c>--mcp-config</c> file names, by name; none where it names no file.</summary>
+    private static List<string> McpServers(string? file)
+        => file is null
+            ? []
+            : [.. (JsonNode.Parse(File.ReadAllText(file))?["mcpServers"] as JsonObject ?? []).Where(server => Text(server.Value?["type"]) == "sdk").Select(server => server.Key)];
+
     private static bool Flag(JsonObject entry, string name)
         => entry[name] is JsonValue value && value.TryGetValue<bool>(out var set) && set;
 
     /// <summary>What Claude Code says beside a call's result: why it did not run, where it did not, and how its permission was decided.</summary>
-    private static JsonObject Meta(string id, string? notRun, string decision, string source)
+    private static JsonObject Meta(string id, string? notRun, string decision, string source, string? reason = null)
     {
         var meta = new JsonObject { ["id"] = id };
 
@@ -638,6 +784,11 @@ internal static class FakeClaude
         }
 
         meta["permission_decision"] = new JsonObject { ["decision"] = decision, ["source"] = source };
+
+        if (reason is not null)
+        {
+            meta["permission_decision"]!["reason_type"] = reason;
+        }
 
         return meta;
     }

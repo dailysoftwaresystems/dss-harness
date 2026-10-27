@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -94,6 +95,63 @@ public static class JsonStateFile
 
         using var lines = FileLines.Read(fileSystem, path).GetEnumerator();
         return read(new JsonLineReader(lines));
+    }
+
+    /// <summary>
+    /// The records of a log a writer appends to a line at a time (<see cref="Agents.AppendLog"/>), each whole line one
+    /// record read by <see cref="LineOptions"/>, read a line at a time: a last line no line feed ended is a writer's torn
+    /// line - half an append, or a whole record whose line feed never reached the disk - set aside and given back, never
+    /// read as a record and never repaired; none where there is no file.
+    /// </summary>
+    /// <typeparam name="T">What each line holds.</typeparam>
+    /// <param name="fileSystem">The file system it is read through.</param>
+    /// <param name="path">The log.</param>
+    /// <param name="problem">Why a record read does not stand where it does, given the records before it; null where it does.</param>
+    /// <param name="refused">The refusal of a whole line that is no record, by its number from 1 and why.</param>
+    /// <returns>Each record in order, and the torn line set aside where there was one.</returns>
+    public static (IReadOnlyList<T> Records, string? Torn) ReadLog<T>(IFileSystem fileSystem, string path, Func<T, IReadOnlyList<T>, string?> problem, Func<int, string, Exception> refused)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(problem);
+        ArgumentNullException.ThrowIfNull(refused);
+
+        if (fileSystem.KindOf(path) != PathKind.File)
+        {
+            return ([], null);
+        }
+
+        var records = new List<T>();
+
+        // A line at a time: a log grows with what writes it.
+        foreach (var (text, ended) in FileLines.Read(fileSystem, path))
+        {
+            if (!ended)
+            {
+                return (records, text);
+            }
+
+            T? read;
+
+            // A record of many kinds whose line names none, or not first, is no more one than a line that is no JSON.
+            try
+            {
+                read = JsonSerializer.Deserialize<T>(text.TrimEnd('\r'), LineOptions);
+            }
+            catch (Exception ex) when (ex is JsonException or NotSupportedException)
+            {
+                throw refused(records.Count + 1, ex.Message.TrimEnd('.'));
+            }
+
+            if ((read is null ? "it holds null" : problem(read, records)) is { } why)
+            {
+                throw refused(records.Count + 1, why);
+            }
+
+            records.Add(read!);
+        }
+
+        return (records, null);
     }
 
     /// <summary>Writes a state file as lines (<see cref="JsonLineWriter"/>), whole and atomically, as <paramref name="write"/> gives them.</summary>

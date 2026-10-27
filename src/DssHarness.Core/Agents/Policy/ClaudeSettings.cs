@@ -49,16 +49,43 @@ public static class ClaudeSettings
         new("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "1"),
     ];
 
+    /// <summary>The variable Claude Code reads for how long a shell command runs where its call names no time, in milliseconds.</summary>
+    public const string BashTimeoutVariable = "BASH_DEFAULT_TIMEOUT_MS";
+
+    /// <summary>The variable Claude Code reads for the most time a call of a shell command may name, in milliseconds.</summary>
+    public const string BashMaxTimeoutVariable = "BASH_MAX_TIMEOUT_MS";
+
+    /// <summary>
+    /// The names the engine sets in a launch whose commands run under <paramref name="commands"/>, in the order they are
+    /// written: <see cref="Controlled"/>, then Claude Code's own bounds of a shell command from
+    /// <c>agentPolicy.commandTimeoutSeconds</c> and <c>maxCommandTimeoutSeconds</c> - so a command an agent runs is held to
+    /// them on this client as on every other.
+    /// </summary>
+    /// <param name="commands">What the configuration says of an agent's commands.</param>
+    public static IReadOnlyList<KeyValuePair<string, string>> Launched(AgentCommandSettings commands)
+    {
+        ArgumentNullException.ThrowIfNull(commands);
+
+        return
+        [
+            .. Controlled,
+            new(BashTimeoutVariable, (commands.TimeoutSeconds * 1000L).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new(BashMaxTimeoutVariable, (commands.MaxTimeoutSeconds * 1000L).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        ];
+    }
+
     /// <summary>
     /// Renders the settings file of one launch.
     /// </summary>
     /// <param name="tools">Every tool the launch has, by Claude Code's own names, as <c>--tools</c> names them.</param>
     /// <param name="ground">The launch's ground: its restrictions and the roots it reads and writes.</param>
+    /// <param name="commands">What the configuration says of an agent's commands, whose times the settings' <c>env</c> holds.</param>
     /// <param name="comparison">How a name in a pattern and a name in a path compare: the case rule of the tree the path is in.</param>
-    public static string Render(IReadOnlyList<string> tools, AgentPolicyGround ground, StringComparison comparison)
+    public static string Render(IReadOnlyList<string> tools, AgentPolicyGround ground, AgentCommandSettings commands, StringComparison comparison)
     {
         ArgumentNullException.ThrowIfNull(tools);
         ArgumentNullException.ThrowIfNull(ground);
+        ArgumentNullException.ThrowIfNull(commands);
 
         using var stream = new MemoryStream();
 
@@ -74,7 +101,7 @@ public static class ClaudeSettings
 
             writer.WriteStartObject("env");
 
-            foreach (var (name, value) in Controlled)
+            foreach (var (name, value) in Launched(commands))
             {
                 writer.WriteString(name, value);
             }

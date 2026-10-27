@@ -22,12 +22,34 @@ public sealed record FlowAnswerGiven(string Question, string Answer);
 /// <param name="Blocks">Whether the issue stops the reporting step's own work.</param>
 public sealed record FlowPreExistingReport(string Title, string Description, string Where, string Evidence, bool Blocks);
 
-/// <summary>The run a step belongs to: where it works, its name, the commit it started from and the workflow it runs.</summary>
+/// <summary>
+/// The run a step belongs to: where it works, its name, the commit and the branch it started from and the workflow it
+/// runs.
+/// </summary>
 /// <param name="Repository">The main checkout's root: where every service a step calls is asked from.</param>
 /// <param name="Run">The run's name, which names its orchestrator.</param>
 /// <param name="StartCommit">The commit the run started from; null where its records name none.</param>
 /// <param name="Definition">The workflow the run runs, as it was frozen when the run began.</param>
-public sealed record FlowRunPlace(string Repository, string Run, string? StartCommit, WorkflowDefinition Definition);
+/// <param name="Branch">
+/// The branch the run started on, as its records keep it (<see cref="FlowRunContext.Branch"/>): the one its commits, its
+/// pushes and its pull request work on (<see cref="OffItsBranch"/>); null where its records name none.
+/// </param>
+public sealed record FlowRunPlace(string Repository, string Run, string? StartCommit, WorkflowDefinition Definition, string? Branch = null)
+{
+    /// <summary>
+    /// Why a step that publishes the run's work - a commit, a push, a pull request - is refused with the main checkout on
+    /// <paramref name="branch"/>: it is not the branch the run started on - a person checked another out while the run was
+    /// paused - and the run's work would go onto that one. The one guard of the three; null where the checkout is on the
+    /// run's branch, or where the run's records name none.
+    /// </summary>
+    /// <param name="instance">The step's instance, which the refusal names.</param>
+    /// <param name="branch">The branch the main checkout is on now; null where its HEAD is detached.</param>
+    /// <param name="untouched">What the step did not do, as the refusal's last sentence says it: <c>staged</c>, <c>pushed</c> or <c>opened</c>.</param>
+    public string? OffItsBranch(string instance, string? branch, string untouched)
+        => Branch is { } started && !string.Equals(branch, started, StringComparison.Ordinal)
+            ? $"'{instance}' works on '{started}', the branch the run started on, and the main checkout {(branch is null ? "has its HEAD detached" : $"is on '{branch}'")} now: check out '{started}', then resume. Nothing was {untouched}."
+            : null;
+}
 
 /// <summary>
 /// The agent a step makes, as the engine named it before the step began: written to the step's record with the model
@@ -62,7 +84,9 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// <c>allow.new</c> and <c>allow.merge</c>, a refresh's <c>paths</c>, <c>except</c>, <c>stale</c> and <c>merge</c> and a
 /// rebase's <c>merge</c>, each the names its expression yielded, under its key - <c>allow.new</c> and <c>allow.merge</c>
 /// spelt so - and none where one that may read nothing did; a <c>ci-wait</c> step's <c>commit</c> where it names none,
-/// the commit the run last pushed. Empty for every other step.
+/// the commit the run last pushed; a <c>commit</c> step's <c>folds</c>, the instances of the fold and delete-agent steps
+/// upstream of it that fold; a <c>pull-request</c> step's <c>body</c>, the text of the file it names, filled. Empty for
+/// every other step.
 /// </param>
 /// <param name="Made">The agent a <c>create-agent</c> step makes, as the engine named it; null for every other step.</param>
 /// <param name="WorksIn">
@@ -72,6 +96,11 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// <param name="Target">
 /// The agent a refresh or a rebase of <c>others</c> works on in this attempt: each of its targets in turn, one at a time,
 /// each kept in the step's directory under <c>targets/&lt;agent&gt;/</c>; null for every other step.
+/// </param>
+/// <param name="WorkedFrom">
+/// A reason step's: the instances whose working sets its context pack is seeded from (<see cref="FlowWorkingSets"/>), in
+/// order - the step it goes on with, each reason step it depends on directly (a group by each one in it), then its own
+/// earlier visits, newest first - each that began once and no other; none for every other step.
 /// </param>
 public sealed record FlowStepRun(
     WorkflowStep Step,
@@ -89,7 +118,8 @@ public sealed record FlowStepRun(
     IReadOnlyDictionary<string, FlowValue>? Read = null,
     FlowMadeAgent? Made = null,
     string? WorksIn = null,
-    string? Target = null);
+    string? Target = null,
+    IReadOnlyList<FlowWorkedFrom>? WorkedFrom = null);
 
 /// <summary>
 /// The one who runs a step: the code a step type calls - a machine step's service, a reason step's client runner - asked

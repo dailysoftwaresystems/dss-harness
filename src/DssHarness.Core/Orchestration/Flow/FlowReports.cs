@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
@@ -47,7 +48,7 @@ public sealed record FlowRecordPath(string What, string Path);
 /// <param name="Answered">The questions this command answered, each with who answered and what the engine did.</param>
 /// <param name="PassedOver">The instances whose failures the run passed over, in the order they ended.</param>
 /// <param name="Handoffs">The handoffs a safe pause wrote, each by its step, who wrote it and its file.</param>
-/// <param name="LeftForAPerson">What is left for a person, tied to no step's name: each question still open with its recommendation, and what each of the run's loops left.</param>
+/// <param name="LeftForAPerson">What is left for a person, tied to no step's name: each pull request the run opened or found open, to merge, the paths its folds changed that git ignores, never committed, each question still open with its recommendation, and what each of the run's loops left.</param>
 /// <param name="Spent">What the run has spent of its budget: usd, tokens and minutes; null where the command did not reach a run's state.</param>
 /// <param name="ExitCode">The command's exit code.</param>
 /// <param name="Records">Every record the command wrote or took, by what it is and where it is.</param>
@@ -195,8 +196,10 @@ public static class FlowReports
     }
 
     /// <summary>
-    /// What is left for a person, tied to no step's name: each question still open, with its recommendation and the way
-    /// to answer it, and what each of the run's loops left.
+    /// What is left for a person, tied to no step's name: each pull request a <c>pull-request</c> step opened or found
+    /// open, by its address, which the run did not merge and will not; the paths its folds changed that git ignores, as
+    /// its <c>commit</c> steps answered them (<c>ignored</c>) and none of them took since, which the run never commits;
+    /// each question still open, with its recommendation and the way to answer it; and what each of the run's loops left.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="flow">The run's state in one file.</param>
@@ -207,6 +210,28 @@ public static class FlowReports
         ArgumentNullException.ThrowIfNull(flow);
 
         var left = new List<string>();
+
+        foreach (var url in flow.Steps
+            .Where(step => step.Type == "pull-request")
+            .Select(step => step.Output?["url"])
+            .OfType<JsonValue>()
+            .Where(url => url.GetValueKind() == JsonValueKind.String)
+            .Select(url => url.GetValue<string>())
+            .Distinct(StringComparer.Ordinal))
+        {
+            left.Add($"pull request {url} is open: the run did not merge it and will not - merging it is a person's");
+        }
+
+        var commits = flow.Steps.Where(step => step.Type == "commit").ToList();
+        var taken = commits.SelectMany(step => TextsOf(step.Output?["paths"])).ToHashSet(StringComparer.Ordinal);
+        List<string> ignored = [.. commits.SelectMany(step => TextsOf(step.Output?["ignored"])).Distinct(StringComparer.Ordinal).Where(path => !taken.Contains(path))];
+
+        if (ignored.Count > 0)
+        {
+            left.Add(
+                $"{ReportText.Counted(ignored.Count, "path")} folded, ignored by git, never committed: {ReportText.Listed([.. ignored.Select(path => $"'{path}'")])} - "
+                + "the run commits no path git ignores, and committing one, or leaving it out, is a person's");
+        }
 
         foreach (var question in questions?.Open ?? [])
         {
@@ -222,6 +247,12 @@ public static class FlowReports
 
         return left;
     }
+
+    /// <summary>The texts a step's output holds in a list - a commit's paths or ignored paths - in order; none where it holds none.</summary>
+    private static IEnumerable<string> TextsOf(JsonNode? list)
+        => list is JsonArray texts
+            ? texts.OfType<JsonValue>().Where(text => text.GetValueKind() == JsonValueKind.String).Select(text => text.GetValue<string>())
+            : [];
 
     /// <summary>A question's recommendation in words: the answer recommended and why, or that none was sought and why.</summary>
     private static string RecommendationOf(FlowQuestionEntry question)

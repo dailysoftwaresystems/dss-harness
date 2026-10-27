@@ -477,10 +477,7 @@ public sealed class InitService(
     /// <exception cref="HarnessException">git could not list them.</exception>
     private async Task<IReadOnlyList<string>> ActionFilesAsync(string root, CancellationToken cancellationToken)
         => [.. (await _gitClient
-                .ListNamesAsync(
-                    root,
-                    ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", HarnessLayout.RunnerActionsDirectoryRelative],
-                    cancellationToken)
+                .ListTreeFilesAsync(root, HarnessLayout.RunnerActionsDirectoryRelative, cancellationToken)
                 .ConfigureAwait(false))
             .Select(name => name.Text)];
 
@@ -492,10 +489,7 @@ public sealed class InitService(
     /// <exception cref="HarnessException">git could not list them.</exception>
     private async Task<IReadOnlyList<string>> WorkflowFilesAsync(string root, CancellationToken cancellationToken)
         => [.. (await _gitClient
-                .ListNamesAsync(
-                    root,
-                    ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", HarnessLayout.WorkflowsDirectoryRelative],
-                    cancellationToken)
+                .ListTreeFilesAsync(root, HarnessLayout.WorkflowsDirectoryRelative, cancellationToken)
                 .ConfigureAwait(false))
             .Select(name => name.Text)];
 

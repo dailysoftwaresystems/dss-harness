@@ -16,8 +16,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="Dirty">Every path the checkout changes - staged, not staged or untracked - as git names them, each once, in order.</param>
 /// <param name="Remotes">The repository's remotes, as git lists them.</param>
 /// <param name="Remote">
-/// The remote the run's branch goes to: the one the flow's <c>push</c> step names, else the remote the branch tracks,
-/// else <c>origin</c> (<see cref="GitRemotes.ConventionalRemote"/>), else the only one there is; null where none is found.
+/// The remote the run's branch goes to: the one the flow's <c>push</c> steps name - one, which the definition's check holds
+/// every push step that names a remote to - else the remote the branch tracks, else <c>origin</c>
+/// (<see cref="GitRemotes.ConventionalRemote"/>), else the only one there is; null where none is found.
 /// </param>
 /// <param name="RemoteDefault">The branch <paramref name="Remote"/> names its default, without the remote's name; null where it names none here.</param>
 public sealed record FlowCheckout(
@@ -32,6 +33,25 @@ public sealed record FlowCheckout(
 {
     /// <summary>Whether the repository has a remote at all.</summary>
     public bool HasRemote => Remotes.Count > 0;
+
+    /// <summary>
+    /// Why no remote is the one the run's branch goes to, ending a sentence: the repository has none, or none is that
+    /// one - what was looked for said.
+    /// </summary>
+    public string NoRemote => HasRemote ? $"none is that one {Sought}" : "the repository has no remote";
+
+    /// <summary>What was looked for where no remote is the one the run's branch goes to, as a parenthesis.</summary>
+    private static string Sought => $"(the push step names none, the branch tracks none, and none is {GitRemotes.ConventionalRemote})";
+
+    /// <summary>
+    /// Why <paramref name="remote"/> cannot be pushed to or opened on, ending a sentence - it is not a remote of this
+    /// repository, those it has named; null where it is one. A push step may name one the repository does not have.
+    /// </summary>
+    /// <param name="remote">The remote, by name.</param>
+    public string? NotARemote(string remote)
+        => Remotes.Contains(remote, StringComparer.Ordinal)
+            ? null
+            : $"'{remote}', which is not a remote of this repository ({(HasRemote ? ReportText.Listed(Remotes) : "it has none")})";
 
     /// <summary>
     /// The branch the run's pull request is opened against (<c>orient.baseBranch</c>): the flow's <c>pull-request</c>
@@ -69,10 +89,14 @@ public sealed record FlowCheckout(
             ? null
             : "the branch the run's pull request is opened against cannot be told here - no pull-request step names a base, and "
                 + (Remote is null
-                    ? $"no remote is the one the run's branch goes to (the push step names none, the branch tracks none, and none is {GitRemotes.ConventionalRemote})"
-                    : $"remote '{Remote}' names no default branch here")
+                    ? $"no remote is the one the run's branch goes to {Sought}"
+                    : NotARemote(Remote) is { } unknown
+                        ? $"the push step names remote {unknown}"
+                        : $"remote '{Remote}' names no default branch here")
                 + $" - so the main checkout's branch '{Branch}' was held to none: name the base on the pull-request step"
-                + (Remote is null ? ", or the remote on the push step" : $", or read the remote's own with git remote set-head {Remote} --auto");
+                + (Remote is null ? ", or the remote on the push step"
+                    : NotARemote(Remote) is not null ? ", or one of the repository's remotes on the push step"
+                    : $", or read the remote's own with git remote set-head {Remote} --auto");
 
     /// <summary>Reads the checkout at <paramref name="root"/>, its remote chosen as <paramref name="definition"/>'s push step names it.</summary>
     /// <param name="gitClient">Git.</param>
@@ -111,7 +135,7 @@ public sealed record FlowCheckout(
             branch,
             head,
             merging,
-            [.. status.Where(entry => entry.Index is not (' ' or '?' or '!')).Select(entry => entry.Path.Text).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
+            [.. status.Where(entry => entry.IsStaged).Select(entry => entry.Path.Text).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
             [.. status.SelectMany(entry => entry.Paths).Select(path => path.Text).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
             remotes,
             remote,

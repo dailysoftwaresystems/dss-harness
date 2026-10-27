@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using DssHarness.Core.Execution;
 
 namespace DssHarness.Core.Agents;
 
@@ -90,6 +91,12 @@ public enum AgentMessageKind
 
     /// <summary>What a plan update changes for its work.</summary>
     PlanUpdate,
+
+    /// <summary>A nudge to go on with an answer the provider cut off at its length.</summary>
+    Continue,
+
+    /// <summary>The step's envelope said in words, once the provider refused it as a schema.</summary>
+    EnvelopeInWords,
 }
 
 /// <summary>Who ran a tool call, as the call's events name it.</summary>
@@ -150,11 +157,129 @@ public sealed record AgentUsage(long InputTokens, long OutputTokens, long CacheR
 /// <param name="Name">The tool's name.</param>
 public sealed record AgentToolCall(string Id, string Name);
 
-/// <summary>One question the agent asks the person.</summary>
-/// <param name="Text">The question.</param>
-/// <param name="Choices">The answers there are to pick from, where the question offers them.</param>
-/// <param name="Recommended">The one it recommends, where it does.</param>
-public sealed record AgentQuestion(string Text, IReadOnlyList<string> Choices, string? Recommended = null);
+/// <summary>
+/// One question an agent asks the person or a step's output writes, in the shape every question holds (part 04): what is
+/// asked, what stands in the way, what was tried, what depends on it, the choices, the one recommended and why.
+/// </summary>
+/// <param name="Question">What is asked.</param>
+/// <param name="Problem">What is open or stands in the way.</param>
+/// <param name="Tried">What was looked at or tried before asking.</param>
+/// <param name="Means">What depends on the answer.</param>
+/// <param name="Options">The choices, at least two, each a sentence that says what it leads to.</param>
+/// <param name="Recommended">The one recommended, word for word as it stands among the choices.</param>
+/// <param name="Why">Why, by the bar the agent was given.</param>
+public sealed record AgentQuestion(string Question, string Problem, string Tried, string Means, IReadOnlyList<string> Options, string Recommended, string Why)
+{
+    /// <summary>This question with every text of it masked.</summary>
+    /// <param name="mask">The run's mask.</param>
+    public AgentQuestion MaskedBy(ILineMask mask)
+    {
+        ArgumentNullException.ThrowIfNull(mask);
+
+        return new(mask.Redact(Question), mask.Redact(Problem), mask.Redact(Tried), mask.Redact(Means), [.. Options.Select(mask.Redact)], mask.Redact(Recommended), mask.Redact(Why));
+    }
+
+    /// <summary>
+    /// What is wrong with this question, each problem named by the member it is in as the envelope names it -
+    /// <c>options[1]: ...</c>, for the question's own path to go before - and empty where nothing is: every text written, at
+    /// least <see cref="AgentEnvelope.FewestOptions"/> options, no two alike, and the one recommended among them, word for
+    /// word. The one owner of what no schema says of a question, which the envelope's gate, a run's result and a run's
+    /// questions hold it to alike.
+    /// </summary>
+    public IReadOnlyList<string> Problems()
+    {
+        // A record read from a file may lack what its type says it holds: what is not there is empty.
+        var options = Options ?? [];
+        var problems = new List<string>();
+
+        foreach (var (member, text) in new[] { (nameof(Question), Question), (nameof(Problem), Problem), (nameof(Tried), Tried), (nameof(Means), Means) })
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                problems.Add(AgentEnvelope.Empty(member));
+            }
+        }
+
+        var named = AgentEnvelope.Member(nameof(Options));
+
+        if (options.Count < AgentEnvelope.FewestOptions)
+        {
+            problems.Add($"{named}: holds {Counted(options.Count)}, and a question offers at least {AgentEnvelope.FewestOptions}");
+        }
+
+        for (var at = 0; at < options.Count; at++)
+        {
+            if (string.IsNullOrWhiteSpace(options[at]))
+            {
+                problems.Add($"{named}[{at}]: is empty; each option is a sentence that says what it leads to");
+            }
+            else if (Enumerable.Range(0, at).FirstOrDefault(before => string.Equals(options[before], options[at], StringComparison.Ordinal), -1) is >= 0 and var first)
+            {
+                problems.Add($"{named}[{at}]: {AgentEnvelope.Quoted(options[at])} stands at {named}[{first}] already; each option is a choice of its own");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(Recommended))
+        {
+            problems.Add(AgentEnvelope.Empty(nameof(Recommended)));
+        }
+        else if (!options.Contains(Recommended, StringComparer.Ordinal))
+        {
+            problems.Add($"{AgentEnvelope.Member(nameof(Recommended))}: {AgentEnvelope.Quoted(Recommended)} is none of the {Counted(options.Count)}; recommend one of them, word for word");
+        }
+
+        if (string.IsNullOrWhiteSpace(Why))
+        {
+            problems.Add(AgentEnvelope.Empty(nameof(Why)));
+        }
+
+        return problems;
+    }
+
+    /// <summary>
+    /// The first thing wrong with any of <paramref name="questions"/>, said by its place in them - <c>questions[1].why: ...</c>
+    /// - or null where every one of them holds together.
+    /// </summary>
+    /// <param name="questions">The questions, in order.</param>
+    public static string? ProblemIn(IReadOnlyList<AgentQuestion?> questions)
+        => AgentEnvelope.ProblemIn(AgentEnvelope.Questions, questions, question => question.Problems());
+
+    private static string Counted(int options) => $"{options} option{(options == 1 ? string.Empty : "s")}";
+}
+
+/// <summary>One thing an agent assumed where a person could have told it: what was open, what it took, and why.</summary>
+/// <param name="About">What was open.</param>
+/// <param name="Assumed">What it took it to be.</param>
+/// <param name="Why">Why it took that.</param>
+public sealed record AgentAssumption(string About, string Assumed, string Why)
+{
+    /// <summary>This assumption with every text of it masked.</summary>
+    /// <param name="mask">The run's mask.</param>
+    public AgentAssumption MaskedBy(ILineMask mask)
+    {
+        ArgumentNullException.ThrowIfNull(mask);
+
+        return new(mask.Redact(About), mask.Redact(Assumed), mask.Redact(Why));
+    }
+
+    /// <summary>
+    /// What is wrong with this assumption, each problem named by the member it is in as the envelope names it, for the
+    /// assumption's own path to go before; empty where nothing is: every text written. The one owner of what no schema says
+    /// of an assumption, which the envelope's gate and a run's result hold it to alike.
+    /// </summary>
+    public IReadOnlyList<string> Problems()
+        => [.. new[] { (nameof(About), About), (nameof(Assumed), Assumed), (nameof(Why), Why) }
+            .Where(member => string.IsNullOrWhiteSpace(member.Item2))
+            .Select(member => AgentEnvelope.Empty(member.Item1))];
+
+    /// <summary>
+    /// The first thing wrong with any of <paramref name="assumptions"/>, said by its place in them -
+    /// <c>assumptions[1].why: ...</c> - or null where every one of them holds together.
+    /// </summary>
+    /// <param name="assumptions">The assumptions, in order.</param>
+    public static string? ProblemIn(IReadOnlyList<AgentAssumption?> assumptions)
+        => AgentEnvelope.ProblemIn(AgentEnvelope.Assumptions, assumptions, assumption => assumption.Problems());
+}
 
 /// <summary>The launch began: what it runs as, where its credential came from, and what it was given.</summary>
 /// <param name="Client">The client's key, as the configuration names it.</param>
@@ -268,7 +393,7 @@ public sealed record UsageReported(AgentUsage Turn, AgentUsage Cumulative) : Age
 /// <param name="Until">When the wait ends.</param>
 public sealed record WaitingToRetry(string Cause, int Attempt, int Of, TimeSpan Delay, DateTimeOffset Until) : AgentEvent;
 
-/// <summary>A partial turn was thrown away, and the turn begins again.</summary>
+/// <summary>A partial turn was thrown away - what it streamed is none of the run's - and the turn begins again unless the run ends.</summary>
 /// <param name="Why">Why it was thrown away.</param>
 public sealed record TurnRestarted(string Why) : AgentEvent;
 
@@ -299,7 +424,24 @@ public sealed record FallbackStarted(
     bool ThrewAway,
     bool CreditAsked,
     string? FromKey = null,
-    string? ToKey = null) : AgentEvent;
+    string? ToKey = null) : AgentEvent
+{
+    /// <summary>
+    /// The fallback a refused key makes, on every client: the same model of the same provider and client, on the next of
+    /// the run's keys, each named and never valued.
+    /// </summary>
+    /// <param name="model">The model.</param>
+    /// <param name="provider">Its provider.</param>
+    /// <param name="client">Its client.</param>
+    /// <param name="refused">The name of the key refused.</param>
+    /// <param name="next">The name of the key that takes over.</param>
+    /// <param name="said">What the refusal said, masked.</param>
+    /// <param name="how">How the run goes on with the next key.</param>
+    /// <param name="turn">The turn it happened on.</param>
+    /// <param name="threwAway">Whether a part of an answer was thrown away.</param>
+    public static FallbackStarted KeyRefused(string model, string provider, string client, string refused, string next, string said, string how, int turn, bool threwAway)
+        => new(model, provider, client, model, provider, client, $"key refused: {said}", how, turn, threwAway, CreditAsked: false, refused, next);
+}
 
 /// <summary>An entry of the fallback that was not taken.</summary>
 /// <param name="Model">The model not taken.</param>
@@ -329,7 +471,17 @@ public sealed record HandoffAsked(string Why, TimeSpan Bound) : AgentEvent;
 /// <summary>The handoff turn ended.</summary>
 /// <param name="Answered">Whether the agent answered.</param>
 /// <param name="WhyNot">Why it did not, where it did not; null where it answered.</param>
-public sealed record HandoffAnswered(bool Answered, string? WhyNot = null) : AgentEvent;
+public sealed record HandoffAnswered(bool Answered, string? WhyNot = null) : AgentEvent
+{
+    /// <summary>What a run's <paramref name="handoff"/> tells as the event that ends its handoff turn, on every client.</summary>
+    /// <param name="handoff">The run's handoff.</param>
+    public static HandoffAnswered Of(AgentHandoff handoff)
+    {
+        ArgumentNullException.ThrowIfNull(handoff);
+
+        return new(handoff.Answered, handoff.WhyNone);
+    }
+}
 
 /// <summary>The agent asked the person.</summary>
 /// <param name="Questions">Its questions, each with its choices and the one it recommends.</param>

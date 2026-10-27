@@ -56,11 +56,13 @@ public sealed class JsonConfigStore(IFileSystem fileSystem) : IConfigStore
             throw new ConfigException($"'{path}' is empty.");
         }
 
-        // The agent sections' own refusals and the agent policy's, made where the file is read and said together: a
-        // config that loads is one the tool can use, and a restriction that loads is a restriction the tool reads.
+        // The agent sections' own refusals, the agent policy's and the web search's (V56, and V55 of its defaults), made
+        // where the file is read and said together: a config that loads is one the tool can use, a restriction that loads
+        // is a restriction the tool reads, and a source that loads is one its kind can ask.
         var (_, problems) = DssHarness.Core.Agents.AgentProviders.Resolve(config);
+        var search = DssHarness.Core.Web.Search.WebSearchSources.Of(config, DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild);
 
-        if ((IReadOnlyList<string>)[.. problems, .. DssHarness.Core.Agents.Policy.AgentPolicy.RuleProblems(config)] is [_, ..] refused)
+        if ((IReadOnlyList<string>)[.. problems, .. DssHarness.Core.Agents.Policy.AgentPolicy.RuleProblems(config), .. search.Problems] is [_, ..] refused)
         {
             throw new ConfigException($"'{path}' could not be read: {string.Join(" ", refused)}");
         }
@@ -85,47 +87,14 @@ public sealed class JsonConfigStore(IFileSystem fileSystem) : IConfigStore
 
     /// <summary>
     /// The first key or value in <paramref name="json"/> that spells half a character, said with its
-    /// line; <see langword="null"/> when every one is text, or the file is not JSON at all, which the
-    /// serializer then reports as it reports any file it cannot read.
+    /// line (<see cref="Json.JsonHalfCharacter"/>); <see langword="null"/> when every one is text, or the
+    /// file is not JSON at all, which the serializer then reports as it reports any file it cannot read.
     /// </summary>
-    /// <remarks>
-    /// Half a character is an escape of a lone surrogate, such as <c>\ud800</c> with no <c>\udc00</c>
-    /// to <c>\udfff</c> after it. JSON allows the escape and no text can hold what it names, so the
-    /// parser takes the file and every reader of the string then fails in words of its own.
-    /// </remarks>
     private static string? HalfCharacter(string json)
     {
-        var bytes = Encoding.UTF8.GetBytes(json);
-        var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-
-        try
-        {
-            while (reader.Read())
-            {
-                if (reader.TokenType is not (JsonTokenType.PropertyName or JsonTokenType.String))
-                {
-                    continue;
-                }
-
-                try
-                {
-                    _ = reader.GetString();
-                }
-                catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
-                {
-                    var line = bytes.AsSpan(0, (int)reader.TokenStartIndex).Count((byte)'\n') + 1;
-
-                    return $"line {line}: '{Encoding.UTF8.GetString(reader.ValueSpan)}' spells half a character, "
-                        + "an escape of a lone surrogate that no text can hold. Write the whole character, or both of its escapes.";
-                }
-            }
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-
-        return null;
+        return Json.JsonHalfCharacter.Find(json, new JsonReaderOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }) is var (line, spelt)
+            ? $"line {line}: '{spelt}' spells half a character, an escape of a lone surrogate that no text can hold. Write the whole character, or both of its escapes."
+            : null;
     }
 
     /// <summary>

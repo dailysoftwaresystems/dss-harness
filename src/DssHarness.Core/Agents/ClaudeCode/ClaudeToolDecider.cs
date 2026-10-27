@@ -10,7 +10,9 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// </summary>
 /// <remarks>
 /// A tool the launch was not given is refused by name, whatever the policy would say of its input, and so is a call whose
-/// input does not name what the action needs: nothing is allowed that the engine could not see whole.
+/// input does not name what the action needs: nothing is allowed that the engine could not see whole. A call of the
+/// engine's tool server is allowed as asked: the engine runs it itself, by the tool runtime, whose tool decides each thing
+/// it does as it does it - each address of the web asked of the policy and recorded - as on every other client.
 /// </remarks>
 public static class ClaudeToolDecider
 {
@@ -32,6 +34,11 @@ public static class ClaudeToolDecider
         if (!offered.Contains(tool, StringComparer.Ordinal))
         {
             return Refused($"'{tool}' is no tool this agent was given; it was given: {(offered.Count == 0 ? "none" : string.Join(", ", offered))}");
+        }
+
+        if (ClaudeCodeTools.ServedAs(tool) is not null)
+        {
+            return AgentPolicyAnswer.Allow;
         }
 
         if (ClaudeCodeTools.Find(tool) is not { } row)

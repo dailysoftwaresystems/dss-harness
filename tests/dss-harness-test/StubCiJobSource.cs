@@ -20,6 +20,15 @@ internal sealed class StubCiJobSource(IReadOnlyList<CiRun> runs) : ICiJobSource
     public List<long> RunsRead { get; } = [];
 
     /// <summary>
+    /// The limit each read was made under, in order: the one the source it was made through was given
+    /// (<see cref="ICiJobSource.Within"/>), null for a read made through this one, which was given none.
+    /// </summary>
+    public List<TimeSpan?> Limits { get; } = [];
+
+    /// <inheritdoc/>
+    public ICiJobSource Within(TimeSpan? limit) => new Limited(this, limit);
+
+    /// <summary>
     /// What each reading of a commit's checks answers - its check runs, then its statuses - in turn, the last again once
     /// they run out; none where none is given.
     /// </summary>
@@ -55,29 +64,43 @@ internal sealed class StubCiJobSource(IReadOnlyList<CiRun> runs) : ICiJobSource
         string branch,
         int limit,
         CancellationToken cancellationToken = default)
+        => ListRuns(null, branch);
+
+    public Task<CiRun> ReadRunAsync(string repositoryRoot, long runId, CancellationToken cancellationToken = default) => ReadRun(null, runId);
+
+    public Task<IReadOnlyList<CiCheckRun>> ListCheckRunsAsync(string repositoryRoot, string commit, CancellationToken cancellationToken = default) => ListCheckRuns(null);
+
+    public Task<IReadOnlyList<CiCommitStatus>> ListStatusesAsync(string repositoryRoot, string commit, CancellationToken cancellationToken = default) => ListStatuses(null);
+
+    public Task<string> ReadJobLogAsync(string repositoryRoot, long jobId, CancellationToken cancellationToken = default) => ReadJobLog(null, jobId);
+
+    private Task<IReadOnlyList<long>> ListRuns(TimeSpan? within, string branch)
     {
         lock (_gate)
         {
+            Limits.Add(within);
             Branches.Add(branch);
         }
 
         return Task.FromResult<IReadOnlyList<long>>([.. runs.Select(run => run.Id)]);
     }
 
-    public Task<CiRun> ReadRunAsync(string repositoryRoot, long runId, CancellationToken cancellationToken = default)
+    private Task<CiRun> ReadRun(TimeSpan? within, long runId)
     {
         lock (_gate)
         {
+            Limits.Add(within);
             RunsRead.Add(runId);
         }
 
         return Task.FromResult(runs.First(run => run.Id == runId));
     }
 
-    public Task<IReadOnlyList<CiCheckRun>> ListCheckRunsAsync(string repositoryRoot, string commit, CancellationToken cancellationToken = default)
+    private Task<IReadOnlyList<CiCheckRun>> ListCheckRuns(TimeSpan? within)
     {
         lock (_gate)
         {
+            Limits.Add(within);
             Reading?.Invoke(_readings);
 
             if (FailedReadings.TryGetValue(_readings, out var failure))
@@ -90,18 +113,41 @@ internal sealed class StubCiJobSource(IReadOnlyList<CiRun> runs) : ICiJobSource
         }
     }
 
-    public Task<IReadOnlyList<CiCommitStatus>> ListStatusesAsync(string repositoryRoot, string commit, CancellationToken cancellationToken = default)
+    private Task<IReadOnlyList<CiCommitStatus>> ListStatuses(TimeSpan? within)
     {
         lock (_gate)
         {
+            Limits.Add(within);
             var statuses = Readings.Count == 0 ? [] : Readings[Math.Min(_readings, Readings.Count - 1)].Statuses;
             _readings++;
             return Task.FromResult(statuses);
         }
     }
 
-    public Task<string> ReadJobLogAsync(string repositoryRoot, long jobId, CancellationToken cancellationToken = default)
+    private Task<string> ReadJobLog(TimeSpan? within, long jobId)
     {
+        lock (_gate)
+        {
+            Limits.Add(within);
+        }
+
         return FailedLogs.TryGetValue(jobId, out var failure) ? Task.FromException<string>(failure) : Task.FromResult(Logs[jobId]);
+    }
+
+    /// <summary>The source given a limit: what it reads is the stub's, each read recorded under its limit.</summary>
+    private sealed class Limited(StubCiJobSource stub, TimeSpan? limit) : ICiJobSource
+    {
+        public ICiJobSource Within(TimeSpan? other) => new Limited(stub, other);
+
+        public Task<IReadOnlyList<long>> ListRunsAsync(string repositoryRoot, string workflow, string branch, int count, CancellationToken cancellationToken = default)
+            => stub.ListRuns(limit, branch);
+
+        public Task<CiRun> ReadRunAsync(string repositoryRoot, long runId, CancellationToken cancellationToken = default) => stub.ReadRun(limit, runId);
+
+        public Task<IReadOnlyList<CiCheckRun>> ListCheckRunsAsync(string repositoryRoot, string commit, CancellationToken cancellationToken = default) => stub.ListCheckRuns(limit);
+
+        public Task<IReadOnlyList<CiCommitStatus>> ListStatusesAsync(string repositoryRoot, string commit, CancellationToken cancellationToken = default) => stub.ListStatuses(limit);
+
+        public Task<string> ReadJobLogAsync(string repositoryRoot, long jobId, CancellationToken cancellationToken = default) => stub.ReadJobLog(limit, jobId);
     }
 }

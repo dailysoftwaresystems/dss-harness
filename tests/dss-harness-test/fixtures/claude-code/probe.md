@@ -120,7 +120,8 @@ add `decision_reason_rule_source` and `server_policy_ask_only`.
   assistant message. An id the provider does not know is named in `system/init` as given, and
   every turn ends in an API error (below).
 - **No session file is written**: under `--no-session-persistence`, with `-p` and without, no
-  launch of the 21 on any version left `<session id>.jsonl` under the projects directory. Each
+  launch of the 21 on any version left `<session id>.jsonl` under the projects directory, nor the
+  `mcp-message` and `deny-rules` launches of 2026-10-26 (below). Each
   launch does leave an empty `memory` directory there, under the working directory's name.
 - `--max-turns` and `--max-budget-usd` hold without `-p` (the help says "only works with
   --print"): see the results below.
@@ -236,6 +237,66 @@ in`): it names an API key's source, and does not tell a login from no credential
 own skills, agents and slash commands load under `--setting-sources user`. `capabilities`
 advertise the interrupt protocol (`interrupt_receipt_v1`, `interrupt_cancel_queued_v1`,
 `interrupt_send_now_v1`), message lifecycle (`msg_lifecycle_v1`) and more.
+
+## The engine's tool server: an MCP server of type `sdk`, over the control channel
+
+The launch `mcp-message`, run on 2026-10-26 for slice 22b3 against 2.1.287 (`oldest`), 2.1.308 (the
+`stable` tag that day) and 2.1.310 (`latest`), with `--tools Read,Grep,Glob`, an ask rule for
+`mcp__dssharness__web_search` and `mcp__dssharness__web_fetch` beside them, and `--mcp-config`
+naming one server, `{"mcpServers":{"dssharness":{"type":"sdk","name":"dssharness"}}}`, beside
+`--strict-mcp-config`. The host answered each MCP message as the Agent SDK does. Every answer below
+held identically on all three versions.
+
+- **`mcp_message` holds for a host that is no SDK.** Claude Code sends each message of the server
+  to its host as `{"type":"control_request","request_id":<uuid>,"request":{"subtype":"mcp_message",
+  "server_name":"dssharness","message":<the JSON-RPC message>}}`, and takes the host's answer as
+  `{"type":"control_response","response":{"subtype":"success","request_id":<its id>,"response":
+  {"mcp_response":<the JSON-RPC reply>}}}`, which it writes back on its stream as it does every
+  answer of the host's.
+- **The server is connected before the launch's init**, its first message sent even before Claude
+  Code answers the host's own `initialize`: `initialize` (`protocolVersion` `2025-11-25`, empty
+  `capabilities`, its `clientInfo`), then `notifications/initialized` - a notification, whose
+  answer is an empty result - then `tools/list`. An answer of `2024-11-05` to its `initialize` was
+  taken.
+- **The server's tools stand beside `--tools`**: `--tools` named none of them, and every init lists
+  both, with `mcp_servers` `[{"name":"dssharness","status":"connected","source":"sdk"}]`.
+- **Each call is asked of the host first, by its ask rule**: a `can_use_tool` naming
+  `mcp__dssharness__web_search`, carrying `mcp_server` `{"name":"dssharness","source":"sdk"}` and the
+  call's input, and only once the host allowed it the call itself, as `tools/call` with `name`
+  `web_search`, the input as `arguments`, and `_meta` naming the call the host was asked about,
+  `{"claudecode/toolUseId":<the call's tool_use_id>,"progressToken":2}`. The server's text was the
+  call's result, and the model answered from it.
+- **A call the host denies is never sent**: the fetch was asked about, denied, and no `tools/call`
+  followed.
+
+So the engine serves the server in its own process on every version taken, and the hidden
+`serve-harness-tools` - the separate process part 08 decided as the transport where this does not
+hold - is not built.
+
+## Claude Code's own deny rules: a file tool's refusal told by its result alone
+
+The launch `deny-rules`, run on 2026-10-26 against the same three versions after slice 22b3's live
+smoke saw a read of a credential slot refused with nothing told the host - since the launch's
+settings carry a read of each slot as a deny rule, beside the ask rules. Its settings denied
+`Read(<outside>/**)`, `Edit(<outside>/**)` and `Bash(rm:*)`, and the model was asked, a turn each, to
+read a file there with `Read`, search the directory with `Grep`, write a file there with `Write`,
+and run `rm -f` with `Bash`. Nothing was asked of the host, and nothing ran, on any version.
+
+- **A file tool's call is refused as Claude Code reads its input, told by its result alone**: no
+  `can_use_tool`, no `system/permission_denied` line, and the result `<tool_use_error>File is in a
+  directory that is denied by your permission settings.</tool_use_error>`, the same words on every
+  version, for the read and the write alike. 2.1.308 and 2.1.310 stamp its meta with the permission
+  decision `{"decision":"reject","source":"config","reason_type":"rule"}` and no
+  `non_execution_kind`; 2.1.287 stamps nothing. A reader that took a stamped decision for a call that
+  ran would read the refusal as a call run unasked: a decision `reject` is a call that did not run.
+- **A search's and a command's are told by a `system/permission_denied` line besides** (`Permission
+  to read <outside> has been denied.`, `Permission to use Bash with command rm -f ... has been
+  denied.`), their results the same words, stamped `non_execution_kind` `permission-rule` on every
+  version, and from 2.1.308 the decision `reject` by a `rule` (`subcommandResults` for the command).
+
+So `ClaudeLine.CallResult.RefusedByRule` reads a refusal by its result's words on a call that did
+not run - which the `reject` stamp says from 2.1.308, and the input-error mark on 2.1.287 - and the
+client counts and records it once as Claude Code's own denial, however many lines tell it.
 
 ## Not settled by this run
 

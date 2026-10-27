@@ -1,0 +1,26 @@
+{
+  "results": [
+    {
+      "title": "Group results by key - C#",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/linq/standard-query-operators/grouping-data",
+      "displayUrl": { "content": "/dotnet/csharp/linq/standard-query-operators/grouping-data", "hitHighlights": [] },
+      "description": "Grouping puts data into groups so that the elements in each group share an attribute.",
+      "lastUpdatedDate": "2026-03-30T21:10:00+00:00",
+      "breadcrumbs": [],
+      "category": "Documentation"
+    },
+    {
+      "title": "Enumerable.GroupBy Method",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.groupby",
+      "displayUrl": { "content": "/dotnet/api/system.linq.enumerable.groupby", "hitHighlights": [] },
+      "description": "Groups the elements of a sequence.",
+      "lastUpdatedDate": "2026-02-01T10:00:00+00:00",
+      "breadcrumbs": [],
+      "category": "Reference"
+    }
+  ],
+  "spellingCorrection": null,
+  "scopeRemoved": false,
+  "count": 12107,
+  "nextLink": "https://learn.microsoft.com/api/search?search=groupby&locale=en-us&$skip=2&$top=2"
+}

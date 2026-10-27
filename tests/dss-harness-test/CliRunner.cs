@@ -12,8 +12,13 @@ namespace DssHarness.Tests;
 /// </summary>
 public static class CliRunner
 {
-    /// <summary>Longest a single CLI invocation may run before the test fails as hung.</summary>
-    private static readonly TimeSpan Budget = TimeSpan.FromMinutes(2);
+    /// <summary>
+    /// Longest a single CLI invocation may run before the test fails as hung: a guard against a hang, well above the
+    /// slowest real run. The Windows arm64 runner's speed wanders threefold between runs - a check-mutations sweep of
+    /// the fixture that took under a minute there ran past five, with nothing hung - and the suite's own notices name
+    /// a test still running every two minutes, so a hang is named long before this ends it.
+    /// </summary>
+    private static readonly TimeSpan Budget = TimeSpan.FromMinutes(15);
 
     private static readonly Lazy<string> CliAssembly = new(LocateCliAssembly, LazyThreadSafetyMode.PublicationOnly);
 

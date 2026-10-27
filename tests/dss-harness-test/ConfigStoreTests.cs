@@ -634,6 +634,7 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "commit": { "template": "{area}", "variables": { "area": { "required": true, "default": "core" } } } }""", "is required and has a default")]
     [InlineData("""{ "commit": { "template": "{1area}", "variables": { "1area": {} } } }""", "commit.variables '1area' must be letters")]
     [InlineData("""{ "commit": { "template": " " } }""", "commit.template is blank")]
+    [InlineData("""{ "commit": { "template": "{area: fix", "variables": { "area": {} } } }""", "commit.template is not written whole: the placeholder at column 1 of line 1 is never closed")]
     public void Load_RejectsACommitPolicyThatCannotWork(string json, string expected)
     {
         var exception = LoadInvalid(json);
@@ -1932,6 +1933,51 @@ public sealed class ConfigStoreTests
         Assert.Equal("vs", config.Toolchains["msvc"].DeveloperEnvironment);
         Assert.Equal(DeveloperEnvironmentKinds.VisualStudio, config.DeveloperEnvironments["VS"].Kind);
         Assert.Equal(DeveloperEnvironmentConfig.DefaultVisualStudioComponent, config.DeveloperEnvironments["vs"].RequiresComponent);
+
+        // Naming no toolset is the default, and the toolset is the one vcvarsall.bat sets up by default.
+        Assert.Null(config.DeveloperEnvironments["vs"].ToolsVersion);
+    }
+
+    /// <summary>
+    /// A developer environment may name the MSVC toolset its legs build with - by its line's two numbers or all three -
+    /// so two environments of one kind keep two toolsets apart on one machine; it is read as written, and a null is no
+    /// toolset named.
+    /// </summary>
+    [Theory]
+    [InlineData("\"14.44\"", "14.44")]
+    [InlineData("\"14.44.35207\"", "14.44.35207")]
+    [InlineData("null", null)]
+    public void ADeveloperEnvironment_MayNameTheToolsetItsLegsBuildWith(string toolsVersion, string? read)
+    {
+        var config = LoadValid(
+            $$"""{ "developerEnvironments": { "vs": { "kind": "visualStudio" }, "cuda": { "kind": "visualStudio", "toolsVersion": {{toolsVersion}} } } }""");
+
+        Assert.Equal(read, config.DeveloperEnvironments["cuda"].ToolsVersion);
+        Assert.Null(config.DeveloperEnvironments["vs"].ToolsVersion);
+    }
+
+    /// <summary>
+    /// A toolsVersion that names no toolset as VC\Tools\MSVC names them is refused when the file is read, whole: its form
+    /// alone is held, and never a particular toolset, which is the repository's to name and the survey's to find.
+    /// </summary>
+    [Theory]
+    [InlineData("14")]
+    [InlineData("14.44.17.14")]
+    [InlineData("v143")]
+    [InlineData("Preview")]
+    [InlineData("14.44 ")]
+    [InlineData("14..44")]
+    [InlineData("14.x")]
+    [InlineData("\u0661\u0664.\u0664\u0664")]
+    public void Load_RejectsAToolsVersionThatNamesNoToolset(string toolsVersion)
+    {
+        var exception = LoadInvalid($$"""{ "developerEnvironments": { "cuda": { "kind": "visualStudio", "toolsVersion": "{{toolsVersion}}" } } }""");
+
+        Assert.Contains(
+            $"developer environment 'cuda' toolsVersion '{toolsVersion}' names no MSVC toolset; name one as VC\\Tools\\MSVC does, by its "
+            + "first two numbers or all three - such as 14.44 or 14.44.35207 - or leave it out for the toolset vcvarsall.bat sets up by default",
+            exception.Message,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1946,6 +1992,12 @@ public sealed class ConfigStoreTests
     [InlineData(
         """{ "developerEnvironments": { "vs": { "kind": "visualStudio", "requiresComponent": " " } } }""",
         "developer environment 'vs' requiresComponent is blank; leave it out for the C++ build tools")]
+    [InlineData(
+        """{ "developerEnvironments": { "vs": { "kind": "visualStudio", "toolsVersion": " " } } }""",
+        "developer environment 'vs' toolsVersion is blank; leave it out for the toolset vcvarsall.bat sets up by default")]
+    [InlineData(
+        """{ "developerEnvironments": { "vs": { "kind": "visualStudio", "toolsVersion": "" } } }""",
+        "developer environment 'vs' toolsVersion is blank; leave it out for the toolset vcvarsall.bat sets up by default")]
     [InlineData(
         """{ "toolchains": { "msvc": { "platforms": ["windows"], "env": { "CC": "cl" }, "developerEnvironment": "vs" } } }""",
         "toolchain 'msvc' names developer environment 'vs', which is not declared under developerEnvironments")]
@@ -3069,6 +3121,52 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
+    /// The API clients' keys are read from config.json as written - their extras as the JSON they are - and one that sets
+    /// what the tool sends itself is refused where the file is read, naming the file.
+    /// </summary>
+    [Fact]
+    public void TheApiClientsKeys_AreReadAsWritten_AndRefusedWhereTheFileIsRead()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.WriteFile(
+            "config.json",
+            """{ "agentClients": { "claude-api": { "maxRetries": 2, "maxRetryWaitSeconds": 30, "cacheTtl": "1h", "requestExtras": { "metadata": { "user_id": "u1" } }, "betas": ["b-2026-01-01"] } } }""");
+
+        var api = CreateStore().Load(path).AgentClients["claude-api"];
+
+        Assert.Equal((2, 30, "1h", """{"metadata":{"user_id":"u1"}}"""), (api.MaxRetries, api.MaxRetryWaitSeconds, api.CacheTtl, System.Text.Json.JsonSerializer.Serialize(api.RequestExtras)));
+        Assert.Equal(["b-2026-01-01"], api.Betas);
+
+        // A value holding a comment and a trailing comma, as config.json may, reaches every request as what it says.
+        var commented = temp.WriteFile(
+            "commented.json",
+            """{ "agentClients": { "claude-api": { "requestExtras": { "metadata": { "user_id": "u1", /* the run's */ }, "stop_sequences": ["END", "STOP",], } } } }""");
+        var extras = CreateStore().Load(commented).AgentClients["claude-api"];
+        var request = new DssHarness.Core.Agents.Loop.ChatRequest("claude-opus-5-5", null, "s", "[]", ["""{"role":"user","content":[{"type":"text","text":"Go."}]}"""], 16, new DssHarness.Core.Agents.AgentKey("K", "v"), null);
+        var body = System.Text.Json.Nodes.JsonNode.Parse(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.Body(request, DssHarness.Core.Agents.ClaudeApi.ClaudeApiSettings.Of(extras)))!;
+
+        Assert.Equal(("""{"user_id":"u1"}""", """["END","STOP"]"""), (body["metadata"]!.ToJsonString(), body["stop_sequences"]!.ToJsonString()));
+
+        var owned = temp.WriteFile("owned.json", """{ "agentClients": { "claude-api": { "requestExtras": { "model": "claude-other" } } } }""");
+
+        Assert.Equal(
+            $"'{owned}' could not be read: agentClients 'claude-api' requestExtras.model is refused: the tool sends it itself",
+            Assert.Throws<ConfigException>(() => CreateStore().Load(owned)).Message);
+
+        var glm = CreateStore().Load(temp.WriteFile(
+            "glm.json",
+            """{ "agentClients": { "glm": { "maxRetries": 1, "maxRetryWaitSeconds": 5, "preserveThinking": true, "requestExtras": { "user_id": "u1" } } } }""")).AgentClients["glm"];
+
+        Assert.Equal((1, 5, true, """{"user_id":"u1"}"""), (glm.MaxRetries, glm.MaxRetryWaitSeconds, glm.PreserveThinking, System.Text.Json.JsonSerializer.Serialize(glm.RequestExtras)));
+
+        var thinking = temp.WriteFile("thinking.json", """{ "agentClients": { "glm": { "requestExtras": { "thinking": { "clear_thinking": true } } } } }""");
+
+        Assert.Equal(
+            $"'{thinking}' could not be read: agentClients 'glm' requestExtras.thinking.clear_thinking is refused: the tool sends it itself",
+            Assert.Throws<ConfigException>(() => CreateStore().Load(thinking)).Message);
+    }
+
+    /// <summary>
     /// The agent sections' own refusals are made where config.json is read: a file whose providers do not read does not
     /// load, naming the file and the problem, so a config that loads is one the tool can use.
     /// </summary>
@@ -3264,6 +3362,36 @@ public sealed class ConfigStoreTests
         var config = LoadValid("{ \"predefinedRunners\": { \"bench\": { \"description\": \"\\ud83d\\ude00\", \"phases\": [ { \"name\": \"go\", \"command\": [\"tool\"] } ] } } }");
 
         Assert.Equal("\U0001F600", config.PredefinedRunners["bench"].Description);
+    }
+
+    /// <summary>
+    /// A web search that cannot be used is refused as the file is read, each problem naming its source and key (V56), and a
+    /// key no part of agentWebSearch takes is refused by name.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "agentWebSearch": { "sources": { "gov": { "kind": "feed" } } } }""", "agentWebSearch.sources.gov (feed): 'url' is missing: a source of kind 'feed' gives it - the address asked: a template whose {query} is the query, and {limit} the most results asked where the search takes one")]
+    [InlineData("""{ "agentWebSearch": { "sources": { "stackoverflow": { "perDay": -1 } } } }""", "agentWebSearch.sources.stackoverflow (json-api): 'perDay' is a whole number from 1 to 1,000,000, and is -1")]
+    [InlineData("""{ "agentWebSearch": { "defaults": ["nowhere"] } }""", "agentWebSearch.defaults names 'nowhere', which is no source or tag of agentWebSearch; sources: stackoverflow, github-repos, github-issues, nuget, npm, pub-dev, learn, mdn, wikipedia, hackernews, readthedocs; tags: qa, code, packages, dotnet, js, dart, docs, docs-web, reference, blogs, docs-rtd")]
+    [InlineData("""{ "agentWebSearch": { "maxPerStep": 0 } }""", "agentWebSearch.maxPerStep is 0; it is the most requests of sources one step makes, from 1 to 1,000")]
+    [InlineData("""{ "agentWebSearch": { "engines": {} } }""", "The JSON property 'engines' could not be mapped to any .NET member contained in type 'DssHarness.Core.Configuration.AgentWebSearchConfig'. (line 1)")]
+    public void AWebSearchThatCannotBeUsed_IsRefusedAsTheFile(string json, string expected)
+        => Assert.EndsWith($"config.json' could not be read: {expected}", LoadInvalid(json).Message, StringComparison.Ordinal);
+
+    /// <summary>A web search that holds is read as written: a built-in changed, a source added, the bounds kept.</summary>
+    [Fact]
+    public void AWebSearchThatHolds_IsRead()
+    {
+        var config = LoadValid("""
+            { "agentWebSearch": {
+                "sources": { "npm": { "enabled": false }, "gov": { "kind": "feed", "url": "https://gov.example.test/feed?q={query}" } },
+                "defaults": ["gov", "qa"], "maxPerStep": 12, "resultsPerSource": 3 } }
+            """);
+        var search = DssHarness.Core.Web.Search.WebSearchSources.Of(config, DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild);
+
+        Assert.Empty(search.Problems);
+        Assert.Equal((12, 3), (search.MaxPerStep, search.ResultsPerSource));
+        Assert.Equal(["gov", "stackoverflow"], search.Chosen(null).Select(source => source.Name));
+        Assert.False(search.Find("npm")!.Enabled);
     }
 
     private static ConfigException LoadInvalid(string json)

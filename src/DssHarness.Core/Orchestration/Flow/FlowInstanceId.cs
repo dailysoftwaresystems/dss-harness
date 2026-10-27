@@ -150,34 +150,123 @@ public static class FlowInstanceId
     private static readonly char[] Marks = ['+', '#', '['];
 
     /// <summary>
-    /// Which visit of the step named <paramref name="name"/> the well-formed id <paramref name="id"/> holds: the visit
-    /// of its own segment, from 1 where none is written.
+    /// Which visit of its step the well-formed id <paramref name="id"/> holds: the visit of its own segment, from 1 where
+    /// none is written.
     /// </summary>
     /// <param name="id">The instance id, well formed.</param>
-    /// <param name="name">The step's name, the id's last segment's name.</param>
-    public static int VisitOf(string id, string name)
+    public static int VisitOf(string id)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        var segment = id[(id.LastIndexOf('.') + 1)..];
+        return Marked(id[(id.LastIndexOf('.') + 1)..]).Visit;
+    }
 
-        if (!segment.StartsWith(name, StringComparison.Ordinal) || segment.Length == name.Length)
+    /// <summary>
+    /// Whether two well-formed ids are visits of one step of one work item: the same, but for each visit and each
+    /// iteration written after the innermost item - an iteration or a visit outside it may hold another item at the same
+    /// place, so there they must match. <c>rounds#1.items[0].fix#2.revise.rework</c> and
+    /// <c>rounds#1.items[0].fix#1.revise.rework</c> are; <c>rounds#2.items[0].fix#1.revise.rework</c> is not of them.
+    /// </summary>
+    /// <param name="one">An instance id, well formed.</param>
+    /// <param name="other">Another.</param>
+    public static bool SameStep(string one, string other)
+    {
+        ArgumentNullException.ThrowIfNull(one);
+        ArgumentNullException.ThrowIfNull(other);
+
+        return string.Equals(Lineage(one), Lineage(other), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// How two well-formed ids are ordered by the group instances around them, read segment by segment from the root: at
+    /// the first segment both name alike but mark otherwise, <paramref name="earlier"/> comes first where its visit, then
+    /// its iteration, is the lower - every step of that group instance ended before the other's began - and never where
+    /// its item is another of the same <c>forEach</c>, which runs beside it; two visits of one step are ordered by their
+    /// visits alike. Null where the two share every group instance around them and are steps of their own, which only
+    /// their declarations can order (<see cref="FlowGraph.Waits"/>). <c>fix#1.gate</c> comes before <c>fix#2.commit</c>,
+    /// <c>items[0].fold</c> neither before nor after <c>items[1].commit</c>, and <c>gate</c> and <c>commit</c> are null.
+    /// </summary>
+    /// <param name="earlier">An instance id, well formed.</param>
+    /// <param name="later">Another.</param>
+    public static bool? Precedes(string earlier, string later)
+    {
+        ArgumentNullException.ThrowIfNull(earlier);
+        ArgumentNullException.ThrowIfNull(later);
+
+        var one = earlier.Split('.');
+        var other = later.Split('.');
+
+        for (var at = 0; at < one.Length && at < other.Length; at++)
         {
-            return 1;
+            var (name, visit, iteration, item) = Marked(one[at]);
+            var (otherName, otherVisit, otherIteration, otherItem) = Marked(other[at]);
+
+            if (!string.Equals(name, otherName, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            if (visit != otherVisit)
+            {
+                return visit < otherVisit;
+            }
+
+            if (iteration != otherIteration)
+            {
+                return iteration < otherIteration;
+            }
+
+            if (item != otherItem)
+            {
+                return false;
+            }
         }
 
-        var marks = segment[name.Length..];
+        // The same instance, which comes neither before nor after itself.
+        return false;
+    }
 
-        if (marks[0] != '+')
+    /// <summary>One segment's name and its marks: its visit, from 1 where none is written, and the iteration or the item it holds, where it holds one.</summary>
+    private static (string Name, int Visit, int? Iteration, int? Item) Marked(string segment)
+    {
+        var first = segment.IndexOfAny(Marks);
+        var name = first < 0 ? segment : segment[..first];
+        var visit = 1;
+        int? iteration = null;
+        int? item = null;
+
+        for (var at = first; at >= 0 && at < segment.Length;)
         {
-            return 1;
+            var mark = segment[at];
+            var end = mark == '[' ? segment.IndexOf(']', at + 1) : segment.IndexOfAny(Marks, at + 1) is >= 0 and var next ? next : segment.Length;
+            var count = WorkflowExpressions.WholeNumber(segment[(at + 1)..end]);
+
+            switch (mark)
+            {
+                case '+':
+                    visit = count ?? 1;
+                    break;
+                case '#':
+                    iteration = count;
+                    break;
+                default:
+                    item = count;
+                    break;
+            }
+
+            at = mark == '[' ? end + 1 : end;
         }
 
-        var end = marks.IndexOfAny(['+', '#', '['], 1);
-        var written = marks[1..(end < 0 ? marks.Length : end)];
+        return (name, visit, iteration, item);
+    }
 
-        return WorkflowExpressions.WholeNumber(written) is { } visit ? visit : 1;
+    /// <summary>The id with each visit and iteration written after its innermost item taken out: what <see cref="SameStep"/> compares.</summary>
+    private static string Lineage(string id)
+    {
+        var segments = id.Split('.');
+        var item = Array.FindLastIndex(segments, segment => segment.Contains('['));
+
+        return string.Join('.', segments.Select((segment, at) => at <= item ? segment : segment[..(segment.IndexOfAny(Marks) is >= 0 and var mark ? mark : segment.Length)]));
     }
 
     /// <summary>

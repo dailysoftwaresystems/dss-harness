@@ -707,8 +707,9 @@ public sealed class FlowService(
                 records,
                 resume,
                 layout.Name,
-                new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, runContext.StartCommit, definition),
-                Agents.AgentProviders.Resolve(context.Config).Providers is { } providers ? WorkflowValidator.AgentModels(definition, providers) : null);
+                new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, runContext.StartCommit, definition, runContext.Branch),
+                Agents.AgentProviders.Resolve(context.Config).Providers is { } providers ? WorkflowValidator.AgentModels(definition, providers) : null,
+                named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, definition.Name, named, "a pull request's body"));
             var before = _store.ReadFlowQuestions(layout);
 
             if (answered is { } given && !coordinator.TryAnswer(given.Question, given.Answer, given.Text, out var problem, AnswerCommand))

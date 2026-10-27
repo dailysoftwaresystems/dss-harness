@@ -1,14 +1,15 @@
-using System.Globalization;
 using DssHarness.Core.Git;
+using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Ci;
 
 /// <summary>
-/// The one way this tool runs the forge's command line, <c>gh</c>, whoever asks: a read of CI, and later a push's and a
-/// pull request's publishing. Each call answers for the repository it stands in, cannot ask anyone anything, and is
-/// ended where it has not finished in time.
+/// The one way this tool runs the forge's command line, <c>gh</c>, whoever asks: a read of CI, and a pull request's
+/// publishing. Each call answers for the repository it stands in, cannot ask anyone anything, and is ended where it has
+/// not finished in time: its caller's limit - the step's <c>timeoutMinutes</c>, where the step that makes it says one -
+/// else its own, <see cref="Limit"/>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -19,9 +20,8 @@ namespace DssHarness.Core.Ci;
 /// </para>
 /// <para>
 /// A call that could wait for ever on something nobody will give it - a prompt for a password, a credential helper's
-/// window, a server that does not answer - is started so that it cannot ask (<c>GH_PROMPT_DISABLED</c>,
-/// <c>GCM_INTERACTIVE</c>, <c>GIT_TERMINAL_PROMPT</c>), and ended at its limit: what it was asked was not done, and a
-/// caller may ask again (<see cref="HarnessExit.Incomplete"/>).
+/// window, a server that does not answer - is started so that it cannot ask (<see cref="UnattendedCommands"/>), and
+/// ended at its limit: what it was asked was not done, and a caller may ask again (<see cref="HarnessExit.Incomplete"/>).
 /// </para>
 /// </remarks>
 /// <param name="processRunner">Runs the forge's tool.</param>
@@ -34,7 +34,7 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
     /// <summary>The forge's command line. The one dependency, and there is no fallback to a second.</summary>
     public const string Executable = "gh";
 
-    /// <summary>How long one call may take: five minutes.</summary>
+    /// <summary>How long one call may take where its caller gives no limit of its own: five minutes.</summary>
     public static readonly TimeSpan Limit = TimeSpan.FromMinutes(5);
 
     /// <summary>
@@ -44,14 +44,6 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
     /// </summary>
     internal const string RepositoryOverrideVariable = "GH_REPO";
 
-    /// <summary>What each call is started with so that it cannot ask: the forge's tool, a credential manager, and git.</summary>
-    internal static readonly IReadOnlyDictionary<string, string> NeverAsks = new Dictionary<string, string>(StringComparer.Ordinal)
-    {
-        ["GH_PROMPT_DISABLED"] = "1",
-        ["GCM_INTERACTIVE"] = "never",
-        ["GIT_TERMINAL_PROMPT"] = "0",
-    };
-
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly GitLocalVariables _localVariables = localVariables ?? new GitLocalVariables(processRunner);
     private readonly Func<string, string?> _environment = environment ?? Environment.GetEnvironmentVariable;
@@ -60,7 +52,13 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
     /// <param name="repositoryRoot">The repository the call answers for.</param>
     /// <param name="arguments">Its arguments.</param>
     /// <param name="notDone">What a call that did not answer leaves undone, as each refusal ends: "so CI was NOT read (this is not a pass)".</param>
+    /// <param name="limit">How long the call may take; <see cref="Limit"/> where null.</param>
     /// <param name="cancellationToken">Stops the call.</param>
+    /// <param name="late">
+    /// What a call that did not answer in time leaves, where that is not <paramref name="notDone"/> - a write the forge
+    /// may have made before it was ended: "so whether a pull request was opened is not known"; null for a read, which did
+    /// not read.
+    /// </param>
     /// <exception cref="HarnessException">
     /// <c>GH_REPO</c> is set (13); <c>gh</c> is not there (14); it failed (20); or it passed its limit (21). Each says what
     /// it left undone.
@@ -69,7 +67,9 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
         string repositoryRoot,
         IReadOnlyList<string> arguments,
         string notDone,
-        CancellationToken cancellationToken)
+        TimeSpan? limit,
+        CancellationToken cancellationToken,
+        string? late = null)
     {
         ArgumentNullException.ThrowIfNull(repositoryRoot);
         ArgumentNullException.ThrowIfNull(arguments);
@@ -93,12 +93,9 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
         await _localVariables.ClearAsync(environment, cancellationToken).ConfigureAwait(false);
 
-        foreach (var (name, value) in NeverAsks)
-        {
-            environment[name] = value;
-        }
+        UnattendedCommands.Apply(environment);
 
-        var budget = Limit;
+        var budget = limit ?? Limit;
         var result = await _processRunner.RunAsync(
             new ProcessRequest
             {
@@ -114,8 +111,8 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
         {
             throw new HarnessException(
                 HarnessExit.Incomplete,
-                $"{Executable} {string.Join(' ', arguments)} did not answer within {Minutes(budget)}, {notDone}. Asked again, "
-                + "it may answer: a forge that is slow or a network that dropped says nothing of the code.");
+                $"{Executable} {string.Join(' ', arguments)} did not answer within {ReportText.Limit(budget)}, {late ?? notDone}. Asked again, "
+                + "it may answer: a forge that is slow, or a network that dropped, refused nothing.");
         }
 
         if (!result.Succeeded)
@@ -130,9 +127,4 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
 
         return result.StandardOutput;
     }
-
-    private static string Minutes(TimeSpan budget)
-        => budget.TotalMinutes >= 1 && budget.TotalMinutes == Math.Floor(budget.TotalMinutes)
-            ? $"{budget.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minute{(budget.TotalMinutes == 1 ? string.Empty : "s")}"
-            : $"{budget.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s";
 }

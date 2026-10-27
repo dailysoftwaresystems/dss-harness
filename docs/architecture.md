@@ -16,11 +16,11 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
-`update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `clean`, `up`, `down` and
-`help`.
+`update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `query-codebase-graph`, `clean`, `up`,
+`down` and `help`.
 
 Every section of this document now describes code that exists. Where a rule is stated in
 the present tense it is enforced, and a gap between the two is a defect in the tool rather
@@ -54,13 +54,16 @@ Below that seam a few primitives ask the runtime for one fact each, where nothin
 asked - `PhysicalFileSystem`, `ProcessRunner`, `DetachedProcessLauncher`, `Containment` (the
 session, group, signal and job-object calls containment is made of, and the choice between them
 that `ContainExec` places a child through), `UserState`,
-`WslDiskImages`, `CMakeToolchainReader`, `ProcessContext` (the process's current directory) and the
-command that holds a host awake.
+`WslDiskImages`, `CMakeToolchainReader`, `ProcessContext` (the process's current directory),
+`AgentChildEnvironment.Own` (the tool's own environment, which an agent's child would inherit),
+`SystemWebNames` (a host name's addresses) and `HarnessFetch.Connecting` (the sockets the harness's
+own fetch connects through), and the command that holds a host awake.
 
 A file is read through one stream (`IFileSystem.OpenRead`) and written whole by one of two atomic writes, each writing
 a temporary file beside the target and renaming it over the target: `IFileSystem.WriteAtomic`, handed a stream, for
 what is made as it is written - a record, a text - and `WriteAllBytesAtomicAsync` for bytes already in hand, which a
-tree sync, a fold's copy and a mutation write, waiting between its attempts without holding a thread. A whole text or
+tree sync, a fold's copy and a mutation write, waiting between its attempts without holding a thread. A file either
+replaces keeps its mode (`IFilePermissions.CopyMode`: on Unix a script its execute bit, a secret its owner alone). A whole text or
 a whole file's bytes is read and a text written by a convenience over those (`WholeFiles`), so a double that changes
 how a file reads or writes changes it for every caller, whatever form the caller takes it in. A state file
 (`JsonStateFile.Read`, `JsonStateFile.Write`) is parsed straight off that stream and serialized straight onto it,
@@ -69,7 +72,10 @@ size again, in buffers the runtime's shared pool keeps. A file is renamed into p
 (`Win32Files.TryReplace`): one who holds the old file open - every read here shares its deletion - goes on reading it
 while the new one takes its name, where Windows' own rename is refused while the old file is open at all, so a writer
 could not replace a record another sync was streaming. A volume that cannot rename so - FAT, some shares - is renamed
-Windows' own way.
+Windows' own way. Off Windows, a read refuses a pipe, a socket or a device before it opens one (`UnixFiles`, the
+runtime's own stat, where .NET's attributes call each a plain file): a pipe's open waits for a writer, past any stop.
+A walk that must not stop at what it cannot read (`EnumerateReachableFiles`) goes a directory at a time, passing by
+and naming one beneath it that cannot be read.
 
 A platform-specific implementation is created only where behaviour genuinely
 differs. Today that is three families of behaviour.
@@ -278,10 +284,10 @@ at once, with the line it concerns where the parser knows it:
   given empty, by one rule and in one wording: a runner's `legs` and `steps`; a tool's `platforms`,
   `toolchains`, `legs`, `processors` and `emulators`; a toolchain's `platforms`; an emulator's
   `phases`; `ci.workflows`; `test.inputs`; a project's `targets` and `rebuildableFormats`; a
-  platform's `toolSearchDirectories`. Read as the key left out, a runner's `"legs": []` synced the
-  tree to every host and ran on every leg, for a list naming none, as `--legs` given no name would
-  have. Left out, each still means what it did, and a list a caller builds empty in code reads as
-  left out. A list whose empty form means none - such as `sync.neverTransfer`, `sync.exclude` or
+  platform's `toolSearchDirectories`; `agentWebSearch.defaults`. Read as the key left out, a
+  runner's `"legs": []` synced the tree to every host and ran on every leg, for a list naming
+  none, as `--legs` given no name would have. Left out, each still means what it did, and a list a
+  caller builds empty in code reads as left out. A list whose empty form means none - such as `sync.neverTransfer`, `sync.exclude` or
   `contention.buildTools` - takes `[]` as that.
 - A key nothing reads is refused, saying so: a test section's `configs`, which `init` once wrote
   and nothing ever read - each leg builds and tests the one config its `config` names - and `exec`,
@@ -376,7 +382,7 @@ at once, with the line it concerns where the parser knows it:
   defect in this tool; a copy starts nothing and asks nothing. The host that runs the leg sets it up from the
   instance its own survey found, never a second look: that instance's `vcvarsall.bat` for the leg's
   processor (`amd64`, or `amd64_arm64` to cross-compile), run once per environment, instance,
-  architecture and host environment by `cmd.exe` from a batch file the harness writes, reading
+  toolset, architecture and host environment by `cmd.exe` from a batch file the harness writes, reading
   `set` before and after it in UTF-16 and keeping only what changed; the batch file names its
   variables `%%NAME%%`, so only `call`'s own pass expands them, and a path holding `%`, `^` or `&`
   is used as it is. Its exit code, an `[ERROR` line in either encoding it prints, a
@@ -392,6 +398,24 @@ at once, with the line it concerns where the parser knows it:
   build. Each leg's line names it - `developer environment: visualStudio (Visual Studio
   18.0.11205.157, MSVC 14.50.35717, amd64)` - and `--json` carries it as `developerEnvironment`,
   beside the detail rather than inside it, like the compilers.
+- **A developer environment may hold its legs to one MSVC toolset**, with the optional
+  `toolsVersion`: two numbers, naming the newest toolset of that line, or three, naming one, as
+  `VC\Tools\MSVC` names its directories. Only that form is checked when the file is read - a blank
+  one, one number, a side-by-side component's four (`14.44.17.14`, from which `vcvarsall.bat` falls
+  back to another toolset with a warning) and anything else are refused - and nothing in the tool
+  names a toolset: left out, `vcvarsall.bat` is given the architecture alone and sets up its
+  instance's default. Named, the survey asks `vswhere -sort` for every instance with
+  `requiresComponent`, newest first, and takes the first whose `VC\Tools\MSVC` holds a toolset it
+  names, with the newest of those by their numbers (`VisualStudioToolsets`, the one owner of what a
+  `toolsVersion` names); a host whose instances hold none turns the leg away as
+  `skipped-tool-missing`, naming the toolset and what each instance holds, and one whose toolsets
+  could not be listed as `skipped-unavailable`. The toolset found travels with the instance in the
+  survey's answer, and the host that runs the leg runs `vcvarsall.bat` with `-vcvars_ver=` and
+  exactly that toolset - never the shorter form, which `vcvarsall.bat` matches anywhere inside a
+  directory's name, so `14.4` would take `14.44.35207` - and fails the leg where `VCToolsVersion`
+  comes out as anything else. The leg's line names the MSVC set up. Two environments of one kind,
+  one naming a toolset, keep two toolsets apart on one machine: a CUDA toolchain's legs on the
+  toolset its `nvcc` accepts, every other MSVC leg on the instance's default.
 - **A leg naming a toolchain that does not exist on its own operating system is refused**, by the
   toolchain's `platforms` list. Refused when read rather than skipped when placed, because nothing
   about it needs measuring: a leg's `os` is required, and a leg only ever runs on a host whose
@@ -1439,11 +1463,12 @@ bills nor redirects one. Where a value is read (`AgentKeyStore.Value`, which no 
 build calls yet), who may reach the file each name came from is asked by the one rule
 the host items' files are held to (`ItemEnvironment.Unprotected`): never a file others can change,
 and never one others can read while it holds a secret - a name the configuration appoints as a key,
-not a setting such as the program a client starts. `list-agent-providers` says the same configuration without saying one key: each
-provider, client and tier, every appointed key and token present or missing and each setting a
-client reads present or absent (`AgentProviders.SettingsRead`), exit 0 whatever is missing;
-`--template` the sections as `init` writes them, answered before any repository is read - outside
-one, and where the configuration it is printed to repair does not load. The Claude Code the clients will drive is npm's own:
+not a setting such as the program a client starts. `list-agent-providers` says the same configuration without saying one
+key: each provider, client and tier, every appointed key and token present or missing and each setting a client reads
+and each web-search source's key present or absent (`AgentProviders.SettingsRead`, `AgentProviders.SourceKeys`), exit 0
+whatever is missing; `--template` the sections as `init` writes them, answered before any repository is read - outside
+one, and where the configuration it is printed to repair does not load. The Claude Code the clients will drive is npm's
+own:
 `NpmClient` finds npm (a program, or on Windows what `npm.cmd` would have started - the tool never
 starts a batch file - with npm and the node that starts it looked for on one PATH by the tool's one
 walk of a PATH), `ClaudeCodeInstall` reads the package it holds and the version its program
@@ -1489,6 +1514,9 @@ and no share undecided, and a shell's spelling of a drive (`/c/x`, `/cygdrive/c/
 read both as the drive and as the directory it names on the current drive, each decided and the
 action allowed only where both are (`AgentPolicy.Spelled`, `AgentPolicy.Plain`); where a link
 resolves, where a `cd` moves to and the ground's own directories are spelled the same way, a `cd`
+(`AgentPolicy.Movers`: `pushd`, `Set-Location` and `Push-Location` too, each word it may go to; and
+the directory `env -C` or `pwsh -WorkingDirectory` starts its command in, which `CommandAnalysis`
+reads as the `cd` before it, so `AgentPolicy.MovedTo` is the one reader of every move)
 from every place the command reached before it, up to `AgentPolicy.MaxPlaces`, past which the
 command is undecided - and a refusal's places compare in any
 case on every system, each Windows short name read as its long one (as `Path.GetFullPath` spells it); what a
@@ -1502,37 +1530,90 @@ branches read as commands of their own, each substitution's commands before the 
 in, whose word keeps the substitution's text, so the word is the expansion it is; a `for`'s or a
 `select`'s head kept as a command its reserved word leads, so the paths it hands its body are read,
 and a `case`'s patterns never; inside `[[ ]]` its parentheses and operators words of the test; a
-redirect kept apart from the words, after them, its operator normalized and before the file it
-names, wherever it stood; reserved words read only where a command begins, unquoted; a continued
-line joined and `$'...'` decoded. The `NAME=value` words before a program are kept as its
-environment and carried to what it runs, and a value that is a program git or another tool runs
-(`CommandAnalysis.ProgramValued`: `GIT_SSH_COMMAND`, `GIT_PAGER`, `EDITOR` and their kind) is read as
-that program's command line, an `export`'s or a declaration's too, and so is the value of git's own
+redirect kept apart from the words as its own (`AnalyzedCommand`, `ShellRedirect`: its operator
+normalized and the file it names), wherever it stood, so a quoted word spelled as one is a word, a
+program's rules meet the words it is handed and a redirect is decided by its file; reserved words read only where a command begins, unquoted; a continued
+line joined and `$'...'` decoded. The `NAME=value` (and `NAME+=value`, `CommandAnalysis.AssignedName`)
+words before a program are kept as its environment and carried to what it runs, and a value that is a
+program git or another tool runs (`CommandAnalysis.ProgramValued`: `GIT_SSH_COMMAND`, `GIT_PAGER`,
+`GIT_PROXY_COMMAND`, `EDITOR` and their kind) is read as that program's command line, what a command
+declares too (`CommandAnalysis.Declarations`, the one owner of it: an `export` or a declaration, cmd's
+`set`, fish's `set`, csh's `setenv`, `setx`, PowerShell's `Set-Item` and its kind of an `env:` item), and so is the value of git's own
 setting of a key git runs as a command line (`CommandAnalysis.RunsProgram`: its pager, editors, ssh,
 drivers, filters, helpers, an alias) - a `-c`, a `--config-env`'s variable (refused where the
 command does not set it), `GIT_CONFIG_VALUE_n`, `GIT_CONFIG_PARAMETERS` - an alias's `!` taken off,
 any other alias the git command it names; wrappers (`env`, `nohup`, `time`,
-`timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`, `eval`, `busybox`, `Invoke-Expression`)
+`timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`, `eval`, `busybox`)
 are stripped with their own options, at most 32 deep, what `xargs` reads standing among the words
 it runs as an expansion; and it goes into `sh -c` and every other shell's (the words after its
-script read as scripts too), a here-string or here-document a shell reads, `cmd /c` and
+script read as scripts too; fish's options read as fish reads them, `CommandAnalysis.FishScripts`,
+its `-C` scripts among what it runs), the here-string, here-document or file a shell reads as the last input
+its descriptor 0 is given (`ShellRedirect.Descriptor`; `/dev/stdin` and PowerShell's `-` among its
+names), `cmd /c` and
 `powershell -Command` and a decoded `-EncodedCommand` - by any prefix PowerShell takes, behind its
 valued options - and the command lines `trap`, `watch`, `script` and `flock` run, each by its own
-shell's quoting, to four levels, and into a shell another program runs with its script among its
-words. What it cannot read whole it refuses, and the policy denies as `undecided`: a script nested
+shell's quoting - PowerShell by a reader of its own (`CommandAnalysis.PowerShellReader`), which
+follows pwsh's tokenizer and grammar and writes each statement on a line and each word whole and
+quoted for the shell reader, so the shell reads no syntax of its own into it: a command's words as
+PowerShell hands them (a quoted string that begins a word ends it, a comma joins what follows it
+unspaced, its blanks, typographic quotes, dashes, escapes and comments its own, a here-string's
+footer where its line begins), a variable an expansion, `$(...)`, `@(...)`, `(...)`, a script
+block and a hashtable a substitution whose statements are read, an expression's strings kept as
+data, an assignment's right side a statement (`$env:NAME = value` the assignment it is), keywords'
+conditions and blocks read, `%` and `?` the cmdlets they are, and `Invoke-Expression`'s one string
+read as a script of its own (`CommandAnalysis.PowerShellReader.InvokeExpression`, to four levels as a
+script gone into is), a command's program read as any word is and then known by its name, so the
+call operator's string, a module's name before it or an escape inside it is `Invoke-Expression` too; a static method, an instance method off `CommandAnalysis.PowerShellMethods`, a member a string,
+a variable or an expression names, a null-conditional one alike, a function's or an alias's text
+(a foreach's variable and every target of an assignment among them), a class or `using`, its
+stop-parsing `--%`, a script `Invoke-Expression` is handed by no one string and what PowerShell
+refuses to read are undecided, as is a command line a program composes (`CommandAnalysis.ComposesCommandLine`:
+`Start-Process`'s arguments, WMI's, the task scheduler's, code `Add-Type` compiles, a method
+`ForEach-Object` calls by name) - to four levels, and into a shell another program runs with its script among its
+words, find's `-exec` and its kind to their `;` (or the `+` after a `{}`), reading find's input;
+`env -S`'s string is split by env's own rules (`CommandAnalysis.SplitWords`), never the shell's; a
+command `find -exec`, `fd -x`, `rg --pre` or `--hostname-bin`, `parallel` or an option of a git subcommand runs is a
+command of its own (`CommandAnalysis.Executed`, git's dispatched by `CommandAnalysis.GitExecuted` on the subcommand its
+global options are passed over to find) - a pack program a transport runs through the shell (`--upload-pack` of a fetch,
+pull, clone, ls-remote or fetch-pack, `--receive-pack` of a push or send-pack, their `--exec` synonyms, clone's `-u`,
+archive's `--exec` with `--remote`), difftool's `--extcmd`, rebase's `--exec`, grep's `--open-files-in-pager`,
+filter-branch's filters and send-email's commands, each in every form git takes a value; `bisect run`'s words git runs
+as the program and arguments they are, `submodule foreach`'s as one script the shell evaluates - each word it fills in
+`CommandAnalysis.InputWord` and fd's, rg's and parallel's added one too; `$((...))`, `((...))` and `$[...]` are read as arithmetic, their close found
+as bash finds it, their text read as a double quote's and their substitutions read as commands, so a
+`<<` there shifts and opens no here-document; a single quote inside a double quote's or a
+here-document's `${...}` is a character; a shell's options are read as it reads them before its
+script - an `o` in a short cluster taking the next word (`-eo pipefail`), a help or a version
+running nothing only where it stands before what would run; a redirect's descriptor is read as bash
+reads it (`{name}>`, `<&3-`, digits past an int a word); env's own words are read once
+(`CommandAnalysis.EnvWords`) for both its command and its `-S`; parallel's command is read as the
+script it runs through the shell; a script another program fills in (`find -exec sh -c 'echo {}'`)
+is undecided; and a here-document's or here-string's text is read for root actions and paths with
+no brace expansion, which the shell never makes in it, a name one Windows reads as its device
+(`NUL`, `COM1.txt`) the file of that name another Windows and its shells make, and a bracket the shell
+would not read as one its characters; arithmetic that does not close is read once at each place.
+What it cannot read whole it refuses, and the policy denies as `undecided`: a script nested
 past four levels, parentheses past 32, a shell that reads its script from its input or from a file
-an expansion names (`bash <(curl ...)`), an `xargs` handing a shell its script, a program named by a
+an expansion or another open descriptor names (`bash <(curl ...)`, `/dev/fd/3`, `<&3`), an `env -S`
+string holding a backslash or a comment a line end follows, an alias it gives, an `xargs` handing a shell its script, a program named by a
 variable, a substitution, a pattern or a brace, a brace that spells more than 64 words, a word where
-none can stand, and an option of git's or gh's own before its command that this does not know.
-Every word of a command is tried as the program of the words after it, a program matched by its
-name (`CommandAnalysis.Name`, `.exe`, `.cmd` and `.dll` among the ends folded away), so a command
-another program runs meets the rules on its own program; a rule matches through
+none can stand, and an option of git's, gh's, fish's or Windows PowerShell's own before its command that this does
+not know (`CommandAnalysis.WindowsPowerShellValued` and `WindowsPowerShellSwitches` the parameters it knows, its command
+read once, from its first word that is neither).
+Every word of a command is tried as the program of the words after it - but a word of a program
+that runs none of its words (`CommandAnalysis.DataPrograms`: grep, rg, echo, cat, which and their
+kind), and a git or gh tried so reads an option it does not know as one word - a program matched by
+its name in any case (`CommandAnalysis.Name`, `.exe`, `.cmd` and `.dll` among the ends folded away,
+a cmd line's `@` dropped, `git-push` read as `git push`), so a command another program runs meets the rules on its own program; a rule matches through
 `AgentRule.Match`, whose `Expanded` - a word the rule reads is one the shell expands - the policy
 denies as what the rule may be; git's own options, valued ones with their values, are dropped
 before its subcommand, gh's flags before its command's path (`gh pr -R o/r merge` is
 `gh pr merge`), and a git configured where it runs - a `-c` or `--config-env` of any key but the
-ones that only shape what git prints, `--exec-path`, the `GIT_CONFIG` names, `GIT_EXEC_PATH` and
-`GIT_TEMPLATE_DIR` of its environment - is the `git config` it is, and still the command it runs,
+ones that only shape what git prints, `--exec-path`, clone's own `-c` or `--config` and clone's and init's `--template`
+(`CommandAnalysis.ClonesConfigured`, whose keys git runs read through the same owner as a global `-c`'s), the
+`GIT_CONFIG` names, `GIT_EXEC_PATH`,
+`GIT_TEMPLATE_DIR` and the homes git reads its global configuration from (`HOME`, `XDG_CONFIG_HOME`,
+`HOMEDRIVE`, `HOMEPATH`, `USERPROFILE`) its assignments set, never a word of data that spells one - is the `git config` it is, and still the command it runs,
 each reading met by the rules. A word that names a path is read
 as each candidate it may be - the word, a redirect's file, an option's value, the words a script in
 it names, each word its braces spell and the path a `file://` address names - and a pattern the
@@ -1540,13 +1621,23 @@ shell expands is refused where it may reach a credential slot or a Claude Code d
 (`curl`, `wget`, `Invoke-WebRequest` and `Invoke-RestMethod` with `iwr` and `irm`, `http`, `https`,
 `gh api`) is decided as a web request too, by each address it names and each host it reaches (a
 proxy, curl's `--connect-to` and `--resolve` targets, the proxy of its environment), under the
-`Web(...)` rules and `agentPolicy.webDomains`, refused where the step has no web, and refused where
+`Web(...)` rules and `agentPolicy.webDomains` - the list of the pages an agent reads and the
+results a search gives, a search source's own requests held to the `Web(...)` rules alone -
+refused where the step has no web, and refused where
 the web is held to any rule when it reads what it reaches from a file. What it does not see is said
 in help: the inside of a script file a command runs. The worktree rules
-(`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs and the merges
-and CI starts of `gh` - `gh pr merge`, `gh workflow run`, `gh run rerun`, the `gh api` endpoints and
-GraphQL mutations of the same (`AgentPolicy.GhApiEndpoints`, `AgentPolicy.GhApiMutations`) and `gh
-alias set` - keep git's own files unwritten whatever `protectedPaths` says (`AgentPolicy.GitsOwnRule`:
+(`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs, the `gh` commands that run them
+or write gh's own configuration (`AgentPolicy.GhStateCommands`; gh's own aliases read as the commands they name,
+`CommandAnalysis.GhAliases`, and a place gh reads its configuration from set for a command read as `gh config set`),
+and the merges
+and CI starts of `gh` - each endpoint and GraphQL mutation that merges or starts CI with the `gh`
+commands that reach it, one list (`AgentPolicy.GhCiReaches`) that `AgentPolicy.NeverCiCommands`
+(`gh pr merge`, `gh pr update-branch`, `gh repo sync`, `gh workflow run`, `gh run rerun`, `gh pr create`,
+`gh release create`, `gh release edit`), `AgentPolicy.GhApiEndpoints`, `AgentPolicy.GhApiWriteEndpoints` (a ref, a
+file, a pull request or a release written: refused where `CommandAnalysis.GhApiWrites` says the request writes) and
+`AgentPolicy.GhApiMutations` are read from, `gh alias set`, `gh extension exec`, and a `gh` command
+named by none of gh's own (`AgentPolicy.GhCommands`: an alias, `co` among them, or an extension), where `gh` runs -
+its command's own program, or past one that runs the words after it (`CommandAnalysis.CommandRunners`) - keep git's own files unwritten whatever `protectedPaths` says (`AgentPolicy.GitsOwnRule`:
 a `.git` segment at any depth beneath a root, in any case, so a nested repository's hooks are as
 safe as the root's), and hold the tool's own
 policy and what the next launch loads unwritten by any agent; its own state
@@ -1554,7 +1645,8 @@ policy and what the next launch loads unwritten by any agent; its own state
 says, a writable root standing inside it - the agent's own work directory - the one exception; the
 tool's own verbs (`AgentPolicy.ToolVerbs`, each the command's own name as its service declares it)
 and `run-side-task` are refused, run by any program or from a response file, whatever the switch
-says. The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
+says, and so are the `gh` commands that hand the work to another agent or install what the next launch loads
+(`AgentPolicy.GhOutOfStepCommands`). The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
 as rules (`AgentPolicy.ProtectedPathRules`), pinned by a test and printed by `help agent-clients`,
 refused on every client; a step's `writes` is the one source that narrows, and the reporter's reads
 are narrowed to the run's directory alone (`AgentPolicyGround.ReporterRoot`: no command, no write,
@@ -1565,15 +1657,18 @@ too - and the restriction rules as deny rules, absolute once for each root, but 
 pattern there would cover a root the launch writes, each path in the POSIX form Claude Code matches
 (`//c/x` for `C:\x`) and a `Write` rule as an `Edit` rule, for Claude Code holds every file tool to
 its `Read` and `Edit` rules alone - a second layer, for the engine is asked about
-every call and answers from the same policy in its own
-process. Where the policy cannot decide a call it denies it, never
+every other call and answers from the same policy in its own
+process; a call these rules refuse first is Claude Code's own denial, told by a
+`system/permission_denied` line or, for a file tool's call refused as Claude Code reads its input,
+by its result alone (`ClaudeLine.CallResult.RefusedByRule`), and counted and recorded once. Where the policy cannot decide a call it denies it, never
 allows - nothing runs while the host that would answer is silent or gone. The first client that
 asks it is `Agents\ClaudeCode\ClaudeCodeClient`, the `IAgentClient` of `claude-code`: each
-launch a new session (`ClaudeLaunch` builds its one argument list and its environment - nothing of
-a Claude Code session the tool was started in, the names `ClaudeSettings.Controlled` sets -
+launch a new session (`ClaudeLaunch` builds its one argument list and its environment - what
+every child of an agent has (`AgentChildEnvironment`), nothing of a Claude Code session the tool
+was started in but a name `agentPolicy.keepEnvironment` gives back, the names `ClaudeSettings.Launched` sets -
 `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` among them, so every shell command starts in the
 launch's directory, where the policy reads its relative paths, never where an earlier command's
-`cd` left it - and the one credential an `AgentCredential` gives), streamed both ways and read line by line as
+`cd` left it, and Claude Code's own bounds of a shell command from the command times - and the one credential an `AgentCredential` gives), streamed both ways and read line by line as
 `ClaudeLine`s (every kind the probe's recordings hold), each `can_use_tool` it asks decided by
 `ClaudeToolDecider` through the policy, the tools it is given - and what a call of each is of - from
 the one table `ClaudeCodeTools` holds; an answer held to a schema checked by `StructuredOutputGate`
@@ -1582,7 +1677,23 @@ turn (its prompt and its refusal `AgentHandoffSignal`'s, every client's; the age
 message the engine wrote was taken or dropped - each with an id of its own, by which the
 interrupt's receipt names those it dropped), the model each message names, and a key reported
 invalid moved past with a new launch, all in one launch's loop that the stored stream
-(`AgentRunner`) records as it runs. Once a launch has ended, however it ended, a session file it
+(`AgentRunner`) records as it runs. A step with the web takes the harness's own fetch and search
+from the engine's tool server, `Agents\Runtime\AgentToolServer`: one MCP server of type `sdk`
+(`ClaudeLaunch.McpConfiguration`, the step's `claude-mcp.json`, which `--mcp-config` names beside
+`--strict-mcp-config`), whose every message Claude Code sends its host as an `mcp_message` control
+request - the probe found it does so for a host that is no SDK on every version taken, its
+`initialize`, `notifications/initialized` and `tools/list` before the launch's init, and each
+`tools/call` after the engine allowed the call, naming it in `_meta` (`claudecode/toolUseId`). The
+server is the subset of MCP a server of tools needs, our own code over `System.Text.Json`:
+`AgentToolServer.Read` sorts a message into one answered at once, a call, or a call's cancellation,
+and `AgentToolServer.CallAsync` runs a call by the runtime. The client's loop answers each message, runs a call in the
+background only where the engine was asked about it and allowed it, once - one it was not refuses
+and fails the step - cancels one its client cancels, and holds each turn's init to the server:
+connected, every tool of it taken, no other server (`ClaudeCodeTools.ServerTools`,
+`ClaudeCodeTools.ServedName`; a call of one runs by the harness, `AgentToolRunner.Harness`). Its tools' names stand beside
+`--tools`, each with an ask rule, and `ClaudeToolDecider` allows a call of one as asked: its rules
+are its tool's, each address decided and recorded as it runs, as on the API clients, and what the
+runtime refused and asked of the web is counted in the step's result. Once a launch has ended, however it ended, a session file it
 left is removed, and what its container could not reach where the runner hands its end back
 (`ProcessResult.Uncontained`) is said and kept in the result's `uncontained`; a call the engine's
 own deciding fails on is a denial like any other, by the rule `undecided`. The client holds each
@@ -1592,8 +1703,170 @@ digest named in the launch's start, the hooks off), the `initialize` answer boun
 before any work and its tools and credential source (`ClaudeLaunch.ApiKeySources`) held to the launch's, and every call
 that ran (`ClaudeLine.CallResult.Ran`) one the engine was asked about and allowed; a decline is
 `Refused` and an account at its limit (`ClaudeLine.RateLimit`, or the turn's error) `RateLimited`
-with an `AgentAccountLimit`. The API clients are the next thing the tool grows. This build checks workflow definitions and
-starts and drives a run of one (see "Running a workflow" below). Each step is given to the runner of its type
+with an `AgentAccountLimit`. Each client's denials, requests of the web and answers too large for
+their events are recorded by the one `AgentCallRecords` (`denials.jsonl`, `web.jsonl`,
+`tool-results/`). The harness's own tools, `Agents\Runtime\AgentToolRuntime`, are built for the
+API clients - `claude-api` and `glm` - each run's opened by `AgentToolHost.Open`, and serve
+the `claude-code` client the web's through the engine's tool server (`AgentToolServer`, opened by
+`AgentToolHost.Serve` for one launch: the server's tools alone, written to the launch's own
+`AgentCallRecords`, each call answered by `AgentToolRuntime.ServeAsync`, whose end the launch's
+stream tells): the tools are the one
+table `AgentTools` holds (what a step is offered, what help prints and what runs); each call is
+held to its tool's schema (`JsonSchemaSubset`), each path to the agent's roots by `ConfinedPaths` -
+its spelling, its links followed, a write through no link below its root - before the policy is
+asked; reads and searches go through `AgentFiles` (git's listing in a work tree, a walk elsewhere),
+edits through `EditedText` over `EncodedText` (the encoding rule the graph's `CodeFileText` reads
+by too, its lines cut by `CodeFileText.Spans`), a command through `PhaseRunner` as a contained
+phase - its environment `AgentChildEnvironment`'s, every name the configuration appoints and every
+secret-shaped one gone but those `agentPolicy.keepEnvironment` gives back, its time
+`agentPolicy.commandTimeoutSeconds` unless its call names one, `agentPolicy.maxCommandTimeoutSeconds`
+at most (`AgentCommandSettings`) - and a page through `Web\HarnessFetch`,
+which decides every address before it is asked and gives it its turn (`WebFetchGate`: the decision, the record, the
+reader's pace, waited for outside the fetch's 30 s), asks only the `http` and `https` addresses of public hosts
+`WebAddresses` allows - checked on the lookup and again on the connection made - and reduces HTML to text by
+`WebPageText` over AngleSharp. A turn runs its reads together, at most 4 at once, a
+write or a run alone between them.
+
+The loop the API clients share is `Agents\Loop\ToolLoop`, driven in its own tests by a fake provider: one request
+after another over an `IChatProvider` - the provider's own wire, its form of a conversation's messages and tools, what
+each of its failures is (`ChatFailure`), what a request has used so far (`ChatPart.Used`, counted where it ends
+without its turn), what is heard of an answer that is none of its parts (`ChatPart.Heard`, which keeps the stall bound
+from a stream that is alive) and what its requests are billed by (`IChatProvider.Uses`) - each turn's calls run by the run's
+`AgentToolRuntime` (`AgentToolHost.Open`) through `AgentToolRuntime.RunTurnAsync`, which an `AgentTurnCut` cuts when
+the run pauses or the step runs past its time, every call it cut still answered (`AgentToolRuntime.Interrupted`,
+`AgentToolRuntime.NotRun`); a host that cannot serve the tools a run is offered says why before it starts
+(`AgentToolHost.Unserved`). The loop owns the bounds - `maxTurns` but the handoff turn's, the budget checked before every
+request against the cost `AgentPrices` counts (`AgentPrices.BudgetRefusal` refusing a start without the prices it needs),
+the duration, the stall - the keys, a refused one passed over for the next, the retries (`ToolLoop.Backoff`,
+`ToolLoopTerms`), the handoff turn (`AgentHandoffSignal`, whose question and answer the claude-code client reads the
+same way), a message to an
+agent at work (`AgentMessages.TryTake`), the output check (`StructuredOutputGate`), the model each turn names
+(`AgentModelIds`, which the claude-code client holds its messages to too) and the conversation: `StoredConversation`
+under the agent's `sessions/<id>/` (`AgentRun.SessionsDirectory`, `OrchestratorLayout.SessionDirectoryIn`), each line a
+JSON array of the provider's messages written at a point where the history is whole, each message kept and sent back
+byte for byte - and, where the provider begins sending it shortened (`ChatPart.Shortened`), the point kept beside it
+(`StoredConversation.Shorten`, `shortened.json`) and given with every later request (`ChatRequest.ShortenedBefore`), so
+each sends what the last did. The first request asks for a quarter of the model's `maxOutputTokens` (`ToolLoop.FirstMaxTokens`), a turn
+cut off while it called a tool, before it wrote anything, or while its request held it to a schema (`ToolLoop.WhileHeld`: the
+answer to a nudge would be a whole object of its own), doubling it. Every message the engine sends the agent - the step's
+prompt, a nudge, a repair, the handoff's question, a message to an agent at work - is masked as the system prompt is,
+before it is sent or stored. Every client ends a run in the same words, whatever its wire: a step that
+never began, a model nobody asked for, an answer outside its schema, a declined request and an account at its limit are
+each said by `AgentEndings`, and what a run used, by model, is counted by `AgentUsageTally`.
+
+The `claude-api` client is `Agents\ClaudeApi\ClaudeApiClient`: the loop over `ClaudeApiProvider`, built for each run
+from the run's entries (`AgentEntries`: the provider's, the model's and the client's own where the configuration
+declares one, which the runner copies from the step's request) and refusing a start without the provider's and the
+model's. `ClaudeApiRequest` is the one owner of a request - its body, its
+headers, the version, the betas, what the tool sends itself or never sends (`ClaudeApiRequest.Owned`, which a client's
+`requestExtras` may not set, `ExtrasProblems` refusing it when the configuration is read - the sampling parameters the
+version refuses on every model among it, `ClaudeApiRequest.SamplingRefused`) and the cache's lifetimes; the provider
+streams each answer through `Agents\Http\ApiConnection` - one `HttpClient` for the process, its events read by
+`System.Net.ServerSentEvents`, a refusal, a network that failed and a stream cut each an `ApiEvent` of its own, never
+an exception, a refusal whose body could not be read a stream cut - puts each block back together from its deltas, and keeps the answer's message as the API wrote it;
+`ClaudeApiFailures` is the one table of what each status and error type is to the loop. Its tests replay the answers
+under `tests/dss-harness-test/fixtures/claude-api/` through `ApiEndpoint`, a handler that stands in for the network
+and keeps every request as it was sent.
+
+The `glm` client is `Agents\ZaiApi\ZaiApiClient`: the same loop over `ZaiApiProvider`, built the same way from the
+run's entries (`ToolLoopTerms.Of`, `ToolLoopTerms.Unstartable`, which both API clients start by). What the two API
+clients' wires share has one owner each under `Agents\Http`: `ApiBody` writes a request's body - the tool's own members,
+the stored tools and messages written raw, a client's `requestExtras` merged and refused where they set an
+`OwnedMember` - and `ApiAnswers` reads a posted request's events into the loop's parts (`ApiAnswers.Parts`), says
+a refusal, a network that failed, a stream cut, an answer that never began, an ending it does not know and a call it
+cannot put back together in the same words for both, settles a turn whose end its calls disagree with
+(`ApiAnswers.Settled`: one done that holds calls is a turn of calls, one of calls that holds none failed part way), and
+reads JSON's members. `ZaiApiRequest` is the one owner of
+a Z.AI request - its body, its header, what the tool sends itself (`ZaiApiRequest.Owned`), the short form an older
+answer goes out in (`ZaiApiRequest.ShortAnswer`) - and `ZaiApiProvider` reads each chunk into the loop's parts, puts
+the message back together - its text, its reasoning and each call's arguments by the call's index - and owns the one
+rewrite of what is sent: past `ZaiApiProvider.ShortenAt` of the model's context it yields `ChatPart.Shortened` once,
+and past `ZaiApiProvider.FullAt` after that the context is full. `ZaiApiFailures` is the one table of Z.AI's codes
+(`ZaiApiFailures.Codes`) and of its statuses where it names none (`ZaiApiFailures.Statuses`), which the help says row by
+row. Its tests replay the
+answers under `tests/dss-harness-test/fixtures/zai-api/`, recorded live by `ZaiApiProbeTests` and curated.
+
+Where a step names an output, every client asks for the envelope `AgentEnvelope` builds round the step's schema -
+`notes`, `output` (the step's schema whole, null beside it, its definitions at the envelope's root), `assumptions`
+(`AgentAssumption`), and `questions` (`AgentQuestion`, the one shape of a question an agent asks or a step's output
+writes) where `AgentOutput.AskRounds` leaves the step rounds to ask - and one `StructuredOutputGate` for each run reads
+every answer of it on all three clients: the members by the subset's check, the output against the step's schema under
+`$.output` (`JsonSchemaSubset.Problems` from a path, `JsonSchemaSubset.Respelled` for an enum's spelling), what no
+schema says (the notes not empty, a null output only where the answer asks, and each assumption and question by its
+record's own rule - `AgentAssumption.Problems`, `AgentQuestion.Problems`: every text written, options no two alike, a
+recommendation among them - which `AgentRunResult.Problem` and the run's `questions.json` hold them to as well), and the
+run's end - `Completed` or `Asked`, with `PersonAsked`, or a repair sent back, then `InvalidOutput`. The runner writes
+the notes as `notes.md` (`OrchestratorLayout.StepNotesFileName`) before `result.json`, and removes an earlier attempt's
+before an attempt begins, for the step's directory is every attempt's. What each client is sent: `--json-schema` the
+envelope as built; the loop's `ChatRequest.Schema`, which the Claude API sends as `output_config.format` in the copy
+`ClaudeApiRequest.Sent` makes - every array bound structured outputs do not take moved into its description, over
+`JsonSchemaSubset.SchemasIn` - and which, once the API refuses it as more than it compiles
+(`ClaudeApiFailures.RefusesTheFormat`, failed as `ChatFailureKind.SchemaRefused`), the loop sends the run's later requests
+none of, the envelope said in words in a message it appends to the conversation (`AgentMessageKind.EnvelopeInWords`) -
+never in the system prompt, which every stored turn's thinking was made under - and which a provider whose wire holds no answer to a schema (`IChatProvider.SendsSchema` false, Z.AI) is told in words
+in the step's first message (`AgentEnvelope.InWords`), an answer that read as no JSON asked again in JSON alone
+(`ChatRequest.JsonAlone`: no tool offered, `response_format` a JSON object).
+
+The harness's own web search is built under `Web\Search`: each kind of source an implementation of `IWebSearchKind` -
+pure, asking and reading only what it is handed - found by the one scan of the core (`CoreImplementations<T>`, which
+the codebase graph's languages are found by too) into the registry `WebSearchKinds`, which refuses two kinds of one
+name and holds a source to its kind's keys and every source's own (`WebSearchSource.OwnProblems`, the `credential`'s
+shape by `WebSearchCredential`). `json-api` reads an answer by RFC 9535 JSONPath (`Core.Json.JsonPath`, the tool's
+own, held to the standard's compliance suite, its `match` and `search` by `IRegexp`) through `JsonSearchItems`, its
+templates read by the configuration's one brace grammar (`FlowTemplate.Pieces`); `feed` and `opensearch` read feeds
+by `FeedItems` over `WebXml`, the one reader of XML from the web; a field is markup only where its source says so
+(`JsonSearchItems`' `markup`) or its format does (RSS, an Atom text by its type), reduced by `WebPageText.OfMarkup`, and
+any other is text as it stands (`OfText`), never guessed; every status and rate limit is read by `WebRateLimit` (no
+pause longer than a day), an endpoint's answer to a query by `WebSearchStatus` over it; what a site answers is read to
+bounds of its readers' own - robots.txt's 500 KiB (`RobotsTxt.MostRead`), a sitemap's 50,000 entries
+(`SitemapDocument`), a link's 2,048 characters (`WebAddresses.MostLength`), a field's 16 KiB, its cut marked where it
+fell in the order its reader reads it (`WebPageText`), an answer's 100 items (`WebSearchAnswer.MostResults`), an
+I-Regexp's 4 KiB - each rule decided in one pass; and `sitemap` is answered by the harness's own index of a site
+(`Web\Index`): `WebIndex`, BM25 over `pages.jsonl` under `.orchestrators/.web-index/<source>/`
+(`OrchestratorLayout.WebIndexDirectory`) - lines that only grow, a page that could not be read among them, written anew
+under a new generation once the lines replaced outnumber those kept - filled in the background by `SitemapFill`
+(`RobotsTxt`, `SitemapDocument`, the fetch asked by `WebFetchAsk` for markup, a page's parts, a gzip, or text whatever
+type its server says; a fill that leaves nothing a search may find stops short, and why one stopped short is kept until
+one ends whole;
+every page and redirect, and every sitemap of the site robots.txt does not name, held to robots.txt; each request at the
+site's crawl delay and in the source's turn the run's gate gives) through `WebIndexes`, one fill of an index at a time
+on the machine, filled again whenever the source's settings change.
+The configuration's sources are `agentWebSearch`, laid over the built-in ones key by key (`WebSearchSources`, the one
+owner of what the sources are, from the embedded `Templates/web-search-sources.json`, which `init` writes): each held to
+its kind's keys and every source's own where the configuration is read (V56), a reason step's `search` held to them
+where the workflow is (V55). `web_search` is a tool of the runtime (`AgentTools`), offered to a step that has a source,
+its schema naming them; it asks `HarnessWebSearch`, which owns every rule that is no kind's: the query held to the mask,
+each source in its own part (`WebSearchPart`), what its lookups found read once a run and each answered query kept in
+the run's `web/searches.jsonl` as any step may be told it - masked as below, a result whose link holds a secret left out
+and counted - with each address it was asked at and whether its key was sent (`WebSearchRun`) - a later step of the run
+given it under its own rules, each of those addresses decided again, and why a lookup found nothing never kept, nor a
+pause asked for but by what the source answered - each address a source asks for the step decided by the mask - a secret
+behind its escapes too, as `web_fetch` decides (`LineMasks.HoldsUnescaped`, and recorded and told by `RedactUnescaped`)
+- then by the policy's `WebSource` - the `Web(...)` rules, never `webDomains` - and recorded before it is asked, a
+sitemap source's site decided so before its index is searched and the pages its fill reads by the policy's `WebFill`,
+the configuration's `Web(...)` rules alone, since the index outlives the step, each result held to `Web` and left out
+and counted where refused, each request made counted against `maxPerStep`, each source's `perMinute` and `perDay` held
+machine-wide by one record beside admission's and a pause it asks for kept there (`WebSearchPace`), a key read by
+`WebSearchKeys` from the slot or `gh auth token --hostname` for the source's host - a slot's key sent to the scheme, host
+and port the source's own address writes alone (`IWebSearchKind.KeyOrigin`, a source whose address takes its host from
+what discover finds refused one where the configuration is read), a gh login to that host or its API alone
+(`WebFetchKey.Origins`), never a host a document the source read names - and added by the fetch to what it sends the
+scheme, host and port each of the source's search requests first asks alone, where it is one of those - its lookups are
+sent none - as a header or a query parameter, over https alone, never to an address a record or an answer holds - a
+query parameter of its name is dropped from every address, a redirect's
+that echoes it back among them, and a first address naming one refused (`WebFetchAsk.Key`) - each address it may not go
+to refused by the key's own rule (`HarnessFetch.KeyRule`) before the step's rules decide it, nothing sent, and recorded
+as theirs are - the step's mask holding each form it is sent or echoed in (`WebSearchCredential.Forms`) masking each
+answer as written before its kind reads it, its form kept - one that still holds a secret behind its escapes not read,
+so no reader's cut parts one - and each text the kind read of it as the step is told it - behind its percent-escapes and
+HTML's character references too - read as a page's reader reads them, every name HTML holds and a number with no `;` -
+at most eight readings deep (`LineMasks.RedactUnescaped`), a text its reader cut short, its cut marked, cut again before
+what could be a secret's start in any reading of it, an escape the cut left unfinished dropped (`LineMasks.RedactHead`)
+- so no half of a secret is told - and each part given in a `<web-search>` block by `WebBlocks`, the one owner of how
+text from the web reaches a model, a page's `<web-page>` among them.
+
+This build checks workflow definitions and starts and drives a run of one (see "Running a workflow" below). Each
+step is given to the runner of its type
 (`FlowStepRunners`, over every `IFlowStepTypeRunner` the root registers - `FlowStepRunners.Served` lists them, and a test
 holds the two to each other); a step of a type none serves yet fails, saying no runner serves its type. Those served
 are machine steps, each a thin adapter over the owner of its rule: `OrientRunner` reads the main checkout by
@@ -1613,7 +1886,8 @@ holds is waited out as a held lock is; and `IAgentService.CreateAsync(new AgentC
 makes a read-only reason step's agent the same way. Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`
-- a `ci-wait`'s commit where it names none - the one the run last pushed), the agent it works in (`FlowStepRun.WorksIn`)
+- a `ci-wait`'s commit where it names none - the one the run last pushed - a commit's `folds`, the instances of the
+steps that fold upstream of it), the agent it works in (`FlowStepRun.WorksIn`)
 or, of `others`, the target whose turn it is (`FlowStepRun.Target`), and its keys' templates filled (`FlowStepTemplates`, the one
 reader of which text each template key holds, the definition's check its other caller). The leg steps - `build`, `test`,
 `run`, `check-mutations` - share `LegStepRunner`: the use case of each command (`IBuildLegs`, `ITestLegs`,
@@ -1632,9 +1906,10 @@ checks print (`AnchorReports.BalanceFindings`, `AnchorCitationReports.Line`); `C
 `ICiLegsService.CheckAsync`; and `CiWaitStepRunner` over `ICiChecksService`, which reads a commit's check runs and
 statuses through `ICiJobSource` until one is red - classified by `ICiLegsService.ClassifyRunAsync`, its job's log read
 whole - every one has ended, none appeared, or its time is spent, with `CiConclusions` the one place that says what a
-conclusion came to. Every call of `gh` goes through `GhProcess`: the repository it answers for, never asking, ended at its
-limit (21) - a step's read at `GhProcess.Limit`, never at the step's time limit, which bounds the attempt and ends
-a read in flight with it, so a `ci-wait` whose read stalls reads again at its next poll. The fold family - `FoldStepRunner`, `DeleteAgentStepRunner`, `RefreshStepRunner` and `RebaseStepRunner`, over
+conclusion came to. Every call of `gh` goes through `GhProcess`: the repository it answers for, never asking
+(`UnattendedCommands`, which every git command is started with too), ended at its limit (21) - its caller's, a step's
+`timeoutMinutes` (`WorkflowStepTypes.CommandLimitOf`, handed on as `CiLegsRequest.ReadTimeLimit`,
+`CiChecksRequest.ReadTimeLimit` and `ICiJobSource.Within`), else `GhProcess.Limit`. The fold family - `FoldStepRunner`, `DeleteAgentStepRunner`, `RefreshStepRunner` and `RebaseStepRunner`, over
 `FoldFamilyStepRunner` - calls the verbs' typed use cases and reads their `AgentVerbFacts`, never an exit code:
 `FoldStandings.Read` says whether a dry run ends the step, asks or applies; `FlowQuestions.FoldQuestionOf` is the one rule
 of the question it raises - `foldConflicts` for conflicting merges alone, `foldOutside` for paths `FoldWithin` finds
@@ -1648,14 +1923,45 @@ definition's check and the runner alike. `FoldLedger` writes a fold's intent to 
 and what it left after (`FlowFoldLedgerFile`) - applied, stopped, failed with what the tree holds read, or refused
 having read nothing - an intent a crash cut off settled from the tree by the next attempt; the step's `fold.json` takes
 what the apply answered before the ledger's settle, and an apply that threw goes on with its own exception, its intent
-left for the next attempt where reading the tree fails too. Whether a fold is committed is never written: it is read
-from the main tree (`FoldLedger.Uncommitted`, over git's status, read before the repository's section where another
-run's ledger changed a path), so a commit made by hand ends a stopped run's hold as the run's own does. A deletion run
+left for the next attempt where reading the tree fails too. `CommitStepRunner` commits the folds upstream of it
+(`FoldLedger.Owed`, over the instances the coordinator read where it started - `FlowInstanceId.Precedes`, then
+`FlowGraph.Waits`, so another item of a `forEach` is never upstream): its message from `CommitTemplate`, the one owner
+of `commit.template`'s grammar and of its refusals, which `ValidateCommit` and V30 read too; the main checkout on the
+branch the run started on (`FlowRunPlace.OffItsBranch`, over `FlowRunContext.Branch`, the one guard the commit, the push
+and the pull request apply), every fold upstream settled (`FoldOwed.Unsettled`), an empty index, each path's digest and
+no path to stage the index marks assume-unchanged or skip-worktree checked before anything is
+staged; the staged set written to the ledger (`FlowCommitEntry`) before `IGitPublisher` stages it by explicit path and
+commits once, then held to what the commit changes against its parent - one that took more, or left a path of the set
+out, is left for a person and kept beside the set (`FlowCommitStray`) - and marked committed in it and in each fold path
+it took (`FlowFoldPath.Committed`); a path git ignores marked `Ignored` and answered under `ignored`
+(`FoldLedger.IgnoredOf`); and a set an attempt before left staged settled first, committed only where the tree holds
+what it staged. Whether HEAD holds a fold's path as the tree does is one answer, `FoldLedger.DifferingAsync` - the blob
+git add would record for the file (`IGitClient.ListStagedIdsAsync`, its carriage returns kept where the index holds the
+path with them) against HEAD's, never git's status, which does not look at a path marked assume-unchanged or
+skip-worktree - which the commit reads and so does whether a fold is committed at all (`FoldLedger.Uncommitted`, read
+before the repository's section where another run's ledger owes a path, a path git ignores left out as the commit
+leaves it out), so a commit made by hand ends a stopped run's hold as the run's own does. The texts of what a run
+checked - `{run.ran}`, `{run.notRun}`, `{run.red}`, and `{carried.*}` of one commit - are `FlowChecks`', over the
+step records the coordinator hands it; a check is a type `WorkflowStepTypes.StepType.Checks` marks or an independent
+reason step. A deletion run
 again whose agent its record says deleted - its ending cut off by a stop's drain, a time limit or a crash - is done
 (`FoldFamilyStepRunner.DoneAlreadyAsync`), its output what `fold.json` kept of the apply. A
 refresh or a rebase of `others` is one turn for each target (`FlowInstance.Targets`, `FlowTargetRecord`), in
 `OrchestrationRules.AgentNameOrder`, each claimed on its own tree (`FlowClaims.Of`), retried by its own count and ended
-on its own. The other step runners - the agents, the rest of the steps over the services the tool already has - are
+on its own. `PushStepRunner` and `PullRequestStepRunner` read the main checkout as a run's start does (`FlowCheckout`),
+each refused where it is not on the run's branch (`FlowRunPlace.OffItsBranch`):
+the push sends HEAD to its branch on the step's remote, else `FlowCheckout.Remote` - one, which the definition's check
+holds every push step that names a remote to - through `IGitPublisher.PushAsync` -
+`<sha>:refs/heads/<branch>` with `--porcelain`, never forced, its line read for whether the branch moved; the pull
+request is found - among those gh lists from the branch's name, never one from another repository (`isCrossRepository`)
+- or opened through `GhProcess` on the repository `GitRemotes.ForgeAddress` reads from the remote's
+address - its host as ssh's configuration names it where the address is over ssh (`SshHostNames`, `ssh -G`), and none,
+leaving gh to read the remotes itself, where it cannot be told - against `FlowCheckout.BaseBranch`, its body the workflow's file the coordinator read and filled where the step
+started (`WorkflowNamedFiles.ReadText`, the one rule the definition's check holds a named file to) and the runner wrote
+to the step's directory; `FlowReports.LeftForAPerson` names each pull request the run opened or found, and each path
+its folds changed that git ignores, as its commits answered them. Every command a
+publishing step runs is one of `PublisherCommands.All`, over `IGitClient.RunWithinAsync` and `GhProcess`, given the
+step's `timeoutMinutes` else the command's own limit. The other step runners - the agents, the rest of the steps over the services the tool already has - are
 the next thing the tool grows.
 
 A definition is held to the `config.json` it is checked under as well: a `run` step whose runner -
@@ -1858,14 +2164,14 @@ tree lists is a node, every declaration an implementation reads is one, and the 
 sure they are (`exact`, `unique`, `candidates`). Nothing of it names a language. Everything that reads a file's contents
 is an implementation of one contract, `ICodeGraphExtractor` - its `Language`, its `Version`, its `Claims`, whether it
 `Outlines` its files rather than reading a language's declarations, a pure `Extract` and its `Help` - which answers a
-language-neutral `FileExtract`: nodes - a value's type (`ValueType`) and the type an extension extends (`Extends`)
-among what they say - the scopes they are put in (open to
-other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address or path ending, with their prefixes and filters,
+language-neutral `FileExtract`: nodes - a value's type (`ValueType`), the type an extension extends (`Extends`) and
+the scope whose declarations alone see it (`SeenIn`) among what they say - the scopes they are put in (open to
+other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address or path ending, with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`) and an import of a file whose imports this one shares (`Shares`),
 address roots, references by name with their qualifiers, and four marks - a prototype, a test, generated code with
 why, and each line it saw something it cannot bind or stopped reading at (`dynamic`) - of which the linker reads the
-first two. An implementation is registered by being written:
-`CodeGraphExtractors.Implementations` is the one scan of the core, which `AddDssHarness` registers each type of, and the
-registry built from them refuses two of one name, two claims of one exact name or extension of which either gives no
+first two. An implementation is registered by being written: the one scan of the core (`CoreImplementations<T>`, which
+`CodeGraphExtractors.Implementations` reads) finds each, `AddDssHarness` registers each type of it
+(`AddCoreImplementationsOf<T>`), and the registry built from them refuses two of one name, two claims of one exact name or extension of which either gives no
 content test, no fallback or two, a fallback that claims a name or an extension, a claimed name no file can bear or
 extension no file has, and a version below 1 - so a clash is a red test, never an order. A file goes to the
 claimants of its exact name, else of its extension, else to the fallback (`listed`); their content tests decide among
@@ -1884,22 +2190,136 @@ from many threads, a sound model, tolerance of any cut of a fixture, pure conten
 another's, the extracts stored with the tests for its version (`fixtures/codebase-graph/<language>/v<version>/`,
 written where missing with `DSSHARNESS_STORE_EXTRACTS=1`), and the edges its fixtures name through the linker.
 
+A language no parser this tool can carry reads goes through the structural scanner (`Codebase\Languages\Scanning\`),
+whose core knows no language: a language's lexer cuts the text into tokens (`ScanToken`), its comments apart and each
+conditional's directives marked as opening, alternative or closing - each lexer's run a `ScanLexing`, which holds what
+every language's reads alike: the tokens and comments it collects, a name's characters, a line break, a punctuator read
+alone, and the one reading of the language's comments (`CommentEnd`) its code and the code its literals hold are both
+read by - and `ScannedText` matches the brackets - each branch
+of a conditional read from where the conditional began, the brackets every branch leaves open at one depth joined into
+one closed by the bracket after it (a brace the first branch leaves open kept though another leaves none, as
+`extern "C" {` is), what the joined group holds being what every branch writes after its own opener, the head each other
+branch repeats before its opener left out (`Inside`), every other bracket a branch leaves unbalanced stranded - matching nothing, holding
+nothing, and ending its statement with the rest of its branch - and a stray parenthesis or square bracket stopped at a
+brace so it never ends a body, a closer with nothing open it could close passed over at once, with no walk down what is
+open; it gives a group's bounds and the bracket that closes one (`CloseOf`), a statement's end - past a `;`,
+or the closer a language gives (`EndsStatement`) - the code between two indices, the comments above a declaration
+(`CommentsAbove`) and a header on one line (`Spelled`, and as a node's signature `Signature`). `ScanCalls` reads a call alike for every such
+language by the rules it gives (`ScanCallRules`: its keywords, and how it writes type arguments - the punctuators a
+type holds and what may follow a list in an expression, which C++ gives a declaration's types more of than code's,
+where `<` compares too) - a name, type arguments, `(` - its arity counted by the commas at its own depth; splits a list
+of declarations at its top-level commas and finds the first of a token at its top (a parameter's default `=`), groups
+and type arguments passed over alike;
+`ScanComments` reads a declaration's summary from the comments above it and the mark of a generator from a file's
+first lines; `ScanFrame.Walk` walks declarations, always moving on, and a frame nested past `ScanFrame.MostDepth`
+blocks reads none - marked dynamic where it stops (`ScanFrame.TooDeepWhy`) - so no text nests a reader past its stack; and `ScanExtract` gathers nodes by keys, giving their ids
+once the file is read - a declaration with a body before one without, so a prototype never takes its definition's id -
+with a namespace's parts in one file one node. `ScannedText.AngleEnd` and `ScanCalls.TypeArgumentsStart` find a list of
+type arguments' end and its start from either bracket, alike for every language that writes them. A language's reader
+(C and C++ share `CFamilyReading`; Dart's is `DartReading`, over `DartLexer`) says what a declaration, a scope and an
+import are. Dart's lexer keeps a string whole with every interpolation it holds and says where each `${...}` holds
+code - through `ScanLexing.LiteralStack`, the one stack of what a literal's reading is in, JavaScript's and PHP's lexers'
+too, which passes over that code's comments by its language's rules and holds its braces alike for each
+(`LiteralStack.Past`) - which the reader scans as a text of its own; its reader puts a library's declarations - its
+file's and its parts' - in one open scope named by the library's path, keeps each private name to it (`SeenIn`), has a part share its
+library's imports (`Shares`), and reads a test framework's `test`, `testWidgets` and `group` calls in a test file as test
+nodes. Any name but a reserved word's may name a member - `of`, `show`, `get` - and a member's call is one whatever its
+name spells after the receiver's dot (`x.when(...)`); a call's arity counts no comma that ends its arguments, where
+the language lets one (`ScanCallRules.TrailingComma`), and no comma of a type's arguments a literal's list or a type
+test holds. Declarations, interpolations, test groups and C++'s placements of a `new` nested past `ScanFrame.MostDepth`
+are marked dynamic and read no deeper (`ScanFrame.ReadsDeeper`), and a run of non-null assertions before a list of type
+arguments is stepped over in a loop, so no hostile text reaches past a reader's stack.
+`pubspec`, an outline over the repository's YAML reader (`YamlReading.Load`, which says the line and column a text stops
+being one mapping at, as `Root`'s refusals do), declares the address root each package's `package:` imports resolve
+through.
+JavaScript and TypeScript share one reader (`JsReading`, over `JsLexer`), JSX and TSX with them. The lexer tells a
+regular expression from a division by what the slash follows, keeps a template whole with each `${...}` said to be code,
+and in a JSX file reads an element - its tags, a component's type arguments (`<Table<User> />`), attributes, text and the
+elements it holds - as one token whose code and whose tags' names it says; a statement ends where JavaScript's automatic semicolons end it, and a type where
+TypeScript's grammar does. A module - a file that imports or exports, `require`s or assigns `module.exports`, or is a
+`.mjs`, `.cjs`, `.mts` or `.cts` - puts its declarations in one open scope named by its path, each it does not export
+kept to it (`SeenIn`); a script's are the repository's, at no scope. Each binding is an import of its own: the names a
+statement binds as they are exported one that shows them, a default, renamed, namespace or `require`d binding one with
+its local name as its prefix, showing the name it imports; a call through such a binding is named by what it imports.
+A specifier is tried as Node resolves it - as written, with each extension, then as a directory's `index` - a
+TypeScript `.js` specifier as its `.ts` source first, each try an import that stands in for the one before it; a bare
+one is an address; `export *` re-exports all but the default. A declaration exported by a name besides its own
+(`export default`, `export { a as b }`, `module.exports =`) lists it (`ExtractNode.Exports`), its own name still the
+module's: an import of its file finds it by that name, whatever scope keeps its own, and nothing else does. A
+receiver's type is the call's qualifier where the file states it; a call through what the file cannot name - a computed
+member, `eval`, a function a parameter, a local or a function-typed field holds, a receiver typed or cast `any`, an
+import of a module the code computes - is marked dynamic. A function a body declares is the body's own wherever it calls
+it. A declaration file's (`.d.ts`) members are prototypes, and code at a module's top is held by its file's `(module)`
+node, CommonJS exports its blocks hold read as the top's. `npm`, over `JsonOutline` (the reader of a project file's
+JSON, which keeps the line each value begins on as the core counts lines and says where and why a file is no object),
+names a package by its name, refers to each package it depends on, and declares its address roots: its name alone each
+file its entry may be - its `exports`' `.` conditions in the order written, then `source`, `module`, `main`, `types`
+and `typings`, then the usual `index` files, each tried as TypeScript and Node try a path; each subpath its
+`exports` name (`ProjectRoots`, the one owner of a mapping's roots for both); and, where it names no `exports`, its name and `/` its directory. A whole root
+(`ExtractAddressRoot.Whole`) stands for its one address and names a file; roots of one prefix are tried in the order
+declared until one names a file the tree holds. `tsconfig` (comments and trailing commas allowed) refers to each project
+its `references` name and declares local roots (`ExtractAddressRoot.Local`) for its `compilerOptions.paths` from its
+`baseUrl` - a pattern whose `*` ends it a directory's, one with none a file's tried as TypeScript and Node try it - which the
+files in its directory and below resolve a bare import by before any other root, the nearest configuration's first.
+PHP's reader (`PhpReading`, over `PhpLexer`) reads code only between `<?php` or `<?=` and `?>`, the rest of a file its
+text, each `?>` ending a statement as a semicolon does (`ScannedText.EndsStatement`, the closer a lexer gives) and nothing
+after `__halt_compiler();` read; the lexer keeps a string, a heredoc and a nowdoc whole, saying
+where a double-quoted string's or a heredoc's `{$...}` and `${...}` hold code, and a name with namespaces' separators one
+token. The reader writes PHP's `\` as the model's dot: each namespace - in braces, or ended by its semicolon to the next
+- is an open scope and a node of each file that declares it, each type an open scope in it; each name a reference writes
+is written out as PHP resolves it, by the file's `use` declarations and its namespace - a class in the namespace that
+names it alone, a function in its namespace and then the global one (a `scope` qualifier) - and each `use` is an import
+of the class it names, its alias the prefix, or of a function's or a constant's namespace, showing its name. A property
+is named by its variable (`$name`), a constructor's promoted parameters properties of its type, and what a property's
+hooks call its calls. A receiver's type is the call's qualifier where the file states it - a typed parameter, a local a
+`new` made, a caught exception, a typed property reached through `$this` - `self::`, `static::` and `$this::` a `this`
+qualifier and `parent::` a `base` one. `require` and `include` of a path the code writes - a text, or one joined to
+`__DIR__` or `dirname(__DIR__)` - import it by a path from the file's directory; one the code computes is marked dynamic,
+its code read, as a call through a variable or of a value the code computes, `call_user_func` and `eval` are. A class
+that extends a `TestCase`, or is named for a test and extends one, is a test class, its public `test...` methods tests,
+and its methods - or a trait's - marked `#[Test]` or `@test`; in a file under
+`tests/` or `test/` Pest's `test`, `it` and `describe` calls are test nodes; and the code of a file's top is its `(script)`
+node's. `composer`, over `PackageManifest` - the one reader of a package manager's JSON manifest, `npm`'s too - names a
+package by its name and refers to each package its `require` and `require-dev` name, a name with no `/` - PHP's
+platform's: `php`, `ext-*`, `lib-*`, `composer-plugin-api` - none; it declares no address root, since a class is found by
+its namespace.
+
 The one linker (`CodeGraphLinker`) resolves every reference by the same steps for every language - the qualifier's
 scope, a type and its bases among it; the enclosing scopes from the inside out; a scope import's prefix (an alias),
-for what that import stands for; the file's imports in order, filters applied; the repository by name and arity - a
+for what that import stands for; the file's imports in order, filters applied - a file imported making visible what it
+declares at its top, what it declares exported by another name by that name, the open scopes it declares and what each
+file it exports does, each export's filter applied and
+each file once, an export making nothing visible to the file that makes it, and a file that shares another's imports
+(`ExtractImport.Shares`, a Dart part's of its library) importing those after its own; the repository by name and arity - a
 qualifier being read as such a prefix too where no type or scope has it as its whole qualified name, from the file
-that makes the import or, made global, from every file of its language - and derives `dispatches`, `declares` and `tests` from the `implements` edges
-and the marks. A qualified reference is looked for where its qualifier says alone. A `type` qualifier is a type or
+that makes the import or, made global, from every file of its language, and a name no value or type has that an import's
+prefix is standing for that import, written as a value or before a type's name - and derives `dispatches`, `declares`
+and `tests` from the `implements` edges and the marks. A type is looked in before its bases and its bases a level at a
+time, each level nearest first, the first rank that holds the name deciding with all it holds: the mixins each type of
+the level names, a rank each, the last first - each applied over what comes before it - then one rank of everything
+the level's types inherit and implement, a mixin's own inherited bases (what a Dart mixin is declared `on`) not followed
+where it is applied; a dispatch answers as sure as the surest way up to its answer. A declaration kept to a scope (`ExtractNode.SeenIn`) is seen only from the
+declarations written in that scope or inside it, as the scopes they are written in climb. A closed scope at a file's top - one no scope holds and that is no type's or namespace's own, as a C
+file's for its `static` names - is one every declaration of the file is written in, looked in after its own scopes, so
+what it declares is found `exact` from anywhere in the file. An import marked `Fallback` stands in for the one before it - a C `#include` in quotes, found by its
+path's ending where the including file's folder lacks it - and is taken only where that one names no file; a
+prototype found beside its body - the same language and qualified name - is that body; and a member defined outside
+its type's body, as C++ writes `T::f`, is in the type its declaration's scope names. A qualified reference is looked for where its qualifier says alone. A `type` qualifier is a type or
 scope found as a name is - nearest first in the scopes it is written in, then the container of its whole qualified
 name, an alias, an import's, the repository's - else every container its name ends; a `named` one is that too, unless
-a value a scope it is written in holds (a base's among them) is nearer. A value - and a `value` qualifier - is
+a value a scope it is written in holds (a base's among them) is nearer; a `scope` one is the scope it names alone, else
+the declarations in no scope - with no name those alone - each of its own language, `exact`, as PHP finds a function in
+its namespace and then the global one. A value - and a `value` qualifier - is
 followed through its member's `ValueType`, each name of a chain, from a value or from a type, through the one before's
 type, a type the repository does not declare holding nothing it declares; a call on a value of no said type goes by
 its name in the repository, never to a type and never to the caller's own scopes. A call a type does not hold goes,
 `unique`, to a member that `Extends` that type or a base of it, as the extension's own file names the type - or a type
 the repository lacks, by its written name - where the call's file reaches it: the scope of the extension's type, or
-the one holding that, is one the call is written in or its file imports, or is the top, or the call's file imports the
-extension's by path; one in a closed scope is reached from its own file alone, and no override is an extension. Extracts keep names, not targets, so a name a changed file adds
+the one holding that, is one the call is written in, or is the top; or an import of the call's file makes it visible -
+an import of that scope with no prefix (an alias names a scope and imports nothing), or of a file that declares the
+extension, declares that scope open or exports one that does - each filter on the way letting the name of
+what holds the extension; one in a closed scope is reached from its own file alone, one kept to a scope from that scope alone,
+and no override is an extension. Extracts keep names, not targets, so a name a changed file adds
 binds callers in files that did not change. Each finding keeps every key it read - a name's declarations, an id's parts,
 a qualified name's containers, a name's run's end, a scope's parent, a type's bases, a file's imports and open scopes,
 a language's global imports, the address roots, a path, a file name - each read through the one accessor of its index,
@@ -1998,8 +2418,8 @@ the rest, after its reads either - and, where the tree's HEAD moved since its la
 between the commit that sync recorded and the one HEAD names now (`IGitClient.ListNamesChangedBetweenAsync`), HEAD asked
 before anything is listed, so a commit made in the tree meanwhile that touched no path given leaves no file as the older
 commit held it under the newer head; where git cannot name them - that commit no longer held, or either naming none - the
-tree is synced whole; `CheckAsync` is the check an answer of the graph makes of the files it names before it is given - no command
-answers from the graph yet - a `stat` against what the view recorded, or against what an earlier check found of a file
+tree is synced whole; `CheckAsync` is the check an answer of the graph makes of the files it names before it is given - the `graph` tool's, once a step is
+given it (below) - a `stat` against what the view recorded, or against what an earlier check found of a file
 whose time alone moved, trusted only where that time is older than the tree's last whole sync's record (`Tree.Written`),
 as git trusts an index entry older than its index; a file either moved, whose time is not older, or that could not be
 read listed again by its path, as a sync by paths lists it - so it is held to the blob a listing gives it, never to a
@@ -2026,6 +2446,108 @@ again. A sync of these that fails, for any cause but a stop, is said - a line of
 names the view, and a warning that says what takes it up again - and never fails its step - nor does a reason step's repository that does not read where
 the hook looks for it, which its runner finds as it does.
 `delete-orchestrator` removes the graph with its run, outside what `--delete-evidence` guards.
+
+What an agent asks of the graph is one tool, `graph` (`Agents\Runtime\CodebaseGraphTool`), whose `op` is `find`, `node`,
+`related`, `outline`, `body`, `edit` or `wholeFile`, over the lookups of `CodebaseGraphQueries` - each node by its id,
+handle, qualified name (one written with its language's `::` or `\` read as the model's `.`, or with only its last
+parts, `Order.Total`) and simple name and `path:line`, each file's nodes, each node's edges in and out by kind, the words its
+name splits into weighed by how rare they are, and the 99th percentile of each kind's degree on either side - built once
+from a `CodebaseGraphRead`. Every node an answer names is one line with its handle, kind, signature and `path:start-end
+#hash` (the first eight characters of its digest); `find` ranks a whole qualified name, then a simple name, then a
+prefix, then the share of the query's words weighed by their rarity, a summary's and a path's words a twentieth as much,
+generated code after every other, a tie by how near the step's own work each node is (`GraphNearness`: its context
+pack or a working set it was given, a file its `writes` covers, a file its agent changed, a path or a name its prompt
+holds) and then by id; `related` gives a hub - more edges of the relation's kinds than the 99th percentile and at least
+`CodebaseGraphQueries.CrowdFloor`, `CodebaseGraphQueries.Crowd` the one rule of it - and does not go through it; each operation is bounded
+(`CodebaseGraphTool.FindLines` and the rest) and every answer cut at a whole line past `CodebaseGraphTool.MostCharacters`,
+saying the offset to ask again with; every answer ends naming the files whose extract the view no longer holds
+(`CodebaseGraphQueries.Unheld`), whose declarations no answer gives. Where the graph is not sure - no node matched, a
+name it does not hold, an edge of `candidates`, a node named with external or unresolved callees or in a file `dynamic`
+or generated - the answer adds the lines that hold the name as a whole word, searched by `AgentFiles.SearchAsync` as
+`search_files` searches and saying what it did not read in the same notes (`AgentSearch.LeftOut`), through the read rule
+the tool is handed, which leaves out and counts every node, edge and hit of a file it refuses; a path or a `path:line`
+is searched for by no word. `body` reads a node's lines fresh - a type's members' bodies left out unless `full`, each
+member's signature line kept - and where its hash moved since the view was read, has the file checked again before
+serving it, where the tool may sync, the node looked for again in the same file (`CodebaseGraphQueries.Part`); `edit`,
+one at a time, writes a node's lines through `EditedText.ReplaceLines` only where the hash given is its hash now
+(optimistic concurrency) - a node spread over files in the part that hash names - after the write rule the tool is
+handed, keeping the file's encoding, endings and final newline, and answers the card the file's new extract gives. Every
+file `body` reads and `edit` writes is reached through the `ConfinedPaths` the tool is handed (`ConfinedPaths.Within` the
+tree where query-codebase-graph runs it), which resolves each link, so a link out of the tree is neither read nor written
+through. The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
+`wholeFile` with `narrow`), and a call given a member its operation does not read, one of the wrong type, or missing one
+it needs, is a usage line (`CodebaseGraphTool.Misused`). Nothing gives a step the tool yet: slice 27d adds it to the tool
+runtime's table with its write rules and edit check. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
+
+The context pack (`CodebaseContextPack`, value 370) is the part of the graph a step's work touches, made at its start
+from the view and what the step says alone (`ContextPackRequest`: its filled prompt, `writes`, the working sets it is
+given, its changes, its read rule and cap), so the same step on the same tree is given the same pack. Its seeds are what
+the prompt names exactly - a symbol or a path in backquotes (a path standing for its declarations), a qualified name
+or its last parts, a handle, a `path:line` as a stack frame or a compiler writes one, the longest of an absolute or a
+foreign path's endings the view holds or the one file it holds that ends with it - each a weight of 4 (a name several readable nodes
+carry, up to `CodeConfidences.MostCandidates`, 2 each), a working set's nodes 4 and an edited one 5, a named file's
+declarations (`CodeNodeKinds.Declarations`) 3, the declarations of the files the step's `writes` covers
+(`AgentPolicy.StepWrites`) 2, and the ten nodes the prompt's words match best (`find`'s ranking, over declarations) 2.
+The walk goes two hops from a node named or worked with and one from the others over `CodebaseContextPack.Walked` -
+`calls`, `inherits`, `mixesIn`, `implements`, `overrides`, `dispatches` and `tests` both ways, `references` out, the
+steps of each `CodebaseGraphQueries.Steps` gives - each node keeping its best score (its seed's weight halved at each
+hop, times 1, 0.7 or 0.3 by each edge's confidence) and its relation to the node it was reached from (`calls
+FoldAsync`). A seed is walked from along every kind, as `related` walks from the node asked about; a node reached is
+not gone through along a kind it is a hub of (`CodebaseGraphQueries.Crowd`, judged per kind), its line saying which;
+a node the step may not read is neither listed, named nor gone through, only counted. The lines are written best first
+by file - generated code after every other - within the cap in estimated tokens (`EstimatedTokens`: UTF-8 bytes over
+four, rounded up), a line that does not fit left out whole and counted, and a cap too small for the first and last
+lines gives no pack, every node counted left out; the first line names the view, its commit, the files that differ
+from its base and what the pack was seeded from, the last its nodes, its tokens and what was left out.
+Change-first (value 371) starts from `ICodebaseGraphService.ChangesAsync`: the paths that differ from the base
+(`ICodebaseGraphService.DifferingAsync`: git's diff against it and the untracked list, kept to what the graph's
+`include` and `exclude` list), each file's blob at the base sized first (`IGitClient.ReadBlobSizesAsync`) - one past
+`maxFileBytes` not read - and read in memory as a sync reads a file (`CodebaseGraphService.Read`, the one reading of a
+file's text into an extract, its size check with it) beside its extract and lines now, and
+`CodebaseGraphChanges.Compared` telling each declaration added, changed by its own lines (`CodeLineDiff`, Myers' walk
+bounded by `CodeLineDiff.MostEdits`, lines taken out judged at the base) or taken out - a type by none of its members,
+each declaration taken out with what it was declared in (`CodeChangedNode.Parent`), a file kept out as generated, or a
+side not read, telling none for that side and kept with why (`CodebaseGraphChanges.Uncompared`), which the pack's first
+line names, never saying no declaration changed while one was not compared. The pack lists those first, each with where its lines differ - a
+declaration moved to another file said moved from where it was, a part of a type in each file it changed in listed
+for each, one taken out said as the base held it, whether or not another file still declares a part of it, and what
+went with its container said by the container alone - then their tests and their direct callers' tests, then their
+callers to two hops, overrides both ways, implementations and dispatches, and derived types, then the task's seeds;
+its first line counts the lines the changes lead with, and with no base, its changes unread (and why, on one line:
+`TextLines.OneLine`), no change, or no declaration among the files that differ and were compared, says so and the task's seeds stand
+in. `FlowGraphSyncs.ChangesBase` names the base: an agent's recorded `Base`, the run's start commit for the main
+checkout. A pack keeps, beside its text, its seeds (each node once, by its heaviest seed - the one its line says), its
+nodes and each node line it wrote (`ContextPack.Lines`, what a delta gives of a pack a conversation was not given).
+Slice 27d puts the pack at the head of a step's first message and hands the tool its `Near`.
+The working set (`CodebaseWorkingSet`, value 372) is what a reason step that has a graph worked with, kept in its
+directory as `working-set.json` (`OrchestrationStore.WriteWorkingSet`): each node it edited, served, read or found
+(`WorkingSetUses`), with how often it was touched and its handle, file, lines and hash at the step's end, at most
+`CodebaseWorkingSet.MostNodes` - edited first, then by how often, the rest counted - and a node the view no longer
+holds kept by its id, marked gone. `CodebaseWorkingSet.Make` reads it from the step's `graph.jsonl` (`GraphStepLine`,
+one `GraphCallLine` for each call of the tool, from the facts its answer carries, `GraphToolFacts`: each node a call
+asked about by name is found, each a line of which a `body`'s answer gives, within its cap, is served, and an `edit` is
+matched by the lines it wrote, as every write is, the node it named edited where they no longer declare it) and from
+the tool calls its stored stream holds (`OrchestrationStore.ReadStepStream`; a call is named by its `ToolCallStarted` or
+the `AssistantMessage` that made it), on every client's form: a read (`Read`, `view_file`) by where the lines its answer
+gave stand once in the file as the step left it, else by the first and the last number it gave them, a write (`Edit`,
+`replace_in_file`, `insert_in_file`) where its new text stands once there - every place, with `replace_all` - else by
+the lines it names, else counted unplaced with a deletion, which writes no lines, and a whole file's write (`Write`,
+`create_file`) by every line, counted unplaced where its file does not read as the step left it; text is found line by line, each line's trailing blanks aside, as a client may strip
+them where it writes - each matched to the declarations whose own lines it meets (`CodeOwnLines`, a member's
+lines never its type's), as the view at the step's end holds them. The coordinator names in each reason step's
+`FlowStepRun.WorkedFrom` the instances whose sets seed its pack: the step it goes on with (`resume`), each step it
+depends on directly - its own `dependsOn` and `on` and each enclosing group's, a group by each reason step in it -
+then its own earlier visits of the same work item (`FlowInstanceId.SameStep`: the same id but for the visits and
+iterations after its innermost item), newest first, each that began, once; `FlowWorkingSets.SeedsOf` reads their sets
+into `ContextPackRequest.Worked` (`CodebaseWorkingSet.Seeds`: each node once, edited where any set says so, none
+gone). Slice 27d writes both files as a step ends and hands the seeds to its pack.
+`query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
+through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a
+view linked in memory from the base's files and its record, and a link result another linker made linked again in
+memory - with a read rule that refuses what no graph lists (`CodebaseGraphService.NeverListed`), the main checkout's run
+and configuration wherever it is typed (`MainTree`); a misuse is told by `CodebaseGraphTool.Misused` before anything is
+read, and a view not made yet is said and the base answered; it ends 0, 13 where the run has no graph and 10 for a
+usage error, and no host is asked to run it.
 
 ## Anchor registries
 
@@ -3270,7 +3792,7 @@ tool replaces, where a green result had quietly stopped meaning anything.
 - Every other command asked for `--json` that stops before it has anything of its own to say
   answers in its own document's shape, never the ledger's: the agent verbs with the agent
   document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
-  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down` and `stop-run` with their own document
+  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down`, `stop-run` and `query-codebase-graph` with their own document
   holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs
   (`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`,
   `stop-orchestrator`) with the flow document - the session they would have run, empty

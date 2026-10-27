@@ -464,6 +464,12 @@ public sealed record WorkflowStep
     /// <summary>Restrictions the agent works under, beyond the workflow's own.</summary>
     public IReadOnlyList<string> Restrictions { get; init; } = [];
 
+    /// <summary>
+    /// The sources of <c>agentWebSearch</c> a reason step's <c>web_search</c> asks, by name or tag, as written - one given
+    /// empty kept empty, for the check to refuse; <see langword="null"/> where it says none, and asks <c>defaults</c>.
+    /// </summary>
+    public IReadOnlyList<string>? Search { get; init; } = null;
+
     /// <summary>The paths a writing reason step may write, written out or as an expression.</summary>
     public FlowList? Writes { get; init; } = null;
 

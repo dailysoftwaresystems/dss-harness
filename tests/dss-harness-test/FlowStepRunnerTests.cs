@@ -13,6 +13,8 @@ using DssHarness.Core.Results;
 using DssHarness.Core.Worktrees;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
+using DssHarness.Core.Ci;
+using DssHarness.Core.Git;
 
 namespace DssHarness.Tests;
 
@@ -313,6 +315,11 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.True(served >= 0, "the README counts the steps served");
         var listed = readme[served..readme.IndexOf("A check that finds red", served, StringComparison.Ordinal)];
         Assert.All(FlowStepRunners.Served, type => Assert.Contains($"`{type}`", listed, StringComparison.Ordinal));
+        Assert.Contains(
+            $"else its own ({ReportText.Limit(GhProcess.Limit)} for `gh` and a push, {ReportText.Limit(PublisherCommands.CommitLimit)} for a commit's)",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Equal(GhProcess.Limit, PublisherCommands.PushLimit);
         Assert.IsType<FlowStepRunners>(provider.GetRequiredService<IFlowStepRunner>());
     }
 

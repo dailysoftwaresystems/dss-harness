@@ -11,6 +11,9 @@ name: Test
 # than under emulation: .NET is not supported under QEMU, so an emulated leg could fail,
 # or pass, for reasons that have nothing to do with the code.
 #
+# The suite is split into shards where one runner would take too long over it: each shard
+# runs every Nth of its test classes, so a runner's shards together run every test once.
+#
 # Every action is pinned to a full commit SHA; see docs/releasing.md.
 
 on:
@@ -21,23 +24,35 @@ permissions:
 
 jobs:
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 135
+    timeout-minutes: 90
 
     strategy:
       # Every platform's result is wanted. Cancelling the others on the first failure
       # hides whether a break is platform specific, which is exactly the question this
       # matrix exists to answer.
       fail-fast: false
+      #
+      # Shards per runner, from what one run of the whole suite took there (11,961 tests,
+      # 2026-10-26): Linux about 5 minutes, one shard; Windows 33 (x86_64), two; Windows 50
+      # (arm64), three, since that runner's speed wanders threefold between runs; macOS 61
+      # (arm64), two, and over 120 (x86_64), three - five macOS jobs, as many as GitHub runs
+      # at once.
       matrix:
-        os:
-          - ubuntu-latest           # Linux x86_64
-          - ubuntu-24.04-arm        # Linux arm64
-          - windows-latest          # Windows x86_64
-          - windows-11-vs2026-arm   # Windows arm64
-          - macos-26-intel          # macOS x86_64
-          - macos-latest            # macOS arm64
+        include:
+          - { os: ubuntu-latest, shard: 1, shards: 1 }           # Linux x86_64
+          - { os: ubuntu-24.04-arm, shard: 1, shards: 1 }        # Linux arm64
+          - { os: windows-latest, shard: 1, shards: 2 }          # Windows x86_64
+          - { os: windows-latest, shard: 2, shards: 2 }
+          - { os: windows-11-vs2026-arm, shard: 1, shards: 3 }   # Windows arm64
+          - { os: windows-11-vs2026-arm, shard: 2, shards: 3 }
+          - { os: windows-11-vs2026-arm, shard: 3, shards: 3 }
+          - { os: macos-26-intel, shard: 1, shards: 3 }          # macOS x86_64
+          - { os: macos-26-intel, shard: 2, shards: 3 }
+          - { os: macos-26-intel, shard: 3, shards: 3 }
+          - { os: macos-latest, shard: 1, shards: 2 }            # macOS arm64
+          - { os: macos-latest, shard: 2, shards: 2 }
 
     steps:
       - name: Checkout
@@ -82,14 +97,65 @@ jobs:
         # two minutes, named again every two minutes it runs on, and the slowest tests once the
         # run ends. And it is stopped short of the job's own limit: a job that limit ended kept
         # no log, so nothing said which test had hung. The limit is not how a hang is found -
-        # the two-minute notice names it - and it sits well above the slowest runner, whose own
-        # time wanders: the Intel macOS runner took 48 minutes over 7,500 tests, then between 56
-        # and 78 over 7,722 to 7,781 and passed 80 over 7,810, every time with no test hung and
-        # none alone running two minutes, where the arm64 one took about 25. The tests added
-        # among those spent under 2% of the suite's time, so the wander is the runner's.
-        timeout-minutes: 120
+        # the two-minute notice names it - and it sits well above the slowest shard, whose own
+        # time wanders: the Intel macOS runner took 48 minutes over 7,500 tests and between 86
+        # and over 120 over 11,700 to 11,961, every time with no test hung, its slowest test
+        # under two minutes. Its time grows with the suite and wanders with the runner; more
+        # shards, not a longer limit, are the answer when a shard nears it.
+        #
+        # A shard is a set of whole test classes. The classes are dealt out heaviest first, each
+        # to the shard holding fewest tests so far - a class weighing the tests it holds, and
+        # one more for itself - in one order on every runner, so a runner's shards together
+        # run every class once. The suite's time is spread over its many small tests rather
+        # than held by a few long ones, so how many tests a shard holds stands for how long it
+        # runs. A shard that holds no class fails the step rather than running nothing green.
+        timeout-minutes: 75
+        shell: bash
         env:
           # A runner is meant to hold cmake, ninja and a compiler: a test that really builds fails here where one is
           # lacking, and is skipped only on a developer's machine that has none.
           DSSHARNESS_TESTS_REQUIRE_BUILD_TOOLS: "1"
-        run: ./build/bin/dss-harness-test/release/dss-harness-test${{ runner.os == 'Windows' && '.exe' || '' }} --xunit-diagnostics on --long-running 120 --show-slowest-tests 20
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ matrix.shards }}
+        run: |
+          # No -u: bash 3.2, macOS's own, reads an empty "$@" as unset.
+          set -eo pipefail
+          suite=./build/bin/dss-harness-test/release/dss-harness-test${{ runner.os == 'Windows' && '.exe' || '' }}
+
+          # The lists are kept outside the checkout, which some tests read. Listing runs no test,
+          # which the suite's runner reports as exit 8.
+          "$suite" --xunit-list classes --ignore-exit-code 8 | tr -d '\r' \
+            | grep -E '^[A-Za-z_][A-Za-z0-9_.+`]*$' | LC_ALL=C sort > "$RUNNER_TEMP/test-classes.txt"
+
+          # How many tests each class holds: a test's name is its class's, a dot, its method's,
+          # and a theory's arguments in brackets.
+          "$suite" --list-tests --ignore-exit-code 8 | tr -d '\r' \
+            | awk '/^  [A-Za-z_]/ && !/^  duration:/ {
+                name = substr($0, 3); at = index(name, "(")
+                if (at) name = substr(name, 1, at - 1)
+                sub(/\.[^.]*$/, "", name); held[name]++
+              }
+              END { for (name in held) print held[name], name }' > "$RUNNER_TEMP/test-weights.txt"
+
+          awk 'FNR == NR { held[$2] = $1; next } { print held[$0] + 1, $0 }' \
+            "$RUNNER_TEMP/test-weights.txt" "$RUNNER_TEMP/test-classes.txt" \
+            | LC_ALL=C sort -k1,1nr -k2,2 \
+            | awk -v n="$SHARDS" -v i="$SHARD" '{
+                least = 1
+                for (s = 2; s <= n; s++) if (load[s] < load[least]) least = s
+                load[least] += $1
+                if (least == i) print $2
+              }' > "$RUNNER_TEMP/test-shard.txt"
+
+          set --
+          while IFS= read -r class; do
+            set -- "$@" "$class"
+          done < "$RUNNER_TEMP/test-shard.txt"
+
+          if [ "$#" -eq 0 ]; then
+            echo "::error::Shard $SHARD of $SHARDS holds no test class: the suite listed $(wc -l < "$RUNNER_TEMP/test-classes.txt" | tr -d ' ')."
+            exit 1
+          fi
+
+          echo "Shard $SHARD of $SHARDS: $# of $(wc -l < "$RUNNER_TEMP/test-classes.txt" | tr -d ' ') test classes."
+          "$suite" --xunit-diagnostics on --long-running 120 --show-slowest-tests 20 --filter-class "$@"

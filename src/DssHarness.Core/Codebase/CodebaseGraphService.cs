@@ -77,6 +77,56 @@ public interface ICodebaseGraphService
     /// <param name="agent">The agent.</param>
     /// <param name="cancellationToken">Cancels the wait for a sync of that view.</param>
     Task DropViewAsync(OrchestratorLayout run, string agent, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The run's graph as it stands on disk, read only: no gate taken, no sync, nothing written. The base, or the view of
+    /// <paramref name="agent"/>'s worktree where one is asked - the overlay of what the worktree holds otherwise over the
+    /// base as it stands, linked in memory from the extracts on disk. For the <c>query-codebase-graph</c> verb, where an
+    /// answer is read by hand with no run under way, so what was served can be checked. <see langword="null"/> where the run
+    /// has no graph, or the named view was not made yet; the file at a node's span is not read, so a body is read from the
+    /// tree against this.
+    /// </summary>
+    /// <param name="run">The run whose graph it is.</param>
+    /// <param name="agent">The agent whose view to read; <see langword="null"/> for the base.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    /// <exception cref="HarnessException">
+    /// The base's manifest or the view's record is there and does not read, or the view stands on a base the graph no
+    /// longer keeps (<see cref="HarnessExit.Refused"/>, saying why); a record could not be read at all, by its cause.
+    /// </exception>
+    Task<CodebaseGraphRead?> ReadOnlyAsync(OrchestratorLayout run, string? agent, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The paths the tree of <paramref name="request"/> - the main checkout, or the agent's worktree - holds otherwise than
+    /// <paramref name="baseCommit"/>: every path git's diff against it and the untracked list name that a graph lists, by
+    /// path - what a pack's first line counts and a step's <c>find</c> holds near, for a step of either <c>graphFrom</c>.
+    /// Nothing is read but git's lists.
+    /// </summary>
+    /// <param name="request">The tree, and how the workflow shapes its graph.</param>
+    /// <param name="baseCommit">The commit the tree's work started from.</param>
+    /// <param name="cancellationToken">Stops the lists.</param>
+    /// <exception cref="HarnessException">
+    /// git could not be started (<see cref="HarnessExit.ToolMissing"/>), or could not compare the tree with the commit - one
+    /// the repository does not hold, for one (<see cref="HarnessExit.CommandFailed"/>).
+    /// </exception>
+    Task<IReadOnlyList<string>> DifferingAsync(CodebaseGraphSync request, string baseCommit, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// What the tree of <paramref name="request"/> holds otherwise than <paramref name="baseCommit"/>, change-first's ground
+    /// (value 371): the paths <see cref="DifferingAsync"/> names, and each declaration added, changed or taken out
+    /// (<see cref="CodebaseGraphChanges.Compared"/>) - each such file's blob at the base read as a sync reads a file, its size
+    /// first, in memory and nothing written, beside its extract in <paramref name="read"/>, the view as the step's start
+    /// synced it, and its lines now. A file the view keeps out as generated code, or one not read on a side, tells no
+    /// declaration, and is said not compared, with why (<see cref="CodebaseGraphChanges.Uncompared"/>). No gate, no sync.
+    /// </summary>
+    /// <param name="request">The tree, and how the workflow shapes its graph.</param>
+    /// <param name="read">The view of that tree, synced.</param>
+    /// <param name="baseCommit">The commit the tree's work started from.</param>
+    /// <param name="cancellationToken">Stops the reads.</param>
+    /// <exception cref="HarnessException">
+    /// git could not be started (<see cref="HarnessExit.ToolMissing"/>), or could not compare the tree with the commit - one
+    /// the repository does not hold, for one (<see cref="HarnessExit.CommandFailed"/>).
+    /// </exception>
+    Task<CodebaseGraphChanges> ChangesAsync(CodebaseGraphSync request, CodebaseGraphRead read, string baseCommit, CancellationToken cancellationToken = default);
 }
 
 /// <summary>One sync asked of a run's graph.</summary>
@@ -282,6 +332,13 @@ public sealed class CodebaseGraphService(
     /// </summary>
     public const int ReadShare = 2;
 
+    /// <summary>
+    /// What no graph lists, and so never serves - the credential slots and the tool's own state - as patterns relative
+    /// to a tree's root: the one list a sync leaves out and a read of the graph by hand refuses.
+    /// </summary>
+    /// <param name="worktreesRoot">The configured worktrees root, which the tool's state paths name.</param>
+    public static IReadOnlyList<string> NeverListed(string worktreesRoot) => [.. HarnessLayout.SecretSlots, .. HarnessLayout.StatePaths(worktreesRoot)];
+
     /// <summary>What this process holds of each graph, by its directory.</summary>
     private readonly ConcurrentDictionary<string, Graph> _graphs = new(StringComparer.Ordinal);
 
@@ -431,6 +488,93 @@ public sealed class CodebaseGraphService(
             run,
             cancellationToken).ConfigureAwait(false);
     }
+
+    /// <inheritdoc/>
+    public Task<CodebaseGraphRead?> ReadOnlyAsync(OrchestratorLayout run, string? agent, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        return Task.FromResult(ReadOnly(run, agent));
+    }
+
+    /// <inheritdoc cref="ReadOnlyAsync"/>
+    private CodebaseGraphRead? ReadOnly(OrchestratorLayout run, string? agent)
+    {
+        // A record that is there and does not read is said with why, never taken for none.
+        if (ManifestOrNull(run, out var unread) is not { } manifest)
+        {
+            return unread is null ? null : throw unread;
+        }
+
+        if (agent is null)
+        {
+            // Where the link result on disk is this manifest's and this build's linker's, it is read; else it is made again in memory.
+            var baseTree = ReadSymbolsOrNull(run, manifest.Digest) is { } symbols
+                ? new Tree(BaseView, manifest.Tree, manifest.Files, manifest.Files.Keys.ToHashSet(StringComparer.Ordinal), null, null, manifest.Digest) { Manifest = manifest, Symbols = symbols }
+                : LinkedTree(run, BaseView, manifest.Tree, manifest.Files, manifest.Digest, manifest, record: null);
+
+            return ReadOf(run, baseTree, EmptyExtracts);
+        }
+
+        if (ViewOrNull(run, agent, out var refused) is not { } record)
+        {
+            return refused is null ? null : throw refused;
+        }
+
+        // A view held against a base no longer kept does not read until its next whole sync, as a sync finds it.
+        if (record.Base != manifest.Digest)
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"the codebase graph's view '{agent}' of run '{run.Name}' stands on a base the graph no longer keeps; its next whole sync makes it again against the base as it stands");
+        }
+
+        // A view is the overlay of its worktree over the base it stands on, linked in memory: its link result is on no disk.
+        var files = Whole(manifest.Files, record);
+        var viewTree = LinkedTree(run, agent, record.Tree, files, record.Base, manifest: null, record: record);
+
+        return ReadOf(run, viewTree, EmptyExtracts);
+    }
+
+    /// <summary>The view <paramref name="view"/> of <paramref name="files"/>, linked in memory from the extracts on disk, nothing written.</summary>
+    private Tree LinkedTree(OrchestratorLayout run, string view, string treePath, IReadOnlyDictionary<string, CodeGraphFileEntry> files, string @base, CodeGraphManifest? manifest, CodeGraphView? record)
+    {
+        var sorted = new SortedDictionary<string, CodeGraphFileEntry>(files.ToDictionary(file => file.Key, file => file.Value, StringComparer.Ordinal), StringComparer.Ordinal);
+        var linked = new Dictionary<string, CodeGraphFile>(StringComparer.Ordinal);
+
+        foreach (var (path, entry) in sorted)
+        {
+            linked[path] = Linked(path, entry, entry.Extract is { } name ? ExtractOrNull(run, name, path)?.Extract : null);
+        }
+
+        return new Tree(view, treePath, files, files.Keys.ToHashSet(StringComparer.Ordinal), linked, CodeGraphLinker.Link([.. sorted.Keys.Select(path => linked[path])]), @base)
+        {
+            Manifest = manifest,
+            View = record,
+        };
+    }
+
+    /// <summary>
+    /// The run's link result, where it reads and was made from the manifest of <paramref name="digest"/> by this build's
+    /// linker; null where it is to be made again - none, one that does not read, or one of another manifest or linker.
+    /// One that could not be read at all is no record that does not read, and fails the read.
+    /// </summary>
+    private CodeGraphSymbolsFile? ReadSymbolsOrNull(OrchestratorLayout run, string digest)
+    {
+        try
+        {
+            return _store.ReadGraphSymbols(run) is { } symbols && symbols.Graph == digest && symbols.Linker == CodeGraphLinker.Revision ? symbols : null;
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.Refused)
+        {
+            return null;
+        }
+    }
+
+    private static readonly IReadOnlyDictionary<string, FileExtract> EmptyExtracts = new Dictionary<string, FileExtract>(StringComparer.Ordinal);
+
+    /// <summary>The file <paramref name="path"/> as the linker is given it: a generated file under <c>generated: exclude</c> is listed and its extract kept, its declarations left out of the link.</summary>
+    private static CodeGraphFile Linked(string path, CodeGraphFileEntry entry, FileExtract? extract)
+        => new(path, entry.Language, entry.State == CodeFileStates.Generated ? null : extract);
 
     private Graph GraphOf(OrchestratorLayout run) => _graphs.GetOrAdd(run.GraphDirectory, _ => new Graph());
 
@@ -938,7 +1082,7 @@ public sealed class CodebaseGraphService(
             _run = request.Run;
             _shape = request.Shape;
             _versions = [.. service._extractors.All.Select(extractor => new CodeGraphExtractorVersion(extractor.Language, extractor.Version))];
-            _never = [.. HarnessLayout.SecretSlots, .. HarnessLayout.StatePaths(request.WorktreesRoot)];
+            _never = NeverListed(request.WorktreesRoot);
         }
 
         /// <summary>Why the tree's record does not read, where <see cref="Current"/> found it there and not reading; null otherwise.</summary>
@@ -1739,7 +1883,7 @@ public sealed class CodebaseGraphService(
         /// </summary>
         private bool Kept(GitName name, IDictionary<string, CodebaseGraphSkipped> unnamed)
         {
-            if (Never(name.Text) || !Graphs(name.Text))
+            if (!Lists(name.Text, _never, _shape, _service._platform.PathComparison))
             {
                 return false;
             }
@@ -1794,7 +1938,7 @@ public sealed class CodebaseGraphService(
         /// Whether <paramref name="path"/> is a name the graph's records cannot hold (<see cref="OrchestrationRules.RelativePathProblem"/>):
         /// a file git holds by such a name on a machine that allows it is said, never written into a record that would not read back.
         /// </summary>
-        private static bool Unnameable(string path) => OrchestrationRules.RelativePathProblem(path, "a file's path") is not null;
+        internal static bool Unnameable(string path) => OrchestrationRules.RelativePathProblem(path, "a file's path") is not null;
 
         /// <summary>
         /// Whether a link lies along the directory <paramref name="path"/> lies in (<see cref="ThroughLink"/>), asked once a
@@ -1843,9 +1987,6 @@ public sealed class CodebaseGraphService(
 
             return stands;
         }
-
-        /// <summary>Whether the workflow's patterns graph <paramref name="path"/>, as this machine's file system compares names.</summary>
-        private bool Graphs(string path) => _shape.Graphs(path, _service._platform.PathComparison);
 
         /// <summary>Whether <paramref name="path"/> is in a credential slot or the tool's own state.</summary>
         private bool Never(string path)
@@ -1945,7 +2086,7 @@ public sealed class CodebaseGraphService(
                     }
 
                     // A file read before keeps its generated mark in its why; whether it is left out is the shape's now.
-                    return before with { State = StateOf(claimant, generated: before.Why is not null) };
+                    return before with { State = StateOf(claimant, generated: before.Why is not null, _shape) };
 
                 default:
                     return null;
@@ -2079,9 +2220,9 @@ public sealed class CodebaseGraphService(
                     return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = "it was gone when it was read" }, null, null);
                 }
 
-                if (standing.Length > _shape.MaxFileBytes)
+                if (TooLarge(blob, standing.Length, _shape, standing.Written) is { } tooLarge)
                 {
-                    return (new CodeGraphFileEntry(blob, CodeFileStates.TooLarge, standing.Length) { Why = string.Create(CultureInfo.InvariantCulture, $"{standing.Length:N0} bytes, over maxFileBytes ({_shape.MaxFileBytes:N0})"), Mtime = standing.Written }, null, standing);
+                    return (tooLarge, null, standing);
                 }
 
                 bytes = await _service._fileSystem.ReadAllBytesAsync(absolute, token).ConfigureAwait(false);
@@ -2102,68 +2243,9 @@ public sealed class CodebaseGraphService(
                 return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = ChangedWhileRead }, null, null);
             }
 
-            var decoded = CodeFileText.Decode(bytes);
-
-            if (!decoded.IsRead)
-            {
-                return (new CodeGraphFileEntry(blob, decoded.State, bytes.Length) { Why = decoded.Why, Mtime = standing.Written }, null, standing);
-            }
-
-            var text = decoded.Text;
-            var route = _service._extractors.Route(path, CodeFileText.Probe(text));
-
-            if (route.Failed is { } failed)
-            {
-                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = failed, Mtime = standing.Written }, null, null);
-            }
-
-            if (route.Extractor is not { } claimant)
-            {
-                return (new CodeGraphFileEntry(blob, CodeFileStates.Ambiguous, bytes.Length) { Why = route.Ambiguous, Mtime = standing.Written }, null, standing);
-            }
-
-            var extractor = _shape.Uses(claimant.Language) ? claimant : _service._extractors.Fallback;
-            var input = new CodeFileInput(path, text);
-            var lines = input.Lines;
-            FileExtract extract;
-
-            try
-            {
-                extract = extractor.Extract(input).WithDigests(lines);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // The contract's kit holds every implementation to answering for any text; one that throws is a defect of
-                // it, said for the one file and never the end of the sync.
-                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = $"its implementation '{extractor.Language}' failed on it: {ex.Message.TrimEnd('.')}", Mtime = standing.Written }, null, null);
-            }
-
-            var stored = new CodeGraphStoredExtract(CodeGraphManifest.CurrentSchema, extractor.Language, extractor.Version, blob, path, lines.Count, extract);
-
-            if (stored.Problem() is { } wrong)
-            {
-                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = $"its implementation '{extractor.Language}' answered what is no extract: {wrong}", Mtime = standing.Written }, null, null);
-            }
-
-            // A file read keeps why it is generated, where its implementation said, in its why: the mark a later sync keeps.
-            var entry = new CodeGraphFileEntry(blob, StateOf(extractor, extract.Generated is not null), bytes.Length)
-            {
-                Language = extractor.Language,
-                Why = extract.Generated,
-                Lines = lines.Count,
-                Mtime = standing.Written,
-                Extract = CodeGraphIds.ExtractName(blob, path, extractor.Language, extractor.Version),
-            };
-
-            return (entry, stored, standing);
+            var read = _service.Read(path, blob, bytes, _shape, standing.Written);
+            return (read.Entry, read.Stored, read.Settled ? standing : null);
         }
-
-        /// <summary>The state a file read by <paramref name="extractor"/> is in.</summary>
-        private string StateOf(ICodeGraphExtractor extractor, bool generated)
-            => generated && _shape.ExcludeGenerated ? CodeFileStates.Generated
-                : extractor.Claims.Fallback ? CodeFileStates.Listed
-                : extractor.Outlines ? CodeFileStates.Outlined
-                : CodeFileStates.Parsed;
 
         /// <summary>
         /// Links every file of <paramref name="entries"/> - from what <paramref name="from"/> linked, a file it held alike
@@ -2196,7 +2278,7 @@ public sealed class CodebaseGraphService(
                     continue;
                 }
 
-                files[path] = new CodeGraphFile(path, entry.Language, entry.State == CodeFileStates.Generated ? null : extract);
+                files[path] = Linked(path, entry, extract);
             }
 
             foreach (var (path, made) in await ReadAsync(toMake).ConfigureAwait(false))
@@ -2209,7 +2291,7 @@ public sealed class CodebaseGraphService(
                     _reused--;
                 }
 
-                files[path] = new CodeGraphFile(path, made.Language, made.State == CodeFileStates.Generated ? null : _read.GetValueOrDefault(path));
+                files[path] = Linked(path, made, _read.GetValueOrDefault(path));
             }
 
             List<CodeGraphFile> list = [.. entries.Keys.Select(path => files[path])];
@@ -2219,22 +2301,8 @@ public sealed class CodebaseGraphService(
         /// <summary>The extract <paramref name="name"/> of <paramref name="path"/>, where it reads as one made for it; null where it does not.</summary>
         private CodeGraphStoredExtract? ExtractOrNull(string name, string path) => _service.ExtractOrNull(_run, name, path);
 
-        /// <summary>
-        /// The run's link result, where it reads and was made from the manifest of <paramref name="digest"/> by this build's
-        /// linker; null where it is to be made again - none, one that does not read, or one of another manifest or linker.
-        /// One that could not be read at all is no record that does not read, and fails the sync.
-        /// </summary>
-        private CodeGraphSymbolsFile? Symbols(string digest)
-        {
-            try
-            {
-                return _service._store.ReadGraphSymbols(_run) is { } symbols && symbols.Graph == digest && symbols.Linker == CodeGraphLinker.Revision ? symbols : null;
-            }
-            catch (HarnessException ex) when (ex.ExitCode == HarnessExit.Refused)
-            {
-                return null;
-            }
-        }
+        /// <summary>The run's link result, where it reads and was made from the manifest of <paramref name="digest"/> by this build's linker.</summary>
+        private CodeGraphSymbolsFile? Symbols(string digest) => _service.ReadSymbolsOrNull(_run, digest);
 
         /// <summary>For each implementation that read a file, how many it read and the nodes they hold.</summary>
         private static IReadOnlyList<CodebaseGraphLanguage> Languages(IReadOnlyDictionary<string, CodeGraphFileEntry> files, CodeGraphSymbolsFile? symbols)
@@ -2306,6 +2374,237 @@ public sealed class CodebaseGraphService(
             linked.External,
             linked.Unresolved);
     }
+
+    /// <summary>
+    /// Whether a graph lists <paramref name="path"/>: not a credential slot nor the tool's own state, and taken by the
+    /// workflow's <c>include</c> and <c>exclude</c>, as <paramref name="comparison"/> compares names. The one rule a sync
+    /// keeps a path by and the files a tree differs in are told by; a name its records cannot hold is kept out apart.
+    /// </summary>
+    /// <param name="path">A path relative to the tree, with forward separators.</param>
+    /// <param name="never">What no graph lists (<see cref="NeverListed"/>).</param>
+    /// <param name="shape">What the workflow's <c>codebaseGraph</c> says.</param>
+    /// <param name="comparison">How this machine's file system compares names.</param>
+    private static bool Lists(string path, IReadOnlyList<string> never, CodebaseGraphShape shape, StringComparison comparison)
+        => !PathPatterns.Matches(never, path, comparison) && shape.Graphs(path, comparison);
+
+    /// <inheritdoc/>
+    public async Task<IReadOnlyList<string>> DifferingAsync(CodebaseGraphSync request, string baseCommit, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseCommit);
+
+        var tree = request.Worktree?.Path ?? request.Repository.MainCheckoutRoot;
+        var never = NeverListed(request.WorktreesRoot);
+        var differing = await _gitClient.ListChangedSinceAsync(tree, baseCommit, cancellationToken).ConfigureAwait(false);
+        var untracked = (await _gitClient.ListWorkingFilesAsync(tree, cancellationToken).ConfigureAwait(false))
+            .Where(file => file.Untracked && file.Name.IsUtf8)
+            .Select(file => file.Name.Text);
+
+        return [.. differing.Concat(untracked)
+            .Distinct(StringComparer.Ordinal)
+            .Where(path => Lists(path, never, request.Shape, _platform.PathComparison) && !Sync.Unnameable(path))
+            .Order(StringComparer.Ordinal)];
+    }
+
+    /// <inheritdoc/>
+    public async Task<CodebaseGraphChanges> ChangesAsync(CodebaseGraphSync request, CodebaseGraphRead read, string baseCommit, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(read);
+
+        var paths = await DifferingAsync(request, baseCommit, cancellationToken).ConfigureAwait(false);
+
+        if (paths.Count == 0)
+        {
+            return new CodebaseGraphChanges(baseCommit, [], []);
+        }
+
+        var tree = request.Worktree?.Path ?? request.Repository.MainCheckoutRoot;
+        var held = await _gitClient.HeldAtAsync(tree, baseCommit, paths, cancellationToken).ConfigureAwait(false);
+        List<string> blobs = [.. paths.Select(path => held.TryGetValue(path, out var at) ? at.Blob : null).OfType<string>().Distinct(StringComparer.Ordinal)];
+
+        // A blob over maxFileBytes is never read: its size is asked first, as a file's is.
+        IReadOnlyList<long?> sizes = blobs.Count == 0 ? [] : await _gitClient.ReadBlobSizesAsync(tree, blobs, cancellationToken).ConfigureAwait(false);
+        List<string> small = [.. blobs.Where((_, at) => sizes[at] is { } size && size <= request.Shape.MaxFileBytes)];
+        IReadOnlyList<byte[]?> contents = small.Count == 0 ? [] : await _gitClient.ReadBlobsAsync(tree, small, cancellationToken).ConfigureAwait(false);
+        var sizeOf = blobs.Zip(sizes).ToDictionary(blob => blob.First, blob => blob.Second, StringComparer.Ordinal);
+        var bytesOf = small.Zip(contents).ToDictionary(blob => blob.First, blob => blob.Second, StringComparer.Ordinal);
+        var nodes = new List<CodeChangedNode>();
+        var uncompared = new List<CodeUncomparedFile>();
+
+        foreach (var path in paths)
+        {
+            // Each side is no file, or a file an implementation read: a file kept out as generated code, or one not read on
+            // a side - too large, not text, gone or locked while it was read - tells no declaration, for what that side held
+            // is not known: nothing is said changed or gone by it, and it is said not compared, with why.
+            var after = Side.None;
+
+            if (read.Files.TryGetValue(path, out var entry))
+            {
+                var now = string.Equals(entry.State, CodeFileStates.Generated, StringComparison.Ordinal) ? null : read.Extract(path);
+                var lines = now is null ? null : await LinesNowAsync(Path.Combine(tree, path.Replace('/', Path.DirectorySeparatorChar)), path, cancellationToken).ConfigureAwait(false);
+
+                if (now is null || lines is null)
+                {
+                    uncompared.Add(new CodeUncomparedFile(path, now is not null ? "it could not be read now" : Unextracted(entry.State, entry.Why)));
+                    continue;
+                }
+
+                after = new Side(now, lines);
+            }
+
+            var before = Side.None;
+
+            if (held.TryGetValue(path, out var at) && at.Blob is { } blob)
+            {
+                var (then, why) = bytesOf.GetValueOrDefault(blob) is { } bytes
+                    ? AtBase(path, blob, bytes, request.Shape)
+                    : (null, sizeOf.GetValueOrDefault(blob) is { } size ? TooLarge(blob, size, request.Shape, written: null)?.Why : "its blob could not be read");
+
+                if (then is null)
+                {
+                    uncompared.Add(new CodeUncomparedFile(path, $"{why} at the base"));
+                    continue;
+                }
+
+                before = then;
+            }
+
+            nodes.AddRange(CodebaseGraphChanges.Compared(path, before.Extract, before.Lines, after.Extract, after.Lines));
+        }
+
+        return new CodebaseGraphChanges(baseCommit, paths, nodes) { Uncompared = uncompared };
+    }
+
+    /// <summary>
+    /// A file's blob at the base, read as a sync reads the file - its size, its bytes, the implementation that claims it - or,
+    /// where no implementation read it or it is kept out as generated code, none and why.
+    /// </summary>
+    private (Side? Side, string? Why) AtBase(string path, string blob, byte[] bytes, CodebaseGraphShape shape)
+    {
+        var read = Read(path, blob, bytes, shape, written: null);
+
+        return read is { Stored: { } stored, Lines: { } lines } && !string.Equals(read.Entry.State, CodeFileStates.Generated, StringComparison.Ordinal)
+            ? (new Side(stored.Extract, lines), null)
+            : (null, Unextracted(read.Entry.State, read.Entry.Why));
+    }
+
+    /// <summary>Why a file in <paramref name="state"/> tells no declaration a change-first comparison can read: kept out as generated code, or what its entry says kept it unread.</summary>
+    private static string Unextracted(string state, string? why)
+        => string.Equals(state, CodeFileStates.Generated, StringComparison.Ordinal) ? "kept out as generated code" : why ?? state;
+
+    /// <summary>One side of a file's change: its extract and its lines, or no file there.</summary>
+    private sealed record Side(FileExtract? Extract, IReadOnlyList<string> Lines)
+    {
+        public static Side None { get; } = new(null, []);
+    }
+
+    /// <summary>The lines of the file at <paramref name="absolute"/> as an extract numbers them; null where it is gone, cannot be read now, or does not decode.</summary>
+    private async Task<IReadOnlyList<string>?> LinesNowAsync(string absolute, string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var decoded = CodeFileText.Decode(await _fileSystem.ReadAllBytesAsync(absolute, cancellationToken).ConfigureAwait(false));
+            return decoded.IsRead ? new CodeFileInput(path, decoded.Text).Lines : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The entry of a file of <paramref name="length"/> bytes over <c>maxFileBytes</c>, which is never read; null where it is not over.</summary>
+    private static CodeGraphFileEntry? TooLarge(string blob, long length, CodebaseGraphShape shape, DateTime? written)
+        => length > shape.MaxFileBytes
+            ? new CodeGraphFileEntry(blob, CodeFileStates.TooLarge, length) { Why = string.Create(CultureInfo.InvariantCulture, $"{length:N0} bytes, over maxFileBytes ({shape.MaxFileBytes:N0})"), Mtime = written }
+            : null;
+
+    /// <summary>
+    /// What the bytes of the file at <paramref name="path"/> are, by the core's rules - over <c>maxFileBytes</c>, binary or
+    /// undecodable - and then by the implementation that claims them, whose extract is completed with every node's digest:
+    /// its entry, the extract to store once its blob is confirmed, whether the bytes decided the entry - a state a later
+    /// sync may keep while the file stands as it did - rather than a failure to read them, which is tried again, and its
+    /// lines where it decoded. The one reading of a file's bytes into an extract: a sync's of the file, and the change-first
+    /// base's of its blob.
+    /// </summary>
+    /// <param name="path">The file's path, relative to the tree with forward separators.</param>
+    /// <param name="blob">The id git gives the bytes.</param>
+    /// <param name="bytes">The bytes.</param>
+    /// <param name="shape">What the workflow's <c>codebaseGraph</c> says: the languages it uses, and whether generated code is kept out.</param>
+    /// <param name="written">When the file was written, which its entry records; null for a blob.</param>
+    private FileRead Read(string path, string blob, byte[] bytes, CodebaseGraphShape shape, DateTime? written)
+    {
+        if (TooLarge(blob, bytes.Length, shape, written) is { } tooLarge)
+        {
+            return new FileRead(tooLarge, null, true, null);
+        }
+
+        var decoded = CodeFileText.Decode(bytes);
+
+        if (!decoded.IsRead)
+        {
+            return new FileRead(new CodeGraphFileEntry(blob, decoded.State, bytes.Length) { Why = decoded.Why, Mtime = written }, null, true, null);
+        }
+
+        var text = decoded.Text;
+        var route = _extractors.Route(path, CodeFileText.Probe(text));
+
+        var input = new CodeFileInput(path, text);
+        var lines = input.Lines;
+
+        if (route.Failed is { } failed)
+        {
+            return new FileRead(new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = failed, Mtime = written }, null, false, lines);
+        }
+
+        if (route.Extractor is not { } claimant)
+        {
+            return new FileRead(new CodeGraphFileEntry(blob, CodeFileStates.Ambiguous, bytes.Length) { Why = route.Ambiguous, Mtime = written }, null, true, lines);
+        }
+
+        var extractor = shape.Uses(claimant.Language) ? claimant : _extractors.Fallback;
+        FileExtract extract;
+
+        try
+        {
+            extract = extractor.Extract(input).WithDigests(lines);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The contract's kit holds every implementation to answering for any text; one that throws is a defect of
+            // it, said for the one file and never the end of the sync.
+            return new FileRead(new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = $"its implementation '{extractor.Language}' failed on it: {ex.Message.TrimEnd('.')}", Mtime = written }, null, false, lines);
+        }
+
+        var stored = new CodeGraphStoredExtract(CodeGraphManifest.CurrentSchema, extractor.Language, extractor.Version, blob, path, lines.Count, extract);
+
+        if (stored.Problem() is { } wrong)
+        {
+            return new FileRead(new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = $"its implementation '{extractor.Language}' answered what is no extract: {wrong}", Mtime = written }, null, false, lines);
+        }
+
+        // A file read keeps why it is generated, where its implementation said, in its why: the mark a later sync keeps.
+        var entry = new CodeGraphFileEntry(blob, StateOf(extractor, extract.Generated is not null, shape), bytes.Length)
+        {
+            Language = extractor.Language,
+            Why = extract.Generated,
+            Lines = lines.Count,
+            Mtime = written,
+            Extract = CodeGraphIds.ExtractName(blob, path, extractor.Language, extractor.Version),
+        };
+
+        return new FileRead(entry, stored, true, lines);
+    }
+
+    /// <summary>What reading a file's bytes made: its entry, its extract where one was made, whether the bytes decided the entry, and its lines where it decoded.</summary>
+    private sealed record FileRead(CodeGraphFileEntry Entry, CodeGraphStoredExtract? Stored, bool Settled, IReadOnlyList<string>? Lines);
+
+    /// <summary>The state a file read by <paramref name="extractor"/> is in.</summary>
+    private static string StateOf(ICodeGraphExtractor extractor, bool generated, CodebaseGraphShape shape)
+        => generated && shape.ExcludeGenerated ? CodeFileStates.Generated
+            : extractor.Claims.Fallback ? CodeFileStates.Listed
+            : extractor.Outlines ? CodeFileStates.Outlined
+            : CodeFileStates.Parsed;
 
     /// <summary>
     /// The extract <paramref name="name"/> of <paramref name="path"/> in <paramref name="run"/>'s graph, where it reads as the

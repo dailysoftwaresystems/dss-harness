@@ -824,14 +824,8 @@ public sealed class HostAgentService(
                     saying).ConfigureAwait(false);
             }
 
-            try
-            {
-                await abandoned.CancelAsync().ConfigureAwait(false);
-            }
-            catch (ObjectDisposedException)
-            {
-                // The request was served, and its token disposed, as this was told.
-            }
+            // A request served as this was told has let go of its token already.
+            await abandoned.TryCancelAsync().ConfigureAwait(false);
         }
 
         /// <summary>

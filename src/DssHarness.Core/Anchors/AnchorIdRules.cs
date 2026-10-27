@@ -109,7 +109,7 @@ public sealed class AnchorIdRules
         return stripped.Length switch
         {
             0 => "<blank>",
-            > MaximumFallbackIdentityLength => stripped[..MaximumFallbackIdentityLength],
+            > MaximumFallbackIdentityLength => Output.TextCut.Head(stripped, MaximumFallbackIdentityLength),
             _ => stripped,
         };
     }

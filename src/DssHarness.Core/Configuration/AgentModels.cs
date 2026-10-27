@@ -44,6 +44,45 @@ public sealed class AgentClientConfig
     /// (claude-code's key; <c>CLAUDE_EXECUTABLE</c> where nothing is said): a name, appointed once beside every key.
     /// </summary>
     public string? Executable { get; init; }
+
+    /// <summary>
+    /// How many times a failed request is asked again (a key of the API clients, claude-api and glm;
+    /// <see cref="Agents.Loop.ToolLoopTerms.DefaultMaxRetries"/> where nothing is said): past them a rate limit is the
+    /// account at its limit, and a failing service fails the step.
+    /// </summary>
+    public int? MaxRetries { get; init; }
+
+    /// <summary>
+    /// The longest wait before a failed request is asked again, in seconds (a key of the API clients;
+    /// <see cref="Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait"/> where nothing is said): a rate limit naming a longer one
+    /// is the account at its limit, and a failing service naming one fails the step.
+    /// </summary>
+    public int? MaxRetryWaitSeconds { get; init; }
+
+    /// <summary>
+    /// How long what a request caches is kept (claude-api's key): <c>5m</c>, where nothing is said, or <c>1h</c>, for both
+    /// of its cache marks - and a model whose requests are cached an hour is priced by its <c>priceCacheWrite1h</c>.
+    /// </summary>
+    public string? CacheTtl { get; init; }
+
+    /// <summary>
+    /// Fields merged into every request's body (a key of the API clients): one the tool does not send yet, sent before it
+    /// learns it - an object merged member by member into one the tool sends - and never one the tool sends itself, nor
+    /// the Claude API's <c>fallbacks</c>, which no request carries.
+    /// </summary>
+    public System.Text.Json.JsonElement? RequestExtras { get; init; }
+
+    /// <summary>
+    /// Whether Z.AI is asked to keep the model's reasoning across turns (glm's key; <c>thinking.clear_thinking: false</c>,
+    /// false where nothing is said): the reasoning is stored and sent back with each message either way.
+    /// </summary>
+    public bool? PreserveThinking { get; init; }
+
+    /// <summary>
+    /// Beta header values sent beside the ones the tool sends itself (claude-api's key) - never a
+    /// <c>server-side-fallback-</c> one, for the engine's fallback is the only one a step has.
+    /// </summary>
+    public List<string>? Betas { get; init; }
 }
 
 /// <summary>
@@ -61,10 +100,11 @@ public sealed class AgentPolicyConfig
     public List<string> Restrictions { get; init; } = [];
 
     /// <summary>
-    /// The allow list of every web request an agent makes: each entry one domain, and a request is allowed only to
-    /// a domain on the list or a name under it. Left out where every address is allowed, which is the
-    /// default; given empty it is refused - leave the key out instead. A <c>Web(...)</c> restriction refuses
-    /// beside it whatever this allows.
+    /// The allow list of every page an agent reads and every result a search gives: each entry one domain, and an
+    /// address is allowed only to a domain on the list or a name under it - a search source's own requests are held
+    /// to the <c>Web(...)</c> rules alone. Left out where every address is allowed, which is the default; given
+    /// empty it is refused - leave the key out instead. A <c>Web(...)</c> restriction refuses beside it whatever
+    /// this allows.
     /// </summary>
     public List<string>? WebDomains { get; init; }
 
@@ -82,6 +122,27 @@ public sealed class AgentPolicyConfig
     /// refusal away, and each client's own guard, where it has one, stays its own.
     /// </summary>
     public bool? ProtectedPaths { get; init; }
+
+    /// <summary>
+    /// The secret-shaped names a command an agent runs keeps from the tool's environment: every name ending with one of
+    /// <see cref="Agents.AgentChildEnvironment.SecretSuffixes"/> is taken from it otherwise, beside every name the
+    /// configuration appoints, which is never given back. Left out where none is given back, which is the default; given
+    /// empty it is refused.
+    /// </summary>
+    public List<string>? KeepEnvironment { get; init; }
+
+    /// <summary>
+    /// How many seconds a command an agent runs may take where its call names no time:
+    /// <see cref="Agents.AgentCommandSettings.DefaultTimeoutSeconds"/> where nothing is said.
+    /// </summary>
+    public int? CommandTimeoutSeconds { get; init; }
+
+    /// <summary>
+    /// The most seconds a call may name for a command an agent runs:
+    /// <see cref="Agents.AgentCommandSettings.DefaultMaxTimeoutSeconds"/> where nothing is said, and at most
+    /// <see cref="Agents.AgentCommandSettings.MostTimeoutSeconds"/>, as the time without a call's is.
+    /// </summary>
+    public int? MaxCommandTimeoutSeconds { get; init; }
 }
 
 /// <summary>

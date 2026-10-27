@@ -3,8 +3,10 @@ using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Help;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
+using NSubstitute;
 
 namespace DssHarness.Tests;
 
@@ -16,9 +18,42 @@ namespace DssHarness.Tests;
 public sealed class WorkflowValidationServiceTests
 {
     /// <summary>
+    /// A run reads a file its workflow names by the rule the definition's check holds it to: the text of one inside the
+    /// workflow's directory, and a refusal (12) saying why for one not there and one spelt as a path out of it.
+    /// </summary>
+    [Fact]
+    public void AFileTheWorkflowNames_IsReadByTheRuleTheCheckHoldsItTo()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        Directory.CreateDirectory(layout.WorkflowDirectory("flow"));
+        File.WriteAllText(Path.Combine(layout.WorkflowDirectory("flow"), "body.md"), "the body\n");
+        var named = new WorkflowNamedFiles(harness.FileSystem, harness.Platform.PathComparison);
+
+        var missing = Assert.Throws<HarnessException>(() => named.ReadText(layout, "flow", "absent.md", "a pull request's body"));
+        var outside = Assert.Throws<HarnessException>(() => named.ReadText(layout, "flow", "../flow.yml", "a pull request's body"));
+
+        Assert.Equal("the body\n", named.ReadText(layout, "flow", "body.md", "a pull request's body"));
+        Assert.Equal(
+            (HarnessExit.ConfigInvalid, $"'absent.md', a pull request's body, is not at '{HarnessLayout.WorkflowDirectoryRelative("flow")}/absent.md'; write it there, beside the definition that names it"),
+            (missing.ExitCode, missing.Message));
+        Assert.Equal(HarnessExit.ConfigInvalid, outside.ExitCode);
+        Assert.StartsWith("'../flow.yml', a pull request's body, does not name a file inside the workflow's directory", outside.Message, StringComparison.Ordinal);
+
+        // A workflow's directory the file system cannot resolve - a loop of links - is the definition's problem too.
+        var looping = Substitute.For<IFileSystem>();
+        looping.ResolveLinks(Arg.Any<string>()).Returns(_ => throw new IOException("too many levels of links"));
+        var unresolved = Assert.Throws<HarnessException>(() => new WorkflowNamedFiles(looping, harness.Platform.PathComparison).ReadText(layout, "flow", "body.md", "a pull request's body"));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, unresolved.ExitCode);
+        Assert.EndsWith("could not be resolved: too many levels of links", unresolved.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The implementation workflow, initialized into a repository and declared in its config, passes its check: the one
     /// line says what it is, and under it each reason step's models and the level each runs at - the plan's own among
-    /// them, xhigh on Fable 5.1 and max on GLM 5.3 - and the outcome says every one checked.
+    /// them, xhigh on Fable 5.1 and on GLM 5.3 - and the outcome says every one checked.
     /// </summary>
     [Fact]
     public async Task TheImplementationWorkflow_InitializedIntoARepository_PassesItsCheck()
@@ -30,7 +65,7 @@ public sealed class WorkflowValidationServiceTests
 
         Assert.True(report.Passed);
         Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", report.Lines[0]);
-        Assert.Contains("step 'planning.plan' (best): claude-fable-5-1 at xhigh, glm-5.3 at max", report.Lines);
+        Assert.Contains("step 'planning.plan' (best): claude-fable-5-1 at xhigh, glm-5.3 at xhigh", report.Lines);
         Assert.Contains("step 'intake.triage' (high): claude-opus-5-5 at high, glm-5.3 at high", report.Lines);
 
         // Whether each model a step may run on has a price, and when its provider's numbers were read: every model of
@@ -128,6 +163,46 @@ public sealed class WorkflowValidationServiceTests
                     + "add ANTHROPIC_API_KEY= to a file there, holding the Anthropic API key (it is read from this slot and nowhere else). The steps that would read it: step 'think'",
             ],
             report.Lines);
+    }
+
+    /// <summary>
+    /// A reason step's search is checked against the configuration's web search: a source the repository turned off is
+    /// refused by name, through the service as through the validator (V55).
+    /// </summary>
+    [Fact]
+    public async Task AStepsSearch_IsCheckedAgainstTheConfigurationsSources()
+    {
+        var config = new HarnessConfig
+        {
+            Workflows = ["small"],
+            AgentWebSearch = System.Text.Json.JsonSerializer.Deserialize<AgentWebSearchConfig>("""{ "sources": { "npm": { "enabled": false } } }""", JsonConfigOptions.Default),
+        };
+        using var repository = await RepositoryAsync(config);
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: think
+                type: reason
+                agent: worker
+                model: claude-sonnet-5-5
+                search: [qa, npm]
+                prompt: prompts/work.md
+                outputs: schemas/work.json
+            """,
+            cancellationToken,
+            "agents/worker.md",
+            "prompts/work.md",
+            "schemas/work.json");
+
+        var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
+
+        Assert.False(report.Passed);
+        Assert.Contains($"{Shown("small")}: step 'think' searches 'npm', which is turned off (enabled: false); turn it on, or name another", report.Lines);
     }
 
     /// <summary>
@@ -1382,6 +1457,7 @@ public sealed class WorkflowValidationServiceTests
             TestTimingRegex = given.TestTimingRegex,
             LineEndings = given.LineEndings,
             Ci = given.Ci,
+            AgentWebSearch = given.AgentWebSearch,
             Providers = given.Providers.Count == 0 ? [.. agents.Providers] : given.Providers,
             TierConfig = given.TierConfig.Count == 0 ? new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase) : given.TierConfig,
         };

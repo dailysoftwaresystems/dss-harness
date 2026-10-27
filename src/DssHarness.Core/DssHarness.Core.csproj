@@ -31,6 +31,10 @@
          compiler's own parser: a full syntax tree of any file, tolerant of errors, with exact spans. Its syntax
          alone - no compilation, no references, no restore - so nothing of a repository is built to graph it. -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
+
+    <!-- The harness's own fetch reduces a page's HTML to its text (Web\WebPageText) by a parser that reads HTML as a
+         browser does, malformed markup included, with nothing run: no script, no request, no style. -->
+    <PackageReference Include="AngleSharp" Version="1.8.5" />
   </ItemGroup>
 
   <ItemGroup>
@@ -40,6 +44,8 @@
     <EmbeddedResource Include="Anchors/Templates/anchor-registry.md" LogicalName="DssHarness.Core.Anchors.Templates.anchor-registry.md" />
     <None Remove="Agents/Templates/agent-providers.json" />
     <EmbeddedResource Include="Agents/Templates/agent-providers.json" LogicalName="DssHarness.Core.AgentProviders" />
+    <None Remove="Agents/Templates/web-search-sources.json" />
+    <EmbeddedResource Include="Agents/Templates/web-search-sources.json" LogicalName="DssHarness.Core.WebSearchSources" />
   </ItemGroup>
 
   <ItemGroup>
