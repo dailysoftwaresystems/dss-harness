@@ -791,6 +791,53 @@ public sealed class ConfigStoreTests
         Assert.Contains("not a valid regular expression", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// What a failed run keeps as evidence could name none if it left the build directory, named the build directory
+    /// itself or a directory besides it, or spelled a pattern no reader reads: refused when the file is read, naming
+    /// the key, before a run has spent its build on evidence it could never keep.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": [] } } } ] }""", "test.all.keepOnFailure is given empty")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["C:/evidence"] } } } ] }""", "test.all.keepOnFailure entry 'C:/evidence' must be a relative path inside the build directory")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["../out"] } } } ] }""", "test.all.keepOnFailure entry '../out' must be a relative path inside the build directory")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["."] } } } ] }""", "test.all.keepOnFailure names '.', which is the build directory itself")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["{buildDir}"] } } } ] }""", "test.all.keepOnFailure names '{buildDir}', which is the build directory itself")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["{buildDir}/."] } } } ] }""", "test.all.keepOnFailure names '{buildDir}/.', which is the build directory itself")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "windows": { "keepOnFailure": ["{treeDir}/out"] } } } ] }""", "test.windows.keepOnFailure names '{treeDir}', which is not under the build directory")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["{nowhere}/out"] } } } ] }""", "test.all.keepOnFailure")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["out//report.json"] } } } ] }""", "test.all.keepOnFailure names 'out//report.json', which holds a '.' segment or a doubled separator")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["out/**x"] } } } ] }""", "which holds '**' inside a segment")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["out"], "keepOnFailureCapBytes": 0 } } } ] }""", "test.all.keepOnFailureCapBytes must be at least 1 byte, found 0")]
+    public void Load_RejectsKeepOnFailureThatCouldNameNoEvidence(string json, string fragment)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains(fragment, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Load_KeepsWhatAFailedRunNames_UnderTheBuildDirectory()
+    {
+        var config = LoadValid("""
+            {
+              "projects": [
+                {
+                  "name": "main",
+                  "type": "cmake",
+                  "test": {
+                    "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["{buildDir}/corpus-out"], "keepOnFailureCapBytes": 1048576 }
+                  }
+                }
+              ]
+            }
+            """);
+
+        var invocation = config.Projects.Single().Test!.All!;
+
+        Assert.Equal(["{buildDir}/corpus-out"], invocation.KeepOnFailure);
+        Assert.Equal(1048576, invocation.KeepOnFailureCapBytes);
+    }
+
     [Fact]
     public void Defaults_AreUsable_WithoutAnyConfiguration()
     {

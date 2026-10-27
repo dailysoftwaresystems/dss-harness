@@ -4538,7 +4538,8 @@ public static class HelpTopics
         builder.AppendLine("Leave the key out instead. A list whose empty form means none - such as");
         builder.AppendLine("sync.neverTransfer, sync.exclude or");
         builder.AppendLine("contention.buildTools - takes [] as that. workflows, which declares no workflow left");
-        builder.AppendLine("out, and agentPolicy.keepEnvironment, which gives no name back left out, are refused");
+        builder.AppendLine("out, agentPolicy.keepEnvironment, which gives no name back left out, and a test");
+        builder.AppendLine("invocation's keepOnFailure, which keeps no evidence left out, are refused");
         builder.AppendLine("given empty too, so none is spelt one way: leave the key out for none. A runner's list");
         builder.AppendLine("under mutations.runReads, which would say nothing given empty, is refused so: leave the");
         builder.AppendLine("runner out instead.");
@@ -4663,6 +4664,20 @@ public static class HelpTopics
         builder.AppendLine("give its excludeArg themselves, the exclusions are added to those values instead,");
         builder.AppendLine("where they stand: to each -LE's, and to the last -E's. An empty excludeJoin gives each");
         builder.AppendLine("its own excludeArg over a join the shared section declares.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A test invocation may name what a failed run keeps as evidence: keepOnFailure, paths relative to the "
+            + "leg's build directory - files, directories, or patterns, {buildDir} among the names they may use. When "
+            + "the invocation does not pass, whatever the verdict, what they name is copied into kept-on-failure/ beside "
+            + "the leg's log, each file's tree as it stood under the build directory, within keepOnFailureCapBytes kept "
+            + $"in all ({DiskSpace.Size(Testing.KeptOnFailure.DefaultCapBytes)} where it is left out). A pass keeps "
+            + "nothing, and a later step reads nothing from it: it is evidence beside the verdict, never an output, and "
+            + "a failed step still keeps nothing of what one reads. The leg's line names the directory, how many files "
+            + "were kept and their size, and how many were refused over the cap, could not be read, or named nothing - "
+            + "a path naming nothing is said, not refused, for the failure may have been before it was written. On a "
+            + "leg a WSL or ssh host runs, the copy is kept beside that host's own log and crosses back over the host's "
+            + "transport: 'sync --pull' takes the kept-on-failure directory within that host's run.");
         builder.AppendLine();
         builder.AppendLine("A leg on a host reached through WSL or ssh runs in that host's copy of its tree:");
         builder.AppendLine("the files the sync writes there from this tree, in a git repository of the host's own -");

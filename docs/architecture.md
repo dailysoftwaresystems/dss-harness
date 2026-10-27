@@ -3724,6 +3724,22 @@ tool replaces, where a green result had quietly stopped meaning anything.
   anything the harness wrote: a log header that echoes the command line contains the
   pattern whenever the command does. An empty pattern matches anything and is refused
   when the file is read.
+- A test invocation that does not pass - failed, timed out, unwitnessed, any verdict but a
+  pass - may keep evidence: `keepOnFailure` names paths under the leg's build directory -
+  files, directories or patterns, `{buildDir}` among the names they may use - and what they
+  name is copied into `kept-on-failure/` beside the leg's log, each file's tree as it stood
+  under the build directory, within `keepOnFailureCapBytes` kept in all (64 MiB where it is
+  left out; files past the cap are not copied and are named). A pass keeps nothing; a later
+  step reads nothing from it, for it is evidence beside the verdict and never an output, and
+  a failed step still keeps nothing of what one reads. A path naming nothing is said on the
+  leg's line, not refused, for the failure may have been before it was written; the line
+  (text and `--json`) names the directory, how many files were kept and their size, and how
+  many were refused over the cap, could not be read, or named nothing. On a leg a WSL or ssh
+  host runs, the copy is kept beside that host's own log and crosses back over the host's
+  transport: `sync --pull` takes the kept-on-failure directory within that host's run. Entries
+  that are absolute, climb out of the build directory, name the build directory itself or a
+  directory besides it, spell a path or pattern no reader reads, or are given empty are
+  refused when the file is read, naming the key.
 - A build passes only if every file in the project's `buildOutputs` exists afterwards,
   so a build that exited 0 cannot hand its tests a binary left over from an earlier one.
   An entry is a path, or a mapping of platform to path where the platforms disagree about what the

@@ -363,6 +363,17 @@ public static partial class LegPathNames
     ];
 
     /// <summary>
+    /// The names whose value is a directory that is never under a leg's build directory: the tree, the harness's own
+    /// directory, and the run-of-an-action ones. A setting whose paths are relative to the build directory - a test
+    /// invocation's <c>keepOnFailure</c> - refuses an entry naming any of them, naming the key, when the configuration
+    /// is read.
+    /// </summary>
+    public static IReadOnlyList<string> Directories { get; } =
+    [
+        TreeRoot, HarnessDirectory, ActionBuild, ActionArtifacts, StepBuild, RunArtifacts,
+    ];
+
+    /// <summary>
     /// The names whose value the leg's build makes: its build directory, the one file it is declared to make, and the
     /// compilers it identifies. A step or a runner's phase naming any reads what the build left there, so a run that
     /// runs it builds the leg first: see <see cref="BuiltNamesIn"/>.

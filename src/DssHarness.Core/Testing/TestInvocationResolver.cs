@@ -722,7 +722,9 @@ public static class TestInvocationResolver
             platform?.WorkingDirectory ?? all?.WorkingDirectory,
             platform?.TestSet ?? all?.TestSet,
             platform?.RemoteExcludes ?? all?.RemoteExcludes ?? [],
-            platform?.SetUp ?? all?.SetUp ?? []);
+            platform?.SetUp ?? all?.SetUp ?? [],
+            platform?.KeepOnFailure ?? all?.KeepOnFailure ?? [],
+            platform?.KeepOnFailureCapBytes ?? all?.KeepOnFailureCapBytes);
 }
 
 /// <summary>One test invocation, with every field decided.</summary>
@@ -742,6 +744,8 @@ public static class TestInvocationResolver
 /// <param name="TestSet">Which of the project's test sets it runs, or null for the shared one.</param>
 /// <param name="RemoteExcludes">What a leg on a host reached through a transport leaves out beside what it is asked to.</param>
 /// <param name="SetUp">The set-ups a leg running it brings up around its work, where the run is asked to set up.</param>
+/// <param name="KeepOnFailure">What a run keeping evidence copies out of the build directory when it does not pass.</param>
+/// <param name="KeepOnFailureCapBytes">The most to keep in all, in bytes, or null for the default cap.</param>
 public sealed record ResolvedTestInvocation(
     string Runner,
     IReadOnlyList<string> Args,
@@ -758,7 +762,9 @@ public sealed record ResolvedTestInvocation(
     string? WorkingDirectory = null,
     string? TestSet = null,
     IReadOnlyList<string>? RemoteExcludes = null,
-    IReadOnlyList<SetUpUse>? SetUp = null);
+    IReadOnlyList<SetUpUse>? SetUp = null,
+    IReadOnlyList<string>? KeepOnFailure = null,
+    long? KeepOnFailureCapBytes = null);
 
 /// <summary>A test invocation ready to start.</summary>
 /// <param name="Program">The runner to start.</param>

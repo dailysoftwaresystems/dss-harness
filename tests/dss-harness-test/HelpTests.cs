@@ -1683,6 +1683,36 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The config topic says what a failed test invocation keeps as evidence - the paths under the build directory, the
+    /// cap with its real default read from the code, kept-on-failure beside the leg's log, a pass keeping nothing, a
+    /// later step reading nothing from it, a path naming nothing said rather than refused, and a host's copy crossing
+    /// back over its transport.
+    /// </summary>
+    [Fact]
+    public async Task ConfigTopic_SaysWhatAFailedTestInvocationKeeps()
+    {
+        var said = Prose.Words((HelpText.Of("config")).StandardOutput);
+
+        Assert.Contains(
+            "A test invocation may name what a failed run keeps as evidence: keepOnFailure, paths relative to the leg's "
+                + "build directory - files, directories, or patterns, {buildDir} among the names they may use. When the "
+                + "invocation does not pass, whatever the verdict, what they name is copied into kept-on-failure/ beside "
+                + "the leg's log, each file's tree as it stood under the build directory, within keepOnFailureCapBytes kept "
+                + $"in all ({DiskSpace.Size(DssHarness.Core.Testing.KeptOnFailure.DefaultCapBytes)} where it is left out). A pass keeps "
+                + "nothing, and a later step reads nothing from it: it is evidence beside the verdict, never an output, and "
+                + "a failed step still keeps nothing of what one reads. The leg's line names the directory, how many files "
+                + "were kept and their size, and how many were refused over the cap, could not be read, or named nothing - "
+                + "a path naming nothing is said, not refused, for the failure may have been before it was written. On a "
+                + "leg a WSL or ssh host runs, the copy is kept beside that host's own log and crosses back over the host's "
+                + "transport: 'sync --pull' takes the kept-on-failure directory within that host's run.",
+            said,
+            StringComparison.Ordinal);
+
+        // The number is the decision, not a constant nobody reads: said as the words that decided it.
+        Assert.Contains("within keepOnFailureCapBytes kept in all (64 MiB where it is left out)", said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The config topic says a leg's inputs are watched only as deep as they lie, and the directories above them for
     /// the names in them alone, so a build in another tree below the worktrees root is never heard: on Linux however
     /// many directories they lie in, through one inotify instance for the process; on Windows and macOS up to the number
@@ -4130,11 +4160,13 @@ public sealed partial class HelpTests
             Prose.Words(layout.StandardOutput),
             StringComparison.Ordinal);
 
-        // workflows and keepEnvironment are refused given empty though leaving each out means none, which neither of the
-        // other two kinds of list the topic names is: said apart from both, with the spelling the refusal itself asks for.
+        // workflows, keepEnvironment and keepOnFailure are refused given empty though leaving each out means none,
+        // which neither of the other two kinds of list the topic names is: said apart from both, with the spelling the
+        // refusal itself asks for.
         Assert.Contains(
-            "workflows, which declares no workflow left out, and agentPolicy.keepEnvironment, which gives no name back left out, "
-                + "are refused given empty too, so none is spelt one way: leave the key out for none.",
+            "workflows, which declares no workflow left out, agentPolicy.keepEnvironment, which gives no name back left "
+                + "out, and a test invocation's keepOnFailure, which keeps no evidence left out, are refused given empty "
+                + "too, so none is spelt one way: leave the key out for none.",
             Prose.Words(config.StandardOutput),
             StringComparison.Ordinal);
     }

@@ -212,7 +212,13 @@ A test passes only where its runner printed its `successPattern`, and `countPatt
 many tests ran: a leg that ran a different number than the other legs of its project and
 `testSet` is marked on its own line, never as a timing and never changing its verdict. A set
 that differs on purpose, such as a platform's own tests, is named with `testSet` on that
-platform's test invocation.
+platform's test invocation. A test invocation that does not pass may name what it keeps as
+evidence: `keepOnFailure`, paths under the leg's build directory — files, directories or
+patterns — copied into `kept-on-failure/` beside the leg's log when the verdict is anything
+but a pass, within `keepOnFailureCapBytes` kept in all (64 MiB by default). A pass keeps
+nothing, and a later step reads nothing from it: it is evidence beside the verdict, never an
+output. The leg's line names the directory and the counts — files kept, refused over the cap,
+unreadable, or naming nothing.
 
 **Refuse early, with the arithmetic.** `create-worktree` will not create a worktree
 whose build paths cannot fit inside Windows' path limit, because that failure
