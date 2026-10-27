@@ -2512,7 +2512,14 @@ public static class HelpTopics
         builder.AppendLine("tried, the first serving a step on the tier and the rest its fallback - a step's order as");
         builder.AppendLine("entries of a model and one of its provider's keys, each model's keys before the next");
         builder.AppendLine("model, and a model named outright, on the step or in its agent definition, running on that");
-        builder.AppendLine("model with none after it ('help agent-definitions'). A step's effort is its own - one");
+        builder.AppendLine("model with none after it ('help agent-definitions'). The engine's fallback walks that order:");
+        builder.AppendLine("an entry that cannot be used on this machine is said and passed over when its turn comes");
+        builder.AppendLine("and never refuses a run, a declined request, an account at its limit and a key the provider");
+        builder.AppendLine("refused move the step to its next entry by the cause's rule - inside the one conversation");
+        builder.AppendLine("where the provider and client are the same (the loop's own walk, below), a new conversation");
+        builder.AppendLine("with the step's prompt everywhere else - a limit the run met is remembered until its end, and");
+        builder.AppendLine("where the slot holds none of the keys of the step's first model the run is refused before it");
+        builder.AppendLine("starts; a later model's missing key is only said and passed over. A step's effort is its own - one");
         builder.AppendLine("level for every model of its tier, or a map giving each its own: all for the rest, a");
         builder.AppendLine("model's code for one - and where the step gives a model none, its agent definition's map");
         builder.AppendLine("or level is read the same way, and a model neither names runs at its own default. Each");
@@ -2794,10 +2801,11 @@ public static class HelpTopics
             + "as Claude Code fails a call whose input did not read cannot be told from one, and is not caught); and each is "
             + "ended at once. A message the engine writes that no turn takes within the step's stall bound - counted from "
             + "when the launch answered its initialize request, and from the turn's end for one written while a turn ran - ends "
-            + $"it {nameof(Agents.AgentRunStatus.Stalled)}. A request the model declines ends the step "
-            + $"{nameof(Agents.AgentRunStatus.Refused)}, with what it was of where the provider names it, and an account at its limit - a rate limit event "
-            + "that says rejected, or a turn Claude Code ends on rate_limit or billing_error after its own tries - ends it "
-            + $"{nameof(Agents.AgentRunStatus.RateLimited)}, with when the limit lifts where it says; an overloaded service is no limit of the account's.";
+            + $"it {nameof(Agents.AgentRunStatus.Stalled)}. A request the model declines and an account at its limit - a rate limit event "
+            + "that says rejected, or a turn Claude Code ends on rate_limit or billing_error after its own tries - each move "
+            + $"the step to its next entry, a new launch on another model, ending it {nameof(Agents.AgentRunStatus.Refused)} and "
+            + $"{nameof(Agents.AgentRunStatus.RateLimited)} where none is left, with what the declined request was of where the "
+            + "provider names it and when the limit lifts where it says; an overloaded service is no limit of the account's.";
     }
 
     /// <summary>
@@ -2884,14 +2892,17 @@ public static class HelpTopics
             + "or paused, is every piece of it. A failed request is asked again "
             + $"up to {Agents.Loop.ToolLoopTerms.DefaultMaxRetries} times after a wait that doubles from "
             + $"{Agents.Loop.ToolLoop.FirstWait.TotalSeconds:0} s to {Agents.Loop.ToolLoop.LongestDoubledWait.TotalSeconds:0} s, "
-            + "or the one the provider names; a rate limit past them, or naming a wait past "
-            + $"{Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds:0} s, is the account at its limit "
-            + $"({nameof(Agents.AgentRunStatus.RateLimited)}) - the model's on the key it was sent with, or the key's whole where its "
-            + "balance is spent, each named - a service failing past them, or naming such a wait, fails the "
+            + "or the one the provider names; a service failing past them, or naming such a wait, fails the "
             + "step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
             + "a model the provider does not serve the key never starts the "
-            + "step before its first answer and fails it after; a key the provider refuses is passed over for the run's "
-            + "next, the same request sent again with it. A handoff asked abandons the request under way and cuts the calls "
+            + "step before its first answer and fails it after. The engine's fallback works inside the one conversation: a key "
+            + $"the provider refuses - said, and passed over for the rest of the run - an account at its limit (a rate limit past those tries, or naming a wait past {Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds:0} s: "
+            + "the model's on the key it was sent with, or the key's whole where its balance is spent, each named) and a "
+            + "request the model declined each move the run to its next entry of the same provider and client, the same "
+            + "request sent again with the model or the key changed and nothing else, the declined turn thrown away with any "
+            + "part of an answer it had written; at a limit the same model's next key is tried first and every entry the "
+            + "limit covers is passed over until it lifts, a declined request passes over the model's other keys, and one the "
+            + "provider marks about what the prompt asks (reasoning_extraction) moves no step. A handoff asked abandons the request under way and cuts the calls "
             + $"running, each answered '{Agents.Runtime.AgentToolRuntime.Interrupted(Agents.Loop.ToolLoop.Pausing)}', then asks "
             + "the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn; "
             + "a message the engine gives an agent at work is given after "
@@ -2921,8 +2932,10 @@ public static class HelpTopics
             + $"({string.Join(" or ", Agents.ClaudeApi.ClaudeApiRequest.CacheTtls)}, {Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes} "
             + "where nothing is said), so a budget needs the model's price of that cache's writes too: priceCacheWrite, or "
             + "priceCacheWrite1h for an hour. A step with a fallback that can go on here sends the "
-            + $"{Agents.ClaudeApi.ClaudeApiRequest.FallbackCreditBeta} beta, and a request the model declines ends the step "
-            + $"{nameof(Agents.AgentRunStatus.Refused)}, with its category and the credit the API gave for it on the result; "
+            + $"{Agents.ClaudeApi.ClaudeApiRequest.FallbackCreditBeta} beta, and a request the model declines moves the step "
+            + $"to its next model of the same provider and client - the same request sent again with the model changed and "
+            + $"the credit the API gave sent back as its fallback_credit_token, a failure naming it answered by the same "
+            + $"request without it - {nameof(Agents.AgentRunStatus.Refused)} with its category only where none is left; "
             + $"no request carries fallbacks or a {Agents.ClaudeApi.ClaudeApiRequest.ServerSideFallbackPrefix}* beta, for the "
             + $"engine's fallback is the only one a step has. Two keys are {Client}'s alone: betas, sent beside the tool's own, "
             + "each one word and never the API's fallback's, and cacheTtl; three are both API clients': requestExtras, an "
@@ -2933,11 +2946,11 @@ public static class HelpTopics
             + $"maxRetryWaitSeconds, the loop's tries and longest wait ({Agents.Loop.ToolLoopTerms.DefaultMaxRetries} and "
             + $"{Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds:0} where nothing is said). A spend limit reached "
             + $"- the organization's monthly cap, a 429 whose error names {Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}, or one "
-            + "the organization or a workspace set, a 400 that says so - is the key's limit, the step "
-            + $"{nameof(Agents.AgentRunStatus.RateLimited)} at once until the date the API names; a 401 is a key "
-            + "refused, passed over for the next; a 402 the key's balance spent, the step "
-            + $"{nameof(Agents.AgentRunStatus.RateLimited)} at once; a 429 the model's limit on that key, waited out within "
-            + "those tries and the step RateLimited past them; a 413, a prompt too long or an answer the model's context could hold no more "
+            + "the organization or a workspace set, a 400 that says so - is the key's limit, every entry on that key passed "
+            + "over until the date the API names; a 401 is a key "
+            + "refused, said and passed over for the rest of the run; a 402 the key's balance spent, every entry on that "
+            + "key passed over; a 429 the model's limit on that key, waited out within "
+            + "those tries and the same model's next key tried past them; a 413, a prompt too long or an answer the model's context could hold no more "
             + $"of is the context exhausted ({nameof(Agents.AgentRunStatus.ContextExhausted)}); a 403, a 404, or a 400 "
             + "answering a conversation's first request - a model the key's organization is not given, such as one that "
             + "needs a data retention the organization does not keep - is a model the provider does not serve the key, "
@@ -3029,12 +3042,12 @@ public static class HelpTopics
     /// <summary>What a failure of <paramref name="kind"/> is to a step, as the loop acts on it.</summary>
     private static string FailureSaid(Agents.Loop.ChatFailureKind kind, bool balanceSpent) => kind switch
     {
-        Agents.Loop.ChatFailureKind.KeyRefused => "is a key refused, passed over for the next",
-        Agents.Loop.ChatFailureKind.AccountLimit => $"is the key's limit{(balanceSpent ? ", its balance spent" : string.Empty)}, the step {nameof(Agents.AgentRunStatus.RateLimited)} at once",
-        Agents.Loop.ChatFailureKind.RateLimited => $"is the model's limit on that key, waited out within the tries and the step {nameof(Agents.AgentRunStatus.RateLimited)} past them",
+        Agents.Loop.ChatFailureKind.KeyRefused => "is a key refused, said and passed over for the rest of the run",
+        Agents.Loop.ChatFailureKind.AccountLimit => $"is the key's limit{(balanceSpent ? ", its balance spent" : string.Empty)}, every entry on that key passed over",
+        Agents.Loop.ChatFailureKind.RateLimited => "is the model's limit on that key, waited out within the tries and the same model's next key tried past them",
         Agents.Loop.ChatFailureKind.Transient => "is asked again",
         Agents.Loop.ChatFailureKind.ContextFull => $"is the context exhausted ({nameof(Agents.AgentRunStatus.ContextExhausted)})",
-        Agents.Loop.ChatFailureKind.Declined => $"ends the step {nameof(Agents.AgentRunStatus.Refused)}",
+        Agents.Loop.ChatFailureKind.Declined => $"moves the step to its next model, {nameof(Agents.AgentRunStatus.Refused)} where none is left",
         Agents.Loop.ChatFailureKind.Unserved => "is a model the provider does not serve the key",
         _ => "fails the step",
     };

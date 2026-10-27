@@ -97,6 +97,9 @@ public enum AgentMessageKind
 
     /// <summary>The step's envelope said in words, once the provider refused it as a schema.</summary>
     EnvelopeInWords,
+
+    /// <summary>An effort change told in the conversation: the step goes on at another level.</summary>
+    Effort,
 }
 
 /// <summary>Who ran a tool call, as the call's events name it.</summary>
@@ -410,7 +413,9 @@ public sealed record TurnRestarted(string Why) : AgentEvent;
 /// <param name="ThrewAway">Whether a part of an answer was thrown away.</param>
 /// <param name="CreditAsked">Whether a credit was asked for.</param>
 /// <param name="FromKey">The name of the key the serving entry signed in with, where it signed in with one; never its value.</param>
-/// <param name="ToKey">The name of the key the entry that takes over signs in with, where it signs in with one.</param>
+/// <param name="ToKey">The name of the key the entry that takes over signs in with, where it signs in with one; never its value.</param>
+/// <param name="FromEffort">The level the step was at, where it was at one; null otherwise.</param>
+/// <param name="ToEffort">The level the entry that takes over goes on at, where the step gives it one; null where it goes on at the model's own default.</param>
 public sealed record FallbackStarted(
     string FromModel,
     string FromProvider,
@@ -424,7 +429,9 @@ public sealed record FallbackStarted(
     bool ThrewAway,
     bool CreditAsked,
     string? FromKey = null,
-    string? ToKey = null) : AgentEvent
+    string? ToKey = null,
+    string? FromEffort = null,
+    string? ToEffort = null) : AgentEvent
 {
     /// <summary>
     /// The fallback a refused key makes, on every client: the same model of the same provider and client, on the next of

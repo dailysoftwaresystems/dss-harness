@@ -188,13 +188,7 @@ public sealed record AgentLimits(int? MaxTurns, decimal? MaxBudgetUsd, TimeSpan?
     public static readonly TimeSpan DefaultHandoffBound = TimeSpan.FromSeconds(180);
 }
 
-/// <summary>One model the step goes on with, in the fallback's order.</summary>
-/// <param name="Model">The model.</param>
-/// <param name="Provider">Its provider.</param>
-/// <param name="Client">Its client.</param>
-/// <param name="Effort">The effort it was asked for, where one is.</param>
-/// <param name="UsableHere">Whether it can be used on this machine.</param>
-public sealed record AgentFallbackModel(string Model, string Provider, string? Client, string? Effort, bool UsableHere);
+/// <summary>One entry of a step's order as the engine runs it, and the one shape the engine's fallback walks: see <see cref="AgentRunEntry"/>.</summary>
 
 /// <summary>One skill the step's prompt named, as the run was given it.</summary>
 /// <param name="Name">The skill's name.</param>
@@ -477,6 +471,14 @@ public sealed record AgentStepRequest(
 
     /// <summary>The configuration's entries the step's model is reached by, as the engine resolved them; null where it gave none.</summary>
     public AgentEntries? Entries { get; init; }
+
+    /// <summary>
+    /// The step's whole order as the engine resolved it for running - the entry that serves first and each entry the
+    /// engine's fallback may move it to - and null where the engine gave none, for a step worked as one run on one
+    /// client with no move. An entry the machine cannot use is said and passed over when its turn comes; where none of
+    /// the first model's keys is in the slot the run is refused before it starts.
+    /// </summary>
+    public IReadOnlyList<AgentRunEntry>? Order { get; init; }
 }
 
 /// <summary>
@@ -492,7 +494,7 @@ public sealed record AgentStepRequest(
 /// <param name="Provider">The provider the step's model is of.</param>
 /// <param name="Model">The model it runs on, where the step named one; null where it did not, before the resolution that names one.</param>
 /// <param name="Effort">The effort it was asked for, where one is.</param>
-/// <param name="Fallback">The models it goes on with, in order.</param>
+/// <param name="Fallback">The entries it may go on with, in order: the step's later entries, of every client, each usable or said and passed over.</param>
 /// <param name="Files">The files the run was handed, by path.</param>
 /// <param name="Skills">The skills its prompt named, as it was given them.</param>
 /// <param name="Mask">What masks the secrets its lines may carry; never null, masking nothing where the step carries none.</param>
@@ -516,7 +518,7 @@ public sealed record AgentRun(
     string? Provider,
     string? Model,
     string? Effort,
-    IReadOnlyList<AgentFallbackModel> Fallback,
+    IReadOnlyList<AgentRunEntry> Fallback,
     IReadOnlyList<string> Files,
     IReadOnlyList<AgentSkill> Skills,
     ILineMask Mask,

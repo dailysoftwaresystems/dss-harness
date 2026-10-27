@@ -403,20 +403,21 @@ public sealed class ToolLoopTests : IDisposable
     }
 
     /// <summary>
-    /// A request of a step with a model after its own asks that a decline leave it a credit, and a declined turn's credit is
-    /// the run's, beside what it was of; a step with no model after its own asks none.
+    /// A request of a step with a model after its own asks that a decline leave it a credit, and the decline's credit
+    /// is sent back with the same request on that model; a step with no model after its own asks none, and neither does
+    /// one whose every later entry cannot be used here.
     /// </summary>
     [Fact]
-    public async Task ADeclinedTurnsCredit_IsTheRuns_WhereTheStepGoesOn()
+    public async Task ADeclinedTurnsCredit_IsSentBackOnTheStepSNextModel()
     {
         var credit = new AgentFallbackCredit("tok-1", PrefillClaim: true);
-        _chat.Answer(FakeChat.Said(string.Empty, stop: ChatStop.Declined, category: "cyber") with { Credit = credit });
+        _chat.Answer(FakeChat.Said(string.Empty, stop: ChatStop.Declined, category: "cyber") with { Credit = credit }).Answer(FakeChat.Said("done", model: "claude-opus-4-8"));
 
-        var result = await Ran(Run() with { Fallback = [new AgentFallbackModel("claude-opus-4-8", "anthropic", null, null, UsableHere: true)] });
+        var result = await Ran(Run() with { Fallback = [Entry("claude-opus-4-8", "anthropic")] });
 
-        Assert.Equal((AgentRunStatus.Refused, "cyber", credit), (result.Status, result.DeclinedFor, result.Credit));
-        Assert.Equal("the model declined the request (cyber): it wrote nothing before it declined", result.Error);
-        Assert.True(Assert.Single(_chat.Requests).Credit);
+        Assert.Equal((AgentRunStatus.Completed, "done"), (result.Status, result.FinalText));
+        Assert.True(_chat.Requests[0].Credit);
+        Assert.Equal(("tok-1", "claude-opus-4-8"), (_chat.Requests[1].CreditToken!.Token, _chat.Requests[1].Model));
 
         var alone = new FakeChat().Answer(FakeChat.Said("no", stop: ChatStop.Declined));
         var unused = new FakeChat().Answer(FakeChat.Said("no", stop: ChatStop.Declined));
@@ -424,7 +425,7 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Null((await Ran(Run(), chat: alone)).Credit);
         Assert.False(Assert.Single(alone.Requests).Credit);
 
-        await Ran(Run() with { Fallback = [new AgentFallbackModel("claude-opus-4-8", "anthropic", null, null, UsableHere: false)] }, chat: unused);
+        await Ran(Run() with { Fallback = [Entry("claude-opus-4-8", "anthropic", usable: false)] }, chat: unused);
         Assert.False(Assert.Single(unused.Requests).Credit);
     }
 
@@ -1993,6 +1994,25 @@ public sealed class ToolLoopTests : IDisposable
             new AgentModelConfig { Code = FakeChat.Model, MaxOutputTokens = maxOutput, ContextTokens = 200000, PriceInputMiss = 5, PriceInputHit = priceHit, PriceOutput = 25 },
             maxRetries,
             maxRetryWait);
+
+    /// <summary>One entry of the run's order, of the loop's provider and client, for a fallback a test names.</summary>
+    private static AgentRunEntry Entry(string model, string provider = "anthropic", string client = "claude-api", string? key = "WORK_KEY", string? effort = null, bool usable = true)
+        => new(
+            model,
+            provider,
+            client,
+            key,
+            effort,
+            usable,
+            usable ? null : $"no file under '.harness-config/workflows/.env/' declares '{key}'")
+        {
+            Entries = usable
+                ? new AgentEntries(
+                    new AgentProviderConfig { Name = provider, Type = "anthropic", Currency = "USD" },
+                    new AgentModelConfig { Code = model, MaxOutputTokens = 64000, ContextTokens = 200000, PriceInputMiss = 5, PriceInputHit = 1, PriceOutput = 25 },
+                    null)
+                : null,
+        };
 
     /// <summary>The answer a request gave the call <paramref name="id"/>.</summary>
     private static (bool Ok, string Text) Answer(IReadOnlyList<string> messages, string id)

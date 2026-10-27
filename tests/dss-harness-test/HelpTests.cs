@@ -548,8 +548,10 @@ public sealed partial class HelpTests
         Assert.Contains("a launch that does not answer the host's initialize request within 30 s, that works before its init says what it runs as,", prose, StringComparison.Ordinal);
         Assert.Contains("a call it ran that the engine was never asked about, or refused, fails the step by the tool's name", prose, StringComparison.Ordinal);
         Assert.Contains("within the step's stall bound - counted from when the launch answered its initialize request, and from the turn's end for one written while a turn ran - ends it Stalled", prose, StringComparison.Ordinal);
-        Assert.Contains("A request the model declines ends the step Refused", prose, StringComparison.Ordinal);
-        Assert.Contains("ends it RateLimited, with when the limit lifts where it says", prose, StringComparison.Ordinal);
+        Assert.Contains("A request the model declines and an account at its limit - a rate limit event", prose, StringComparison.Ordinal);
+        Assert.Contains("that says rejected, or a turn Claude Code ends on rate_limit or billing_error after its own tries - each move", prose, StringComparison.Ordinal);
+        Assert.Contains("the step to its next entry, a new launch on another model, ending it Refused and", prose, StringComparison.Ordinal);
+        Assert.Contains("RateLimited where none is left, with what the declined request was of where the", prose, StringComparison.Ordinal);
         Assert.Contains("CLAUDE_EXECUTABLE, or the name agentClients.claude-code.executable gives", prose, StringComparison.Ordinal);
     }
 
@@ -691,8 +693,15 @@ public sealed partial class HelpTests
         Assert.Contains(
             $"A turn cut off at its length that called no tool, its request holding it to no schema, is stored and nudged on, {nudges} times at most; one cut off while it called a tool - its calls never run - before it wrote anything, or while its request held it to a schema, which the answer to a nudge would be held to whole, is thrown away and asked again with twice the room, up to the most; past either the step is Truncated. "
                 + $"A turn the provider paused is sent again with nothing added, {pauses} in a row failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request is asked again up to {tries} times after a wait that doubles from {first} s to {longest} s, "
-                + $"or the one the provider names; a rate limit past them, or naming a wait past {wait} s, is the account at its limit (RateLimited) - the model's on the key it was sent with, or the key's whole where its balance is spent, each named - a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
-                + "a model the provider does not serve the key never starts the step before its first answer and fails it after; a key the provider refuses is passed over for the run's next, the same request sent again with it. "
+                + "or the one the provider names; a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
+                + "a model the provider does not serve the key never starts the step before its first answer and fails it after. The engine's fallback works inside the one conversation: a key "
+                + $"the provider refuses - said, and passed over for the rest of the run - an account at its limit (a rate limit past those tries, or naming a wait past {wait} s: "
+                + "the model's on the key it was sent with, or the key's whole where its balance is spent, each named) and a "
+                + "request the model declined each move the run to its next entry of the same provider and client, the same "
+                + "request sent again with the model or the key changed and nothing else, the declined turn thrown away with any "
+                + "part of an answer it had written; at a limit the same model's next key is tried first and every entry the "
+                + "limit covers is passed over until it lifts, a declined request passes over the model's other keys, and one the "
+                + "provider marks about what the prompt asks (reasoning_extraction) moves no step. "
                 + $"A handoff asked abandons the request under way and cuts the calls running, each answered '{interrupted}', then asks the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn;",
             prose,
             StringComparison.Ordinal);
@@ -714,8 +723,15 @@ public sealed partial class HelpTests
         Assert.Contains(
             $"A turn cut off at its length that called no tool, its request holding it to no schema, is stored and nudged on, {nudges} times at most; one cut off while it called a tool - its calls never run - before it wrote anything, or while its request held it to a schema, which the answer to a nudge would be held to whole, is thrown away and asked again with twice the room, up to the most; past either the step is `Truncated`. "
                 + $"A turn the provider paused is sent again with nothing added, {pauses} in a row failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request is asked again up to {tries} times after a wait that doubles from {first} s to {longest} s, "
-                + $"or the one the provider names; a rate limit past them, or naming a wait past {wait} s, is the account at its limit (`RateLimited`) - the model's on the key it was sent with, or the key's whole where its balance is spent, each named - a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
-                + "a model the provider does not serve the key never starts the step before its first answer and fails it after; a key the provider refuses is passed over for the run's next, the same request sent again with it. "
+                + $"or the one the provider names; a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
+                + "a model the provider does not serve the key never starts the step before its first answer and fails it after. The engine's fallback works inside the one conversation: a key "
+                + $"the provider refuses - said, and passed over for the rest of the run - an account at its limit (a rate limit past those tries, or naming a wait past {wait} s: "
+                + "the model's on the key it was sent with, or the key's whole where its balance is spent, each named) and a "
+                + "request the model declined each move the run to its next entry of the same provider and client, the same "
+                + "request sent again with the model or the key changed and nothing else, the declined turn thrown away with any "
+                + "part of an answer it had written; at a limit the same model's next key is tried first and every entry the "
+                + "limit covers is passed over until it lifts, a declined request passes over the model's other keys, and one the "
+                + "provider marks about what the prompt asks (`reasoning_extraction`) moves no step. "
                 + $"A handoff asked abandons the request under way and cuts the calls running, each answered `{interrupted}`, then asks the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn;",
             readme,
             StringComparison.Ordinal);
@@ -779,11 +795,11 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains($"old tool uses cleared by the server as the context fills ({Clear}, under the {Context} beta), each clearing said in a notice;", prose, StringComparison.Ordinal);
         Assert.Contains("the system prompt and the conversation cached for agentClients.claude-api.cacheTtl (5m or 1h, 5m where nothing is said), so a budget needs the model's price of that cache's writes too: priceCacheWrite, or priceCacheWrite1h for an hour.", prose, StringComparison.Ordinal);
-        Assert.Contains($"A step with a fallback that can go on here sends the {Credit} beta, and a request the model declines ends the step Refused, with its category and the credit the API gave for it on the result; no request carries fallbacks or a server-side-fallback-* beta,", prose, StringComparison.Ordinal);
+        Assert.Contains($"A step with a fallback that can go on here sends the {Credit} beta, and a request the model declines moves the step to its next model of the same provider and client - the same request sent again with the model changed and the credit the API gave sent back as its fallback_credit_token, a failure naming it answered by the same request without it - Refused with its category only where none is left; no request carries fallbacks or a server-side-fallback-* beta,", prose, StringComparison.Ordinal);
         Assert.Contains("Two keys are claude-api's alone: betas, sent beside the tool's own, each one word and never the API's fallback's, and cacheTtl; three are both API clients':", prose, StringComparison.Ordinal);
         Assert.Contains($"refused where it sets what the tool sends itself or, here, fallbacks or a sampling parameter (temperature, top_p, top_k), which anthropic-version {Version} refuses on every model, and free to add a tool choice or thinking.budget_tokens where the step's model takes one; and maxRetries and maxRetryWaitSeconds, the loop's tries and longest wait ({tries} and {wait} where nothing is said).", prose, StringComparison.Ordinal);
         Assert.Contains("a 403, a 404, or a 400 answering a conversation's first request - a model the key's organization is not given, such as one that needs a data retention the organization does not keep - is a model the provider does not serve the key, naming it;", prose, StringComparison.Ordinal);
-        Assert.Contains($"A spend limit reached - the organization's monthly cap, a 429 whose error names {DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}, or one the organization or a workspace set, a 400 that says so - is the key's limit, the step RateLimited at once until the date the API names; a 401 is a key refused, passed over for the next; a 402 the key's balance spent, the step RateLimited at once; a 429 the model's limit on that key, waited out within those tries and the step RateLimited past them;", prose, StringComparison.Ordinal);
+        Assert.Contains($"A spend limit reached - the organization's monthly cap, a 429 whose error names {DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}, or one the organization or a workspace set, a 400 that says so - is the key's limit, every entry on that key passed over until the date the API names; a 401 is a key refused, said and passed over for the rest of the run; a 402 the key's balance spent, every entry on that key passed over; a 429 the model's limit on that key, waited out within those tries and the same model's next key tried past them;", prose, StringComparison.Ordinal);
         Assert.Contains("every request's usage - one that ended without its turn, failed, silent or left, by what it said it used so far - is counted at the model's prices,", prose, StringComparison.Ordinal);
 
         Assert.Contains(
@@ -792,11 +808,11 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains($"old tool uses cleared by the server as the context fills (`{Clear}`, under the `{Context}` beta), each clearing said in a notice;", readme, StringComparison.Ordinal);
         Assert.Contains("`agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said), so a budget needs the model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour.", readme, StringComparison.Ordinal);
-        Assert.Contains($"A step with a fallback that can go on here sends the `{Credit}` beta, and a request the model declines ends the step `Refused`,", readme, StringComparison.Ordinal);
+        Assert.Contains($"A step with a fallback that can go on here sends the `{Credit}` beta, and a request the model declines moves the step to its next model of the same provider and client - the same", readme, StringComparison.Ordinal);
         Assert.Contains("Two keys are `claude-api`'s alone: `betas`, sent beside the tool's own, each one word and never the API's fallback's, and `cacheTtl`; three are both API clients':", readme, StringComparison.Ordinal);
         Assert.Contains($"refused where it sets what the tool sends itself or, here, `fallbacks` or a sampling parameter (`temperature`, `top_p`, `top_k`), which `anthropic-version {Version}` refuses on every model, and free to add a tool choice or `thinking.budget_tokens` where the step's model takes one; and `maxRetries` and `maxRetryWaitSeconds`, the loop's tries and longest wait ({tries} and {wait} where nothing is said).", readme, StringComparison.Ordinal);
         Assert.Contains("a 403, a 404, or a 400 answering a conversation's first request - a model the key's organization is not given, such as one that needs a data retention the organization does not keep - is a model the provider does not serve the key, naming it;", readme, StringComparison.Ordinal);
-        Assert.Contains($"A spend limit reached - the organization's monthly cap, a 429 whose error names `{DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}`, or one the organization or a workspace set, a 400 that says so - is the key's limit, the step `RateLimited` at once until the date the API names; a 401 is a key refused, passed over for the next; a 402 the key's balance spent, the step `RateLimited` at once; a 429 the model's limit on that key, waited out within those tries and the step `RateLimited` past them;", readme, StringComparison.Ordinal);
+        Assert.Contains($"A spend limit reached - the organization's monthly cap, a 429 whose error names `{DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}`, or one the organization or a workspace set, a 400 that says so - is the key's limit, every entry on that key passed over until the date the API names; a 401 is a key refused, said and passed over for the rest of the run; a 402 the key's balance spent, every entry on that key passed over; a 429 the model's limit on that key, waited out within those tries and the same model's next key tried past them;", readme, StringComparison.Ordinal);
         Assert.Contains("every request's usage - one that ended without its turn, failed, silent or left, by what it said it used so far - is counted at the model's prices,", readme, StringComparison.Ordinal);
 
         Assert.Contains($"`Agents\\ClaudeApi\\{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiClient)}`", architecture, StringComparison.Ordinal);
@@ -906,11 +922,12 @@ public sealed partial class HelpTests
             Assert.Contains($"{row.What} ({string.Join(", ", row.Codes)})", readme, StringComparison.Ordinal);
         }
 
-        Assert.Contains("a usage limit that names when it resets (1308, 1310, 1316, 1317, 1318, 1319, 1320, 1321) is the key's limit, the step RateLimited at once;", prose, StringComparison.Ordinal);
+        Assert.Contains("a usage limit that names when it resets (1308, 1310, 1316, 1317, 1318, 1319, 1320, 1321) is the key's limit, every", prose, StringComparison.Ordinal);
+        Assert.Contains("entry on that key passed over until it resets;", readme, StringComparison.Ordinal);
         Assert.Contains("a model unknown, an API the key may not call or a plan without the model (1211, 1220, 1311) is a model the provider does not serve the key;", prose, StringComparison.Ordinal);
         Assert.Contains("a plan that does not cover the call or has ended (1309, 1313, 1314, 1315) fails the step. A code that list does not hold is read by the status:", prose, StringComparison.Ordinal);
-        Assert.Contains("read by the status: a 401 is a key refused, passed over for the next; a 429 is the model's limit on that key, waited out within the tries and the step RateLimited past them; a 413 is the context exhausted (ContextExhausted); a 403 or a 404 is a model the provider does not serve the key; a request timed out, a conflict or a server's error is asked again, and any other fails the step.", prose, StringComparison.Ordinal);
-        Assert.Contains("read by the status: a 401 is a key refused, passed over for the next; a 429 is the model's limit on that key, waited out within the tries and the step `RateLimited` past them; a 413 is the context exhausted (`ContextExhausted`); a 403 or a 404 is a model the provider does not serve the key; a request timed out, a conflict or a server's error is asked again, and any other fails the step.", readme, StringComparison.Ordinal);
+        Assert.Contains("read by the status: a 401 is a key refused, said and passed over for the rest of the run; a 429 is the model's limit on that key, waited out within the tries and the same model's next key tried past them; a 413 is the context exhausted (ContextExhausted); a 403 or a 404 is a model the provider does not serve the key; a request timed out, a conflict or a server's error is asked again, and any other fails the step.", prose, StringComparison.Ordinal);
+        Assert.Contains("read by the status: a 401 is a key refused, said and passed over for the rest of the run; a 429 is the model's limit on that key, waited out within the tries and the same model's next key tried past them; a 413 is the context exhausted (`ContextExhausted`); a 403 or a 404 is a model the provider does not serve the key; a request timed out, a conflict or a server's error is asked again, and any other fails the step.", readme, StringComparison.Ordinal);
         Assert.Contains("a failure Z.AI names is said in its own words.", prose, StringComparison.Ordinal);
         Assert.Contains("a failure Z.AI names is said in its own words.", readme, StringComparison.Ordinal);
 

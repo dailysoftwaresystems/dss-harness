@@ -143,7 +143,9 @@ public sealed class AgentUsageTally
             _perModel[at] = _perModel[at] with { Usage = _perModel[at].Usage.Plus(usage) };
         }
 
-        if (_served.Count == 0)
+        // The model that served the run from its first turn, and that turn: the first counted, and each later model
+        // that took over from the turn it began at - one entry per model that served, in order.
+        if (_served.Count == 0 || !string.Equals(_served[^1].Model, model, StringComparison.Ordinal))
         {
             _served.Add(new AgentServedModel(model, turn));
         }

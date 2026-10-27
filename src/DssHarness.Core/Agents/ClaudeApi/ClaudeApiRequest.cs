@@ -38,6 +38,13 @@ public static class ClaudeApiRequest
     public const string FallbackCreditBeta = "fallback-credit-2026-07-01";
 
     /// <summary>
+    /// The beta a request is sent under where the step's effort changed mid-conversation - a fallback move to a model
+    /// the step gives another level among them - for the change is told as a message of the conversation, and the
+    /// top-level effort stays what the conversation began with, which keeps its cache.
+    /// </summary>
+    public const string MidConversationEffortBeta = "mid-conversation-output-config-2026-07-01";
+
+    /// <summary>
     /// Whether the API holds every answer to the schema a request sends: structured outputs (<c>output_config.format</c>)
     /// write the answer to the schema's grammar.
     /// </summary>
@@ -152,9 +159,17 @@ public static class ClaudeApiRequest
         body[ApiBody.Messages] = null;
         body["thinking"] = new JsonObject { ["type"] = "adaptive", ["display"] = "summarized" };
 
-        if (request.Effort is { Length: > 0 } effort)
+        // The conversation's own effort is what the request is sent with: changing it there would drop the cached
+        // conversation, so a level a fallback move changed is told in the conversation and the top-level one stays.
+        if ((request.FirstEffort ?? request.Effort) is { Length: > 0 } effort)
         {
             body["output_config"] = new JsonObject { ["effort"] = effort };
+        }
+
+        // The credit a declined request left the step's next model, sent back with the same request on that model.
+        if (request.CreditToken is { } credit)
+        {
+            body["fallback_credit_token"] = credit.Token;
         }
 
         // Every request of a step that names an output is held to its envelope, the handoff's among them.
@@ -177,7 +192,13 @@ public static class ClaudeApiRequest
     internal static IReadOnlyList<KeyValuePair<string, string>> Headers(ChatRequest request, ClaudeApiSettings settings)
     {
         var key = request.Key ?? throw new InvalidOperationException("A request of the claude-api client is signed with a key, and the loop gave it none.");
-        IEnumerable<string> betas = [ContextManagementBeta, .. request.Credit ? [FallbackCreditBeta] : Array.Empty<string>(), .. settings.Betas];
+        IEnumerable<string> betas =
+        [
+            ContextManagementBeta,
+            .. request.Credit ? [FallbackCreditBeta] : Array.Empty<string>(),
+            .. request.FirstEffort is null ? Array.Empty<string>() : [MidConversationEffortBeta],
+            .. settings.Betas,
+        ];
 
         return
         [

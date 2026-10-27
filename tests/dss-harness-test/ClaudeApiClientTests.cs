@@ -205,22 +205,79 @@ public sealed class ClaudeApiClientTests : IDisposable
 
     /// <summary>
     /// A first request the API refuses as a model the key's organization is not given means the step never began, saying
-    /// what to do; a declined request ends the step refused with its category and the credit it left the next model.
+    /// what to do; a declined request moves the step to its next model of the same provider and client - the same
+    /// request sent again with the model changed and the credit the decline left sent back - and where the step names
+    /// no later model the ending stands with the category and the credit.
     /// </summary>
     [Fact]
-    public async Task AModelTheOrganizationIsNotGiven_NeverBegins_AndADeclineLeavesItsCredit()
+    public async Task AModelTheOrganizationIsNotGiven_NeverBegins_AndADeclineMovesToItsNextModel()
     {
         _endpoint
             .Then(ApiReply.Error(400, "invalid_request_error", "In order to access this model, your organization must have data retention enabled."))
-            .Then(ApiReply.Fixture("refusal.sse"));
+            .Then(ApiReply.Fixture("refusal.sse"))
+            .Then(ApiReply.Stream(ClaudeApiFixtures.Read("answer.sse").Replace("claude-opus-5-5", "claude-opus-5", StringComparison.Ordinal)));
 
         var unserved = await Ran(Run());
-        var declined = await Ran(Run() with { Fallback = [new AgentFallbackModel("claude-opus-5", "anthropic", ClaudeApiClient.ClientName, null, UsableHere: true)] });
+        var moved = await Ran(Run() with { Fallback = [Entry("claude-opus-5", "anthropic", ClaudeApiClient.ClientName)] });
 
         Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (unserved.Status, unserved.NotStartedBecause));
         Assert.Contains("is not given 'claude-opus-5-5'", unserved.Error, StringComparison.Ordinal);
-        Assert.Equal((AgentRunStatus.Refused, "cyber", new AgentFallbackCredit("fct_000000000000000000000001", false)), (declined.Status, declined.DeclinedFor, declined.Credit));
-        Assert.Equal("context-management-2025-06-27,fallback-credit-2026-07-01", _endpoint.Asked[1].Headers["anthropic-beta"]);
+
+        // The retry is the declined request with the model changed and nothing else, the credit sent back with it, and
+        // the decline's turn thrown away: none of it in the messages the retry sends.
+        Assert.Equal(AgentRunStatus.Completed, moved.Status);
+        Assert.Equal(["claude-opus-5-5", "claude-opus-5"], _endpoint.Asked.Skip(1).Select(sent => JsonNode.Parse(sent.Body)!["model"]!.GetValue<string>()));
+
+        var movedOn = Assert.Single(_events.All.OfType<FallbackStarted>());
+
+        Assert.Equal(("claude-opus-5-5", "claude-opus-5", "declined (cyber)", "the request sent again", true), (movedOn.FromModel, movedOn.ToModel, movedOn.Why, movedOn.How, movedOn.CreditAsked));
+
+        var (declined, retry) = (JsonNode.Parse(_endpoint.Asked[1].Body)!.AsObject(), JsonNode.Parse(_endpoint.Asked[2].Body)!.AsObject());
+
+        Assert.Null(declined["fallback_credit_token"]);
+        Assert.Equal("fct_000000000000000000000001", retry["fallback_credit_token"]!.GetValue<string>());
+        retry.Remove("fallback_credit_token");
+        retry["model"] = declined["model"]!.DeepClone();
+        Assert.Equal(declined.ToJsonString(), retry.ToJsonString());
+        Assert.Equal("context-management-2025-06-27,fallback-credit-2026-07-01", _endpoint.Asked[2].Headers["anthropic-beta"]);
+        Assert.Equal(["claude-opus-5-5", "claude-opus-5"], moved.Served.Select(served => served.Model));
+
+        var alone = new ApiEndpoint().Then(ApiReply.Fixture("refusal.sse"));
+        var ended = await Client(alone).RunAsync(Run() with { Fallback = [] }, _events, TestContext.Current.CancellationToken);
+
+        Assert.Equal((AgentRunStatus.Refused, "cyber", new AgentFallbackCredit("fct_000000000000000000000001", false)), (ended.Status, ended.DeclinedFor, ended.Credit));
+    }
+
+    /// <summary>
+    /// A move to a model the step gives another effort is told on the wire as the API takes it: the change appended to
+    /// the conversation under the mid-conversation beta, the request's top-level effort staying the conversation's
+    /// first, and no credit token.
+    /// </summary>
+    [Fact]
+    public async Task AMoveToAnotherEffort_IsToldInTheConversation_AndTheTopEffortStaysTheFirsts()
+    {
+        _endpoint
+            .Then(ApiReply.Fixture("refusal.sse"))
+            .Then(ApiReply.Stream(ClaudeApiFixtures.Read("answer.sse").Replace("claude-opus-5-5", "claude-opus-5", StringComparison.Ordinal)));
+
+        var run = Run() with
+        {
+            Effort = "low",
+            Fallback = [Entry("claude-opus-5", "anthropic", ClaudeApiClient.ClientName, effort: "high")],
+        };
+
+        var result = await Ran(run);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+
+        var (declined, retry) = (JsonNode.Parse(_endpoint.Asked[0].Body)!, JsonNode.Parse(_endpoint.Asked[1].Body)!);
+
+        Assert.Equal("low", declined["output_config"]!["effort"]!.GetValue<string>());
+        Assert.Equal("low", retry["output_config"]!["effort"]!.GetValue<string>());
+        Assert.Null(retry["fallback_credit_token"]);
+
+        Assert.Equal("context-management-2025-06-27,fallback-credit-2026-07-01,mid-conversation-output-config-2026-07-01", _endpoint.Asked[1].Headers["anthropic-beta"]);
+        Assert.Contains(Messages(_endpoint.Asked[1]), message => JsonNode.Parse(message) is { } told && told["role"]!.GetValue<string>() == "system" && told["output_config"]!["effort"]!.GetValue<string>() == "high");
     }
 
     /// <summary>A step with no entries, or entries of another provider's type, never begins: every request is built from them.</summary>
@@ -348,10 +405,10 @@ public sealed class ClaudeApiClientTests : IDisposable
         }
     }
 
-    private ClaudeApiClient Client()
+    private ClaudeApiClient Client(ApiEndpoint? endpoint = null)
     {
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
-        var connection = new ApiConnection(TimeProvider.System, _endpoint);
+        var connection = new ApiConnection(TimeProvider.System, endpoint ?? _endpoint);
         var host = new AgentToolHost(_harness.FileSystem, _harness.Platform, _harness.GitClient, new PhaseRunner(_harness.ProcessRunner, _harness.FileSystem, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), TimeProvider.System);
         _opened.Add(fetch);
 
@@ -385,6 +442,25 @@ public sealed class ClaudeApiClientTests : IDisposable
             new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Api = "https://api.anthropic.com", Currency = "USD" },
             new AgentModelConfig { Code = Model, MaxOutputTokens = 64000, ContextTokens = 1000000, PriceInputMiss = 4, PriceInputHit = 0.2, PriceOutput = 20, PriceCacheWrite = 5 },
             client);
+
+    /// <summary>One entry of the run's order, of this client's provider, for a fallback a test names.</summary>
+    private static AgentRunEntry Entry(string model, string provider = "anthropic", string? client = null, string? effort = null, bool usable = true)
+        => new(
+            model,
+            provider,
+            client ?? ClaudeApiClient.ClientName,
+            "WORK_KEY",
+            effort,
+            usable,
+            usable ? null : "no file under '.harness-config/workflows/.env/' declares 'WORK_KEY'")
+        {
+            Entries = usable
+                ? new AgentEntries(
+                    Entries().Provider,
+                    new AgentModelConfig { Code = model, MaxOutputTokens = 64000, ContextTokens = 1000000, PriceInputMiss = 4, PriceInputHit = 0.2, PriceOutput = 20, PriceCacheWrite = 5 },
+                    Entries().Client)
+                : null,
+        };
 
     private AgentRun Run(AgentClientConfig? client = null)
         => AgentRuns.Of(_step, _worktree, null, PolicyGrounds.Of(_worktree, [_worktree], [_worktree], [], [], [], null)) with

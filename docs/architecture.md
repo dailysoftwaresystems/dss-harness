@@ -1723,7 +1723,8 @@ digest named in the launch's start, the hooks off), the `initialize` answer boun
 before any work and its tools and credential source (`ClaudeLaunch.ApiKeySources`) held to the launch's, and every call
 that ran (`ClaudeLine.CallResult.Ran`) one the engine was asked about and allowed; a decline is
 `Refused` and an account at its limit (`ClaudeLine.RateLimit`, or the turn's error) `RateLimited`
-with an `AgentAccountLimit`. Each client's denials, requests of the web and answers too large for
+with an `AgentAccountLimit`, and each moves the step to its next entry - on this client every move
+is a new launch, the engine's walk of the step's order. Each client's denials, requests of the web and answers too large for
 their events are recorded by the one `AgentCallRecords` (`denials.jsonl`, `web.jsonl`,
 `tool-results/`). The harness's own tools, `Agents\Runtime\AgentToolRuntime`, are built for the
 API clients - `claude-api` and `glm` - each run's opened by `AgentToolHost.Open`, and serve
@@ -1757,16 +1758,27 @@ the run pauses or the step runs past its time, every call it cut still answered 
 `AgentToolRuntime.NotRun`); a host that cannot serve the tools a run is offered says why before it starts
 (`AgentToolHost.Unserved`). The loop owns the bounds - `maxTurns` but the handoff turn's, the budget checked before every
 request against the cost `AgentPrices` counts (`AgentPrices.BudgetRefusal` refusing a start without the prices it needs),
-the duration, the stall - the keys, a refused one passed over for the next, the retries (`ToolLoop.Backoff`,
+the duration, the stall - the run's order of entries of its provider and client (the serving model's
+keys in the credential's order, then each later model of the same provider and client with each of
+its keys, `ToolLoop.JoinLaterEntries`; the serving entry `Now`, the walk planned (`PlannedFor`) and
+taken (`TakeAsync`) only where a request will follow it), a key refused never asked again of any
+model, the retries (`ToolLoop.Backoff`,
 `ToolLoopTerms`), the handoff turn (`AgentHandoffSignal`, whose question and answer the claude-code client reads the
 same way), a message to an
 agent at work (`AgentMessages.TryTake`), the output check (`StructuredOutputGate`), the model each turn names
-(`AgentModelIds`, which the claude-code client holds its messages to too) and the conversation: `StoredConversation`
+(`AgentModelIds`, which the claude-code client holds its messages to too), a level a move changed
+told in the conversation (`IChatProvider.EffortMessage`, `ChatRequest.FirstEffort`) and the
+conversation: `StoredConversation`
 under the agent's `sessions/<id>/` (`AgentRun.SessionsDirectory`, `OrchestratorLayout.SessionDirectoryIn`), each line a
 JSON array of the provider's messages written at a point where the history is whole, each message kept and sent back
 byte for byte - and, where the provider begins sending it shortened (`ChatPart.Shortened`), the point kept beside it
 (`StoredConversation.Shorten`, `shortened.json`) and given with every later request (`ChatRequest.ShortenedBefore`), so
-each sends what the last did. The first request asks for a quarter of the model's `maxOutputTokens` (`ToolLoop.FirstMaxTokens`), a turn
+each sends what the last did. The engine's fallback has two owners, one rule each: the loop moves
+the run inside the one conversation (`AgentFallback` the rules - what a limit covers, which entry a
+cause moves to, which decline moves nowhere), and the runner (`AgentRunner.OrderedAsync`, over the
+step's `Order` of `AgentRunEntry`s) walks the rest of the order across clients, a new run for each
+entry it takes, watching the events of each client it works for where it got to (`Watching`) and
+merging what every entry did into the step's one result (`WalkTotals`). The first request asks for a quarter of the model's `maxOutputTokens` (`ToolLoop.FirstMaxTokens`), a turn
 cut off while it called a tool, before it wrote anything, or while its request held it to a schema (`ToolLoop.WhileHeld`: the
 answer to a nudge would be a whole object of its own), doubling it. Every message the engine sends the agent - the step's
 prompt, a nudge, a repair, the handoff's question, a message to an agent at work - is masked as the system prompt is,

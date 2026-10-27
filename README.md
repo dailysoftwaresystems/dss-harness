@@ -732,8 +732,10 @@ did not give, or that refuses by itself a call the engine allows never started; 
 by itself that the engine refuses too - by its own deny rules, a file tool's told by its result
 alone - is a denial of Claude Code's, counted and recorded once; a call it ran that the engine was
 never asked about, or refused, fails the step by the tool's name; each is ended at once. A message
-no turn takes within the stall bound stalls the step; a declined request ends it `Refused`, and
-an account at its limit `RateLimited`, with when the limit lifts where Claude Code says.
+no turn takes within the stall bound stalls the step; a declined request and an account at its
+limit move the step to its next entry, a new launch on another model, `Refused` and `RateLimited`
+(where none is left) with when the limit lifts where Claude Code says. Every move on this client is
+a new launch, and a move within the step's work goes on from what the engine stored.
 `help agent-clients` says it whole.
 
 The tool runtime is the harness's own tools, built for the API clients to give their agents in
@@ -799,17 +801,43 @@ the answer to a nudge would be held to whole, is thrown away and asked again wit
 the most; past either the step is `Truncated`. A turn the provider paused is sent again with nothing added, 10 in a row
 failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request
 is asked again up to 6 times after a wait that doubles from 2 s to 60 s, or the one the provider
-names; a rate limit past them, or naming a wait past 300 s, is the account at its limit
-(`RateLimited`) - the model's on the key it was sent with, or the key's whole where its balance is
-spent, each named - a service failing past them, or naming such a wait, fails the step, and one
+names; a service failing past them, or naming such a wait, fails the step, and one
 silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it;
 a model the provider does not serve the key never starts the
-step before its first answer and fails it after; a key the provider refuses is passed over for the
-run's next, the same request sent again with it. A handoff asked abandons the request under way and cuts the calls
+step before its first answer and fails it after. The engine's fallback works inside the one
+conversation: a key the provider refuses - said, and passed over for the rest of the run - an
+account at its limit (a rate limit past those tries, or naming a wait past 300 s: the model's on
+the key it was sent with, or the key's whole where its balance is spent, each named) and a request
+the model declined each move the run to its next entry of the same provider and client, the same
+request sent again with the model or the key changed and nothing else, the declined
+turn thrown away with any part of an answer it had written; at a limit the same model's next key is
+tried first and every entry the limit covers is passed over until it lifts, a declined request
+passes over the model's other keys, and one the provider marks about what the prompt asks
+(`reasoning_extraction`) moves no step. A handoff asked abandons the request under way and cuts the calls
 running, each answered `interrupted: the run is pausing; it may have run part way`, then asks the
 agent in one more message of the conversation, held to the handoff's bound instead of the step's
 time, no tool run in that turn; a message the engine gives an agent at work is given after the
 results of the calls it is running, and an answer written while it was is not the step's.
+
+A step's engine may hand its run a whole order - the entry that serves first and each entry the
+engine's fallback may move it to, a model with one of its provider's keys, each model's keys before
+the next model, the effort the step gives each model with it, and whether each can be used on this
+machine - and the runner walks it: an entry that cannot be used here is said and passed over when
+its turn comes and never refuses a run, and a declined request, an account at its limit and a failed
+run whose provider and client have no key left unrefused move the step to its next entry by the
+cause's rule, across clients as within one, each move said by `FallbackStarted` and each entry
+passed over by `FallbackPassedOver`. Where the step gives the next model another effort, the move
+goes on at that level and says both: the request carries it, a provider that caches the conversation
+is still sent top-level the level it began at, and the change is told in the conversation - the
+Claude API a message under `mid-conversation-output-config-2026-07-01`, Z.AI the request's
+`reasoning_effort` - with no credit token, for it is not the same request. Where the next entry is
+of another provider or client -
+and for every move on `claude-code` - the step begins a new conversation with its prompt on that
+client's model, and what every entry did and used is the step's one result, each model that served
+it named from the turn it began at. A limit the run met is remembered until its end: an entry it
+covers is passed over, said so, whichever client would serve it. Where the slot holds none of the
+keys of the step's first model the run is refused before it starts; a later model's missing key is
+only said and passed over.
 
 The `claude-api` client works a step through the Claude API by the loop above, every call run by
 the tool runtime: each request is posted to its provider's `api` with `/v1/messages` after it,
@@ -825,8 +853,11 @@ clearing said in a notice; and the system prompt and the conversation cached for
 `agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said), so a budget needs the
 model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour. A
 step with a fallback that can go on here sends the `fallback-credit-2026-07-01` beta, and a request
-the model declines ends the step `Refused`, with its category and the credit the API gave for it on
-the result; no request carries `fallbacks` or a `server-side-fallback-*` beta, for the engine's
+the model declines moves the step to its next model of the same provider and client - the same
+request sent again with the model changed and the credit the API gave sent back as its
+`fallback_credit_token` (a failure naming it answered by the same request without it), `Refused`
+with its category only where none is left; no request carries
+`fallbacks` or a `server-side-fallback-*` beta, for the engine's
 fallback is the only one a step has. Two keys are `claude-api`'s alone: `betas`, sent beside the
 tool's own, each one word and never the API's fallback's, and `cacheTtl`; three are both API
 clients': `requestExtras`, an object merged into every request's body - a member it adds sent as
@@ -837,10 +868,10 @@ itself or, here, `fallbacks` or a sampling parameter (`temperature`, `top_p`, `t
 `maxRetryWaitSeconds`, the loop's tries and longest wait (6 and 300 where nothing is said). A
 spend limit reached - the organization's monthly cap, a 429 whose error names
 `enforced_spend_limit_reached`, or one the organization or a workspace set, a 400 that says so - is
-the key's limit, the step `RateLimited` at once until the date the API names; a 401 is a key
-refused, passed over for the next; a 402 the key's balance spent, the step
-`RateLimited` at once; a 429 the model's limit on that key, waited out within those tries and the
-step `RateLimited` past them; a 413, a prompt too long or an answer the model's
+the key's limit, every entry on that key passed over until the date the API names; a 401 is a key
+refused, said and passed over for the rest of the run; a 402 the key's balance spent, every entry
+on that key passed over; a 429 the model's limit on that key, waited out within those tries and the
+same model's next key tried past them; a 413, a prompt too long or an answer the model's
 context could hold no more of is the context exhausted (`ContextExhausted`); a 403, a 404, or a 400
 answering a conversation's first request - a model the key's organization is not given, such as one
 that needs a data retention the organization does not keep - is a model the provider does not serve
@@ -869,21 +900,24 @@ that, the context is exhausted (`ContextExhausted`). Three keys are both API cli
 `requestExtras`, refused where it sets what the tool sends itself, and `maxRetries` and
 `maxRetryWaitSeconds`, as the `claude-api` client's above - and one is `glm`'s alone:
 `preserveThinking`. A failure is read by Z.AI's code first: a key it does not take (1000, 1001,
-1003, 1005) is a key refused, passed over for the next; an empty balance (1113) is the key's limit,
-its balance spent, the step `RateLimited` at once; a usage limit that names when it resets (1308,
-1310, 1316, 1317, 1318, 1319, 1320, 1321) is the key's limit, the step `RateLimited` at once; a
-rate limit (1302) is the
-model's limit on that key, waited out within the tries and the step `RateLimited` past them; an
+1003, 1005) is a key refused, said and passed over for the rest of the run; an empty balance (1113)
+is the key's limit, its balance spent, every entry on that key passed over; a usage limit that
+names when it resets (1308, 1310, 1316, 1317, 1318, 1319, 1320, 1321) is the key's limit, every
+entry on that key passed over until it resets; a rate limit (1302) is the model's limit on that
+key, waited out within the tries and the same model's next key tried past them; an
 overload, a network error or a call failed on its side (1305, 1234, 1200, 1230) is asked again; a
 prompt too long (1261) is the context exhausted (`ContextExhausted`); content it will not answer
-(1301) ends the step `Refused`; a model unknown, an API the key may not call or a plan without the
-model (1211, 1220, 1311) is a model the provider does not serve the key; a plan that does not cover
-the call or has ended (1309, 1313, 1314, 1315) fails the step. A code that list does not hold is
-read by the status: a 401 is a key refused, passed over for the next; a 429 is the model's limit on
-that key, waited out within the tries and the step `RateLimited` past them; a 413 is the context
-exhausted (`ContextExhausted`); a 403 or a 404 is a model the provider does not serve the key; a
+(1301) moves the step to its next model, `Refused` where none is left; a model unknown, an API the
+key may not call or a plan without the model (1211, 1220, 1311) is a model the provider does not
+serve the key; a plan that does not cover the call or has ended (1309, 1313, 1314, 1315) fails the
+step. A code that list does not hold is
+read by the status: a 401 is a key refused, said and passed over for the rest of the run; a 429 is
+the model's limit on that key, waited out within the tries and the same model's next key tried past
+them; a 413 is the context exhausted (`ContextExhausted`); a 403 or a 404 is a model the provider
+does not serve the key; a
 request timed out, a conflict or a server's error is asked again, and any other fails the step. An
-answer Z.AI ends as sensitive ends the step `Refused`, one it ends for its context the context is
+answer Z.AI ends as sensitive moves the step to its next model, `Refused` where none is left, one
+it ends for its context the context is
 exhausted and one it ends for a network error is asked again; a failure Z.AI names is said in its
 own words.
 

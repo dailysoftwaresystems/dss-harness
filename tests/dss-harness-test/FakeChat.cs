@@ -69,6 +69,10 @@ internal sealed class FakeChat : IChatProvider
 
     public string UserMessage(string text) => User(text);
 
+    /// <summary>An effort change told in the conversation, in the claude-api form a test can read.</summary>
+    public string EffortMessage(string effort)
+        => new JsonObject { ["role"] = "system", ["content"] = new JsonArray(), ["output_config"] = new JsonObject { ["effort"] = effort } }.ToJsonString();
+
     public IReadOnlyList<string> Answers(ChatTurn turn, IReadOnlyList<ChatAnswer> answers, IReadOnlyList<string> messages)
         => [.. answers.Select(answer => new JsonObject { ["role"] = "tool", ["id"] = answer.Id, ["ok"] = answer.Ok, ["content"] = answer.Text }.ToJsonString()), .. messages.Select(User)];
 
