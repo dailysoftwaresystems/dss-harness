@@ -113,21 +113,21 @@ jobs:
           # A runner is meant to hold cmake, ninja and a compiler: a test that really builds fails here where one is
           # lacking, and is skipped only on a developer's machine that has none.
           DSSHARNESS_TESTS_REQUIRE_BUILD_TOOLS: "1"
-          SUITE: ./build/bin/dss-harness-test/release/dss-harness-test${{ runner.os == 'Windows' && '.exe' || '' }}
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ matrix.shards }}
         run: |
           # No -u: bash 3.2, macOS's own, reads an empty "$@" as unset.
           set -eo pipefail
+          suite=./build/bin/dss-harness-test/release/dss-harness-test${{ runner.os == 'Windows' && '.exe' || '' }}
 
           # The lists are kept outside the checkout, which some tests read. Listing runs no test,
           # which the suite's runner reports as exit 8.
-          "$SUITE" --xunit-list classes --ignore-exit-code 8 | tr -d '\r' \
+          "$suite" --xunit-list classes --ignore-exit-code 8 | tr -d '\r' \
             | grep -E '^[A-Za-z_][A-Za-z0-9_.+`]*$' | LC_ALL=C sort > "$RUNNER_TEMP/test-classes.txt"
 
           # How many tests each class holds: a test's name is its class's, a dot, its method's,
           # and a theory's arguments in brackets.
-          "$SUITE" --list-tests --ignore-exit-code 8 | tr -d '\r' \
+          "$suite" --list-tests --ignore-exit-code 8 | tr -d '\r' \
             | awk '/^  [A-Za-z_]/ && !/^  duration:/ {
                 name = substr($0, 3); at = index(name, "(")
                 if (at) name = substr(name, 1, at - 1)
@@ -156,4 +156,4 @@ jobs:
           fi
 
           echo "Shard $SHARD of $SHARDS: $# of $(wc -l < "$RUNNER_TEMP/test-classes.txt" | tr -d ' ') test classes."
-          "$SUITE" --xunit-diagnostics on --long-running 120 --show-slowest-tests 20 --filter-class "$@"
+          "$suite" --xunit-diagnostics on --long-running 120 --show-slowest-tests 20 --filter-class "$@"

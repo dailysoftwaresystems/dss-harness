@@ -8,17 +8,17 @@ namespace DssHarness.Tests;
 internal static class WorkflowFiles
 {
     /// <summary>
-    /// The one step of <paramref name="workflow"/> whose run line names <paramref name="runs"/>: its lines from its name
-    /// to that line, each without the space around it.
+    /// The one step of <paramref name="workflow"/> whose run line, or the script its run block holds, names
+    /// <paramref name="runs"/>: its lines from its name to the line that names it, each without the space around it.
     /// </summary>
     /// <param name="workflow">The workflow's file name, under <c>.github/workflows</c>.</param>
-    /// <param name="runs">What the step's run line names.</param>
+    /// <param name="runs">What the step's run line or script names.</param>
     public static IReadOnlyList<string> StepRunning(string workflow, string runs)
     {
         var lines = Lines(workflow);
         var run = Assert.Single(
             Enumerable.Range(0, lines.Length),
-            line => lines[line].TrimStart().StartsWith("run:", StringComparison.Ordinal) && lines[line].Contains(runs, StringComparison.Ordinal));
+            line => lines[line].Contains(runs, StringComparison.Ordinal) && (IsRun(lines[line]) || InRunBlock(lines, line)));
         var named = Array.FindLastIndex(lines, run, line => line.TrimStart().StartsWith("- name:", StringComparison.Ordinal));
 
         Assert.True(named >= 0, $"No step of '{workflow}' is named above the line that runs {runs}.");
@@ -72,4 +72,14 @@ internal static class WorkflowFiles
     }
 
     private static int Indent(string line) => line.Length - line.TrimStart().Length;
+
+    private static bool IsRun(string line) => line.TrimStart().StartsWith("run:", StringComparison.Ordinal);
+
+    /// <summary>Whether line <paramref name="at"/> is in the script a <c>run: |</c> block holds: the first line further out than it is that run.</summary>
+    private static bool InRunBlock(string[] lines, int at)
+    {
+        var outer = Array.FindLastIndex(lines, at, line => line.Trim().Length > 0 && Indent(line) < Indent(lines[at]));
+
+        return outer >= 0 && IsRun(lines[outer]) && lines[outer].TrimEnd().EndsWith('|');
+    }
 }
