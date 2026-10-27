@@ -1698,7 +1698,7 @@ public sealed class WorkflowValidatorTests
 
         // A step that names neither a tier nor a model, where the configuration names no default tier.
         Assert.Equal(
-            ["workflow 'default' step 'plan' names neither a tier nor a model, and the configuration names no defaults.agentTier; say one on the step, or under defaults.agentTier"],
+            ["workflow 'default' step 'plan' names neither a tier nor a model, and the configuration names no defaults.agentTier; say one on the step, in its agent's definition, or under defaults.agentTier"],
             WorkflowValidator.Validate(Parse("""
                 name: default
                 steps:
@@ -1781,7 +1781,6 @@ public sealed class WorkflowValidatorTests
                     prompt: prompts/think.md
                     outputs: schemas/think.json
                 """), hasCommitTemplate: false, files: null, providers));
-
         // Where the model's own entry gave the level, the first sentence stands alone: it has a level of its own, and
         // the level is what is wrong.
         Assert.Equal(
@@ -1872,6 +1871,63 @@ public sealed class WorkflowValidatorTests
                     outputs: schemas/think.json
                 """), hasCommitTemplate: false, files: null, TwoModels()));
     }
+
+    /// <summary>
+    /// A step's agent definition is the level below it: what the definition names stands where the step names nothing,
+    /// its file's problems are said with the file that holds them, and the step's own names win over the definition's -
+    /// its effort read after the step's, its remedy pointing at the definition where the level came from there.
+    /// </summary>
+    [Fact]
+    public void AStepsAgentDefinition_StandBelowItsOwnNames()
+    {
+        var providers = TwoModels();
+
+        // The definition's tier serves a step that names neither, and its effort map is checked against every model
+        // of it - the remedy pointing at the definition, where the level came from there.
+        Assert.Equal(
+            ["workflow 'default' step 'plan' runs 'glm-5.3' (tier 'best') at effort 'xhigh', which it does not take. It takes: low, high, max. Give it a level of its own under effort, in the agent's definition: glm-5.3: max"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: AgentFiles(("thinker", "---\nname: thinker\ndescription: thinks\ntier: best\neffort:\n  all: xhigh\n---\nYou think.\n")), providers: providers));
+
+        // The step's own tier over the definition's model (part 03), and its own level over the definition's map.
+        Assert.Empty(WorkflowValidator.Validate(Parse("""
+            name: default
+            steps:
+              - name: plan
+                type: reason
+                agent: thinker
+                tier: balanced
+                effort: high
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+            """), hasCommitTemplate: false, files: AgentFiles(("thinker", "---\nname: thinker\ndescription: thinks\nmodel: claude-fable-5-1\neffort: xhigh\n---\nYou think.\n")), providers: providers));
+
+        // A definition's own problems are said with the file that holds them, once wherever it is named.
+        Assert.Equal(
+            ["agents/worker.md: line 4, column 1: 'fallback' is not a key of an agent; a fallback is the order of the tier's models in tierConfig."],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: worker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: AgentFiles(("worker", "---\nname: worker\ndescription: works\nfallback: []\n---\nYou work.\n")), providers: providers));
+    }
+
+    /// <summary>The named files of a workflow's directory, reading each agent definition the steps name.</summary>
+    private static Func<string, string?>? AgentFiles(params (string Agent, string Text)[] agents)
+        => agents.Length == 0 ? null : named => named is { } file && file.StartsWith("agents/", StringComparison.Ordinal) && file.EndsWith(".md", StringComparison.Ordinal)
+            ? agents.FirstOrDefault(agent => agent.Agent == file["agents/".Length..^".md".Length]).Text
+            : "text";
 
     /// <summary>A test step's filterWhen is an expression as when is, with the same reads, and must yield a boolean.</summary>
     [Fact]

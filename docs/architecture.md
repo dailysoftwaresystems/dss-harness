@@ -1439,7 +1439,16 @@ Against a configuration's providers it also checks every reason step, the adviso
 reaches the provider, and each model the step may run on is given a level it takes - one level for
 every model, or a map of `all` and models' codes, each model's resolved on its own, a code the step
 does not run on refused as dead, and a step that goes on with another's work checked against the tier
-it inherits. Where the definition holds, the check says each agent's models and the level each runs
+it inherits. A step's agent definition is read by the same check (`AgentDefinitionParser`, the
+frontmatter of the workflow's `agents/<name>.md`, its retired keys refused as a step's are) and
+stands below the step's own names: the tier or the model the step does not name, the effort read
+after the step's own through `AgentResolution.LevelFor`'s four sources (the step's entry, its `all`
+or one level, the definition's entry, its `all` or one level, else the model's own default), and the
+client where the step names none - a step's order resolved by `AgentResolution.Of` as entries of a
+model and one of its provider's keys, each model's keys before the next model, the first serving and
+the rest what it goes on by, a model named outright on either level running on that model with none
+after its own keys; null where no entry can be made, which the check refuses with its cause. Where
+the definition holds, the check says each agent's models and the level each runs
 at, one line apiece under the line that says it holds, and every key a step's model would read that
 no file of the agent clients' slot declares, one beside a key the slot holds among them, with the
 steps that would read it - as a step's first model, or as a later model of its tier. What a model

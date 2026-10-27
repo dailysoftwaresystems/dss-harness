@@ -487,10 +487,14 @@ engine raises the triage and keeps the list; until the reasoning step runner is 
 A reasoning step's `effort` is one level for every model it may run on, or a map giving each its own -
 `all` for the rest and a model's code for one; the shipped workflow runs its heaviest steps at
 `xhigh` and its other agents at `high`, or `low` on the `fast` tier, every model of a step's tier at
-the one level. Each model's level is checked against
+the one level. Where a step gives a model none, its agent file's map or level is read the same way
+below it, and a model neither names runs at its own default. Each model's level is checked against
 what that model takes, and `validate-workflow` says, under the line that says a definition holds,
 every step's models and levels, each provider's prices for the models its steps may run on and the
-date they were read, and each key a step's model would read that the slot lacks. A `test` step's
+date they were read, and each key a step's model would read that the slot lacks. A step's order over
+its tier's models is entries of a model and one of its provider's keys, each model's keys before the
+next model, and a model named outright - on the step or in its agent file - runs on that model with
+none after its own keys; `help agent-definitions` says what an agent file is and takes. A `test` step's
 `filter` names the tests it runs; its `filterWhen` is an
 expression that switches it - where it reads false the step gives no filter and every test of its
 legs runs, as the shipped `verify` steps do where the run's input `affectedTests` is off, each item

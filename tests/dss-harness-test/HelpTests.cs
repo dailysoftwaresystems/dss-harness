@@ -233,6 +233,48 @@ public sealed partial class HelpTests
             "reason.tier a name for a class of model: one of the configuration's tierConfig, its models in the order they are tried",
             Prose.Words(HelpText.Of("workflows").StandardOutput),
             StringComparison.Ordinal);
+
+        // A step's order is entries of a model and one of its provider's keys, each model's keys before the next model,
+        // and a model named outright has none after its own keys.
+        Assert.Contains(
+            "The tiers a step runs on are tierConfig's: each tier its models in the order they are tried, the first serving "
+                + "a step on the tier and the rest its fallback - a step's order as entries of a model and one of its "
+                + "provider's keys, each model's keys before the next model, and a model named outright, on the step or in "
+                + "its agent definition, running on that model with none after it ('help agent-definitions')",
+            prose,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The agent-definitions topic says what an agent file is, the keys it takes, that a definition is the level below
+    /// a step's, that a fallback is no key of one, and that the shipped files name no model, tier or effort.
+    /// </summary>
+    [Fact]
+    public async Task TheAgentDefinitionsTopic_SaysWhatAnAgentFileIsAndTakes()
+    {
+        var topic = HelpText.Of("agent-definitions").StandardOutput;
+
+        Assert.Equal(topic, HelpText.Of("definitions").StandardOutput);
+        Assert.Contains(HelpTopics.Described, described => described.Name == "agent-definitions");
+
+        var prose = Prose.Words(topic);
+
+        Assert.Contains(
+            "A definition is the level below a step's: where a step names a tier, a model, an effort or a client, its own "
+                + "wins; where it names none, the definition's stands, each on its own.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A fallback is no key of a definition or of a step: it is the order of the tier's models in tierConfig, each "
+                + "model's keys before the next model.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The sample agent files name no model, tier or effort, and no shipped one does: they are a step's "
+                + "configuration, and the shipped workflow names them on its steps, where a person reads and changes them.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("a step's prompt {skill.<name>}", prose, StringComparison.Ordinal);
     }
 
     /// <summary>

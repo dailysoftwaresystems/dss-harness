@@ -69,6 +69,7 @@ public static class HelpTopics
         new("codebase-graph", ["graph", "graphify-codebase"], "A run's map of the repository: what it reads, and what it does not see", RenderCodebaseGraph),
         new("web-search", ["search", "web_search", "agentwebsearch"], "The harness's own web search: its sources, their kinds and keys", RenderWebSearch),
         new("agent-clients", ["clients", "models"], "Providers, models, tiers and keys in config.json", RenderAgentClients),
+        new("agent-definitions", ["agent-definition", "definition", "definitions"], "The agent files of a workflow's directory: what each may name", RenderAgentDefinitions),
         new("anchors", ["anchor"], "Anchor registries and the commands that change them", RenderAnchors),
         new("layout", [], "What init creates, and what git tracks", RenderLayout),
         new("secrets", ["hosts-secrets"], "Where each host's connection data lives", RenderSecrets),
@@ -2396,6 +2397,58 @@ public static class HelpTopics
     /// slot, the tiers a step runs on and the effort forms, the agents' policy and the claude-code client - said where a
     /// person reads them, before the step runners are built (nothing here runs a step).
     /// </summary>
+    /// <summary>
+    /// The agent-definitions topic: what a workflow's <c>agents/&lt;name&gt;.md</c> file is, the keys it takes, and how
+    /// what it names stands below a step's own - the one reading of a definition, beside the clients topic that owns
+    /// the configuration's half.
+    /// </summary>
+    private static string RenderAgentDefinitions()
+    {
+        var builder = new StringBuilder();
+
+        builder.AppendLine("Agent definitions");
+        builder.AppendLine();
+        builder.AppendLine($"A workflow's agents are defined by markdown files in its own directory,");
+        builder.AppendLine(".harness-config/workflows/<name>/agents/<name>.md, tracked: frontmatter that declares");
+        builder.AppendLine("the agent, and a body that is the system prompt, verbatim. A run reads its agent files");
+        builder.AppendLine("from the main checkout wherever the command was typed, never from an agent's worktree:");
+        builder.AppendLine("what a later step is told must not be something an earlier agent wrote on its way.");
+        builder.AppendLine();
+        builder.AppendLine("A definition is the level below a step's: where a step names a tier, a model, an effort");
+        builder.AppendLine("or a client, its own wins; where it names none, the definition's stands, each on its own.");
+        builder.AppendLine("The keys a definition takes:");
+        builder.AppendLine();
+        builder.AppendLine("  name          the agent's name, which is the file's: lowercase letters, digits and");
+        builder.AppendLine("                single hyphens, said again so a copied file cannot pass as the agent it was");
+        builder.AppendLine("  description   what the agent is for, shown wherever agents are listed");
+        builder.AppendLine("  tier          a tier tierConfig defines, for a step that names neither a tier nor a");
+        builder.AppendLine("                model; never beside model");
+        builder.AppendLine("  model         a model's code, as its provider lists it, for a step that names neither;");
+        builder.AppendLine("                never beside tier. A model named outright runs on that model, and the rest");
+        builder.AppendLine("                of the tier's models are no step's fallback after it");
+        builder.AppendLine("  effort        one level, or a level for each model by its code with all for the rest;");
+        builder.AppendLine("                read after the step's own, and a model neither names runs at its own default");
+        builder.AppendLine("  client        for a step that names none: another client to reach the model through, one");
+        builder.AppendLine("                that reaches its provider's type");
+        builder.AppendLine("  maxTurns, maxBudgetUsd, maxMinutes, stallSeconds");
+        builder.AppendLine("                limits, each a positive number");
+        builder.AppendLine("  capabilities  of read, write, run and web; all four where the definition names none");
+        builder.AppendLine("  writes        false makes its worktree read-only; true where nothing is said");
+        builder.AppendLine("  restrictions  rules added to the configured ones; never removing one");
+        builder.AppendLine();
+        builder.AppendLine("A fallback is no key of a definition or of a step: it is the order of the tier's models");
+        builder.AppendLine("in tierConfig, each model's keys before the next model. A key of another tool's agent");
+        builder.AppendLine("files is refused naming what to use instead - tools for capabilities, disallowedTools for");
+        builder.AppendLine("restrictions, skills for a step's prompt {skill.<name>} - and every problem the file has");
+        builder.AppendLine("is said at once, each with the line it stands on, when the workflow is checked.");
+        builder.AppendLine();
+        builder.AppendLine("The sample agent files name no model, tier or effort, and no shipped one does: they are");
+        builder.AppendLine("a step's configuration, and the shipped workflow names them on its steps, where a person");
+        builder.AppendLine("reads and changes them.");
+
+        return builder.ToString();
+    }
+
     private static string RenderAgentClients()
     {
         var builder = new StringBuilder();
@@ -2456,14 +2509,19 @@ public static class HelpTopics
         builder.AppendLine("model's code, what is sent to the API, is one word, and its name is the one a person reads.");
         builder.AppendLine();
         builder.AppendLine("The tiers a step runs on are tierConfig's: each tier its models in the order they are");
-        builder.AppendLine("tried, the first serving a step on the tier and the rest its fallback. A step's effort is");
-        builder.AppendLine("its own - one level for every model of its tier, or a map giving each its own: all for the");
-        builder.AppendLine("rest, a model's code for one. Each model's level is checked against what that model takes");
-        builder.AppendLine("when the definition is checked, a level it does not take refused naming the level to give");
-        builder.AppendLine("it instead; validate-workflow says, under the line that says a definition holds, every");
-        builder.AppendLine("step's models and levels, each provider's prices for the models its steps may run on and");
-        builder.AppendLine("the date they were read, and each key a step's model would read that the slot lacks, with");
-        builder.AppendLine("the steps that would read it.");
+        builder.AppendLine("tried, the first serving a step on the tier and the rest its fallback - a step's order as");
+        builder.AppendLine("entries of a model and one of its provider's keys, each model's keys before the next");
+        builder.AppendLine("model, and a model named outright, on the step or in its agent definition, running on that");
+        builder.AppendLine("model with none after it ('help agent-definitions'). A step's effort is its own - one");
+        builder.AppendLine("level for every model of its tier, or a map giving each its own: all for the rest, a");
+        builder.AppendLine("model's code for one - and where the step gives a model none, its agent definition's map");
+        builder.AppendLine("or level is read the same way, and a model neither names runs at its own default. Each");
+        builder.AppendLine("model's level is checked against what that model takes when the definition is checked,");
+        builder.AppendLine("a level it does not take refused naming the level to give it instead; validate-workflow");
+        builder.AppendLine("says, under the line that says a definition holds, every step's models and levels, each");
+        builder.AppendLine("provider's prices for the models its steps may run on and the date they were read, and");
+        builder.AppendLine("each key a step's model would read that the slot lacks, with the steps that would read");
+        builder.AppendLine("it.");
         builder.AppendLine();
         builder.AppendLine("This build checks configurations and definitions against these sections and writes them with");
         builder.AppendLine($"init (and '{ToolPackage.Command} init' writes the prices it holds, as read on their date).");

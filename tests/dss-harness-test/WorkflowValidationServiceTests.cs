@@ -1364,7 +1364,14 @@ public sealed class WorkflowValidationServiceTests
             var path = Path.Combine([directory, .. file.Split('/')]);
 
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            await File.WriteAllTextAsync(path, file.EndsWith(".json", StringComparison.Ordinal) ? "{}\n" : "text\n", cancellationToken);
+            await File.WriteAllTextAsync(
+                path,
+                file.EndsWith(".json", StringComparison.Ordinal)
+                    ? "{}\n"
+                    : file.EndsWith(".md", StringComparison.Ordinal)
+                        ? $"---\nname: {Path.GetFileNameWithoutExtension(file)}\ndescription: does the work the steps ask of it\n---\nYou do the work the steps ask of you.\n"
+                        : "text\n",
+                cancellationToken);
         }
     }
 

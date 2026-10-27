@@ -708,7 +708,12 @@ public sealed class FlowService(
                 resume,
                 layout.Name,
                 new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, runContext.StartCommit, definition, runContext.Branch),
-                Agents.AgentProviders.Resolve(context.Config).Providers is { } providers ? WorkflowValidator.AgentModels(definition, providers) : null,
+                Agents.AgentProviders.Resolve(context.Config).Providers is { } providers
+                    ? WorkflowValidator.AgentModels(
+                        definition,
+                        providers,
+                        named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, definition.Name, named, "an agent definition"))
+                    : null,
                 named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, definition.Name, named, "a pull request's body"));
             var before = _store.ReadFlowQuestions(layout);
 
