@@ -241,6 +241,43 @@ public sealed class ToolLoop(
         public static readonly Went On = new();
     }
 
+    /// <summary>
+    /// A time the run is held to - the step's, a handoff's bound - on the loop's clock: its token cancelled once the time
+    /// is spent, and whether it is spent read from the clock itself. A timer's callback a busy machine runs late never
+    /// lets a request go out past the time: the clock passed it, so it has passed, and the token is cancelled then.
+    /// </summary>
+    private sealed class ClockLimit : IDisposable
+    {
+        private readonly TimeProvider _clock;
+        private readonly DateTimeOffset? _due;
+        private readonly CancellationTokenSource _source;
+
+        /// <summary>A limit of <paramref name="limit"/> from now; none where it is null or infinite.</summary>
+        public ClockLimit(TimeSpan? limit, TimeProvider clock)
+        {
+            _clock = clock;
+            var held = limit is { } most && most != Timeout.InfiniteTimeSpan ? most : (TimeSpan?)null;
+            _due = held is { } span ? clock.GetUtcNow() + span : null;
+            _source = held is { } after ? new CancellationTokenSource(after, clock) : new CancellationTokenSource();
+        }
+
+        /// <summary>Cancelled once the time is spent.</summary>
+        public CancellationToken Token => _source.Token;
+
+        /// <summary>Whether the time is spent: its token cancelled, or the clock past it - which cancels the token.</summary>
+        public bool HasPassed()
+        {
+            if (!_source.IsCancellationRequested && _due is { } due && _clock.GetUtcNow() >= due)
+            {
+                _source.Cancel();
+            }
+
+            return _source.IsCancellationRequested;
+        }
+
+        public void Dispose() => _source.Dispose();
+    }
+
     /// <summary>One run of the loop: its conversation, its counts and its bounds.</summary>
     private sealed class Looping(ToolLoop loop, AgentRun run, IAgentEventSink events, IChatProvider provider, ToolLoopTerms terms)
     {
@@ -264,7 +301,7 @@ public sealed class ToolLoop(
 
         private StoredConversation? _conversation;
         private AgentToolRuntime? _runtime;
-        private CancellationTokenSource? _deadline;
+        private ClockLimit? _deadline;
         private int _keyAt;
         private int _turns;
         private int _counted;
@@ -307,7 +344,7 @@ public sealed class ToolLoop(
                 OrchestratorLayout.SessionDirectoryIn(run.SessionsDirectory!, _session),
                 system,
                 tools);
-            using var deadline = _deadline = run.Limits.MaxDuration is { } most ? new CancellationTokenSource(most, loop._clock) : new CancellationTokenSource();
+            using var deadline = _deadline = new ClockLimit(run.Limits.MaxDuration, loop._clock);
             using var pause = _pause;
 
             // The run's pause abandons the request under way and cuts the calls running: the handoff is asked at once.
@@ -366,7 +403,7 @@ public sealed class ToolLoop(
                     return await HandOffAsync(stop).ConfigureAwait(false);
                 }
 
-                if (Deadline.IsCancellationRequested)
+                if (_deadline!.HasPassed())
                 {
                     return TimedOut();
                 }
@@ -387,7 +424,7 @@ public sealed class ToolLoop(
                     await BeginTurnAsync().ConfigureAwait(false);
                 }
 
-                var sent = await SendAsync(stop, CancellationToken.None).ConfigureAwait(false);
+                var sent = await SendAsync(stop, null).ConfigureAwait(false);
 
                 if (sent.Left)
                 {
@@ -484,7 +521,7 @@ public sealed class ToolLoop(
             var asked = await run.Handoff.WhenAsked.ConfigureAwait(false);
             await Emit(new HandoffAsked(asked.Why, run.Handoff.Bound)).ConfigureAwait(false);
 
-            using var bound = new CancellationTokenSource(run.Handoff.Bound, loop._clock);
+            using var bound = new ClockLimit(run.Handoff.Bound, loop._clock);
             var question = AgentHandoffSignal.Question(asked.Lead);
             var answers = 0;
 
@@ -492,7 +529,7 @@ public sealed class ToolLoop(
 
             while (true)
             {
-                if (bound.IsCancellationRequested)
+                if (bound.HasPassed())
                 {
                     return await HandedAsync(null, AgentHandoffSignal.BoundPassed).ConfigureAwait(false);
                 }
@@ -513,7 +550,7 @@ public sealed class ToolLoop(
                     await BeginTurnAsync().ConfigureAwait(false);
                 }
 
-                var sent = await SendAsync(stop, bound.Token).ConfigureAwait(false);
+                var sent = await SendAsync(stop, bound).ConfigureAwait(false);
 
                 if (sent.Left)
                 {
@@ -686,8 +723,11 @@ public sealed class ToolLoop(
         /// </summary>
         /// <param name="stop">The hard stop, which abandons the request and ends the run.</param>
         /// <param name="bound">The handoff's bound, in the handoff turn; none otherwise.</param>
-        private async Task<Sent> SendAsync(CancellationToken stop, CancellationToken bound)
+        private async Task<Sent> SendAsync(CancellationToken stop, ClockLimit? bound)
         {
+            // What the request is held to: the handoff's bound in the handoff turn, the step's time otherwise.
+            var limit = _handing ? bound! : _deadline!;
+
             for (var tried = 1; ;)
             {
                 if (!_handing && PauseAsked())
@@ -700,8 +740,8 @@ public sealed class ToolLoop(
                 // The handoff turn is held to its bound, not to the step's time: it counts against none of the step's
                 // turns, budget or time.
                 using var left = _handing
-                    ? CancellationTokenSource.CreateLinkedTokenSource(stop, bound)
-                    : CancellationTokenSource.CreateLinkedTokenSource(stop, Deadline, _pause.Token);
+                    ? CancellationTokenSource.CreateLinkedTokenSource(stop, limit.Token)
+                    : CancellationTokenSource.CreateLinkedTokenSource(stop, limit.Token, _pause.Token);
                 using var stall = new CancellationTokenSource(Timeout.InfiniteTimeSpan, loop._clock);
                 using var asking = CancellationTokenSource.CreateLinkedTokenSource(left.Token, stall.Token);
                 var parts = 0;
@@ -877,6 +917,12 @@ public sealed class ToolLoop(
                     return await LeftAsync(0, null).ConfigureAwait(false);
                 }
 
+                // A wait that outlasted the time - its timer's callback late - sends nothing more.
+                if (limit.HasPassed())
+                {
+                    return await LeftAsync(0, null).ConfigureAwait(false);
+                }
+
                 tried++;
             }
         }
@@ -893,7 +939,7 @@ public sealed class ToolLoop(
                 await CountedAsync(used).ConfigureAwait(false);
             }
 
-            var timedOut = !PauseAsked() && Deadline.IsCancellationRequested;
+            var timedOut = !PauseAsked() && _deadline!.HasPassed();
 
             if (parts > 0)
             {

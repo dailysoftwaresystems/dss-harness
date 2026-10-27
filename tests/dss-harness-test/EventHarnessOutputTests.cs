@@ -190,10 +190,14 @@ public sealed class EventHarnessOutputTests
     public async Task ASinkStillBehindWhenDisposed_IsAbandoned_AndCalledNoMore()
     {
         var held = new TaskCompletionSource();
-        var sink = new HeldSink(held.Task);
+        var sink = new GatedSink(held.Task, awaited: 1);
         var output = new EventHarnessOutput(sink, OperationId.New(), drainLimit: TimeSpan.FromMilliseconds(50));
 
         output.Info("leg", "one");
+
+        // Behind on the first, for certain: on a busy machine the drain may not have reached it within the limit.
+        await sink.Holding.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
         output.Info("leg", "two");
         output.Info("leg", "three");
         output.Dispose();

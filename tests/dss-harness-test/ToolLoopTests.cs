@@ -1854,6 +1854,48 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Single(_chat.Requests);
     }
 
+    /// <summary>
+    /// A step's time the clock has passed asks nothing more though its timer has not fired - a busy machine runs a timer's
+    /// callback late: the clock, not the timer, says the time is spent.
+    /// </summary>
+    [Fact]
+    public async Task AStepPastItsTimeByTheClock_ItsTimerLate_AsksNothingMore()
+    {
+        _chat.Reply((_, _) => Unheeding(FakeChat.Said("not json"), TimeSpan.FromMilliseconds(400)));
+
+        var result = await Ran(Run(output: Schema, limits: Limits(maxDuration: TimeSpan.FromMilliseconds(200))), loop: Loop(clock: new LateTimers()));
+
+        Assert.Equal((AgentRunStatus.TimedOut, 1), (result.Status, result.Turns));
+        Assert.Single(_chat.Requests);
+    }
+
+    /// <summary>A handoff's bound the clock has passed asks nothing more though its timer has not fired.</summary>
+    [Fact]
+    public async Task AHandoffsBoundPassedByTheClock_ItsTimerLate_AsksNothingMore()
+    {
+        var run = Run() with { Handoff = new AgentHandoffSignal(TimeSpan.FromMilliseconds(200)) };
+        run.Handoff.Ask();
+        _chat.Reply((_, _) => Unheeding(FakeChat.Said(" "), TimeSpan.FromMilliseconds(400)));
+
+        var result = await Ran(run, loop: Loop(clock: new LateTimers()));
+
+        Assert.Equal((AgentRunStatus.HandedOff, AgentHandoffSignal.BoundPassed), (result.Status, result.Handoff!.WhyNone));
+        Assert.Single(_chat.Requests);
+    }
+
+    /// <summary>A wait to ask again that outlasts the step's time sends nothing more, though the time's timer has not fired.</summary>
+    [Fact]
+    public async Task AWaitToAskAgainOutlastingTheStepsTime_ItsTimerLate_SendsNothingMore()
+    {
+        _chat.Fail(new ChatFailure(ChatFailureKind.Transient, "busy")).Answer(FakeChat.Said("ok"));
+        var loop = Loop(clock: new LateTimers(), wait: (_, _) => Task.Delay(TimeSpan.FromMilliseconds(400), CancellationToken.None));
+
+        var result = await Ran(Run(limits: Limits(maxDuration: TimeSpan.FromMilliseconds(200))), loop: loop);
+
+        Assert.Equal(AgentRunStatus.TimedOut, result.Status);
+        Assert.Single(_chat.Requests);
+    }
+
     /// <summary>A key refused after the answer began throws away what it wrote, and says so.</summary>
     [Fact]
     public async Task AKeyRefusedAfterTheAnswerBegan_SaysWhatWasThrownAway()
@@ -1897,6 +1939,23 @@ public sealed class ToolLoopTests : IDisposable
 
     /// <summary>When a limit lifts, where the provider names it.</summary>
     private static readonly DateTimeOffset Lifts = new(2026, 10, 26, 12, 0, 0, TimeSpan.Zero);
+
+    /// <summary>The machine's own clock, whose timers never fire: a busy machine's timer callbacks, as late as they come.</summary>
+    private sealed class LateTimers : TimeProvider
+    {
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) => new Dormant();
+
+        private sealed class Dormant : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+            public void Dispose()
+            {
+            }
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
 
     /// <summary>An answer that comes after <paramref name="after"/> whatever the run asks: a provider slower than the bound it is held to.</summary>
     private static async IAsyncEnumerable<ChatPart> Unheeding(ChatTurn turn, TimeSpan after)
@@ -1998,7 +2057,7 @@ public sealed class ToolLoopTests : IDisposable
             Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", "sk-1")]),
         };
 
-    private ToolLoop Loop(IFileSystem? fileSystem = null, IProcessRunner? processes = null, Func<TimeSpan, CancellationToken, Task>? wait = null, Func<double>? jitter = null)
+    private ToolLoop Loop(IFileSystem? fileSystem = null, IProcessRunner? processes = null, Func<TimeSpan, CancellationToken, Task>? wait = null, Func<double>? jitter = null, TimeProvider? clock = null)
     {
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
         var files = fileSystem ?? _harness.FileSystem;
@@ -2008,7 +2067,7 @@ public sealed class ToolLoopTests : IDisposable
         return new ToolLoop(
             files,
             host,
-            TimeProvider.System,
+            clock ?? TimeProvider.System,
             (delay, token) =>
             {
                 lock (_waits)
