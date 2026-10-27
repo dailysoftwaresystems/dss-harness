@@ -407,13 +407,16 @@ public sealed class ToolLoop(
                 SessionId: _session,
                 Credential: new AgentCredentialSource(AgentCredentialSource.EnvironmentFile, Now.Key!.Name))).ConfigureAwait(false);
 
-            // A provider whose wire holds no answer to the schema is told it in words, in the step's first message -
-            // the run's parts in their order, the continuation record only where the conversation is a new one, which
-            // on an API client a handed conversation never is.
-            var first = AgentPromptParts.FirstMessage(run, newConversation: run.Conversation is null);
+            // The first message: a compacted conversation begins with the engine's compaction record, whole; any
+            // other begins with the run's parts in their order, the continuation record only where the conversation
+            // is a new one, which on an API client a handed conversation never is. A provider whose wire holds no
+            // answer to the schema is told it in words after it.
+            var first = run.Compaction is { Length: > 0 } compacted
+                ? compacted
+                : AgentPromptParts.FirstMessage(run, newConversation: run.Conversation is null);
 
             await SayAsync(
-                _gate is { } gate && !provider.SendsSchema ? $"{first}\n\n{AgentEnvelope.InWords(gate.Envelope)}" : first,
+                _gate is { } gate && !provider.SendsSchema && run.Compaction is null ? $"{first}\n\n{AgentEnvelope.InWords(gate.Envelope)}" : first,
                 AgentMessageKind.FirstPrompt).ConfigureAwait(false);
 
             var result = await LoopAsync(stop).ConfigureAwait(false);

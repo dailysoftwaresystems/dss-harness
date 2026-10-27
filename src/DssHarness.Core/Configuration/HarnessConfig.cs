@@ -253,6 +253,9 @@ public sealed class AgentContextConfig
 {
     /// <summary>The continuation record's bounds. Left out, the defaults hold.</summary>
     public AgentContinuationConfig? Continuation { get; init; }
+
+    /// <summary>The compaction's bounds. Left out, the defaults hold.</summary>
+    public AgentCompactionConfig? Compaction { get; init; }
 }
 
 /// <summary>The bounds of the continuation record, under <c>agentContext.continuation</c>: each a positive number, each with its default.</summary>
@@ -290,6 +293,36 @@ public sealed class AgentContinuationConfig
             if (value is < 1)
             {
                 problems.Add($"'{name}' is {value}, and a bound of the continuation record is a positive number");
+            }
+        }
+
+        return problems;
+    }
+}
+
+/// <summary>The bounds of the engine's compaction, under <c>agentContext.compaction</c>: each a positive number, each with its default.</summary>
+public sealed class AgentCompactionConfig
+{
+    /// <summary>The most characters of the compaction record's reduced part: 200,000 where left out.</summary>
+    public int? ReducedChars { get; init; }
+
+    /// <summary>The most characters of a call's input in a reduced line: 400 where left out.</summary>
+    public int? CallInputChars { get; init; }
+
+    /// <summary>Each bound said, where one is not a positive number; empty where every one is.</summary>
+    public IReadOnlyList<string> Problems()
+    {
+        var problems = new List<string>();
+
+        foreach (var (name, value) in new (string Name, int? Value)[]
+        {
+            ("agentContext.compaction.reducedChars", ReducedChars),
+            ("agentContext.compaction.callInputChars", CallInputChars),
+        })
+        {
+            if (value is < 1)
+            {
+                problems.Add($"'{name}' is {value}, and a bound of the compaction is a positive number");
             }
         }
 

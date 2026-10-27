@@ -1839,7 +1839,16 @@ the files changed, the last red build or test, the handoff (never cut), the cont
 was cut off, and the last iterations word for word from the stored stream of the newest attempt (`Iterations`, the
 newest attempt what follows its last `RunStarted`) - whatever is cut named with a copy in the agent's
 `work/continuation/` (`AgentContinuation.CopiesFolder`), the bounds `agentContext.continuation`'s
-(`AgentContinuationBounds`: recordChars, stepChars, paths, lastIterations, iterationChars). What each client is sent: `--json-schema` the
+(`AgentContinuationBounds`: recordChars, stepChars, paths, lastIterations, iterationChars). The compaction beside it is
+`Agents\AgentCompaction` (`Reduce`, over the newest attempt's events): the engine's own reduction of a conversation
+that filled its model's context - the run context and the task whole as they were sent, the last iterations word for
+word by the continuation record's rule, every earlier message of the agent its text whole with its thinking left
+out, every earlier call one line (the tool, its input cut at `callInputChars`, how it ended, the path where its input
+names one), every earlier result left out, and every message the engine sent since the first whole - the bounds
+`agentContext.compaction`'s (`AgentCompactionBounds`: reducedChars 200000, callInputChars 400, the oldest messages cut
+to their first 2,000 characters each where the reduced part is over), the counts a `Compacted` event says held by
+`AgentCompacted`. It begins a new conversation, on every client (`AgentRun.Compaction` - the record is the first
+message of one, the old kept whole; the loop and the claude-code client ask it before any parts). What each client is sent: `--json-schema` the
 envelope as built; the loop's `ChatRequest.Schema`, which the Claude API sends as `output_config.format` in the copy
 `ClaudeApiRequest.Sent` makes - every array bound structured outputs do not take moved into its description, over
 `JsonSchemaSubset.SchemasIn` - and which, once the API refuses it as more than it compiles

@@ -700,13 +700,13 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         JsonStateFile.Write(_fileSystem, Path.Combine(directory, ResultFileName), result);
     }
 
-    /// <summary>Writes the first user message as it is sent, masked, before the client is taken: the parts the attempt was given, held by the one owner of their order.</summary>
+    /// <summary>Writes the first user message as it is sent, masked, before the client is taken: the parts the attempt was given, held by the one owner of their order, or the compaction record whole where the run begins a compacted conversation.</summary>
     /// <param name="run">The run the client is about to work.</param>
     /// <param name="newConversation">Whether the conversation the run begins is a new one.</param>
     private void WroteUserMd(AgentRun run, bool newConversation)
         => _fileSystem.WriteAllTextAtomic(
             Path.Combine(StepDirectoryOf(run), OrchestratorLayout.StepUserFileName),
-            run.Mask.Redact(AgentPromptParts.FirstMessage(run, newConversation)));
+            run.Mask.Redact(run.Compaction is { Length: > 0 } compacted ? compacted : AgentPromptParts.FirstMessage(run, newConversation)));
 
     /// <summary>The step's run, as the client takes it: the prompt filled, the places as they are, the directory its own.</summary>
     /// <param name="step">The step.</param>
@@ -733,7 +733,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             messages,
             step.RunContext,
             step.PlanUpdates,
-            step.Continuation)
+            step.Continuation,
+            step.Compaction)
         {
             Ground = step.Ground,
             Credential = step.Credential,
@@ -778,7 +779,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             messages,
             step.RunContext,
             step.PlanUpdates,
-            step.Continuation)
+            step.Continuation,
+            step.Compaction)
         {
             Ground = step.Ground,
             Credential = entry.Credential is null ? null : entry.Credential with

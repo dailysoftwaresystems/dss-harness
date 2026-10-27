@@ -488,6 +488,9 @@ public sealed record AgentStepRequest(
 
     /// <summary>The continuation record of the work the step goes on with; null where the step begins its own.</summary>
     public string? Continuation { get; init; }
+
+    /// <summary>The compaction record of the conversation the run begins, where the engine compacted one; null where it did not. A run given one begins a new conversation.</summary>
+    public string? Compaction { get; init; }
 }
 
 /// <summary>
@@ -520,6 +523,7 @@ public sealed record AgentStepRequest(
 /// <param name="RunContext">The run context, the block of the run's facts the engine gives every step; null where it gave none.</param>
 /// <param name="PlanUpdates">Each plan update that told this work something, with what raised it; null where the engine gave none.</param>
 /// <param name="Continuation">The continuation record of the work the step goes on with; null where the step begins its own.</param>
+/// <param name="Compaction">The compaction record of the conversation this run begins, where the engine compacted one; null where it did not.</param>
 public sealed record AgentRun(
     string SystemPrompt,
     string UserPrompt,
@@ -539,7 +543,8 @@ public sealed record AgentRun(
     AgentMessages Messages,
     string? RunContext = null,
     string? PlanUpdates = null,
-    string? Continuation = null)
+    string? Continuation = null,
+    string? Compaction = null)
 {
     /// <summary>
     /// What the agent's policy is decided against - its capabilities among it, which name the tools a launch offers; null

@@ -486,7 +486,8 @@ public sealed class ClaudeCodeClient(
         }
 
         /// <summary>The step's prompt, as the first message of a launch.</summary>
-        private string UserPrompt() => AgentPromptParts.FirstMessage(run, newConversation: true);
+        private string UserPrompt()
+            => run.Compaction is { Length: > 0 } compacted ? compacted : AgentPromptParts.FirstMessage(run, newConversation: true);
 
         /// <summary>Reads what reaches the launch, one thing at a time, until it has ended one way or another.</summary>
         private async Task<LaunchOutcome> LoopAsync(CancellationToken cancellationToken)

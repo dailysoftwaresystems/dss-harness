@@ -67,6 +67,7 @@ public sealed class JsonConfigStore(IFileSystem fileSystem) : IConfigStore
             .. DssHarness.Core.Agents.Policy.AgentPolicy.RuleProblems(config),
             .. search.Problems,
             .. config.AgentContext?.Continuation?.Problems() ?? [],
+            .. config.AgentContext?.Compaction?.Problems() ?? [],
         ] is [_, ..] refused)
         {
             throw new ConfigException($"'{path}' could not be read: {string.Join(" ", refused)}");

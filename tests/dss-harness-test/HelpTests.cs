@@ -262,6 +262,24 @@ public sealed partial class HelpTests
                 + $"user message alone; the message as sent is kept in the step's {OrchestratorLayout.StepUserFileName}, masked.",
             prose,
             StringComparison.Ordinal);
+
+        // The compaction: the engine's own reduction, its bounds said, a new conversation on every client.
+        Assert.Contains(
+            "A conversation that has filled its model's context is compacted by the engine, and no model: a reduction "
+                + "worked out from the stored stream, the same input always the same record - the run context and the task "
+                + "whole as they were sent, the last iterations word for word by the continuation record's rule, every "
+                + "earlier message of the agent its text whole with its thinking left out, every earlier call one line (the "
+                + "tool, its input cut at callInputChars, how it ended, the path where its input names one), every earlier "
+                + "result left out, and every message the engine sent since the first whole. The reduced part is at most "
+                + "agentContext.compaction.reducedChars (200000); a call's input is cut at callInputChars (400)",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "It begins a new conversation, on every client - the record is the first message of one and the old is kept "
+                + "whole, never edited or sent again; a claude-code child is started with DISABLE_COMPACT=1, so it never "
+                + "compacts by itself and a full context ends the step",
+            prose,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
