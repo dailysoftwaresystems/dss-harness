@@ -198,6 +198,24 @@ public sealed class HarnessFetchTests
         Assert.Equal(("https://example.com/b", "no answer read within 1 s"), (fetched.Address, fetched.Failure));
     }
 
+    /// <summary>
+    /// An answer the clock says came past the bound is none read within it, though the bound's timer has not fired - a busy
+    /// machine runs a timer's callback late - and what it said of itself is kept.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerPastTheBoundByTheClock_ItsTimerLate_IsNoneReadWithinIt()
+    {
+        using var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ =>
+        {
+            Thread.Sleep(TimeSpan.FromMilliseconds(700));
+            return WebEndpoint.Page("late", "text/plain");
+        }), TimeSpan.FromMilliseconds(300), new LateTimers());
+
+        var fetched = await fetch.FetchAsync("https://example.com/a", WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.Equal(("https://example.com/a", "no answer read within 0.3 s", 200, (string?)null), (fetched.Address, fetched.Failure, fetched.Status, fetched.Text));
+    }
+
     /// <summary>Asked for its parts, a page is read into them - its text the parts' text - and anything else is read as asked without them.</summary>
     [Fact]
     public async Task AskedForParts_APageIsReadIntoThem()

@@ -1940,23 +1940,6 @@ public sealed class ToolLoopTests : IDisposable
     /// <summary>When a limit lifts, where the provider names it.</summary>
     private static readonly DateTimeOffset Lifts = new(2026, 10, 26, 12, 0, 0, TimeSpan.Zero);
 
-    /// <summary>The machine's own clock, whose timers never fire: a busy machine's timer callbacks, as late as they come.</summary>
-    private sealed class LateTimers : TimeProvider
-    {
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) => new Dormant();
-
-        private sealed class Dormant : ITimer
-        {
-            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
-
-            public void Dispose()
-            {
-            }
-
-            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-        }
-    }
-
     /// <summary>An answer that comes after <paramref name="after"/> whatever the run asks: a provider slower than the bound it is held to.</summary>
     private static async IAsyncEnumerable<ChatPart> Unheeding(ChatTurn turn, TimeSpan after)
     {

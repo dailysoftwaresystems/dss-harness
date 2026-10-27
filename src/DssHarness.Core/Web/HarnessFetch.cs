@@ -45,6 +45,7 @@ public sealed class HarnessFetch : IDisposable
 
     private readonly IWebNames _names;
     private readonly TimeSpan _bound;
+    private readonly TimeProvider _clock;
     private readonly string _userAgent;
     private readonly Lazy<HttpMessageInvoker> _client;
 
@@ -61,13 +62,15 @@ public sealed class HarnessFetch : IDisposable
     /// <param name="names">Finds a host's addresses.</param>
     /// <param name="handler">What sends the requests: a test's endpoint, or null for <see cref="Connecting"/>'s own.</param>
     /// <param name="bound">How long one fetch may take: <see cref="Bound"/> where none is given, a test's shorter.</param>
-    internal HarnessFetch(IToolIdentityProvider identity, IWebNames names, HttpMessageHandler? handler, TimeSpan? bound = null)
+    /// <param name="clock">The clock the bound is held to: the machine's where none is given, a test's whose timers are late.</param>
+    internal HarnessFetch(IToolIdentityProvider identity, IWebNames names, HttpMessageHandler? handler, TimeSpan? bound = null, TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(names);
 
         _names = names;
         _bound = bound ?? Bound;
+        _clock = clock ?? TimeProvider.System;
         _userAgent = $"{ToolPackage.Command}/{identity.Current.Version} (+{ToolPackage.ProjectUrl})";
         _client = new(() => new HttpMessageInvoker(handler ?? Connecting(names), disposeHandler: true), LazyThreadSafetyMode.ExecutionAndPublication);
     }
@@ -232,12 +235,12 @@ public sealed class HarnessFetch : IDisposable
             }
 
             WebHop told;
-            var asked = Stopwatch.GetTimestamp();
+            var given = left > TimeSpan.Zero ? left : TimeSpan.Zero;
+            var asked = _clock.GetTimestamp();
 
-            using (var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            using (var timer = new CancellationTokenSource(given, _clock))
+            using (var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timer.Token))
             {
-                bound.CancelAfter(left > TimeSpan.Zero ? left : TimeSpan.Zero);
-
                 try
                 {
                     told = await AskAsync(uri, ask, method, body, ask.Key is not null && uri.GetLeftPart(UriPartial.Authority) == keyedTo, bound.Token, cancellationToken).ConfigureAwait(false);
@@ -263,7 +266,15 @@ public sealed class HarnessFetch : IDisposable
                 }
             }
 
-            left -= Stopwatch.GetElapsedTime(asked);
+            var took = _clock.GetElapsedTime(asked);
+            left -= took;
+
+            // An answer read past the bound is no answer read within it, though the bound's timer had not yet stopped the
+            // reading: a busy machine runs a timer's callback late, and the clock says the time was spent.
+            if (told.Failure is null && took > given)
+            {
+                told = WebHop.Failed(told.Address, Unanswered, told.Status, told.Type) with { Headers = told.Headers };
+            }
 
             await gate.Answered(told).ConfigureAwait(false);
 

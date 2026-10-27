@@ -3521,7 +3521,25 @@ public sealed class LegRunServiceTests
         var harness = new HarnessFactory();
 
         SetUpScripts.Write(temp.Path);
-        stop.CancelAfter(TimeSpan.FromMilliseconds(700));
+
+        // Interrupted once the up line has started - its log begun - whatever the machine's pace: a timer from the test's
+        // start, run late on a busy machine, once landed after the up line had finished. Watched from a thread of its
+        // own, as an interrupt comes, so no busy pool holds it back.
+        var run = RunId.New();
+        var upLog = new LegRecords(new HarnessLayout(temp.Path, temp.Path).RunDirectory(run.Value), "native").PhaseLog(PhaseLogs.NameFor("set-up a up"));
+        var watching = new Thread(() =>
+        {
+            var since = Stopwatch.GetTimestamp();
+
+            while (!File.Exists(upLog) && Stopwatch.GetElapsedTime(since) < TimeSpan.FromMinutes(1))
+            {
+                Thread.Sleep(10);
+            }
+
+            stop.Cancel();
+        }) { IsBackground = true };
+
+        watching.Start();
 
         var outcome = await OutcomeAsync(
             temp,
@@ -3531,9 +3549,10 @@ public sealed class LegRunServiceTests
             new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a") with { SetUp = true } },
             work: _ => throw new InvalidOperationException("the leg's work started while its set-up came up"),
             setUps: SetUpsFor(harness, state).SetUps,
-            cancellationToken: stop.Token);
+            cancellationToken: stop.Token,
+            runId: run);
 
-        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.True(HarnessExit.Cancelled == outcome.ExitCode, $"{outcome.ExitCode}: {outcome.Message} | {harness.StandardOutput}{harness.StandardError}");
         Assert.Equal<string>(["down-a"], SetUpScripts.Logged(temp.Path));
         Assert.DoesNotContain("did not bring set-up", outcome.Message, StringComparison.Ordinal);
     }
