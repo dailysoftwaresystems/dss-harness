@@ -260,7 +260,7 @@ public sealed class AgentFallbackTests : IDisposable
         };
         var second = new Scripted("two") { Script = (run, events, _) => Refused(run, events, null, turns: 1) };
         var third = new Scripted("glm") { Script = (run, events, _) => Completed(run, events, "glm-5.3", turns: 1) };
-        var runner = new AgentRunner([first, second, third], _harness.FileSystem, _harness.Platform, TimeProvider.System);
+        var runner = new AgentRunner([first, second, third], _harness.FileSystem, Elevation.User, TimeProvider.System);
         var seen = new Collecting();
 
         var result = await runner.RunAsync(
@@ -340,7 +340,7 @@ public sealed class AgentFallbackTests : IDisposable
     {
         var first = new Scripted("claude-code") { Script = (run, events, _) => Refused(run, events, "cyber", turns: 2) };
         var second = new Scripted("glm") { Script = (run, events, _) => Completed(run, events, "glm-5.3", turns: 3) };
-        var runner = new AgentRunner([first, second], _harness.FileSystem, _harness.Platform, TimeProvider.System);
+        var runner = new AgentRunner([first, second], _harness.FileSystem, Elevation.User, TimeProvider.System);
         var seen = new Collecting();
 
         var result = await runner.RunAsync(Step(order: [Entry("claude-fable-5-1", "anthropic", "claude-code", key: null), Entry("glm-5.3", "zai", "glm", key: null)]), seen, Token);
@@ -370,7 +370,7 @@ public sealed class AgentFallbackTests : IDisposable
     {
         var first = new Scripted("claude-code") { Script = (run, events, _) => Refused(run, events, null, turns: 1) };
         var third = new Scripted("glm") { Script = (run, events, _) => Completed(run, events, "glm-5.3", turns: 1) };
-        var runner = new AgentRunner([first, third], _harness.FileSystem, _harness.Platform, TimeProvider.System);
+        var runner = new AgentRunner([first, third], _harness.FileSystem, Elevation.User, TimeProvider.System);
         var seen = new Collecting();
 
         var result = await runner.RunAsync(
@@ -391,7 +391,7 @@ public sealed class AgentFallbackTests : IDisposable
 
         // A first model with another key that is held is begun on that key, its unusable entry said as the run starts.
         var other = new Scripted("one") { Script = (run, events, _) => Completed(run, events, "claude-fable-5-1", turns: 1) };
-        var walking = new AgentRunner([other], _harness.FileSystem, _harness.Platform, TimeProvider.System);
+        var walking = new AgentRunner([other], _harness.FileSystem, Elevation.User, TimeProvider.System);
         var told = new Collecting();
 
         var begun = await walking.RunAsync(
@@ -418,7 +418,7 @@ public sealed class AgentFallbackTests : IDisposable
     public async Task WhereNoneOfTheFirstModelsKeysIsThere_TheRunIsRefused()
     {
         var other = new Scripted("glm") { Script = (run, events, _) => Completed(run, events, "glm-5.3", turns: 1) };
-        var runner = new AgentRunner([other], _harness.FileSystem, _harness.Platform, TimeProvider.System);
+        var runner = new AgentRunner([other], _harness.FileSystem, Elevation.User, TimeProvider.System);
 
         var refused = await runner.RunAsync(
             Step(order:
@@ -457,7 +457,7 @@ public sealed class AgentFallbackTests : IDisposable
         var first = new Scripted("one") { Script = (run, events, _) => Refused(run, events, null, turns: 1) };
         var limited = new Scripted("two") { Script = (run, events, _) => AtLimit(run, events, "WORK_KEY") };
         var third = new Scripted("glm") { Script = (run, events, _) => Completed(run, events, "glm-5.3", turns: 1) };
-        var runner = new AgentRunner([first, limited, third], _harness.FileSystem, _harness.Platform, TimeProvider.System);
+        var runner = new AgentRunner([first, limited, third], _harness.FileSystem, Elevation.User, TimeProvider.System);
         var seen = new Collecting();
 
         var result = await runner.RunAsync(
@@ -491,7 +491,7 @@ public sealed class AgentFallbackTests : IDisposable
             Script = (run, events, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.WrongModel, Model: run.Model, Error: "the step asked for 'claude-fable-5-1' and its turn 4 was written by 'claude-opus-5'")),
         };
         var second = new Scripted("glm") { Script = (run, events, _) => Completed(run, events, "glm-5.3", turns: 1) };
-        var runner = new AgentRunner([first, second], _harness.FileSystem, _harness.Platform, TimeProvider.System);
+        var runner = new AgentRunner([first, second], _harness.FileSystem, Elevation.User, TimeProvider.System);
 
         var result = await runner.RunAsync(Step(order: [Entry("claude-fable-5-1", "anthropic", "claude-api", key: "WORK_KEY"), Entry("glm-5.3", "zai", "glm", key: null)]), events: null, Token);
 
