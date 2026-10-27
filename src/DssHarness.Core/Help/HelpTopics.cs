@@ -2524,7 +2524,11 @@ public static class HelpTopics
         builder.AppendLine("this tool's own verbs and run-side-task, run by any program or from a response file,");
         builder.AppendLine("whatever any switch says: an agent does not move its own run, nor leave its step's limits -");
         builder.AppendLine("nor do the gh commands that hand its work to another agent or install what the next launch");
-        builder.AppendLine($"loads ({string.Join(", ", Agents.Policy.AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too.");
+        builder.AppendLine($"loads ({string.Join(", ", Agents.Policy.AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too -");
+        builder.AppendLine("nor does any command print a credential, whatever the worktree rules say");
+        builder.AppendLine($"({string.Join(", ", Agents.Policy.AgentPolicy.CredentialPrintingCommands)}):");
+        builder.AppendLine("a credential leaves its slot only by the key store that holds it, never through an");
+        builder.AppendLine("agent's words.");
         builder.AppendLine("No agent starts while this tool itself runs elevated: its step is recorded never started,");
         builder.AppendLine("saying so, before any client is taken. A path is decided as asked and as resolved, and a");
         builder.AppendLine("refusal's places compare in any case on every system, a Windows short name read as its long");
@@ -2622,7 +2626,12 @@ public static class HelpTopics
             + "that runs none of its words, its data (grep, rg, echo, cat, which and their kind) - a program read by its "
             + "name in any case, its directories and a Windows end (.exe, .cmd, .dll) folded away, a cmd line's '@' dropped, git-push read as git push. A word the shell expands where a "
             + "rule reads a literal one makes the command one the rule may be, refused as such ('git $VERB' under "
-            + "Run(git push *)); a pattern or a brace that may name a credential slot or a Claude Code directory is "
+            + "Run(git push *)) - and the expansion is read only where the shell would make it: the reader keeps, for "
+            + "each word, which of its parts were quoted, so git 'p*sh' is a word no rule meets and "
+            + "gh api 'repos/o/r/pulls?state=open' an endpoint that names no merge, while a double-quoted $x is a "
+            + "variable still and an unquoted * a glob; an argument list crosses no shell, so no word of one is an "
+            + "expansion however it is spelled, and what cmd reads again - a batch argument's percent among it - it "
+            + "expands wherever it stands; a pattern or a brace that may name a credential slot or a Claude Code directory is "
             + "refused as naming it, and a file:// address is read as the path it names. What it cannot read whole it "
             + "denies, said here, not guessed at: a script nested past four levels, a shell that reads its script from "
             + "its input (curl ... | sh), from a process substitution or from another open descriptor (/dev/fd/3, <&3), "

@@ -291,7 +291,7 @@ public sealed partial class HelpTests
         Assert.Contains("writes outside an agent's writable roots, every read and write of a", prose, StringComparison.Ordinal);
         Assert.Contains("this tool's own verbs and run-side-task, run by any program or from a response file, whatever any switch says: an agent", prose, StringComparison.Ordinal);
         Assert.Contains(
-            $"nor leave its step's limits - nor do the gh commands that hand its work to another agent or install what the next launch loads ({string.Join(", ", AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too.",
+            $"nor leave its step's limits - nor do the gh commands that hand its work to another agent or install what the next launch loads ({string.Join(", ", AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too - nor does any command print a credential, whatever the worktree rules say ({string.Join(", ", AgentPolicy.CredentialPrintingCommands)}): a credential leaves its slot only by the key store that holds it, never through an agent's words.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("every read and write of a credential slot or a Claude Code directory of the run's and every search over one", prose, StringComparison.Ordinal);
@@ -545,6 +545,17 @@ public sealed partial class HelpTests
         Assert.Contains("read whole before it is matched, `Agents\\Policy\\CommandAnalysis`", architecture, StringComparison.Ordinal);
         Assert.Contains("no agent starts while the tool itself runs elevated (`IHostPlatform.IsPrivilegedProcess`", architecture, StringComparison.Ordinal);
         Assert.Contains("Where the policy cannot decide a call it denies it, never allows", architecture, StringComparison.Ordinal);
+
+        // The credential-printing refusal and the quote-aware reading of expansions, in every document that says them.
+        Assert.Contains(
+            "and so is any command that prints a credential (`gh auth token`, `git credential fill`, `git credential-manager get`,",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains("(`AgentPolicy.CredentialPrintingCommands`, pinned by a test and printed by `help agent-clients`", architecture, StringComparison.Ordinal);
+        Assert.Contains(
+            "an expansion is read only where the shell would make it, for the reader keeps, per word, which of its parts were quoted",
+            architecture,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

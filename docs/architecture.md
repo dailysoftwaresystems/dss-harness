@@ -1606,7 +1606,15 @@ kind), and a git or gh tried so reads an option it does not know as one word - a
 its name in any case (`CommandAnalysis.Name`, `.exe`, `.cmd` and `.dll` among the ends folded away,
 a cmd line's `@` dropped, `git-push` read as `git push`), so a command another program runs meets the rules on its own program; a rule matches through
 `AgentRule.Match`, whose `Expanded` - a word the rule reads is one the shell expands - the policy
-denies as what the rule may be; git's own options, valued ones with their values, are dropped
+denies as what the rule may be; an expansion is read only where the shell would make it, for the
+reader keeps, per word, which of its parts were quoted (`WordQuoting`: single quotes and escapes
+literal, a double quote's `$`, backtick and cmd percents still live, its globs not), so `git 'p*sh'`
+is a word no rule meets, `gh api 'repos/o/r/pulls?state=open'` an endpoint that names no merge and
+a double-quoted `$x` a variable still (`CommandAnalysis.Expansion`, asked by every reader of one);
+an argument list (`Commands(IReadOnlyList<string>)`) crosses no shell, so its words are literal;
+a word another program fills in as it runs (`CommandAnalysis.InputWord`) stands as an expansion
+whatever quotes a reader put around it, and what cmd reads again - a batch argument's `%` among it -
+it expands wherever it stands; git's own options, valued ones with their values, are dropped
 before its subcommand, gh's flags before its command's path (`gh pr -R o/r merge` is
 `gh pr merge`), and a git configured where it runs - a `-c` or `--config-env` of any key but the
 ones that only shape what git prints, `--exec-path`, clone's own `-c` or `--config` and clone's and init's `--template`
@@ -1646,7 +1654,10 @@ says, a writable root standing inside it - the agent's own work directory - the 
 tool's own verbs (`AgentPolicy.ToolVerbs`, each the command's own name as its service declares it)
 and `run-side-task` are refused, run by any program or from a response file, whatever the switch
 says, and so are the `gh` commands that hand the work to another agent or install what the next launch loads
-(`AgentPolicy.GhOutOfStepCommands`). The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
+(`AgentPolicy.GhOutOfStepCommands`) and the commands that print a credential
+(`AgentPolicy.CredentialPrintingCommands`, pinned by a test and printed by `help agent-clients`:
+`gh auth token` and git's credential helpers' `get` and `fill` - a credential leaves its slot only
+by the key store that holds it, never through an agent's words). The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
 as rules (`AgentPolicy.ProtectedPathRules`), pinned by a test and printed by `help agent-clients`,
 refused on every client; a step's `writes` is the one source that narrows, and the reporter's reads
 are narrowed to the run's directory alone (`AgentPolicyGround.ReporterRoot`: no command, no write,

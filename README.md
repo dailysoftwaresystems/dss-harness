@@ -578,7 +578,10 @@ a Claude Code directory of the run's and every search over one, any command nami
 `$HOME`, as a redirect's file or an option's value too - and this tool's own verbs and
 `run-side-task`, run by any program or from a response file, whatever any switch says - and so are the `gh`
 commands that hand an agent's work to another agent or install what the next launch loads (`gh copilot`,
-`gh agent-task create`, `gh skill install`, `gh skill update`, `gh skill publish`). No agent
+`gh agent-task create`, `gh skill install`, `gh skill update`, `gh skill publish`) - and so is any
+command that prints a credential (`gh auth token`, `git credential fill`, `git credential-manager get`,
+`git credential-manager-core get`, `git credential-cache get`, `git credential-store get`): a
+credential leaves its slot only by the key store that holds it, never through an agent's words. No agent
 starts while this tool itself runs elevated: its step is recorded never started, saying so, before
 any client is taken. A path is decided as asked and as resolved, and a refusal's places compare in
 any case on every system, a Windows short name read as its long one. On Windows a device prefix
@@ -621,7 +624,12 @@ substitutions as commands - so `git -C x push` is `git push`, and `env A=1 git p
 `A=1 /usr/bin/git push` are too; every word of a command is tried as the program of the words
 after it - but a word of a program that runs none of its words, its data (`grep`, `rg`, `echo`,
 `cat`, `which` and their kind) - a program read by its name in any case, a cmd line's `@` dropped, `git-push` read as `git push`. A word the shell expands where a rule reads a literal one
-makes the command one the rule may be, refused as such (`git $VERB` under `Run(git push *)`), and
+makes the command one the rule may be, refused as such (`git $VERB` under `Run(git push *)`) - and the
+expansion is read only where the shell would make it: the reader keeps, for each word, which of its
+parts were quoted, so `git 'p*sh'` is a word no rule meets and `gh api 'repos/o/r/pulls?state=open'`
+an endpoint that names no merge, while a double-quoted `$x` is a variable still and an unquoted `*`
+a glob; an argument list crosses no shell, so no word of one is an expansion however it is spelled,
+and what cmd reads again - a batch argument's `%` among it - it expands wherever it stands - and
 a pattern, a brace or a `file://` address that may name a credential slot or a Claude Code
 directory is refused as naming it. What it cannot read whole it denies, said in help, not guessed
 at: a script nested past four levels, a shell that reads its script from its input
