@@ -234,7 +234,67 @@ public sealed class HarnessConfig
     /// </summary>
     public AgentWebSearchConfig? AgentWebSearch { get; init; }
 
+    /// <summary>
+    /// What an agent is given of the work it goes on with, and of the run around it: the bounds of the continuation
+    /// record. Left out, the defaults hold - each bound a repository changes where its agents work better with more,
+    /// or its models hold less.
+    /// </summary>
+    public AgentContextConfig? AgentContext { get; init; }
+
     private static Dictionary<string, TValue> Map<TValue>() => new(StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// What an agent is given of the work it goes on with, under <c>agentContext</c>: the continuation record's bounds.
+/// How much of earlier work an agent needs is not the same for every repository, so each is a key and not a constant;
+/// the rule that nothing is cut in the middle and that whatever is cut is named is not configurable.
+/// </summary>
+public sealed class AgentContextConfig
+{
+    /// <summary>The continuation record's bounds. Left out, the defaults hold.</summary>
+    public AgentContinuationConfig? Continuation { get; init; }
+}
+
+/// <summary>The bounds of the continuation record, under <c>agentContext.continuation</c>: each a positive number, each with its default.</summary>
+public sealed class AgentContinuationConfig
+{
+    /// <summary>The most characters of the record's own parts (all but the last iterations): 60,000 where left out.</summary>
+    public int? RecordChars { get; init; }
+
+    /// <summary>The most characters of one step's notes and of its output, each its own bound: 16,000 where left out.</summary>
+    public int? StepChars { get; init; }
+
+    /// <summary>The most changed paths listed, the count of the rest said: 300 where left out.</summary>
+    public int? Paths { get; init; }
+
+    /// <summary>How many of the last iterations are kept whole, whatever their size: 3 where left out.</summary>
+    public int? LastIterations { get; init; }
+
+    /// <summary>The most characters of the earlier iterations kept, none cut in the middle of one: 120,000 where left out.</summary>
+    public int? IterationChars { get; init; }
+
+    /// <summary>Each bound said, where one is not a positive number; empty where every one is.</summary>
+    public IReadOnlyList<string> Problems()
+    {
+        var problems = new List<string>();
+
+        foreach (var (name, value) in new (string Name, int? Value)[]
+        {
+            ("agentContext.continuation.recordChars", RecordChars),
+            ("agentContext.continuation.stepChars", StepChars),
+            ("agentContext.continuation.paths", Paths),
+            ("agentContext.continuation.lastIterations", LastIterations),
+            ("agentContext.continuation.iterationChars", IterationChars),
+        })
+        {
+            if (value is < 1)
+            {
+                problems.Add($"'{name}' is {value}, and a bound of the continuation record is a positive number");
+            }
+        }
+
+        return problems;
+    }
 }
 
 /// <summary>Settings used wherever a more specific section does not override them.</summary>

@@ -479,6 +479,15 @@ public sealed record AgentStepRequest(
     /// the first model's keys is in the slot the run is refused before it starts.
     /// </summary>
     public IReadOnlyList<AgentRunEntry>? Order { get; init; }
+
+    /// <summary>The run context, the block of the run's facts the engine gives every step; null where it gave none.</summary>
+    public string? RunContext { get; init; }
+
+    /// <summary>Each plan update that told this work something, with what raised it; null where the engine gave none.</summary>
+    public string? PlanUpdates { get; init; }
+
+    /// <summary>The continuation record of the work the step goes on with; null where the step begins its own.</summary>
+    public string? Continuation { get; init; }
 }
 
 /// <summary>
@@ -508,6 +517,9 @@ public sealed record AgentStepRequest(
 /// </param>
 /// <param name="Handoff">The signal the engine raises when the run is pausing.</param>
 /// <param name="Messages">What the engine has to tell the agent while it works.</param>
+/// <param name="RunContext">The run context, the block of the run's facts the engine gives every step; null where it gave none.</param>
+/// <param name="PlanUpdates">Each plan update that told this work something, with what raised it; null where the engine gave none.</param>
+/// <param name="Continuation">The continuation record of the work the step goes on with; null where the step begins its own.</param>
 public sealed record AgentRun(
     string SystemPrompt,
     string UserPrompt,
@@ -524,7 +536,10 @@ public sealed record AgentRun(
     ILineMask Mask,
     string StepDirectory,
     AgentHandoffSignal Handoff,
-    AgentMessages Messages)
+    AgentMessages Messages,
+    string? RunContext = null,
+    string? PlanUpdates = null,
+    string? Continuation = null)
 {
     /// <summary>
     /// What the agent's policy is decided against - its capabilities among it, which name the tools a launch offers; null

@@ -584,7 +584,8 @@ public sealed class AgentRunnerTests
 
     /// <summary>
     /// The run's own record and its stream are written through the file system the runner was given: the stream opened
-    /// for appending, and <c>result.json</c> put in place in one step, so one that is there was written whole.
+    /// for appending, and the first user message (<c>user.md</c>, before the client is taken) and <c>result.json</c>
+    /// (after the stream's last line) each put in place in one step, so one that is there was written whole.
     /// </summary>
     [Fact]
     public async Task TheRecordsAreWritten_ThroughTheFileSystemTheRunnerWasGiven()
@@ -596,7 +597,7 @@ public sealed class AgentRunnerTests
         await new AgentRunner([client], disk, Elevation.User, TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
 
         Assert.Equal([StreamFile(temp)], disk.Appended);
-        Assert.Equal([ResultFile(temp)], disk.Written);
+        Assert.Equal([UserMdFile(temp), ResultFile(temp)], disk.Written);
     }
 
     /// <summary>
@@ -1265,6 +1266,9 @@ public sealed class AgentRunnerTests
 
     /// <summary>The run's own record, beside its stream.</summary>
     private static string ResultFile(TempDirectory temp) => Path.Combine(StepDirectory(temp), AgentRunner.ResultFileName);
+
+    /// <summary>The first user message as sent, beside its stream.</summary>
+    private static string UserMdFile(TempDirectory temp) => Path.Combine(StepDirectory(temp), "user.md");
 
     /// <summary>The stream's lines, read beside its writer, which may still hold it.</summary>
     private static List<string> Lines(TempDirectory temp) => [.. ReadBeside(StreamFile(temp))];

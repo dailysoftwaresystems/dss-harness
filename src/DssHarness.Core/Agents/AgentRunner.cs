@@ -303,7 +303,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
         try
         {
-            var result = await client.RunAsync(Resolved(step, directory, mask, messages), pump, pump.Stopping).ConfigureAwait(false);
+            var resolved = Resolved(step, directory, mask, messages);
+            WroteUserMd(resolved, NewConversation(client, resolved));
+            var result = await client.RunAsync(resolved, pump, pump.Stopping).ConfigureAwait(false);
 
             if (result.Problem() is not { } wrong)
             {
@@ -412,7 +414,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
                 try
                 {
-                    var result = await client.RunAsync(Resolved(step, directory, mask, messages, entry, [.. order.Skip(at + 1)]), watching, pump.Stopping).ConfigureAwait(false);
+                    var resolved = Resolved(step, directory, mask, messages, entry, [.. order.Skip(at + 1)]);
+                    WroteUserMd(resolved, NewConversation(client, resolved));
+                    var result = await client.RunAsync(resolved, watching, pump.Stopping).ConfigureAwait(false);
 
                     if (result.Problem() is { } wrong)
                     {
@@ -661,6 +665,15 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         }
     }
 
+    /// <summary>Whether the conversation <paramref name="run"/> begins on <paramref name="client"/> is a new one: every launch on a client that renders its conversations, and any run handed none.</summary>
+    private static bool NewConversation(IAgentClient client, AgentRun run)
+        => client.Capabilities.GoesOnWith == AgentConversationHandling.Rendered || run.Conversation is null;
+
+    /// <summary>The step's own directory, as the one owner of the paths spells it.</summary>
+    /// <param name="run">The run, whose step's records are kept there.</param>
+    private static string StepDirectoryOf(AgentRun run)
+        => run.StepDirectory;
+
     /// <summary>The client the step names, or the one there is where it names none; null where there is none.</summary>
     /// <param name="step">The step.</param>
     private IAgentClient? Client(AgentStepRequest step)
@@ -668,11 +681,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             ? _clients.FirstOrDefault(client => string.Equals(client.Name, named, StringComparison.Ordinal))
             : _clients.Count == 1 ? _clients[0] : null;
 
-    /// <summary>
-    /// Writes the run's own record beside its stream, in one step, so that one there is one written whole - and, where its
-    /// answer left notes, the notes before it (<see cref="OrchestratorLayout.StepNotesFileName"/>), so a result that holds
-    /// notes is never read without them beside it.
-    /// </summary>
+    /// <summary>Writes the run's own record beside its stream, in one step, so that one there is one written whole - and, where its answer left notes, the notes before it (<see cref="OrchestratorLayout.StepNotesFileName"/>), so a result that holds notes is never read without them beside it - and the first user message as sent, masked (<see cref="OrchestratorLayout.StepUserFileName"/>), holding the parts the attempt was given.</summary>
     /// <param name="directory">The step's own directory.</param>
     /// <param name="result">How the run ended.</param>
     /// <exception cref="InvalidOperationException">The result does not hold together, which none the runner makes does.</exception>
@@ -690,6 +699,14 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
         JsonStateFile.Write(_fileSystem, Path.Combine(directory, ResultFileName), result);
     }
+
+    /// <summary>Writes the first user message as it is sent, masked, before the client is taken: the parts the attempt was given, held by the one owner of their order.</summary>
+    /// <param name="run">The run the client is about to work.</param>
+    /// <param name="newConversation">Whether the conversation the run begins is a new one.</param>
+    private void WroteUserMd(AgentRun run, bool newConversation)
+        => _fileSystem.WriteAllTextAtomic(
+            Path.Combine(StepDirectoryOf(run), OrchestratorLayout.StepUserFileName),
+            run.Mask.Redact(AgentPromptParts.FirstMessage(run, newConversation)));
 
     /// <summary>The step's run, as the client takes it: the prompt filled, the places as they are, the directory its own.</summary>
     /// <param name="step">The step.</param>
@@ -713,7 +730,10 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             mask,
             directory,
             step.Handoff ?? new AgentHandoffSignal(Bound(step)),
-            messages)
+            messages,
+            step.RunContext,
+            step.PlanUpdates,
+            step.Continuation)
         {
             Ground = step.Ground,
             Credential = step.Credential,
@@ -755,7 +775,10 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             mask,
             directory,
             step.Handoff ?? new AgentHandoffSignal(Bound(step)),
-            messages)
+            messages,
+            step.RunContext,
+            step.PlanUpdates,
+            step.Continuation)
         {
             Ground = step.Ground,
             Credential = entry.Credential is null ? null : entry.Credential with

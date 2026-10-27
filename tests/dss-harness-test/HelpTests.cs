@@ -243,6 +243,25 @@ public sealed partial class HelpTests
                 + "its agent definition, running on that model with none after it ('help agent-definitions')",
             prose,
             StringComparison.Ordinal);
+
+        // A step that goes on with earlier work is given the continuation record, its bounds said, and the first user
+        // message's parts - the record only of a new conversation - with the message kept as user.md.
+        Assert.Contains(
+            "A step that goes on with earlier work is given the engine's record of it: the continuation record, text put "
+                + "together from the step directories of the agent - what it is, the steps so far with each one's notes and "
+                + "output, the files changed, the last red build or test, the handoff, and the last iterations of the newest "
+                + "attempt word for word from its stored stream - nothing in it written or shortened by a model, and "
+                + "whatever is cut named with a copy in the agent's work/continuation/. Its bounds are "
+                + "agentContext.continuation's - recordChars (60000), stepChars (16000), paths (300), lastIterations (3) and "
+                + "iterationChars (120000), each at its default where the key says none, each a positive number",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The record is sent only where the conversation is a new one - every launch on claude-code, and on the API "
+                + "clients a conversation that cannot be gone on with - for a handed conversation goes on with one more "
+                + $"user message alone; the message as sent is kept in the step's {OrchestratorLayout.StepUserFileName}, masked.",
+            prose,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

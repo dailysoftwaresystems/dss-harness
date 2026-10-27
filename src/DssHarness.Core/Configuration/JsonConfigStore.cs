@@ -62,7 +62,12 @@ public sealed class JsonConfigStore(IFileSystem fileSystem) : IConfigStore
         var (_, problems) = DssHarness.Core.Agents.AgentProviders.Resolve(config);
         var search = DssHarness.Core.Web.Search.WebSearchSources.Of(config, DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild);
 
-        if ((IReadOnlyList<string>)[.. problems, .. DssHarness.Core.Agents.Policy.AgentPolicy.RuleProblems(config), .. search.Problems] is [_, ..] refused)
+        if ((IReadOnlyList<string>)[
+            .. problems,
+            .. DssHarness.Core.Agents.Policy.AgentPolicy.RuleProblems(config),
+            .. search.Problems,
+            .. config.AgentContext?.Continuation?.Problems() ?? [],
+        ] is [_, ..] refused)
         {
             throw new ConfigException($"'{path}' could not be read: {string.Join(" ", refused)}");
         }

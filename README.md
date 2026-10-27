@@ -839,6 +839,21 @@ covers is passed over, said so, whichever client would serve it. Where the slot 
 keys of the step's first model the run is refused before it starts; a later model's missing key is
 only said and passed over.
 
+A step that goes on with earlier work is given the engine's record of it: the continuation record,
+text put together from the step directories of the agent - what it is, the steps so far with each
+one's notes and output, the files changed, the last red build or test, the handoff, and the last
+iterations of the newest attempt word for word from its stored stream (each the agent's message as
+it wrote it, its thinking as far as the provider showed it, and each call it made with the tool,
+its input and its result as the stream holds them) - nothing in it written or shortened by a model,
+and whatever is cut named with a copy in the agent's `work/continuation/`. Its bounds are
+`agentContext.continuation`'s - `recordChars` (60000), `stepChars` (16000), `paths` (300),
+`lastIterations` (3) and `iterationChars` (120000), each at its default where the key says none,
+each a positive number - and the first user message holds the parts in their order: the run
+context, the plan updates, the continuation record and the step's prompt as the task. The record is
+sent only where the conversation is a new one - every launch on `claude-code`, and on the API
+clients a conversation that cannot be gone on with - for a handed conversation goes on with one
+more user message alone; the message as sent is kept in the step's `user.md`, masked.
+
 The `claude-api` client works a step through the Claude API by the loop above, every call run by
 the tool runtime: each request is posted to its provider's `api` with `/v1/messages` after it,
 signed with a key of the provider's (`x-api-key`), under `anthropic-version: 2026-10-21`, and its

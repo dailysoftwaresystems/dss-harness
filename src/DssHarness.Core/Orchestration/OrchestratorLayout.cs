@@ -162,6 +162,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// </summary>
     public const string StepNotesFileName = "notes.md";
 
+    /// <summary>The name of the file a step's first user message is kept in, masked, in its directory: as sent, holding the parts it was given.</summary>
+    public const string StepUserFileName = "user.md";
+
     /// <summary>The name of the file a leg step keeps its legs' ledger in, as <c>--json</c> gives it, in its directory.</summary>
     public const string StepLedgerFileName = "ledger.json";
 

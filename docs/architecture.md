@@ -1829,7 +1829,17 @@ record's own rule - `AgentAssumption.Problems`, `AgentQuestion.Problems`: every 
 recommendation among them - which `AgentRunResult.Problem` and the run's `questions.json` hold them to as well), and the
 run's end - `Completed` or `Asked`, with `PersonAsked`, or a repair sent back, then `InvalidOutput`. The runner writes
 the notes as `notes.md` (`OrchestratorLayout.StepNotesFileName`) before `result.json`, and removes an earlier attempt's
-before an attempt begins, for the step's directory is every attempt's. What each client is sent: `--json-schema` the
+before an attempt begins, for the step's directory is every attempt's; it writes the first user message as sent, masked,
+as `user.md` (`OrchestratorLayout.StepUserFileName`) before the client is taken - the parts the attempt was given, held
+by the one owner of their order (`AgentPromptParts.FirstMessage`: the run context, the plan updates and the continuation
+record, the record only where the conversation is a new one - every launch on a client that renders its conversations,
+and any run handed none - the run's prompt as the task). The continuation record itself is built by
+`Agents\AgentContinuation` from the step directories of the agent: the steps so far with each one's notes and output,
+the files changed, the last red build or test, the handoff (never cut), the continuation message after an attempt that
+was cut off, and the last iterations word for word from the stored stream of the newest attempt (`Iterations`, the
+newest attempt what follows its last `RunStarted`) - whatever is cut named with a copy in the agent's
+`work/continuation/` (`AgentContinuation.CopiesFolder`), the bounds `agentContext.continuation`'s
+(`AgentContinuationBounds`: recordChars, stepChars, paths, lastIterations, iterationChars). What each client is sent: `--json-schema` the
 envelope as built; the loop's `ChatRequest.Schema`, which the Claude API sends as `output_config.format` in the copy
 `ClaudeApiRequest.Sent` makes - every array bound structured outputs do not take moved into its description, over
 `JsonSchemaSubset.SchemasIn` - and which, once the API refuses it as more than it compiles
