@@ -2581,13 +2581,17 @@ public static class HelpTopics
             + "the same way and never a key; a launch is to sign in from that directory where the slot holds it, else from the "
             + $"tool's own {Orchestration.ClaudeTranscripts.ConfigDirectoryVariable}, else from Claude Code's own. A launch is "
             + "given that credential and no other, whatever the tool's own environment holds; claude-api and glm sign each "
-            + "request with their provider's keys. Choosing a key is the engine's, when "
-            + "it runs a run's steps, and no command of this build runs a step: a step is to start on the first key the slot "
-            + "holds, unless balanceKeyUsage is on (off unless turned on), where it is to start on the one that has spent "
-            + "least in the last seven days, counted back from the moment it starts, its conversation staying with one "
-            + "account. What a key spent is to be what the engine counts for each request served with it, at the "
-            + "configuration's prices, recorded by the key's name in the repository's records; what the same key spends "
-            + "elsewhere - another repository, another machine, another tool - is not seen.");
+            + "request with their provider's keys. Choosing a key is the engine's, where it runs a run's steps: a step "
+            + "starts on the first key of its model's provider the slot holds and no remembered limit covers, or - where "
+            + "balanceKeyUsage is on (off unless turned on) - on the one that has spent least in the last seven days, "
+            + "counted back from the moment it starts, keys that spent alike in the list's order, whatever tier, model, "
+            + "step, run or side-task spent it; the key is kept for the step, its conversation staying with one account, "
+            + "and a limit or a rejected key moves it to the next in the same order. What a key spent is what the engine "
+            + $"counts for each request served with it, at the configuration's prices - or, for a Claude Code launch, what the launch reports - recorded by the key's name (never its value) in {HarnessLayout.OrchestratorsDirectoryName}/{DssHarness.Core.Agents.AgentKeySpend.FileName}, "
+            + "one line for each entry of a step's order that ran, read for a key's week and its lines older than seven "
+            + "days dropped when it is next written; what the same key spends elsewhere - another repository, another "
+            + "machine, another tool - is not seen. Each request a step sends goes through the gate of its provider and "
+            + "key (above), beside the orchestrator's maxReasoningAgents.");
         builder.AppendLine();
         builder.AppendLine("The slot itself is a directory of dotenv files, " + HarnessLayout.WorkflowsEnvSlotRelative + "/:");
         builder.AppendLine("every file in it is read and merged, a name declared in two of them is refused, a line whose");
@@ -2668,12 +2672,12 @@ public static class HelpTopics
             + $"agentClients.<client>.maxParallel of them under way at once ({string.Join(", ", Agents.ClientGateSettings.BuiltIn.Select(bound => $"{bound.Key} {bound.Value}"))} "
             + "where the entry says none; a client that signs in with a login is one lane by its client, and two keys of one "
             + "provider two lanes, keyed by a hash of the key). Beside it the API clients' optional buckets pace a lane's "
-            + "minute - requestsPerMinute, inputTokensPerMinute (a request's own counted as it enters) and "
+            + "minute - requestsPerMinute, inputTokensPerMinute (a request's own counted as it enters; the engine's runner "
+            + "holds the lane at its step today and counts no input there, so the bucket waits for the client's own requests) and "
             + "outputTokensPerMinute (an answer's counted once it is had), each waited out until the oldest of the minute is "
             + "a minute old - and a 429's cool-down holds every waiter of the lane, a later or longer one holding past a "
             + "sooner one. Left out, the provider's answers pace the client; the orchestrator's maxReasoningAgents bounds "
-            + "agents beside the gate, and both apply. No command of this build runs a step yet, so no gate opens one; the "
-            + "engine's step runner holds the lane a run's requests go through.");
+            + "agents beside the gate, and both apply. The engine's step runner holds the lane a run's requests go through.");
         builder.AppendLine();
         builder.AppendLine("This build checks configurations and definitions against these sections and writes them with");
         builder.AppendLine($"init (and '{ToolPackage.Command} init' writes the prices it holds, as read on their date).");

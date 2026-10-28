@@ -492,6 +492,9 @@ public sealed record AgentStepRequest(
 
     /// <summary>The compaction record of the conversation the run begins, where the engine compacted one; null where it did not. A run given one begins a new conversation.</summary>
     public string? Compaction { get; init; }
+
+    /// <summary>Where the run's every entry records what its key spent, for the next step's choice of one; null where nothing is counted.</summary>
+    public IAgentSpendSink? Spend { get; init; }
 }
 
 /// <summary>

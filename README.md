@@ -532,6 +532,20 @@ never a key. The credential slots - the runner's two
 value directories and this one among them - are never handed to an agent, seeded from the main tree
 or folded back into it, whatever git or the ignore block says.
 
+Choosing a key is the engine's, where it runs a run's steps: a step starts on the first key of its
+model's provider the slot holds and no remembered limit covers, or - `balanceKeyUsage` on (off by
+default) - on the one that spent least in the last seven days, keys that spent alike in the list's
+order, whatever tier, model, step, run or side-task spent it; the key is chosen when the step starts
+and kept for it, and a limit or a rejected key moves it to the next in the same order. What a key
+spent is what the engine counts for each request served with it, at the configuration's prices - or,
+for a Claude Code launch, what the launch reports - recorded by the key's name, never its value, in
+`.orchestrators/key-spend.jsonl`, the repository's records across runs: one line for each entry of a
+step's order that ran, read for a key's week, its lines older than seven days dropped when the file
+is next written. What the same key spends elsewhere - another repository, another machine, another
+tool - is not seen. Each request a step sends goes through the gate of its provider and key (the
+client's parallel bound, its optional pacing buckets and a 429's cool-down), beside the
+orchestrator's `maxReasoningAgents`.
+
 The Claude Code this tool uses is the one npm installs, and no other: the tool asks npm where its
 global packages are and starts the program the package names, by its full path - never a launcher,
 never a batch file, and on Windows `npm.cmd` itself is never started: the tool does what that file

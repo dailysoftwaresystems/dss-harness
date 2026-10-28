@@ -56,7 +56,8 @@ namespace DssHarness.Core.Agents;
 /// <param name="fileSystem">The file system the step's records are kept on.</param>
 /// <param name="platform">Whether this tool itself runs elevated, which no agent starts under, and how it compares names.</param>
 /// <param name="clock">When each event happened.</param>
-public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem fileSystem, IHostPlatform platform, TimeProvider clock) : IAgentRunner
+/// <param name="gates">The lanes a run's requests go through, one per provider and key; null where none are held.</param>
+public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem fileSystem, IHostPlatform platform, TimeProvider clock, ClientGates? gates = null) : IAgentRunner
 {
     /// <summary>The run's own record, in the step's directory: the result as it ended.</summary>
     public const string ResultFileName = "result.json";
@@ -71,6 +72,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     private readonly IHostPlatform _platform = platform ?? throw new ArgumentNullException(nameof(platform));
 
     private readonly TimeProvider _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+
+    private readonly ClientGates? _gates = gates;
 
     /// <summary>Works the step, from its request to its result, emitting what happens beside the stored stream.</summary>
     /// <param name="step">The step, as the engine resolved it.</param>
@@ -415,8 +418,38 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 try
                 {
                     var resolved = Resolved(step, directory, mask, messages, entry, [.. order.Skip(at + 1)]);
-                    WroteUserMd(resolved, NewConversation(client, resolved));
-                    var result = await client.RunAsync(resolved, watching, pump.Stopping).ConfigureAwait(false);
+
+                    // The lane a run's requests go through (part 03's "Coordination"): one per provider and key - the
+                    // key's own value is the account, and two names holding one value one lane - or, where the client
+                    // signs in with the machine's login, one by its client. The identity is hashed before it is handed
+                    // to the registry, for the key's value is a secret no dictionary of the process holds in the clear.
+                    // Held from the request's entry to its end, the answer's tokens charged once they are had.
+                    var identity = entry.Credential?.Keys.FirstOrDefault(key => string.Equals(key.Name, entry.Key, StringComparison.Ordinal))?.Value ?? entry.Key ?? entry.Client;
+                    var lane = _gates is null ? null : await _gates
+                        .Lane(entry.Provider, FileSystem.FileContentHash.Of(Encoding.UTF8.GetBytes(identity)), ClientGateSettings.Of(entry.Client, entry.Entries?.Client))
+                        .EnterAsync(inputTokens: 0, pump.Stopping)
+                        .ConfigureAwait(false);
+                    AgentRunResult result;
+
+                    try
+                    {
+                        WroteUserMd(resolved, NewConversation(client, resolved));
+                        result = await client.RunAsync(resolved, watching, pump.Stopping).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        lane?.Dispose();
+                    }
+
+                    lane?.Answered(result.Usage?.Total.OutputTokens ?? 0);
+                    Spent(step, entry, result);
+
+                    // A 429 the account met holds the lane's every waiter until the provider says the limit lifts:
+                    // the cool-down is set from what it said, never shortened by a sooner one.
+                    if (lane is not null && result.Status == AgentRunStatus.RateLimited && result.Limit?.Lifts is { } lifts && lifts > _clock.GetUtcNow())
+                    {
+                        lane.Gate.RateLimited(lifts - _clock.GetUtcNow());
+                    }
 
                     if (result.Problem() is { } wrong)
                     {
@@ -528,6 +561,25 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         }
 
         return or;
+    }
+
+    /// <summary>
+    /// Records what the entry's run spent, by the key's name and never its value, for the next step's choice of one:
+    /// what the client reported the run cost where it reports one (a Claude Code launch's own number), else what the
+    /// engine counted at the configuration's prices; nothing where neither is known, for a cost no price was there
+    /// for is unknown and never zero.
+    /// </summary>
+    /// <param name="step">The step, whose sink the run records through; null where nothing is counted.</param>
+    /// <param name="entry">The entry that served the run, its key the one that spent.</param>
+    /// <param name="result">How the run ended, with what it used and what that cost.</param>
+    private static void Spent(AgentStepRequest step, AgentRunEntry entry, AgentRunResult result)
+    {
+        if (step.Spend is not { } sink || entry.Key is not { Length: > 0 } || result.Usage?.Cost?.Usd is not { } cost)
+        {
+            return;
+        }
+
+        sink.Record(entry.Provider, entry.Key, entry.Model, cost);
     }
 
     /// <summary>The client named, or null where none is registered under the name.</summary>

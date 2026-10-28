@@ -233,9 +233,11 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The agent-clients topic says what this build does with keys and what it leaves to the engine: claude-code reads
-    /// none, choosing one is the engine's and no command runs a step, and validate-workflow says the prices and the
-    /// missing keys of a definition's steps - and the workflows topic that a step's tier is one of tierConfig's.
+    /// The agent-clients topic says what this build does with keys and what the engine does with them: claude-code reads
+    /// none, choosing one is the engine's where it runs a run's steps - the first the slot holds, or the least spent
+    /// under balanceKeyUsage - what each key spent recorded by its name, and each request through the gate - and
+    /// validate-workflow says the prices and the missing keys of a definition's steps; the workflows topic that a
+    /// step's tier is one of tierConfig's.
     /// </summary>
     [Fact]
     public async Task AgentClientsTopic_SaysChoosingAKeyIsTheEngines_AndWhatValidateWorkflowSays_AndAStepsTierIsTierConfigs()
@@ -252,8 +254,16 @@ public sealed partial class HelpTests
                 + "to sign in from that directory where the slot holds it, else from the tool's own CLAUDE_CONFIG_DIR, else from Claude "
                 + "Code's own. A launch is given that credential and no "
                 + "other, whatever the tool's own environment holds; claude-api and glm sign each request with their provider's keys. "
-                + "Choosing a key is the engine's, when it runs a run's steps, and no command of this build runs a step: a step is to start on "
-                + "the first key the slot holds,",
+                + "Choosing a key is the engine's, where it runs a run's steps: a step starts on the first key of its model's provider the "
+                + "slot holds and no remembered limit covers, or - where balanceKeyUsage is on (off unless turned on) - on the one that has "
+                + "spent least in the last seven days, counted back from the moment it starts, keys that spent alike in the list's order, "
+                + "whatever tier, model, step, run or side-task spent it; the key is kept for the step, its conversation staying with one "
+                + "account, and a limit or a rejected key moves it to the next in the same order. What a key spent is what the engine "
+                + $"counts for each request served with it, at the configuration's prices - or, for a Claude Code launch, what the launch reports - recorded by the key's name (never its value) in {HarnessLayout.OrchestratorsDirectoryName}/key-spend.jsonl, "
+                + "one line for each entry of a step's order that ran, read for a key's week and its lines older than seven days dropped "
+                + "when it is next written; what the same key spends elsewhere - another repository, another machine, another tool - is not "
+                + "seen. Each request a step sends goes through the gate of its provider and key (above), beside the orchestrator's "
+                + "maxReasoningAgents.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(

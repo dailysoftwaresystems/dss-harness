@@ -108,7 +108,8 @@ public sealed class ReasonStepRunnerTests
             kit.Harness.FileSystem,
             new AgentKeyStore(kit.Harness.FileSystem, kit.Harness.FilePermissions, kit.Harness.Platform),
             new GhProcess(kit.Harness.ProcessRunner),
-            kit.Harness.Output);
+            kit.Harness.Output,
+            TimeProvider.System);
 
     /// <summary>The run a reason step is asked with, with what a test changes of it.</summary>
     private static FlowStepRun Run(
@@ -269,6 +270,42 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal(worktree, asked.Workspace.WorkingDirectory);
         Assert.Equal(Path.Combine(kit.Layout.AgentDirectory("ag"), "work"), asked.Workspace.WorkDirectory);
         Assert.Contains(worktree, asked.Ground!.WritableRoots);
+    }
+
+    /// <summary>
+    /// Where the configuration balances a provider's keys, the step's order runs each model's keys by least spent in
+    /// the last seven days - the repository's key-spend record read where the step starts - a tie in the list's order.
+    /// </summary>
+    [Fact]
+    public async Task WhereTheConfigurationBalancesTheKeys_TheOrderRunsThemByLeastSpent()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", ".env", "b.env"), "ANTHROPIC_SPARE=sk-test-two\n");
+        kit.Harness.FilePermissions.ProtectSecret(Path.Combine(kit.Main, ".harness-config", "workflows", ".env", "b.env"));
+        File.WriteAllText(
+            Path.Combine(kit.Main, ".harness-config", "config.json"),
+            File.ReadAllText(Path.Combine(kit.Main, ".harness-config", "config.json"))
+                .Replace("\"apiKeyNames\": [\"ANTHROPIC_KEY\"]", "\"apiKeyNames\": [\"ANTHROPIC_KEY\", \"ANTHROPIC_SPARE\"]")
+                .Replace("\"contextTokens\": 200000, \"maxOutputTokens\": 32000", "\"contextTokens\": 200000, \"maxOutputTokens\": 32000, \"priceInputMiss\": 5, \"priceInputHit\": 1, \"priceOutput\": 25")
+                .Replace("\"client\": \"claude-api\",", "\"client\": \"claude-api\", \"currency\": \"USD\", \"readOn\": \"2026-10-12\",")
+                .Replace("\"defaults\": { \"agentTier\": \"best\" }", "\"balanceKeyUsage\": true, \"defaults\": { \"agentTier\": \"best\" }"));
+        var spentFile = Path.Combine(new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main).OrchestratorsDirectory, "key-spend.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(spentFile)!);
+        File.WriteAllText(
+            spentFile,
+            $$"""{"time":"{{DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture)}}","provider":"anthropic","key":"ANTHROPIC_KEY","model":"claude-opus-5-5","cost":3.5}""");
+
+        var result = await Runner(kit, agents).RunAsync(Run(kit, agent: "reader"), Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        // The list's order is ANTHROPIC_KEY first; the week's spend turns it around, so the order proves the record
+        // was read, not merely the list.
+        Assert.Equal(
+            ["ANTHROPIC_SPARE", "ANTHROPIC_KEY"],
+            agents.Asked.Single().Order!.Select(entry => entry.Key));
     }
 
     /// <summary>A stopped step's handoff turn is answered of its own record: the agent's answer where it gave one, and null where it did not.</summary>

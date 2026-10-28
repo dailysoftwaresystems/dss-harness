@@ -23,13 +23,14 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
-/// <param name="store">Reads the agent's record.</param>
+/// <param name="store">Reads the agent's record, and guards the repository's key-spend record across runs.</param>
 /// <param name="create">Makes the read-only agent a step that names none is given.</param>
 /// <param name="runner">Works the step, whatever the client is.</param>
 /// <param name="fileSystem">The file system the step's files are read on.</param>
 /// <param name="keys">The slot the entry's keys are read from.</param>
 /// <param name="gh">Runs <c>gh</c>, for a web-search source the machine's login reads.</param>
 /// <param name="harnessOutput">Writes output the copies of a continuation record name.</param>
+/// <param name="clock">Tells the week a balanced key's spend is counted for.</param>
 public sealed class ReasonStepRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -39,7 +40,8 @@ public sealed class ReasonStepRunner(
     IFileSystem fileSystem,
     AgentKeyStore keys,
     GhProcess gh,
-    Output.IHarnessOutput harnessOutput) : IFlowStepTypeRunner, IFlowHandoffRunner
+    Output.IHarnessOutput harnessOutput,
+    TimeProvider clock) : IFlowStepTypeRunner, IFlowHandoffRunner
 {
     /// <inheritdoc/>
     public string Type => "reason";
@@ -124,7 +126,13 @@ public sealed class ReasonStepRunner(
                 $"'{run.Instance}' has no model to run on: name a tier or a model on the step, or a tier under defaults.agentTier");
         }
 
-        var order = AgentStepOrder.Of(providers, resolution, context.Layout, keys, new ClaudeTranscripts(fileSystem, platform).ConfigDirectory);
+        // The running order: the resolution's entries with their credentials, and - where the configuration balances
+        // a provider's keys by what each spent - each model's keys in the order of least spent in the last seven days,
+        // whatever tier, model, step, run or side-task spent it, ties in the list's order. The key is chosen when the
+        // step starts and kept for it; what each entry spends is recorded for the next step's choice.
+        var spend = new AgentKeySpend(fileSystem, store, clock);
+        var spent = context.Config.BalanceKeyUsage == true ? spend.Spent(context.Layout) : null;
+        var order = AgentStepOrder.Of(providers, resolution, context.Layout, keys, new ClaudeTranscripts(fileSystem, platform).ConfigDirectory, spent);
         var workspace = Workspace(agentRecord, context.Layout.MainCheckoutRoot, layout, agent);
         var webSearch = await WebSearchOf(context, providers, run.Step, cancellationToken).ConfigureAwait(false);
         var claude = new ClaudeTranscripts(fileSystem, platform).ConfigDirectory;
@@ -196,6 +204,7 @@ public sealed class ReasonStepRunner(
             Order = order,
             Continuation = ContinuationOf(run, layout, agent, context),
             WebSearch = webSearch,
+            Spend = spend.RecordingIn(context.Layout),
         };
 
         try

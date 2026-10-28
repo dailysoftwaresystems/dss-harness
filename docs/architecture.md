@@ -1969,6 +1969,18 @@ stop, the schema-validated output the step's). A stopped step's handoff turn is 
 (`IFlowHandoffRunner.HandoffAsync`, `AgentRunner.ResultFileName`), and the coordinator deletes the read-only agent
 once no step can go on with its work (`FlowCoordinator.ReadOnlyAgentOver`, over the declarations that resume its
 maker and the instances drawn of them, through the `deleteAgent` the service wires to `IAgentService.DeleteAsync`).
+The key a step starts on is chosen with the order (`balanceKeyUsage`, value 425): the resolution's entries built by
+`AgentStepOrder.Of` keep the list's order, or - where the configuration balances the keys - each model's keys run by
+least spent in the last seven days (a tie in the list's order, for `OrderBy` keeps it), the week read by
+`Agents\AgentKeySpend.cs` from `.orchestrators/key-spend.jsonl` - the repository's records across runs, one line for
+each entry that ran (the time, the provider, the key's name never its value, the model, the cost - what the client
+reported where it does, else what the engine counted), written and read under `OrchestrationStore.AcrossRuns`, its
+lines older than the week dropped when it is next written - and each entry's run recorded through the request's
+`IAgentSpendSink`. Each request a step sends goes through the gate of its provider and key (`ClientGate`, slice 30):
+`AgentRunner.OrderedAsync` enters the lane - the key's own value is the account; a login one lane by its client -
+before the client runs and releases it after, the answer's tokens charged to the output bucket and a 429 the account
+met setting the lane's cool-down from when the provider said the limit lifts, beside the orchestrator's
+`maxReasoningAgents`.
 Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`

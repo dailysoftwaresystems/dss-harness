@@ -10,8 +10,8 @@ namespace DssHarness.Core.Agents;
 /// what it runs by: its client's settings and the credential its key signs in with, read from the slot once for them
 /// all. A key the slot does not hold is an entry the machine cannot use, said and passed over when its turn comes
 /// (<see cref="AgentRunEntry.Usable"/>); where none of the step's first model's keys is held the run is refused before
-/// it starts, as the walk's own rule says. The keys are in the list's order; balancing them by what each spent is
-/// <c>balanceKeyUsage</c>'s, a slice of its own.
+/// it starts, as the walk's own rule says. The keys are in the list's order, or - where the configuration balances
+/// them by what each spent - in the order of least spent, keys that spent alike in the list's order.
 /// </summary>
 public static class AgentStepOrder
 {
@@ -25,12 +25,17 @@ public static class AgentStepOrder
     /// <param name="layout">The repository, whose slot holds the keys.</param>
     /// <param name="keys">The slot the keys are read from.</param>
     /// <param name="toolConfigDirectory">Claude Code's own directory on this machine, which a launch reads where the slot holds no other for it.</param>
+    /// <param name="spent">
+    /// What each key spent in the last seven days, by provider and the key's name, where the configuration balances
+    /// them (<c>balanceKeyUsage</c>); null where the keys keep the list's order.
+    /// </param>
     public static IReadOnlyList<AgentRunEntry> Of(
         AgentProviders providers,
         AgentResolution resolution,
         HarnessLayout layout,
         AgentKeyStore keys,
-        string? toolConfigDirectory)
+        string? toolConfigDirectory,
+        IReadOnlyDictionary<(string Provider, string Key), decimal>? spent = null)
     {
         ArgumentNullException.ThrowIfNull(providers);
         ArgumentNullException.ThrowIfNull(resolution);
@@ -76,7 +81,47 @@ public static class AgentStepOrder
             };
         }
 
-        return [Entry(resolution.Serving), .. resolution.After.Select(Entry)];
+        // The entries in the order they run: the resolution's own, or - where the configuration balances the keys -
+        // each model's keys by least spent (a tie in the list's order, for OrderBy keeps it), the models' order
+        // untouched.
+        var ordered = spent is null
+            ? (IReadOnlyList<AgentModelEntry>)[resolution.Serving, .. resolution.After]
+            : Balanced(resolution, spent);
+
+        return [.. ordered.Select(Entry)];
+    }
+
+    /// <summary>
+    /// The resolution's entries with each model's keys in the order of least spent, keys that spent alike in the
+    /// list's order: each run of entries of one model - the same model, provider and client - reordered on its own,
+    /// the models' order untouched.
+    /// </summary>
+    /// <param name="resolution">The step's resolution, its serving entry first.</param>
+    /// <param name="spent">What each key spent in the last seven days, by provider and the key's name.</param>
+    private static IReadOnlyList<AgentModelEntry> Balanced(AgentResolution resolution, IReadOnlyDictionary<(string Provider, string Key), decimal> spent)
+    {
+        var all = new List<AgentModelEntry> { resolution.Serving };
+        all.AddRange(resolution.After);
+
+        var balanced = new List<AgentModelEntry>(all.Count);
+
+        for (var at = 0; at < all.Count;)
+        {
+            var end = at + 1;
+
+            while (end < all.Count
+                && string.Equals(all[end].Model, all[at].Model, StringComparison.Ordinal)
+                && string.Equals(all[end].Provider, all[at].Provider, StringComparison.Ordinal)
+                && string.Equals(all[end].Client, all[at].Client, StringComparison.Ordinal))
+            {
+                end++;
+            }
+
+            balanced.AddRange(all[at..end].OrderBy(entry => spent.GetValueOrDefault((entry.Provider, entry.Key ?? string.Empty))));
+            at = end;
+        }
+
+        return balanced;
     }
 
     /// <summary>
