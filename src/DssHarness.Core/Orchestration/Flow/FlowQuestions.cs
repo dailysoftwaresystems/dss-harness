@@ -203,7 +203,8 @@ public static class FlowQuestions
     /// <summary>Whether <paramref name="option"/> of a question of <paramref name="kind"/> on <paramref name="step"/> is answered with a text.</summary>
     private static bool TakesText(string kind, WorkflowStep? step, string option)
         => (kind == "pause" && (step?.Text.Contains(option, StringComparer.Ordinal) ?? false))
-            || (kind == "recoveryBound" && option == "direct");
+            || (kind == "recoveryBound" && option == "direct")
+            || (kind == "ask" && option == "answer");
 
     /// <summary>
     /// The answers <paramref name="kind"/> offers <paramref name="step"/>: the kind's own from
@@ -222,8 +223,8 @@ public static class FlowQuestions
                 case "pause":
                     return [.. (step?.Options ?? [])];
                 case "ask":
-                    // An agent's questions are answered with a text or left to the agent; the answer's own spelling
-                    // is 31's to wire, and the list stands so the kind is not a crash in its owner's table.
+                    // An agent's questions are answered with a text or left to the agent, which goes on with what it
+                    // recommended; abort is every question's.
                     return ["answer", "decide", "abort"];
                 case "foldLostRows" or "foldOverCells":
                     // A person's alone: no configuration answers it, so the kind's answers live here and not among the

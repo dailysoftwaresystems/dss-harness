@@ -65,6 +65,12 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <summary>What a run stopped by its hard stop says it ended with.</summary>
     public const string StoppedError = "The run was stopped before it ended.";
 
+    /// <summary>How long a failed agent's first retry waits, in seconds, where neither its step nor the workflow names one.</summary>
+    public const int WorkflowBackoffSeconds = 30;
+
+    /// <summary>The most a failed agent's retry waits, doubling from its backoff: the cap a step's own backoff answers to.</summary>
+    public const int MostBackoffSeconds = Orchestration.Flow.WorkflowStep.MostBackoffSeconds;
+
     private readonly IReadOnlyList<IAgentClient> _clients = [.. (clients ?? throw new ArgumentNullException(nameof(clients)))];
 
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
@@ -364,6 +370,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         var totals = new WalkTotals();
         var refused = new HashSet<string>(StringComparer.Ordinal);
         var limits = new List<(AgentAccountLimit Limit, string Client)>();
+        var retried = new Dictionary<int, int>();
         var watching = new Watching(pump);
         var messages = step.Messages ?? new AgentMessages();
 
@@ -417,7 +424,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
                 try
                 {
-                    var resolved = Resolved(step, directory, mask, messages, entry, [.. order.Skip(at + 1)]);
+                    var resolved = Resolved(step, directory, mask, messages, entry, [.. order.Skip(at + 1)], step.Conversation, client.Capabilities.GoesOnWith == AgentConversationHandling.Handed);
 
                     // The lane a run's requests go through (part 03's "Coordination"): one per provider and key - the
                     // key's own value is the account, and two names holding one value one lane - or, where the client
@@ -472,8 +479,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                     }
 
                     // What moves the step, and nothing else: a decline - never one about what the prompt asks - an
-                    // account at its limit, and a failed run whose provider and client have no key left unrefused.
-                    // Everything else is the step's own ending, however it ended.
+                    // account at its limit, a failed run whose provider and client have no key left unrefused, and a
+                    // failed agent with retries left on its model. Everything else is the step's own ending, however it
+                    // ended.
                     var decline = result.Status == AgentRunStatus.Refused && !string.Equals(result.DeclinedFor, AgentFallback.ReasoningExtraction, StringComparison.Ordinal);
                     var atLimit = result.Status == AgentRunStatus.RateLimited;
                     var keysGone = result.Status == AgentRunStatus.Failed && result.KeysRefused.Count > 0 && !order.Any(one =>
@@ -481,8 +489,11 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                         && string.Equals(one.Provider, entry.Provider, StringComparison.Ordinal)
                         && string.Equals(one.Client, entry.Client, StringComparison.Ordinal)
                         && (one.Key is not { Length: > 0 } key || !refused.Contains(key)));
+                    var agentFailed = result.Status is AgentRunStatus.Failed or AgentRunStatus.InvalidOutput or AgentRunStatus.WrongModel or AgentRunStatus.Stalled or AgentRunStatus.TimedOut
+                        && !keysGone
+                        && !result.ServiceFailed;
 
-                    if (!decline && !atLimit && !keysGone)
+                    if (!decline && !atLimit && !keysGone && !agentFailed)
                     {
                         break;
                     }
@@ -492,10 +503,42 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                         limits.Add((result.Limit!, entry.Client));
                     }
 
+                    // A failed agent is tried again on its model before the step moves past it: `retries` times - the
+                    // step's own, the workflow's where it says none - waiting `backoffSeconds` before the first and
+                    // twice as long before each later one, at most fifteen minutes. The provider's service failing
+                    // past the client's own tries is never retried, for every model of the step is reached through the
+                    // same service.
+                    if (agentFailed)
+                    {
+                        var spent = retried.GetValueOrDefault(at);
+
+                        if (spent < (step.Retries ?? 0))
+                        {
+                            retried[at] = spent + 1;
+
+                            var wait = TimeSpan.FromSeconds(Math.Min(
+                                (step.BackoffSeconds ?? WorkflowBackoffSeconds) * Math.Pow(2, spent),
+                                (double)MostBackoffSeconds));
+                            var of = step.Retries ?? 0;
+
+                            await pump.EmitAsync(new WaitingToRetry(
+                                $"the agent failed: {result.Error ?? "it ended failed"}",
+                                spent + 1,
+                                of,
+                                wait,
+                                _clock.GetUtcNow() + wait)).ConfigureAwait(false);
+                            await Task.Delay(wait, _clock, cancellationToken).ConfigureAwait(false);
+
+                            continue;
+                        }
+                    }
+
                     var from = watching.LastServed(entry);
                     var where = PlaceOf(order, from, at);
 
-                    if (AgentFallback.Next(order, Math.Max(where, at), decline, refused, limits, _clock.GetUtcNow()) is not { } next)
+                    // A failure past its retries moves the step as a decline does: to the next model, past the model's
+                    // other keys, for another account of the same model is asked the same and answers the same.
+                    if (AgentFallback.Next(order, Math.Max(where, at), decline || agentFailed, refused, limits, _clock.GetUtcNow()) is not { } next)
                     {
                         break;
                     }
@@ -512,7 +555,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                         order[next.At].Model,
                         order[next.At].Provider,
                         order[next.At].Client,
-                        decline ? $"declined ({result.DeclinedFor ?? "the request"})" : atLimit ? "limit" : "key refused",
+                        decline ? $"declined ({result.DeclinedFor ?? "the request"})" : atLimit ? "limit" : agentFailed ? $"failed past its {(step.Retries ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture)} retries" : "key refused",
                         AgentFallback.NewConversation,
                         totals.Turns,
                         ThrewAway: false,
@@ -802,8 +845,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <summary>
     /// The run of one entry of the step's order, as its client takes it: the entry's model, provider, effort, entries
     /// and credential - its key first among the credential's, for the run serves the entry it is started on - the
-    /// entries after it for the client's own walk, and a new conversation - a move to another entry is never a
-    /// conversation gone on with.
+    /// entries after it for the client's own walk, and the stored conversation the step goes on with, handed only where
+    /// this entry is the conversation's own client and provider and the client stores conversations - a move to another
+    /// entry is never a conversation gone on with.
     /// </summary>
     /// <param name="step">The step.</param>
     /// <param name="directory">The step's own directory.</param>
@@ -811,13 +855,20 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <param name="messages">Where the engine tells the agent what it has to.</param>
     /// <param name="entry">The entry that serves.</param>
     /// <param name="later">The entries after it, of every client, as each may go on with.</param>
-    private static AgentRun Resolved(AgentStepRequest step, string directory, ILineMask mask, AgentMessages messages, AgentRunEntry entry, IReadOnlyList<AgentRunEntry> later)
+    /// <param name="conversation">The stored conversation the step's answer goes on with, where its attempt has one.</param>
+    /// <param name="storesConversations">Whether the entry's client is one the engine hands a stored conversation to.</param>
+    private static AgentRun Resolved(AgentStepRequest step, string directory, ILineMask mask, AgentMessages messages, AgentRunEntry entry, IReadOnlyList<AgentRunEntry> later, AgentSessionRef? conversation, bool storesConversations)
         => new(
             step.SystemPrompt,
             Filled(step.PromptTemplate, step.PromptValues),
             step.Workspace,
             step.Output,
-            Conversation: null,
+            Conversation: conversation is { } handed
+                && storesConversations
+                && string.Equals(entry.Client, handed.Client, StringComparison.Ordinal)
+                && string.Equals(entry.Provider ?? string.Empty, handed.Provider ?? string.Empty, StringComparison.Ordinal)
+                ? handed
+                : null,
             step.Limits,
             entry.Provider,
             entry.Model,

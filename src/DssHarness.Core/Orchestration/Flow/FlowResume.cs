@@ -179,13 +179,14 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
     /// <summary>
     /// A step's record with the handoff its directory holds taken back where the record does not name it yet: a handoff's
     /// file is written before the record that names it, so a crash between the two leaves the file beside a record still
-    /// <c>Running</c> or <c>Stopped</c>. Who wrote it is read from its first line, as the engine marks its own
+    /// <c>Running</c>, <c>Stopped</c> or <c>Paused</c> - a step paused on a question holds one for the attempt its
+    /// answer goes on with. Who wrote it is read from its first line, as the engine marks its own
     /// (<see cref="FlowHandoffRecord.EngineMark"/>).
     /// </summary>
     private FlowStepRecord WithHandoffTakenBack(FlowStepRecord record, string handoffFile)
     {
         if (record.Handoff is not null
-            || record.State is not (nameof(FlowInstanceState.Running) or nameof(FlowInstanceState.Stopped))
+            || record.State is not (nameof(FlowInstanceState.Running) or nameof(FlowInstanceState.Stopped) or nameof(FlowInstanceState.Paused))
             || _fileSystem.KindOf(handoffFile) != PathKind.File)
         {
             return record;
@@ -195,7 +196,7 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
     }
 
     /// <summary>
-    /// Each stopped or cut-off step's handoff, read from its own directory: every one whose record names one. A record
+    /// Each stopped, cut-off or paused step's handoff, read from its own directory: every one whose record names one. A record
     /// that names a handoff its directory does not hold is refused, naming the file - the file is written before the
     /// record that names it, so something removed it, and the engine would otherwise write one of its own in the place
     /// of the agent's account.
@@ -204,7 +205,7 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
     {
         var handoffs = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        foreach (var step in file.Steps.Where(step => step.State is nameof(FlowInstanceState.Stopped) or nameof(FlowInstanceState.Running) && step.Handoff is not null))
+        foreach (var step in file.Steps.Where(step => step.State is nameof(FlowInstanceState.Stopped) or nameof(FlowInstanceState.Running) or nameof(FlowInstanceState.Paused) && step.Handoff is not null))
         {
             var handoffFile = _layout.InstanceHandoffFile(step.Instance, step.Agent);
 

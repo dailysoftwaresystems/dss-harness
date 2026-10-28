@@ -461,6 +461,16 @@ public sealed record AgentStepRequest(
     /// <summary>What the configuration says of the agent's commands: the names a child is given back, and their times.</summary>
     public AgentCommandSettings Commands { get; init; } = AgentCommandSettings.Default;
 
+    /// <summary>
+    /// How many times a failed agent is asked again on its model before the step moves to the next model of its order,
+    /// and how long to wait before the first ask, doubling each time: the step's own where it says them, the workflow's
+    /// where it does not. Null where the caller gives no rule, and none is retried.
+    /// </summary>
+    public int? Retries { get; init; }
+
+    /// <summary>How long to wait before the first retry of a failed agent, in seconds, doubling each time; null with <see cref="Retries"/>.</summary>
+    public int? BackoffSeconds { get; init; }
+
     /// <summary>The web search the agent is given: its sources, bounds and keys; <see langword="null"/> where it searches none.</summary>
     public AgentWebSearch? WebSearch { get; init; }
 

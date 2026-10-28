@@ -4203,7 +4203,9 @@ public static class HelpTopics
         builder.AppendLine("the schedule never starts it. A step gives a failure nothing handles to the workflow's");
         builder.AppendLine("recover by saying onFailure: recover, itself or through a group around it - never a");
         builder.AppendLine("reasoning step, whose agent is tried again (retries, waiting backoffSeconds, twice as long");
-        builder.AppendLine("each time) and on its fallback, and which asks where it still fails. The recovery's steps,");
+        builder.AppendLine("each time) and on each model of its fallback, and which asks where it still fails; where");
+        builder.AppendLine("every account it could use is at its limit, or its provider's service fails past the");
+        builder.AppendLine("client's own tries, the run pauses safely instead and resumes that very step. The recovery's steps,");
         builder.AppendLine("written once, read the step that failed as source and see every step of the flow, find");
         builder.AppendLine("what went wrong and put it right; then the run goes where its onSuccess says - failed-step,");
         builder.AppendLine("the step that gave it its failure, which runs again from where it stopped - and a failure");
@@ -4345,7 +4347,15 @@ public static class HelpTopics
             + "('help agent-clients'); its prompt file read and filled where the step starts, each skill it names looked up again and "
             + "the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, "
             + "and its going on by the client's kind - the stored conversation handed where the client goes on with one, a new "
-            + "launch rendered where it does not; and its answer, held to the schema its outputs names, the step's output. "
+            + "launch rendered where it does not; and its answer, held to the schema its outputs names, the step's output. A failed "
+            + "agent is tried again on its model - the step's retries, absent the workflow's maxRetries, waiting its backoffSeconds, "
+            + "absent the workflow's, twice as long before each later try - and then on each model of its order; what its agents "
+            + "assumed without asking is kept, read as the step's own assumptions fact and named in the run's. Where the step may "
+            + "ask (ask) its agent's questions pause it - askRounds times in one attempt, the answer or decide going on in the same "
+            + "attempt as the agent's next message; a limit of its own (turns, budget, a truncated answer, a full context) asks, "
+            + "more offered only where a stored conversation of the attempt can be handed, and compact for a full context goes on "
+            + "from the engine's reduction of it, the attempt's bounds counting still; every account at a limit, and a provider's "
+            + "service failing past the client's own tries, pause the run safely, and the resume runs that very step. "
             + "build, test, run and check-mutations run their legs as the commands of those names do, in the worktree "
             + "of the agent their in names, else the main checkout: test with its filter, exclude and labels and run with its "
             + "inputs - a filter, an exclusion or a label that fills to nothing is not given - and check-mutations with its arms, "

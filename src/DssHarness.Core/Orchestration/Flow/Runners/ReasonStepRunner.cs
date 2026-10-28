@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.Policy;
@@ -148,28 +149,53 @@ public sealed class ReasonStepRunner(
         // The prompt with each skill it names handed over: the folder copied into the agent's own work directory, the
         // block put in the prompt's place, and what cannot be handed refused here - the step-start half of the skill's
         // failing loud twice, held to the capabilities the agent's own ground gives it. The resume prompt, where the
-        // step goes on with earlier work and names one, in its place.
-        string? filled;
+        // step goes on with earlier work and names one, in its place. An attempt that goes on with an answer - a
+        // person's answer to what its agent asked, a limit's `more` or `compact` - sends the answer as its message in
+        // the attempt's own conversation instead, and no skill is handed again.
+        var goingOn = GoingOnOf(run);
 
-        if (run.Step.ResumePrompt is not null && GoesOnWithEarlierWork(run)
-            && run.Read.TryGetValue("resumePrompt", out var resumeValue) && resumeValue.AsScalar("resumePrompt") is string resumePrompt)
+        // The prompt the attempt sends: an answer that goes on with this attempt sends its own message - the person's
+        // words, or what a granted bound tells the agent - in the attempt's own conversation; a compaction sends the
+        // engine's record as the run's first message and the filled prompt stands for the files that read it; every
+        // other start fills the step's prompt, the resume prompt where the step goes on with earlier work and names one.
+        string? resume = null;
+
+        if (goingOn is null && run.Step.ResumePrompt is not null && GoesOnWithEarlierWork(run)
+            && run.Read.TryGetValue("resumePrompt", out var resumeValue) && resumeValue.AsScalar("resumePrompt") is string readResume)
         {
-            filled = SkillBlocks(resumePrompt, run, agent, ground.Capabilities, workspace, resolution, out var refusedResume);
+            resume = readResume;
+        }
 
-            if (filled is null)
-            {
-                return FlowStepResult.Ended(passed: false, HarnessExit.Refused, refusedResume!);
-            }
+        string? filled;
+        string? refusedSkill = null;
+
+        if (goingOn is { Prompt: { } message })
+        {
+            filled = message;
         }
         else
         {
-            filled = SkillBlocks(readPrompt, run, agent, ground.Capabilities, workspace, resolution, out var refused);
-
-            if (filled is null)
-            {
-                return FlowStepResult.Ended(passed: false, HarnessExit.Refused, refused!);
-            }
+            filled = SkillBlocks(goingOn is { Compact: true } || resume is null ? readPrompt : resume!, run, agent, ground.Capabilities, workspace, resolution, out refusedSkill);
         }
+
+        if (filled is null)
+        {
+            return FlowStepResult.Ended(passed: false, HarnessExit.Refused, refusedSkill!);
+        }
+
+        // The handoff the attempt is given - a stop wrote it, or a limit the attempt before this one reached - stands
+        // at the head of its prompt, and is spent once the prompt holds it.
+        filled = WithHandoff(run.Handoff, filled);
+
+        // The conversation this attempt goes on with, where its answers gave it one to go on with: the session the
+        // step's own stream names last, there for the handing only where the engine stored one. A client that renders
+        // its conversations - Claude Code - is handed none, and the attempt's own continuation record stands in its
+        // place. A compaction is the engine's reduction of the conversation so far, which every client begins a NEW
+        // conversation from - the old one stays whole and is never sent again.
+        var stream = goingOn is null ? [] : StreamOf(layout, agent, run.Instance);
+        var conversation = goingOn is null or { Compact: true } ? null : SessionIn(stream, layout, agent);
+        var ownContinuation = goingOn is null || conversation is not null ? null : OwnContinuationOf(layout, agent, run, context);
+        var compaction = goingOn is { Compact: true } ? CompactedFrom(stream, run.Attempt, context) : null;
 
         var request = new AgentStepRequest(
             place.Run,
@@ -188,8 +214,8 @@ public sealed class ReasonStepRunner(
             new Dictionary<string, string>(StringComparer.Ordinal),
             ResumeTemplate: null,
             workspace,
-            OutputOf(files, context.Layout, place.Definition.Name, run.Step),
-            Conversation: null,
+            OutputOf(files, context.Layout, place.Definition.Name, run.Step, run),
+            Conversation: conversation,
             new AgentLimits(
                 definition?.MaxTurns,
                 definition?.MaxBudgetUsd,
@@ -202,16 +228,32 @@ public sealed class ReasonStepRunner(
             Credential = order.FirstOrDefault(entry => entry.Usable)?.Credential,
             Withheld = [.. providers.Appointed().Select(appointed => appointed.Name)],
             Order = order,
-            Continuation = ContinuationOf(run, layout, agent, context),
+            Continuation = ownContinuation ?? ContinuationOf(run, layout, agent, context),
             WebSearch = webSearch,
             Spend = spend.RecordingIn(context.Layout),
+            Compaction = compaction,
+            Retries = run.Step.Retries ?? place.Definition.MaxRetries ?? 3,
+            BackoffSeconds = run.Step.BackoffSeconds ?? place.Definition.BackoffSeconds,
         };
 
         try
         {
             var result = await runner.RunAsync(request, events: null, cancellationToken).ConfigureAwait(false);
 
-            return Ended(result, run.Instance);
+            // A limit's question says whether a stored conversation of the attempt can be handed, which is where the
+            // answer `more` is offered; no other ending reads it.
+            var stored = result.Status is AgentRunStatus.MaxTurns or AgentRunStatus.BudgetSpent or AgentRunStatus.ContextExhausted
+                ? SessionIn(StreamOf(layout, agent, run.Instance), layout, agent) is not null
+                : false;
+
+            if (run.Handoff is not null && result.Status != AgentRunStatus.NotStarted)
+            {
+                // The prompt that holds the handoff is on the disk now, so the handoff is spent - never between the
+                // two. A run that never began leaves it standing for the retry that may follow.
+                run.Events.HandoffTaken();
+            }
+
+            return Ended(result, run.Instance, stored);
         }
         catch (HarnessException refused)
         {
@@ -252,12 +294,15 @@ public sealed class ReasonStepRunner(
 
     /// <summary>
     /// The step's ending as its run's maps it: an answer that read against its schema is the step's output; a stop is
-    /// incomplete, whatever it ended; a limit of the step's own asks; and a failure or a refusal ends the step with its
-    /// own words.
+    /// incomplete, whatever it ended; the person asked is the step's question; a limit of the step's own asks, saying
+    /// whether a stored conversation of the attempt can be handed, which is where the answer <c>more</c> is offered;
+    /// every account at its limit, or the provider's service failing past the client's own tries, pauses the run safely
+    /// and resumes this very step; and a failure or a refusal ends the step with its own words.
     /// </summary>
     /// <param name="result">How the agent's run ended.</param>
     /// <param name="instance">The step instance's name, for the words that name it.</param>
-    private static FlowStepResult Ended(AgentRunResult result, string instance)
+    /// <param name="storedConversation">Whether a stored conversation of the attempt exists for a client to be handed.</param>
+    private static FlowStepResult Ended(AgentRunResult result, string instance, bool storedConversation)
     {
         if (result.Problem() is { } wrong)
         {
@@ -269,21 +314,109 @@ public sealed class ReasonStepRunner(
             AgentRunStatus.Completed => FlowStepResult.Ended(
                 passed: true,
                 HarnessExit.Success,
-                output: result.StructuredOutput is { Length: > 0 } json && JsonNode.Parse(json) is { } parsed ? parsed : null),
-            AgentRunStatus.Asked => FlowStepResult.Ended(
-                passed: false,
-                HarnessExit.Refused,
-                $"'{instance}'s agent asked the person, which this build does not yet serve"),
-            AgentRunStatus.Cancelled or AgentRunStatus.HandedOff => FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, result.Error ?? "the step was stopped before it ended"),
+                output: result.StructuredOutput is { Length: > 0 } json && JsonNode.Parse(json) is { } parsed ? parsed : null)
+                with { Assumptions = result.Assumptions },
+            AgentRunStatus.Asked => FlowStepResult.Asking(
+                new FlowQuestion(FlowQuestions.RunsOwn, "ask", instance, AskedProblemOf(result, instance), FlowQuestions.OptionsOf("ask", step: null))
+                {
+                    AgentQuestions = result.Questions,
+                    RaisedBy = new FlowQuestionRaisedBy("step", instance),
+                    Recommendation = new FlowRecommendation("given", Why: "each of its questions names the answer the agent recommends", By: "agent"),
+                })
+                with { Assumptions = result.Assumptions },
+            AgentRunStatus.Cancelled or AgentRunStatus.HandedOff => FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, result.Error ?? "the step was stopped before it ended") with { Assumptions = result.Assumptions },
             AgentRunStatus.NotStarted => FlowStepResult.Ended(passed: false, HarnessExit.Refused, result.Error ?? "the step's agent was not started"),
-            AgentRunStatus.Stalled or AgentRunStatus.TimedOut or AgentRunStatus.RateLimited or AgentRunStatus.Truncated
+            AgentRunStatus.RateLimited => FlowStepResult.SafelyPausing(result.Error ?? $"'{instance}'s every account is at its limit"),
+            AgentRunStatus.Failed or AgentRunStatus.Stalled when result.ServiceFailed
+                => FlowStepResult.SafelyPausing(result.Error ?? $"'{instance}'s provider's service failed"),
+            AgentRunStatus.Stalled or AgentRunStatus.TimedOut or AgentRunStatus.Truncated
                 => FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, result.Error ?? "the step's agent ended incomplete"),
-            AgentRunStatus.MaxTurns => FlowStepResult.AtLimit("turns", result.Error),
-            AgentRunStatus.BudgetSpent => FlowStepResult.AtLimit("budget", result.Error),
-            AgentRunStatus.ContextExhausted => FlowStepResult.AtLimit("context", result.Error),
-            _ => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, result.Error ?? $"'{instance}'s agent failed"),
+            AgentRunStatus.MaxTurns => AtLimit(result, "turns", instance, storedConversation),
+            AgentRunStatus.BudgetSpent => AtLimit(result, "budget", instance, storedConversation),
+            AgentRunStatus.ContextExhausted => AtLimit(result, "context", instance, storedConversation),
+            _ => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, result.Error ?? $"'{instance}'s agent failed") with { Assumptions = result.Assumptions },
         };
+
+        static FlowStepResult AtLimit(AgentRunResult result, string limit, string instance, bool stored)
+            => FlowStepResult.AtLimit(limit, result.Error) with { StoredConversation = stored };
     }
+
+    /// <summary>
+    /// What the step's asking says, written from its records: that its agent asked the person, and each question it
+    /// asked, each with its own problem and the answer its agent recommends.
+    /// </summary>
+    /// <param name="result">How the agent's run ended: asking.</param>
+    /// <param name="instance">The step instance's name, for the words that name it.</param>
+    private static string AskedProblemOf(AgentRunResult result, string instance)
+        => $"'{instance}'s agent asked the person {result.Questions.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} question{(result.Questions.Count == 1 ? string.Empty : "s")}: "
+            + string.Join(" ", result.Questions.Select(asked => $"'{asked.Question}' (it recommends '{asked.Recommended}')"));
+
+    /// <summary>
+    /// The handoff the attempt is given, at the head of its prompt: a part of its own, so what goes on with the prompt
+    /// reads the agent's account first and the task after it.
+    /// </summary>
+    /// <param name="handoff">The handoff's text; null where the attempt is given none.</param>
+    /// <param name="prompt">The filled prompt.</param>
+    private static string WithHandoff(string? handoff, string prompt)
+        => handoff is { Length: > 0 } ? $"<{HandoffTag}>{Environment.NewLine}{handoff.TrimEnd()}{Environment.NewLine}</{HandoffTag}>{Environment.NewLine}{Environment.NewLine}{prompt}" : prompt;
+
+    /// <summary>The tag the handoff's part of a prompt is wrapped in, as the first user message wraps its own parts.</summary>
+    public const string HandoffTag = "handoff";
+
+    /// <summary>
+    /// What this attempt goes on with, where its answers gave it something to: the last answer of this attempt's
+    /// questions - a person's answer to what its agent asked, read as the attempt's next message; a limit answered
+    /// <c>more</c>, which hands the attempt its own conversation and grants the bound once again; a full context
+    /// answered <c>compact</c>, which hands it the engine's reduction of the conversation so far, its last iterations
+    /// word for word. Null where the answers gave it nothing, and the attempt is a start like any other; an earlier
+    /// attempt's answers are never served, for each attempt is its own.
+    /// </summary>
+    /// <param name="run">The step, with the answers its questions were given.</param>
+    private GoingOn? GoingOnOf(FlowStepRun run)
+    {
+        foreach (var given in run.Answers.Reverse().Where(given => given.Attempt == run.Attempt))
+        {
+            switch (given.Kind, given.Answer)
+            {
+                case ("ask", "answer"):
+                    return new(given.Text is { Length: > 0 } ? $"The person answered:{Environment.NewLine}{given.Text}" : "The person answered with nothing: decide for yourself and finish the task.", Compact: false);
+                case ("ask", "decide"):
+                    return new("The person leaves the questions to you: go on with what you recommended for each, record each under your assumptions, and finish the task.", Compact: false);
+                default:
+                    if (given.Answer == "more" && IsLimit(given.Kind))
+                    {
+                        return new($"The run's person allowed the step's {WordOf(given.Kind)} once again. Go on with the task.", Compact: false);
+                    }
+
+                    if (given.Answer == "compact" && given.Kind == "contextLimit")
+                    {
+                        return new(Prompt: null, Compact: true);
+                    }
+
+                    break;
+            }
+        }
+
+        return null;
+
+        static bool IsLimit(string? kind)
+            => kind is "turnLimit" or "stepBudget" or "truncated" or "contextLimit";
+
+        static string WordOf(string? kind)
+            => kind switch
+            {
+                "turnLimit" => "turn bound",
+                "stepBudget" => "budget",
+                "truncated" => "answer",
+                "contextLimit" => "context",
+                _ => "bound",
+            };
+    }
+
+    /// <summary>What one attempt goes on with from its answers: the message it sends instead of its prompt, and whether it begins from the engine's compaction of the conversation so far.</summary>
+    /// <param name="Prompt">The attempt's message; null where it sends its own filled prompt.</param>
+    /// <param name="Compact">Whether the answer was <c>compact</c>, and the attempt begins from the engine's reduction of the conversation so far.</param>
+    private sealed record GoingOn(string? Prompt, bool Compact);
 
     /// <summary>
     /// Where the run works: its agent's worktree where it has one - the working directory, which it writes - or, for a
@@ -335,15 +468,21 @@ public sealed class ReasonStepRunner(
 
     /// <summary>
     /// The output the step's answer is held to, where it names one: its schema file read whole, the step's own name the
-    /// name its output is read by.
+    /// name its output is read by, and - where the step may ask - the rounds it may ask in one attempt, less what its
+    /// answers already spent: after the last the agent is offered no questions and told so.
     /// </summary>
     /// <param name="files">Reads the files the workflow names.</param>
     /// <param name="layout">The repository's layout.</param>
     /// <param name="workflow">The workflow's name.</param>
     /// <param name="step">The step, whose name its output is read by and whose ask rounds are counted here.</param>
-    private static AgentOutput? OutputOf(WorkflowNamedFiles files, HarnessLayout layout, string workflow, WorkflowStep step)
+    /// <param name="run">The step run, whose answers spent the rounds it was given.</param>
+    private static AgentOutput? OutputOf(WorkflowNamedFiles files, HarnessLayout layout, string workflow, WorkflowStep step, FlowStepRun run)
         => step.Outputs is { } named
-            ? new AgentOutput(step.Name, files.ReadText(layout, workflow, named, "a schema"), MaxRepairs: 2, AskRounds: step.Ask == true ? step.AskRounds ?? 2 : null)
+            ? new AgentOutput(
+                step.Name,
+                files.ReadText(layout, workflow, named, "a schema"),
+                MaxRepairs: 2,
+                AskRounds: step.Ask == true ? Math.Max(0, (step.AskRounds ?? 2) - run.Answers.Count(given => given.Kind == "ask" && given.Attempt == run.Attempt)) : null)
             : null;
 
     /// <summary>
@@ -407,6 +546,134 @@ public sealed class ReasonStepRunner(
     /// <param name="run">The step.</param>
     private static bool GoesOnWithEarlierWork(FlowStepRun run)
         => run.Step.Resume is not null || run.Attempt > 1 || run.Handoff is not null;
+
+    /// <summary>
+    /// The events the step's own stream holds, masked as it holds them: the step's transcript, from which the engine
+    /// reads what no agent can say any more - the session a conversation goes on as, and the conversation a compaction
+    /// reduces. Empty where the step streamed nothing yet.
+    /// </summary>
+    /// <param name="layout">The run's own paths.</param>
+    /// <param name="agent">The agent the step works as, whose directory keeps the step's records.</param>
+    /// <param name="instance">The step instance's name.</param>
+    private IReadOnlyList<AgentEvent> StreamOf(OrchestratorLayout layout, string agent, string instance)
+    {
+        var file = Path.Combine(layout.AgentStepDirectory(agent, instance), StoredStream.FileName);
+
+        if (!fileSystem.FileExists(file))
+        {
+            return [];
+        }
+
+        var events = new List<AgentEvent>();
+
+        foreach (var line in fileSystem.ReadAllText(file).Split('\n'))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (JsonSerializer.Deserialize<AgentEvent>(line.TrimEnd('\r'), JsonStateFile.LineOptions) is { } read)
+                {
+                    events.Add(read);
+                }
+            }
+            catch (JsonException)
+            {
+                // A torn line a killed writer left takes itself back; the whole ones before it stand.
+            }
+        }
+
+        return events;
+    }
+
+    /// <summary>
+    /// The stored conversation the step's own stream names last, where the engine holds one it can hand: the session's
+    /// id with the client and provider that began it, and only where its <c>conversation.jsonl</c> is there - a client
+    /// that renders its conversations, Claude Code among them, names a session of its own that no conversation can be
+    /// handed to. Null where none is.
+    /// </summary>
+    /// <param name="stream">The step's own events.</param>
+    /// <param name="layout">The run's own paths.</param>
+    /// <param name="agent">The agent the step works as, whose sessions directory keeps its conversations.</param>
+    private AgentSessionRef? SessionIn(IReadOnlyList<AgentEvent> stream, OrchestratorLayout layout, string agent)
+    {
+        var last = stream.OfType<SessionStarted>().LastOrDefault(started => started.SessionId is { Length: > 0 });
+
+        if (last?.SessionId is not { } id)
+        {
+            return null;
+        }
+
+        return fileSystem.FileExists(Path.Combine(OrchestratorLayout.SessionDirectoryIn(layout.AgentSessionsDirectory(agent), id), "conversation.jsonl"))
+            ? new AgentSessionRef(last.Client, last.Provider ?? string.Empty, id)
+            : null;
+    }
+
+    /// <summary>
+    /// The engine's compaction of the conversation the step's own stream holds, its last iterations word for word -
+    /// what the answer <c>compact</c> goes on from, a new conversation that begins with it. The window is the
+    /// attempt's whole conversation: every engine run of this attempt, from its first message - the task - to its
+    /// last, for the conversation one attempt goes on with spans every answer it was given.
+    /// </summary>
+    /// <param name="stream">The step's own events.</param>
+    /// <param name="attempt">The attempt the compaction answers.</param>
+    /// <param name="context">The repository's context, whose configuration bounds the record and the reduction.</param>
+    private static string? CompactedFrom(IReadOnlyList<AgentEvent> stream, int attempt, HarnessContext context)
+    {
+        var window = AttemptOf(stream, attempt);
+
+        return window.Count == 0 ? null : AgentCompaction.Reduce(
+            window,
+            AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation),
+            AgentCompactionBounds.Of(context.Config.AgentContext?.Compaction)).Record;
+    }
+
+    /// <summary>The events of <paramref name="attempt"/> alone: everything after the last run an earlier attempt began; every event where none did.</summary>
+    /// <param name="stream">The step's own events.</param>
+    /// <param name="attempt">The attempt whose events are asked for, from 1.</param>
+    private static IReadOnlyList<AgentEvent> AttemptOf(IReadOnlyList<AgentEvent> stream, int attempt)
+    {
+        // The newest run of an earlier attempt ends the window; every event after it is this attempt's, whatever run
+        // of this attempt began it.
+        var lastEarlier = -1;
+
+        for (var index = 0; index < stream.Count; index++)
+        {
+            if (stream[index] is RunStarted begun && begun.Attempt != attempt)
+            {
+                lastEarlier = index;
+            }
+        }
+
+        return lastEarlier < 0 ? stream : [.. stream.Skip(lastEarlier + 1)];
+    }
+
+    /// <summary>
+    /// The continuation record of the step's own work, for an answer that goes on with it on a client no conversation
+    /// can be handed to: what the step's own records hold - its iterations last, the agent's questions among them word
+    /// for word - rendered as a continuation record renders a step.
+    /// </summary>
+    /// <param name="layout">The run's own paths.</param>
+    /// <param name="agent">The agent the step works as.</param>
+    /// <param name="run">The step.</param>
+    /// <param name="context">The repository's context, whose configuration bounds the record.</param>
+    private string? OwnContinuationOf(OrchestratorLayout layout, string agent, FlowStepRun run, HarnessContext context)
+    {
+        var work = new AgentContinuationWork(
+            run.Instance,
+            [new AgentContinuedStep(run.Instance, "done", layout.AgentStepDirectory(agent, run.Instance))],
+            ChangedPaths: [],
+            RedLegs: [],
+            CutOff: false);
+
+        return new AgentContinuation(fileSystem, harnessOutput).Render(
+            work,
+            Path.Combine(layout.AgentDirectory(agent), OrchestratorLayout.WorkDirectoryName),
+            AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation));
+    }
 
     /// <summary>
     /// The prompt with each skill it names handed over: every <c>{skill.&lt;name&gt;}</c> read again where the step

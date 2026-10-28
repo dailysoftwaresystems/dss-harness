@@ -1981,6 +1981,28 @@ lines older than the week dropped when it is next written - and each entry's run
 before the client runs and releases it after, the answer's tokens charged to the output bucket and a 429 the account
 met setting the lane's cool-down from when the provider said the limit lifts, beside the orchestrator's
 `maxReasoningAgents`.
+The asking is the runner's too (slice 31b): a failed agent is tried again on its model - the step's `retries`, absent
+the workflow's `maxRetries`, waiting its `backoffSeconds`, absent the workflow's, twice as long before each later try
+(`AgentRunner.OrderedAsync`, `AgentStepRequest.Retries`/`BackoffSeconds`, the waits said as `WaitingToRetry`) - and
+then moved to the next model as a decline moves, past the model's other keys; the provider's service failing past the
+client's own tries (`AgentRunResult.ServiceFailed`, set where the loop says so) is neither retried nor moved past, nor
+is a run that ended `RateLimited` with no entry left ended a failure: each is answered `FlowStepResult.SafelyPausing`,
+and the coordinator ends the step stopped and asks the run for a safe pause of the cause `limits`
+(`FlowPauseRequest.Causes`), which resumes that very step. A step that says `ask` is paused on its agent's questions
+(`AgentRunStatus.Asked` mapped to a question of the kind `ask`, the agent's questions riding with it and the
+recommendation saying the agent recommends within each), and the answer - `answer` with a text, or `decide` - goes back
+into the same attempt (`FlowAnswerGiven` carrying its text and kind): the runner sends the person's words as the
+attempt's next message, handing the stored conversation the step's stream names last (`AgentSessionRef`, found from the
+step's `stream.jsonl` where the engine holds `sessions/<id>/conversation.jsonl`) to the entry that began it alone, and,
+on a client no conversation can be handed to, the step's own continuation record (`AgentContinuation.Render` over the
+step itself) ending with the questions word for word. The rounds it may ask are spent by the answers given
+(`AgentOutput.AskRounds`, less each `ask` answer), what its agents assumed is kept whatever the attempt ended by
+(`FlowStepResult.Assumptions` to the step's record and the `<step>.assumptions` fact, every step's in
+`run.assumptions`), and a limit's answers are served the same way - `more` (offered only where a stored conversation of
+the attempt can be handed, `FlowStepResult.StoredConversation`) grants the bound once again in the same conversation,
+`compact` begins a new one from the engine's reduction of the stream so far (`AgentCompaction.Reduce`), and `retry`
+begins a new attempt given the engine's one-line handoff (`FlowHandoff.ByEngine`, written before the question is
+raised).
 Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`

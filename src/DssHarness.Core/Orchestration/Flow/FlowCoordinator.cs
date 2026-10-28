@@ -241,6 +241,12 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>Every leg the step ran, with each one's own verdict; empty for the steps that run no legs.</summary>
     public IReadOnlyList<FlowLeg> Legs { get; internal set; } = [];
 
+    /// <summary>
+    /// What the step's agent assumed where a person could have told it - the envelope's own list, masked - kept for the
+    /// step's record whatever the attempt ended by, each answer of the step adding to it; empty where nothing was assumed.
+    /// </summary>
+    public IReadOnlyList<Agents.AgentAssumption> Assumptions { get; internal set; } = [];
+
     /// <summary>The red legs alone, in the order they ran; the step's failure names the worst of them.</summary>
     public IReadOnlyList<FlowLeg> RedLegs { get; internal set; } = [];
 
@@ -1660,7 +1666,7 @@ public sealed class FlowCoordinator
                 AnswerPause(instance, answer, text);
                 break;
             default:
-                AnswerTheKind(instance, asked, answer);
+                AnswerTheKind(instance, asked, answer, text);
                 break;
         }
     }
@@ -1791,7 +1797,7 @@ public sealed class FlowCoordinator
     /// <c>merge</c>, <c>stay</c> and <c>compact</c> hand the answer to the runner in the same attempt;
     /// <c>skip</c> ends the step skipped; <c>fail</c> ends it failed with the question's kind.
     /// </summary>
-    private void AnswerTheKind(FlowInstance instance, FlowQuestion asked, string answer)
+    private void AnswerTheKind(FlowInstance instance, FlowQuestion asked, string answer, string? text)
     {
         switch (answer)
         {
@@ -1812,12 +1818,14 @@ public sealed class FlowCoordinator
                 HandleFailure(instance);
                 break;
             default:
-                instance._answers.Add(new FlowAnswerGiven(asked.Id, answer));
+                // The answer lets the step's work go on in the same attempt - a limit's `more` and `compact`, an agent's
+                // `answer` and `decide` - and the runner serves it from there: the answer, its text, its kind and its
+                // attempt are the attempt's, and the step is started again as the same attempt it was.
+                instance._answers.Add(new FlowAnswerGiven(asked.Id, answer, text, asked.Kind, instance.Attempt));
                 instance.State = FlowInstanceState.NotStarted;
                 break;
         }
     }
-
     /// <summary>
     /// The targets of a refresh or a rebase of <c>others</c>: every agent of the run that is open with a worktree - each
     /// create-agent's whose agent no deletion closed - but the one <c>others</c> names, in the order of their names.
@@ -3019,12 +3027,35 @@ public sealed class FlowCoordinator
         // The budget's minutes are the time reason steps ran, each attempt and each handoff turn counted.
         CountMinutes(instance);
 
+        // What the attempt's agent assumed, asked or not: kept whatever else the attempt ends by, for a later step, a
+        // report and the person read what an unattended run took for granted.
+        if (result.Assumptions is [_, ..] assumed)
+        {
+            instance.Assumptions = [.. instance.Assumptions, .. assumed];
+        }
+
         if (result.Asked is { } asking)
         {
             // A step that asks holds nothing while it waits: it gives back every claim and every counter, and is
             // admitted again, against the limits and the claims as they then are, when it is answered.
             Release(instance);
-            _ = Ask(instance, asking.Kind, asking.Problem, asking.Options);
+            _ = Ask(instance, asking.Kind, asking.Problem, asking.Options, agentQuestions: asking.AgentQuestions, agent: WorksInOf(instance) ?? instance.Made);
+            return;
+        }
+
+        if (result.Pauses is { } pausing)
+        {
+            // Every account a reason step could use is at its limit, or its provider's service failed past the client's
+            // own tries: the run pauses safely and resumes that very step, never a failure and never a question, for
+            // every model the step could move to would meet the same. The step is stopped where it stands, as a pause
+            // stops it, with why as its handoff - the resume's next attempt is told what the attempt met - and runs
+            // again at the resume.
+            Release(instance);
+            instance.Handoff ??= FlowHandoff.ByEngine(pausing);
+            Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
+            End(instance, FlowInstanceState.Stopped, HarnessExit.Incomplete, pausing);
+            Record(FlowChangeKind.Step, instance, detail: "the run pauses for it");
+            RequestPause("limits");
             return;
         }
 
@@ -3055,10 +3086,23 @@ public sealed class FlowCoordinator
         if (result.Limit is { } limit)
         {
             // A reason step at a limit of its own asks and is no failure. Its question is raised however the step's
-            // onFailure reads, for the step has not failed.
+            // onFailure reads, for the step has not failed. The engine writes the attempt's handoff before the question
+            // is raised - one line saying why, for the agent's run had ended and cannot answer - so the answer `retry`
+            // begins the next attempt with it, as a pause's next attempt begins with the agent's. `more` is offered
+            // only where a stored conversation of the attempt can be handed, for more of the same conversation could
+            // not help anywhere else.
             Release(instance);
             var kind = FlowQuestions.LimitKindOf(limit);
-            _ = Ask(instance, kind, $"'{instance.Id}' reached its {limit}{(result.LimitDetail is { } detail ? $" ({detail})" : string.Empty)}", FlowQuestions.OptionsOf(kind, instance.Step));
+            var options = FlowQuestions.OptionsOf(kind, instance.Step);
+
+            if (!result.StoredConversation)
+            {
+                options = [.. options.Where(option => option != "more")];
+            }
+
+            instance.Handoff ??= FlowHandoff.ByEngine($"'{instance.Id}' reached its {limit}");
+            Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
+            _ = Ask(instance, kind, $"'{instance.Id}' reached its {limit}{(result.LimitDetail is { } detail ? $" ({detail})" : string.Empty)}", options);
             return;
         }
 
@@ -4401,7 +4445,9 @@ public sealed class FlowCoordinator
     /// <param name="problem">What happened, as the question states it.</param>
     /// <param name="options">The answers the question takes.</param>
     /// <param name="subject">What a counted answer of this question is counted for, where it is not the instance alone: a handler's name, a source's own.</param>
-    private string Ask(FlowInstance instance, string kind, string problem, IReadOnlyList<string> options, string? subject = null)
+    /// <param name="agentQuestions">The questions the step's agent asked, where it asked; empty for the engine's own.</param>
+    /// <param name="agent">The agent that asked, where one did; null for the engine's own question.</param>
+    private string Ask(FlowInstance instance, string kind, string problem, IReadOnlyList<string> options, string? subject = null, IReadOnlyList<Agents.AgentQuestion>? agentQuestions = null, string? agent = null)
     {
         var id = FlowQuestionIds.Of(++_questionsRaised);
         var asked = new FlowQuestion(id, kind, instance.Id, problem, options)
@@ -4411,6 +4457,11 @@ public sealed class FlowCoordinator
             Means = MeansOf(instance),
             Held = FlowQuestions.HeldOptionsOf(kind, instance.Step, options),
             Handler = subject,
+            AgentQuestions = agentQuestions ?? [],
+            RaisedBy = agent is { } ? new FlowQuestionRaisedBy("step", instance.Id, agent) : new FlowQuestionRaisedBy("step", instance.Id),
+            Recommendation = agentQuestions is [{ }, ..]
+                ? new FlowRecommendation("given", Why: "each of its questions names the answer the agent recommends", By: "agent", Agent: agent)
+                : FlowRecommendation.NotSought,
         };
         _questions.Add(asked);
 
@@ -5697,7 +5748,7 @@ public sealed class FlowCoordinator
         merged["code"] = instance.Exit;
         merged["error"] = instance.Error;
         merged["question"] = instance.EndedByQuestion;
-        merged["assumptions"] = new JsonArray();
+        merged["assumptions"] = AssumptionsOf(instance);
 
         // The newest output of the work, as its output is read: a step whose failure was passed over left nothing it
         // is read by, so its latest is Missing too.
@@ -5709,9 +5760,24 @@ public sealed class FlowCoordinator
         return FlowValue.Of(merged);
     }
 
-    /// <summary>The scope before this one in its repeat's iterations, as <c>previous</c> reads it.</summary>
-    private Scope? PreviousOf(Scope scope)
+    /// <summary>
+    /// What <paramref name="instance"/>'s agents assumed, as a step's <c>assumptions</c> fact reads it: the envelope's
+    /// own shape of each - what was open, what it took, and why - of every attempt of the visit.
+    /// </summary>
+    private static JsonArray AssumptionsOf(FlowInstance instance)
     {
+        var assumed = new JsonArray();
+
+        foreach (var one in instance.Assumptions)
+        {
+            assumed.Add(new JsonObject { ["about"] = one.About, ["assumed"] = one.Assumed, ["why"] = one.Why });
+        }
+
+        return assumed;
+    }
+
+    /// <summary>The scope before this one in its repeat's iterations, as <c>previous</c> reads it.</summary>
+    private Scope? PreviousOf(Scope scope)    {
         for (var at = scope; at is not null; at = at.Parent)
         {
             if (at.Iteration is { } iteration && at.LoopOf is { } loop)
@@ -5741,6 +5807,10 @@ public sealed class FlowCoordinator
             .Select(instance => $"'{instance.Id}' left {FlowValue.Of(instance.Leftover!.DeepClone()).AsTemplateText()}")
             .ToList();
         var preExisting = _tally.Select(entry => $"{entry.State} - {entry.Line}").ToList();
+        var assumed = _created
+            .Where(instance => instance.Assumptions is [_, ..])
+            .SelectMany(instance => instance.Assumptions.Select(one => $"'{instance.Step.Name}' assumed about {one.About}: {one.Assumed} ({one.Why})"))
+            .ToList();
 
         return new JsonObject
         {
@@ -5753,8 +5823,8 @@ public sealed class FlowCoordinator
             ["passedOver"] = main.Count(instance => instance.PassedOver),
             ["leftover"] = leftover.Count > 0 ? string.Join("; ", leftover) : FlowChecks.None,
             ["preExisting"] = preExisting.Count > 0 ? string.Join("; ", preExisting) : FlowChecks.None,
-            // What the run's agents assumed without asking: a reason step records its own (slice 31), and none does yet.
-            ["assumptions"] = FlowChecks.None,
+            // What the run's agents assumed without asking, of every step that did: a person reads it and corrects it.
+            ["assumptions"] = assumed.Count > 0 ? string.Join("; ", assumed) : FlowChecks.None,
             ["ran"] = FlowChecks.Ran(checks.Select(CheckOf)),
             ["notRun"] = FlowChecks.NotRun(checks.Select(CheckOf), PendingChecks(path => true, checks), passedOver: false),
             ["red"] = FlowChecks.Red(checks.Select(CheckOf)),
@@ -6396,6 +6466,7 @@ public sealed class FlowCoordinator
             instance.Iteration,
             [.. instance._answers],
             WaitsOnOf(instance, walk),
+            [.. instance.Assumptions],
             [.. instance._handlers],
             instance.HandledBy,
             instance.Leftover?.DeepClone(),
@@ -7064,6 +7135,7 @@ public sealed class FlowCoordinator
             instance.FromResume = true;
             instance._handlers.AddRange(record.Handlers ?? []);
             instance._answers.AddRange(record.Answers);
+            instance.Assumptions = record.Assumptions ?? [];
 
             // Whether a failure is settled is read from where it left the run: passed over, ended the run, taken by its
             // group or by a handler. One still owed, or waiting on what raised for it, is not.
@@ -7071,10 +7143,11 @@ public sealed class FlowCoordinator
                 || instance.Failure is FlowFailure.PassedOver or FlowFailure.EndedRun or FlowFailure.TakenByGroup
                 || instance.HandledBy is not null;
 
-            if (instance.State is FlowInstanceState.Stopped or FlowInstanceState.Running && record.Handoff is { } handoff)
+            if (instance.State is FlowInstanceState.Stopped or FlowInstanceState.Running or FlowInstanceState.Paused && record.Handoff is { } handoff)
             {
-                // The handoff the stop left is in the step's own directory - and so is one an attempt a crash cut off
-                // still held, no prompt holding it yet: the resume is given it where it is, never one in its place.
+                // The handoff the stop or the limit left is in the step's own directory - and so is one an attempt a
+                // crash cut off still held, no prompt holding it yet, and one a step paused on a question was given for
+                // the attempt the answer goes on with: the resume is given it where it is, never one in its place.
                 instance.Handoff = from.Handoffs.TryGetValue(instance.Id, out var text)
                     ? new FlowHandoff(text, handoff.By, handoff.Why)
                     : null;

@@ -481,10 +481,12 @@ public sealed class AgentFallbackTests : IDisposable
     }
 
     /// <summary>
-    /// A message written by a model nobody asked for ends the step: no entry takes over, whatever the order holds.
+    /// A message written by a model nobody asked for is an agent failure like any other (the user, 2026-10-17): tried
+    /// again on the model that served it - its retries, and none here - and then on each next model of the order, for
+    /// only when every model was tried does the step end failed.
     /// </summary>
     [Fact]
-    public async Task AMessageOfAModelNobodyAskedFor_EndsTheStep()
+    public async Task AMessageOfAModelNobodyAskedFor_IsTriedAgainOnTheNextModel()
     {
         var first = new Scripted("claude-api")
         {
@@ -495,8 +497,8 @@ public sealed class AgentFallbackTests : IDisposable
 
         var result = await runner.RunAsync(Step(order: [Entry("claude-fable-5-1", "anthropic", "claude-api", key: "WORK_KEY"), Entry("glm-5.3", "zai", "glm", key: null)]), events: null, Token);
 
-        Assert.Equal(AgentRunStatus.WrongModel, result.Status);
-        Assert.Null(second.Given);
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.NotNull(second.Given);
     }
 
     /// <summary>When a limit lifts, where the provider says: a future one for coverage, a past one for its lifting.</summary>
@@ -620,7 +622,7 @@ public sealed class AgentFallbackTests : IDisposable
     {
         public string Name { get; } = name;
 
-        public AgentClientCapabilities Capabilities { get; } = new(
+        public AgentClientCapabilities Capabilities { get; init; } = new(
             Streaming: true,
             Thinking: true,
             WritableWhileWorking: true,
@@ -676,6 +678,125 @@ public sealed class AgentFallbackTests : IDisposable
     {
         await events.EmitAsync(new SessionStarted("claude-api", run.Model!, "hash", [], [], HandedConversation: false, run.Provider));
         return AgentEndings.AtLimit("the provider", new AgentAccountLimit(true, StillLifts, key), "credit balance too low", run.Mask) with { Turns = 1 };
+    }
+
+    /// <summary>
+    /// A failed agent is tried again on its model - its retries, waiting its backoff doubled before each later ask,
+    /// at most fifteen minutes - and only then does the step move to the next model, said so by the move its walk emits.
+    /// </summary>
+    [Fact]
+    public async Task AFailedAgent_IsTriedAgainOnItsModel_BeforeTheStepMovesToTheNextModel()
+    {
+        var asked = 0;
+        var failing = new Scripted("one")
+        {
+            Script = (run, events, _) =>
+            {
+                asked++;
+                return Task.FromResult(new AgentRunResult(AgentRunStatus.Failed, Model: run.Model, Error: "it broke"));
+            },
+        };
+        var next = new Scripted("glm") { Script = (run, events, _) => Completed(run, events, "glm-5.3", turns: 1) };
+        var runner = new AgentRunner([failing, next], _harness.FileSystem, Elevation.User, TimeProvider.System);
+        var seen = new Collecting();
+
+        var result = await runner.RunAsync(
+            Step([Entry("claude-fable-5-1", "anthropic", "one"), Entry("glm-5.3", "zai", "glm", key: null)]) with { Retries = 2, BackoffSeconds = 1 },
+            seen,
+            Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(3, asked);
+
+        var waits = seen.Seen.OfType<WaitingToRetry>().ToList();
+
+        Assert.Equal(2, waits.Count);
+        Assert.Equal(TimeSpan.FromSeconds(1), waits[0].Delay);
+        Assert.Equal(TimeSpan.FromSeconds(2), waits[1].Delay);
+        Assert.Contains("the agent failed", waits[0].Cause, StringComparison.Ordinal);
+
+        var moved = seen.Seen.OfType<FallbackStarted>().Single();
+
+        Assert.Equal("failed past its 2 retries", moved.Why);
+        Assert.Equal("glm-5.3", moved.ToModel);
+    }
+
+    /// <summary>
+    /// A failed agent with no retries given moves at once, and one whose retries are spent on its last model ends
+    /// failed: only when every model was tried does the failure meet the step's own ending.
+    /// </summary>
+    [Fact]
+    public async Task AFailedAgentWithNoRetries_MovesAtOnce_AndEndsFailedWhereEveryModelWasTried()
+    {
+        var failing = new Scripted("one") { Script = (run, events, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Failed, Model: run.Model, Error: "it broke")) };
+        var alsoFailing = new Scripted("glm") { Script = (run, events, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Failed, Model: run.Model, Error: "it broke too")) };
+        var runner = new AgentRunner([failing, alsoFailing], _harness.FileSystem, Elevation.User, TimeProvider.System);
+
+        var result = await runner.RunAsync(
+            Step([Entry("claude-fable-5-1", "anthropic", "one"), Entry("glm-5.3", "zai", "glm", key: null)]),
+            events: null,
+            Token);
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.Contains("it broke too", result.Error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The provider's service failing past the client's own tries is neither retried nor moved past: every model of
+    /// the step is reached through the same service, so the ending stands for the run to pause on.
+    /// </summary>
+    [Fact]
+    public async Task AProvidersServiceFailure_IsNeitherRetriedNorMovedPast()
+    {
+        var asked = 0;
+        var unreachable = new Scripted("one")
+        {
+            Script = (run, events, _) =>
+            {
+                asked++;
+                return Task.FromResult(new AgentRunResult(AgentRunStatus.Failed, Model: run.Model, Error: "the provider's service failed past its 4 tries: unreachable") { ServiceFailed = true });
+            },
+        };
+        var next = new Scripted("glm") { Script = (run, events, _) => Completed(run, events, "glm-5.3", turns: 1) };
+        var runner = new AgentRunner([unreachable, next], _harness.FileSystem, Elevation.User, TimeProvider.System);
+        var seen = new Collecting();
+
+        var result = await runner.RunAsync(
+            Step([Entry("claude-fable-5-1", "anthropic", "one"), Entry("glm-5.3", "zai", "glm", key: null)]) with { Retries = 3, BackoffSeconds = 1 },
+            seen,
+            Token);
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.True(result.ServiceFailed);
+        Assert.Equal(1, asked);
+        Assert.Empty(seen.Seen.OfType<WaitingToRetry>());
+        Assert.Empty(seen.Seen.OfType<FallbackStarted>());
+    }
+
+    /// <summary>
+    /// The stored conversation an attempt goes on with is handed to the entry that began it - its own client and
+    /// provider, on a client the engine hands conversations to - and to no other entry, nor a client that renders its
+    /// conversations.
+    /// </summary>
+    [Fact]
+    public async Task TheStoredConversationAnAttemptGoesOnWith_IsHandedToTheEntryThatBeganIt()
+    {
+        var handed = new AgentSessionRef("api", "anthropic", "11111111-1111-1111-1111-111111111111");
+        var stores = new Scripted("api")
+        {
+            Capabilities = new AgentClientCapabilities(
+                Streaming: true, Thinking: true, WritableWhileWorking: true, AgentConversationHandling.Handed, SchemaEnforcedOutput: false,
+                AgentToolsOwner.Harness, AgentToolsOwner.Harness, ReportsCost: false, ["low", "high"], ProviderType: "none", ToldModelBy: "the test"),
+            Script = (run, events, _) => Completed(run, events, run.Model!, turns: 1),
+        };
+        var renders = new Scripted("claude") { Script = (run, events, _) => Completed(run, events, run.Model!, turns: 1) };
+        var runner = new AgentRunner([stores, renders], _harness.FileSystem, Elevation.User, TimeProvider.System);
+        var step = Step([Entry("claude-fable-5-1", "anthropic", "api"), Entry("claude-opus-5-5", "anthropic", "claude")]) with { Conversation = handed };
+
+        _ = await runner.RunAsync(step, events: null, Token);
+
+        Assert.Same(handed, stores.Given!.Conversation);
+        Assert.Null(renders.Given);
     }
 
     /// <summary>A sink that collects what it is given.</summary>

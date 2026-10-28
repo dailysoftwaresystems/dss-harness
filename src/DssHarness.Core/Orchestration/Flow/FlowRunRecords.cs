@@ -587,6 +587,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.Item.IsMissing ? null : step.Item.ToNode(),
             step.Index,
             step.Iteration,
+            step.Assumptions is [_, ..] assumed ? [.. assumed] : null,
             step.Handlers,
             step.HandledBy,
             step.Leftover?.DeepClone(),

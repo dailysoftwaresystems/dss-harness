@@ -494,7 +494,20 @@ every step's models and levels, each provider's prices for the models its steps 
 date they were read, and each key a step's model would read that the slot lacks. A step's order over
 its tier's models is entries of a model and one of its provider's keys, each model's keys before the
 next model, and a model named outright - on the step or in its agent file - runs on that model with
-none after its own keys; `help agent-definitions` says what an agent file is and takes. A `test` step's
+none after its own keys; `help agent-definitions` says what an agent file is and takes.
+
+A reasoning step that says `ask: true` may put its questions to a person: the step pauses on them,
+and the answer - a free text, or `decide`, which leaves them to the agent and what it recommended -
+go on in the same attempt, `askRounds` times at most, on the two API clients as the next message of
+the stored conversation and on Claude Code as a new launch whose continuation record ends with the
+questions word for word. What an agent assumed without asking is kept either way - read as
+`<step>.assumptions` and named in the run's own `run.assumptions`, so an unattended run stops for
+nothing and hides nothing. A limit of a step's own - its turns, its budget, a truncated answer, a
+full context - asks: `retry` begins a new attempt, `more` (offered only where a stored conversation
+of the attempt can be handed) grants the bound once again in the same conversation, `compact` goes
+on from the engine's reduction of it, and a configuration may answer any of it beforehand. Every
+account a step could use at its limit, and a provider's service failing past the client's own tries,
+pause the run safely instead - never a failure - and the resume runs that very step. A `test` step's
 `filter` names the tests it runs; its `filterWhen` is an
 expression that switches it - where it reads false the step gives no filter and every test of its
 legs runs, as the shipped `verify` steps do where the run's input `affectedTests` is off, each item

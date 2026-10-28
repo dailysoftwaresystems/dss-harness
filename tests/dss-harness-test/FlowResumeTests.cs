@@ -1919,8 +1919,57 @@ public sealed class FlowResumeTests
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
 
-        Assert.Equal([new FlowAnswerGiven("q1", "allow")], next.Answers["fold@2"]);
-        Assert.Equal([new FlowAnswerGiven("q1", "allow")], harness.OrchestrationStore.ReadStepRecord(Path.Combine(layout.InstanceDirectory("fold", "a1"), OrchestratorLayout.StepRecordFileName))!.Answers);
+        // The answer carries its question's kind and the attempt it was given to, so the attempt a resume runs again
+        // knows what it answers and each attempt serves only its own.
+        Assert.Equal([new FlowAnswerGiven("q1", "allow", Kind: "foldNewRows", Attempt: 1)], next.Answers["fold@2"]);
+        Assert.Equal([new FlowAnswerGiven("q1", "allow", Kind: "foldNewRows", Attempt: 1)], harness.OrchestrationStore.ReadStepRecord(Path.Combine(layout.InstanceDirectory("fold", "a1"), OrchestratorLayout.StepRecordFileName))!.Answers);
+    }
+
+    /// <summary>
+    /// The handoff a limit's question wrote survives the crash that comes while the question waits: a step paused on
+    /// its own question keeps it, and the answer <c>retry</c> begins the next attempt told why the one before it ended.
+    /// </summary>
+    [Fact]
+    public async Task TheHandoffALimitsQuestionWrote_SurvivesTheCrashWhileTheQuestionWaits()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var end = await new FlowCoordinator(
+                definition,
+                new Runner().On("think", _ => FlowStepResult.AtLimit("turns", "20 turns")),
+                new RunnerFacts(),
+                records: records).RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+        }
+
+        var next = new Runner().On("think", run => FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+
+            Assert.True(coordinator.TryAnswer("q1", "retry", null, out _, FlowService.AnswerCommand));
+
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+
+            // The resumed attempt was told why the one before it ended: the engine's one-line handoff of the limit.
+            Assert.Contains("reached its turns", next.Given[2], StringComparison.Ordinal);
+        }
     }
 
     /// <summary>A work item that is JSON null is read back null, never Missing: the item a resume runs again is the one the run expanded.</summary>
@@ -2941,7 +2990,7 @@ public sealed class FlowResumeTests
             => new Runner()
                 .On("build", run => run.Visit == 1 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "red") : FlowStepResult.Ended(passed: true, 0))
                 .On("flaky", run => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "flaked"))
-                .On("think", run => run.Answers.Count == 0 ? FlowStepResult.AtLimit("turns") : FlowStepResult.Ended(passed: true, 0));
+                .On("think", run => run.Answers.Count == 0 ? FlowStepResult.AtLimit("turns") with { StoredConversation = true } : FlowStepResult.Ended(passed: true, 0));
 
         async Task<(FlowSessionEnd End, IReadOnlyList<FlowStepRecord> Steps, IReadOnlyList<FlowQuestionEntry> Questions, int Writes)> RunCutAsync(int writes)
         {

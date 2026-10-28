@@ -115,6 +115,11 @@ public sealed record FlowEvent(
 /// <param name="Visit">Which visit of the step this is.</param>
 /// <param name="Answers">The answers the questions of this visit were given, in the order they were given.</param>
 /// <param name="WaitsOn">What the instance waits on, where it waits: a dependency, a claim, a counter, a question, the resume.</param>
+/// <param name="Assumptions">
+/// What the step's agents assumed where a person could have told it, of every attempt of the visit - the envelope's own
+/// shape of each - read as <c>&lt;step&gt;.assumptions</c> and written into the run's own <c>run.assumptions</c>; null
+/// where nothing was.
+/// </param>
 /// <param name="Type">The step's type; null for a group's own record.</param>
 /// <param name="StartedAt">When this attempt began; written null until it has.</param>
 /// <param name="FinishedAt">When the instance ended; written null until it has.</param>
@@ -202,6 +207,7 @@ public sealed record FlowStepRecord(
     JsonNode? Item = null,
     int? Index = null,
     int? Iteration = null,
+    IReadOnlyList<Agents.AgentAssumption>? Assumptions = null,
     IReadOnlyList<FlowHandlerState>? Handlers = null,
     string? HandledBy = null,
     JsonNode? Leftover = null,
@@ -249,6 +255,7 @@ public sealed record FlowStepRecord(
             : Question is not null && !FlowQuestionIds.IsWellFormed(Question) ? $"'{Question}' is not a question's id"
             : Item is not null && Index is null ? "it holds an item without its index"
             : Answers.Any(answer => string.IsNullOrWhiteSpace(answer.Question) || string.IsNullOrWhiteSpace(answer.Answer)) ? "an answer names neither its question nor its answer"
+            : Assumptions?.Contains(null) == true ? "it names an assumption as null"
             : Handlers is { Count: > 0 } && Handlers.Any(handler => handler.Problem() is not null) ? $"its handlers hold one that is not a state: {Handlers.First(handler => handler.Problem() is not null).Problem()}"
             : HandledBy is not null && !FlowInstanceId.IsWellFormed(HandledBy) && !FlowQuestionIds.IsWellFormed(HandledBy) ? $"'{HandledBy}' names neither an instance nor a question"
             : RaisedBy is not null && !FlowInstanceId.IsWellFormed(RaisedBy) ? $"'{RaisedBy}' is not an instance id"
@@ -745,6 +752,7 @@ public sealed record FlowSnapshot(
 /// <param name="Iteration">The iteration of the repeat this instance is one of; null outside every one.</param>
 /// <param name="Answers">The answers the questions of this visit were given, in the order they were given.</param>
 /// <param name="WaitsOn">What the instance waits on, where it waits.</param>
+/// <param name="Assumptions">What the step's agents assumed where a person could have told it, of every attempt of the visit; null where nothing was.</param>
 /// <param name="Handlers">What the ending of this step owes and owes no longer: each handler declared beside it, and where it stands.</param>
 /// <param name="HandledBy">The handler that took this step's failure, where one did; null where none did.</param>
 /// <param name="Leftover">What a repeat that ended with its until still false says it left; null where the loop names none.</param>
@@ -784,6 +792,7 @@ public sealed record FlowSnapshotStep(
     int? Iteration,
     IReadOnlyList<FlowAnswerGiven> Answers,
     IReadOnlyList<string> WaitsOn,
+    IReadOnlyList<Agents.AgentAssumption>? Assumptions = null,
     IReadOnlyList<FlowHandlerState>? Handlers = null,
     string? HandledBy = null,
     JsonNode? Leftover = null,

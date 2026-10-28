@@ -8,7 +8,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>One answer a question was given, and what it carried beside it.</summary>
 /// <param name="Question">The question's id.</param>
 /// <param name="Answer">The answer, as the question's options spell it.</param>
-public sealed record FlowAnswerGiven(string Question, string Answer);
+/// <param name="Text">The text given with the answer, where it takes one; null where none was.</param>
+/// <param name="Kind">The question's kind, as the runner reads it to serve the answer; null where it was not said.</param>
+/// <param name="Attempt">The attempt the answer was given to; null where it was not said. An answer that goes on with an attempt belongs to it alone, and a later attempt serves none of an earlier one's.</param>
+public sealed record FlowAnswerGiven(string Question, string Answer, string? Text = null, string? Kind = null, int? Attempt = null);
 
 /// <summary>
 /// One issue a reason step's answer reports having met that was there before the run's changes: it reports; it never
@@ -342,6 +345,25 @@ public sealed record FlowStepResult
     /// </summary>
     public bool NameSpent { get; init; }
 
+    /// <summary>
+    /// The run must pause safely and this step runs again at the resume, never a failure: every account a reason step
+    /// could use is at its limit, or its provider's service failed past the client's own tries - the run's own answer,
+    /// for every model the step could move to would meet the same. Holds why; null for every other result.
+    /// </summary>
+    public string? Pauses { get; init; }
+
+    /// <summary>
+    /// What the step's agent assumed where a person could have told it - the envelope's own list, masked - kept for the
+    /// step's record whatever else the attempt ended by; empty where it assumed nothing.
+    /// </summary>
+    public IReadOnlyList<Agents.AgentAssumption> Assumptions { get; init; } = [];
+
+    /// <summary>
+    /// Whether a stored conversation of this attempt can be handed to a client - which is where the answer
+    /// <c>more</c> is offered, for more of the same conversation could not help elsewhere.
+    /// </summary>
+    public bool StoredConversation { get; init; }
+
     /// <summary>A result for a step that ended: passed or not, with its code.</summary>
     public static FlowStepResult Ended(bool passed, int exit, string? error = null, JsonNode? output = null, IReadOnlyList<FlowPreExistingReport>? preExisting = null)
         => new() { Asked = null, Passed = passed, Exit = exit, Error = error, Output = output, PreExisting = preExisting ?? [] };
@@ -370,6 +392,14 @@ public sealed record FlowStepResult
     /// <summary>A result for a reason step at a limit of its own.</summary>
     public static FlowStepResult AtLimit(string limit, string? detail = null)
         => new() { Asked = null, Passed = false, Exit = HarnessExit.CommandFailed, Limit = limit, LimitDetail = detail };
+
+    /// <summary>
+    /// A result for a reason step the run pauses safely for and resumes at that very step: never a failure, never a
+    /// question, for every model it could move to would meet the same.
+    /// </summary>
+    /// <param name="why">Why the run pauses: what every account or the provider's service did.</param>
+    public static FlowStepResult SafelyPausing(string why)
+        => new() { Asked = null, Passed = false, Exit = HarnessExit.Incomplete, Pauses = why };
 
     /// <summary>A result for a wait for checks that came to nothing it could end on.</summary>
     public static FlowStepResult Found(string checks, string? detail = null)

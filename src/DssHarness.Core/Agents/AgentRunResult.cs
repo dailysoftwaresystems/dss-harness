@@ -237,6 +237,15 @@ public sealed record AgentRunResult(
     public IReadOnlyList<string> Uncontained { get; init; } = [];
 
     /// <summary>
+    /// The provider's service failed past the client's own tries - unreachable, down, or refusing the account - which is
+    /// the provider's state and no model's answer: the run is neither retried on its model nor moved to another, for
+    /// every model of the step is reached through the same service. False for every other failure, and written only
+    /// where it is true.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ServiceFailed { get; init; }
+
+    /// <summary>
     /// What is wrong with this result, as its own fields say it; null when nothing is. Each field that only one ending
     /// carries is held to it - why it never began to <see cref="AgentRunStatus.NotStarted"/>, an account's limit to
     /// <see cref="AgentRunStatus.RateLimited"/>, what a declined request was of to <see cref="AgentRunStatus.Refused"/>, an
@@ -286,6 +295,7 @@ public sealed record AgentRunResult(
             : AgentAssumption.ProblemIn(Assumptions) is { } assumed ? $"its {assumed}"
             : AgentQuestion.ProblemIn(Questions) is { } asked ? $"its {asked}"
             : Status == AgentRunStatus.Completed && Error is not null ? "it completed, and says why it failed"
+            : Status is not (AgentRunStatus.Failed or AgentRunStatus.Stalled) && ServiceFailed ? $"it ended {Status}, and says the provider's service failed, which only a run that ended Failed or Stalled does"
             : Served.FirstOrDefault(served => served.FromTurn < 1) is { } early ? $"it names '{early.Model}' as serving from turn {early.FromTurn.ToString(System.Globalization.CultureInfo.InvariantCulture)}, and turns are counted from one"
             : null;
     }

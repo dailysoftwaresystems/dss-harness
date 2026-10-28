@@ -119,15 +119,18 @@ public sealed class ReasonStepRunnerTests
         FlowMadeAgent? made = null,
         IReadOnlyList<FlowWorkedFrom>? workedFrom = null,
         string? handoff = null,
-        int attempt = 1)
+        int attempt = 1,
+        IReadOnlyList<FlowAnswerGiven>? answers = null,
+        bool ask = false,
+        int? askRounds = null)
         => new(
-            new WorkflowStep { Name = "think", Type = "reason", Prompt = "prompts/plan.md", Outputs = "schemas/plan.schema.json" },
+            new WorkflowStep { Name = "think", Type = "reason", Prompt = "prompts/plan.md", Outputs = "schemas/plan.schema.json", Ask = ask, AskRounds = askRounds },
             "think",
             attempt,
             FlowValue.Missing,
             null,
             null,
-            [],
+            answers ?? [],
             new NoEvents(),
             handoff,
             Issue: null,
@@ -391,5 +394,211 @@ public sealed class ReasonStepRunnerTests
         Assert.Null(limited.Asked);
         Assert.False(limited.Passed);
         Assert.Equal("turns", limited.Limit);
+
+        // No stored conversation of the attempt is there - the engine holds none - so more of the same conversation
+        // could not help, and the question does not offer it.
+        Assert.False(limited.StoredConversation);
+
+        // The assumptions of an answer that read are the step's, whatever else it ended by.
+        agents.Answer = _ => new AgentRunResult(AgentRunStatus.Completed, FinalText: "done")
+        {
+            Assumptions = [new AgentAssumption("the framework", "the newest", "the plan names none")],
+        };
+
+        var assumed = await runner.RunAsync(Run(kit, agent: "reader"), Token);
+
+        Assert.Single(assumed.Assumptions);
+        Assert.Equal("the framework", assumed.Assumptions[0].About);
+    }
+
+    /// <summary>
+    /// The person asked is the step's question: the agent's questions ride with it, the engine's problem is written
+    /// from what its records hold - each question with the answer its agent recommends - and the answers it takes are
+    /// the ask kind's own.
+    /// </summary>
+    [Fact]
+    public async Task ThePersonAsked_IsTheStepsQuestion_WithTheAgentsQuestionsAndItsRecommendation()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        agents.Answer = _ => new AgentRunResult(AgentRunStatus.Asked, FinalText: "which way?")
+        {
+            Questions = [new AgentQuestion("which way?", "two ways stand", "the map", "the route", ["left", "right"], "left", "it is shorter")],
+        };
+
+        var asking = await Runner(kit, agents).RunAsync(Run(kit, agent: "reader"), Token);
+
+        Assert.NotNull(asking.Asked);
+        Assert.Equal("ask", asking.Asked.Kind);
+        Assert.Equal(["answer", "decide", "abort"], asking.Asked.Options);
+        Assert.Equal("which way?", asking.Asked.AgentQuestions.Single().Question);
+        Assert.Equal("agent", asking.Asked.Recommendation.By);
+        Assert.Contains("which way?", asking.Asked.Problem, StringComparison.Ordinal);
+        Assert.Contains("it recommends 'left'", asking.Asked.Problem, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An answer that goes on with the attempt is its next message: the person's words where they answered, what a
+    /// granted bound says where they allowed more - and the step's own filled prompt where none did.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerThatGoesOnWithTheAttempt_IsItsNextMessage()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var runner = Runner(kit, agents);
+
+        await runner.RunAsync(Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "answer", "split the parser item in two", "ask", Attempt: 1)]), Token);
+
+        Assert.Equal($"The person answered:{Environment.NewLine}split the parser item in two", agents.Asked[0].PromptTemplate);
+
+        await runner.RunAsync(Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "decide", null, "ask", Attempt: 1)]), Token);
+
+        Assert.Contains("leaves the questions to you", agents.Asked[1].PromptTemplate, StringComparison.Ordinal);
+
+        await runner.RunAsync(Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "more", null, "turnLimit", Attempt: 1)]), Token);
+
+        Assert.Contains("allowed the step's turn bound once again", agents.Asked[2].PromptTemplate, StringComparison.Ordinal);
+
+        await runner.RunAsync(Run(kit, agent: "reader"), Token);
+
+        Assert.Equal("Plan the work.", agents.Asked[3].PromptTemplate);
+
+        // An earlier attempt's answers are never served: each attempt is its own, and the second begins a fresh start
+        // even where the first was answered.
+        await runner.RunAsync(Run(kit, agent: "reader", attempt: 2, answers: [new FlowAnswerGiven("q1", "answer", "split the parser item in two", "ask", Attempt: 1)]), Token);
+
+        Assert.Equal("Plan the work.", agents.Asked[4].PromptTemplate);
+    }
+
+    /// <summary>
+    /// A full context answered <c>compact</c> begins a NEW conversation from the engine's reduction of the attempt's
+    /// own - the exhausted conversation is handed to no client, however plainly it is there, and stays whole on the
+    /// disk.
+    /// </summary>
+    [Fact]
+    public async Task AFullContextAnsweredCompact_BeginsANewConversation()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+
+        // A stored conversation of the attempt, plain on the disk: a session the stream names and the engine holds.
+        var session = Guid.NewGuid().ToString("D");
+        var directory = kit.Layout.AgentStepDirectory("reader", "think");
+        Directory.CreateDirectory(directory);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, StoredStream.FileName),
+            $$"""{"kind":"sessionStarted","seq":1,"at":"2026-10-28T10:00:00Z","client":"claude-api","model":"claude-opus-5-5","systemPromptHash":"hash","tools":[],"skills":[],"handedConversation":false,"provider":"anthropic","sessionId":"{{session}}"}""" + "\n",
+            Token);
+        var sessions = Path.Combine(kit.Layout.AgentDirectory("reader"), "sessions", session);
+        Directory.CreateDirectory(sessions);
+        await File.WriteAllTextAsync(Path.Combine(sessions, "conversation.jsonl"), "[]\n", Token);
+
+        await Runner(kit, agents).RunAsync(
+            Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "compact", null, "contextLimit", Attempt: 1)]),
+            Token);
+
+        Assert.Null(agents.Asked.Single().Conversation);
+    }
+
+    /// <summary>
+    /// The handoff the attempt is given stands at the head of its prompt, and is spent once the prompt holds it - the
+    /// engine's own one-line handoff a limit's question wrote, or a stop's the agent's words of.
+    /// </summary>
+    [Fact]
+    public async Task TheHandoffTheAttemptIsGiven_StandsAtTheHeadOfItsPrompt_AndIsSpent()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var spent = new CountingEvents();
+
+        await Runner(kit, agents).RunAsync(Run(kit, agent: "reader", handoff: "what was left", answers: [new FlowAnswerGiven("q1", "retry", null, "turnLimit")]) with { Events = spent }, Token);
+
+        Assert.StartsWith($"<handoff>{Environment.NewLine}what was left{Environment.NewLine}</handoff>", agents.Asked.Single().PromptTemplate, StringComparison.Ordinal);
+        Assert.Equal(1, spent.Taken);
+    }
+
+    /// <summary>
+    /// The rounds a step that may ask is given are spent by the answers its questions were given: the output it is
+    /// held to offers what is left, and none after the last.
+    /// </summary>
+    [Fact]
+    public async Task TheRoundsAStepThatMayAskIsGiven_AreSpentByItsAnswers()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var runner = Runner(kit, agents);
+
+        await runner.RunAsync(Run(kit, agent: "reader", ask: true, askRounds: 3), Token);
+
+        Assert.Equal(3, agents.Asked[0].Output!.AskRounds);
+
+        await runner.RunAsync(Run(kit, agent: "reader", ask: true, askRounds: 3, answers: [new FlowAnswerGiven("q1", "answer", "first", "ask", Attempt: 1)]), Token);
+
+        Assert.Equal(2, agents.Asked[1].Output!.AskRounds);
+
+        await runner.RunAsync(Run(kit, agent: "reader", ask: true, askRounds: 2, answers: [new FlowAnswerGiven("q1", "answer", "first", "ask", Attempt: 1), new FlowAnswerGiven("q2", "decide", null, "ask", Attempt: 1)]), Token);
+
+        Assert.Equal(0, agents.Asked[2].Output!.AskRounds);
+
+        await runner.RunAsync(Run(kit, agent: "reader"), Token);
+
+        Assert.Null(agents.Asked[3].Output!.AskRounds);
+    }
+
+    /// <summary>
+    /// Every account at its limit, and the provider's service failing past the client's own tries, pause the run safely
+    /// and resume this very step: no failure, no question, and the step runs again.
+    /// </summary>
+    [Fact]
+    public async Task EveryAccountAtItsLimit_AndAServiceFailure_PauseTheRunSafely()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var runner = Runner(kit, agents);
+
+        agents.Answer = _ => new AgentRunResult(AgentRunStatus.RateLimited, Error: "still limited after 4 tries")
+        {
+            Limit = new AgentAccountLimit(BalanceSpent: false),
+        };
+
+        var limited = await runner.RunAsync(Run(kit, agent: "reader"), Token);
+
+        Assert.Null(limited.Asked);
+        Assert.Null(limited.Limit);
+        Assert.NotNull(limited.Pauses);
+        Assert.Contains("still limited", limited.Pauses, StringComparison.Ordinal);
+
+        agents.Answer = _ => new AgentRunResult(AgentRunStatus.Failed, Error: "the provider's service failed past its 4 tries: unreachable") { ServiceFailed = true };
+
+        var service = await runner.RunAsync(Run(kit, agent: "reader"), Token);
+
+        Assert.NotNull(service.Pauses);
+        Assert.Null(service.Error);
+    }
+
+    /// <summary>The events of a run, counting the handoff it says was taken.</summary>
+    private sealed class CountingEvents : IFlowRunEvents
+    {
+        /// <summary>How many handoffs were taken.</summary>
+        public int Taken { get; private set; }
+
+        public void LegPlaced(string leg, bool inACopy) { }
+
+        public void EveryLegPlaced() { }
+
+        public void LegCopyMade(string leg) { }
+
+        public void LegEnded(string leg) { }
+
+        public void Used(long tokens, double usd) { }
+
+        public void HandoffTaken() => Taken++;
     }
 }

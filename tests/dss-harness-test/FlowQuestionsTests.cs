@@ -540,8 +540,8 @@ public sealed class FlowQuestionsTests
             """);
         var runner = new FakeRunner().Queue(
             "think",
-            FlowStepResult.AtLimit("turns", "12 turns"),
-            FlowStepResult.AtLimit("context", "the conversation filled it"),
+            FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true },
+            FlowStepResult.AtLimit("context", "the conversation filled it") with { StoredConversation = true },
             FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}""")));
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
@@ -550,6 +550,7 @@ public sealed class FlowQuestionsTests
         Assert.Equal(FlowRunStatus.Paused, end.Status);
         var first = coordinator.OpenQuestions.Single();
         Assert.Equal("turnLimit", first.Kind);
+        // A stored conversation of the attempt can be handed, so more of it is offered.
         Assert.Equal(["retry", "more", "fail", "abort"], first.Options);
 
         Assert.True(coordinator.TryAnswer(first.Id, "more", out var more));
@@ -574,6 +575,40 @@ public sealed class FlowQuestionsTests
         Assert.Equal(3, asked.Count);
         Assert.All(asked, run => Assert.Equal(1, run.Attempt));
         Assert.Equal(["more", "compact"], asked[2].Answers.Select(answer => answer.Answer));
+    }
+
+    /// <summary>
+    /// A reason step's limit offers <c>more</c> only where a stored conversation of the attempt can be handed: a runner
+    /// that says one is there offers it, and the answer goes on in the same attempt as every answer that lets the step's
+    /// work go on does.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepAtItsLimit_WhereAStoredConversationCanBeHanded_OffersMore()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var runner = new FakeRunner().Queue(
+            "think",
+            FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true },
+            FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var first = coordinator.OpenQuestions.Single();
+        Assert.Equal("turnLimit", first.Kind);
+        Assert.Equal(["retry", "more", "fail", "abort"], first.Options);
+
+        Assert.True(coordinator.TryAnswer(first.Id, "more", out _));
+        end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(FlowRunStatus.Done, end.Status);
     }
 
     /// <summary>A wait for checks asks by what it found, and its fail answer ends the step with the code each reading gives.</summary>
@@ -908,4 +943,11 @@ public sealed class FlowQuestionsTests
         Assert.Equal(HarnessExit.ConfigInvalid, rounds.Exit);
         Assert.Equal("expression 'until' of 'rounds#1': 'done.absent' reads nothing", rounds.Error);
     }
+
+    /// <summary>An agent's questions are answered with a text: <c>answer</c> takes one, <c>decide</c> and <c>abort</c> take none.</summary>
+    [Fact]
+    public void AnAgentsAnswer_TakesAText_AndDecideTakesNone()
+        => Assert.Equal(
+            [true, false, false],
+            FlowQuestions.HeldOptionsOf("ask", step: null, ["answer", "decide", "abort"]).Select(option => option.Text));
 }
