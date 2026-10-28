@@ -1793,6 +1793,17 @@ before it is sent or stored. Every client ends a run in the same words, whatever
 never began, a model nobody asked for, an answer outside its schema, a declined request and an account at its limit are
 each said by `AgentEndings`, and what a run used, by model, is counted by `AgentUsageTally`.
 
+The runs of one provider and one key go through one lane of the gate (`Agents\ClientGate.cs`, held by its own tests
+over a clock and a wait that move only when told): at most `agentClients.<client>.maxParallel` under way at once
+(`ClientGateSettings.BuiltIn`, 3 for claude-code, 4 for claude-api and 2 for glm where the entry says none; a client
+that signs in with a login one lane by its client, two keys of one provider two lanes keyed by a hash of the key -
+`ClientGates.Lane`, made once and shared), the API clients' optional buckets pacing a lane's minute
+(`requestsPerMinute`, `inputTokensPerMinute` counted as a request enters and `outputTokensPerMinute` charged by
+`ClientSlot.Answered` once the answer is had, each waited out until the oldest of the minute is a minute old) and a
+429's cool-down holding every waiter (`RateLimited`, never shortened by a sooner one). No command of this build runs a
+step yet, so no gate opens one; the engine's step runner (part 04) holds the lane a run's requests go through, beside
+the orchestrator's `maxReasoningAgents`.
+
 The `claude-api` client is `Agents\ClaudeApi\ClaudeApiClient`: the loop over `ClaudeApiProvider`, built for each run
 from the run's entries (`AgentEntries`: the provider's, the model's and the client's own where the configuration
 declares one, which the runner copies from the step's request) and refusing a start without the provider's and the

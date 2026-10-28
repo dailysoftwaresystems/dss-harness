@@ -2662,6 +2662,19 @@ public static class HelpTopics
         builder.AppendLine("the old is kept whole, never edited or sent again; a claude-code child is started with");
         builder.AppendLine("DISABLE_COMPACT=1, so it never compacts by itself and a full context ends the step");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "The runs of one provider and one key go through one lane of the gate: at most "
+            + $"agentClients.<client>.maxParallel of them under way at once ({string.Join(", ", Agents.ClientGateSettings.BuiltIn.Select(bound => $"{bound.Key} {bound.Value}"))} "
+            + "where the entry says none; a client that signs in with a login is one lane by its client, and two keys of one "
+            + "provider two lanes, keyed by a hash of the key). Beside it the API clients' optional buckets pace a lane's "
+            + "minute - requestsPerMinute, inputTokensPerMinute (a request's own counted as it enters) and "
+            + "outputTokensPerMinute (an answer's counted once it is had), each waited out until the oldest of the minute is "
+            + "a minute old - and a 429's cool-down holds every waiter of the lane, a later or longer one holding past a "
+            + "sooner one. Left out, the provider's answers pace the client; the orchestrator's maxReasoningAgents bounds "
+            + "agents beside the gate, and both apply. No command of this build runs a step yet, so no gate opens one; the "
+            + "engine's step runner holds the lane a run's requests go through.");
+        builder.AppendLine();
         builder.AppendLine("This build checks configurations and definitions against these sections and writes them with");
         builder.AppendLine($"init (and '{ToolPackage.Command} init' writes the prices it holds, as read on their date).");
         builder.AppendLine();
@@ -4716,10 +4729,15 @@ public static class HelpTopics
         builder.AppendLine($"                 it starts ({Orchestration.ClaudeTranscripts.ConfigDirectoryVariable}, {Agents.ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable} where none is named);");
         builder.AppendLine("                 maxRetries, maxRetryWaitSeconds and requestExtras, the API");
         builder.AppendLine($"                 clients' ({string.Join(", ", Agents.AgentProviders.ApiClients)}), their tries, longest wait and the");
-        builder.AppendLine("                 fields merged into each request; cacheTtl and betas, claude-api's");
+        builder.AppendLine("                 fields merged into each request; requestsPerMinute,");
+        builder.AppendLine("                 inputTokensPerMinute and outputTokensPerMinute, the API clients'");
+        builder.AppendLine("                 too, the buckets that pace a lane's minute; cacheTtl and betas,");
+        builder.AppendLine("                 claude-api's");
         builder.AppendLine("                 alone, how long its requests are cached and the betas sent beside");
         builder.AppendLine("                 the tool's own; preserveThinking, glm's alone, whether Z.AI keeps");
-        builder.AppendLine("                 the model's reasoning across turns;");
+        builder.AppendLine("                 the model's reasoning across turns; maxParallel, every client's,");
+        builder.AppendLine($"                 the runs of one provider and key under way at once ({string.Join(", ", Agents.ClientGateSettings.BuiltIn.Select(bound => $"{bound.Key} {bound.Value}"))}");
+        builder.AppendLine("                 where nothing is said) - the gate of 'help agent-clients';");
         builder.AppendLine("                 a client holds no model, size or price - contextTokens and");
         builder.AppendLine("                 maxOutputTokens are a model's ('help agent-clients')");
         builder.AppendLine("  agentPolicy    what an agent may do beyond the rules built into the tool:");

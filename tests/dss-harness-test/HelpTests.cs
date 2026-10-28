@@ -156,13 +156,45 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The agent-clients topic says the gate: one lane per provider and key, the client's parallel bound with the
+    /// built-in's own beside it, the API clients' optional buckets, the 429 cool-down holding every waiter, and that
+    /// the step runner holds the lane - and the README says the same.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_SaysTheGateOfOneLanePerProviderAndKey()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains(
+            "The runs of one provider and one key go through one lane of the gate: at most "
+                + "agentClients.<client>.maxParallel of them under way at once (claude-code 3, claude-api 4, glm 2 "
+                + "where the entry says none; a client that signs in with a login is one lane by its client, and two keys of one "
+                + "provider two lanes, keyed by a hash of the key).",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a 429's cool-down holds every waiter of the lane, a later or longer one holding past a sooner one",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Left out, the provider's answers pace the client; the orchestrator's maxReasoningAgents bounds agents beside the gate, and both apply",
+            prose,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "The runs of one provider and one key go through one lane of the gate: at most "
+                + "`agentClients.<client>.maxParallel` of them under way at once (3 for claude-code, 4 for claude-api and 2 for glm where",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The config topic names every agent section of the file's top level, agentClients among them - its one key, and
     /// that a client holds no size, a model's sizes being its own - and the agent-clients topic the name rules.
     /// </summary>
     [Fact]
     public async Task ConfigTopic_NamesTheAgentClientsSection_AndTheAgentClientsTopicTheNameRules()
-    {
-        var config = Prose.Words(HelpText.Of("config").StandardOutput);
+    {        var config = Prose.Words(HelpText.Of("config").StandardOutput);
 
         Assert.Contains(
             "agentClients the clients the tool builds in (claude-code, claude-api, glm), each by its name: update, claude-code's alone, says "
@@ -170,10 +202,13 @@ public sealed partial class HelpTests
                 + "oauthToken, authToken, login where nothing is said), and token the variable a token is held under; configDir and "
                 + "executable, claude-code's alone, the variables that hold a specific login's Claude Code directory and the program it "
                 + "starts (CLAUDE_CONFIG_DIR, CLAUDE_EXECUTABLE where none is named); maxRetries, maxRetryWaitSeconds and requestExtras, "
-                + "the API clients' (claude-api, glm), their tries, longest wait and the fields merged into each request; cacheTtl and "
-                + "betas, claude-api's alone, how long its requests are cached and the betas sent beside the tool's own; "
-                + "preserveThinking, glm's alone, whether Z.AI keeps the model's reasoning across turns; a client holds no "
-                + "model, size or price - contextTokens and maxOutputTokens are a model's ('help agent-clients')",
+                + "the API clients' (claude-api, glm), their tries, longest wait and the fields merged into each request; "
+                + "requestsPerMinute, inputTokensPerMinute and outputTokensPerMinute, the API clients' too, the buckets that pace a "
+                + "lane's minute; cacheTtl and betas, claude-api's alone, how long its requests are cached and the betas sent beside "
+                + "the tool's own; preserveThinking, glm's alone, whether Z.AI keeps the model's reasoning across turns; maxParallel, "
+                + "every client's, the runs of one provider and key under way at once (claude-code 3, claude-api 4, glm 2 where "
+                + "nothing is said) - the gate of 'help agent-clients'; a client holds no model, size or price - contextTokens and "
+                + "maxOutputTokens are a model's ('help agent-clients')",
             config,
             StringComparison.Ordinal);
 

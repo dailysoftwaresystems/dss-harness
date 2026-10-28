@@ -868,6 +868,17 @@ record is the first message of one and the old is kept whole, never edited or se
 `claude-code` child is started with `DISABLE_COMPACT=1`, so it never compacts by itself and a full
 context ends the step `ContextExhausted`, which the engine's compaction is what follows.
 
+The runs of one provider and one key go through one lane of the gate: at most
+`agentClients.<client>.maxParallel` of them under way at once (3 for claude-code, 4 for claude-api and 2 for glm where
+the entry says none; a client that signs in with a login is one lane by its client, and two keys of one provider two
+lanes, keyed by a hash of the key). Beside it the API clients' optional buckets pace a lane's minute -
+`requestsPerMinute`, `inputTokensPerMinute` (a request's own counted as it enters) and `outputTokensPerMinute` (an
+answer's counted once it is had), each waited out until the oldest of the minute is a minute old - and a 429's
+cool-down holds every waiter of the lane, a later or longer one holding past a sooner one. Left out, the provider's
+answers pace the client; the orchestrator's `maxReasoningAgents` bounds agents beside the gate, and both apply. No
+command of this build runs a step yet, so no gate opens one; the engine's step runner holds the lane a run's requests
+go through (`help agent-clients`).
+
 A reason step's prompt says `{skill.<name>}` where a skill's text goes, and the engine puts the
 text there before the prompt is sent, on every client alike (`help skills`): the two API clients
 have no skill mechanism, and the `claude` child is started with `--setting-sources user`, under

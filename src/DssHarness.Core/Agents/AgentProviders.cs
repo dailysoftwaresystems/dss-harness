@@ -419,6 +419,9 @@ public sealed partial class AgentProviders
                 ("maxRetries", entry.MaxRetries is not null, "how many times a failed request is asked again", apis),
                 ("maxRetryWaitSeconds", entry.MaxRetryWaitSeconds is not null, "the longest wait before a failed request is asked again", apis),
                 ("requestExtras", entry.RequestExtras is not null, "the fields merged into every request's body", apis),
+                ("requestsPerMinute", entry.RequestsPerMinute is not null, "at most this many requests in any minute on one provider and key", apis),
+                ("inputTokensPerMinute", entry.InputTokensPerMinute is not null, "at most this many input tokens in any minute on one provider and key", apis),
+                ("outputTokensPerMinute", entry.OutputTokensPerMinute is not null, "at most this many output tokens in any minute on one provider and key", apis),
                 ("cacheTtl", entry.CacheTtl is not null, "how long what a request caches is kept", [Claude]),
                 ("betas", entry.Betas is not null, "the beta headers sent beside the tool's own", [Claude]),
                 ("preserveThinking", entry.PreserveThinking is not null, "whether Z.AI keeps the model's reasoning across turns", [Glm]),
@@ -429,6 +432,21 @@ public sealed partial class AgentProviders
                 problems.Add(of is [var alone]
                     ? $"{where} names {key}, a key of the {alone} client alone: {what}"
                     : $"{where} names {key}, a key of the API clients alone ({string.Join(", ", of)}): {what}");
+            }
+
+            if (entry.MaxParallel is < 1)
+            {
+                problems.Add($"{where} maxParallel is {entry.MaxParallel.Value.ToString(CultureInfo.InvariantCulture)}; the runs of one provider and key under way at once is one or more");
+            }
+
+            foreach (var (key, given) in new (string Key, int? Given)[]
+            {
+                ("requestsPerMinute", entry.RequestsPerMinute),
+                ("inputTokensPerMinute", entry.InputTokensPerMinute),
+                ("outputTokensPerMinute", entry.OutputTokensPerMinute),
+            }.Where(bucket => bucket.Given is < 1))
+            {
+                problems.Add($"{where} {key} is {given!.Value.ToString(CultureInfo.InvariantCulture)}; a minute's bucket is one or more, or left out");
             }
 
             if (KindOf(client) is not { ExtrasProblems: { } extrasProblems })
