@@ -193,9 +193,10 @@ public sealed record AgentLimits(int? MaxTurns, decimal? MaxBudgetUsd, TimeSpan?
 /// <summary>One skill the step's prompt named, as the run was given it.</summary>
 /// <param name="Name">The skill's name.</param>
 /// <param name="Where">Where it was read.</param>
-/// <param name="Digest">Its digest.</param>
+/// <param name="Digest">The SHA-256 of its <c>SKILL.md</c>, lowercase hex.</param>
+/// <param name="FolderDigest">The SHA-256 of its folder, over each file's path and content in order.</param>
 /// <param name="Folder">The folder handed to the step.</param>
-public sealed record AgentSkill(string Name, string Where, string Digest, string Folder);
+public sealed record AgentSkill(string Name, string Where, string Digest, string FolderDigest, string Folder);
 
 /// <summary>
 /// The signal the engine raises when a run is pausing, beside the cancellation token, which stays the hard stop: the

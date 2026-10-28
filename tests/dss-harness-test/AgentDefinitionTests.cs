@@ -111,11 +111,14 @@ public sealed class AgentDefinitionTests
     {
         var (none, noFrontmatter) = AgentDefinitionParser.Parse("You do the work.\n", "worker");
         var (empty, noPrompt) = AgentDefinitionParser.Parse("---\nname: worker\ndescription: does the work\n---\n", "worker");
+        var (closed, endsAtTheClosingLine) = AgentDefinitionParser.Parse("---\nname: worker\ndescription: does the work\n---", "worker");
 
         Assert.Null(none);
         Assert.Equal(["the file holds no frontmatter: '---' on the first line, the agent's keys, '---' again, and the system prompt after it"], noFrontmatter);
         Assert.Null(empty);
         Assert.Equal(["the file holds no prompt: the body after its frontmatter is the agent's system prompt, verbatim"], noPrompt);
+        Assert.Null(closed);
+        Assert.Equal(["the file holds no prompt: the body after its frontmatter is the agent's system prompt, verbatim"], endsAtTheClosingLine);
     }
 
     /// <summary>A key of another tool's agent files names the key of this tool's that says it.</summary>

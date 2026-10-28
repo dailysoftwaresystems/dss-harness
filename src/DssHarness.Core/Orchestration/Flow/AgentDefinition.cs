@@ -258,7 +258,8 @@ public static class AgentDefinitionParser
 
             if (text.AsSpan(at, (end < 0 ? text.Length : end) - at).TrimEnd('\r').SequenceEqual("---"))
             {
-                return (text[opening..at], text[((end < 0 ? text.Length : end) + 1)..]);
+                // The closing '---' may end the file; the body is then empty rather than past the file's end.
+                return (text[opening..at], text[(end < 0 ? text.Length : end + 1)..]);
             }
 
             if (end < 0)

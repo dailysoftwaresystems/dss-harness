@@ -155,17 +155,23 @@ public static class WorkflowValidator
     /// The configuration's web search, resolved; or <see langword="null"/> where the configuration cannot be given, which
     /// leaves V55's names unchecked, a name given twice refused all the same.
     /// </param>
+    /// <param name="skills">
+    /// The lookup of the skills a prompt names, in the three places; or <see langword="null"/> where the caller reads no
+    /// files of the repository, which leaves every <c>{skill.&lt;name&gt;}</c> unlooked-for - a check that reads no file
+    /// cannot say one is missing.
+    /// </param>
     public static IReadOnlyList<string> Validate(
         WorkflowDefinition definition,
         bool hasCommitTemplate,
         Func<string, string?>? files,
         DssHarness.Core.Agents.AgentProviders? providers = null,
         IReadOnlyList<string>? languages = null,
-        Web.Search.WebSearchSources? search = null)
+        Web.Search.WebSearchSources? search = null,
+        AgentSkills? skills = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        var check = new Check(definition, hasCommitTemplate, files, providers, languages, search);
+        var check = new Check(definition, hasCommitTemplate, files, providers, languages, search, skills);
         return check.Problems;
     }
 
@@ -293,7 +299,8 @@ public static class WorkflowValidator
             Func<string, string?>? files,
             DssHarness.Core.Agents.AgentProviders? providers = null,
             IReadOnlyList<string>? languages = null,
-            Web.Search.WebSearchSources? search = null)
+            Web.Search.WebSearchSources? search = null,
+            AgentSkills? skills = null)
         {
             _definition = definition;
             _hasCommitTemplate = hasCommitTemplate;
@@ -301,6 +308,7 @@ public static class WorkflowValidator
             _providers = providers;
             _languages = languages;
             _search = search;
+            _skills = skills;
 
             DefinitionRules();
             Index(definition.Steps, parent: null);
@@ -310,6 +318,7 @@ public static class WorkflowValidator
             Cycle();
             WorkflowAnswers();
             Steps();
+            AgentBodies();
             CodebaseGraph();
             Amend();
             Checkpoints();
@@ -672,6 +681,7 @@ public static class WorkflowValidator
 
                 Templates(entry, type);
                 Prompts(entry);
+                Skills(entry);
             }
         }
 
@@ -1762,7 +1772,8 @@ public static class WorkflowValidator
                     return;
 
                 case "skill":
-                    // A reason step's prompt takes a skill's text; whether the skill is there is the check of the skills.
+                    // A reason step's prompt takes a skill's text; whether the skill is there and can be used is the
+                    // lookup's own check, over the prompt again with the place and line each name stands on.
                     if (readIn == ReadIn.StepPrompt)
                     {
                         return;
@@ -2463,6 +2474,34 @@ public static class WorkflowValidator
             foreach (var problem in problems)
             {
                 _problems.Add($"agents/{agent}.md: {problem}");
+            }
+
+            // The body is the system prompt, sent as written: a skill's text is a step's prompt's to name, and nothing
+            // fills a placeholder there. Said at the file's own line, past the frontmatter.
+            if (definition is { } parsed)
+            {
+                var lines = text.Split('\n');
+                var closed = 0;
+                var body = lines.Length;
+
+                for (var line = 0; line < lines.Length; line++)
+                {
+                    if (lines[line].TrimEnd('\r') == "---" && ++closed == 2)
+                    {
+                        body = line + 1;
+                        break;
+                    }
+                }
+
+                while (body < lines.Length)
+                {
+                    foreach (var named in WorkflowExpressions.TemplateReads(lines[body]).Where(named => named.Root == "skill"))
+                    {
+                        _problems.Add($"agent '{agent}' names {{{named.Whole}}} in its body (line {body + 1}): the body is the system prompt and is sent as written. Name the skill in a step's prompt");
+                    }
+
+                    body++;
+                }
             }
 
             return _agents[agent] = definition;
@@ -3192,6 +3231,12 @@ public static class WorkflowValidator
         /// <summary>The configuration's web search, where the caller gave it: V55's names are checked only under a configuration the caller chose.</summary>
         private readonly Web.Search.WebSearchSources? _search;
 
+        /// <summary>
+        /// The lookup of the skills a prompt names, in the three places; <see langword="null"/> where the caller reads
+        /// no files of the repository, which leaves every <c>{skill.&lt;name&gt;}</c> unlooked-for.
+        /// </summary>
+        private readonly AgentSkills? _skills;
+
         /// <summary>Each reason step's schema as a reading, by the path its <c>outputs</c> names; <see langword="null"/> where it types nothing.</summary>
         private readonly Dictionary<string, JsonSchemaSubset.Reading?> _schemas = new(StringComparer.Ordinal);
 
@@ -3782,6 +3827,119 @@ public static class WorkflowValidator
 
                     TemplateRead(entry, read, what, readIn);
                 });
+            }
+        }
+
+        /// <summary>
+        /// Checks every skill a reason step's <c>prompt</c> and <c>resumePrompt</c> name, each at the line it first
+        /// stands on: the lookup's answer - no such skill, with every place looked for it, or one that is there and
+        /// cannot be used, its <c>allowed-tools</c> held to the capabilities of the step's agent - and a skill named
+        /// twice in one prompt, for once is enough. Where the caller gave no lookup none is looked for, and where no
+        /// files are given no prompt is read.
+        /// </summary>
+        private void Skills(Entry entry)
+        {
+            var step = entry.Step;
+
+            if (step.Type != "reason")
+            {
+                return;
+            }
+
+            foreach (var (key, named) in new[] { ("prompt", step.Prompt), ("resumePrompt", step.ResumePrompt) })
+            {
+                if (named is null || _files?.Invoke(named) is not { } text)
+                {
+                    continue;
+                }
+
+                var lines = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+                var written = text.Split('\n');
+
+                for (var line = 0; line < written.Length; line++)
+                {
+                    // Every placeholder of the line, not the reads it yields once each: a skill named twice on one line
+                    // is named twice.
+                    foreach (var piece in FlowTemplate.Pieces(written[line]).TakeWhile(each => each.Kind != FlowTemplate.PieceKind.Unclosed))
+                    {
+                        if (piece.Kind != FlowTemplate.PieceKind.Placeholder || piece.Name.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        var read = WorkflowExpressions.ReadOf(piece.Name, true, false);
+
+                        if (read.Root != "skill")
+                        {
+                            continue;
+                        }
+
+                        if (read.Whole.Contains('['))
+                        {
+                            _problems.Add($"{key} '{named}' line {line + 1} names {{{read.Whole}}}, which reads an index: a skill is named by its folder's name alone");
+                            continue;
+                        }
+
+                        var name = string.Join(".", read.Names.Skip(1));
+
+                        if (name.Length == 0)
+                        {
+                            _problems.Add($"step '{entry.Path}' {key} '{named}' line {line + 1} names '{{skill}}' alone: name one - {{skill.<name>}} names it by its folder's name");
+                            continue;
+                        }
+
+                        (lines.TryGetValue(name, out var at) ? at : lines[name] = []).Add(line + 1);
+                    }
+                }
+
+                foreach (var (name, at) in lines)
+                {
+                    if (_skills is { } skills)
+                    {
+                        var may = DefinitionOf(step.Agent)?.May ?? AgentDefinition.AllCapabilities;
+
+                        foreach (var problem in skills.Find(name) is { } found
+                            ? found.ProblemsFor(entry.Path, step.Agent, may)
+                            : [$"{key} '{named}' line {at[0]} names {{skill.{name}}}, and {skills.Missing(name)}"])
+                        {
+                            _problems.Add(problem);
+                        }
+                    }
+
+                    if (at.Count > 1)
+                    {
+                        _problems.Add($"{key} '{named}' names {{skill.{name}}} {(at.Count == 2 ? "twice" : $"{at.Count} times")} (lines {Spelled(at)}): once is enough");
+                    }
+                }
+            }
+        }
+
+        /// <summary>A list of line numbers as a refusal writes it: <c>14 and 40</c>, <c>14, 40 and 51</c>.</summary>
+        private static string Spelled(IReadOnlyList<int> numbers)
+            => numbers.Count == 1
+                ? numbers[0].ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : $"{string.Join(", ", numbers.Take(numbers.Count - 1).Select(number => number.ToString(System.Globalization.CultureInfo.InvariantCulture)))} and {numbers[^1]}";
+
+        /// <summary>
+        /// Reads every agent definition the flow names, whatever the configuration: a reason step's, the advisor's and
+        /// the reporter's. Its file's problems and its body's placeholders are said whatever providers were given, for
+        /// they are the definition's own and not the configuration's half.
+        /// </summary>
+        private void AgentBodies()
+        {
+            foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason"))
+            {
+                _ = DefinitionOf(entry.Step.Agent);
+            }
+
+            if (_definition.Advisor is { } advisor)
+            {
+                _ = DefinitionOf(advisor.Agent);
+            }
+
+            if (_definition.Reporter is { } reporter)
+            {
+                _ = DefinitionOf(reporter.Agent);
             }
         }
 

@@ -1421,7 +1421,14 @@ rest) is read by an `always` step alone; a placeholder stands in a key that is a
 refused in any other where the file is read; a pull request's `base` reads nothing but the run's
 inputs and `run.name`, one base for every pull request; and a prompt's own placeholders - a reason
 step's `prompt` and `resumePrompt`, a pull request's `body` - are read as the step reads, each said at
-its line, the iteration before only in a `resumePrompt`. It checks every question
+its line, the iteration before only in a `resumePrompt`. A skill a prompt names is looked for by
+the skills' own lookup (`AgentSkills`, part 03's "Skills in a prompt"): the first of the three
+places that has the folder decides, a `SKILL.md` that is there and cannot be used is refused
+without falling to the next, its `allowed-tools` held to the one table of Claude Code's tools and
+the step's agent's capabilities, a skill named twice in one prompt is refused, and the body of an
+agent definition - the system prompt, sent as written - names none. The lookup is given to the
+check by whoever reads the repository's files, so the shipped definition is checked without one and
+a skill it does not name is never looked for. It checks every question
 kind an answer names, and every file the
 definition points at, beside the definition that names it - a runner or a leg no configuration
 declares is said the same way, as is a definition that cannot be read, and a workflow whose

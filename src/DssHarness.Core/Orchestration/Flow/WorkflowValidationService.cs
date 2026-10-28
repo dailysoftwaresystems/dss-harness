@@ -167,7 +167,8 @@ public sealed class WorkflowValidationService(
             named => Text(named, directory, name),
             resolved.Providers,
             _extractors.Languages,
-            Web.Search.WebSearchSources.Of(context.Config, Web.Search.WebSearchKinds.OfThisBuild)));
+            Web.Search.WebSearchSources.Of(context.Config, Web.Search.WebSearchKinds.OfThisBuild),
+            new AgentSkills(_fileSystem, _platform, context.Layout.RepositoryRoot)));
         problems.AddRange(Files(definition, directory, name, context.Config));
 
         // The key slot's own problems - a name declared twice, a line that defines nothing - are the configuration's,

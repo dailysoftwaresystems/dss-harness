@@ -868,6 +868,40 @@ record is the first message of one and the old is kept whole, never edited or se
 `claude-code` child is started with `DISABLE_COMPACT=1`, so it never compacts by itself and a full
 context ends the step `ContextExhausted`, which the engine's compaction is what follows.
 
+A reason step's prompt says `{skill.<name>}` where a skill's text goes, and the engine puts the
+text there before the prompt is sent, on every client alike (`help skills`): the two API clients
+have no skill mechanism, and the `claude` child is started with `--setting-sources user`, under
+which it loads none of the worktree's. The file is Claude Code's own `SKILL.md`, unchanged - this
+tool adds no key and no syntax of its own - and `<name>` is the folder's name. The first place
+that has the folder decides: `.harness-config/skills/<name>/` in the main checkout (the tool's own
+place, tracked), `.claude/skills/<name>/` in the main checkout (the repository's Claude Code
+skills), and `skills/<name>/` in the user's Claude directory (`CLAUDE_CONFIG_DIR` where it is set,
+else `~/.claude`). The repository's come before the user's - Claude Code's own order is the other
+way round - and a `SKILL.md` that is there and cannot be used is refused, the next place not tried
+in its stead. The places are read in the main checkout, never in an agent's worktree, and each
+step reads them as it starts: a run does not freeze its skills. What is put into the prompt is the
+body, not the frontmatter, inside one block that names the skill, its place and the folder handed
+to the step; the folder is copied whole into the agent's work directory,
+`work/<agent>/skills/<name>/`, in place of any earlier copy, and that path is what
+`${CLAUDE_SKILL_DIR}` becomes. A folder that holds a link, more than 500 files or more than 16 MB
+is refused. The frontmatter's keys are each honoured, recorded or refused: `allowed-tools` is
+honoured as what the skill needs, each tool it names held to the one table of Claude Code's tools
+for each capability and the step's agent's - and it grants nothing; `model`, `effort`, `context`,
+`agent`, `background`, `hooks` and `disallowed-tools` are refused, for text put into a prompt runs
+in the step's own agent, on its model, under its policy; any other key is refused naming the keys
+this tool knows. In the body `${CLAUDE_SKILL_DIR}`, `${CLAUDE_PROJECT_DIR}`,
+`${CLAUDE_SESSION_ID}`, `${CLAUDE_EFFORT}` and `\$` are replaced, a read of an argument, a command
+run when the skill is loaded and the reads only a plugin has are refused each naming their line,
+and a body is at most 64,000 characters after its substitutions. A skill's text is not scanned for
+placeholders again: `{skill.b}` inside skill `a` is plain text. The placeholder stands in a reason
+step's `prompt` and `resumePrompt` alone - refused in an agent definition's body, which is sent as
+written, in any other template key and in an expression - and each skill once in a prompt. A skill
+that is missing or unusable fails loud, twice: when the definition is checked (`validate-workflow`,
+and the start of `run-orchestrator` and `resume-orchestrator`; exit 12, nothing started, every
+problem of every prompt together, each refusal naming every place looked for it), and when the
+step starts, for a file can go or change between - the step is not started, it ends `Failed` with
+the same sentence, and its `onFailure` decides what follows.
+
 The `claude-api` client works a step through the Claude API by the loop above, every call run by
 the tool runtime: each request is posted to its provider's `api` with `/v1/messages` after it,
 signed with a key of the provider's (`x-api-key`), under `anthropic-version: 2026-10-21`, and its
@@ -1001,6 +1035,7 @@ dssharness list-agent-providers --template   # the agent sections, to paste into
 dssharness export-workflow implementation --shipped --to ../mine  # the shipped one, to make your own
 dssharness help workflows                    # the file, every step type and every key
 dssharness help agent-clients                # providers, tiers, efforts and the key slot
+dssharness help skills                       # a step's prompt names one: {skill.<name>}
 dssharness help web-search                   # the web search's sources, kinds and keys
 ```
 

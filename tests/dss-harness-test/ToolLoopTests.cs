@@ -778,7 +778,7 @@ public sealed class ToolLoopTests : IDisposable
     {
         Write("a.txt", "alpha");
         _chat.Answer(FakeChat.Calling(View("c1", "a.txt"))).Answer(FakeChat.Said("done"));
-        var run = Run() with { Skills = [new AgentSkill("review", "the run's skills", "digest", "review")] };
+        var run = Run() with { Skills = [new AgentSkill("review", "the run's skills", "digest", "folder digest", "review")] };
 
         var result = await Ran(run);
 

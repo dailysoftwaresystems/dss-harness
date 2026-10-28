@@ -99,6 +99,36 @@ public sealed class WorkflowValidationServiceTests
     }
 
     /// <summary>
+    /// A skill a step's prompt names is looked for by the service's own check, in the repository's places: the missing
+    /// sentence names every one, under the definition's refusal, and nothing is run.
+    /// </summary>
+    [Fact]
+    public async Task ASkillAStepsPromptNames_IsLookedForInTheRepositorysOwnPlaces()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["flow"] });
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "flow");
+
+        Directory.CreateDirectory(Path.Combine(directory, "prompts"));
+        Directory.CreateDirectory(Path.Combine(directory, "agents"));
+        Directory.CreateDirectory(Path.Combine(directory, "schemas"));
+        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: implement\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n");
+        File.WriteAllText(Path.Combine(directory, "prompts", "implement.md"), "Use {skill.release-notes}.\n");
+        File.WriteAllText(Path.Combine(directory, "agents", "worker.md"), "---\nname: worker\ndescription: does the work\n---\nYou do the work.\n");
+        File.WriteAllText(Path.Combine(directory, "schemas", "implement.json"), """{ "type": "object", "properties": { } }""");
+
+        var report = await Service(repository).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
+
+        Assert.False(report.Passed);
+        var problem = Assert.Single(report.Workflows[0].Lines);
+        Assert.StartsWith(
+            $"{Shown("flow")}: prompt 'prompts/implement.md' line 1 names {{skill.release-notes}}, and there is no such skill. Looked for:",
+            problem);
+        Assert.Contains(Path.Combine(repository.Path, ".harness-config", "skills", "release-notes", "SKILL.md"), problem);
+        Assert.Contains(Path.Combine(repository.Path, ".claude", "skills", "release-notes", "SKILL.md"), problem);
+        Assert.EndsWith("A plugin's skill, a managed one and a .claude/commands file are not looked for: copy the skill's folder to .harness-config/skills/release-notes.", problem.TrimEnd());
+    }
+
+    /// <summary>
     /// A slot that holds a provider's key takes its missing-key line away, and the check passes either way: which names
     /// the slot holds is no problem of the definition, so a machine that only checks a configuration needs no key.
     /// </summary>
