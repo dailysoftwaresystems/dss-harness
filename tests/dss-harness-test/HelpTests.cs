@@ -3657,7 +3657,7 @@ public sealed partial class HelpTests
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase, commit, push, pull-request ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
+            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase, commit, push, pull-request ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
             orchestrators,
             StringComparison.Ordinal);
     }
@@ -4194,7 +4194,7 @@ public sealed partial class HelpTests
         Assert.Contains(
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
                 + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, graphify-codebase, validate-plan, "
-                + "create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, "
+                + "create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, "
                 + "refresh, rebase, commit, push, pull-request, each below; a step of "
                 + "any other type fails, saying no runner serves its type.",
             prose,
@@ -4213,6 +4213,10 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "create-agent makes the agent the engine named for it - a<N>, one past the highest the run's agent directories and step records hold, never given twice - for the model of the first reason step that works in it, or the default tier's first model where none does, both written to the step's record before the agent is made.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "reason works the step's agent: the one its in names or the work it goes on with (resume), or - where it names neither - the engine's own read-only agent, with no worktree, made before the step runs and deleted once no step can go on with its work; the step's model resolved with its agent definition below its own and its order built as entries of a model and one of its provider's keys, each entry's credential read from the slot ('help agent-clients'); its prompt file read and filled where the step starts, each skill it names looked up again and the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, and its going on by the client's kind - the stored conversation handed where the client goes on with one, a new launch rendered where it does not; and its answer, held to the schema its outputs names, the step's output.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("params - its own knobs, defaulted in the file and read as param.<name>", prose, StringComparison.Ordinal);

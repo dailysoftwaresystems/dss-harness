@@ -168,10 +168,12 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowService, FlowService>();
         services.AddSingleton<PlanValidator>();
         services.AddSingleton<CreateAgentRunner>();
+        services.AddSingleton<ReasonStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, OrientRunner>();
         services.AddSingleton<IFlowStepTypeRunner, GraphifyCodebaseRunner>();
         services.AddSingleton<IFlowStepTypeRunner, PlanCheckRunner>();
         services.AddSingleton<IFlowStepTypeRunner>(provider => provider.GetRequiredService<CreateAgentRunner>());
+        services.AddSingleton<IFlowStepTypeRunner>(provider => provider.GetRequiredService<ReasonStepRunner>());
         services.AddSingleton<IFlowStepTypeRunner, BuildStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, TestStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, RunStepRunner>();

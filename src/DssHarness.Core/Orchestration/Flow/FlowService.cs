@@ -90,6 +90,7 @@ public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSp
 /// <param name="pathBudget">Reckons the run's deepest paths against this machine's limit at its start.</param>
 /// <param name="output">Says what the engine's poller met and what it did about it.</param>
 /// <param name="gitClient">Reads the checkout a run starts from, by the probe its orient step reads.</param>
+/// <param name="agents">Makes and deletes agents: the engine's own read-only agents among them.</param>
 /// <param name="clock">When the run's records are written, and how every wait of these commands is timed.</param>
 /// <param name="timings">How often the commands look; <see cref="FlowTimings.Default"/> where not given.</param>
 public sealed class FlowService(
@@ -106,6 +107,7 @@ public sealed class FlowService(
     IPathBudget pathBudget,
     IHarnessOutput output,
     Git.IGitClient gitClient,
+    IAgentService agents,
     TimeProvider? clock = null,
     FlowTimings? timings = null) : IFlowService
 {
@@ -140,6 +142,7 @@ public sealed class FlowService(
     private readonly IPathBudget _pathBudget = pathBudget;
     private readonly IHarnessOutput _output = output;
     private readonly Git.IGitClient _gitClient = gitClient;
+    private readonly IAgentService _agents = agents;
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly FlowTimings _timings = timings ?? FlowTimings.Default;
     private readonly FlowRunOwner _owner = new(store, identity, clock);
@@ -714,7 +717,23 @@ public sealed class FlowService(
                         providers,
                         named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, definition.Name, named, "an agent definition"))
                     : null,
-                named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, definition.Name, named, "a pull request's body"));
+                named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, definition.Name, named, "a workflow file"),
+                async (run, agent, token) =>
+                {
+                    // The engine's own deleting of a read-only agent whose work is over: applied, with nothing to fold
+                    // and no worktree to remove, and its failure said in the run's log, for the run goes on whatever
+                    // it did.
+                    var deleted = await _agents.DeleteAsync(
+                        new DeleteAgentRequest(context.Layout.MainCheckoutRoot, layout.Name, agent, new FoldAllowances(), Apply: true, DiscardUncommitted: false),
+                        token).ConfigureAwait(false);
+
+                    if (!deleted.Outcome.Succeeded)
+                    {
+                        _ = _log.Append(layout, agent, "delete-agent", deleted.Outcome);
+                    }
+
+                    return deleted.Outcome;
+                });
             var before = _store.ReadFlowQuestions(layout);
 
             if (answered is { } given && !coordinator.TryAnswer(given.Question, given.Answer, given.Text, out var problem, AnswerCommand))

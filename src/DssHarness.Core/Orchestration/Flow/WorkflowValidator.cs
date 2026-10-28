@@ -2507,7 +2507,7 @@ public static class WorkflowValidator
             return _agents[agent] = definition;
         }
 
-        /// <summary>The model each create-agent step makes its agent for, by its path, where one resolves (<see cref="WorkflowValidator.AgentModels"/>).</summary>
+        /// <summary>The model each create-agent step makes its agent for, and each reason step that names no agent its own read-only one, by its path, where one resolves (<see cref="WorkflowValidator.AgentModels"/>).</summary>
         internal IReadOnlyDictionary<string, string> AgentModels()
         {
             var models = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -2532,6 +2532,19 @@ public static class WorkflowValidator
                 if (providers.ModelsFor(tier ?? definition?.Tier, model ?? definition?.Model) is [var first, ..])
                 {
                     models[entry.Path] = first.Model.Code;
+                }
+            }
+
+            // A reason step that makes an agent of its own - one that reads and begins work of its own - is given the
+            // engine's own read-only one, made for the model the step itself resolves to. A create-agent's own entry
+            // is above; this is the reason steps' alone.
+            foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason" && WorkflowStepTypes.MakesAgent(entry.Step) && entry.Step.In is null))
+            {
+                var definition = DefinitionOf(entry.Step.Agent);
+
+                if (providers.ModelsFor(entry.Step.Tier ?? definition?.Tier, entry.Step.Model ?? definition?.Model) is [var own, ..])
+                {
+                    models[entry.Path] = own.Model.Code;
                 }
             }
 

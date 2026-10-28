@@ -457,7 +457,7 @@ public sealed class FlowRecordsTests
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
 
-            var handoff = layout.StepHandoffFile("think");
+            var handoff = layout.HandoffFile("a1", "think");
 
             Assert.True(harness.FileSystem.KindOf(handoff) == PathKind.File);
             Assert.Equal("what the agent said it was doing\n", harness.FileSystem.ReadAllText(handoff));

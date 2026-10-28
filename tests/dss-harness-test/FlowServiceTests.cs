@@ -89,6 +89,7 @@ public sealed class FlowServiceTests
             harness.PathBudget,
             output ?? harness.Output,
             harness.GitClient,
+            harness.AgentService,
             clock,
             timings ?? Quick);
     }

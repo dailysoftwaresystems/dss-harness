@@ -2128,6 +2128,38 @@ public sealed class WorkflowValidatorTests
             new Dictionary<string, string> { ["make"] = "claude-fable-5-1", ["idle"] = "glm-5.3" },
             WorkflowValidator.AgentModels(definition, TwoModels()!));
 
+        // A reason step that resumes itself begins work of its own again, and makes an agent like one that resumes
+        // nothing; one that goes on with another's work makes none.
+        Assert.Equal(
+            new Dictionary<string, string> { ["plan"] = "claude-fable-5-1", ["loop.think"] = "claude-fable-5-1" },
+            WorkflowValidator.AgentModels(Parse("""
+                name: flow
+                steps:
+                  - name: plan
+                    type: reason
+                    tier: best
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: loop
+                    repeat:
+                      until: think.done
+                      maxIterations: 2
+                    steps:
+                      - name: think
+                        type: reason
+                        tier: best
+                        prompt: prompts/think.md
+                        resumePrompt: prompts/think.md
+                        outputs: schemas/think.json
+                        resume: think
+                  - name: check
+                    type: reason
+                    resume: plan
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                    dependsOn: [plan]
+                """), TwoModels()!));
+
         Assert.Equal(
             ["workflow 'flow' step 'idle' makes an agent no reason step works in, which is made for the first model of the default tier, and the configuration names no defaults.agentTier; name the tier there"],
             WorkflowValidator.Validate(Parse("""

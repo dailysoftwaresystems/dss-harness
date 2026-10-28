@@ -605,6 +605,11 @@ public sealed partial class AgentProviders
     public (AgentProviderConfig Provider, AgentModelConfig Model)? Of(string code)
         => _models.TryGetValue(code, out var entry) ? entry : null;
 
+    /// <summary>The entry <c>agentClients</c> holds for <paramref name="client"/>; null where it holds none, and the client's own defaults hold.</summary>
+    /// <param name="client">The client's name.</param>
+    public Configuration.AgentClientConfig? ClientOf(string client)
+        => Config.AgentClients.TryGetValue(client, out var entry) ? entry : null;
+
     /// <summary>
     /// How <paramref name="client"/> signs in, where it is a client that signs in: its entry's <c>auth</c>, the machine's
     /// login where it says none; null for a client that signs each request with its provider's key, and for one the

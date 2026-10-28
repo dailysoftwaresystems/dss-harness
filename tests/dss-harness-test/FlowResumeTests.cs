@@ -251,7 +251,7 @@ public sealed class FlowResumeTests
         }
 
         var taken = TakeUp(harness, layout, definition);
-        var handoff = layout.StepHandoffFile("think");
+        var handoff = layout.HandoffFile("a1", "think");
 
         Assert.Equal(["think"], taken.File.Pause!.Handoffs);
         Assert.NotNull(taken.File.Pause.CompletedAt);
@@ -454,7 +454,7 @@ public sealed class FlowResumeTests
             }
         }
 
-        Assert.Equal(account + "\n", File.ReadAllText(layout.StepHandoffFile("think")));
+        Assert.Equal(account + "\n", File.ReadAllText(layout.HandoffFile("a1", "think")));
 
         var third = new Runner();
         var (_, _, last) = Records("r1", temp.Path, definition);
@@ -716,12 +716,12 @@ public sealed class FlowResumeTests
             _ = await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         }
 
-        File.Delete(layout.StepHandoffFile("think"));
+        File.Delete(layout.HandoffFile("a1", "think"));
 
         var refused = Assert.Throws<HarnessException>(() => TakeUp(harness, layout, definition));
 
         Assert.Equal(
-            $"step 'think' of run 'r1' holds a handoff written by the agent, and '{layout.StepHandoffFile("think")}' is not there. "
+            $"step 'think' of run 'r1' holds a handoff written by the agent, and '{layout.HandoffFile("a1", "think")}' is not there. "
             + "Nothing was changed: a handoff is never written again in the place of one that was lost; put the file back to go on with the run, "
             + "or delete-orchestrator r1 ends it.",
             refused.Message);
@@ -758,7 +758,7 @@ public sealed class FlowResumeTests
             // The crash, between the handoff's file and the record that would name it.
         }
 
-        File.WriteAllText(layout.StepHandoffFile("think"), text + "\n");
+        File.WriteAllText(layout.HandoffFile("a1", "think"), text + "\n");
 
         var taken = TakeUp(harness, layout, definition);
         var step = Assert.Single(taken.File.Steps);
@@ -2350,7 +2350,7 @@ public sealed class FlowResumeTests
             Assert.Equal(FlowRunStatus.Failed, (await new FlowCoordinator(definition, first, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
 
-        Assert.Equal([issue], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("think"))!.IssuesOwed);
+        Assert.Equal([issue], harness.OrchestrationStore.ReadStepRecord(layout.AgentStepRecordFile("a1", "think"))!.IssuesOwed);
 
         var held = new Runner().Hold("triage");
         var (_, _, raising) = Records("r1", temp.Path, definition);
@@ -2572,7 +2572,7 @@ public sealed class FlowResumeTests
             _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), records: new Cut(crashedRecords, triageDone)).RunAsync(Token).WaitAsync(Bound, Token);
         }
 
-        Assert.Equal(nameof(FlowInstanceState.Done), crashedHarness.OrchestrationStore.ReadStepRecord(crashedLayout.StepRecordFile("triage"))!.State);
+        Assert.Equal(nameof(FlowInstanceState.Done), crashedHarness.OrchestrationStore.ReadStepRecord(crashedLayout.AgentStepRecordFile("a2", "triage"))!.State);
         Assert.Null(crashedHarness.OrchestrationStore.ReadFlow(crashedLayout)!.Steps.FirstOrDefault(step => step.Instance == "recover"));
 
         var next = new Runner();

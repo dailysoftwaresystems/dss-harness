@@ -476,7 +476,7 @@ public sealed class AgentFallbackTests : IDisposable
 
         var passed = Assert.Single(seen.Seen.OfType<FallbackPassedOver>());
 
-        Assert.Equal("the limit covers it until 2026-10-28 12:00:00Z", passed.Why);
+        Assert.Equal($"the limit covers it until {StillLifts:u}", passed.Why);
         Assert.Equal("glm-5.3", passed.Model);
     }
 
@@ -500,10 +500,10 @@ public sealed class AgentFallbackTests : IDisposable
     }
 
     /// <summary>When a limit lifts, where the provider says: a future one for coverage, a past one for its lifting.</summary>
-    private static readonly DateTimeOffset Lifts = new(2026, 10, 26, 12, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset Lifts = DateTimeOffset.UtcNow.AddDays(-2);
 
-    /// <summary>A limit that has not lifted yet, on the day after the one above.</summary>
-    private static readonly DateTimeOffset StillLifts = new(2026, 10, 28, 12, 0, 0, TimeSpan.Zero);
+    /// <summary>A limit that has not lifted yet: an hour from whenever the test runs, never a date the clock has passed.</summary>
+    private static readonly DateTimeOffset StillLifts = DateTimeOffset.UtcNow.AddHours(1);
 
     /// <summary>A run as the loop takes it, on the loop's provider and client.</summary>
     private AgentRun Run()

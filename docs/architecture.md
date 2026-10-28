@@ -16,7 +16,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `query-codebase-graph`, `clean`, `up`,
@@ -1952,11 +1952,28 @@ drops a making cut part way - one whose hand-over of the main tree's uncommitted
 (`SeedRecord.HandOverStopped`) seeded again with the rest - and finishes the removal of one found closed
 (`FlowStepResult.NameSpent`); a refusal it meets keeps its cause (`FlowStepResult.Failed`), so a main tree another run
 holds is waited out as a held lock is; and `IAgentService.CreateAsync(new AgentCreateRequest(..., NoWorktree: true))`
-makes a read-only reason step's agent the same way. Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
+makes a read-only reason step's agent the same way. `ReasonStepRunner` works the reason step itself: the agent it is
+given - the one its `in` names, the work a `resume` goes on with (`FlowCoordinator.NamedAgentOf` walks the chain), or
+the engine's own read-only one, named with its model before its record (`FlowCoordinator.Start`) and made through
+`CreateAgentRunner.MakeAsync(noWorktree: true)` where the step names none - the model resolved by `AgentResolution.Of`
+with its definition below its own (a `resume` inheriting what the resumed step names), the order built by
+`AgentStepOrder.Of` as running entries with each credential read from the slot and a key the slot does not hold said
+and passed over, the workspace and the policy's ground by `AgentStepGround.Of` (a read-only agent reading the main
+tree and writing its work directory alone), each skill its prompt names looked up again where the step starts
+(`AgentSkills.Find`), the folder copied whole into `work/<agent>/skills/<name>/` and the block put where the
+placeholder stood - the engine having filled every other name into the prompt (`FlowStepRun.Read`'s `prompt` and
+`resumePrompt`, `FlowTemplate.Fill` leaving a `skill.` name for the runner) - the work it goes on with rendered as its
+continuation record (`AgentContinuation.Render` over its `FlowStepRun.WorkedFrom`), and the run answered through
+`IAgentRunner`, its ending mapped to the step's own (`FlowStepResult.AtLimit` for a limit of its own, incomplete for a
+stop, the schema-validated output the step's). A stopped step's handoff turn is answered of its own record
+(`IFlowHandoffRunner.HandoffAsync`, `AgentRunner.ResultFileName`), and the coordinator deletes the read-only agent
+once no step can go on with its work (`FlowCoordinator.ReadOnlyAgentOver`, over the declarations that resume its
+maker and the instances drawn of them, through the `deleteAgent` the service wires to `IAgentService.DeleteAsync`).
+Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`
 - a `ci-wait`'s commit where it names none - the one the run last pushed - a commit's `folds`, the instances of the
-steps that fold upstream of it), the agent it works in (`FlowStepRun.WorksIn`)
+steps that fold upstream of it, and a reason step's `prompt` and `resumePrompt`), the agent it works in (`FlowStepRun.WorksIn`)
 or, of `others`, the target whose turn it is (`FlowStepRun.Target`), and its keys' templates filled (`FlowStepTemplates`, the one
 reader of which text each template key holds, the definition's check its other caller). The leg steps - `build`, `test`,
 `run`, `check-mutations` - share `LegStepRunner`: the use case of each command (`IBuildLegs`, `ITestLegs`,

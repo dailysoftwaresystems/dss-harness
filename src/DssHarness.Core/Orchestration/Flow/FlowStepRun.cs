@@ -76,23 +76,26 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// <param name="Issue">The pre-existing issue this instance is raised to triage, where it is one; null for every step the schedule starts.</param>
 /// <param name="Visit">Which visit of the step this is: 1 for the first, one more for each time a redirect, a handler or the recovery sent the run back to it.</param>
 /// <param name="Place">Where the run works; null for a run held in memory alone, which no step that calls a service can run in.</param>
-/// <param name="Read">
-/// What the engine read for the step where it starts, by key: a <c>validate-plan</c> step's <c>items</c> and
-/// <c>scope</c>, each where the step gives it; an <c>orient</c> step's <c>base</c>, the flow's <c>pull-request</c> step's
-/// base filled (<see cref="FlowTemplate.PullRequestBase"/>), where one names it; an anchor check's <c>rows</c> or
-/// <c>paths</c>, the names its expression yielded, none where it read nothing; a fold's or a deletion's <c>within</c>,
-/// <c>allow.new</c> and <c>allow.merge</c>, a refresh's <c>paths</c>, <c>except</c>, <c>stale</c> and <c>merge</c> and a
-/// rebase's <c>merge</c>, each the names its expression yielded, under its key - <c>allow.new</c> and <c>allow.merge</c>
-/// spelt so - and none where one that may read nothing did; a <c>ci-wait</c> step's <c>commit</c> where it names none,
-/// the commit the run last pushed; a <c>commit</c> step's <c>folds</c>, the instances of the fold and delete-agent steps
-/// upstream of it that fold; a <c>pull-request</c> step's <c>body</c>, the text of the file it names, filled. Empty for
-/// every other step.
-/// </param>
+    /// <param name="Read">
+    /// What the engine read for the step where it starts, by key: a <c>validate-plan</c> step's <c>items</c> and
+    /// <c>scope</c>, each where the step gives it; an <c>orient</c> step's <c>base</c>, the flow's <c>pull-request</c> step's
+    /// base filled (<see cref="FlowTemplate.PullRequestBase"/>), where one names it; an anchor check's <c>rows</c> or
+    /// <c>paths</c>, the names its expression yielded, none where it read nothing; a fold's or a deletion's <c>within</c>,
+    /// <c>allow.new</c> and <c>allow.merge</c>, a refresh's <c>paths</c>, <c>except</c>, <c>stale</c> and <c>merge</c> and a
+    /// rebase's <c>merge</c>, each the names its expression yielded, under its key - <c>allow.new</c> and <c>allow.merge</c>
+    /// spelt so - and none where one that may read nothing did; a <c>ci-wait</c> step's <c>commit</c> where it names none,
+    /// the commit the run last pushed; a <c>commit</c> step's <c>folds</c>, the instances of the fold and delete-agent steps
+    /// upstream of it that fold; a <c>pull-request</c> step's <c>body</c>, the text of the file it names, filled; a
+    /// <c>reason</c> step's <c>prompt</c> and <c>resumePrompt</c>, the text of each file it names, filled with every name
+    /// but a skill's. Empty for every other step.
+    /// </param>
 /// <param name="Made">The agent a <c>create-agent</c> step makes, as the engine named it; null for every other step.</param>
-/// <param name="WorksIn">
-/// The agent the step works in or acts on - the one its <c>in</c> or <c>of</c> names, as that step's create-agent made
-/// it - whose worktree a leg step works in and whose directory keeps the step's records; null for a step that names none.
-/// </param>
+    /// <param name="WorksIn">
+    /// The agent the step works in or acts on - the one its <c>in</c> or <c>of</c> names, as that step's create-agent made
+    /// it; a reason step that goes on with another's work, the agent that step works in; a reason step that names none,
+    /// the engine's own read-only agent, named for it - whose worktree a leg step works in and whose directory keeps the
+    /// step's records; null for a step that names none.
+    /// </param>
 /// <param name="Target">
 /// The agent a refresh or a rebase of <c>others</c> works on in this attempt: each of its targets in turn, one at a time,
 /// each kept in the step's directory under <c>targets/&lt;agent&gt;/</c>; null for every other step.

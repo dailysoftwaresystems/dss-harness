@@ -360,6 +360,12 @@ public sealed class FlowCoordinator
     /// <summary>Reads the text of a file the run's workflow names, by its name in the definition; null where the run reads none.</summary>
     private readonly Func<string, string>? _workflowFile;
 
+    /// <summary>Deletes a read-only agent of the run whose work is over, as the engine is to (<c>DeleteAsync</c>, applied); null where the run deletes none.</summary>
+    private readonly Func<string, string, CancellationToken, Task<Results.CommandOutcome>>? _deleteAgent;
+
+    /// <summary>Every read-only agent deletion the run has begun, seen to before its session ends: a deletion left half-done by a session's end is a record the next command reads as one.</summary>
+    private readonly List<Task> _deletions = [];
+
     /// <summary>Every agent name the session gave, a spent one's among them: never given again, though no step holds it any more.</summary>
     private readonly HashSet<string> _agentNamesGiven = new(StringComparer.Ordinal);
 
@@ -494,13 +500,18 @@ public sealed class FlowCoordinator
     /// </param>
     /// <param name="place">Where the run works, handed to every step; null for a run held in memory alone.</param>
     /// <param name="agentModels">
-    /// The model each create-agent step makes its agent for, by the step's path (<see cref="WorkflowValidator.AgentModels"/>);
-    /// a step it names none for is handed none, which its runner refuses.
+    /// The model each create-agent step makes its agent for, and each reason step that names no agent its own read-only
+    /// one, by the step's path (<see cref="WorkflowValidator.AgentModels"/>); a step it names none for is handed none,
+    /// which its runner refuses.
     /// </param>
     /// <param name="workflowFile">
     /// Reads the text of a file the run's workflow names, by its name in the definition, throwing with why where it cannot
-    /// (<see cref="WorkflowNamedFiles.ReadText"/>): a pull request's body. Null where the run reads none, and a step that
-    /// needs one then fails 12, saying so.
+    /// (<see cref="WorkflowNamedFiles.ReadText"/>): a pull request's body, and a reason step's prompt files. Null where
+    /// the run reads none, and a step that needs one then fails 12, saying so.
+    /// </param>
+    /// <param name="deleteAgent">
+    /// Deletes a read-only agent of the run whose work is over, applied, as the engine is to
+    /// (<c>IAgentService.DeleteAsync</c>); null where the run deletes none, which a run held in memory alone never does.
     /// </param>
     /// <exception cref="HarnessException">An input the run needs is missing, or a value is outside the ones its input takes.</exception>
     public FlowCoordinator(
@@ -514,7 +525,8 @@ public sealed class FlowCoordinator
         string? runName = null,
         FlowRunPlace? place = null,
         IReadOnlyDictionary<string, string>? agentModels = null,
-        Func<string, string>? workflowFile = null)
+        Func<string, string>? workflowFile = null,
+        Func<string, string, CancellationToken, Task<Results.CommandOutcome>>? deleteAgent = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(runner);
@@ -530,6 +542,7 @@ public sealed class FlowCoordinator
         _place = place;
         _agentModels = agentModels ?? new Dictionary<string, string>(StringComparer.Ordinal);
         _workflowFile = workflowFile;
+        _deleteAgent = deleteAgent;
 
         foreach (var (path, _) in FlowScope.Declared(definition))
         {
@@ -981,6 +994,15 @@ public sealed class FlowCoordinator
             _starting = false;
             HandBackWhatIsLeft();
             _inSession = false;
+
+            // Every read-only agent deletion the session began is seen to before it ends, for a deletion left
+            // half-done by an ending session is a record the next command reads as one. Each swallows its own failure:
+            // the deleter said it, and the run is not stopped by it.
+            if (_deletions is [_, ..] && !(_pausing || _hardStop))
+            {
+                await Task.WhenAll(_deletions).ConfigureAwait(false);
+                _deletions.Clear();
+            }
         }
 
         _last = Finish();
@@ -2836,6 +2858,24 @@ public sealed class FlowCoordinator
             instance.MadeModel ??= _agentModels.GetValueOrDefault(instance.Path);
         }
 
+        // A reason step that makes an agent of its own - one that reads and begins work of its own, neither working in
+        // another's worktree nor going on with another's work (a step that resumes itself begins its own again) - is
+        // given the engine's own read-only one, named the same way a create-agent's is: before the record, with the
+        // model the step resolves to. Its records live in that agent's directory, as every reason step's do. A step
+        // that resumes itself keeps one agent over all its visits - a repeat's iterations of one share the first's -
+        // and every other step's each visit makes its own.
+        if (instance.Step.Type == "reason" && WorkflowStepTypes.MakesAgent(instance.Step) && WorksInOf(instance) is null)
+        {
+            instance.Made ??= (instance.Step.Resume is { } self && string.Equals(self, instance.Step.Name, StringComparison.Ordinal)
+                ? _created.FirstOrDefault(earlier => !ReferenceEquals(earlier, instance)
+                    && string.Equals(earlier.Path, instance.Path, StringComparison.Ordinal)
+                    && earlier.Made is not null)?.Made
+                : null)
+                ?? NameAgent();
+            instance.MadeModel ??= _agentModels.GetValueOrDefault(instance.Path);
+            instance.WorksIn ??= instance.Made;
+        }
+
         Record(FlowChangeKind.Step, instance, from: was, to: FlowInstanceState.Running, attempt: instance.Attempt);
 
         if (instance.Step.Type == "pause")
@@ -2911,6 +2951,29 @@ public sealed class FlowCoordinator
                 }
 
                 step = filled;
+
+                // A reason step's prompt is its runner's to fill - the skill blocks a step starts with are put in there
+                // - so the engine reads the files and fills every other name here, handing the texts as read. One that
+                // cannot be filled fails the step, as a template key's that breaks. A run held in memory alone reads
+                // no files: its runner is handed none, and refuses where it needs one.
+                if (step.Type == "reason" && _workflowFile is { } readFile)
+                {
+                    foreach (var (promptKey, promptFileNamed) in new[] { ("prompt", step.Prompt), ("resumePrompt", step.ResumePrompt) })
+                    {
+                        if (promptFileNamed is null)
+                        {
+                            continue;
+                        }
+
+                        if (Filled(instance, readFile(promptFileNamed), out var promptBroken) is not { } promptText)
+                        {
+                            _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable(promptKey, instance.Id, promptBroken!)), null, Attempt: attempt));
+                            return;
+                        }
+
+                        read[promptKey] = FlowValue.Of(promptText);
+                    }
+                }
 
                 var result = await _runner.RunAsync(RunOf(instance, step, attempt, read, handoff?.Text), token).ConfigureAwait(false);
 
@@ -4580,6 +4643,18 @@ public sealed class FlowCoordinator
             }
         }
 
+        // A read-only agent's work is over when the last step that can go on with it has ended and the run goes on:
+        // deleted here, and the deletions seen to before the session ends. A run that is pausing or stopping leaves
+        // every agent live for the resume, and so does a step that failed, whose work the run may yet go on with. A
+        // group's end settles its members' work too, so it sweeps as well.
+        if (_deleteAgent is not null && instance.Step.Type is "reason" or null)
+        {
+            foreach (var readOnly in ReadOnlyAgentsOver())
+            {
+                _deletions.Add(DeleteReadOnlyAsync(readOnly));
+            }
+        }
+
         if (instance.DeclaredScope is null)
         {
             return;
@@ -5728,11 +5803,19 @@ public sealed class FlowCoordinator
         => FlowInstanceId.Precedes(target.Id, of.Id) ?? FlowGraph.Waits(_definition, of.Path, target.Path);
 
     /// <summary>One instance of a check, as <see cref="FlowChecks"/> reads it.</summary>
-    private static FlowCheck CheckOf(FlowInstance instance)
-        => new(
+    private FlowCheck CheckOf(FlowInstance instance)
+    {
+        // An engine-made agent is a read-only one, with no worktree: its step ran in the main tree, reading it, and
+        // the line says so - never that it ran in a worktree there is none of.
+        var worksIn = WorksInOf(instance) is { } named
+            && _created.FirstOrDefault(made => made.Made is { } madeName && string.Equals(madeName, named, StringComparison.Ordinal)) is not { Step.Type: "reason" }
+            ? named
+            : null;
+
+        return new(
             instance.Id,
             FlowChecks.KindOf(instance.Step),
-            WorksInOf(instance),
+            worksIn,
             instance.State,
             instance.Output,
             instance.Exit,
@@ -5740,6 +5823,7 @@ public sealed class FlowCoordinator
             instance.PassedOver,
             instance.HandledBy,
             instance.FinishedAt);
+    }
 
     /// <summary>
     /// The checks the definition holds that no instance <paramref name="drawn"/> holds has ended - done, failed, skipped or
@@ -6117,8 +6201,8 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Fills a template of <paramref name="instance"/>'s step - a pause step's question, and each text its keys hand on
-    /// (<see cref="FlowStepTemplates"/>) - by the one grammar
+    /// Fills a template of <paramref name="instance"/>'s step - a pause step's question, each text its keys hand on
+    /// (<see cref="FlowStepTemplates"/>), and a reason step's prompt files - by the one grammar
     /// (<see cref="FlowTemplate.Fill"/>), each name read by the same roots an expression reads. A name that reads nothing
     /// says why, in <paramref name="problem"/>, and fills nothing.
     /// </summary>
@@ -6330,7 +6414,7 @@ public sealed class FlowCoordinator
     /// The agent this step works in: the one stored on it (<see cref="FlowInstance.WorksIn"/>), or - before it was stored -
     /// the one its <c>in</c> or <c>of</c> names now (<see cref="NamedAgentOf"/>).
     /// </summary>
-    private static string? WorksInOf(FlowInstance instance) => instance.WorksIn ?? NamedAgentOf(instance);
+    private string? WorksInOf(FlowInstance instance) => instance.WorksIn ?? NamedAgentOf(instance);
 
     /// <summary>
     /// The agent this step's <c>in</c> or <c>of</c> names as the run stands now: the one its create-agent's newest visit
@@ -6338,16 +6422,23 @@ public sealed class FlowCoordinator
     /// goes on with another's work, the one that step's names; null for the create-agent itself and every step that
     /// names none. What is stored on a step where it is drawn or starts, and read again of no step that has it.
     /// </summary>
-    private static string? NamedAgentOf(FlowInstance instance)
+    private string? NamedAgentOf(FlowInstance instance)
     {
         var working = WorkingOf(instance);
 
-        if (CreateStepNamedBy(working) is not { } create)
+        if (CreateStepNamedBy(working) is { } create)
         {
-            return null;
+            return create is { State: FlowInstanceState.Done, Made: { } made } ? made : null;
         }
 
-        return create is { State: FlowInstanceState.Done, Made: { } made } ? made : null;
+        // A reason step that goes on with another's work works as that step's agent (<see cref="WorkingOf"/> walked the
+        // chain): the one the resumed step works in, or its own engine-made one - read of no step that has one stored.
+        if (!ReferenceEquals(working, instance))
+        {
+            return working.WorksIn ?? working.Made;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -6365,16 +6456,149 @@ public sealed class FlowCoordinator
     /// in was never made. Null where its agent is made, where it names none, and where its create-agent step has not
     /// ended - a step the definition's check would refuse for not waiting starts beside it, naming no agent yet.
     /// </summary>
-    private static string? AgentNeverMade(FlowInstance instance)
+    private string? AgentNeverMade(FlowInstance instance)
     {
-        if (WorksInOf(instance) is not null || CreateStepNamedBy(WorkingOf(instance)) is not { } create)
+        if (instance.WorksIn is not null || NamedAgentOf(instance) is not null || CreateStepNamedBy(WorkingOf(instance)) is not { } create)
         {
+            // A step that goes on with another's work can never work as it where the step its chain begins with ended
+            // without an agent of its own - skipped, or never run - for there is none to work as.
+            if (instance.Step.Type == "reason" && instance.Step.Resume is not null
+                && WorkingOf(instance) is { } source && !ReferenceEquals(source, instance)
+                && source.State is FlowInstanceState.Skipped or FlowInstanceState.NotRun)
+            {
+                return $"the step it goes on with never made an agent: '{source.Id}' is {source.State}";
+            }
+
             return null;
         }
 
         return create.State is FlowInstanceState.Skipped or FlowInstanceState.Failed or FlowInstanceState.NotRun
             ? $"the agent it works in was never made: '{create.Id}' is {create.State}"
             : null;
+    }
+
+    /// <summary>
+    /// Every read-only agent of the run whose work is over, as an ending settles what can still go on with it: each
+    /// agent a reason step of this run made as its own, where its making step has ended past going on and no step
+    /// whose chain of resumed work reaches the making one can still run - none of such a step's instances is unended
+    /// or redrawable, and no group around its declaration is either, for a repeat may raise one yet. The run going on
+    /// - not pausing, not stopping - is the ground: a run that failed, was paused or was stopped leaves every agent
+    /// live for the resume.
+    /// </summary>
+    private IReadOnlyList<string> ReadOnlyAgentsOver()
+    {
+        if (_deleteAgent is null || _pausing || _hardStop)
+        {
+            return [];
+        }
+
+        var declarations = FlowScope.Declared(_definition).ToList();
+        var over = new List<string>();
+
+        foreach (var makers in _created.Where(made => made.Made is not null && made.Step.Type == "reason").GroupBy(made => made.Made!, StringComparer.Ordinal))
+        {
+            if (makers.Any(made => !PastGoingOn(made)) || ResumersCanStillRun(declarations, makers.First().Path))
+            {
+                continue;
+            }
+
+            over.Add(makers.Key);
+        }
+
+        return over;
+    }
+
+    /// <summary>Whether a step that goes on with the work made at <paramref name="makerPath"/> can still run: one of its instances is unended or not drawn yet, or a group around its declaration is unended, for a repeat may raise one yet.</summary>
+    /// <param name="declarations">Every declaration, with its path.</param>
+    /// <param name="makerPath">The making step's declaration path.</param>
+    private bool ResumersCanStillRun(IReadOnlyList<(string Path, WorkflowStep Step)> declarations, string makerPath)
+    {
+        foreach (var (path, declared) in declarations)
+        {
+            if (declared.Type != "reason" || declared.Resume is null || !ResumesTransitively(declarations, path, makerPath))
+            {
+                continue;
+            }
+
+            var drawn = _created.Where(one => string.Equals(one.Path, path, StringComparison.Ordinal)).ToList();
+
+            if (drawn.Count == 0 || drawn.Any(one => !PastGoingOn(one)) || _created.Any(one => IsAround(one.Path, path) && !PastGoingOn(one)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the step declared at <paramref name="path"/> goes on with the work declared at <paramref name="maker"/>
+    /// - resuming it, or resuming a step whose chain of resumed work reaches it: each resume in turn, until the chain
+    /// names the maker, ends, or turns on itself.
+    /// </summary>
+    /// <param name="declarations">Every declaration, with its path.</param>
+    /// <param name="path">The declaration that may go on with the maker's work.</param>
+    /// <param name="maker">The making step's declaration path.</param>
+    private static bool ResumesTransitively(IReadOnlyList<(string Path, WorkflowStep Step)> declarations, string path, string maker)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var at = path;
+
+        while (seen.Add(at))
+        {
+            if (string.Equals(at, maker, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            var current = declarations.FirstOrDefault(one => string.Equals(one.Path, at, StringComparison.Ordinal));
+
+            if (current.Step is not { Resume: { } resumed } || string.Equals(resumed, current.Step.Name, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            // The resumed step, by name: the definition's check resolved the name in its own scope, and the first of
+            // that name is the one it found.
+            var next = declarations.FirstOrDefault(one => one.Step.Type == "reason" && string.Equals(one.Step.Name, resumed, StringComparison.Ordinal));
+
+            if (next.Step is null)
+            {
+                return false;
+            }
+
+            at = next.Path;
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether <paramref name="group"/> names a group the declaration at <paramref name="declaration"/> sits in, or one around it.</summary>
+    /// <param name="group">A group's declaration path.</param>
+    /// <param name="declaration">The declaration's path.</param>
+    private static bool IsAround(string group, string declaration)
+        => declaration.StartsWith(group + ".", StringComparison.Ordinal);
+
+    /// <summary>Whether <paramref name="instance"/> has ended past going on: done or skipped. A failed, stopped, waiting or never-run step may yet go on with its agent's work - a never-run one may be drawn again once what kept it is settled.</summary>
+    private static bool PastGoingOn(FlowInstance instance)
+        => instance.State is FlowInstanceState.Done or FlowInstanceState.Skipped;
+
+    /// <summary>
+    /// Deletes the read-only agent whose work is over, apart from the run's own thread: its failure changes nothing of
+    /// the run, which goes on, and is the deleter's to say - the next command over the orchestrator sweeps what a
+    /// failed deletion leaves.
+    /// </summary>
+    /// <param name="agent">The agent to delete.</param>
+    private async Task DeleteReadOnlyAsync(string agent)
+    {
+        try
+        {
+            await _deleteAgent!(_runName ?? string.Empty, agent, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Said by the deleter, whose own words the run's log keeps: the run itself is not stopped by it.
+        }
     }
 
     /// <summary>

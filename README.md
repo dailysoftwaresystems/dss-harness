@@ -1081,7 +1081,7 @@ update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`
 rest), which a template reads and an expression does not. The engine starts and drives a run of a workflow
 (`run-orchestrator`, `dssharness help orchestrators`), from the main checkout's HEAD on a branch of its own: a start is
 refused where HEAD is detached, where the checkout is on the branch the run's pull request goes to, where a merge is under
-way and where changes are staged. Nineteen steps are served so far: `orient`, which reads what the repository is and has once
+way and where changes are staged. Twenty steps are served so far: `orient`, which reads what the repository is and has once
 (its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
 CI, mutation arms, what is dirty, the open agents and who holds the tree); `graphify-codebase`, which syncs the run's one map
 of the repository - every file a node, each declaration a language's implementation reads with its lines, its header and
@@ -1096,7 +1096,15 @@ once its agent is no longer live - and a sync of its own that fails is said, owe
 fails the step (`dssharness help codebase-graph`; the workflow's `codebaseGraph` shapes it);
 `validate-plan`, the machine's check of a plan's
 work items; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
-first reason step runs on, both recorded before the agent is made so a step run again asks for the same one; and the leg
+first reason step runs on, both recorded before the agent is made so a step run again asks for the same one;
+`reason`, which works the step's agent - the one its `in` names or the work it goes on with (`resume`), or, where it
+names neither, the engine's own read-only agent, with no worktree, made before the step runs and deleted once no step
+can go on with its work: the step's model resolved with its agent definition below its own and its order built as
+entries of a model and one of its provider's keys, each entry's credential read from the slot; its prompt file read
+and filled where the step starts, each skill it names looked up again and the folder handed over in the agent's work
+directory; the work it goes on with rendered as its continuation record, and its going on by the client's kind - the
+stored conversation handed where the client goes on with one, a new launch rendered where it does not; and its answer,
+held to the schema its `outputs` names, the step's output; and the leg
 steps `build`, `test`, `run` and `check-mutations`, which run their legs as the commands do, in the worktree of the agent
 they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
 that failed with the phase that did not pass and its last lines, a sweep's arm with its arm - a leg in a copy letting the
