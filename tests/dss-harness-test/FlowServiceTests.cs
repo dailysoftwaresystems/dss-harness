@@ -140,6 +140,11 @@ public sealed class FlowServiceTests
                 agent: planner
                 prompt: update.md
                 outputs: update.json
+              - name: planupdate
+                type: reason
+                agent: planner
+                prompt: update.md
+                outputs: update.json
               - name: check
                 type: orient
                 dependsOn: [replan]
@@ -163,7 +168,7 @@ public sealed class FlowServiceTests
         amend:
           input: request
           changedAnswerMinutes: 5
-          step: planning.replan
+          step: planning.planupdate
           then: check
           scope: 'planning.scope'
           whenAddScope: items.build
@@ -201,6 +206,7 @@ public sealed class FlowServiceTests
     private static void Script(SteppedRunner runner)
     {
         runner.On("replan", FlowStepResult.Ended(passed: true, 0, output: new JsonObject { ["items"] = new JsonArray("one"), ["scope"] = new JsonArray() }));
+        runner.On("planupdate", FlowStepResult.Ended(passed: true, 0, output: new JsonObject { ["items"] = new JsonArray("two"), ["scope"] = new JsonArray() }));
         runner.On("itemcheck", FlowStepResult.Ended(passed: true, 0, output: new JsonObject { ["items"] = new JsonArray("one") }));
     }
 
@@ -311,12 +317,15 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
-    /// An amendment asked of a run whose plan's scope has begun is refused by the taking - this build raises no step
-    /// to plan one - and recorded <c>refused</c> in <c>updates.json</c> with why: the run's history says what became
-    /// of a change a person asked for, and the input keeps reading the request as it was given.
+    /// An amendment asked of a run whose plan's scope has begun is taken by the next session: the update is
+    /// <c>underWay</c>, the step the <c>amend</c> block names is raised - a new visit of it in the newest instance of
+    /// its scope, which had ended and is in progress again - and the run is held while it plans. The block's
+    /// <c>then</c> is followed when it is done - the check runs again - and once that scope has come to rest the plan
+    /// stands: the update is <c>done</c>, the hold ends, and every step that starts from there reads the request with
+    /// its amendments.
     /// </summary>
     [Fact]
-    public async Task AnAmendmentTakenWhereThePlansScopeHasBegun_IsRefusedAndRecordedAsRefused()
+    public async Task AnAmendmentTakenWhereThePlansScopeHasBegun_RaisesThePlanningStep_AndThePlanStandsWhenItsScopeRests()
     {
         var (repository, service, runner) = await AmendedAsync();
         using var disposed = repository;
@@ -327,18 +336,30 @@ public sealed class FlowServiceTests
         var store = repository.Harness.OrchestrationStore;
 
         // Past the planning, paused at the last pause: the amendment is recorded - the command's gates pass - and the
-        // next session refuses it, for this build plans no update.
+        // next session takes it by raising the planning step.
         _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
         _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
         _ = await service.AmendAsync(repository.Path, "r1", "in fact, only the parser", textFile: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var answered = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
-        Assert.Equal(HarnessExit.Success, answered.ExitCode);
-        var refused = Assert.Single(store.ReadFlowUpdates(run)!.Updates);
-        Assert.Equal(("u1", "refused"), (refused.Id, refused.State));
-        Assert.Equal("run 'r1' has begun 'planning', the scope an update to its plan is planned in; this build raises no step to plan one yet, so the update is recorded as refused and the request stands", refused.Why);
+        Assert.True(HarnessExit.Success == answered.ExitCode, $"{answered.ExitCode}: {answered.Message}");
 
+        // The session that took it drove the update whole: the planner raised and ended, the update done, and the run
+        // ended done with the request read with its amendment.
+        var update = Assert.Single(store.ReadFlowUpdates(run)!.Updates);
+        Assert.Equal(("u1", "done"), (update.Id, update.State));
+        Assert.NotNull(update.Step);
+        Assert.Equal("check", update.Then);
+        Assert.Null(update.Why);
+
+        var steps = store.ReadFlow(run)!.Steps;
+        Assert.Single(steps, step => step.Step == "planning.planupdate" && step.RaisedByUpdate == "u1");
+        Assert.Equal(2, steps.Count(step => step.Step == "planning.check"));
+        Assert.Contains(steps, step => step.Step == "planning.check" && step.LeftBy == "planning.planupdate");
+
+        // The pause after had asked before the update was taken, and its question stands as it was filled: a step
+        // that started reads the request with its amendments, and one that had asked already asks nothing again.
         var asked = store.ReadFlowQuestions(run)!.Questions[^1];
         Assert.Equal("build the thing", asked.ProblemShown!.Happened);
     }
@@ -452,11 +473,12 @@ public sealed class FlowServiceTests
 
     /// <summary>
     /// A changed answer past its window is refused - naming the answer, when it was given, until when it could be
-    /// changed and what time it is - and the answer stands; where the run's plan has begun, the change is refused
-    /// and recorded as refused, for this build plans no update, and the answer stands the same.
+    /// changed and what time it is - and the answer stands; where the run's plan has begun, the change is taken: the
+    /// update is under way, the step the <c>amend</c> block names is raised and plans it with both answers, and the
+    /// block's <c>then</c> is followed - the check runs again - until the plan stands again and the update is done.
     /// </summary>
     [Fact]
-    public async Task AChangedAnswerPastItsWindowOrWhereAPlanHolds_IsRefused_AndTheAnswerStands()
+    public async Task AChangedAnswerPastItsWindow_IsRefused_AndWhereAPlanHasBegun_IsPlannedAndThePlanStands()
     {
         var (repository, service, runner) = await AmendedAsync();
         using var disposed = repository;
@@ -489,17 +511,28 @@ public sealed class FlowServiceTests
         Assert.Single(store.ReadFlowQuestions(run)!.Questions[0].Answers);
         Assert.Empty(store.ReadFlowUpdates(run)!.Updates);
 
-        // Where the run's plan has begun, the change is refused and recorded as refused; the answer stands.
+        // Where the run's plan has begun, the change is taken within its window: the update is planned by the step
+        // the amend block names, and both answers are kept.
         _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var begun = await service.AnswerAsync(repository.Path, "r1", "stay", question: null, text: null, textFile: null, again: true, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
-        Assert.Equal(HarnessExit.Refused, begun.ExitCode);
-        Assert.Equal("run 'r1' has begun 'planning', the scope an update to its plan is planned in; this build raises no step to plan one yet, so the update is recorded as refused and the answer stands", begun.Message);
+        // The change is taken and its update planned while the session runs; the run itself parks on the question
+        // the pause after asks, which no step answers.
+        Assert.True(FlowExit.Paused == begun.ExitCode, $"{begun.ExitCode}: {begun.Message}");
 
         var update = Assert.Single(store.ReadFlowUpdates(run)!.Updates);
-        Assert.Equal(("u1", "changedAnswer", "refused", "q2", "go", "stay"), (update.Id, update.Cause, update.State, update.Question, update.FromAnswer, update.ToAnswer));
-        Assert.Single(store.ReadFlowQuestions(run)!.Questions[1].Answers);
+        Assert.Equal(("u1", "changedAnswer", "done", "q2", "go", "stay"), (update.Id, update.Cause, update.State, update.Question, update.FromAnswer, update.ToAnswer));
+        Assert.NotNull(update.Step);
+        Assert.Equal("check", update.Then);
+
+        var answers = store.ReadFlowQuestions(run)!.Questions[1].Answers;
+        Assert.Equal(2, answers.Count);
+        Assert.Equal(("go", "stay", "u1"), (answers[0].Answer, answers[1].Answer, answers[1].Update));
+
+        var steps = store.ReadFlow(run)!.Steps;
+        Assert.Single(steps, step => step.Step == "planning.planupdate" && step.RaisedByUpdate == "u1");
+        Assert.Equal(2, steps.Count(step => step.Step == "planning.check"));
     }
     /// <summary>A run starts the next r-N, writes every record of the run, drives the session to its end, releases the owner, and names every record it wrote.</summary>
     [Fact]

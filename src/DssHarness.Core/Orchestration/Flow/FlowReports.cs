@@ -245,11 +245,14 @@ public static class FlowReports
                 + $"answer with answer-orchestrator {layout.Name} <answer> --question {question.Id}");
         }
 
-        foreach (var update in updates?.Updates.Where(update => update.State is FlowUpdateStates.Refused or FlowUpdateStates.Queued) ?? [])
+        foreach (var update in updates?.Updates.Where(update => update.State is FlowUpdateStates.Refused or FlowUpdateStates.Queued or FlowUpdateStates.UnderWay) ?? [])
         {
-            left.Add(update.State == FlowUpdateStates.Queued
-                ? $"plan update {update.Id} ({(update.Cause == FlowUpdateCauses.ChangedAnswer ? "a changed answer" : "an amendment")}) is recorded and waits for the run to be gone on with"
-                : $"plan update {update.Id} ({(update.Cause == FlowUpdateCauses.ChangedAnswer ? "a changed answer" : "an amendment")}) was refused: {update.Why}");
+            left.Add(update.State switch
+            {
+                FlowUpdateStates.Queued => $"plan update {update.Id} ({(update.Cause == FlowUpdateCauses.ChangedAnswer ? "a changed answer" : "an amendment")}) is recorded and waits for the run to be gone on with",
+                FlowUpdateStates.UnderWay => $"plan update {update.Id} ({(update.Cause == FlowUpdateCauses.ChangedAnswer ? "a changed answer" : "an amendment")}) is under way: the run is held while '{update.Step ?? "its planning step"}' plans it",
+                _ => $"plan update {update.Id} ({(update.Cause == FlowUpdateCauses.ChangedAnswer ? "a changed answer" : "an amendment")}) was refused: {update.Why}",
+            });
         }
 
         foreach (var step in flow.Steps.Where(step => step.Leftover is not null))
@@ -303,6 +306,9 @@ public static class FlowReports
         ["question"] = update.Question,
         ["fromAnswer"] = update.FromAnswer,
         ["toAnswer"] = update.ToAnswer,
+        ["text"] = update.Text,
+        ["step"] = update.Step,
+        ["then"] = update.Then,
         ["why"] = update.Why,
     };
 
@@ -430,10 +436,11 @@ public static class FlowReports
             foreach (var update in updates.Updates)
             {
                 var why = update.Why is { } held ? $" - {held}" : string.Empty;
+                var step = update.State == FlowUpdateStates.UnderWay && update.Step is { } planning ? $" by '{planning}'" : string.Empty;
 
                 text.Add(update.Cause == FlowUpdateCauses.ChangedAnswer
-                    ? $"- {update.Id} (changed answer of {update.Question}, '{update.FromAnswer}' to '{update.ToAnswer}'), taken at {FlowTimeConverter.Written(update.TakenAt)}: {update.State}{why}"
-                    : $"- {update.Id} (amendment), taken at {FlowTimeConverter.Written(update.TakenAt)}: {update.State}{why}{(update.Amendment is { } amendment ? $"\n  > {amendment.Replace("\n", "\n  > ")}" : string.Empty)}");
+                    ? $"- {update.Id} (changed answer of {update.Question}, '{update.FromAnswer}' to '{update.ToAnswer}'), taken at {FlowTimeConverter.Written(update.TakenAt)}: {update.State}{step}{why}"
+                    : $"- {update.Id} (amendment), taken at {FlowTimeConverter.Written(update.TakenAt)}: {update.State}{step}{why}{(update.Amendment is { } amendment ? $"\n  > {amendment.Replace("\n", "\n  > ")}" : string.Empty)}");
             }
         }
 

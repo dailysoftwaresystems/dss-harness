@@ -125,7 +125,7 @@ public static class OrchestrationReports
             ? $"changed answer of {update.Question}, '{update.FromAnswer}' to '{update.ToAnswer}'"
             : "amendment";
 
-        return $"plan update {update.Id} ({raised}): {update.State}{(update.Why is { } why ? $" - {why}" : string.Empty)}";
+        return $"plan update {update.Id} ({raised}): {update.State}{(update.State == Flow.FlowUpdateStates.UnderWay && update.Step is { } planning ? $" - the run is held while '{planning}' plans it" : update.Why is { } why ? $" - {why}" : string.Empty)}";
     }
 
     private static string Line(AgentInventory agent)

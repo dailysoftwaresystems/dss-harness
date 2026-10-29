@@ -1136,9 +1136,14 @@ public sealed class FlowQuestionsTests
                       input: request
                 question: 'the request says: {input.request}'
                 options: [approve, revise]
+              - name: replan
+                type: reason
+                agent: planner
+                prompt: plan.md
+                outputs: plan.json
             """) with
         {
-            Amend = new FlowAmend("request", null, null, "approval", null, "x", "approval", "approval", "approval", null),
+            Amend = new FlowAmend("request", null, null, "replan", null, "x", "replan", "replan", "replan", null),
         };
         var amendmentAt = DateTimeOffset.UtcNow;
         FlowUpdatesFile taken = new(1, "r1", amendmentAt, [new FlowUpdateEntry("u1", "amendment", "done", amendmentAt, Amendment: "in fact, build the parser and nothing else", Through: "amend-orchestrator-request")]);

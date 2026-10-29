@@ -29,11 +29,12 @@ public static class FlowUpdateIds
 /// <summary>
 /// One plan update a run has taken, as <c>updates.json</c> holds it: its id, what raised it, and where it stands. Of
 /// what raised it, an amendment holds its text, when it was made and through what; a changed answer holds the id of
-/// the question whose answer was changed with the answer before and the answer now. Of where it stands, this build
-/// takes an update only where no plan holds it yet - <see cref="FlowUpdateStates.DoneAtOnce"/> - or cannot take it at
-/// all - <see cref="FlowUpdateStates.Refused"/>: the planning this file's siblings in the plan name is later work,
-/// and an update taken where the plan's scope has begun is refused naming that, and recorded as refused here, so the
-/// run's history says what became of a change a person asked for.
+/// the question whose answer was changed with the answer before and the answer now. Of where it stands, an update
+/// taken where no plan holds it yet is <see cref="FlowUpdateStates.DoneAtOnce"/>; one taken where a plan has is
+/// <see cref="FlowUpdateStates.UnderWay"/> - the run held while the step the <c>amend</c> block names plans it, its
+/// instance named here - until the updated plan stands (<see cref="FlowUpdateStates.Done"/>) or its planning was
+/// given up (<see cref="FlowUpdateStates.Failed"/>, saying why no plan holds the change); one the run cannot take
+/// is <see cref="FlowUpdateStates.Refused"/>.
 /// </summary>
 /// <param name="Id">The update's id: <c>u&lt;n&gt;</c>, in the order taken.</param>
 /// <param name="Cause">What raised it: an <c>amendment</c> or a <c>changedAnswer</c>.</param>
@@ -48,7 +49,16 @@ public static class FlowUpdateIds
 /// The id of the <c>inbox.json</c> entry the change was handed over under, to an engine running the run; null where
 /// none was, so an entry the run's records hold is never weighed again.
 /// </param>
-/// <param name="Why">What the run says of the update where its state alone cannot: why one was refused.</param>
+/// <param name="Why">What the run says of the update where its state alone cannot: why one was refused, or given up.</param>
+/// <param name="Step">
+/// The instance of the step the <c>amend</c> block names that plans this update, where the run has raised one; null
+/// until it has. How that visit ended is its own step's record, which this entry names and does not copy.
+/// </param>
+/// <param name="Then">
+/// The step the <c>amend</c> block's <c>then</c> names, written as the update's redirect to it is decided; null until
+/// one was, and where the block names none.
+/// </param>
+/// <param name="Text">The text given with a changed answer, where its question takes one; null where none was.</param>
 public sealed record FlowUpdateEntry(
     string Id,
     string Cause,
@@ -60,7 +70,10 @@ public sealed record FlowUpdateEntry(
     string? FromAnswer = null,
     string? ToAnswer = null,
     string? Inbox = null,
-    string? Why = null)
+    string? Why = null,
+    string? Step = null,
+    string? Then = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Text = null)
 {
     /// <summary>What is wrong with this entry; null when nothing is.</summary>
     public string? Problem()
@@ -72,6 +85,7 @@ public sealed record FlowUpdateEntry(
             : Cause == FlowUpdateCauses.ChangedAnswer && (string.IsNullOrWhiteSpace(FromAnswer) || string.IsNullOrWhiteSpace(ToAnswer)) ? "a changed answer is recorded with the answer before and the answer now"
             : State == FlowUpdateStates.Refused && string.IsNullOrWhiteSpace(Why) ? "it says not why it was refused"
             : Inbox is not null && string.IsNullOrWhiteSpace(Inbox) ? "it names no inbox entry"
+            : Step is not null && !FlowInstanceId.IsWellFormed(Step) ? $"'{Step}' is not an instance's id"
             : null;
 }
 
@@ -94,8 +108,9 @@ public static class FlowUpdateStates
     public const string Refused = "refused";
 
     /// <summary>
-    /// Done the moment it was taken, for no plan held it: every step that starts reads the change. The state a step
-    /// that plans an update never leaves, for this build raises no planning step.
+    /// Done the moment it was taken, for no plan held it: every step that starts reads the change. Where a plan has
+    /// begun, an update is planned by the step the <c>amend</c> block names and ends <see cref="Done"/> when the
+    /// updated plan stands.
     /// </summary>
     public const string DoneAtOnce = Done;
 

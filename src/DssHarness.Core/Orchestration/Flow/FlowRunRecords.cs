@@ -573,7 +573,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             snapshot.Pause is { } pause
                 ? new FlowPauseRecord(pause.Cause, pause.All, pause.BeganAt, [.. pause.Handoffs], pause.CompletedAt)
                 : null,
-            snapshot.Redirects);
+            snapshot.Redirects,
+            snapshot.Hold);
     }
 
     /// <summary>One step's own record, from the coordinator's snapshot of it.</summary>
@@ -621,7 +622,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.Cause is OutcomeCause.None ? null : step.Cause.ToString(),
             step.Model,
             step.Copied ? true : null,
-            step.Targets);
+            step.Targets,
+            step.RaisedByUpdate);
     }
 
     /// <summary>

@@ -2072,10 +2072,29 @@ hands over, and once: both answers are kept, each with when it was given, the ne
 at once with the new answer (`FlowCoordinator.RevisitPause`). Both pass the one table of gates
 (`FlowUpdateGates.Refused`, read by the command over the run's files and by the engine over its own state): a run that
 is done, one past the step its `amend.before` names, one past the work items of its last round, a definition whose
-`amend` names no such change - nothing recorded for one. Where the run has begun the scope its plan updates are
-planned in (the group its `amend.step` is directly in), this build raises no step to plan one yet: the change is
-recorded `refused` with why (`FlowCoordinator.NotPlannedYet`), the input keeps the request as it was given, and the
-answer stands. The report lists every update, and `list-orchestrator` says where each stands.
+`amend` names no such change - nothing recorded for one. The report lists every update, and `list-orchestrator` says
+where each stands.
+The planning of a plan update is built (slice 31d2): where the run has begun the scope its plan updates are planned in
+(the group its `amend.step` is directly in), a taken change is not refused but planned - the step the block names is
+raised by the update alone as a handler is raised by an ending (`FlowCoordinator.RaisePlanner`: a new visit of it in
+the newest instance of that scope, `FlowInstance.RaisedByUpdate` in its record, a group around it that had ended in
+progress again), never drawn by the ordinary schedule (`FlowCoordinator.Instantiate`), and admitted ahead of
+everything else (`AdmissionWalk`) - while the run is held (`FlowCoordinator.HoldOf`: nothing starts outside that
+scope, a held step reserving no claim, what is in flight untouched, no next iteration of a loop outside it, no
+redirect made outside it), `flow.json` saying `hold {update, at}` (`FlowHoldRecord`). The step's `amend.then` is
+followed when it is done - the redirect's machinery inside that scope (`FlowCoordinator.SettleUpdates` ->
+`DecideRedirectOf`), a question open on a step it resets withdrawn - and once that scope has come to rest (the step
+ended, what `then` set going ended, and a `repeat` it is in has ended its iteration) the updated plan stands: the
+update is `done`, the hold ends, and the steps that start from here on resolve every name anew. A failed planning
+step is decided by its own handlers and `onFailure` as any step: `stop` ends the run, `pause` asks, `continue` gives
+the update up - `failed`, nothing placed, nobody told, the hold ended, the run going on with the plan as it was, the
+entry saying the request or the answer is recorded and no plan holds it. The prompts of the planning step and of its
+scope read the update (`{update.cause}`, `{update.since}` and `{update.work}`, `FlowCoordinator.UpdateValues`) -
+outside an update each is a sentence that says none is under way. Updates are taken one at a time: one that arrives
+while another is under way is `queued` behind it and taken when that one is done, in the order given
+(`FlowCoordinator.TakeNextQueued`), and a changed answer queued behind an update is applied when its turn comes. The
+whole of it is across a crash and a safe pause: the hold and the raised visit are read back from the run's records at
+the resume, which goes on with the update first.
 Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`

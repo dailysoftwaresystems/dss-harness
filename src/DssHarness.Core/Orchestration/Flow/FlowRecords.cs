@@ -181,6 +181,10 @@ public sealed record FlowEvent(
 /// attempts its turn ran and how it ended - what a resume goes on from, at the first whose turn has not ended; null for
 /// every other step, and before it starts.
 /// </param>
+/// <param name="RaisedByUpdate">
+/// The plan update this instance was raised to plan, by its id - the visit of the step the <c>amend</c> block names; null
+/// for every step an update did not raise.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -220,7 +224,8 @@ public sealed record FlowStepRecord(
     string? Cause = null,
     string? Model = null,
     bool? Copied = null,
-    IReadOnlyList<FlowTargetRecord>? Targets = null)
+    IReadOnlyList<FlowTargetRecord>? Targets = null,
+    string? RaisedByUpdate = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -259,6 +264,7 @@ public sealed record FlowStepRecord(
             : Handlers is { Count: > 0 } && Handlers.Any(handler => handler.Problem() is not null) ? $"its handlers hold one that is not a state: {Handlers.First(handler => handler.Problem() is not null).Problem()}"
             : HandledBy is not null && !FlowInstanceId.IsWellFormed(HandledBy) && !FlowQuestionIds.IsWellFormed(HandledBy) ? $"'{HandledBy}' names neither an instance nor a question"
             : RaisedBy is not null && !FlowInstanceId.IsWellFormed(RaisedBy) ? $"'{RaisedBy}' is not an instance id"
+            : RaisedByUpdate is not null && !FlowUpdateIds.IsId(RaisedByUpdate) ? $"'{RaisedByUpdate}' is not an update's id"
             : LeftBy is not null && !FlowInstanceId.IsWellFormed(LeftBy) ? $"'{LeftBy}' is not an instance id"
             : Handoff?.Problem() is { } handoff ? $"its handoff: {handoff}"
             : Targets?.FirstOrDefault(target => target.Problem() is not null) is { } target ? $"its target '{target.Agent}': {target.Problem()}"
@@ -363,6 +369,10 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// Every redirect the run owes and has not made yet, in the order they were decided - each made in its turn - each
 /// written before its first reset; null where none is owed.
 /// </param>
+/// <param name="Hold">
+/// The plan update the run is held for, and when it was taken; null where none is under way. While it holds, nothing
+/// is started outside the scope the update is planned in.
+/// </param>
 public sealed record FlowFile(
     int Schema,
     string Run,
@@ -378,7 +388,8 @@ public sealed record FlowFile(
     string? StartCommit = null,
     string? Branch = null,
     FlowPauseRecord? Pause = null,
-    IReadOnlyList<FlowRedirectRecord>? Redirects = null)
+    IReadOnlyList<FlowRedirectRecord>? Redirects = null,
+    FlowHoldRecord? Hold = null)
 {
     /// <summary>
     /// The steps the file holds running that are no group's own record, by instance: once a pause is complete, the
@@ -401,6 +412,21 @@ public sealed record FlowFile(
             : Next.Any(id => Steps.All(step => !string.Equals(step.Instance, id, StringComparison.Ordinal))) ? "next names an instance the file does not hold"
             : Pause?.Problem() is { } pause ? $"its pause: {pause}"
             : Redirects?.Select(redirect => redirect.Problem()).FirstOrDefault(problem => problem is not null) is { } redirect ? $"its redirects: {redirect}"
+            : Hold?.Problem() is { } hold ? $"its hold: {hold}"
+            : null;
+}
+
+/// <summary>
+/// The plan update a run is held for, as <c>flow.json</c> holds it: from the moment the update was taken until its plan
+/// stands or its planning was given up, nothing is started outside the scope the update is planned in.
+/// </summary>
+/// <param name="Update">The update's id, as <c>updates.json</c> holds it.</param>
+/// <param name="At">When the update was taken, and the hold began.</param>
+public sealed record FlowHoldRecord(string Update, [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At)
+{
+    /// <summary>What is wrong with this record; null when nothing is.</summary>
+    public string? Problem()
+        => !FlowUpdateIds.IsId(Update) ? $"'{Update}' is not an update's id"
             : null;
 }
 
@@ -710,6 +736,7 @@ public enum FlowChangeKind
 /// <param name="Next">The steps that would start now, in the order they would start.</param>
 /// <param name="WaitingOn">The questions the run holds open, in the order they were raised.</param>
 /// <param name="Redirects">Every redirect the run owes and has not made yet, in the order decided; null where none is owed.</param>
+/// <param name="Hold">The plan update the run is held for, and when it was taken; null where none is under way.</param>
 /// <param name="PreExisting">The run's pre-existing issues by what became of them; null until it has one.</param>
 /// <param name="Issues">
 /// Every pre-existing issue the run has listed, whole, where the change holds them: the records write the run's file of
@@ -726,6 +753,7 @@ public sealed record FlowSnapshot(
     IReadOnlyList<string> Next,
     IReadOnlyList<string> WaitingOn,
     IReadOnlyList<FlowRedirectRecord>? Redirects = null,
+    FlowHoldRecord? Hold = null,
     WorkflowPreExisting? PreExisting = null,
     IReadOnlyList<PreExistingIssue>? Issues = null);
 
@@ -769,6 +797,7 @@ public sealed record FlowSnapshot(
 /// <param name="Model">The model the agent a create-agent step makes is made for; null where <paramref name="Made"/> is.</param>
 /// <param name="Copied">Whether the leg step's attempt let its tree go while its legs work on, every copy made (<see cref="FlowStepRecord.Copied"/>).</param>
 /// <param name="Targets">A step of others' targets, each with where it stands (<see cref="FlowStepRecord.Targets"/>); null for every other step.</param>
+/// <param name="RaisedByUpdate">The plan update this instance was raised to plan, by its id; null for every step an update did not raise.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -808,4 +837,5 @@ public sealed record FlowSnapshotStep(
     OutcomeCause Cause = OutcomeCause.None,
     string? Model = null,
     bool Copied = false,
-    IReadOnlyList<FlowTargetRecord>? Targets = null);
+    IReadOnlyList<FlowTargetRecord>? Targets = null,
+    string? RaisedByUpdate = null);
