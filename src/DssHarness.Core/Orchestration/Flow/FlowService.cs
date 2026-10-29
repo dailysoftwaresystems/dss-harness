@@ -91,6 +91,8 @@ public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSp
 /// <param name="output">Says what the engine's poller met and what it did about it.</param>
 /// <param name="gitClient">Reads the checkout a run starts from, by the probe its orient step reads.</param>
 /// <param name="agents">Makes and deletes agents: the engine's own read-only agents among them.</param>
+/// <param name="agentRunner">Works the run's advisor, whatever the client is.</param>
+/// <param name="keyStore">The slot the advisor's model reads its key from.</param>
 /// <param name="clock">When the run's records are written, and how every wait of these commands is timed.</param>
 /// <param name="timings">How often the commands look; <see cref="FlowTimings.Default"/> where not given.</param>
 public sealed class FlowService(
@@ -108,6 +110,8 @@ public sealed class FlowService(
     IHarnessOutput output,
     Git.IGitClient gitClient,
     IAgentService agents,
+    Agents.IAgentRunner agentRunner,
+    Secrets.AgentKeyStore keyStore,
     TimeProvider? clock = null,
     FlowTimings? timings = null) : IFlowService
 {
@@ -733,7 +737,8 @@ public sealed class FlowService(
                     }
 
                     return deleted.Outcome;
-                });
+                },
+                new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output));
             var before = _store.ReadFlowQuestions(layout);
 
             if (answered is { } given && !coordinator.TryAnswer(given.Question, given.Answer, given.Text, out var problem, AnswerCommand))

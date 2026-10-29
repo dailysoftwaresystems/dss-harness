@@ -519,7 +519,17 @@ by the request's own words, quoted and looked for. The repository's bar for a re
 `recommendations.md` in the workflow's folder, or the file its `recommendations` key names - is read
 by `{recommendations}` in a reason step's prompt, live each time it is given, so a change holds from
 the next question on; where the folder has none, a sentence says so and a recommendation says it
-follows none. A `test` step's
+follows none.
+
+Before a person is left with a question the engine raises itself, the orchestrator's `advisor`
+recommends on it: one reason step that only reads, run wherever the asking step works with its
+records under `advice/<n>/` of the asking step, its prompt reading the question (`{question.step}`,
+`{question.kind}`, `{question.problem}`, `{question.answers}`, `{question.record}`), the run's
+inputs and `{recommendations}`, its answer held to the engine's own schema - one of the question's
+answers. The question is open while the advice runs, so a person who is there answers without
+waiting, and their answer ends the asking; where none was obtained the question says so, and where
+no advisor is named it says that plainly. The advisor takes no question a step's own agent asked
+nor the budget's own, nor a kind its `kinds` leaves out. A `test` step's
 `filter` names the tests it runs; its `filterWhen` is an
 expression that switches it - where it reads false the step gives no filter and every test of its
 legs runs, as the shipped `verify` steps do where the run's input `affectedTests` is off, each item

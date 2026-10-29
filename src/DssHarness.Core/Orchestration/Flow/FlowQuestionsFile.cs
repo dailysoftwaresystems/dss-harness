@@ -44,8 +44,8 @@ public sealed record FlowRecommendation(
     string? Model = null,
     string? Advice = null)
 {
-    /// <summary>The one recommendation this build's questions carry: none sought, said plainly.</summary>
-    public static FlowRecommendation NotSought { get; } = new("notSought", Why: "no recommendation was sought: this build does not ask an advisor yet");
+    /// <summary>The recommendation a question carries where none was sought: said plainly, and nothing is put in a person's place.</summary>
+    public static FlowRecommendation NotSought { get; } = new("notSought", Why: "no recommendation was sought");
 }
 
 /// <summary>Who gave an answer: a person (and through what), the configuration (and where), or the run's input.</summary>

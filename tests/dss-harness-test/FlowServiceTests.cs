@@ -69,7 +69,9 @@ public sealed class FlowServiceTests
         IHarnessOutput? output = null,
         IFileSystem? fileSystem = null,
         IProcessIdentity? identity = null,
-        ChildSessions? children = null)
+        ChildSessions? children = null,
+        DssHarness.Core.Agents.IAgentRunner? agentRunner = null,
+        DssHarness.Core.Secrets.AgentKeyStore? keyStore = null)
     {
         var files = fileSystem ?? harness.FileSystem;
         var store = fileSystem is null ? harness.OrchestrationStore : new OrchestrationStore(files, harness.Output);
@@ -90,6 +92,8 @@ public sealed class FlowServiceTests
             output ?? harness.Output,
             harness.GitClient,
             harness.AgentService,
+            agentRunner ?? new OfNoStep(),
+            keyStore ?? new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform),
             clock,
             timings ?? Quick);
     }

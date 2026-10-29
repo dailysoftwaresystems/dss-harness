@@ -2014,8 +2014,21 @@ answer answers them together. What the person gave the run answers first (`Answe
 `preAnswer` entry whose `when` holds answers at once by the one answer path with `by: input` and the values its when
 read, and an entry that quotes words holds only where they are not empty and stand in the input they are said to be of
 (`StandsIn`, every run of white space compared as one space) - reported words the input does not hold answer nothing,
-the event log says so, and the person is asked. The advisor - the orchestrator's `advisor` block run for a question
-the engine raises - is the next slice (31b3).
+the event log says so, and the person is asked. The advisor is built too (slice 31b3): before a person is left with a
+question the engine raises itself, `FlowCoordinator.SeekAdvice` runs the orchestrator's `advisor` block through
+`IFlowAdvisorRunner` (`Runners\AdvisorRunner.cs`) - one reason step that only reads, wherever the asking step works,
+its model resolved and its order built as a step's is, its records under `advice/<n>/` of the asking step, its prompt
+filled by the one grammar with the question as an object of its texts (`{question.step}`, `{question.kind}`,
+`{question.problem}` with what was tried, `{question.answers}` each with what it does, `{question.record}` - the
+asking step's own records rendered as a continuation record renders a step), the run's inputs and `{recommendations}`,
+and its output the engine's own schema, whose `answer` enum is the question's own answers so the schema itself refuses
+any other. The question is raised at once with its recommendation marked sought, and the session does not end while
+the advice runs (`FlowCoordinator.TakeAdviceAsync`, the loop's wait); a person's answer ends the asking
+(`TakeAnswer` cancelling it), the recommendation written with who gave it and where its records are, none obtained
+said so, and what the advice used counted in the run's spend; an advice owed at a resume - sought by a session a
+crash ended, or deferred while the run was pausing - is sought at its start (`SeekOwedAdvice`). No advisor named, the
+question says so plainly; a kind only a person or an agent answers (`runBudget`, `ask`), a `pause` step's own shown
+questions, and a kind the advisor's `kinds` leaves out, are never advised.
 Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`

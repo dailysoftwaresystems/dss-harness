@@ -369,6 +369,18 @@ public sealed class FlowCoordinator
     /// <summary>Deletes a read-only agent of the run whose work is over, as the engine is to (<c>DeleteAsync</c>, applied); null where the run deletes none.</summary>
     private readonly Func<string, string, CancellationToken, Task<Results.CommandOutcome>>? _deleteAgent;
 
+    /// <summary>Runs the orchestrator's advisor for a question the engine raises; null where none is named.</summary>
+    private readonly IFlowAdvisorRunner? _advisor;
+
+    /// <summary>Every advice the session has begun and not yet taken: its question, how to end it, and its answer.</summary>
+    private readonly List<(FlowQuestion Asked, CancellationTokenSource Cancel, Task<FlowAdvice> Task)> _advising = [];
+
+    /// <summary>How many askings of its question each advice was: the directory under the asking step, from 1.</summary>
+    private readonly Dictionary<string, int> _adviceAsked = [];
+
+    /// <summary>The token of the session in flight, which every advice is held to; null between sessions.</summary>
+    private CancellationToken _sessionToken;
+
     /// <summary>Every read-only agent deletion the run has begun, seen to before its session ends: a deletion left half-done by a session's end is a record the next command reads as one.</summary>
     private readonly List<Task> _deletions = [];
 
@@ -519,6 +531,10 @@ public sealed class FlowCoordinator
     /// Deletes a read-only agent of the run whose work is over, applied, as the engine is to
     /// (<c>IAgentService.DeleteAsync</c>); null where the run deletes none, which a run held in memory alone never does.
     /// </param>
+    /// <param name="advisor">
+    /// Runs the orchestrator's advisor for a question the engine raises, before a person is left with it; null where no
+    /// advisor is named, which every question then says.
+    /// </param>
     /// <exception cref="HarnessException">An input the run needs is missing, or a value is outside the ones its input takes.</exception>
     public FlowCoordinator(
         WorkflowDefinition definition,
@@ -532,7 +548,8 @@ public sealed class FlowCoordinator
         FlowRunPlace? place = null,
         IReadOnlyDictionary<string, string>? agentModels = null,
         Func<string, string>? workflowFile = null,
-        Func<string, string, CancellationToken, Task<Results.CommandOutcome>>? deleteAgent = null)
+        Func<string, string, CancellationToken, Task<Results.CommandOutcome>>? deleteAgent = null,
+        IFlowAdvisorRunner? advisor = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(runner);
@@ -549,6 +566,7 @@ public sealed class FlowCoordinator
         _agentModels = agentModels ?? new Dictionary<string, string>(StringComparer.Ordinal);
         _workflowFile = workflowFile;
         _deleteAgent = deleteAgent;
+        _advisor = advisor;
 
         foreach (var (path, _) in FlowScope.Declared(definition))
         {
@@ -821,6 +839,7 @@ public sealed class FlowCoordinator
         // is refused below, and a refused resume writes nothing of itself.
         _held = _records is null ? null : [];
         _starting = true;
+        _sessionToken = cancellationToken;
 
         try
         {
@@ -842,6 +861,7 @@ public sealed class FlowCoordinator
             else
             {
                 AnswerWhatTheConfigurationAnswers();
+                SeekOwedAdvice();
             }
 
             // A group stands open over its members whatever stopped them, and goes on as it was: it is no step that
@@ -948,10 +968,15 @@ public sealed class FlowCoordinator
                     continue;
                 }
 
+                // What the session's askings of its advisor have answered is taken each pass: a session does not end
+                // paused while an advisor still runs, for the person it asks is to have the recommendation.
+                await TakeAdviceAsync().ConfigureAwait(false);
+
                 // Anything to wait for: a step in flight - a leaf, for a group is only bookkeeping over its members
                 // and a group whose member waits on a question can run nothing until it is answered - a stopped
-                // step's runner still ending, a retry's time coming, or a completion still unread.
-                if (_created.Any(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup) || _wakes.Count > 0 || started > 0)
+                // step's runner still ending, a retry's time coming, an advice of the run's advisor still running, or
+                // a completion still unread.
+                if (_created.Any(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup) || _wakes.Count > 0 || started > 0 || _advising.Count > 0)
                 {
                     await WaitNextAsync(cancellationToken).ConfigureAwait(false);
                     continue;
@@ -1569,6 +1594,15 @@ public sealed class FlowCoordinator
     private void TakeAnswer(FlowQuestion asked, string answer, string? text, string by, string? where, string? through, string? inbox = null, string? input = null)
     {
         _answeredAtStart |= !_inSession || _starting;
+
+        // A person answering while the run's advisor still runs ends the asking, as a cancelled step is ended: its
+        // records stand under the asking step, and their answer is what the run goes on with.
+        foreach (var pending in _advising.Where(pending => pending.Asked.Id == asked.Id).ToList())
+        {
+            _advising.Remove(pending);
+            pending.Cancel.Cancel();
+        }
+
         _ = _open.Remove(asked.Id);
         var instance = _answerable.GetValueOrDefault(asked.Id);
         _ = _answerable.Remove(asked.Id);
@@ -4647,8 +4681,172 @@ public sealed class FlowCoordinator
             _answeredAtOnce = true;
             TakeAnswer(asked, atOnce.Answer, null, "configuration", atOnce.Where, through: null);
         }
+        else
+        {
+            // No person has answered, and no configuration did: where the engine raised the question itself, its
+            // advisor recommends before the person is left with it - never in the person's way, for the question is
+            // open while the advice runs and an answer ends the asking.
+            SeekAdvice(instance, asked);
+        }
 
         return id;
+    }
+
+    /// <summary>
+    /// Sets the recommendation a question starts with, and starts the run's advisor where one is to run: never for a
+    /// kind only a person or an agent answers (`runBudget`, `ask`), for a `pause` step that shows questions of its own
+    /// (they carry their recommendation within them), for a kind the advisor's `kinds` leaves out, nor while the run is
+    /// pausing - no reason step is started then, and the question says the advice is sought at the resume. Where the
+    /// orchestrator names no advisor, the question says so plainly; nothing is put in its place.
+    /// </summary>
+    /// <param name="instance">The instance the question is about; null for the run's own.</param>
+    /// <param name="asked">The question, open.</param>
+    private void SeekAdvice(FlowInstance? instance, FlowQuestion asked)
+    {
+        if (asked.Recommendation is { State: "given" })
+        {
+            // An agent's own questions carry their recommendation with them; the advisor never runs for them.
+            return;
+        }
+
+        if (_definition.Advisor is not { } advisor || _advisor is null)
+        {
+            asked.Recommendation = _definition.Advisor is null
+                ? new FlowRecommendation("notSought", Why: $"no recommendation was sought: orchestrator '{_definition.Name}' names no advisor")
+                : new FlowRecommendation("notSought", Why: $"no recommendation was sought: this run starts no advisor");
+            WriteQuestions();
+            return;
+        }
+
+        if (asked.Kind is "runBudget" or "ask"
+            || asked.AgentQuestions.Count > 0)
+        {
+            // A kind only a person or an agent answers: the budget's question is the run's own, and an agent that asks
+            // recommends within each of its questions.
+            return;
+        }
+
+        if (advisor.Kinds.Count > 0 && !advisor.Kinds.Contains(asked.Kind, StringComparer.Ordinal))
+        {
+            asked.Recommendation = new FlowRecommendation("notSought", Why: $"no recommendation was sought: the advisor's kinds leave out '{asked.Kind}'");
+            WriteQuestions();
+            return;
+        }
+
+        if (_pausing || _hardStop || _pauseRequest is not null)
+        {
+            asked.Recommendation = new FlowRecommendation("deferred", Why: "the run is pausing, and no reason step is started: the recommendation is sought when the run is resumed with this question still open");
+            WriteQuestions();
+            return;
+        }
+
+        if (instance is null)
+        {
+            return;
+        }
+
+        var which = _adviceAsked.GetValueOrDefault(asked.Id) + 1;
+        _adviceAsked[asked.Id] = which;
+        asked.Recommendation = new FlowRecommendation("sought", Why: "a recommendation is being sought from the advisor");
+        WriteQuestions();
+
+        var call = new FlowAdvisorCall(
+            advisor,
+            _runName ?? "run",
+            _definition.Name,
+            asked.Id,
+            asked.Kind,
+            asked.Problem,
+            asked.Tried,
+            asked.Means,
+            asked.Held,
+            instance.Id,
+            WorksInOf(instance) ?? instance.Made,
+            instance.Id,
+            which,
+            Inputs(),
+            Record: null,
+            BarOf(),
+            _place);
+
+        var cancel = CancellationTokenSource.CreateLinkedTokenSource(_sessionToken);
+        var task = Task.Run(() => _advisor!.AdviseAsync(call, cancel.Token), CancellationToken.None);
+        _ = task.ContinueWith(_ => WakeTheLoop(), CancellationToken.None);
+        _advising.Add((asked, cancel, task));
+    }
+
+    /// <summary>
+    /// Takes the advice the session's askings have answered: a recommendation obtained is written to its question with
+    /// who gave it and where its records are, one not obtained leaves the question saying why, and either way the run's
+    /// spend counts what the advice used. An asking ended by an answer - the person was there - is dropped, its records
+    /// standing under the asking step.
+    /// </summary>
+    private async Task TakeAdviceAsync()
+    {
+        foreach (var pending in _advising.Where(pending => pending.Task.IsCompleted).ToList())
+        {
+            _advising.Remove(pending);
+
+            FlowAdvice advice;
+
+            try
+            {
+                advice = await pending.Task.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                pending.Cancel.Dispose();
+                continue;
+            }
+            catch (Exception failed)
+            {
+                advice = new FlowAdvice(Answer: null, Why: null, Text: null, NotObtained: failed.Message);
+            }
+
+            pending.Cancel.Dispose();
+
+            if (advice.Usd is { } usd)
+            {
+                _spent.Usd += usd;
+            }
+
+            if (advice.Tokens is { } tokens)
+            {
+                _spent.Tokens += tokens;
+            }
+
+            if (!_open.Contains(pending.Asked.Id))
+            {
+                // Answered while the advice ran: the person was there, and their answer stands.
+                continue;
+            }
+
+            pending.Asked.Recommendation = advice.Answer is { } answer
+                ? new FlowRecommendation("given", answer, advice.Text, advice.Why, "advisor", _definition.Advisor?.Agent, advice.Model, advice.Directory)
+                : new FlowRecommendation("notObtained", Why: $"no recommendation: one was sought and not obtained ({advice.NotObtained})");
+            WriteQuestions();
+            Record(FlowChangeKind.Advised, _answerable.GetValueOrDefault(pending.Asked.Id), detail: $"{pending.Asked.Id} {(advice.Answer is { } said ? $"advised '{said}'" : "left without a recommendation")}");
+        }
+    }
+
+    /// <summary>
+    /// Seeks the advice each open question still owes at a session's start: one marked sought by a session a crash or a
+    /// stop ended, and one deferred while the run was pausing - the run is resumed now, and the question still open.
+    /// </summary>
+    private void SeekOwedAdvice()
+    {
+        if (_advisor is null || _definition.Advisor is null)
+        {
+            return;
+        }
+
+        foreach (var asked in OpenQuestions.Where(asked => asked.Recommendation.State is "sought" or "deferred").ToList())
+        {
+            if (_answerable.GetValueOrDefault(asked.Id) is { } instance)
+            {
+                SeekAdvice(instance, asked);
+            }
+        }
     }
 
     /// <summary>

@@ -691,6 +691,9 @@ public enum FlowChangeKind
 
     /// <summary>An answer was given from outside the session - taken from the inbox, or refused where its question was no longer open.</summary>
     Answer,
+
+    /// <summary>The run's advisor answered an open question with a recommendation, or left it without one.</summary>
+    Advised,
 }
 
 /// <summary>

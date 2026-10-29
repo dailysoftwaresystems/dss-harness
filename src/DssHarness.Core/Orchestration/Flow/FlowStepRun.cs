@@ -405,3 +405,75 @@ public sealed record FlowStepResult
     public static FlowStepResult Found(string checks, string? detail = null)
         => new() { Asked = null, Passed = false, Exit = HarnessExit.CommandFailed, Checks = checks, ChecksDetail = detail };
 }
+
+/// <summary>One asking of the run's advisor: the question it recommends on, with every text its prompt reads.</summary>
+/// <param name="Advisor">The orchestrator's advisor block, as the definition declares it.</param>
+/// <param name="Run">The orchestrator run's name.</param>
+/// <param name="Workflow">The workflow's name, whose folder holds the advisor's agent and prompt.</param>
+/// <param name="QuestionId">The question's id.</param>
+/// <param name="Kind">The question's kind.</param>
+/// <param name="Problem">The problem as the engine states it.</param>
+/// <param name="Tried">What the run tried before it asked.</param>
+/// <param name="Means">What the answer changes; null where the run has not said.</param>
+/// <param name="Answers">The answers it takes, each with what it does and whether it takes a text.</param>
+/// <param name="Step">The asking step's instance id, its advice recorded under its own directory.</param>
+/// <param name="Agent">The agent the asking step works as, whose directory and workspace the advice shares; null where it names none yet.</param>
+/// <param name="Instance">The asking step's instance id, as its records name it.</param>
+/// <param name="Advice">Which asking of this question this is, from 1: the directory under the asking step.</param>
+/// <param name="Inputs">The run's inputs, as its person gave them.</param>
+/// <param name="Record">What the run stored of the asking step, rendered as a continuation record renders a step.</param>
+/// <param name="Bar">The repository's bar for a recommendation, read where the question was raised.</param>
+/// <param name="Place">Where the run works; null for a run held in memory alone.</param>
+public sealed record FlowAdvisorCall(
+    FlowAdvisor Advisor,
+    string Run,
+    string Workflow,
+    string QuestionId,
+    string Kind,
+    string Problem,
+    string? Tried,
+    string? Means,
+    IReadOnlyList<FlowQuestionOption> Answers,
+    string Step,
+    string? Agent,
+    string Instance,
+    int Advice,
+    System.Text.Json.Nodes.JsonObject Inputs,
+    string? Record,
+    string Bar,
+    FlowRunPlace? Place = null);
+
+/// <summary>
+/// The advice one question of the run's was given: the answer its advisor recommends with why and a text where the
+/// answer takes one, or - where none was obtained - why, said as the question's own recommendation says it.
+/// </summary>
+/// <param name="Answer">The answer recommended, one of the question's; null where none was obtained.</param>
+/// <param name="Why">Why that answer, by the bar the advisor was given; null where none was obtained.</param>
+/// <param name="Text">The text recommended with it, where the answer takes one; null otherwise.</param>
+/// <param name="Model">The model that served the advisor, where one did.</param>
+/// <param name="Directory">Where the advisor's own records are, under the asking step; null where none were kept.</param>
+/// <param name="NotObtained">Why no recommendation was obtained, where it was sought and not had; null otherwise.</param>
+/// <param name="Usd">What the advice cost, where a model served it; null where nothing is known.</param>
+/// <param name="Tokens">The tokens its clients reported, where a model served it; null where nothing is known.</param>
+public sealed record FlowAdvice(
+    string? Answer,
+    string? Why,
+    string? Text,
+    string? Model = null,
+    string? Directory = null,
+    string? NotObtained = null,
+    double? Usd = null,
+    long? Tokens = null);
+
+/// <summary>
+/// The engine's advisor: one reason step that only reads, run for a question the engine raises before a person is left
+/// with it. Never between a person and an answer - the caller raises the question at once, and an answer ends the
+/// asking, its record kept.
+/// </summary>
+public interface IFlowAdvisorRunner
+{
+    /// <summary>Recommends an answer to the question <paramref name="call"/> names, or why none was obtained.</summary>
+    /// <param name="call">The asking: the question, its texts, and the asking step's place.</param>
+    /// <param name="cancellationToken">Ends the asking: a person answered, or the run stopped.</param>
+    Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, CancellationToken cancellationToken);
+}
