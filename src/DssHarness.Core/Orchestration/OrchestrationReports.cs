@@ -96,6 +96,11 @@ public static class OrchestrationReports
             }
         }
 
+        foreach (var update in run.Updates?.Updates ?? [])
+        {
+            yield return UpdateLine(update);
+        }
+
         if (steps)
         {
             foreach (var step in flow.Steps)
@@ -111,6 +116,16 @@ public static class OrchestrationReports
                 yield return line;
             }
         }
+    }
+
+    /// <summary>Where one plan update stands, as the listing says it: what raised it, and what became of it.</summary>
+    private static string UpdateLine(Flow.FlowUpdateEntry update)
+    {
+        var raised = update.Cause == Flow.FlowUpdateCauses.ChangedAnswer
+            ? $"changed answer of {update.Question}, '{update.FromAnswer}' to '{update.ToAnswer}'"
+            : "amendment";
+
+        return $"plan update {update.Id} ({raised}): {update.State}{(update.Why is { } why ? $" - {why}" : string.Empty)}";
     }
 
     private static string Line(AgentInventory agent)

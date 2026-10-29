@@ -36,6 +36,7 @@ public sealed class StoppedDocumentTests
         ["run-orchestrator"] = FlowDocument,
         ["resume-orchestrator"] = FlowDocument,
         ["answer-orchestrator"] = FlowDocument,
+        ["amend-orchestrator-request"] = FlowDocument,
         ["pause-orchestrator"] = FlowDocument,
         ["stop-orchestrator"] = FlowDocument,
         ["refresh-agent"] = AgentDocument,

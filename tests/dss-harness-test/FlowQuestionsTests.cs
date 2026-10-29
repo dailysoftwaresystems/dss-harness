@@ -1111,6 +1111,64 @@ public sealed class FlowQuestionsTests
     }
 
     /// <summary>
+    /// A quote of a pre-answer is looked for in the value the run was started with, never in an amendment: words an
+    /// amendment added answer nothing, and the person is asked - while the input itself reads the request with its
+    /// amendments, in every prompt and every expression alike.
+    /// </summary>
+    [Fact]
+    public async Task APreAnswersQuote_IsLookedForInTheValueAsGiven_NeverInAnAmendment()
+    {
+        var definition = Parse("""
+            name: flow
+            inputs:
+              - name: request
+            steps:
+              - name: intake
+                type: orient
+              - name: approval
+                type: pause
+                dependsOn: [intake]
+                preAnswer:
+                  - when: 'input.request != ""'
+                    answer: approve
+                    quote:
+                      text: 'intake.sentence'
+                      input: request
+                question: 'the request says: {input.request}'
+                options: [approve, revise]
+            """) with
+        {
+            Amend = new FlowAmend("request", null, null, "approval", null, "x", "approval", "approval", "approval", null),
+        };
+        var amendmentAt = DateTimeOffset.UtcNow;
+        FlowUpdatesFile taken = new(1, "r1", amendmentAt, [new FlowUpdateEntry("u1", "amendment", "done", amendmentAt, Amendment: "in fact, build the parser and nothing else", Through: "amend-orchestrator-request")]);
+
+        // The quoted words are the amendment's, read out of the input with its amendments - and a quote is looked for
+        // in the value as given, never in an amendment: the quote does not hold, the person is asked, and the question
+        // itself shows the request with its amendment.
+        var runner = new FakeRunner().On("intake", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"sentence": "in fact, build the parser and nothing else"}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, updates: () => taken);
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Empty(coordinator.OpenQuestions.Single().Given);
+        Assert.Equal(
+            "the request says: build the tool\n\namended at " + FlowTimeConverter.Written(amendmentAt) + ":\nin fact, build the parser and nothing else",
+            coordinator.OpenQuestions.Single().Problem);
+
+        // The quoted words of the value as given hold as they always did, amendments beside them or not.
+        FlowUpdatesFile none = new(1, "r1", DateTimeOffset.UtcNow, []);
+        runner = new FakeRunner().On("intake", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"sentence": "Build the parser   and nothing else, please"}""")));
+        coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "Build the parser   and nothing else, please" }, updates: () => none);
+
+        end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal("approve", coordinator.Questions.Single().Given.Single().Answer);
+    }
+
+    /// <summary>
     /// The repository's bar for a recommendation is read by <c>{recommendations}</c> wherever a template may name it:
     /// the file the orchestrator names, or its folder's own <c>recommendations.md</c> - and where neither is, a
     /// sentence that says so, for a recommendation then says it follows none.

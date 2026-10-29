@@ -3118,6 +3118,14 @@ public sealed class FlowResumeTests
                 inner.Question(questions, refused);
             }
         }
+
+        public void Updates(FlowUpdatesFile updates)
+        {
+            if (Interlocked.Increment(ref _made) <= writes)
+            {
+                inner.Updates(updates);
+            }
+        }
     }
 
     /// <summary>The run's records, each change shown to the test before it is written through - which may fail it there.</summary>
@@ -3131,6 +3139,9 @@ public sealed class FlowResumeTests
 
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
             => inner.Question(questions, refused);
+
+        public void Updates(FlowUpdatesFile updates)
+            => inner.Updates(updates);
     }
 
     /// <summary>The run's records, watched: each change is written through, and a test waits on the change it times.</summary>
@@ -3176,6 +3187,9 @@ public sealed class FlowResumeTests
 
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
             => inner.Question(questions, refused);
+
+        public void Updates(FlowUpdatesFile updates)
+            => inner.Updates(updates);
     }
 
     /// <summary>The owner of a run is claimed at the start of a session: a live owner refuses it, a dead one is reclaimed and said, and the run is released where its session leaves it.</summary>

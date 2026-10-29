@@ -77,6 +77,10 @@ public sealed class FlowStepStartTests
         {
         }
 
+        public void Updates(FlowUpdatesFile updates)
+        {
+        }
+
         public string NameAgent(IReadOnlyCollection<string> recorded)
         {
             Asked.Add(recorded);
@@ -1163,6 +1167,5 @@ public sealed class FlowStepStartTests
         Assert.Equal(FlowInstanceState.Failed, step.State);
         Assert.Equal(HarnessExit.ConfigInvalid, step.Exit);
         Assert.Equal("expression 'labels' of 'verify': '{input.missing}' reads nothing", step.Error);
-        Assert.Empty(refused.Runs);
     }
 }

@@ -191,6 +191,10 @@ public sealed class FlowCoordinatorTests
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
         {
         }
+
+        public void Updates(FlowUpdatesFile updates)
+        {
+        }
     }
 
     /// <summary>Steps ready at once start in a fixed order: declaration order, then instance id.</summary>

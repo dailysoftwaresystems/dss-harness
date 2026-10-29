@@ -41,6 +41,7 @@ namespace DssHarness.Core.Orchestration;
 /// workflow.json               a run's status, for a person and a client to read
 /// definition.json             the workflow's definition, frozen as the run began with it
 /// questions.json              every question the run raised and every answer it was given
+/// updates.json                every plan update the run has taken, and what became of it
 /// folds.json                  the run's write-ahead ledger of its folds, and of each commit a commit step staged of them
 /// pre-existing-issues.json    each pre-existing issue the run listed
 /// events.jsonl                the run's events, one JSON object to a line
@@ -128,6 +129,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The name of the file every question a run raised and every answer it was given is kept in, whole.</summary>
     public const string QuestionsFileName = "questions.json";
+
+    /// <summary>The name of the file every plan update a run has taken is kept in, whole.</summary>
+    public const string UpdatesFileName = "updates.json";
 
     /// <summary>The name of the file what another process asked of the running engine is kept in, until it is taken.</summary>
     public const string StopFileName = "stop.json";
@@ -441,6 +445,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>Every question the run raised and every answer it was given, the open ones among them: the one owner of what a question said.</summary>
     public string QuestionsFile => Path.Combine(Directory, QuestionsFileName);
+
+    /// <summary>Every plan update the run has taken, with what raised it and where it stands: the one owner of what an update is.</summary>
+    public string UpdatesFile => Path.Combine(Directory, UpdatesFileName);
 
     /// <summary>
     /// The run's write-ahead ledger of its folds: each path a fold means to write, the digest it held before and the one

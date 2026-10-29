@@ -95,6 +95,7 @@ public static class FlowReports
     /// <param name="summary">The session in words.</param>
     /// <param name="exitCode">The session's exit code.</param>
     /// <param name="endedAt">When the session ended.</param>
+    /// <param name="updates">The run's plan updates, as the session left them.</param>
     /// <returns>What is left for a person, the report's last section, one line each.</returns>
     public static IReadOnlyList<string> Write(
         IFileSystem fileSystem,
@@ -103,14 +104,15 @@ public static class FlowReports
         FlowQuestionsFile? questions,
         string summary,
         int exitCode,
-        DateTimeOffset endedAt)
+        DateTimeOffset endedAt,
+        FlowUpdatesFile? updates = null)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(flow);
         ArgumentException.ThrowIfNullOrWhiteSpace(summary);
 
-        var left = LeftForAPerson(layout, flow, questions);
+        var left = LeftForAPerson(layout, flow, questions, updates);
         var handoffs = HandoffsOf(layout, flow);
 
         var json = new JsonObject
@@ -126,11 +128,12 @@ public static class FlowReports
             ["steps"] = new JsonArray([.. flow.Steps.Select(StepOf)]),
             ["handoffs"] = new JsonArray([.. handoffs.Select(HandoffOf)]),
             ["questions"] = questions is null ? [] : new JsonArray([.. questions.Questions.Select(QuestionOf)]),
+            ["updates"] = updates is null ? [] : new JsonArray([.. updates.Updates.Select(UpdateOf)]),
             ["leftForAPerson"] = new JsonArray([.. left.Select(line => JsonValue.Create(line))]),
         };
 
         JsonStateFile.Write(fileSystem, layout.ReportJsonFile, json);
-        fileSystem.WriteAllTextAtomic(layout.ReportFile, MarkdownOf(flow, questions, handoffs, summary, exitCode, left) + "\n");
+        fileSystem.WriteAllTextAtomic(layout.ReportFile, MarkdownOf(flow, questions, handoffs, summary, exitCode, left, updates) + "\n");
 
         return left;
     }
@@ -199,12 +202,14 @@ public static class FlowReports
     /// What is left for a person, tied to no step's name: each pull request a <c>pull-request</c> step opened or found
     /// open, by its address, which the run did not merge and will not; the paths its folds changed that git ignores, as
     /// its <c>commit</c> steps answered them (<c>ignored</c>) and none of them took since, which the run never commits;
-    /// each question still open, with its recommendation and the way to answer it; and what each of the run's loops left.
+    /// each question still open, with its recommendation and the way to answer it; each plan update that waits or was
+    /// refused, so what became of a change a person asked for is never lost; and what each of the run's loops left.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="flow">The run's state in one file.</param>
     /// <param name="questions">The run's questions and answers.</param>
-    public static IReadOnlyList<string> LeftForAPerson(OrchestratorLayout layout, FlowFile flow, FlowQuestionsFile? questions)
+    /// <param name="updates">The run's plan updates.</param>
+    public static IReadOnlyList<string> LeftForAPerson(OrchestratorLayout layout, FlowFile flow, FlowQuestionsFile? questions, FlowUpdatesFile? updates = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(flow);
@@ -238,6 +243,13 @@ public static class FlowReports
             left.Add(
                 $"question {question.Id} ({question.Kind}) is open: {question.ProblemShown?.Happened ?? question.Kind}; {RecommendationOf(question)} - "
                 + $"answer with answer-orchestrator {layout.Name} <answer> --question {question.Id}");
+        }
+
+        foreach (var update in updates?.Updates.Where(update => update.State is FlowUpdateStates.Refused or FlowUpdateStates.Queued) ?? [])
+        {
+            left.Add(update.State == FlowUpdateStates.Queued
+                ? $"plan update {update.Id} ({(update.Cause == FlowUpdateCauses.ChangedAnswer ? "a changed answer" : "an amendment")}) is recorded and waits for the run to be gone on with"
+                : $"plan update {update.Id} ({(update.Cause == FlowUpdateCauses.ChangedAnswer ? "a changed answer" : "an amendment")}) was refused: {update.Why}");
         }
 
         foreach (var step in flow.Steps.Where(step => step.Leftover is not null))
@@ -277,6 +289,21 @@ public static class FlowReports
         ["instance"] = handoff.Instance,
         ["by"] = handoff.By,
         ["file"] = handoff.File,
+    };
+
+    /// <summary>One plan update as the report's JSON document holds it: what raised it, word for word, and where it stands.</summary>
+    private static JsonObject UpdateOf(FlowUpdateEntry update) => new()
+    {
+        ["id"] = update.Id,
+        ["cause"] = update.Cause,
+        ["state"] = update.State,
+        ["takenAt"] = FlowTimeConverter.Written(update.TakenAt),
+        ["amendment"] = update.Amendment,
+        ["through"] = update.Through,
+        ["question"] = update.Question,
+        ["fromAnswer"] = update.FromAnswer,
+        ["toAnswer"] = update.ToAnswer,
+        ["why"] = update.Why,
     };
 
     /// <summary>One step as the report's JSON document holds it.</summary>
@@ -330,7 +357,7 @@ public static class FlowReports
     };
 
     /// <summary>The report as a person reads it.</summary>
-    private static string MarkdownOf(FlowFile flow, FlowQuestionsFile? questions, IReadOnlyList<FlowHandoffNamed> handoffs, string summary, int exitCode, IReadOnlyList<string> left)
+    private static string MarkdownOf(FlowFile flow, FlowQuestionsFile? questions, IReadOnlyList<FlowHandoffNamed> handoffs, string summary, int exitCode, IReadOnlyList<string> left, FlowUpdatesFile? updates = null)
     {
         var text = new List<string>
         {
@@ -389,8 +416,24 @@ public static class FlowReports
                 {
                     var replaced = answer.ReplacedAt is { } at ? $" (replaced at {FlowTimeConverter.Written(at)})" : string.Empty;
                     var did = answer.Did is { } done ? $"; {done}" : string.Empty;
-                    text.Add($"  - answered '{answer.Answer}' by {QuestionsText.Who(answer.By)}{(answer.Text is { } given ? $": \"{given}\"" : string.Empty)}{did}{replaced}");
+                    var update = answer.Update is { } named ? $"; {named}" : string.Empty;
+                    text.Add($"  - answered '{answer.Answer}' by {QuestionsText.Who(answer.By)}{(answer.Text is { } given ? $": \"{given}\"" : string.Empty)}{did}{update}{replaced}");
                 }
+            }
+        }
+
+        if (updates?.Updates.Count > 0)
+        {
+            text.Add(string.Empty);
+            text.Add("## Plan updates");
+
+            foreach (var update in updates.Updates)
+            {
+                var why = update.Why is { } held ? $" - {held}" : string.Empty;
+
+                text.Add(update.Cause == FlowUpdateCauses.ChangedAnswer
+                    ? $"- {update.Id} (changed answer of {update.Question}, '{update.FromAnswer}' to '{update.ToAnswer}'), taken at {FlowTimeConverter.Written(update.TakenAt)}: {update.State}{why}"
+                    : $"- {update.Id} (amendment), taken at {FlowTimeConverter.Written(update.TakenAt)}: {update.State}{why}{(update.Amendment is { } amendment ? $"\n  > {amendment.Replace("\n", "\n  > ")}" : string.Empty)}");
             }
         }
 

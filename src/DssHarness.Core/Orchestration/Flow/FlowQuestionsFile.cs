@@ -93,13 +93,15 @@ public sealed record FlowRefusedAnswer(
 /// <param name="By">Who gave it.</param>
 /// <param name="Did">What the engine did with it; null where the answer has not been applied yet.</param>
 /// <param name="ReplacedAt">When a later answer replaced it, where one did; null while it stands.</param>
+/// <param name="Update">The id of the plan update that changed this answer, where one did; null for every answer a person gave as its first.</param>
 public sealed record FlowAnswerRecord(
     string Answer,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At,
     string? Text = null,
     FlowAnswerBy? By = null,
     string? Did = null,
-    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? ReplacedAt = null);
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? ReplacedAt = null,
+    string? Update = null);
 
 /// <summary>
 /// One question a run raised, as <c>questions.json</c> holds it: its id, kind and state, who raised it, the problem

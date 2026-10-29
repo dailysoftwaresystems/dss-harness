@@ -543,7 +543,7 @@ public sealed class OrchestratorService(
                 [.. listed.Where(worktree => WorktreeAddress.AgentOf(orchestrator.Name, worktree.Name) is { } agent && !agents.Any(entry => entry.Name == agent))],
                 OrchestrationRules.OpenAgents(orchestrator.Name, agents, listed.Select(worktree => worktree.Name)),
                 Run: _store.ReadFlow(orchestrator) is { } flow
-                    ? new FlowRunInventory(flow, _store.ReadFlowQuestions(orchestrator), EngineOf(orchestrator, flow))
+                    ? new FlowRunInventory(flow, _store.ReadFlowQuestions(orchestrator), EngineOf(orchestrator, flow), _store.ReadFlowUpdates(orchestrator))
                     : null));
         }
 
@@ -675,7 +675,8 @@ public sealed record OrchestratorInventory(
 /// <param name="Flow">The run's state in one file.</param>
 /// <param name="Questions">The run's questions and answers, where it holds them.</param>
 /// <param name="Engine">What the run's engine is doing.</param>
-public sealed record FlowRunInventory(Flow.FlowFile Flow, Flow.FlowQuestionsFile? Questions, FlowEngineState Engine)
+/// <param name="Updates">The run's plan updates, where it holds them.</param>
+public sealed record FlowRunInventory(Flow.FlowFile Flow, Flow.FlowQuestionsFile? Questions, FlowEngineState Engine, Flow.FlowUpdatesFile? Updates = null)
 {
     /// <summary>The run's status, lower-case, as the listing says it.</summary>
     public string Status => Flow.Status.ToLower(System.Globalization.CultureInfo.InvariantCulture);

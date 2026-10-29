@@ -47,7 +47,7 @@ public sealed class FlowServiceTests
         return (repository, Service(repository.Harness, runner), runner);
     }
 
-    private static async Task<(Repository Repository, SteppedRunner Runner)> RepositoryAsync(string flow, HarnessConfig? config = null)
+    private static async Task<(Repository Repository, SteppedRunner Runner)> RepositoryAsync(string flow, HarnessConfig? config = null, IReadOnlyDictionary<string, string>? files = null)
     {
         var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -56,6 +56,14 @@ public sealed class FlowServiceTests
         await harness.InitializeHarnessAsync(temp.Path, Token, config ?? new HarnessConfig { Workflows = [Workflow] });
         await harness.CommitAllAsync(temp.Path, "initial", Token);
         temp.WriteFile($".harness-config/workflows/{Workflow}/{Workflow}.yml", flow);
+
+        if (files is not null)
+        {
+            foreach (var (path, text) in files)
+            {
+                temp.WriteFile($".harness-config/workflows/{Workflow}/{path}", text);
+            }
+        }
 
         return (new Repository(harness, temp), new SteppedRunner());
     }
@@ -101,14 +109,406 @@ public sealed class FlowServiceTests
     private static OrchestratorLayout RunOf(Repository repository, string run = "r1")
         => new(run, Path.Combine(repository.Path, ".orchestrators", run));
 
-    /// <summary>A run starts the next r&lt;N&gt;, writes every record of the run, drives the session to its end, releases the owner, and names every record it wrote.</summary>
+    /// <summary>
+    /// A workflow that takes plan updates whole: an intake pause asking the request itself, one in between, a planning
+    /// group with its planner and the check beside it, the work-item group with an alternative beside the step that
+    /// builds - and a pause at the end asking the request again, which says what the input reads by then.
+    /// </summary>
+    private const string Amended = """
+        name: flow
+        inputs:
+          - name: request
+        steps:
+          - name: ask
+            type: pause
+            question: '{input.request}'
+            options: [stay, go]
+          - name: warmup
+            type: orient
+            dependsOn: [ask]
+          - name: mid
+            type: pause
+            question: and in between?
+            options: [stay, go]
+            dependsOn: [warmup]
+          - name: planning
+            dependsOn: [mid]
+            gather: [items, scope]
+            steps:
+              - name: replan
+                type: reason
+                agent: planner
+                prompt: update.md
+                outputs: update.json
+              - name: check
+                type: orient
+                dependsOn: [replan]
+          - name: itemcheck
+            type: validate-plan
+            dependsOn: [planning]
+            items: 'planning.items'
+          - name: items
+            dependsOn: [itemcheck]
+            forEach: 'itemcheck.items'
+            steps:
+              - name: build
+                type: orient
+              - name: rebuild
+                type: orient
+          - name: after
+            type: pause
+            question: '{input.request}'
+            options: [stay, go]
+            dependsOn: [items]
+        amend:
+          input: request
+          changedAnswerMinutes: 5
+          step: planning.replan
+          then: check
+          scope: 'planning.scope'
+          whenAddScope: items.build
+          whenChangeScope: items.rebuild
+          whenRemoveScope: items.build
+        """;
+
+    /// <summary>
+    /// The workflow of <see cref="Amended"/> in a repository whose config declares the agent sections as init writes
+    /// them, with its planner's agent definition, prompt and output schema beside the definition.
+    /// </summary>
+    private static async Task<(Repository Repository, FlowService Service, SteppedRunner Runner)> AmendedAsync(string? flow = null)
+    {
+        // The agent sections the workflow's reason steps resolve their tiers against: as init writes them.
+        var agents = DssHarness.Core.Agents.AgentProviderTemplates.Read();
+        var (repository, runner) = await RepositoryAsync(
+            flow ?? Amended,
+            config: new HarnessConfig
+            {
+                Workflows = [Workflow],
+                Defaults = new() { AgentTier = agents.AgentTier },
+                Providers = [.. agents.Providers],
+                TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase),
+            },
+            files: new Dictionary<string, string>
+            {
+                ["agents/planner.md"] = "---\nname: planner\ndescription: plans the change\n---\nYou plan the change.\n",
+                ["update.md"] = "plan the change\n",
+                ["update.json"] = "{ \"type\": \"object\", \"properties\": { } }",
+            });
+        return (repository, Service(repository.Harness, runner), runner);
+    }
+
+    /// <summary>Every step of a scripted run passes, and the planner and the plan check answer what the flow reads of them.</summary>
+    private static void Script(SteppedRunner runner)
+    {
+        runner.On("replan", FlowStepResult.Ended(passed: true, 0, output: new JsonObject { ["items"] = new JsonArray("one"), ["scope"] = new JsonArray() }));
+        runner.On("itemcheck", FlowStepResult.Ended(passed: true, 0, output: new JsonObject { ["items"] = new JsonArray("one") }));
+    }
+
+    /// <summary>Drives the paused run of <paramref name="service"/> on by answering every pause it reaches, one answer a session, until it is done.</summary>
+    private static async Task DoneAsync(Repository repository, FlowService service)
+    {
+        for (var answers = 0; answers < 10; answers++)
+        {
+            var open = repository.Harness.OrchestrationStore.ReadFlowQuestions(RunOf(repository))?.Open ?? [];
+
+            if (open.Count == 0)
+            {
+                return;
+            }
+
+            _ = await service.AnswerAsync(repository.Path, "r1", "go", open[0].Id, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        }
+    }
+
+    /// <summary>
+    /// An amendment given while no engine runs is recorded in <c>updates.json</c> as an update <c>queued</c>, nothing
+    /// else changed and nothing started; the next session of the run takes it before anything else - and, where no
+    /// plan holds it, records it <c>done</c> at once, so every step that starts reads the request with its
+    /// amendments: the value as given, then the amendment under a line that says when it was made.
+    /// </summary>
+    [Fact]
+    public async Task AnAmendmentGivenWhileNoEngineRuns_IsRecordedQueued_AndTakenByTheNextSession_BeforeAnythingElse()
+    {
+        var (repository, service, runner) = await AmendedAsync();
+        using var disposed = repository;
+
+        Script(runner);
+        var started = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["request=build the thing"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        Assert.Equal(FlowExit.Paused, started.ExitCode);
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+
+        var amended = await service.AmendAsync(repository.Path, "r1", "in fact, only the parser", textFile: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, amended.ExitCode);
+        var queued = Assert.Single(store.ReadFlowUpdates(run)!.Updates);
+        Assert.Equal(("u1", "amendment", "queued", "in fact, only the parser", "amend-orchestrator-request"), (queued.Id, queued.Cause, queued.State, queued.Amendment, queued.Through));
+
+        // The next session - here an answer - takes it first: no plan holds it yet, so it is done at once, and what
+        // the run reads from then on says the request with its amendment.
+        var answered = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowExit.Paused, answered.ExitCode);
+        var taken = Assert.Single(store.ReadFlowUpdates(run)!.Updates);
+        Assert.Equal(("u1", "done"), (taken.Id, taken.State));
+        Assert.Contains(answered.Details ?? [], line => line.StartsWith("update u1, an amendment given while no engine ran the run, was taken", StringComparison.Ordinal));
+
+        await DoneAsync(repository, service);
+
+        var asked = store.ReadFlowQuestions(run)!.Questions[^1];
+        Assert.True(
+            asked.ProblemShown!.Happened!.StartsWith("build the thing", StringComparison.Ordinal),
+            asked.ProblemShown!.Happened!);
+        Assert.Contains("\n\namended at ", asked.ProblemShown!.Happened, StringComparison.Ordinal);
+        Assert.EndsWith(":\nin fact, only the parser", asked.ProblemShown!.Happened, StringComparison.Ordinal);
+
+        // The report says where the update stands, and what is left for a person says the amendment was refused
+        // none of it was: it is done, and every step that started read the request with it.
+        Assert.Contains("- u1 (amendment), taken at ", File.ReadAllText(run.ReportFile), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An amendment given while an engine runs the run is handed to it through <c>inbox.json</c> and taken at its
+    /// poll: weighed against the same gates, recorded in <c>updates.json</c> under the inbox entry's id, and read
+    /// with the request by every step that starts from then on.
+    /// </summary>
+    [Fact]
+    public async Task AnAmendmentGivenToARunningEngine_IsTakenFromTheInbox_AndReadWithTheRequest()
+    {
+        var (repository, service, runner) = await AmendedAsync();
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["request=build the thing"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+
+        var held = new TaskCompletionSource();
+        runner.Holds("warmup", held.Task);
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token);
+        await runner.WaitStartedAsync("warmup");
+
+        var amended = await service.AmendAsync(repository.Path, "r1", "in fact, only the parser", textFile: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, amended.ExitCode);
+        Assert.Contains(amended.Details ?? [], line => line == $"inbox: {run.InboxFile}");
+
+        held.SetResult();
+        var outcome = await answering.WaitAsync(Bound, Token);
+
+        Assert.Contains(outcome.Details ?? [], line => line.StartsWith("the amendment handed over was taken from the inbox", StringComparison.Ordinal));
+        Assert.Equal(FlowExit.Paused, outcome.ExitCode);
+
+        await DoneAsync(repository, service);
+
+        var taken = Assert.Single(store.ReadFlowUpdates(run)!.Updates);
+        Assert.Equal(("u1", "amendment", "done"), (taken.Id, taken.Cause, taken.State));
+        Assert.NotNull(taken.Inbox);
+        Assert.False(File.Exists(run.InboxFile));
+
+        var asked = store.ReadFlowQuestions(run)!.Questions[^1];
+        Assert.EndsWith(":\nin fact, only the parser", asked.ProblemShown!.Happened, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An amendment asked of a run whose plan's scope has begun is refused by the taking - this build raises no step
+    /// to plan one - and recorded <c>refused</c> in <c>updates.json</c> with why: the run's history says what became
+    /// of a change a person asked for, and the input keeps reading the request as it was given.
+    /// </summary>
+    [Fact]
+    public async Task AnAmendmentTakenWhereThePlansScopeHasBegun_IsRefusedAndRecordedAsRefused()
+    {
+        var (repository, service, runner) = await AmendedAsync();
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["request=build the thing"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+
+        // Past the planning, paused at the last pause: the amendment is recorded - the command's gates pass - and the
+        // next session refuses it, for this build plans no update.
+        _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        _ = await service.AmendAsync(repository.Path, "r1", "in fact, only the parser", textFile: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var answered = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, answered.ExitCode);
+        var refused = Assert.Single(store.ReadFlowUpdates(run)!.Updates);
+        Assert.Equal(("u1", "refused"), (refused.Id, refused.State));
+        Assert.Equal("run 'r1' has begun 'planning', the scope an update to its plan is planned in; this build raises no step to plan one yet, so the update is recorded as refused and the request stands", refused.Why);
+
+        var asked = store.ReadFlowQuestions(run)!.Questions[^1];
+        Assert.Equal("build the thing", asked.ProblemShown!.Happened);
+    }
+
+    /// <summary>
+    /// The command's own refusals, read of the run as it stands and of the definition it began with: a run that is
+    /// done has nothing to go back to, one past the step its <c>amend.before</c> names has a plan that is no longer
+    /// changed, and a definition whose amend names no input takes no amended request. Nothing is recorded for one,
+    /// and an empty amendment, or one given two ways, is a usage error.
+    /// </summary>
+    [Fact]
+    public async Task AmendCommandRefusals_NothingRecorded()
+    {
+        var (repository, service, runner) = await AmendedAsync(Amended.Replace("  input: request", "  before: after\n  input: request", StringComparison.Ordinal));
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["request=build the thing"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+
+        // To the last pause, past the step before names: refused, nothing recorded.
+        _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var before = await service.AmendAsync(repository.Path, "r1", "narrow it", textFile: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, before.ExitCode);
+        Assert.Equal("run 'r1' has started 'after': what it built is being written down, and its plan is no longer changed. Start a run for the request once this one has ended", before.Message);
+        Assert.Empty(store.ReadFlowUpdates(run)!.Updates);
+
+        // Done: nothing left to go back to.
+        _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var done = await service.AmendAsync(repository.Path, "r1", "narrow it", textFile: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, done.ExitCode);
+        Assert.Equal("run 'r1' is done; there is nothing left to go back to", done.Message);
+        Assert.Empty(store.ReadFlowUpdates(run)!.Updates);
+
+        // A definition whose amend names no input takes no amended request at all.
+        var (plain, plainService, plainRunner) = await AmendedAsync(Amended.Replace("  input: request", string.Empty, StringComparison.Ordinal));
+        using var plainDisposed = plain;
+
+        plainRunner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        _ = await plainService.RunAsync(plain.Path, Workflow, run: null, inputs: ["request=build the thing"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var noInput = await plainService.AmendAsync(plain.Path, "r1", "narrow it", textFile: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, noInput.ExitCode);
+        Assert.Equal("orchestrator 'flow' takes no amended request: its amend names no input", noInput.Message);
+
+        // An empty amendment, and one given two ways, are usage errors.
+        Assert.Equal(HarnessExit.UsageError, (await service.AmendAsync(repository.Path, "r1", "  ", textFile: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+        Assert.Equal(HarnessExit.UsageError, (await service.AmendAsync(repository.Path, "r1", "one", textFile: "two.txt", json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+    }
+
+    /// <summary>
+    /// A changed answer within its window is taken once, where no plan holds it: the entry keeps both answers, each
+    /// with when it was given, and the answer now stands; the update is recorded <c>done</c>; and a <c>pause</c>
+    /// step whose answer was changed is visited again, done at once with the new answer, so whatever reads the step
+    /// from then on reads the new one. A second change of the set is refused, and so is one that is the answer the
+    /// set already has.
+    /// </summary>
+    [Fact]
+    public async Task AChangedAnswerWithinItsWindow_IsTakenOnce_BothAnswersKept_AndAPauseStepRevisitedDone()
+    {
+        var (repository, service, runner) = await AmendedAsync();
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["request=build the thing"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+
+        // The run stands paused at the pause in between, the intake's answer the last a person gave and no plan
+        // begun: the change is taken by the session the command starts.
+        _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var changed = await service.AnswerAsync(repository.Path, "r1", "stay", question: null, text: null, textFile: null, again: true, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowExit.Paused, changed.ExitCode);
+        var first = store.ReadFlowQuestions(run)!.Questions[0];
+        Assert.Equal("answered", first.State);
+        Assert.Equal(2, first.Answers.Count);
+        Assert.Equal(("go", false), (first.Answers[0].Answer, first.Answers[0].ReplacedAt is null));
+        Assert.NotNull(first.Answers[0].ReplacedAt);
+        Assert.Equal(("stay", "person", "u1"), (first.Answers[^1].Answer, first.Answers[^1].By!.Who, first.Answers[^1].Update));
+
+        var update = Assert.Single(store.ReadFlowUpdates(run)!.Updates);
+        Assert.Equal(("u1", "changedAnswer", "done", "q1", "go", "stay"), (update.Id, update.Cause, update.State, update.Question, update.FromAnswer, update.ToAnswer));
+
+        // The pause step that asked is visited again, done at once with the new answer.
+        var asked = store.ReadFlow(run)!.Steps.Where(step => step.Step == "ask").ToList();
+        Assert.Equal(2, asked.Count);
+        Assert.Equal(("Done", "stay"), (asked[^1].State, (string?)asked[^1].Output!["answer"]));
+
+        // The set is changed one time: a second change is refused, and one that is the answer it already has is a
+        // usage error.
+        var second = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: true, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, second.ExitCode);
+        Assert.StartsWith("question 'q1' of run 'r1' had its answer changed already, at ", second.Message, StringComparison.Ordinal);
+        Assert.EndsWith("a set is changed one time", second.Message, StringComparison.Ordinal);
+
+        var same = await service.AnswerAsync(repository.Path, "r1", "stay", question: null, text: null, textFile: null, again: true, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.UsageError, same.ExitCode);
+        Assert.Equal("'stay' is the answer 'q1' already has; a changed answer changes it", same.Message);
+    }
+
+    /// <summary>
+    /// A changed answer past its window is refused - naming the answer, when it was given, until when it could be
+    /// changed and what time it is - and the answer stands; where the run's plan has begun, the change is refused
+    /// and recorded as refused, for this build plans no update, and the answer stands the same.
+    /// </summary>
+    [Fact]
+    public async Task AChangedAnswerPastItsWindowOrWhereAPlanHolds_IsRefused_AndTheAnswerStands()
+    {
+        var (repository, service, runner) = await AmendedAsync();
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["request=build the thing"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+
+        // The window is past: the answer was written ten minutes ago, and the workflow gives five.
+        _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var questions = store.ReadFlowQuestions(run)!;
+        var aged = questions with
+        {
+            Questions =
+            [
+                .. questions.Questions.Select(question => question.Id == "q1"
+                    ? question with { Answers = [new FlowAnswerRecord("go", DateTimeOffset.UtcNow.AddMinutes(-10), By: new FlowAnswerBy("person", "answer-orchestrator"))] }
+                    : question),
+            ],
+        };
+        store.WriteFlowQuestions(run, aged);
+
+        var late = await service.AnswerAsync(repository.Path, "r1", "stay", question: null, text: null, textFile: null, again: true, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, late.ExitCode);
+        Assert.StartsWith("question q1 of run 'r1' was answered 'go' at ", late.Message, StringComparison.Ordinal);
+        Assert.Contains("The answer stands. To change what the run builds, amend its request: amend-orchestrator-request r1 \"<what to change>\"", late.Message, StringComparison.Ordinal);
+        Assert.Single(store.ReadFlowQuestions(run)!.Questions[0].Answers);
+        Assert.Empty(store.ReadFlowUpdates(run)!.Updates);
+
+        // Where the run's plan has begun, the change is refused and recorded as refused; the answer stands.
+        _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var begun = await service.AnswerAsync(repository.Path, "r1", "stay", question: null, text: null, textFile: null, again: true, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, begun.ExitCode);
+        Assert.Equal("run 'r1' has begun 'planning', the scope an update to its plan is planned in; this build raises no step to plan one yet, so the update is recorded as refused and the answer stands", begun.Message);
+
+        var update = Assert.Single(store.ReadFlowUpdates(run)!.Updates);
+        Assert.Equal(("u1", "changedAnswer", "refused", "q2", "go", "stay"), (update.Id, update.Cause, update.State, update.Question, update.FromAnswer, update.ToAnswer));
+        Assert.Single(store.ReadFlowQuestions(run)!.Questions[1].Answers);
+    }
+    /// <summary>A run starts the next r-N, writes every record of the run, drives the session to its end, releases the owner, and names every record it wrote.</summary>
     [Fact]
     public async Task ARunStarts_RecordsAndDrivesTheSessionToItsEnd_NamingEveryRecord()
     {
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
 
         var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
@@ -132,6 +532,7 @@ public sealed class FlowServiceTests
                 $"state: {run.FlowFile}",
                 $"status: {run.WorkflowStatusFile}",
                 $"questions: {run.QuestionsFile}",
+                $"updates: {run.UpdatesFile}",
                 $"issues: {run.PreExistingIssuesFile}",
                 $"definition: {run.DefinitionFile}",
                 $"events: {run.EventsFile}",
@@ -221,7 +622,7 @@ public sealed class FlowServiceTests
         using var disposed = repository;
         await repository.Harness.RunGitAsync(repository.Path, ["remote", "add", "origin", Path.Combine(repository.Path, "nowhere")], Token);
         await repository.Harness.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "feature"], Token);
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
 
         var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
@@ -243,7 +644,7 @@ public sealed class FlowServiceTests
         await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "feature"], Token);
         var head = (await git.RunGitAsync(repository.Path, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
 
         var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
@@ -278,7 +679,7 @@ public sealed class FlowServiceTests
         using var disposed = repository;
         repository.Tree.WriteFile($".harness-config/workflows/{Workflow}/body.md", "the work\n");
         await repository.Harness.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "work"], Token);
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
 
         var refused = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
@@ -409,7 +810,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
 
         var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: true, cancellationToken: Token).WaitAsync(Bound, Token);
         var run = RunOf(repository);
@@ -423,7 +824,7 @@ public sealed class FlowServiceTests
         Assert.Equal("Done", document["status"]!.GetValue<string>());
         Assert.Equal(0d, document["spent"]!["usd"]!.GetValue<double>());
         Assert.Equal(
-            ["run", "state", "status", "questions", "issues", "definition", "events", "report", "reportJson", "folds", "log"],
+            ["run", "state", "status", "questions", "updates", "issues", "definition", "events", "report", "reportJson", "folds", "log"],
             document["records"]!.AsObject().Select(member => member.Key));
         Assert.Equal(run.FlowFile, document["records"]!["state"]!.GetValue<string>());
         Assert.Equal(run.LogFile("r1"), document["records"]!["log"]!.GetValue<string>());
@@ -444,7 +845,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var step = RunOf(repository).StepDirectory("one");
@@ -735,7 +1136,7 @@ public sealed class FlowServiceTests
             """);
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var outcome = await service.AnswerAsync(repository.Path, "r1", "one", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token);
@@ -814,7 +1215,7 @@ public sealed class FlowServiceTests
             """);
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -844,7 +1245,7 @@ public sealed class FlowServiceTests
             """);
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
         _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
@@ -900,7 +1301,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var outcome = await service.PauseAsync(repository.Path, "r1", all: false, json: false, Token);
@@ -916,7 +1317,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var outcome = await service.StopAsync(repository.Path, "r1", now: false, json: false, Token);
@@ -980,7 +1381,7 @@ public sealed class FlowServiceTests
         var (repository, finished, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await finished.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -1009,7 +1410,7 @@ public sealed class FlowServiceTests
         var (repository, finished, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await finished.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -1039,7 +1440,7 @@ public sealed class FlowServiceTests
         var (repository, finished, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await finished.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -1093,7 +1494,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -1118,7 +1519,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -1162,7 +1563,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -1266,7 +1667,7 @@ public sealed class FlowServiceTests
         var (repository, finished, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await finished.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -1325,7 +1726,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -1552,6 +1953,7 @@ public sealed class FlowServiceTests
                 $"state: {run.FlowFile}",
                 $"status: {run.WorkflowStatusFile}",
                 $"questions: {run.QuestionsFile}",
+                $"updates: {run.UpdatesFile}",
                 $"issues: {run.PreExistingIssuesFile}",
                 $"definition: {run.DefinitionFile}",
                 $"events: {run.EventsFile}",
@@ -1569,7 +1971,7 @@ public sealed class FlowServiceTests
         Assert.Equal("r1", document["run"]!.GetValue<string>());
         Assert.Equal("Running", document["status"]!.GetValue<string>());
         Assert.Equal(
-            ["run", "state", "status", "questions", "issues", "definition", "events", "report", "reportJson", "folds", "log"],
+            ["run", "state", "status", "questions", "updates", "issues", "definition", "events", "report", "reportJson", "folds", "log"],
             document["records"]!.AsObject().Select(member => member.Key));
 
         var logged = repository.Harness.OrchestrationLog.Read(run.LogFile("r1"))[^1];
@@ -1808,12 +2210,12 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
-    /// <c>--again</c> finds the question it would change - an answered one, which the run's file keeps with every answer
-    /// it was given through every later session - and is refused for the plan update it would raise, never for a
-    /// question the file lost or for being answered.
+    /// <c>--again</c> finds the set it would change - the last a person answered, which the run's file keeps with
+    /// every answer it was given through every later session - and is refused where the definition the run began with
+    /// takes no changed answer, never for a question the file lost or for being answered.
     /// </summary>
     [Fact]
-    public async Task AgainFindsTheAnsweredQuestion_ThroughLaterSessions_AndIsRefusedForThePlanUpdate()
+    public async Task AgainFindsTheAnsweredQuestion_ThroughLaterSessions_AndIsRefusedWhereNoChangeIsTaken()
     {
         var (repository, service, runner) = await ServiceAsync("""
             name: flow
@@ -1845,10 +2247,10 @@ public sealed class FlowServiceTests
 
         Assert.Equal(FlowExit.Paused, resumed.ExitCode);
 
-        var again = await service.AnswerAsync(repository.Path, "r1", "no", question: "q1", text: null, textFile: null, again: true, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var again = await service.AnswerAsync(repository.Path, "r1", "stay", question: "q1", text: null, textFile: null, again: true, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         Assert.Equal(HarnessExit.Refused, again.ExitCode);
-        Assert.Equal(FlowService.AgainRefused, again.Message);
+        Assert.Equal("orchestrator 'flow' takes no changed answer: its amend names no changedAnswerMinutes", again.Message);
         Assert.Equal(["answered", "open"], repository.Harness.OrchestrationStore.ReadFlowQuestions(RunOf(repository))!.Questions.Select(question => question.State));
     }
 
@@ -1949,7 +2351,7 @@ public sealed class FlowServiceTests
         using var disposed = repository;
         using var elsewhere = new TempDirectory();
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
 
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
@@ -2473,7 +2875,7 @@ public sealed class FlowServiceTests
         var answered = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
         var (events, _) = FlowEventLog.Read(repository.Harness.FileSystem, run.EventsFile);
         var refused = Assert.Single(repository.Harness.OrchestrationStore.ReadFlowQuestions(run)!.Refused!);
-        const string Why = "it changes an answer already given, which raises a plan update; this build takes no plan update yet";
+        const string Why = "orchestrator 'flow' takes no changed answer: its amend names no changedAnswerMinutes";
 
         Assert.Equal(HarnessExit.Success, answered.ExitCode);
         Assert.Equal(
@@ -2665,7 +3067,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -2690,7 +3092,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -2714,7 +3116,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -2740,7 +3142,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -2796,7 +3198,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
@@ -3331,7 +3733,7 @@ public sealed class FlowServiceTests
         var (repository, service, runner) = await ServiceAsync();
         using var disposed = repository;
 
-        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        Script(runner);
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);

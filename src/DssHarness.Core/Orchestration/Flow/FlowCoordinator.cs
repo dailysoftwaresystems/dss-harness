@@ -378,6 +378,14 @@ public sealed class FlowCoordinator
     /// </summary>
     private readonly IFlowStreamAccount? _streamAccount;
 
+    /// <summary>
+    /// Every plan update the run has taken, as this session holds it: the one file the run's history of a change is -
+    /// its amendments read with the input, its changed answers kept with both answers - written whole at every change
+    /// through <see cref="IFlowRecords.Updates"/>. Read once as the session begins; this session is the only writer
+    /// while it runs.
+    /// </summary>
+    private FlowUpdatesFile _updates;
+
     /// <summary>Every advice the session has begun and not yet taken: its question, how to end it, and its answer.</summary>
     private readonly List<(FlowQuestion Asked, CancellationTokenSource Cancel, Task<FlowAdvice> Task)> _advising = [];
 
@@ -546,6 +554,12 @@ public sealed class FlowCoordinator
     /// the agent gave none; left out, the run's own runner is asked, and where that keeps no stream the handoff stands
     /// on its first line alone.
     /// </param>
+    /// <param name="updates">
+    /// Reads the run's plan updates, <c>updates.json</c>, as the run begins - every update a session before this one
+    /// took, whatever its state, which this one goes on with: its amendments are read with the input, and one still
+    /// <c>queued</c> is taken before anything runs. Left out, the run holds none, and takes none until this session
+    /// gives one.
+    /// </param>
     /// <exception cref="HarnessException">An input the run needs is missing, or a value is outside the ones its input takes.</exception>
     public FlowCoordinator(
         WorkflowDefinition definition,
@@ -561,7 +575,8 @@ public sealed class FlowCoordinator
         Func<string, string>? workflowFile = null,
         Func<string, string, CancellationToken, Task<Results.CommandOutcome>>? deleteAgent = null,
         IFlowAdvisorRunner? advisor = null,
-        IFlowStreamAccount? streamAccount = null)
+        IFlowStreamAccount? streamAccount = null,
+        Func<FlowUpdatesFile?>? updates = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(runner);
@@ -580,6 +595,7 @@ public sealed class FlowCoordinator
         _deleteAgent = deleteAgent;
         _advisor = advisor;
         _streamAccount = streamAccount ?? (runner as IFlowStreamAccount);
+        _updates = updates?.Invoke() ?? new FlowUpdatesFile(1, runName ?? string.Empty, _clock.GetUtcNow(), []);
 
         foreach (var (path, _) in FlowScope.Declared(definition))
         {
@@ -1543,17 +1559,15 @@ public sealed class FlowCoordinator
         return true;
     }
 
-    /// <summary>What the refusal of an answer that changes one already given says: the plan update it would raise, which this build does not take.</summary>
-    internal const string PlanUpdateRefused = "changes an answer already given, which raises a plan update; this build takes no plan update yet";
-
     /// <summary>
     /// Weighs an answer handed over - through the run's inbox, to a running session or between two - as a person's, and
     /// records what became of it before anything else is said of it: taken, the answer is written into
     /// <c>questions.json</c> under the inbox entry's id; refused - its question no longer open, or it changes an answer
-    /// already given - the refusal is written there under the id too, then told as an <c>answer</c> event naming why, so
-    /// the run's own history says what became of an answer nobody saw refused. The one owner of an entry weighed once: one
-    /// whose id the run's records already hold - taken or refused by this session or any before it, its removal from the
-    /// inbox having failed or been cut off - is never weighed again, and nothing is written for it.
+    /// already given and the change was not taken - the refusal is written there under the id too, then told as an
+    /// <c>answer</c> event naming why, so the run's own history says what became of an answer nobody saw refused. The
+    /// one owner of an entry weighed once: one whose id the run's records already hold - taken or refused by this
+    /// session or any before it, its removal from the inbox having failed or been cut off - is never weighed again,
+    /// and nothing is written for it.
     /// </summary>
     /// <param name="question">The question's id.</param>
     /// <param name="answer">The answer, spelled as the question's options spell it.</param>
@@ -1561,9 +1575,10 @@ public sealed class FlowCoordinator
     /// <param name="problem">Why the answer was not taken, where it was refused.</param>
     /// <param name="through">How a person gave it; <c>answer-orchestrator</c> where the command handed it over.</param>
     /// <param name="inbox">The id of the inbox entry it was handed over under; null for an answer no inbox handed over, which is weighed as it comes, its refusal told by its event alone, for no entry waits to be settled.</param>
-    /// <param name="again">Whether it changes an answer already given: a plan update, which this build refuses.</param>
+    /// <param name="again">Whether it changes an answer already given; taken within its window and once, or refused with why (<see cref="TryChangeAnswer"/>).</param>
+    /// <param name="at">The moment the answer was given to the tool, where it was handed over: the moment its window is counted to.</param>
     /// <returns>What became of it.</returns>
-    public FlowHandedOver AnswerHandedOver(string question, string answer, string? text, out string? problem, string? through = "answer-orchestrator", string? inbox = null, bool again = false)
+    public FlowHandedOver AnswerHandedOver(string question, string answer, string? text, out string? problem, string? through = "answer-orchestrator", string? inbox = null, bool again = false, DateTimeOffset? at = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(question);
         ArgumentException.ThrowIfNullOrWhiteSpace(answer);
@@ -1576,7 +1591,12 @@ public sealed class FlowCoordinator
 
         if (again)
         {
-            problem = $"it {PlanUpdateRefused}";
+            // A changed answer is an amendment in every respect, and goes by its own path: the last set, its window,
+            // and once - and where the run cannot take it, the answer stands.
+            if (TryChangeAnswer(answer, text, out problem, through, question, at, inbox))
+            {
+                return FlowHandedOver.Taken;
+            }
         }
         else if (TryAnswer(question, answer, text, out problem, through, inbox))
         {
@@ -1598,7 +1618,354 @@ public sealed class FlowCoordinator
     /// <summary>Whether the run's records hold what it did with the inbox entry <paramref name="inbox"/>: an answer taken under it, or its refusal.</summary>
     private bool Recorded(string inbox)
         => _refused.Any(refused => string.Equals(refused.Inbox, inbox, StringComparison.Ordinal))
-            || _questions.Any(question => question.Given.Any(given => string.Equals(given.Inbox, inbox, StringComparison.Ordinal)));
+            || _questions.Any(question => question.Given.Any(given => string.Equals(given.Inbox, inbox, StringComparison.Ordinal)))
+            || _updates.Updates.Any(update => string.Equals(update.Inbox, inbox, StringComparison.Ordinal));
+
+    /// <summary>What the refusal of a change says where the run has begun the scope its plan updates are planned in: this build plans none, and the change is recorded as refused.</summary>
+    /// <param name="scope">The scope the definition's <c>amend.step</c> is in, by its path.</param>
+    /// <param name="what">What was changed, as its refusal names it: <c>amendment</c> or <c>answer</c>.</param>
+    private string NotPlannedYet(string scope, string what)
+        => $"run '{_runName}' has begun '{scope}', the scope an update to its plan is planned in; this build raises no step to plan one yet, so the update is recorded as refused and the {what} stands";
+
+    /// <summary>Whether the run has begun the scope its plan updates are planned in - the group its <c>amend.step</c> is directly in, or the flow itself where the step is one of its top level.</summary>
+    private bool PlanScopeBegun()
+        => _definition.Amend is not { } amend
+            || FlowUpdateGates.ParentOf(amend.Step) is not { } scope
+            || _instances.Values.Any(instance => instance.Path == scope);
+
+    /// <summary>Why the run refuses a change of its plan, as it stands now; null where it takes one. The same gates as the command's, read of the run as this engine holds it.</summary>
+    private string? GatesRefused(string cause)
+    {
+        if (_definition.Amend is not { } amend)
+        {
+            return null;
+        }
+
+        var snapshot = Snapshot();
+        return FlowUpdateGates.Refused(
+            _definition,
+            _runName ?? string.Empty,
+            snapshot.Status.ToString(),
+            [.. snapshot.Steps.Select(step => new FlowStepAt(step.Step, step.State.ToString(), step.Group, step.Iteration))],
+            cause);
+    }
+
+    /// <summary>
+    /// Takes an amendment of the run's request - a person's, handed over through the inbox to this engine or read with
+    /// the run as it began - through the one path every amendment passes: weighed against the gates as the run stands
+    /// now, and recorded in <c>updates.json</c> before anything is done with it. Where the run has not begun the scope
+    /// its plan updates are planned in, no plan holds it and there is nothing to plan: the amendment is recorded
+    /// <c>done</c> at once, and every step that starts reads the request with its amendments. Where it has, this build
+    /// plans no update, and the amendment is recorded <c>refused</c>, nothing changed. Where a gate refuses it,
+    /// nothing is recorded where nothing was - one the run's records already hold, an entry it takes up again or one
+    /// an inbox handed over, keeps its place in them, refused, so the run's history says what became of it.
+    /// </summary>
+    /// <param name="text">The amendment, in the person's words: it adds to the request, corrects it or narrows it.</param>
+    /// <param name="through">How the person gave it: <c>amend-orchestrator-request</c> or <c>front-end</c>.</param>
+    /// <param name="problem">Why the amendment was not taken, where it was not.</param>
+    /// <param name="inbox">The id of the inbox entry it was handed over under; null where none was.</param>
+    /// <param name="at">When the amendment was given; where left out, now.</param>
+    /// <param name="replacing">The id of the update entry this taking takes up again - one left <c>queued</c> by a session before this; null where none was.</param>
+    /// <returns>What became of it.</returns>
+    public FlowHandedOver AmendmentHandedOver(string text, string through, out string? problem, string? inbox = null, DateTimeOffset? at = null, string? replacing = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+
+        if (inbox is not null && Recorded(inbox))
+        {
+            problem = null;
+            return FlowHandedOver.RecordedAlready;
+        }
+
+        var held = _updates.Updates.FirstOrDefault(update => update.Id == replacing);
+        var id = held?.Id ?? _updates.NextId();
+
+        if (_definition.Amend is not { Input: not null })
+        {
+            problem = $"orchestrator '{_definition.Name}' takes no amended request: its amend names no input";
+        }
+        else if (GatesRefused(FlowUpdateCauses.Amendment) is { } refused)
+        {
+            problem = refused;
+        }
+        else if (PlanScopeBegun())
+        {
+            var entry = new FlowUpdateEntry(
+                id,
+                FlowUpdateCauses.Amendment,
+                FlowUpdateStates.Refused,
+                held?.TakenAt ?? at ?? _clock.GetUtcNow(),
+                Amendment: text,
+                Through: held?.Through ?? through,
+                Inbox: inbox,
+                Why: NotPlannedYet(FlowUpdateGates.ParentOf(_definition.Amend.Step) ?? _definition.Name, "request"));
+            PutUpdate(entry);
+            problem = entry.Why;
+            Record(FlowChangeKind.Answer, detail: $"an amendment was refused: {problem}");
+            return FlowHandedOver.Refused;
+        }
+        else
+        {
+            PutUpdate(new FlowUpdateEntry(
+                id,
+                FlowUpdateCauses.Amendment,
+                FlowUpdateStates.DoneAtOnce,
+                held?.TakenAt ?? at ?? _clock.GetUtcNow(),
+                Amendment: text,
+                Through: held?.Through ?? through,
+                Inbox: inbox));
+            problem = null;
+            Record(FlowChangeKind.Answer, detail: "an amendment was taken: every step that starts reads the request with its amendments");
+            return FlowHandedOver.Taken;
+        }
+
+        if (held is not null || inbox is not null)
+        {
+            // One the run's records already held is refused in them, so what became of it is said by the run itself -
+            // and a session that meets its inbox entry again only empties it.
+            PutUpdate(new FlowUpdateEntry(
+                id,
+                FlowUpdateCauses.Amendment,
+                FlowUpdateStates.Refused,
+                held?.TakenAt ?? at ?? _clock.GetUtcNow(),
+                Amendment: text,
+                Through: held?.Through ?? through,
+                Inbox: inbox,
+                Why: problem!));
+        }
+
+        Record(FlowChangeKind.Answer, detail: $"an amendment was not taken: {problem}");
+        return FlowHandedOver.Refused;
+    }
+
+    /// <summary>
+    /// Takes every update a session before this one recorded and left <c>queued</c> - an amendment given while no
+    /// engine ran the run - before anything else runs: the design's order, for the next session of the run takes it
+    /// first. Each goes by the one path an amendment passes (<see cref="AmendmentHandedOver"/>); one this session
+    /// cannot take keeps its place, for the run that could not take it stands as it did.
+    /// </summary>
+    /// <returns>What this taking said, a line to each update it took.</returns>
+    public IReadOnlyList<string> TakeQueuedUpdates()
+    {
+        List<string> said = [];
+
+        foreach (var queued in _updates.Updates.Where(update => update.State == FlowUpdateStates.Queued).ToList())
+        {
+            if (queued.Cause != FlowUpdateCauses.Amendment)
+            {
+                continue;
+            }
+
+            var taken = AmendmentHandedOver(queued.Amendment!, queued.Through ?? "amend-orchestrator-request", out var problem, queued.Inbox, queued.TakenAt, replacing: queued.Id);
+
+            if (taken is FlowHandedOver.Taken)
+            {
+                said.Add($"update {queued.Id}, an amendment given while no engine ran the run, was taken: every step that starts reads the request with its amendments");
+            }
+            else if (problem is not null)
+            {
+                said.Add($"update {queued.Id}, an amendment given while no engine ran the run, was not taken: {problem}");
+            }
+        }
+
+        return said;
+    }
+
+    /// <summary>
+    /// Changes the last answer a person gave the run, within the window its definition names and once: the entry keeps
+    /// both answers, each with when it was given, and the answer now stands; a <c>pause</c> step whose answer was
+    /// changed is visited again, done at once with the new answer, so whatever reads the step from then on reads the
+    /// new one. What the first answer set going is neither taken back by the engine nor left standing by a rule: a
+    /// change is an amendment in every respect, and where the run has begun the scope its plan updates are planned in,
+    /// this build plans none - the change is recorded <c>refused</c>, and the answer stands. Where a gate refuses it,
+    /// or the window is past, or the set was changed already, nothing is recorded at all and the answer stands.
+    /// </summary>
+    /// <param name="answer">The new answer, spelled as the question's options spell it.</param>
+    /// <param name="text">The text given with it, where the answer takes one.</param>
+    /// <param name="problem">Why the answer was not changed, where it was not.</param>
+    /// <param name="through">How the person gave it: <c>answer-orchestrator</c> or <c>front-end</c>.</param>
+    /// <param name="question">
+    /// The id of the set the answer changes, as the command that took it read it; null to take the last set a person
+    /// answered. Where the set named is no longer the last one, the change is refused naming the set that is.
+    /// </param>
+    /// <param name="given">When the new answer was given to the tool: the moment its window is counted to.</param>
+    /// <param name="inbox">The id of the inbox entry it was handed over under; null where none was.</param>
+    /// <returns>Whether the answer was changed.</returns>
+    public bool TryChangeAnswer(string answer, string? text, out string? problem, string? through = null, string? question = null, DateTimeOffset? given = null, string? inbox = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(answer);
+
+        if (inbox is not null && Recorded(inbox))
+        {
+            // What became of it is the run's records' already; a session that meets the entry again only empties it.
+            problem = null;
+            return true;
+        }
+
+        var at = given ?? _clock.GetUtcNow();
+
+        if (_definition.Amend is not { ChangedAnswerMinutes: { } minutes } amend)
+        {
+            problem = $"orchestrator '{_definition.Name}' takes no changed answer: its amend names no changedAnswerMinutes";
+
+            return false;
+        }
+
+        if (LastAnsweredByAPerson() is not { } set)
+        {
+            problem = $"no answer of run '{_runName}' was given by a person, so there is no set to change";
+
+            return false;
+        }
+
+        if (question is not null && question != set.Id)
+        {
+            problem = $"question '{question}' is not the last a person answered any more: '{set.Id}' is";
+
+            return false;
+        }
+
+        var standing = set.Given[^1];
+
+        if (!set.Options.Contains(answer, StringComparer.Ordinal))
+        {
+            problem = $"'{answer}' is not one of the answers '{set.Id}' takes: {string.Join(", ", set.Held)}";
+
+            return false;
+        }
+
+        var needsText = set.Held.Any(option => option.Text && string.Equals(option.Answer, answer, StringComparison.Ordinal));
+
+        if (needsText && string.IsNullOrWhiteSpace(text))
+        {
+            problem = $"'{answer}' is an answer '{set.Id}' takes with a text; give one";
+
+            return false;
+        }
+
+        if (!needsText && !string.IsNullOrWhiteSpace(text) && set.Kind != "ask")
+        {
+            problem = $"'{answer}' is an answer '{set.Id}' takes with no text; give none";
+
+            return false;
+        }
+
+        if (string.Equals(standing.Answer, answer, StringComparison.Ordinal) && standing.Text == text)
+        {
+            problem = $"'{answer}' is the answer '{set.Id}' already has";
+
+            return false;
+        }
+
+        if (set.Given.Any(given => given.ReplacedAt is { } changed))
+        {
+            problem = $"question '{set.Id}' of run '{_runName}' had its answer changed already, at {FlowTimeConverter.Written(set.Given.First(given => given.ReplacedAt is not null).ReplacedAt!.Value)}; a set is changed one time";
+            return false;
+        }
+
+        var until = standing.At ?? set.RaisedAt;
+
+        if (at - until > TimeSpan.FromMinutes(minutes))
+        {
+            problem = $"question {set.Id} of run '{_runName}' was answered '{standing.Answer}' at {FlowTimeConverter.Written(until)} and could be answered again until {FlowTimeConverter.Written(until.AddMinutes(minutes))}; it is {FlowTimeConverter.Written(at)}. The answer stands. To change what the run builds, amend its request: amend-orchestrator-request {_runName} \"<what to change>\"";
+
+            return false;
+        }
+
+        if (GatesRefused(FlowUpdateCauses.ChangedAnswer) is { } refused)
+        {
+            problem = refused;
+
+            return false;
+        }
+
+        _answeredAtStart |= !_inSession || _starting;
+
+        // What became of the change is in the run's records before anything it changes: the update refused, or both
+        // answers kept with the update that changed them.
+        var update = new FlowUpdateEntry(
+            _updates.NextId(),
+            FlowUpdateCauses.ChangedAnswer,
+            PlanScopeBegun() ? FlowUpdateStates.Refused : FlowUpdateStates.DoneAtOnce,
+            at,
+            Through: through,
+            Question: set.Id,
+            FromAnswer: standing.Answer,
+            ToAnswer: answer,
+            Inbox: inbox,
+            Why: PlanScopeBegun() ? NotPlannedYet(FlowUpdateGates.ParentOf(amend.Step) ?? _definition.Name, "answer") : null);
+        PutUpdate(update);
+
+        if (update.State == FlowUpdateStates.Refused)
+        {
+            problem = update.Why;
+            Record(FlowChangeKind.Answer, detail: $"a changed answer was refused: {problem}");
+            return false;
+        }
+
+        // Both answers kept, each with when it was given, and the new one names the update; the old one stands
+        // replaced from the moment the new one was given.
+        set.Change(standing, answer, string.IsNullOrWhiteSpace(text) ? null : text, through, at, update.Id, inbox);
+        WriteQuestions();
+
+        if (set.Kind == "pause" && _instances.GetValueOrDefault(set.Instance) is { } paused)
+        {
+            // A pause step whose answer was changed is visited again, done at once with the new answer, so whatever
+            // reads the step from then on reads the new one.
+            RevisitPause(paused, answer, string.IsNullOrWhiteSpace(text) ? null : text);
+        }
+
+        problem = null;
+        Record(FlowChangeKind.Answer, detail: $"'{set.Id}' answered '{answer}', changing '{standing.Answer}'");
+        return true;
+    }
+
+    /// <summary>The last set a person answered: the question entry whose newest answer a person gave is the newest of all the run's, answered and standing.</summary>
+    private FlowQuestion? LastAnsweredByAPerson()
+    {
+        FlowQuestion? last = null;
+        DateTimeOffset? newest = null;
+
+        foreach (var asked in _questions.Where(asked => asked.State == "answered"))
+        {
+            foreach (var given in asked.Given)
+            {
+                if (given.By != "person")
+                {
+                    continue;
+                }
+
+                if (newest is null || (given.At ?? asked.RaisedAt) > newest)
+                {
+                    last = asked;
+                    newest = given.At ?? asked.RaisedAt;
+                }
+            }
+        }
+
+        return last;
+    }
+
+    /// <summary>Visits a pause step again, done at once with its changed answer: the visit's output is the answer as the new one reads, so every step that reads the pause from then on reads the new answer.</summary>
+    private void RevisitPause(FlowInstance paused, string answer, string? text)
+    {
+        var scope = paused.DeclaredScope ?? _top;
+        var visit = NewVisit(scope, paused.Step, FlowInstanceState.Running, made: visit =>
+        {
+            visit.Output = new JsonObject { ["answer"] = answer, ["text"] = text ?? string.Empty };
+            visit.WorksIn = paused.WorksIn;
+        });
+
+        End(visit, FlowInstanceState.Done, null, null);
+    }
+
+    /// <summary>Records the run's plan updates, whole, through the records seam: the one owner of what an update is.</summary>
+    private void PutUpdate(FlowUpdateEntry entry)
+    {
+        List<FlowUpdateEntry> updates = [.. _updates.Updates.Where(update => update.Id != entry.Id), entry];
+        _updates = _updates with { Updates = updates };
+        Put(records => records.Updates(_updates));
+    }
 
     /// <summary>
     /// Takes one answer to an open question - a person's, or the configuration's in a person's place - by the one path:
@@ -6320,8 +6687,25 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>The run's inputs as one object.</summary>
-    private JsonObject Inputs() => FlowInputs.AsObject(_inputs);
+    /// <summary>
+    /// The run's inputs as one object: the values the run was started with - and the one its <c>amend</c> block names
+    /// as given with its amendments, the value as given then each amendment under a line that says when it was made,
+    /// for every prompt and every expression that reads it. The value as given alone is what a <c>preAnswer</c>'s
+    /// quote is looked for in, which reads <c>_inputs</c> and never this.
+    /// </summary>
+    private JsonObject Inputs()
+    {
+        var amended = _definition.Amend?.Input;
+
+        if (amended is null || _updates.Amendments().Count == 0)
+        {
+            return FlowInputs.AsObject(_inputs);
+        }
+
+        var with = _inputs.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+        with[amended] = FlowUpdatesFile.InputOf(_inputs.GetValueOrDefault(amended, string.Empty), _updates.Amendments());
+        return FlowInputs.AsObject(with);
+    }
 
     /// <summary>The workflow's params as one object.</summary>
     private JsonObject Params()

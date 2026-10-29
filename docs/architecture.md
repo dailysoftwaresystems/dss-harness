@@ -2055,6 +2055,27 @@ each web-search key it was given, built of `Runners.ActionValues`); and the agen
 skills are put. The run itself - a real Claude Code launch over the person's login - ended in the designed safe pause
 of the cause `limits` over the account's own seven-day allowance, its handoff written from the stream, records under
 `.temp\` (never in the suite).
+The two acts of a plan update and their record are built (slice 31d1): `amend-orchestrator-request <run> "<text>"`
+amends the request a run was started with and `answer-orchestrator <run> <answer> --again` changes the last answer a
+person gave - both through one record, `updates.json` (`Flow\FlowUpdates.cs`: its entries `u<n>` by order taken, cause
+`amendment` or `changedAnswer`, state `queued`/`underWay`/`done`/`failed`/`refused`), the one owner of what an update
+is, written by the store under the run's lock (`AddUpdate`) and by the engine's records seam
+(`IFlowRecords.Updates`). An amendment handed to a running engine goes by `inbox.json`
+(`FlowInboxAmendment`) and is taken at the poll (`FlowCoordinator.AmendmentHandedOver`); given while no engine runs it
+is recorded `queued`, and the next session takes it before anything else (`FlowCoordinator.TakeQueuedUpdates`). The
+request is never rewritten: the input reads as the value as given with each amendment under a line that says when it
+was made (`FlowUpdatesFile.InputOf`, read wherever `{input.<name>}` is), while a `preAnswer`'s quote is looked for in
+the value as given and never in an amendment. A changed answer is held to the last set a person answered, its
+`changedAnswerMinutes` window from the moment the answer was recorded to the moment the command stamps on what it
+hands over, and once: both answers are kept, each with when it was given, the new one naming the update
+(`FlowAnswerRecord.Update`, `FlowQuestion.Change`), and a `pause` step whose answer was changed is visited again done
+at once with the new answer (`FlowCoordinator.RevisitPause`). Both pass the one table of gates
+(`FlowUpdateGates.Refused`, read by the command over the run's files and by the engine over its own state): a run that
+is done, one past the step its `amend.before` names, one past the work items of its last round, a definition whose
+`amend` names no such change - nothing recorded for one. Where the run has begun the scope its plan updates are
+planned in (the group its `amend.step` is directly in), this build raises no step to plan one yet: the change is
+recorded `refused` with why (`FlowCoordinator.NotPlannedYet`), the input keeps the request as it was given, and the
+answer stands. The report lists every update, and `list-orchestrator` says where each stands.
 Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`

@@ -203,6 +203,10 @@ public sealed class FlowPauseTests
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
         {
         }
+
+        public void Updates(FlowUpdatesFile updates)
+        {
+        }
     }
 
     /// <summary>A safe pause writes every reason step in flight a handoff, leaves the machine steps to finish and be recorded, and starts nothing more.</summary>

@@ -745,6 +745,10 @@ public sealed class FlowOthersTests
                 Asked.TrySetResult(questions[0].Id);
             }
         }
+
+        public void Updates(FlowUpdatesFile updates)
+        {
+        }
     }
 
     /// <summary>A graph step reads the main tree, and - where its <c>in</c> names an agent - that agent's tree too.</summary>

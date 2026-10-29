@@ -7,9 +7,10 @@ using DssHarness.Core.Results;
 namespace DssHarness.Cli.Commands;
 
 /// <summary>
-/// Wires the five run verbs: <c>run-orchestrator</c>, <c>resume-orchestrator</c>, <c>answer-orchestrator</c>,
-/// <c>pause-orchestrator</c> and <c>stop-orchestrator</c>. The three sessions count two interrupts through their
-/// terminal (<see cref="FlowTerminal"/>): the first asks the engine for a safe pause, the second stops it where it stands.
+/// Wires the six run verbs: <c>run-orchestrator</c>, <c>resume-orchestrator</c>, <c>answer-orchestrator</c>,
+/// <c>amend-orchestrator-request</c>, <c>pause-orchestrator</c> and <c>stop-orchestrator</c>. The three sessions count
+/// two interrupts through their terminal (<see cref="FlowTerminal"/>): the first asks the engine for a safe pause,
+/// the second stops it where it stands.
 /// </summary>
 internal static class FlowCommands
 {
@@ -133,7 +134,7 @@ internal static class AnswerOrchestratorCommand
 
     private static readonly Option<bool> AgainOption = new("--again")
     {
-        Description = "Change an answer already given. This build takes no plan update yet, so it is refused.",
+        Description = "Change the last answer a person gave the run - the one set the command shows - within the minutes its workflow names and once; where the run has begun to plan, this build records the change as refused, for it plans no update yet.",
     };
 
     private static readonly Option<string?> TextOption = new("--text")
@@ -177,6 +178,44 @@ internal static class AnswerOrchestratorCommand
                     token),
                 cancellationToken),
             beginsRun: run => true,
+            FlowCommands.Answer);
+
+        return command;
+    }
+}
+
+/// <summary>Wires <c>DssHarness amend-orchestrator-request</c>.</summary>
+internal static class AmendOrchestratorRequestCommand
+{
+    internal const string Name = FlowService.AmendCommand;
+
+    private static readonly Argument<string> RunArgument = OrchestrationArguments.Orchestrator("The run whose request is amended.");
+
+    private static readonly Argument<string?> TextArgument = new("text")
+    {
+        Description = "The amendment, in the person's words: it adds to the request, corrects it or narrows it. The request as it was given is never rewritten - the amendment is read with it.",
+        Arity = ArgumentArity.ZeroOrOne,
+    };
+
+    private static readonly Option<string?> FileOption = new("--file")
+    {
+        HelpName = "path",
+        Description = "A file holding the amendment, read relative to --directory, in the place of the text argument.",
+    };
+
+    internal static Command Create()
+    {
+        var command = new Command(Name, "Amend the request a run was started with: handed to the engine where one is running the run, else recorded as a plan update that the next session takes first. Starts nothing.");
+        command.Arguments.Add(RunArgument);
+        command.Arguments.Add(TextArgument);
+        command.Options.Add(FileOption);
+        command.Options.Add(OrchestrationArguments.Json);
+        GlobalOptions.AddTo(command);
+
+        CommandRunner.Wire(
+            command,
+            (context, cancellationToken) => context.Get<IFlowService>()
+                .AmendAsync(context.Directory, context.ParseResult.GetRequiredValue(RunArgument), context.ParseResult.GetValue(TextArgument), context.ParseResult.GetValue(FileOption), context.Json, cancellationToken),
             FlowCommands.Answer);
 
         return command;
