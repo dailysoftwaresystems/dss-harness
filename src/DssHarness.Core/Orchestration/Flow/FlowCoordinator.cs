@@ -1566,7 +1566,7 @@ public sealed class FlowCoordinator
     /// the question no longer open, the answer recorded and carried out, and the record of the step that waited on it
     /// written after, from what the answer changed.
     /// </summary>
-    private void TakeAnswer(FlowQuestion asked, string answer, string? text, string by, string? where, string? through, string? inbox = null)
+    private void TakeAnswer(FlowQuestion asked, string answer, string? text, string by, string? where, string? through, string? inbox = null, string? input = null)
     {
         _answeredAtStart |= !_inSession || _starting;
         _ = _open.Remove(asked.Id);
@@ -1579,11 +1579,11 @@ public sealed class FlowCoordinator
         }
 
         var was = instance?.State;
-        ApplyAnswer(instance, asked, answer, text, by, where, through, inbox);
+        ApplyAnswer(instance, asked, answer, text, by, where, through, inbox, input);
 
         if (instance is not null)
         {
-            Record(FlowChangeKind.Step, instance, from: was, to: instance.State, detail: by == "person" ? $"'{asked.Id}' answered '{answer}'" : $"'{asked.Id}' answered '{answer}' by the configuration");
+            Record(FlowChangeKind.Step, instance, from: was, to: instance.State, detail: by == "person" ? $"'{asked.Id}' answered '{answer}'" : $"'{asked.Id}' answered '{answer}' by {(by == "input" ? "the run's input" : "the configuration")}");
         }
     }
 
@@ -1594,10 +1594,10 @@ public sealed class FlowCoordinator
     /// question, its budget's, is about no step, and <paramref name="instance"/> is null for it. An answer handed over
     /// through the inbox is written with its entry's id (<paramref name="inbox"/>), in the one write that records it.
     /// </summary>
-    private void ApplyAnswer(FlowInstance? instance, FlowQuestion asked, string answer, string? text, string by, string? where, string? through, string? inbox = null)
+    private void ApplyAnswer(FlowInstance? instance, FlowQuestion asked, string answer, string? text, string by, string? where, string? through, string? inbox = null, string? input = null)
     {
         var did = asked.Kind == "runBudget" ? answer == "more" ? "each amount is allowed once again" : "the run ends stopped" : null;
-        asked._given.Add(new FlowAnswerEntry(answer, text, by, where, through, _clock.GetUtcNow(), did, Inbox: inbox));
+        asked._given.Add(new FlowAnswerEntry(answer, text, by, where, through, _clock.GetUtcNow(), did, Input: input, Inbox: inbox));
         asked.State = "answered";
 
         if (answer == "abort")
@@ -2889,14 +2889,30 @@ public sealed class FlowCoordinator
         if (instance.Step.Type == "pause")
         {
             // A pause step asks and asks only: the engine fills its question from the same names an expression reads,
-            // and no runner is asked. A question that cannot be filled fails the step, as any step its template
-            // breaks. Either way the graph changed where the loop was admitting, so it goes round again.
+            // the questions an upstream step wrote shown under it, and no runner is asked. A question that cannot be
+            // filled - its own or the questions it shows - fails the step, as any step its template breaks. Either way
+            // the graph changed where the loop was admitting, so it goes round again.
             Release(instance);
             _answeredAtOnce = true;
 
+            var shown = ShownQuestionsOf(instance, out var shownProblem);
+
+            if (shownProblem is not null)
+            {
+                End(instance, FlowInstanceState.Failed, HarnessExit.ConfigInvalid, Unreadable("questions", instance.Id, shownProblem));
+                HandleFailure(instance);
+                return false;
+            }
+
             if (Filled(instance, instance.Step.Question ?? string.Empty, out var problem) is { } question)
             {
-                _ = Ask(instance, "pause", question, FlowQuestions.OptionsOf("pause", instance.Step));
+                var id = Ask(instance, "pause", question, FlowQuestions.OptionsOf("pause", instance.Step), agentQuestions: shown);
+                var asked = _questions.First(asking => asking.Id == id);
+
+                // What the person gave the run answers first, where they gave it: the entry whose when holds answers
+                // at once, as a configured answer would - no person asked - and its words are looked for in the input
+                // they are said to stand in before they count.
+                AnswerWhatTheInputGave(instance, asked);
             }
             else
             {
@@ -4432,6 +4448,155 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
+    /// The questions a <c>pause</c> step shows under its own, where its <c>questions</c> expression yields a list: each
+    /// element in the shape of a question, read from the upstream output it names. An element that is no question says
+    /// why, in <paramref name="problem"/>; one that recommends something not among its own choices, which no schema of
+    /// the subset can refuse, is shown as it is with a line under it saying so.
+    /// </summary>
+    /// <param name="instance">The pause step.</param>
+    /// <param name="problem">Why the questions could not be read; null where they were, and where the step names none.</param>
+    private IReadOnlyList<Agents.AgentQuestion>? ShownQuestionsOf(FlowInstance instance, out string? problem)
+    {
+        if (instance.Step.Questions is not { } expression)
+        {
+            problem = null;
+            return null;
+        }
+
+        var items = EvaluateList(expression, instance.DeclaredScope!, out var unreadable);
+
+        if (unreadable is not null)
+        {
+            problem = unreadable;
+            return null;
+        }
+
+        var shown = new List<Agents.AgentQuestion>();
+
+        foreach (var item in items)
+        {
+            if (QuestionOf(item, expression) is not { } read)
+            {
+                problem = $"'{expression}' yields an element that is not a question of the shape {{question, problem, tried, means, options, recommended, why}}";
+                return null;
+            }
+
+            shown.Add(read);
+        }
+
+        problem = null;
+        return shown;
+    }
+
+    /// <summary>
+    /// One element of a <c>pause</c> step's <c>questions</c> list, as the question it holds: every member of the
+    /// envelope's own shape, an element that lacks one refused whole. A recommendation outside its own choices is kept
+    /// as it stands with a line under it saying so.
+    /// </summary>
+    /// <param name="item">The element, as the list yielded it.</param>
+    /// <param name="expression">The expression that yielded it, as a problem names it.</param>
+    private static Agents.AgentQuestion? QuestionOf(FlowValue item, string expression)
+    {
+        if (item.ToNode() is not JsonObject held)
+        {
+            return null;
+        }
+
+        string? Member(string name)
+            => held[name] is System.Text.Json.Nodes.JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+        if (Member("question") is not { Length: > 0 } asked || Member("problem") is not { Length: > 0 })
+        {
+            return null;
+        }
+
+        var options = held["options"] as System.Text.Json.Nodes.JsonArray;
+        List<string> choices = [.. (options ?? [])
+            .OfType<System.Text.Json.Nodes.JsonValue>()
+            .Select(option => option.TryGetValue<string>(out var text) ? text : null)
+            .OfType<string>()];
+
+        if (choices.Count < 2)
+        {
+            return null;
+        }
+
+        var recommended = Member("recommended");
+        var why = Member("why") ?? string.Empty;
+
+        if (recommended is { Length: > 0 } && !choices.Contains(recommended, StringComparer.Ordinal))
+        {
+            // Shown as it is, with a line under it saying so: no schema of the subset can refuse this.
+            why = $"{why}{(why.Length == 0 ? string.Empty : " ")}(it recommends '{recommended}', which is not among its own choices, and is shown as it stands)";
+        }
+
+        return new Agents.AgentQuestion(
+            asked,
+            Member("problem")!,
+            Member("tried") ?? string.Empty,
+            Member("means") ?? string.Empty,
+            choices,
+            recommended ?? string.Empty,
+            why);
+    }
+
+    /// <summary>
+    /// Answers a <c>pause</c> step's question with what the person gave the run, where they gave it: the first
+    /// <c>preAnswer</c> entry whose <c>when</c> holds answers at once, as a configured answer would - no person asked -
+    /// its entry held only where its <c>quote</c>'s words are not empty and stand in the input they are said to be of,
+    /// every run of white space compared as one space. A quote that is reported and does not stand there passes its
+    /// entry by, the record says so, and the person is asked.
+    /// </summary>
+    /// <param name="instance">The pause step, whose pre-answers are read.</param>
+    /// <param name="asked">The question its own step just raised.</param>
+    private void AnswerWhatTheInputGave(FlowInstance instance, FlowQuestion asked)
+    {
+        foreach (var before in instance.Step.PreAnswer)
+        {
+            if (!Holds(before.When, instance.DeclaredScope!, out _, reader: instance))
+            {
+                continue;
+            }
+
+            if (before.Quote is { } quote)
+            {
+                var said = Evaluate(quote.Text, instance.DeclaredScope!, out _, reader: instance).AsScalar(quote.Text) as string;
+
+                if (said is { Length: > 0 } words && _inputs.TryGetValue(quote.Input, out var given) && StandsIn(words, given))
+                {
+                    TakeAnswer(asked, before.Answer, before.Text, "input", where: null, through: null, input: $"the words \"{words}\" in input '{quote.Input}'");
+                    return;
+                }
+
+                Record(FlowChangeKind.Answer, instance, detail: said is { Length: > 0 }
+                    ? $"a pre-answer was reported and its words are not in input '{quote.Input}': the person is asked"
+                    : $"a pre-answer's words read empty, and no answer is given by them: the person is asked");
+                continue;
+            }
+
+            // Each input its when read, with the value it had: what the person gave that the answer rests on.
+            var read = string.Join(", ", WorkflowExpressions.ReadsOf(before.When)
+                .Where(each => each.Root == "input" && each.Whole.Length > "input.".Length)
+                .Select(each => each.Whole["input.".Length..])
+                .Distinct(StringComparer.Ordinal)
+                .Select(name => $"{name} = '{_inputs.GetValueOrDefault(name) ?? string.Empty}'"));
+
+            TakeAnswer(asked, before.Answer, before.Text, "input", where: null, through: null, input: read.Length > 0 ? read : "the run's input");
+            return;
+        }
+    }
+
+    /// <summary>Whether <paramref name="words"/> stand in <paramref name="given"/> as it was given, every run of white space compared as one space.</summary>
+    /// <param name="words">The words a pre-answer quotes.</param>
+    /// <param name="given">The input's value, as the person gave it.</param>
+    private static bool StandsIn(string words, string given)
+        => Whitespace(words).Contains(Whitespace(given), StringComparison.Ordinal) || Whitespace(given).Contains(Whitespace(words), StringComparison.Ordinal);
+
+    /// <summary><paramref name="text"/> with every run of white space taken to one space, trimmed.</summary>
+    private static string Whitespace(string text)
+        => string.Join(' ', text.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+
+    /// <summary>
     /// Raises a question on <paramref name="instance"/>: a step whose work asks is paused, holding nothing while it
     /// waits, and a question of an ending already made (<see cref="FlowQuestions.AsksOfAnEnding"/>) leaves the step as
     /// it ended; either way only what depends on it is blocked. A configuration that answered the kind beforehand - the
@@ -5592,6 +5757,10 @@ public sealed class FlowCoordinator
                 return new(reader is { Step.Type: "commit" } ? FlowValue.Of(CarriedOf(reader)) : FlowValue.Missing, 0);
             case "source":
                 return new(source is null ? FlowValue.Missing : FlowValue.Of(SourceFacts(source, RaisedGroupOf(scope))), 0);
+            case "recommendations":
+                // The repository's bar for a recommendation, read live - each time it is given, as a prompt is - so a
+                // change holds from the next question on and a run does not keep the bar it started with.
+                return new(FlowValue.Of(BarOf()), 0);
             default:
                 return StepRead(path, keysFrom: -1, scope, scope);
         }
@@ -6278,6 +6447,38 @@ public sealed class FlowCoordinator
     /// </summary>
     private string? Filled(FlowInstance instance, string template, out string? problem)
         => FlowTemplate.Fill(template, path => Read(path, instance.DeclaredScope!, reader: instance), out problem);
+
+    /// <summary>
+    /// The repository's bar for a recommendation, as a prompt reads it by <c>{recommendations}</c>: the file the
+    /// orchestrator names - which the definition's check holds to be there - or, where it names none, the
+    /// <c>recommendations.md</c> its folder has; where neither is, a sentence that says so, for a recommendation then
+    /// says it follows none. Read each time it is given, never kept by the run.
+    /// </summary>
+    private string BarOf()
+    {
+        if (_definition.Recommendations is { } named)
+        {
+            return _workflowFile is { } read ? read(named) : NoBar();
+        }
+
+        if (_workflowFile is { } defaultRead)
+        {
+            try
+            {
+                return defaultRead("recommendations.md");
+            }
+            catch (HarnessException)
+            {
+                // The folder holds no bar of its own, and none was named: said plainly, never refused, for a
+                // repository owes no bar.
+            }
+        }
+
+        return NoBar();
+
+        string NoBar()
+            => $"(orchestrator '{_definition.Name}' has no recommendations file: no bar was written for this repository)";
+    }
 
     /// <summary>Says an unreadable expression the way a step's record keeps it: which expression of which instance could not be read, and why.</summary>
     private static string Unreadable(string key, string instance, string problem)

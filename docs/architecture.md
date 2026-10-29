@@ -2003,6 +2003,19 @@ the attempt can be handed, `FlowStepResult.StoredConversation`) grants the bound
 `compact` begins a new one from the engine's reduction of the stream so far (`AgentCompaction.Reduce`), and `retry`
 begins a new attempt given the engine's one-line handoff (`FlowHandoff.ByEngine`, written before the question is
 raised).
+The asking the engine does itself (slice 31b2): the repository's bar for a recommendation is read by
+`{recommendations}` - `FlowCoordinator.BarOf`, the orchestrator's `recommendations` file or its folder's own
+`recommendations.md` through the run's workflow-file seam, read live each time it is given so a change holds from the
+next question on, and a sentence naming the orchestrator where the folder has no bar. A `pause` step's `questions`
+expression is read where the step asks (`FlowCoordinator.ShownQuestionsOf` over `EvaluateList`), each element held to
+the envelope's own question shape and shown under the step's own question - one that recommends outside its own
+choices, which no schema of the subset can refuse, shown as it is with a line under it saying so - and the step's
+answer answers them together. What the person gave the run answers first (`AnswerWhatTheInputGave`): the first
+`preAnswer` entry whose `when` holds answers at once by the one answer path with `by: input` and the values its when
+read, and an entry that quotes words holds only where they are not empty and stand in the input they are said to be of
+(`StandsIn`, every run of white space compared as one space) - reported words the input does not hold answer nothing,
+the event log says so, and the person is asked. The advisor - the orchestrator's `advisor` block run for a question
+the engine raises - is the next slice (31b3).
 Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`
@@ -2107,7 +2120,7 @@ read by the configuration's one brace grammar (`FlowTemplate.Pieces`): `{{` and 
 `${...}` is left as written, and a placeholder that names nothing is refused. `piece` is read only in the work-item group, and what only a
 prompt reads - `recommendations`, `question`, `status`, `update`, a skill - by no step's own key.
 What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's
-prompt and the advisor's, `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two -
+prompt and the advisor's - the bar the repository wrote, read live each time it is given - `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two -
 `{status.question}` in its `askPrompt` alone - `{update.*}` in the prompts of the step that plans an
 update and of the steps of its scope, and `{piece.*}` in a step of the work-item group; the
 advisor's and the reporter's prompts are read too, and read no step by name, and a pull request's

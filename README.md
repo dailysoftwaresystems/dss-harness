@@ -507,7 +507,19 @@ full context - asks: `retry` begins a new attempt, `more` (offered only where a 
 of the attempt can be handed) grants the bound once again in the same conversation, `compact` goes
 on from the engine's reduction of it, and a configuration may answer any of it beforehand. Every
 account a step could use at its limit, and a provider's service failing past the client's own tries,
-pause the run safely instead - never a failure - and the resume runs that very step. A `test` step's
+pause the run safely instead - never a failure - and the resume runs that very step.
+
+A `pause` step asks and asks only: its question filled as a template is filled, and the questions an
+upstream step wrote (`questions`) shown under its own - the shipped `blocked` shows what triage
+found that only a person can lift - the step's answer answering them together. What the person gave
+the run answers first, where they gave it: the first `preAnswer` entry whose `when` holds answers at
+once, as a configured answer would, and an entry that quotes words holds only where they stand in
+the input they are said to be of - the shipped approval is pre-answered by `preapproved = 'yes'` or
+by the request's own words, quoted and looked for. The repository's bar for a recommendation -
+`recommendations.md` in the workflow's folder, or the file its `recommendations` key names - is read
+by `{recommendations}` in a reason step's prompt, live each time it is given, so a change holds from
+the next question on; where the folder has none, a sentence says so and a recommendation says it
+follows none. A `test` step's
 `filter` names the tests it runs; its `filterWhen` is an
 expression that switches it - where it reads false the step gives no filter and every test of its
 legs runs, as the shipped `verify` steps do where the run's input `affectedTests` is off, each item
@@ -1096,7 +1108,8 @@ create-agent step whose worktree it works in; the agents a run makes, `a` and a 
 workflow's `maxInstances`, fit `worktrees.maxNameLength`; and a commit step gives a value for every
 variable `commit.template` requires and none for one it does not declare - with no template, a
 `message` and no `variables`. What only a prompt reads stands where its agent is asked it:
-`{recommendations}` in a reason step's prompt and the advisor's, `{question.*}` in the advisor's
+`{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote,
+read live each time it is given - `{question.*}` in the advisor's
 alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone -
 `{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and
 `{piece.*}` in a step of the work-item group; the advisor's and the reporter's prompts read no step

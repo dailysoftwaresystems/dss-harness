@@ -39,6 +39,57 @@ public sealed class FlowResumeTests
         => new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(digest ?? FlowRunContext.DigestOf(definition));
 
     /// <summary>
+    /// The repository's bar for a recommendation is read live, each time it is given: the orchestrator's
+    /// <c>recommendations.md</c> as the workflow's file seam reads it, so a change holds from the next question on and
+    /// a run does not keep the bar it started with.
+    /// </summary>
+    [Fact]
+    public async Task TheRepositorysBarForARecommendation_IsReadLiveEachTimeItIsGiven()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: first
+                type: pause
+                question: '{recommendations}'
+                options: [approve, revise]
+              - name: second
+                type: pause
+                dependsOn: [first]
+                question: '{recommendations}'
+                options: [approve, revise]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var bar = Path.Combine(temp.Path, ".harness-config", "workflows", "flow", "recommendations.md");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(bar)!);
+        File.WriteAllText(bar, "Prefer the cheaper answer.\n");
+
+        string ReadBar(string named)
+            => new WorkflowNamedFiles(harness.FileSystem, harness.Platform.PathComparison).ReadText(new HarnessLayout(temp.Path, temp.Path), "flow", named, "a workflow file");
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records, workflowFile: ReadBar);
+            _ = coordinator.RunAsync(Token);
+
+            var first = coordinator.OpenQuestions.Single();
+
+            Assert.Contains("cheaper", first.Problem, StringComparison.Ordinal);
+
+            File.WriteAllText(bar, "Prefer the safer answer.\n");
+
+            Assert.True(coordinator.TryAnswer(first.Id, "approve", null, out _));
+            _ = coordinator.RunAsync(Token);
+
+            // The change holds from the next question on: the second question reads the bar as it is now.
+            Assert.Contains("safer", coordinator.OpenQuestions.Single().Problem, StringComparison.Ordinal);
+            Assert.DoesNotContain("cheaper", coordinator.OpenQuestions.Single().Problem, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// A step of others a crash cut off goes on at the resume from its record alone: at the first target whose turn had
     /// not ended, the ones that ended never asked again, and its every target's count of attempts carried on.
     /// </summary>
