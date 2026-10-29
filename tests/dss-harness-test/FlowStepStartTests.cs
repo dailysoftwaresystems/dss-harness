@@ -364,6 +364,64 @@ public sealed class FlowStepStartTests
     }
 
     /// <summary>
+    /// A reason step's <c>writes</c> given as an expression is read where the step starts and the names it yielded
+    /// narrow the step as a written-out list does - the step its runner is handed carries them as its writes - while a
+    /// list written out narrows as it always did; an expression that names no path fails the step, for an empty list
+    /// would read as no narrowing and a step that owns no path cannot write.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepsWritesGivenAsAnExpression_AreReadWhereItStarts_AndNarrowAsAListDoes()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: find
+                type: orient
+              - name: made
+                type: create-agent
+                agent: worker.md
+              - name: narrow
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                access: write
+                in: made
+                dependsOn: [find, made]
+                writes: 'find.owned'
+              - name: listed
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                access: write
+                in: made
+                dependsOn: [find, made]
+                writes: ['docs/**']
+              - name: empty
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                access: write
+                in: made
+                dependsOn: [find, made]
+                writes: 'find.none'
+            """);
+        var runner = new Runner().On("find", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"owned": ["src/a.cs", "src/b.cs"], "none": null}""")));
+        var coordinator = Coordinator(definition, runner);
+
+        _ = await coordinator.RunAsync(Token);
+
+        var narrowed = runner.Runs.Single(run => run.Instance == "narrow");
+        Assert.Equal(["src/a.cs", "src/b.cs"], narrowed.Step.Writes!.Written);
+        Assert.Null(narrowed.Step.Writes.Expression);
+        Assert.False(narrowed.Read!.ContainsKey("writes"));
+        Assert.Equal(["docs/**"], runner.Runs.Single(run => run.Instance == "listed").Step.Writes!.Written);
+        Assert.DoesNotContain(runner.Runs, run => run.Instance == "empty");
+        Assert.Equal(
+            (FlowInstanceState.Failed, HarnessExit.ConfigInvalid, "expression 'writes' of 'empty': 'find.none' names no path"),
+            (coordinator.Instances["empty"].State, coordinator.Instances["empty"].Exit, coordinator.Instances["empty"].Error));
+    }
+
+    /// <summary>
     /// A refresh's and a rebase's keys given as expressions are read where each starts, under their keys: a refresh's paths,
     /// except and stale, which name none where they read null, and the merge of either, which may read nothing.
     /// </summary>

@@ -372,6 +372,12 @@ public sealed class FlowCoordinator
     /// <summary>Runs the orchestrator's advisor for a question the engine raises; null where none is named.</summary>
     private readonly IFlowAdvisorRunner? _advisor;
 
+    /// <summary>
+    /// Reads the engine's account of a stopped or cut-off step's stored stream, the body of the handoff it writes where
+    /// the agent gave none; null where the run's runner keeps no stream, and the handoff stands on its first line alone.
+    /// </summary>
+    private readonly IFlowStreamAccount? _streamAccount;
+
     /// <summary>Every advice the session has begun and not yet taken: its question, how to end it, and its answer.</summary>
     private readonly List<(FlowQuestion Asked, CancellationTokenSource Cancel, Task<FlowAdvice> Task)> _advising = [];
 
@@ -535,6 +541,11 @@ public sealed class FlowCoordinator
     /// Runs the orchestrator's advisor for a question the engine raises, before a person is left with it; null where no
     /// advisor is named, which every question then says.
     /// </param>
+    /// <param name="streamAccount">
+    /// Reads the engine's account of a stopped or cut-off step's stored stream, the body of the handoff it writes where
+    /// the agent gave none; left out, the run's own runner is asked, and where that keeps no stream the handoff stands
+    /// on its first line alone.
+    /// </param>
     /// <exception cref="HarnessException">An input the run needs is missing, or a value is outside the ones its input takes.</exception>
     public FlowCoordinator(
         WorkflowDefinition definition,
@@ -549,7 +560,8 @@ public sealed class FlowCoordinator
         IReadOnlyDictionary<string, string>? agentModels = null,
         Func<string, string>? workflowFile = null,
         Func<string, string, CancellationToken, Task<Results.CommandOutcome>>? deleteAgent = null,
-        IFlowAdvisorRunner? advisor = null)
+        IFlowAdvisorRunner? advisor = null,
+        IFlowStreamAccount? streamAccount = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(runner);
@@ -567,6 +579,7 @@ public sealed class FlowCoordinator
         _workflowFile = workflowFile;
         _deleteAgent = deleteAgent;
         _advisor = advisor;
+        _streamAccount = streamAccount ?? (runner as IFlowStreamAccount);
 
         foreach (var (path, _) in FlowScope.Declared(definition))
         {
@@ -1065,11 +1078,12 @@ public sealed class FlowCoordinator
             {
                 // The attempt before was cut off and left no handoff - a crash ended the engine, or a stop ended
                 // the run - so the engine writes one, for the next attempt is told what the cut-off one had done,
-                // on every client and after every kind of stop. One the attempt still held - an agent's account no
-                // prompt holds yet - is never written over: the next attempt is given it.
-                stopped.Handoff = FlowHandoff.ByEngine(
-                    was is FlowInstanceState.Running ? "the engine's process ended" : "the run was stopped",
-                    $"Attempt {stopped.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)} was cut off.");
+                // on every client and after every kind of stop: its body is the engine's account of that attempt's
+                // stored stream. One the attempt still held - an agent's account no prompt holds yet - is never
+                // written over: the next attempt is given it.
+                stopped.Handoff = EngineHandoffOf(
+                    stopped,
+                    was is FlowInstanceState.Running ? "the engine's process ended" : "the run was stopped");
                 Record(FlowChangeKind.Handoff, stopped, detail: stopped.Handoff.Why);
             }
 
@@ -1236,7 +1250,7 @@ public sealed class FlowCoordinator
 
                 instance.Handoff = accounts[at].Text is { Length: > 0 } written
                     ? new FlowHandoff(written, "agent")
-                    : FlowHandoff.ByEngine(accounts[at].Why);
+                    : EngineHandoffOf(instance, accounts[at].Why);
                 _pause._handoffs.Add(instance.Id);
                 Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
             }
@@ -3000,6 +3014,20 @@ public sealed class FlowCoordinator
                     step = step with { Filter = null };
                 }
 
+                // A reason step's `writes` given as an expression is read where the step starts, and the names it
+                // yielded narrow the step as a written-out list does: the runner's ground is built of the step it is
+                // handed, so the read list is put in the place of the expression. Nothing is read where the step
+                // wrote its list out, and the written-out list narrows as it always did.
+                if (step.Type == "reason"
+                    && read.Remove("writes", out var writesNamed)
+                    && writesNamed.ToNode() is JsonArray listedWrites)
+                {
+                    step = step with
+                    {
+                        Writes = new FlowList([.. listedWrites.OfType<JsonValue>().Where(one => one.GetValueKind() == JsonValueKind.String).Select(one => one!.GetValue<string>())], Expression: null),
+                    };
+                }
+
                 // Every text the step hands on, filled where it starts by the names the step reads: the runner is given
                 // the step as it is to run. One that reads a step with no output fails the step, as an expression does.
                 if (FlowStepTemplates.Fill(step, (string text, out string? problem) => Filled(instance, text, out problem), out var key, out var broken) is not { } filled)
@@ -3101,7 +3129,7 @@ public sealed class FlowCoordinator
             // stops it, with why as its handoff - the resume's next attempt is told what the attempt met - and runs
             // again at the resume.
             Release(instance);
-            instance.Handoff ??= FlowHandoff.ByEngine(pausing);
+            instance.Handoff ??= EngineHandoffOf(instance, pausing);
             Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
             End(instance, FlowInstanceState.Stopped, HarnessExit.Incomplete, pausing);
             Record(FlowChangeKind.Step, instance, detail: "the run pauses for it");
@@ -3150,7 +3178,7 @@ public sealed class FlowCoordinator
                 options = [.. options.Where(option => option != "more")];
             }
 
-            instance.Handoff ??= FlowHandoff.ByEngine($"'{instance.Id}' reached its {limit}");
+            instance.Handoff ??= EngineHandoffOf(instance, $"'{instance.Id}' reached its {limit}");
             Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
             _ = Ask(instance, kind, $"'{instance.Id}' reached its {limit}{(result.LimitDetail is { } detail ? $" ({detail})" : string.Empty)}", options);
             return;
@@ -6480,6 +6508,7 @@ public sealed class FlowCoordinator
         {
             "test" => [("filterWhen", step.FilterWhen, false, StartRead.Truth)],
             "validate-plan" => [("items", step.Items, false, StartRead.Value), ("scope", step.Scope, true, StartRead.Value)],
+            "reason" => [("writes", step.Writes?.Expression, false, StartRead.Names)],
             "anchor-balance" => [("rows", step.Rows?.Expression, true, StartRead.Names)],
             "anchor-citations" => [("paths", step.AnchorPaths?.Expression, true, StartRead.Names)],
             "fold" or "delete-agent" =>
@@ -6530,6 +6559,14 @@ public sealed class FlowCoordinator
                 if (Names(value, expression, out var names) is { } unnamed)
                 {
                     return Unreadable(key, instance.Id, unnamed);
+                }
+
+                if (key == "writes" && names.Count == 0)
+                {
+                    // A written-out empty `writes` is refused by the definition's check, and an expression that yields
+                    // one is refused here, at the step's start, by the same rule: an empty list would read as no
+                    // narrowing, and a step that owns no path cannot write.
+                    return Unreadable(key, instance.Id, $"'{expression}' names no path");
                 }
 
                 value = FlowValue.Of(new JsonArray([.. names.Select(name => (JsonNode?)name)]));
@@ -7096,6 +7133,17 @@ public sealed class FlowCoordinator
             WorksInOf(instance),
             instance.Step.Others is null ? null : CurrentTarget(instance)?.Agent,
             WorkedFromOf(instance));
+
+    /// <summary>
+    /// The handoff the engine writes for <paramref name="instance"/>: its first line says <paramref name="why"/>, and
+    /// its body is the engine's account of the attempt's stored stream - what the stream shows and no more - where the
+    /// run's runner holds one. Nothing in it is made up, and nothing the engine wrote is given out as the agent's own
+    /// account.
+    /// </summary>
+    /// <param name="instance">The step the handoff is written for, as it was last asked.</param>
+    /// <param name="why">Why the engine writes it, as its first line says.</param>
+    private FlowHandoff EngineHandoffOf(FlowInstance instance, string why)
+        => FlowHandoff.ByEngine(why, _streamAccount?.Account(RunOf(instance, instance.Step, instance.Attempt, new Dictionary<string, FlowValue>(StringComparer.Ordinal), handoff: null)));
 
     /// <summary>
     /// The instances whose working sets a reason step's pack is seeded from (value 372), in order: the step it goes on

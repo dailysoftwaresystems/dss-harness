@@ -283,7 +283,21 @@ public sealed class AgentService(
 
             if (_fileSystem.DirectoryExists(layout.AgentDirectory(agent)))
             {
-                return CommandOutcome.Refused($"'{layout.AgentDirectory(agent)}' is there already, and no record in it names an agent. Nothing was created.");
+                // The run itself places a step's records under the agent the engine named for it before the agent is
+                // made - the name is written before the record that says the step runs, and the making is the step
+                // runner's - so a directory that holds only what a run keeps there (its steps, the agent's work and
+                // plans) is the engine's own placement, and the agent is made in it. Anything else in it is unknown,
+                // and refused as one.
+                var unknown = _fileSystem.EnumerateDirectories(layout.AgentDirectory(agent))
+                    .Select(directory => Path.GetFileName(Path.TrimEndingDirectorySeparator(directory)))
+                    .Where(name => name is not (OrchestratorLayout.StepsDirectoryName or OrchestratorLayout.WorkDirectoryName or OrchestratorLayout.PlansDirectoryName))
+                    .Concat(_fileSystem.EnumerateFiles(layout.AgentDirectory(agent), recursive: false).Select(file => Path.GetFileName(file)))
+                    .ToList();
+
+                if (unknown.Count > 0)
+                {
+                    return CommandOutcome.Refused($"'{layout.AgentDirectory(agent)}' is there already, and no record in it names an agent. Nothing was created.");
+                }
             }
 
             if (noWorktree)

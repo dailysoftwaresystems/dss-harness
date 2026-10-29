@@ -507,7 +507,13 @@ full context - asks: `retry` begins a new attempt, `more` (offered only where a 
 of the attempt can be handed) grants the bound once again in the same conversation, `compact` goes
 on from the engine's reduction of it, and a configuration may answer any of it beforehand. Every
 account a step could use at its limit, and a provider's service failing past the client's own tries,
-pause the run safely instead - never a failure - and the resume runs that very step.
+pause the run safely instead - never a failure - and the resume runs that very step. Where an agent
+gave no handoff of its own - a limit ended its run, a crash cut the attempt off, its handoff turn
+passed its bound or failed - the engine writes one from the stored stream of the step, its first
+line saying why: the files the attempt wrote, the last commands it ran and how each ended, its last
+messages word for word, and the steps before it that left notes, named by step; a step's `writes`
+given as an expression is read where the step starts, the names it yielded narrowing what it may
+write as a written-out list does.
 
 A `pause` step asks and asks only: its question filled as a template is filled, and the questions an
 upstream step wrote (`questions`) shown under its own - the shipped `blocked` shows what triage

@@ -24,5 +24,8 @@ public sealed class NoStepRunner : IFlowStepRunner
     /// <summary>No handoff turn: no agent ran.</summary>
     public Task<string?> HandoffAsync(FlowStepRun run, CancellationToken cancellationToken)
         => Task.FromResult<string?>(null);
+
+    /// <summary>No account: no agent ran, and nothing was streamed.</summary>
+    public string? Account(FlowStepRun run) => null;
 }
 

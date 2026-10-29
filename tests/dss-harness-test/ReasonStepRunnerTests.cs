@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
+using DssHarness.Core.Agents.ClaudeCode;
+using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
@@ -98,7 +100,7 @@ public sealed class ReasonStepRunnerTests
         return (kit, runner);
     }
 
-    private ReasonStepRunner Runner(OrchestrationKit kit, Agents agents)
+    private ReasonStepRunner Runner(OrchestrationKit kit, Agents agents, ClaudeCodeUpdateService? updates = null)
         => new(
             kit.Harness.ContextLoader,
             kit.Harness.Platform,
@@ -106,10 +108,17 @@ public sealed class ReasonStepRunnerTests
             new CreateAgentRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService),
             agents,
             kit.Harness.FileSystem,
-            new AgentKeyStore(kit.Harness.FileSystem, kit.Harness.FilePermissions, kit.Harness.Platform),
+            Keys(kit),
             new GhProcess(kit.Harness.ProcessRunner),
             kit.Harness.Output,
-            TimeProvider.System);
+            TimeProvider.System,
+            kit.Harness.GitClient,
+            kit.Harness.ConfigStore,
+            updates);
+
+    /// <summary>The kit's slot, as the runner reads it.</summary>
+    private static AgentKeyStore Keys(OrchestrationKit kit)
+        => new(kit.Harness.FileSystem, kit.Harness.FilePermissions, kit.Harness.Platform);
 
     /// <summary>The run a reason step is asked with, with what a test changes of it.</summary>
     private static FlowStepRun Run(
@@ -144,14 +153,18 @@ public sealed class ReasonStepRunnerTests
 
     /// <summary>
     /// A step the engine named a read-only agent for is given one - made, with no worktree - and worked as: its
-    /// workspace reads the main tree, writes its work directory, and the request carries the agent's name.
+    /// workspace reads the main tree, writes its work directory, and the request carries the agent's name. The engine
+    /// stores the agent it named as the one the step works in, so the run hands both: the making answers an agent
+    /// already live as already made, and the step works as it.
     /// </summary>
     [Fact]
     public async Task AStepTheEngineNamedAnAgentFor_IsGivenItMadeReadOnly_AndWorkedAs()
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
-        var result = await Runner(kit, agents).RunAsync(Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")), Token);
+
+        // The engine stores the agent it named as the one the step works in, so the run hands both.
+        var result = await Runner(kit, agents).RunAsync(Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")) with { WorksIn = "a9" }, Token);
 
         Assert.True(result.Passed, result.Error);
         var asked = agents.Asked.Single();
@@ -160,10 +173,15 @@ public sealed class ReasonStepRunnerTests
         Assert.True(kit.Record("a9").Reads);
         Assert.Null(asked.Workspace.Worktree);
         Assert.Equal(kit.Main, asked.Workspace.MainCheckout);
-        Assert.Equal(Path.Combine(kit.Layout.AgentDirectory("a9"), "work"), asked.Workspace.WorkDirectory);
+        Assert.Equal(kit.Layout.WorkDirectory("a9"), asked.Workspace.WorkDirectory);
         Assert.Null(asked.Ground!.ReporterRoot);
         Assert.Contains(kit.Main, asked.Ground!.ReadRoots);
-        Assert.Equal([Path.Combine(kit.Layout.AgentDirectory("a9"), "work")], asked.Ground!.WritableRoots);
+        Assert.Equal([kit.Layout.WorkDirectory("a9")], asked.Ground!.WritableRoots);
+
+        var again = await Runner(kit, agents).RunAsync(Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")) with { WorksIn = "a9", Attempt = 2 }, Token);
+
+        Assert.True(again.Passed, again.Error);
+        Assert.Equal("a9", agents.Asked[1].Agent);
     }
 
     /// <summary>
@@ -215,7 +233,7 @@ public sealed class ReasonStepRunnerTests
         Assert.Contains("<skill name=\"planning\" from=\".harness-config/skills\" directory=\"", asked.PromptTemplate, StringComparison.Ordinal);
         Assert.Contains("Files this skill refers to are in that directory. Read them from there.", asked.PromptTemplate, StringComparison.Ordinal);
         Assert.EndsWith("Plan in steps, session think.\n\n</skill>.", asked.PromptTemplate, StringComparison.Ordinal);
-        var copied = Path.Combine(kit.Layout.AgentDirectory("a9"), "work", "skills", "planning");
+        var copied = Path.Combine(kit.Layout.WorkDirectory("a9"), "skills", "planning");
         Assert.Equal("---\ndescription: how to plan\n---\nPlan in steps, session ${CLAUDE_SESSION_ID}.\n", OrchestrationKit.Read(copied, "SKILL.md"));
         Assert.Equal("Three ways.\n", OrchestrationKit.Read(copied, "ways.md"));
 
@@ -271,7 +289,7 @@ public sealed class ReasonStepRunnerTests
         var asked = agents.Asked.Single();
         Assert.Equal(worktree, asked.Workspace.Worktree);
         Assert.Equal(worktree, asked.Workspace.WorkingDirectory);
-        Assert.Equal(Path.Combine(kit.Layout.AgentDirectory("ag"), "work"), asked.Workspace.WorkDirectory);
+        Assert.Equal(kit.Layout.WorkDirectory("ag"), asked.Workspace.WorkDirectory);
         Assert.Contains(worktree, asked.Ground!.WritableRoots);
     }
 
@@ -309,6 +327,53 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal(
             ["ANTHROPIC_SPARE", "ANTHROPIC_KEY"],
             agents.Asked.Single().Order!.Select(entry => entry.Key));
+    }
+
+    /// <summary>
+    /// Where the step's order holds the client that starts a program, the program is found ready where the step starts
+    /// - a program the slot names read for what it is - and the request carries it and the version it answered, for the
+    /// client to start what was found; one not ready refuses the step with the finder's own words.
+    /// </summary>
+    [Fact]
+    public async Task TheProgramAClientThatStartsOneStarts_IsFoundReadyWhereTheStepStarts()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+
+        var where = kit.Harness.Platform.Current == DssHarness.Core.Platform.PlatformId.Windows ? "where.exe" : "which";
+        var found = await kit.Harness.ProcessRunner.RunAsync(new DssHarness.Core.Processes.ProcessRequest { FileName = where, Arguments = ["dotnet"] }, Token);
+        var named = found.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+
+        File.WriteAllText(
+            Path.Combine(kit.Main, ".harness-config", "config.json"),
+            File.ReadAllText(Path.Combine(kit.Main, ".harness-config", "config.json")).Replace("\"client\": \"claude-api\"", "\"client\": \"claude-code\""));
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", ".env", "a.env"), $"ANTHROPIC_KEY=sk-test-one\nCLAUDE_EXECUTABLE={named}\n");
+        kit.Harness.FilePermissions.ProtectSecret(Path.Combine(kit.Main, ".harness-config", "workflows", ".env", "a.env"));
+
+        var updates = new ClaudeCodeUpdateService(
+            kit.Harness.ProcessTable,
+            kit.Harness.ProcessRunner,
+            kit.Harness.FileSystem,
+            kit.Harness.FilePermissions,
+            kit.Harness.Platform,
+            kit.Harness.Identity,
+            Keys(kit));
+
+        var result = await Runner(kit, agents, updates).RunAsync(Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")), Token);
+
+        Assert.True(result.Passed, result.Error);
+        var asked = agents.Asked.Single();
+        Assert.Equal(named, asked.Program);
+        Assert.NotNull(asked.ProgramVersion);
+
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", ".env", "a.env"), $"ANTHROPIC_KEY=sk-test-one\nCLAUDE_EXECUTABLE={kit.Main}\\not-there.exe\n");
+        kit.Harness.FilePermissions.ProtectSecret(Path.Combine(kit.Main, ".harness-config", "workflows", ".env", "a.env"));
+
+        var refused = await Runner(kit, agents, updates).RunAsync(Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")) with { Attempt = 2 }, Token);
+
+        Assert.False(refused.Passed);
+        Assert.Equal(HarnessExit.ToolMissing, refused.Exit);
+        Assert.Contains("not-there", refused.Error, StringComparison.Ordinal);
     }
 
     /// <summary>A stopped step's handoff turn is answered of its own record: the agent's answer where it gave one, and null where it did not.</summary>
@@ -353,6 +418,131 @@ public sealed class ReasonStepRunnerTests
         var dispatched = await new FlowStepRunners([runner], kit.Harness.GraphSyncs).HandoffAsync(Run(kit, agent: "reader", handoff: "cut off"), Token);
 
         Assert.Equal("what was left", dispatched);
+    }
+
+    /// <summary>
+    /// The engine's account of a stored stream holds what the stream shows and no more: the files the newest attempt
+    /// wrote, the last commands it ran and how each ended, and its last messages word for word - an earlier attempt's
+    /// events left out - beside the steps before it that left notes, named by step and not by path. Where the step
+    /// streamed nothing there is no account, and the handoff stands on its first line alone.
+    /// </summary>
+    [Fact]
+    public async Task TheEnginesAccountOfAStoredStream_HoldsWhatItShows()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var runner = (IFlowHandoffRunner)Runner(kit, agents);
+
+        var plan = kit.Layout.AgentStepDirectory("reader", "plan");
+        OrchestrationKit.Write(kit.Main, Path.Combine(plan, "notes.md"), "Planned three items.");
+
+        var stream = StoredStream.Open(kit.Harness.FileSystem, kit.Layout.AgentStepDirectory("reader", "think"), new Masking());
+
+        await stream.EmitAsync(new RunStarted(1));
+        await stream.EmitAsync(new ToolCallStarted("c1", AgentTools.CreateFile, AgentToolRunner.Harness));
+        await stream.EmitAsync(new ToolCallFinished("c1", Ok: true, TimeSpan.FromSeconds(1), "{\"path\": \"src/one.cs\", \"content\": \"one\"}", "written"));
+        await stream.EmitAsync(new RunFinished(AgentRunStatus.Failed));
+        await stream.EmitAsync(new RunStarted(2));
+        await stream.EmitAsync(new ToolCallStarted("c2", AgentTools.CreateFile, AgentToolRunner.Harness));
+        await stream.EmitAsync(new ToolCallFinished("c2", Ok: true, TimeSpan.FromSeconds(1), "{\"path\": \"src/two.cs\", \"content\": \"two\"}", "written"));
+        await stream.EmitAsync(new ToolCallStarted("c3", AgentTools.RunCommand, AgentToolRunner.Harness));
+        await stream.EmitAsync(new ToolCallFinished("c3", Ok: false, TimeSpan.FromSeconds(2), "{\"program\": \"dotnet\", \"args\": [\"test\"]}", "2 tests failed"));
+        await stream.EmitAsync(new AssistantMessage("I wrote the file.", [new AgentToolCall("c2", AgentTools.CreateFile), new AgentToolCall("c3", AgentTools.RunCommand)]));
+        await stream.EmitAsync(new AssistantMessage("The tests failed.", []));
+        stream.Dispose();
+
+        var account = runner.Account(Run(kit, agent: "reader", workedFrom: [new FlowWorkedFrom("plan", "reader")], handoff: "cut off", attempt: 2));
+
+        Assert.NotNull(account);
+        Assert.DoesNotContain("src/one.cs", account, StringComparison.Ordinal);
+        Assert.Contains("The files the attempt wrote:", account, StringComparison.Ordinal);
+        Assert.Contains("- src/two.cs (create_file)", account, StringComparison.Ordinal);
+        Assert.Contains("The last commands it ran and how each ended:", account, StringComparison.Ordinal);
+        Assert.Contains("- dotnet test (failed)", account, StringComparison.Ordinal);
+        Assert.Contains("The agent's last messages, word for word:", account, StringComparison.Ordinal);
+        Assert.Contains("I wrote the file.", account, StringComparison.Ordinal);
+        Assert.Contains("The tests failed.", account, StringComparison.Ordinal);
+        Assert.EndsWith("The steps before it that left notes: 'plan'.", account, StringComparison.Ordinal);
+
+        File.Delete(Path.Combine(kit.Layout.AgentStepDirectory("reader", "think"), "stream.jsonl"));
+
+        Assert.Null(runner.Account(Run(kit, agent: "reader", attempt: 2)));
+    }
+
+    /// <summary>
+    /// A continuation record says how each step before ended, as its own record states it, lists the paths this
+    /// agent's folds wrote into the main tree, and holds the red legs of its newest red build or test with where the
+    /// copied ledger and its logs are.
+    /// </summary>
+    [Fact]
+    public async Task AContinuationRecord_SaysHowEachStepEnded_AndHoldsTheChangedPathsAndTheRedLegs()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var store = kit.Harness.OrchestrationStore;
+
+        var plan = kit.Layout.AgentStepDirectory("reader", "plan");
+        OrchestrationKit.Write(kit.Main, Path.Combine(plan, "notes.md"), "Planned three items.");
+        store.WriteStepRecord(
+            Path.Combine(plan, DssHarness.Core.Orchestration.OrchestratorLayout.StepRecordFileName),
+            new FlowStepRecord("plan", "plan", false, "Stopped", 1, 1, [], [], Type: "reason", Agent: "reader"));
+
+        _ = store.UpdateFolds(kit.Layout, ledger => ledger with
+        {
+            Folds =
+            [
+                new FlowFoldEntry("f1", "plan", 1, "fold", "reader", "applied", DateTimeOffset.UtcNow, [new FlowFoldPath("src/one.cs", "written", null, new string('a', 64), Changed: true)], [], SettledAt: DateTimeOffset.UtcNow),
+            ],
+        });
+
+        store.WriteFlow(kit.Layout, new FlowFile(
+            1,
+            "o1",
+            "flow",
+            "digest",
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            nameof(FlowRunStatus.Running),
+            new FlowBudgetRecord(0, 0, 0),
+            0,
+            [new FlowStepRecord("verify", "verify", false, "Failed", 1, 1, [], [], Type: "test", Agent: "reader", FinishedAt: DateTimeOffset.UtcNow, Output: JsonNode.Parse("""{"passed": false, "red": [{"leg": "unit", "verdict": "failed", "phase": "test", "detail": "2 tests failed", "tail": []}]}"""))],
+            [],
+            DateTimeOffset.UtcNow));
+
+        var gone = await Runner(kit, agents).RunAsync(
+            Run(kit, agent: "reader", workedFrom: [new FlowWorkedFrom("plan", "reader")], handoff: "what was left"),
+            Token);
+
+        Assert.True(gone.Passed, gone.Error);
+        var continuation = agents.Asked.Single().Continuation!;
+        Assert.Contains("step 'plan' ended stopped by a pause.", continuation, StringComparison.Ordinal);
+        Assert.Contains("The files changed so far, by name:", continuation, StringComparison.Ordinal);
+        Assert.Contains("src/one.cs", continuation, StringComparison.Ordinal);
+        Assert.Contains("The last build or test in this worktree was red:", continuation, StringComparison.Ordinal);
+        Assert.Contains($"leg 'unit', phase 'test': 2 tests failed (the ledger and its logs: {kit.Layout.AgentStepDirectory("reader", "verify")})", continuation, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The paths an agent's worktree holds that no fold has taken are listed beside the ones its folds wrote, by the
+    /// fold's own rule of what an agent's change is: every path the worktree's status lists, less the floor.
+    /// </summary>
+    [Fact]
+    public async Task AContinuationRecord_ListsThePathsTheWorktreeHolds_ThatNoFoldHasTaken()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        var worktree = kit.Worktree("ag");
+        OrchestrationKit.Write(worktree, "two.cs", "two");
+
+        var gone = await Runner(kit, agents).RunAsync(
+            Run(kit, agent: "ag", workedFrom: [new FlowWorkedFrom("plan", "ag")], handoff: "what was left"),
+            Token);
+
+        Assert.True(gone.Passed, gone.Error);
+        Assert.Contains("two.cs", agents.Asked.Single().Continuation!, StringComparison.Ordinal);
+        Assert.Contains("The files changed so far, by name:", agents.Asked.Single().Continuation!, StringComparison.Ordinal);
     }
 
     /// <summary>The run's answer is mapped to the step's own ending: a completed one passes with its output, a failed one fails with its words, a stop is incomplete.</summary>

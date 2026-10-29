@@ -2029,6 +2029,32 @@ said so, and what the advice used counted in the run's spend; an advice owed at 
 crash ended, or deferred while the run was pausing - is sought at its start (`SeekOwedAdvice`). No advisor named, the
 question says so plainly; a kind only a person or an agent answers (`runBudget`, `ask`), a `pause` step's own shown
 questions, and a kind the advisor's `kinds` leaves out, are never advised.
+The handoff, the checks and the stream's account (slice 31c): where an agent gave no handoff of its own - the pause's
+turn gave none, a limit ended its run, or a resume found the attempt cut off by a crash or a stop - the engine writes
+one from the stored stream of the step (`FlowCoordinator.EngineHandoffOf` over `IFlowStreamAccount`, routed by
+`FlowStepRunners` to the reason step runner): its first line says why (`FlowHandoff.ByEngine`), and its body is
+`Agents\AgentStreamAccount.cs`'s account of the newest attempt's events alone - the files the attempt wrote (its
+write-tool calls, paths as their inputs name them), the last commands it ran and how each ended, and its last messages
+word for word, as many as the continuation record keeps - beside the steps before it that left notes, named by step and
+never by path; where the stream holds nothing the handoff stands on its first line alone. A reason step's `writes` given
+as an expression is read where the step starts (`ReadAtStart`'s `writes` key, `FlowList` replaced by the names it
+yielded, none refused for an empty list would read as no narrowing), and narrows the ground as a written-out list does.
+The continuation record says the truth of it now: each step of the chain as its own record states it ended
+(`ReasonStepRunner.EndedOf`), the files changed the paths this agent's folds wrote into the main tree (`FoldLedger`)
+and the paths its worktree holds that no fold has taken (`AgentFold.WeighedAsync`, the fold's own rule of what an
+agent's change is, opened to the record), and the red legs of the agent's newest red build or test with where the
+copied ledger and its logs are (`ReasonStepRunner.RedLegsOf` over the run's own index). The first real run through
+Claude Code straightened four seams no fake had met: the engine stores the agent it names for a read-only step as the
+one the step works in, so the runner makes it on that name (`ReasonStepRunner`'s making, `CreateAgentRunner.MakeAsync`
+answering a live one as already made); the run places the step's records under the agent's directory before the agent
+is made, so `AgentService.CreateAsync` makes an agent in a directory that holds only what a run keeps there; the
+program a launch starts is found ready where the step starts (`ClaudeCodeUpdateService.ReadyAsync`, wired into the
+reason step runner, its answer carrying the program and the version it answered; a step's mask holding every form of
+each web-search key it was given, built of `Runners.ActionValues`); and the agent's scratch is the run's own
+`work/<agent>/` (`OrchestratorLayout.WorkDirectory`), where the child is started and the continuation's copies and
+skills are put. The run itself - a real Claude Code launch over the person's login - ended in the designed safe pause
+of the cause `limits` over the account's own seven-day allowance, its handoff written from the stream, records under
+`.temp\` (never in the suite).
 Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`

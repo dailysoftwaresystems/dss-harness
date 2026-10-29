@@ -90,7 +90,8 @@ public sealed record FlowMadeAgent(string Name, string? Model);
     /// the commit the run last pushed; a <c>commit</c> step's <c>folds</c>, the instances of the fold and delete-agent steps
     /// upstream of it that fold; a <c>pull-request</c> step's <c>body</c>, the text of the file it names, filled; a
     /// <c>reason</c> step's <c>prompt</c> and <c>resumePrompt</c>, the text of each file it names, filled with every name
-    /// but a skill's. Empty for every other step.
+    /// but a skill's, and its <c>writes</c>, the names its expression yielded, narrowed as a written-out list narrows
+    /// before its runner is asked. Empty for every other step.
     /// </param>
 /// <param name="Made">The agent a <c>create-agent</c> step makes, as the engine named it; null for every other step.</param>
     /// <param name="WorksIn">

@@ -372,7 +372,7 @@ public sealed class FlowResumeTests
             Assert.Equal(2, coordinator.Instances["think"].Attempt);
         }
 
-        Assert.Equal("Written by the engine: the engine's process ended.\nAttempt 1 was cut off.", next.Given[2]);
+        Assert.Equal("Written by the engine: the engine's process ended.", next.Given[2]);
     }
 
     /// <summary>
@@ -965,7 +965,7 @@ public sealed class FlowResumeTests
         }
 
         Assert.Equal(["after", "side", "think"], next.Started.Order(StringComparer.Ordinal));
-        Assert.Equal("Written by the engine: the run was stopped.\nAttempt 1 was cut off.", given);
+        Assert.Equal("Written by the engine: the run was stopped.", given);
     }
 
     /// <summary>
