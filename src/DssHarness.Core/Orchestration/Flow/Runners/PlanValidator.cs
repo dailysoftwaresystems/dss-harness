@@ -34,8 +34,10 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="run">The run's name, which names its agents' worktrees' directory.</param>
     /// <param name="definition">The workflow, whose leg steps say which copies a worktree keeps.</param>
+    /// <param name="mostItems">Whether the list is held to the bound of <see cref="MostItems"/>: a plan's list and a round's own are; what updates place in a round may come to hold more.</param>
+    /// <param name="noItems">Whether a list of no work item is a problem: one that carries only what updates placed is not.</param>
     /// <returns>Every problem of the plan, in the order of its items; none where it passes.</returns>
-    public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition)
+    public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition, bool mostItems = true, bool noItems = true)
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(context);
@@ -44,14 +46,14 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         if (items.Count == 0)
         {
-            return [NoItems];
+            return noItems ? [NoItems] : [];
         }
 
         var problems = new List<string>();
 
-        if (items.Count > MostItems)
+        if (mostItems && items.Count > MostItems)
         {
-            problems.Add($"the plan holds {items.Count.ToString(CultureInfo.InvariantCulture)} work items, and a plan holds at most {MostItems.ToString(CultureInfo.InvariantCulture)}, each one builder's cycle: merge the smallest, or leave some to a later run");
+            problems.Add(MostItemsProblem(items.Count));
         }
 
         var read = new List<Item>();
@@ -100,6 +102,144 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         return problems;
     }
+
+    /// <summary>What says a list of work items holds more than a plan may: <paramref name="count"/> is how many it holds.</summary>
+    public static string MostItemsProblem(int count)
+        => $"the plan holds {count.ToString(CultureInfo.InvariantCulture)} work items, and a plan holds at most {MostItems.ToString(CultureInfo.InvariantCulture)}, each one builder's cycle: merge the smallest, or leave some to a later run";
+
+    /// <summary>
+    /// Checks the pieces of a plan update, as the plan's scope concluded them, with the items the plan holds: each
+    /// piece of one of the four kinds and its texts; an <c>added</c> or a <c>changed</c> piece's item an item of the
+    /// list, by name and member for member; a <c>removed</c> piece's of a work item's shape; no two pieces naming one
+    /// work item; a <c>changed</c> or a <c>removed</c> piece naming a work item the plan had before the update; and the
+    /// items the update places checked with those of the round it joins, as one list - where the run has one; among
+    /// themselves where it does not.
+    /// </summary>
+    /// <param name="pieces">The pieces, as the plan's scope yielded them.</param>
+    /// <param name="items">The plan's items, as its <c>items</c> yielded them.</param>
+    /// <param name="round">The items of the round the pieces would join, every one it holds; null where the run has no round yet.</param>
+    /// <param name="known">The names of the work items the plan had before the update.</param>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="run">The run's name.</param>
+    /// <param name="definition">The workflow.</param>
+    /// <returns>Every problem of the pieces, in their order; none where they pass.</returns>
+    public IReadOnlyList<string> CheckPieces(
+        IReadOnlyList<JsonNode?> pieces,
+        IReadOnlyList<JsonNode?> items,
+        IReadOnlyList<JsonNode?>? round,
+        IReadOnlyList<string> known,
+        HarnessContext context,
+        string run,
+        WorkflowDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(pieces);
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(known);
+
+        var problems = new List<string>();
+
+        var held = new List<(string Kind, JsonObject Item)>();
+
+        foreach (var (node, at) in pieces.Select((node, at) => (node, at)))
+        {
+            var place = $"piece {(at + 1).ToString(CultureInfo.InvariantCulture)} of the plan's scope";
+
+            if (node is not JsonObject piece || piece["kind"] is not JsonValue kind || !kind.TryGetValue<string>(out var what))
+            {
+                problems.Add($"{place} is of the wrong shape: it is no object with a kind, and a piece is one of 'added', 'changed', 'removed' or 'told'");
+                continue;
+            }
+
+            string? Text(string member) => piece[member] is JsonValue text && text.TryGetValue<string>(out var written) ? written : null;
+
+            if (!FlowUpdatePieceKinds.All.Contains(what, StringComparer.Ordinal))
+            {
+                problems.Add($"{place} is of the kind '{what}', and a piece is one of 'added', 'changed', 'removed' or 'told'");
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(Text("changed")))
+            {
+                problems.Add($"{place} says not what the update changes for its work, and a piece always does");
+            }
+
+            if (what == FlowUpdatePieceKinds.Told)
+            {
+                if (string.IsNullOrWhiteSpace(Text("for")))
+                {
+                    problems.Add($"{place} is told, and names no work under way: a told piece tells work that is going on");
+                }
+                else if (piece["item"] is not null)
+                {
+                    problems.Add($"{place} is told and holds a work item: it names work under way instead");
+                }
+
+                continue;
+            }
+
+            if (piece["item"] is not JsonObject item)
+            {
+                problems.Add($"{place} is '{what}', and holds no work item: a piece that carries a work item out holds one");
+                continue;
+            }
+
+            var name = TextOf(item["name"]);
+
+            if (name is null)
+            {
+                problems.Add($"{place} holds a work item with no name, and a work item is known by its name");
+                continue;
+            }
+
+            if (what == FlowUpdatePieceKinds.Removed)
+            {
+                // The item under the name it had, written for the step that takes it back: of a work item's shape,
+                // so the step that takes back owns the paths it may write.
+                _ = ItemOf(item, 0, problems);
+            }
+            else if (!items.Any(other => other is JsonObject held && string.Equals(TextOf(held["name"]), name, StringComparison.Ordinal) && JsonNode.DeepEquals(held, item)))
+            {
+                problems.Add($"the piece for '{name}' is not an item of the plan's list, by name and member for member: an item the update adds or changes is an item of the updated plan");
+            }
+
+            held.Add((what, item));
+        }
+
+        foreach (var named in held.GroupBy(piece => TextOf(piece.Item["name"])!, StringComparer.Ordinal).Where(group => group.Count() > 1))
+        {
+            problems.Add($"two pieces of the plan's scope name the work item '{named.Key}', and a work item is named once");
+        }
+
+        foreach (var (what, item) in held.Where(piece => piece.Kind is FlowUpdatePieceKinds.Changed or FlowUpdatePieceKinds.Removed))
+        {
+            var name = TextOf(item["name"])!;
+
+            if (!known.Contains(name, StringComparer.Ordinal))
+            {
+                problems.Add($"the piece for '{name}' is '{what}', and no work item the plan had is named so: one an instance of the work-item group carries, or an item of the list this check checked on its visit before");
+            }
+        }
+
+        // The items the update places, checked with those of the round it joins as one list - its own less the work
+        // items a changed or a removed piece names, for their item replaces them - or, where the run has no round,
+        // among themselves.
+        var namedByPieces = held.Where(piece => piece.Kind is FlowUpdatePieceKinds.Changed or FlowUpdatePieceKinds.Removed)
+            .Select(piece => TextOf(piece.Item["name"])!)
+            .ToList();
+
+        var joined = (round ?? [])
+            .Where(other => other is not JsonObject held || !namedByPieces.Contains(TextOf(held["name"]) ?? string.Empty, StringComparer.Ordinal))
+            .Concat(held.Select(piece => (JsonNode?)piece.Item))
+            .ToList();
+
+        problems.AddRange(Check(joined, context, run, definition, mostItems: false, noItems: false));
+
+        return problems;
+    }
+
+    /// <summary>A member's text, where it is one that is not blank; null otherwise.</summary>
+    private static string? TextOf(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<string>(out var text) && !string.IsNullOrWhiteSpace(text) ? text : null;
 
     /// <summary>A work item read whole: its name, the paths it owns and must not touch, and its three lists.</summary>
     private sealed record Item(string Name, IReadOnlyList<(string Text, GlobPattern Pattern)> Owned, IReadOnlyList<(string Text, GlobPattern Pattern)> Forbidden, JsonObject Node);

@@ -586,9 +586,13 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.StartsWith("work item 'deep' would work in paths too long for this machine - ", problem, StringComparison.Ordinal);
     }
 
-    /// <summary>The plan check answers ok, the problems and the items, never a failure; given the pieces of an update it fails, saying it does not check them yet.</summary>
+    /// <summary>
+    /// The plan check answers ok, the problems and the items, never a failure; given the pieces of an update it checks
+    /// them with the items, each breach a problem of the plan in the output - and where it opens a round, its output
+    /// items is its own and what updates owe it, as one list.
+    /// </summary>
     [Fact]
-    public async Task ThePlanCheck_AnswersAnOutput_AndRefusesThePiecesOfAnUpdate()
+    public async Task ThePlanCheck_AnswersAnOutput_AndChecksThePiecesOfAnUpdate()
     {
         var (harness, repository) = await RepositoryAsync();
         var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
@@ -602,12 +606,21 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.Equal(2, checkedPlan.Output["problems"]!.AsArray().Count);
         Assert.Equal(items.ToNode()!.ToJsonString(), checkedPlan.Output["items"]!.ToJsonString());
 
-        var update = await runner.RunAsync(Run(step, repository.Path, new Dictionary<string, FlowValue> { ["items"] = items, ["scope"] = FlowValue.Of(new JsonArray(new JsonObject { ["kind"] = "added" })) }), Token);
-        Assert.False(update.Passed);
-        Assert.Equal(HarnessExit.ToolMissing, update.Exit);
+        var updated = new JsonArray(Item("one"), Item("two", "src/two/**"));
+        var pieces = FlowValue.Of(new JsonArray(Piece("added", Item("two", "src/two/**"))));
 
         var noUpdate = await runner.RunAsync(Run(step, repository.Path, new Dictionary<string, FlowValue> { ["items"] = items, ["scope"] = FlowValue.Missing }), Token);
         Assert.True(noUpdate.Passed, noUpdate.Error);
+
+        var anUpdate = await runner.RunAsync(Run(step, repository.Path, new Dictionary<string, FlowValue>
+        {
+            ["items"] = FlowValue.Of(updated),
+            ["scope"] = pieces,
+            ["known"] = FlowValue.Of(new JsonArray("one")),
+        }), Token);
+
+        Assert.True(anUpdate.Passed, anUpdate.Error);
+        Assert.True((bool)anUpdate.Output!["ok"]!, string.Join("; ", anUpdate.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())));
 
         var notPieces = await runner.RunAsync(Run(step, repository.Path, new Dictionary<string, FlowValue> { ["items"] = items, ["scope"] = FlowValue.Of("added") }), Token);
         Assert.Equal(HarnessExit.ConfigInvalid, notPieces.Exit);
@@ -616,6 +629,189 @@ public sealed class FlowStepRunnerTests : IDisposable
         var notAList = await runner.RunAsync(Run(step, repository.Path, new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of("one") }), Token);
         Assert.Equal(HarnessExit.ConfigInvalid, notAList.Exit);
         Assert.Equal("'check' checks the work items its items yields, and it yields no list", notAList.Error);
+    }
+
+    /// <summary>One piece of a plan update, as the plan's scope concluded it.</summary>
+    private static JsonObject Piece(string kind, JsonObject? item = null, string? forId = null, string changed = "what the update changes")
+        => new()
+        {
+            ["kind"] = kind,
+            ["item"] = item,
+            ["for"] = forId,
+            ["changed"] = changed,
+            ["keep"] = "what stays",
+            ["undo"] = "what is taken back",
+            ["instead"] = "what is done instead",
+        };
+
+    /// <summary>Each breach of the pieces, worded once: the wrong shape, the wrong kind, no change said, an item the plan does not hold, a piece that names what the plan never had, a piece named twice, a told piece that names nothing.</summary>
+    [Fact]
+    public async Task EachBreachOfThePieces_IsAProblem()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };
+        var items = new JsonArray(Item("one"));
+
+        async Task<IReadOnlyList<string>> ProblemsAsync(Dictionary<string, FlowValue> read)
+        {
+            var result = await runner.RunAsync(Run(step, repository.Path, read), Token);
+            Assert.True(result.Passed, result.Error);
+            return [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+        }
+
+        Assert.Equal(
+            [
+                "piece 1 of the plan's scope is of the wrong shape: it is no object with a kind, and a piece is one of 'added', 'changed', 'removed' or 'told'",
+                "piece 2 of the plan's scope is of the kind 'redone', and a piece is one of 'added', 'changed', 'removed' or 'told'",
+                "piece 3 of the plan's scope says not what the update changes for its work, and a piece always does",
+                "the piece for 'two' is not an item of the plan's list, by name and member for member: an item the update adds or changes is an item of the updated plan",
+                "piece 4 of the plan's scope is told, and names no work under way: a told piece tells work that is going on",
+            ],
+            await ProblemsAsync(new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(items),
+                ["scope"] = FlowValue.Of(new JsonArray("added", new JsonObject { ["kind"] = "redone" }, new JsonObject { ["kind"] = "added", ["changed"] = " ", ["item"] = Item("two", "src/two/**") }, new JsonObject { ["kind"] = "told", ["changed"] = "it" })),
+                ["known"] = FlowValue.Of(new JsonArray()),
+            }));
+
+        Assert.Equal(
+            [
+                "piece 1 of the plan's scope holds a work item with no name, and a work item is known by its name",
+                "the piece for 'two' is not an item of the plan's list, by name and member for member: an item the update adds or changes is an item of the updated plan",
+            ],
+            await ProblemsAsync(new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(items),
+                ["scope"] = FlowValue.Of(new JsonArray(new JsonObject { ["kind"] = "changed", ["changed"] = "it", ["item"] = new JsonObject { ["title"] = "no name" } }, Piece("added", Item("two", "src/two/**")))),
+                ["known"] = FlowValue.Of(new JsonArray()),
+            }));
+
+        Assert.Equal(
+            [
+                "two pieces of the plan's scope name the work item 'two', and a work item is named once",
+                "the piece for 'two' is 'removed', and no work item the plan had is named so: one an instance of the work-item group carries, or an item of the list this check checked on its visit before",
+                "the piece for 'one' is 'removed', and no work item the plan had is named so: one an instance of the work-item group carries, or an item of the list this check checked on its visit before",
+                "2 work items are named 'two', and a work item is known by its name: name each once",
+                "work items 'two' and 'two' both own what 'src/two/**' and 'src/two/**' match: no file is written by two items, so give it to one",
+            ],
+            await ProblemsAsync(new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("one"), Item("two", "src/two/**"))),
+                ["scope"] = FlowValue.Of(new JsonArray(Piece("added", Item("two", "src/two/**")), Piece("removed", Item("two", "src/two/**")), Piece("removed", Item("one")))),
+                ["known"] = FlowValue.Of(new JsonArray("other")),
+            }));
+    }
+
+    /// <summary>
+    /// The items an update places are checked with those of the round it joins, as one list: an item that owns a file
+    /// an item of the round owns, built or not, is a problem of the updated plan - and where the run has no round yet,
+    /// the pieces are checked among themselves.
+    /// </summary>
+    [Fact]
+    public async Task AnItemAnUpdatePlaces_IsCheckedWithTheItemsOfTheRoundItJoins()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };
+
+        async Task<IReadOnlyList<string>> ProblemsAsync(Dictionary<string, FlowValue> read)
+        {
+            var result = await runner.RunAsync(Run(step, repository.Path, read), Token);
+            Assert.True(result.Passed, result.Error);
+            return [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+        }
+
+        var updated = new JsonArray(Item("one"), Item("two", "src/two/**"));
+
+        Assert.Empty(await ProblemsAsync(new Dictionary<string, FlowValue>
+        {
+            ["items"] = FlowValue.Of(updated),
+            ["scope"] = FlowValue.Of(new JsonArray(Piece("added", Item("two", "src/two/**")))),
+            ["round"] = FlowValue.Of(new JsonArray(Item("one"))),
+            ["known"] = FlowValue.Of(new JsonArray("one")),
+        }));
+
+        // An item that owns a file an item of the round owns, built or not, is a problem of the updated plan.
+        Assert.Equal(
+            ["work items 'one' and 'two' both own what 'src/one/**' and 'src/one/**' match: no file is written by two items, so give it to one"],
+            await ProblemsAsync(new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("two", "src/one/**"))),
+                ["scope"] = FlowValue.Of(new JsonArray(Piece("added", Item("two", "src/one/**")))),
+                ["round"] = FlowValue.Of(new JsonArray(Item("one"))),
+                ["known"] = FlowValue.Of(new JsonArray("one")),
+            }));
+
+        // The work item a changed or a removed piece names is taken out of the round's list: its item replaces it.
+        Assert.Empty(await ProblemsAsync(new Dictionary<string, FlowValue>
+        {
+            ["items"] = FlowValue.Of(new JsonArray(Item("one", "src/one/**"))),
+            ["scope"] = FlowValue.Of(new JsonArray(Piece("changed", Item("one", "src/one/**")))),
+            ["round"] = FlowValue.Of(new JsonArray(Item("one"))),
+            ["known"] = FlowValue.Of(new JsonArray("one")),
+        }));
+
+        // Where the run has no round yet, the pieces are checked among themselves.
+        Assert.Equal(
+            [
+                "two pieces of the plan's scope name the work item 'one', and a work item is named once",
+                "2 work items are named 'one', and a work item is known by its name: name each once",
+                "work items 'one' and 'one' both own what 'src/one/**' and 'src/one/**' match: no file is written by two items, so give it to one",
+            ],
+            await ProblemsAsync(new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("one", "src/one/**"), Item("two", "src/two/**"))),
+                ["scope"] = FlowValue.Of(new JsonArray(Piece("added", Item("one", "src/one/**")), Piece("added", Item("one", "src/one/**")))),
+                ["known"] = FlowValue.Of(new JsonArray("one")),
+            }));
+    }
+
+    /// <summary>
+    /// The check that opens a round checks one list - its own items and every work item plan updates owe it - and its
+    /// output items is that list, so the group expands from what was checked; the bound of 8 is the round's own list's
+    /// alone, and a round may come to hold more by what updates place in it.
+    /// </summary>
+    [Fact]
+    public async Task TheCheckThatOpensARound_ChecksItsOwnItemsAndTheOwedOnesAsOneList()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "item-check", Type = "validate-plan", Items = "plan.items" };
+        var own = new JsonArray([.. Enumerable.Range(1, 8).Select(at => (JsonNode?)Item($"item-{at}", $"src/{at}/**"))]);
+
+        var opened = await runner.RunAsync(Run(step, repository.Path, new Dictionary<string, FlowValue>
+        {
+            ["items"] = FlowValue.Of(own),
+            ["owed"] = FlowValue.Of(new JsonArray(Item("owed", "src/owed/**"))),
+        }), Token);
+
+        Assert.True(opened.Passed, opened.Error);
+        Assert.True((bool)opened.Output!["ok"]!, string.Join("; ", opened.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())));
+        Assert.Equal(9, opened.Output["items"]!.AsArray().Count);
+        Assert.Equal("owed", opened.Output["items"]!.AsArray()[8]!["name"]!.GetValue<string>());
+
+        var colliding = await runner.RunAsync(Run(step, repository.Path, new Dictionary<string, FlowValue>
+        {
+            ["items"] = FlowValue.Of(new JsonArray(Item("one"))),
+            ["owed"] = FlowValue.Of(new JsonArray(Item("owed", "src/one/**"))),
+        }), Token);
+
+        Assert.True(colliding.Passed);
+        Assert.False((bool)colliding.Output!["ok"]!);
+        Assert.Equal(
+            ["work items 'one' and 'owed' both own what 'src/one/**' and 'src/one/**' match: no file is written by two items, so give it to one"],
+            [.. colliding.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+
+        var tooMany = await runner.RunAsync(Run(step, repository.Path, new Dictionary<string, FlowValue>
+        {
+            ["items"] = FlowValue.Of(new JsonArray([.. own.Select(item => item?.DeepClone()), Item("ninth", "src/9/**")])),
+            ["owed"] = FlowValue.Of(new JsonArray()),
+        }), Token);
+
+        Assert.Equal(
+            [PlanValidator.MostItemsProblem(9)],
+            [.. tooMany.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
     }
 
     private static readonly WorkflowStep CreateStep = new() { Name = "make", Type = "create-agent", Agent = "worker.md" };

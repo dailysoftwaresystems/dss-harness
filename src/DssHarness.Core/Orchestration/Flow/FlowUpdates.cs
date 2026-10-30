@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -24,6 +25,87 @@ public static class FlowUpdateIds
 
     /// <summary>The id the <paramref name="n"/>-th update of a run takes.</summary>
     public static string Of(int n) => OrchestrationRules.Numbered('u', n);
+}
+
+/// <summary>The kinds a piece of a plan update is: what the update does to one work item.</summary>
+public static class FlowUpdatePieceKinds
+{
+    /// <summary>Work the plan did not have.</summary>
+    public const string Added = "added";
+
+    /// <summary>Work the plan had, that is now to be done differently.</summary>
+    public const string Changed = "changed";
+
+    /// <summary>Work the plan had, that is withdrawn.</summary>
+    public const string Removed = "removed";
+
+    /// <summary>Work under way whose scope the update leaves as it is, and that has to know of the change.</summary>
+    public const string Told = "told";
+
+    /// <summary>Every kind a piece is, in the order the report lists them.</summary>
+    public static readonly IReadOnlyList<string> All = [Added, Changed, Removed, Told];
+
+    /// <summary>The kinds that carry a work item out: everything but <see cref="Told"/>.</summary>
+    public static readonly IReadOnlyList<string> Carried = [Added, Changed, Removed];
+}
+
+/// <summary>
+/// One piece of a plan update, as the planning step concluded it and <c>updates.json</c> holds it: what the update
+/// does to one work item - adds it, changes it, withdraws it, or tells the work under way - with the planning agent's
+/// texts for whoever carries it out, and, once the piece is placed, where it went and what carries it.
+/// </summary>
+/// <param name="Kind">What the piece is: one of <see cref="FlowUpdatePieceKinds"/>'s names.</param>
+/// <param name="Item">
+/// The work item, as it now is for <c>added</c> and <c>changed</c>, where it is an item of the updated plan; for
+/// <c>removed</c>, the item under the name it had, written for the step that takes it back; null for <c>told</c>.
+/// </param>
+/// <param name="For">
+/// For <c>told</c> alone: the id of the work under way that is to be told, as the planning step's prompt listed it;
+/// null for every other kind.
+/// </param>
+/// <param name="Changed">What the update changes for this work; never empty.</param>
+/// <param name="Keep">What of the work done stays, where the piece is one that runs.</param>
+/// <param name="Undo">What is taken back, where the piece is one that runs.</param>
+/// <param name="Instead">What is done in its place, where the piece is one that runs.</param>
+/// <param name="Placed">
+/// Where the piece was placed: the instance of the work-item group that carries it out - a new one made for it, or
+/// the one it was given to in the place of its own, or the one it ends to be visited again - null until it is placed,
+/// and for a piece owed to a round that has not opened.
+/// </param>
+/// <param name="OwedTo">
+/// Where a piece is owed that no instance carries yet: the round it joins when that round opens; null where one does.
+/// </param>
+/// <param name="CarriedBy">The visit that carries the piece out - the step that runs in the work-item group's place; null until it is drawn.</param>
+/// <param name="Ended">How the piece's work ended, where it has; null until then, and for a piece that needs no step.</param>
+public sealed record FlowUpdatePiece(
+    string Kind,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] JsonNode? Item = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? For = null,
+    string? Changed = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Keep = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Undo = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Instead = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Placed = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? OwedTo = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? CarriedBy = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Ended = null)
+{
+    /// <summary>The name of the work item the piece is, where it is one; null where it is not.</summary>
+    public string? ItemName()
+        => Kind == FlowUpdatePieceKinds.Told ? null : (Item as JsonObject)?["name"]?.GetValue<string>();
+
+    /// <summary>What is wrong with this piece as the engine takes it; null when nothing is.</summary>
+    public string? Problem()
+        => !FlowUpdatePieceKinds.All.Contains(Kind, StringComparer.Ordinal) ? $"'{Kind}' is not what a piece of a plan update is"
+            : string.IsNullOrWhiteSpace(Changed) ? "a piece says not what the update changes for its work"
+            : Kind == FlowUpdatePieceKinds.Told && string.IsNullOrWhiteSpace(For) ? "a piece that tells names no work under way"
+            : Kind != FlowUpdatePieceKinds.Told && Item is not JsonObject ? "a piece that carries a work item out holds one, and it holds none"
+            : Kind != FlowUpdatePieceKinds.Told && string.IsNullOrWhiteSpace(ItemName()) ? "a piece's work item is known by its name, and it has none"
+            : Kind == FlowUpdatePieceKinds.Told && Item is not null ? "a piece that tells holds no work item: it names work under way instead"
+            : Placed is not null && !FlowInstanceId.IsWellFormed(Placed) ? $"'{Placed}' is not an instance's id"
+            : OwedTo is not null && string.IsNullOrWhiteSpace(OwedTo) ? "a piece owed to a round says not which"
+            : CarriedBy is not null && !FlowInstanceId.IsWellFormed(CarriedBy) ? $"'{CarriedBy}' is not an instance's id"
+            : null;
 }
 
 /// <summary>
@@ -59,6 +141,10 @@ public static class FlowUpdateIds
 /// one was, and where the block names none.
 /// </param>
 /// <param name="Text">The text given with a changed answer, where its question takes one; null where none was.</param>
+/// <param name="Pieces">
+/// Each piece of the update as it was placed: what it is, its work item, where it went and what carries it - written
+/// as the updated plan stood, before the update was done; empty where the planning concluded no piece.
+/// </param>
 public sealed record FlowUpdateEntry(
     string Id,
     string Cause,
@@ -73,8 +159,12 @@ public sealed record FlowUpdateEntry(
     string? Why = null,
     string? Step = null,
     string? Then = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Text = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Text = null,
+    IReadOnlyList<FlowUpdatePiece>? Pieces = null)
 {
+    /// <summary>Each piece of the update, as it was placed; empty where the planning concluded no piece.</summary>
+    public IReadOnlyList<FlowUpdatePiece> ThePieces => Pieces ?? [];
+
     /// <summary>What is wrong with this entry; null when nothing is.</summary>
     public string? Problem()
         => !FlowUpdateIds.IsId(Id) ? $"'{Id}' is not an update's id"
@@ -86,7 +176,13 @@ public sealed record FlowUpdateEntry(
             : State == FlowUpdateStates.Refused && string.IsNullOrWhiteSpace(Why) ? "it says not why it was refused"
             : Inbox is not null && string.IsNullOrWhiteSpace(Inbox) ? "it names no inbox entry"
             : Step is not null && !FlowInstanceId.IsWellFormed(Step) ? $"'{Step}' is not an instance's id"
+            : ThePieces.Any(piece => piece.Problem() is not null) ? $"its pieces hold one that is not a piece: {ThePieces.First(piece => piece.Problem() is not null).Problem()}"
+            : ThePieces.Where(piece => piece.ItemName() is not null).GroupBy(piece => piece.ItemName(), StringComparer.Ordinal).Any(group => group.Count() > 1) ? "one work item is named by two pieces of one update"
             : null;
+
+    /// <summary>The piece of this update that names the work item <paramref name="name"/>, where one does; null where none does.</summary>
+    public FlowUpdatePiece? PieceOf(string name)
+        => ThePieces.FirstOrDefault(piece => string.Equals(piece.ItemName(), name, StringComparison.Ordinal));
 }
 
 /// <summary>The states a plan update stands in.</summary>

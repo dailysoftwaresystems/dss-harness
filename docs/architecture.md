@@ -2095,6 +2095,29 @@ while another is under way is `queued` behind it and taken when that one is done
 (`FlowCoordinator.TakeNextQueued`), and a changed answer queued behind an update is applied when its turn comes. The
 whole of it is across a crash and a safe pause: the hold and the raised visit are read back from the run's records at
 the resume, which goes on with the update first.
+The pieces of an update are placed once its plan stands (slice 31d3): the pieces the `amend.scope` expression reads -
+each `{kind, item, for, changed, keep, undo, instead}`, of the kind `added`, `changed`, `removed` or `told` - are placed
+by `FlowCoordinator.PlaceThePieces` and kept in the update's entry (`FlowUpdatePiece`: the kind, the work item, where it
+was placed, the visit that carries it). An `added` piece makes one more work item of the work-item group (the `forEach`
+group `amend.whenAddScope` names a step of), at once where the round is in progress and owed to the check that opens the
+round where it has not begun - which checks its own items and the owed ones as one list (`PlanCheckRunner`), its output
+`items` that list, so nothing joins a round unchecked. A `changed` or a `removed` piece finds the newest instance of the
+group whose item has its name: where it waits it is given the piece's item in the place of its own, or - `removed` -
+withdrawn before it began; where it has begun it is brought to rest (nothing more started in it, what it owed dropped,
+each reason step in flight given the handoff turn of a safe pause and stopped, `FlowCoordinator.SettlePiecesEndingAsync`)
+and then visited again, in its place and with its agent - a new scope of the piece's kind in which the live agent a
+`create-agent` step made is taken and not made again; where it has ended, one more work item of the group, with new
+agents. Every instance of the group is of one kind, and the step its kind names runs in the place of the one
+`whenAddScope` names - under its name, with its dependencies and its `when` (`FlowCoordinator.DrawWorkItemPlace`) - the
+other two alternatives skipped in its instance, saying why; a read of the add step (`{add.latest}`) or a resume of it
+follows whichever ran (`FlowCoordinator.EndedDoneLastOf`, which `<step>.latest` reads for every step that goes on with
+another's work). The steps of the group read `{piece.kind}`, `{piece.changed}`, `{piece.keep}`, `{piece.undo}`,
+`{piece.instead}` and `{piece.before}` (`FlowCoordinator.PieceValues`, `BeforeOf` - the engine's account, from its own
+records, of the instance that carried the item before); in an instance no update made, the kind is `added` and the texts
+are empty. `PlanValidator.CheckPieces` checks the pieces with the items where a `validate-plan` step's `scope` names
+them - each of the four kinds and its texts, an `added` or `changed` item an item of the plan's list by name and member
+for member, no two pieces one work item, a `changed` or `removed` piece naming a work item the plan had - and the items
+an update places are checked with those of the round they join as one list, only the bound of eight not carried over.
 Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`
