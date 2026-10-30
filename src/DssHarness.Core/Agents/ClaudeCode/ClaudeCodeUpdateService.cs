@@ -20,14 +20,16 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// <param name="ExitCode">The code a run refused by it exits with; 0 where it is ready.</param>
 /// <param name="Message">The one line: what it is and where, or the refusal.</param>
 /// <param name="Details">The lines under it: what npm holds since a change that failed, npm's own last lines.</param>
-public sealed record ClaudeCodeAnswer(bool Ready, int ExitCode, string Message, IReadOnlyList<string> Details)
+/// <param name="Program">The program a run starts, where one is ready; null where none is.</param>
+/// <param name="Version">The version that program answered, where one is ready; null where it was not asked.</param>
+public sealed record ClaudeCodeAnswer(bool Ready, int ExitCode, string Message, IReadOnlyList<string> Details, string? Program = null, string? Version = null)
 {
     /// <summary>One Claude Code a run may start, said in the line a run says when it starts: the version its program answered.</summary>
     public static ClaudeCodeAnswer ReadyAt(SemanticVersion version, string program)
     {
         ArgumentNullException.ThrowIfNull(version);
 
-        return new(true, 0, $"claude {version}, installed with npm: '{program}'", []);
+        return new(true, 0, $"claude {version}, installed with npm: '{program}'", [], program, version.ToString());
     }
 }
 
@@ -379,7 +381,7 @@ public sealed class ClaudeCodeUpdateService(
         }
 
         return AtLeast(version, NeededVersion)
-            ? new ClaudeCodeAnswer(true, 0, $"claude {version}, named by the slot: '{program}'", [])
+            ? new ClaudeCodeAnswer(true, 0, $"claude {version}, named by the slot: '{program}'", [], program, version.ToString())
             : Refused(
                 HarnessExit.ToolMissing,
                 $"'{program}' is claude {version}, older than this tool needs ({Needed}), and a program a person named is never updated. "

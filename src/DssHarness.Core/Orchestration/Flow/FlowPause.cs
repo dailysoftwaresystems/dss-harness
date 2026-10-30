@@ -2,15 +2,16 @@ namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
 /// One ask for a safe pause: who asked (an <c>interrupt</c> typed at the terminal, the <c>command</c>
-/// <c>pause-orchestrator</c>, a <c>frontEnd</c>, or the engine itself for the <c>budget</c>), and whether the machine
-/// steps in progress are stopped too.
+/// <c>pause-orchestrator</c>, a <c>frontEnd</c>, the engine itself for the <c>budget</c>, or a reason step whose every
+/// account is at its limit or whose provider's service failed - <c>limits</c>), and whether the machine steps in
+/// progress are stopped too.
 /// </summary>
 /// <param name="Cause">Who asked for the pause.</param>
 /// <param name="All">Whether the machine steps in progress are stopped as well as left to finish.</param>
 public sealed record FlowPauseRequest(string Cause, bool All)
 {
     /// <summary>Every cause a pause is asked by, as the run's state names it.</summary>
-    public static readonly IReadOnlyList<string> Causes = ["interrupt", "command", "frontEnd", "budget"];
+    public static readonly IReadOnlyList<string> Causes = ["interrupt", "command", "frontEnd", "budget", "limits"];
 }
 
 /// <summary>

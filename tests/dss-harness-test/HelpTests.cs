@@ -156,13 +156,45 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The agent-clients topic says the gate: one lane per provider and key, the client's parallel bound with the
+    /// built-in's own beside it, the API clients' optional buckets, the 429 cool-down holding every waiter, and that
+    /// the step runner holds the lane - and the README says the same.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_SaysTheGateOfOneLanePerProviderAndKey()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains(
+            "The runs of one provider and one key go through one lane of the gate: at most "
+                + "agentClients.<client>.maxParallel of them under way at once (claude-code 3, claude-api 4, glm 2 "
+                + "where the entry says none; a client that signs in with a login is one lane by its client, and two keys of one "
+                + "provider two lanes, keyed by a hash of the key).",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a 429's cool-down holds every waiter of the lane, a later or longer one holding past a sooner one",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Left out, the provider's answers pace the client; the orchestrator's maxReasoningAgents bounds agents beside the gate, and both apply",
+            prose,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "The runs of one provider and one key go through one lane of the gate: at most "
+                + "`agentClients.<client>.maxParallel` of them under way at once (3 for claude-code, 4 for claude-api and 2 for glm where",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The config topic names every agent section of the file's top level, agentClients among them - its one key, and
     /// that a client holds no size, a model's sizes being its own - and the agent-clients topic the name rules.
     /// </summary>
     [Fact]
     public async Task ConfigTopic_NamesTheAgentClientsSection_AndTheAgentClientsTopicTheNameRules()
-    {
-        var config = Prose.Words(HelpText.Of("config").StandardOutput);
+    {        var config = Prose.Words(HelpText.Of("config").StandardOutput);
 
         Assert.Contains(
             "agentClients the clients the tool builds in (claude-code, claude-api, glm), each by its name: update, claude-code's alone, says "
@@ -170,10 +202,13 @@ public sealed partial class HelpTests
                 + "oauthToken, authToken, login where nothing is said), and token the variable a token is held under; configDir and "
                 + "executable, claude-code's alone, the variables that hold a specific login's Claude Code directory and the program it "
                 + "starts (CLAUDE_CONFIG_DIR, CLAUDE_EXECUTABLE where none is named); maxRetries, maxRetryWaitSeconds and requestExtras, "
-                + "the API clients' (claude-api, glm), their tries, longest wait and the fields merged into each request; cacheTtl and "
-                + "betas, claude-api's alone, how long its requests are cached and the betas sent beside the tool's own; "
-                + "preserveThinking, glm's alone, whether Z.AI keeps the model's reasoning across turns; a client holds no "
-                + "model, size or price - contextTokens and maxOutputTokens are a model's ('help agent-clients')",
+                + "the API clients' (claude-api, glm), their tries, longest wait and the fields merged into each request; "
+                + "requestsPerMinute, inputTokensPerMinute and outputTokensPerMinute, the API clients' too, the buckets that pace a "
+                + "lane's minute; cacheTtl and betas, claude-api's alone, how long its requests are cached and the betas sent beside "
+                + "the tool's own; preserveThinking, glm's alone, whether Z.AI keeps the model's reasoning across turns; maxParallel, "
+                + "every client's, the runs of one provider and key under way at once (claude-code 3, claude-api 4, glm 2 where "
+                + "nothing is said) - the gate of 'help agent-clients'; a client holds no model, size or price - contextTokens and "
+                + "maxOutputTokens are a model's ('help agent-clients')",
             config,
             StringComparison.Ordinal);
 
@@ -198,9 +233,11 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The agent-clients topic says what this build does with keys and what it leaves to the engine: claude-code reads
-    /// none, choosing one is the engine's and no command runs a step, and validate-workflow says the prices and the
-    /// missing keys of a definition's steps - and the workflows topic that a step's tier is one of tierConfig's.
+    /// The agent-clients topic says what this build does with keys and what the engine does with them: claude-code reads
+    /// none, choosing one is the engine's where it runs a run's steps - the first the slot holds, or the least spent
+    /// under balanceKeyUsage - what each key spent recorded by its name, and each request through the gate - and
+    /// validate-workflow says the prices and the missing keys of a definition's steps; the workflows topic that a
+    /// step's tier is one of tierConfig's.
     /// </summary>
     [Fact]
     public async Task AgentClientsTopic_SaysChoosingAKeyIsTheEngines_AndWhatValidateWorkflowSays_AndAStepsTierIsTierConfigs()
@@ -217,8 +254,16 @@ public sealed partial class HelpTests
                 + "to sign in from that directory where the slot holds it, else from the tool's own CLAUDE_CONFIG_DIR, else from Claude "
                 + "Code's own. A launch is given that credential and no "
                 + "other, whatever the tool's own environment holds; claude-api and glm sign each request with their provider's keys. "
-                + "Choosing a key is the engine's, when it runs a run's steps, and no command of this build runs a step: a step is to start on "
-                + "the first key the slot holds,",
+                + "Choosing a key is the engine's, where it runs a run's steps: a step starts on the first key of its model's provider the "
+                + "slot holds and no remembered limit covers, or - where balanceKeyUsage is on (off unless turned on) - on the one that has "
+                + "spent least in the last seven days, counted back from the moment it starts, keys that spent alike in the list's order, "
+                + "whatever tier, model, step, run or side-task spent it; the key is kept for the step, its conversation staying with one "
+                + "account, and a limit or a rejected key moves it to the next in the same order. What a key spent is what the engine "
+                + $"counts for each request served with it, at the configuration's prices - or, for a Claude Code launch, what the launch reports - recorded by the key's name (never its value) in {HarnessLayout.OrchestratorsDirectoryName}/key-spend.jsonl, "
+                + "one line for each entry of a step's order that ran, read for a key's week and its lines older than seven days dropped "
+                + "when it is next written; what the same key spends elsewhere - another repository, another machine, another tool - is not "
+                + "seen. Each request a step sends goes through the gate of its provider and key (above), beside the orchestrator's "
+                + "maxReasoningAgents.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -232,6 +277,168 @@ public sealed partial class HelpTests
         Assert.Contains(
             "reason.tier a name for a class of model: one of the configuration's tierConfig, its models in the order they are tried",
             Prose.Words(HelpText.Of("workflows").StandardOutput),
+            StringComparison.Ordinal);
+
+        // A step's order is entries of a model and one of its provider's keys, each model's keys before the next model,
+        // and a model named outright has none after its own keys.
+        Assert.Contains(
+            "The tiers a step runs on are tierConfig's: each tier its models in the order they are tried, the first serving "
+                + "a step on the tier and the rest its fallback - a step's order as entries of a model and one of its "
+                + "provider's keys, each model's keys before the next model, and a model named outright, on the step or in "
+                + "its agent definition, running on that model with none after it ('help agent-definitions')",
+            prose,
+            StringComparison.Ordinal);
+
+        // A step that goes on with earlier work is given the continuation record, its bounds said, and the first user
+        // message's parts - the record only of a new conversation - with the message kept as user.md.
+        Assert.Contains(
+            "A step that goes on with earlier work is given the engine's record of it: the continuation record, text put "
+                + "together from the step directories of the agent - what it is, the steps so far with each one's notes and "
+                + "output, the files changed, the last red build or test, the handoff, and the last iterations of the newest "
+                + "attempt word for word from its stored stream - nothing in it written or shortened by a model, and "
+                + "whatever is cut named with a copy in the agent's work/continuation/. Its bounds are "
+                + "agentContext.continuation's - recordChars (60000), stepChars (16000), paths (300), lastIterations (3) and "
+                + "iterationChars (120000), each at its default where the key says none, each a positive number",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The record is sent only where the conversation is a new one - every launch on claude-code, and on the API "
+                + "clients a conversation that cannot be gone on with - for a handed conversation goes on with one more "
+                + $"user message alone; the message as sent is kept in the step's {OrchestratorLayout.StepUserFileName}, masked.",
+            prose,
+            StringComparison.Ordinal);
+
+        // The compaction: the engine's own reduction, its bounds said, a new conversation on every client.
+        Assert.Contains(
+            "A conversation that has filled its model's context is compacted by the engine, and no model: a reduction "
+                + "worked out from the stored stream, the same input always the same record - the run context and the task "
+                + "whole as they were sent, the last iterations word for word by the continuation record's rule, every "
+                + "earlier message of the agent its text whole with its thinking left out, every earlier call one line (the "
+                + "tool, its input cut at callInputChars, how it ended, the path where its input names one), every earlier "
+                + "result left out, and every message the engine sent since the first whole. The reduced part is at most "
+                + "agentContext.compaction.reducedChars (200000); a call's input is cut at callInputChars (400)",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "It begins a new conversation, on every client - the record is the first message of one and the old is kept "
+                + "whole, never edited or sent again; a claude-code child is started with DISABLE_COMPACT=1, so it never "
+                + "compacts by itself and a full context ends the step",
+            prose,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The agent-definitions topic says what an agent file is, the keys it takes, that a definition is the level below
+    /// a step's, that a fallback is no key of one, and that the shipped files name no model, tier or effort.
+    /// </summary>
+    [Fact]
+    public async Task TheAgentDefinitionsTopic_SaysWhatAnAgentFileIsAndTakes()
+    {
+        var topic = HelpText.Of("agent-definitions").StandardOutput;
+
+        Assert.Equal(topic, HelpText.Of("definitions").StandardOutput);
+        Assert.Contains(HelpTopics.Described, described => described.Name == "agent-definitions");
+
+        var prose = Prose.Words(topic);
+
+        Assert.Contains(
+            "A definition is the level below a step's: where a step names a tier, a model, an effort or a client, its own "
+                + "wins; where it names none, the definition's stands, each on its own.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A fallback is no key of a definition or of a step: it is the order of the tier's models in tierConfig, each "
+                + "model's keys before the next model.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The sample agent files name no model, tier or effort, and no shipped one does: they are a step's "
+                + "configuration, and the shipped workflow names them on its steps, where a person reads and changes them.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("a step's prompt {skill.<name>}", prose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The skills topic says the placeholder, the three places and their order beside Claude Code's own, what is put
+    /// into a prompt, the folder handed to the step, the keys of the frontmatter and the body's reads and bounds, and
+    /// what is not looked for - and the README and the layout topic say the same of it.
+    /// </summary>
+    [Fact]
+    public async Task TheSkillsTopic_SaysThePlaceholderThePlacesAndTheFolderHandedToTheStep()
+    {
+        var topic = HelpText.Of("skills").StandardOutput;
+
+        Assert.Equal(topic, HelpText.Of("skill").StandardOutput);
+        Assert.Contains(HelpTopics.Described, described => described.Name == "skills");
+
+        var prose = Prose.Words(topic);
+
+        Assert.Contains(
+            "A reason step's prompt says {skill.<name>} where a skill's text goes, and the engine puts the text there "
+                + "before the prompt is sent, on every client alike",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The repository's come before the user's, so a run reads the same skill on every machine that has the "
+                + "repository; Claude Code's own order is the other way round.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A SKILL.md that is there and cannot be used is refused: the next place is not tried in its stead, for a "
+                + "broken skill of the repository must not turn into the user's without a word.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What is put into the prompt is the body, not the frontmatter, after its substitutions:",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The folder is copied whole into the agent's work directory, work/<agent>/skills/<name>/, in place of any "
+                + $"earlier copy; that path is the directory the text states and what ${{CLAUDE_SKILL_DIR}} becomes. The work directory is a root every agent already reads and runs commands in, on every client. A folder that holds a link, more than {DssHarness.Core.Orchestration.Flow.AgentSkills.FileLimit} files or more than 16 MB is refused.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "It grants nothing: what an agent may do is its definition's and the policy's",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "refused: each changes what runs the skill in Claude Code, and text put into a prompt runs in the step's own "
+                + "agent, on its model, under its policy. Any other key is refused too, naming the keys this tool knows.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A skill that is missing or unusable fails loud, twice: when the definition is checked - validate-workflow, "
+                + "and the start of run-orchestrator and resume-orchestrator (exit 12, nothing started, every problem of "
+                + "every prompt together) - and when the step starts",
+            prose,
+            StringComparison.Ordinal);
+
+        // The README says the same, and the layout topic names the tool's own place.
+        var readme = Prose.Document("README.md");
+
+        Assert.Contains(
+            "A reason step's prompt says `{skill.<name>}` where a skill's text goes, and the engine puts the text there "
+                + "before the prompt is sent, on every client alike (`help skills`)",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The repository's come before the user's - Claude Code's own order is the other way round - and a `SKILL.md` "
+                + "that is there and cannot be used is refused, the next place not tried in its stead.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A skill that is missing or unusable fails loud, twice: when the definition is checked (`validate-workflow`, "
+                + "and the start of `run-orchestrator` and `resume-orchestrator`; exit 12, nothing started, every problem "
+                + "of every prompt together, each refusal naming every place looked for it), and when the step starts",
+            readme,
+            StringComparison.Ordinal);
+
+        var layout = Prose.Words(HelpText.Of("layout").StandardOutput);
+
+        Assert.Contains(
+            "tracked; the tool's own place a step's prompt names a skill from; init creates nothing there",
+            layout,
             StringComparison.Ordinal);
     }
 
@@ -291,7 +498,7 @@ public sealed partial class HelpTests
         Assert.Contains("writes outside an agent's writable roots, every read and write of a", prose, StringComparison.Ordinal);
         Assert.Contains("this tool's own verbs and run-side-task, run by any program or from a response file, whatever any switch says: an agent", prose, StringComparison.Ordinal);
         Assert.Contains(
-            $"nor leave its step's limits - nor do the gh commands that hand its work to another agent or install what the next launch loads ({string.Join(", ", AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too.",
+            $"nor leave its step's limits - nor do the gh commands that hand its work to another agent or install what the next launch loads ({string.Join(", ", AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too - nor does any command print a credential, whatever the worktree rules say ({string.Join(", ", AgentPolicy.CredentialPrintingCommands)}): a credential leaves its slot only by the key store that holds it, never through an agent's words.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("every read and write of a credential slot or a Claude Code directory of the run's and every search over one", prose, StringComparison.Ordinal);
@@ -506,8 +713,10 @@ public sealed partial class HelpTests
         Assert.Contains("a launch that does not answer the host's initialize request within 30 s, that works before its init says what it runs as,", prose, StringComparison.Ordinal);
         Assert.Contains("a call it ran that the engine was never asked about, or refused, fails the step by the tool's name", prose, StringComparison.Ordinal);
         Assert.Contains("within the step's stall bound - counted from when the launch answered its initialize request, and from the turn's end for one written while a turn ran - ends it Stalled", prose, StringComparison.Ordinal);
-        Assert.Contains("A request the model declines ends the step Refused", prose, StringComparison.Ordinal);
-        Assert.Contains("ends it RateLimited, with when the limit lifts where it says", prose, StringComparison.Ordinal);
+        Assert.Contains("A request the model declines and an account at its limit - a rate limit event", prose, StringComparison.Ordinal);
+        Assert.Contains("that says rejected, or a turn Claude Code ends on rate_limit or billing_error after its own tries - each move", prose, StringComparison.Ordinal);
+        Assert.Contains("the step to its next entry, a new launch on another model, ending it Refused and", prose, StringComparison.Ordinal);
+        Assert.Contains("RateLimited where none is left, with what the declined request was of where the", prose, StringComparison.Ordinal);
         Assert.Contains("CLAUDE_EXECUTABLE, or the name agentClients.claude-code.executable gives", prose, StringComparison.Ordinal);
     }
 
@@ -545,6 +754,17 @@ public sealed partial class HelpTests
         Assert.Contains("read whole before it is matched, `Agents\\Policy\\CommandAnalysis`", architecture, StringComparison.Ordinal);
         Assert.Contains("no agent starts while the tool itself runs elevated (`IHostPlatform.IsPrivilegedProcess`", architecture, StringComparison.Ordinal);
         Assert.Contains("Where the policy cannot decide a call it denies it, never allows", architecture, StringComparison.Ordinal);
+
+        // The credential-printing refusal and the quote-aware reading of expansions, in every document that says them.
+        Assert.Contains(
+            "and so is any command that prints a credential (`gh auth token`, `git credential fill`, `git credential-manager get`,",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains("(`AgentPolicy.CredentialPrintingCommands`, pinned by a test and printed by `help agent-clients`", architecture, StringComparison.Ordinal);
+        Assert.Contains(
+            "an expansion is read only where the shell would make it, for the reader keeps, per word, which of its parts were quoted",
+            architecture,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -638,8 +858,15 @@ public sealed partial class HelpTests
         Assert.Contains(
             $"A turn cut off at its length that called no tool, its request holding it to no schema, is stored and nudged on, {nudges} times at most; one cut off while it called a tool - its calls never run - before it wrote anything, or while its request held it to a schema, which the answer to a nudge would be held to whole, is thrown away and asked again with twice the room, up to the most; past either the step is Truncated. "
                 + $"A turn the provider paused is sent again with nothing added, {pauses} in a row failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request is asked again up to {tries} times after a wait that doubles from {first} s to {longest} s, "
-                + $"or the one the provider names; a rate limit past them, or naming a wait past {wait} s, is the account at its limit (RateLimited) - the model's on the key it was sent with, or the key's whole where its balance is spent, each named - a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
-                + "a model the provider does not serve the key never starts the step before its first answer and fails it after; a key the provider refuses is passed over for the run's next, the same request sent again with it. "
+                + "or the one the provider names; a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
+                + "a model the provider does not serve the key never starts the step before its first answer and fails it after. The engine's fallback works inside the one conversation: a key "
+                + $"the provider refuses - said, and passed over for the rest of the run - an account at its limit (a rate limit past those tries, or naming a wait past {wait} s: "
+                + "the model's on the key it was sent with, or the key's whole where its balance is spent, each named) and a "
+                + "request the model declined each move the run to its next entry of the same provider and client, the same "
+                + "request sent again with the model or the key changed and nothing else, the declined turn thrown away with any "
+                + "part of an answer it had written; at a limit the same model's next key is tried first and every entry the "
+                + "limit covers is passed over until it lifts, a declined request passes over the model's other keys, and one the "
+                + "provider marks about what the prompt asks (reasoning_extraction) moves no step. "
                 + $"A handoff asked abandons the request under way and cuts the calls running, each answered '{interrupted}', then asks the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn;",
             prose,
             StringComparison.Ordinal);
@@ -661,8 +888,15 @@ public sealed partial class HelpTests
         Assert.Contains(
             $"A turn cut off at its length that called no tool, its request holding it to no schema, is stored and nudged on, {nudges} times at most; one cut off while it called a tool - its calls never run - before it wrote anything, or while its request held it to a schema, which the answer to a nudge would be held to whole, is thrown away and asked again with twice the room, up to the most; past either the step is `Truncated`. "
                 + $"A turn the provider paused is sent again with nothing added, {pauses} in a row failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request is asked again up to {tries} times after a wait that doubles from {first} s to {longest} s, "
-                + $"or the one the provider names; a rate limit past them, or naming a wait past {wait} s, is the account at its limit (`RateLimited`) - the model's on the key it was sent with, or the key's whole where its balance is spent, each named - a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
-                + "a model the provider does not serve the key never starts the step before its first answer and fails it after; a key the provider refuses is passed over for the run's next, the same request sent again with it. "
+                + $"or the one the provider names; a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
+                + "a model the provider does not serve the key never starts the step before its first answer and fails it after. The engine's fallback works inside the one conversation: a key "
+                + $"the provider refuses - said, and passed over for the rest of the run - an account at its limit (a rate limit past those tries, or naming a wait past {wait} s: "
+                + "the model's on the key it was sent with, or the key's whole where its balance is spent, each named) and a "
+                + "request the model declined each move the run to its next entry of the same provider and client, the same "
+                + "request sent again with the model or the key changed and nothing else, the declined turn thrown away with any "
+                + "part of an answer it had written; at a limit the same model's next key is tried first and every entry the "
+                + "limit covers is passed over until it lifts, a declined request passes over the model's other keys, and one the "
+                + "provider marks about what the prompt asks (`reasoning_extraction`) moves no step. "
                 + $"A handoff asked abandons the request under way and cuts the calls running, each answered `{interrupted}`, then asks the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn;",
             readme,
             StringComparison.Ordinal);
@@ -726,11 +960,11 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains($"old tool uses cleared by the server as the context fills ({Clear}, under the {Context} beta), each clearing said in a notice;", prose, StringComparison.Ordinal);
         Assert.Contains("the system prompt and the conversation cached for agentClients.claude-api.cacheTtl (5m or 1h, 5m where nothing is said), so a budget needs the model's price of that cache's writes too: priceCacheWrite, or priceCacheWrite1h for an hour.", prose, StringComparison.Ordinal);
-        Assert.Contains($"A step with a fallback that can go on here sends the {Credit} beta, and a request the model declines ends the step Refused, with its category and the credit the API gave for it on the result; no request carries fallbacks or a server-side-fallback-* beta,", prose, StringComparison.Ordinal);
+        Assert.Contains($"A step with a fallback that can go on here sends the {Credit} beta, and a request the model declines moves the step to its next model of the same provider and client - the same request sent again with the model changed and the credit the API gave sent back as its fallback_credit_token, a failure naming it answered by the same request without it - Refused with its category only where none is left; no request carries fallbacks or a server-side-fallback-* beta,", prose, StringComparison.Ordinal);
         Assert.Contains("Two keys are claude-api's alone: betas, sent beside the tool's own, each one word and never the API's fallback's, and cacheTtl; three are both API clients':", prose, StringComparison.Ordinal);
         Assert.Contains($"refused where it sets what the tool sends itself or, here, fallbacks or a sampling parameter (temperature, top_p, top_k), which anthropic-version {Version} refuses on every model, and free to add a tool choice or thinking.budget_tokens where the step's model takes one; and maxRetries and maxRetryWaitSeconds, the loop's tries and longest wait ({tries} and {wait} where nothing is said).", prose, StringComparison.Ordinal);
         Assert.Contains("a 403, a 404, or a 400 answering a conversation's first request - a model the key's organization is not given, such as one that needs a data retention the organization does not keep - is a model the provider does not serve the key, naming it;", prose, StringComparison.Ordinal);
-        Assert.Contains($"A spend limit reached - the organization's monthly cap, a 429 whose error names {DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}, or one the organization or a workspace set, a 400 that says so - is the key's limit, the step RateLimited at once until the date the API names; a 401 is a key refused, passed over for the next; a 402 the key's balance spent, the step RateLimited at once; a 429 the model's limit on that key, waited out within those tries and the step RateLimited past them;", prose, StringComparison.Ordinal);
+        Assert.Contains($"A spend limit reached - the organization's monthly cap, a 429 whose error names {DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}, or one the organization or a workspace set, a 400 that says so - is the key's limit, every entry on that key passed over until the date the API names; a 401 is a key refused, said and passed over for the rest of the run; a 402 the key's balance spent, every entry on that key passed over; a 429 the model's limit on that key, waited out within those tries and the same model's next key tried past them;", prose, StringComparison.Ordinal);
         Assert.Contains("every request's usage - one that ended without its turn, failed, silent or left, by what it said it used so far - is counted at the model's prices,", prose, StringComparison.Ordinal);
 
         Assert.Contains(
@@ -739,11 +973,11 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains($"old tool uses cleared by the server as the context fills (`{Clear}`, under the `{Context}` beta), each clearing said in a notice;", readme, StringComparison.Ordinal);
         Assert.Contains("`agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said), so a budget needs the model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour.", readme, StringComparison.Ordinal);
-        Assert.Contains($"A step with a fallback that can go on here sends the `{Credit}` beta, and a request the model declines ends the step `Refused`,", readme, StringComparison.Ordinal);
+        Assert.Contains($"A step with a fallback that can go on here sends the `{Credit}` beta, and a request the model declines moves the step to its next model of the same provider and client - the same", readme, StringComparison.Ordinal);
         Assert.Contains("Two keys are `claude-api`'s alone: `betas`, sent beside the tool's own, each one word and never the API's fallback's, and `cacheTtl`; three are both API clients':", readme, StringComparison.Ordinal);
         Assert.Contains($"refused where it sets what the tool sends itself or, here, `fallbacks` or a sampling parameter (`temperature`, `top_p`, `top_k`), which `anthropic-version {Version}` refuses on every model, and free to add a tool choice or `thinking.budget_tokens` where the step's model takes one; and `maxRetries` and `maxRetryWaitSeconds`, the loop's tries and longest wait ({tries} and {wait} where nothing is said).", readme, StringComparison.Ordinal);
         Assert.Contains("a 403, a 404, or a 400 answering a conversation's first request - a model the key's organization is not given, such as one that needs a data retention the organization does not keep - is a model the provider does not serve the key, naming it;", readme, StringComparison.Ordinal);
-        Assert.Contains($"A spend limit reached - the organization's monthly cap, a 429 whose error names `{DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}`, or one the organization or a workspace set, a 400 that says so - is the key's limit, the step `RateLimited` at once until the date the API names; a 401 is a key refused, passed over for the next; a 402 the key's balance spent, the step `RateLimited` at once; a 429 the model's limit on that key, waited out within those tries and the step `RateLimited` past them;", readme, StringComparison.Ordinal);
+        Assert.Contains($"A spend limit reached - the organization's monthly cap, a 429 whose error names `{DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}`, or one the organization or a workspace set, a 400 that says so - is the key's limit, every entry on that key passed over until the date the API names; a 401 is a key refused, said and passed over for the rest of the run; a 402 the key's balance spent, every entry on that key passed over; a 429 the model's limit on that key, waited out within those tries and the same model's next key tried past them;", readme, StringComparison.Ordinal);
         Assert.Contains("every request's usage - one that ended without its turn, failed, silent or left, by what it said it used so far - is counted at the model's prices,", readme, StringComparison.Ordinal);
 
         Assert.Contains($"`Agents\\ClaudeApi\\{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiClient)}`", architecture, StringComparison.Ordinal);
@@ -853,11 +1087,12 @@ public sealed partial class HelpTests
             Assert.Contains($"{row.What} ({string.Join(", ", row.Codes)})", readme, StringComparison.Ordinal);
         }
 
-        Assert.Contains("a usage limit that names when it resets (1308, 1310, 1316, 1317, 1318, 1319, 1320, 1321) is the key's limit, the step RateLimited at once;", prose, StringComparison.Ordinal);
+        Assert.Contains("a usage limit that names when it resets (1308, 1310, 1316, 1317, 1318, 1319, 1320, 1321) is the key's limit, every", prose, StringComparison.Ordinal);
+        Assert.Contains("entry on that key passed over until it resets;", readme, StringComparison.Ordinal);
         Assert.Contains("a model unknown, an API the key may not call or a plan without the model (1211, 1220, 1311) is a model the provider does not serve the key;", prose, StringComparison.Ordinal);
         Assert.Contains("a plan that does not cover the call or has ended (1309, 1313, 1314, 1315) fails the step. A code that list does not hold is read by the status:", prose, StringComparison.Ordinal);
-        Assert.Contains("read by the status: a 401 is a key refused, passed over for the next; a 429 is the model's limit on that key, waited out within the tries and the step RateLimited past them; a 413 is the context exhausted (ContextExhausted); a 403 or a 404 is a model the provider does not serve the key; a request timed out, a conflict or a server's error is asked again, and any other fails the step.", prose, StringComparison.Ordinal);
-        Assert.Contains("read by the status: a 401 is a key refused, passed over for the next; a 429 is the model's limit on that key, waited out within the tries and the step `RateLimited` past them; a 413 is the context exhausted (`ContextExhausted`); a 403 or a 404 is a model the provider does not serve the key; a request timed out, a conflict or a server's error is asked again, and any other fails the step.", readme, StringComparison.Ordinal);
+        Assert.Contains("read by the status: a 401 is a key refused, said and passed over for the rest of the run; a 429 is the model's limit on that key, waited out within the tries and the same model's next key tried past them; a 413 is the context exhausted (ContextExhausted); a 403 or a 404 is a model the provider does not serve the key; a request timed out, a conflict or a server's error is asked again, and any other fails the step.", prose, StringComparison.Ordinal);
+        Assert.Contains("read by the status: a 401 is a key refused, said and passed over for the rest of the run; a 429 is the model's limit on that key, waited out within the tries and the same model's next key tried past them; a 413 is the context exhausted (`ContextExhausted`); a 403 or a 404 is a model the provider does not serve the key; a request timed out, a conflict or a server's error is asked again, and any other fails the step.", readme, StringComparison.Ordinal);
         Assert.Contains("a failure Z.AI names is said in its own words.", prose, StringComparison.Ordinal);
         Assert.Contains("a failure Z.AI names is said in its own words.", readme, StringComparison.Ordinal);
 
@@ -1680,6 +1915,36 @@ public sealed partial class HelpTests
             $"({HarnessDefaults.DefaultCores.ToString(CultureInfo.InvariantCulture)} each)",
             result.StandardOutput,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The config topic says what a failed test invocation keeps as evidence - the paths under the build directory, the
+    /// cap with its real default read from the code, kept-on-failure beside the leg's log, a pass keeping nothing, a
+    /// later step reading nothing from it, a path naming nothing said rather than refused, and a host's copy crossing
+    /// back over its transport.
+    /// </summary>
+    [Fact]
+    public async Task ConfigTopic_SaysWhatAFailedTestInvocationKeeps()
+    {
+        var said = Prose.Words((HelpText.Of("config")).StandardOutput);
+
+        Assert.Contains(
+            "A test invocation may name what a failed run keeps as evidence: keepOnFailure, paths relative to the leg's "
+                + "build directory - files, directories, or patterns, {buildDir} among the names they may use. When the "
+                + "invocation does not pass, whatever the verdict, what they name is copied into kept-on-failure/ beside "
+                + "the leg's log, each file's tree as it stood under the build directory, within keepOnFailureCapBytes kept "
+                + $"in all ({DiskSpace.Size(DssHarness.Core.Testing.KeptOnFailure.DefaultCapBytes)} where it is left out). A pass keeps "
+                + "nothing, and a later step reads nothing from it: it is evidence beside the verdict, never an output, and "
+                + "a failed step still keeps nothing of what one reads. The leg's line names the directory, how many files "
+                + "were kept and their size, and how many were refused over the cap, could not be read, or named nothing - "
+                + "a path naming nothing is said, not refused, for the failure may have been before it was written. On a "
+                + "leg a WSL or ssh host runs, the copy is kept beside that host's own log and crosses back over the host's "
+                + "transport: 'sync --pull' takes the kept-on-failure directory within that host's run.",
+            said,
+            StringComparison.Ordinal);
+
+        // The number is the decision, not a constant nobody reads: said as the words that decided it.
+        Assert.Contains("within keepOnFailureCapBytes kept in all (64 MiB where it is left out)", said, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -3402,7 +3667,7 @@ public sealed partial class HelpTests
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase, commit, push, pull-request ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
+            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase, commit, push, pull-request ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
             orchestrators,
             StringComparison.Ordinal);
     }
@@ -3939,7 +4204,7 @@ public sealed partial class HelpTests
         Assert.Contains(
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
                 + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, graphify-codebase, validate-plan, "
-                + "create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, "
+                + "create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, "
                 + "refresh, rebase, commit, push, pull-request, each below; a step of "
                 + "any other type fails, saying no runner serves its type.",
             prose,
@@ -3960,11 +4225,26 @@ public sealed partial class HelpTests
             "create-agent makes the agent the engine named for it - a<N>, one past the highest the run's agent directories and step records hold, never given twice - for the model of the first reason step that works in it, or the default tier's first model where none does, both written to the step's record before the agent is made.",
             prose,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "reason works the step's agent: the one its in names or the work it goes on with (resume), or - where it names neither - the engine's own read-only agent, with no worktree, made before the step runs and deleted once no "
+                + "step can go on with its work; the step's model resolved with its agent definition below its own and its order built as entries of a model and one of its provider's keys, each entry's credential read from the slot "
+                + "('help agent-clients'); its prompt file read and filled where the step starts, its writes given as an expression read there too - the names it yielded narrowing what it may write as a written-out list does - "
+                + "and each skill it names looked up again and the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, "
+                + "and its going on by the client's kind - the stored conversation handed where the client goes on with one, a new launch rendered where it does not; and its answer, held to the schema its outputs names, the step's output. A failed "
+                + "agent is tried again on its model - the step's retries, absent the workflow's maxRetries, waiting its backoffSeconds, absent the workflow's, twice as long before each later try - and then on each model of its order; what its agents "
+                + "assumed without asking is kept, read as the step's own assumptions fact and named in the run's. Where the step may ask (ask) its agent's questions pause it - askRounds times in one attempt, the answer or decide going on in the same "
+                + "attempt as the agent's next message; a limit of its own (turns, budget, a truncated answer, a full context) asks, more offered only where a stored conversation of the attempt can be handed, and compact for a full context goes on "
+                + "from the engine's reduction of it, the attempt's bounds counting still; every account at a limit, and a provider's service failing past the client's own tries, pause the run safely, and the resume runs that very step. Where an "
+                + "agent gave no handoff of its own - a limit ended its run, a crash cut the attempt off, its handoff turn passed its bound or failed - the engine writes one from the stored stream of the step, its first line saying why: the files the "
+                + "attempt wrote, the last commands it ran and how each ended, its last messages word for word, and the steps before it that left notes, named by step.",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains("params - its own knobs, defaulted in the file and read as param.<name>", prose, StringComparison.Ordinal);
         Assert.Contains(
             "A step gives a failure nothing handles to the workflow's recover by saying onFailure: recover, itself or through a group around it - never "
-                + "a reasoning step, whose agent is tried again (retries, waiting backoffSeconds, twice as long each time) and on its fallback, and which asks "
-                + "where it still fails. The recovery's steps, written once, read the step that failed as source and see every step of the flow, find what "
+                + "a reasoning step, whose agent is tried again (retries, waiting backoffSeconds, twice as long each time) and on each model of its fallback, and which asks "
+                + "where it still fails; where every account it could use is at its limit, or its provider's service fails past the client's own tries, the run pauses safely "
+                + "instead and resumes that very step. The recovery's steps, written once, read the step that failed as source and see every step of the flow, find what "
                 + "went wrong and put it right; then the run goes where its onSuccess says - failed-step, the step that gave it its failure, which runs again "
                 + "from where it stopped - and a failure of its own work, past its steps' retries, does what its onFailure says: pause or stop; the recovery "
                 + "never calls itself. A step that fails again goes to the recovery again by its own onFailure, until it passes, a person is asked, or maxVisits is met (absent, "
@@ -4130,11 +4410,13 @@ public sealed partial class HelpTests
             Prose.Words(layout.StandardOutput),
             StringComparison.Ordinal);
 
-        // workflows and keepEnvironment are refused given empty though leaving each out means none, which neither of the
-        // other two kinds of list the topic names is: said apart from both, with the spelling the refusal itself asks for.
+        // workflows, keepEnvironment and keepOnFailure are refused given empty though leaving each out means none,
+        // which neither of the other two kinds of list the topic names is: said apart from both, with the spelling the
+        // refusal itself asks for.
         Assert.Contains(
-            "workflows, which declares no workflow left out, and agentPolicy.keepEnvironment, which gives no name back left out, "
-                + "are refused given empty too, so none is spelt one way: leave the key out for none.",
+            "workflows, which declares no workflow left out, agentPolicy.keepEnvironment, which gives no name back left "
+                + "out, and a test invocation's keepOnFailure, which keeps no evidence left out, are refused given empty "
+                + "too, so none is spelt one way: leave the key out for none.",
             Prose.Words(config.StandardOutput),
             StringComparison.Ordinal);
     }

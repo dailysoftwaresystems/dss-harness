@@ -56,13 +56,20 @@ namespace DssHarness.Core.Agents;
 /// <param name="fileSystem">The file system the step's records are kept on.</param>
 /// <param name="platform">Whether this tool itself runs elevated, which no agent starts under, and how it compares names.</param>
 /// <param name="clock">When each event happened.</param>
-public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem fileSystem, IHostPlatform platform, TimeProvider clock) : IAgentRunner
+/// <param name="gates">The lanes a run's requests go through, one per provider and key; null where none are held.</param>
+public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem fileSystem, IHostPlatform platform, TimeProvider clock, ClientGates? gates = null) : IAgentRunner
 {
     /// <summary>The run's own record, in the step's directory: the result as it ended.</summary>
     public const string ResultFileName = "result.json";
 
     /// <summary>What a run stopped by its hard stop says it ended with.</summary>
     public const string StoppedError = "The run was stopped before it ended.";
+
+    /// <summary>How long a failed agent's first retry waits, in seconds, where neither its step nor the workflow names one.</summary>
+    public const int WorkflowBackoffSeconds = 30;
+
+    /// <summary>The most a failed agent's retry waits, doubling from its backoff: the cap a step's own backoff answers to.</summary>
+    public const int MostBackoffSeconds = Orchestration.Flow.WorkflowStep.MostBackoffSeconds;
 
     private readonly IReadOnlyList<IAgentClient> _clients = [.. (clients ?? throw new ArgumentNullException(nameof(clients)))];
 
@@ -71,6 +78,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     private readonly IHostPlatform _platform = platform ?? throw new ArgumentNullException(nameof(platform));
 
     private readonly TimeProvider _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+
+    private readonly ClientGates? _gates = gates;
 
     /// <summary>Works the step, from its request to its result, emitting what happens beside the stored stream.</summary>
     /// <param name="step">The step, as the engine resolved it.</param>
@@ -279,6 +288,13 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 null);
         }
 
+        if (step.Order is { Count: > 0 } order)
+        {
+            // The step's whole order is the engine's to walk: a decline, a limit and a refused key move it from entry
+            // to entry, across clients as within one, until an ending stands.
+            return await OrderedAsync(order, step, directory, mask, pump, cancellationToken).ConfigureAwait(false);
+        }
+
         if (Client(step) is not { } client)
         {
             // Never begun, and the configuration is why: a record of the step exists all the same, saying so.
@@ -296,7 +312,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
         try
         {
-            var result = await client.RunAsync(Resolved(step, directory, mask, messages), pump, pump.Stopping).ConfigureAwait(false);
+            var resolved = Resolved(step, directory, mask, messages);
+            WroteUserMd(resolved, NewConversation(client, resolved));
+            var result = await client.RunAsync(resolved, pump, pump.Stopping).ConfigureAwait(false);
 
             if (result.Problem() is not { } wrong)
             {
@@ -329,6 +347,399 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     }
 
     /// <summary>
+    /// Works the step through its whole order, the engine's fallback (part 03): the entry that serves is taken first -
+    /// each entry the machine cannot use said and passed over - and a declined request, an account at its limit and a
+    /// key the provider refuses move the step to its next entry by the cause's rule, a move within the same provider and
+    /// client already taken inside the client's own run. Where no entry is left the ending stands; a move to another
+    /// client begins a new conversation with the step's prompt, and a limit the run met is remembered until its end.
+    /// </summary>
+    /// <param name="order">The step's whole order, the serving entry first.</param>
+    /// <param name="step">The step.</param>
+    /// <param name="directory">The step's own directory.</param>
+    /// <param name="mask">What masks the secrets the run's text may carry.</param>
+    /// <param name="pump">The run's pump, the sink the client is handed.</param>
+    /// <param name="cancellationToken">The hard stop.</param>
+    private async Task<(AgentRunResult Result, Exception? Thrown)> OrderedAsync(
+        IReadOnlyList<AgentRunEntry> order,
+        AgentStepRequest step,
+        string directory,
+        ILineMask mask,
+        AgentEventPump pump,
+        CancellationToken cancellationToken)
+    {
+        var totals = new WalkTotals();
+        var refused = new HashSet<string>(StringComparer.Ordinal);
+        var limits = new List<(AgentAccountLimit Limit, string Client)>();
+        var retried = new Dictionary<int, int>();
+        var watching = new Watching(pump);
+        var messages = step.Messages ?? new AgentMessages();
+
+        try
+        {
+            // The slot holds none of the first model's keys: the run never begins, refused as one that could not start,
+            // for no entry of the step's own model could serve it. A later model's missing key is only said and passed
+            // over, and never refuses a run.
+            var first = order.Where(entry => string.Equals(entry.Model, order[0].Model, StringComparison.Ordinal)).ToList();
+
+            if (first.All(entry => !entry.Usable))
+            {
+                var keys = first.All(entry => entry.Key is not null);
+
+                return (AgentEndings.NotStarted(
+                    order[0].Client,
+                    keys ? AgentNotStartedBecause.KeyMissing : AgentNotStartedBecause.ConfigurationWrong,
+                    keys
+                        ? $"the slot holds none of the keys of the step's first model ({string.Join(", ", first.Select(entry => entry.Key))})"
+                        : first[0].WhyNot ?? "no entry of the step's first model can be used on this machine",
+                    step.Model,
+                    mask), null);
+            }
+
+            var at = 0;
+
+            while (true)
+            {
+                while (at < order.Count && !order[at].Usable)
+                {
+                    await watching.EmitAsync(new FallbackPassedOver(order[at].Model, order[at].WhyNot ?? "it cannot be used on this machine")).ConfigureAwait(false);
+                    at++;
+                }
+
+                if (at >= order.Count)
+                {
+                    break;
+                }
+
+                var entry = order[at];
+
+                if (ByName(entry.Client) is not { } client)
+                {
+                    var unknown = AgentEndings.NotStarted(entry.Client, AgentNotStartedBecause.ConfigurationWrong, $"No agent client named '{entry.Client}' is registered.", entry.Model, mask);
+                    totals.Add(unknown);
+
+                    return (totals.Finished(step), null);
+                }
+
+                watching.Began();
+
+                try
+                {
+                    var resolved = Resolved(step, directory, mask, messages, entry, [.. order.Skip(at + 1)], step.Conversation, client.Capabilities.GoesOnWith == AgentConversationHandling.Handed);
+
+                    // The lane a run's requests go through (part 03's "Coordination"): one per provider and key - the
+                    // key's own value is the account, and two names holding one value one lane - or, where the client
+                    // signs in with the machine's login, one by its client. The identity is hashed before it is handed
+                    // to the registry, for the key's value is a secret no dictionary of the process holds in the clear.
+                    // Held from the request's entry to its end, the answer's tokens charged once they are had.
+                    var identity = entry.Credential?.Keys.FirstOrDefault(key => string.Equals(key.Name, entry.Key, StringComparison.Ordinal))?.Value ?? entry.Key ?? entry.Client;
+                    var lane = _gates is null ? null : await _gates
+                        .Lane(entry.Provider, FileSystem.FileContentHash.Of(Encoding.UTF8.GetBytes(identity)), ClientGateSettings.Of(entry.Client, entry.Entries?.Client))
+                        .EnterAsync(inputTokens: 0, pump.Stopping)
+                        .ConfigureAwait(false);
+                    AgentRunResult result;
+
+                    try
+                    {
+                        WroteUserMd(resolved, NewConversation(client, resolved));
+                        result = await client.RunAsync(resolved, watching, pump.Stopping).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        lane?.Dispose();
+                    }
+
+                    lane?.Answered(result.Usage?.Total.OutputTokens ?? 0);
+                    Spent(step, entry, result);
+
+                    // A 429 the account met holds the lane's every waiter until the provider says the limit lifts:
+                    // the cool-down is set from what it said, never shortened by a sooner one.
+                    if (lane is not null && result.Status == AgentRunStatus.RateLimited && result.Limit?.Lifts is { } lifts && lifts > _clock.GetUtcNow())
+                    {
+                        lane.Gate.RateLimited(lifts - _clock.GetUtcNow());
+                    }
+
+                    if (result.Problem() is { } wrong)
+                    {
+                        // An answer that does not hold together is no ending the engine could read, and no ending to move
+                        // on from either: the run failed, saying why, keeping what a failed run keeps.
+                        var error = mask.Redact($"Client '{client.Name}' answered a result that does not hold together: {wrong}.");
+                        var failed = result.FailedFor(error);
+
+                        failed = failed.Problem() is null ? failed : new AgentRunResult(AgentRunStatus.Failed, Model: step.Model, Error: error);
+                        totals.Add(failed);
+
+                        return (totals.Finished(step), null);
+                    }
+
+                    totals.Add(result);
+
+                    foreach (var key in result.KeysRefused)
+                    {
+                        refused.Add(key);
+                    }
+
+                    // What moves the step, and nothing else: a decline - never one about what the prompt asks - an
+                    // account at its limit, a failed run whose provider and client have no key left unrefused, and a
+                    // failed agent with retries left on its model. Everything else is the step's own ending, however it
+                    // ended.
+                    var decline = result.Status == AgentRunStatus.Refused && !string.Equals(result.DeclinedFor, AgentFallback.ReasoningExtraction, StringComparison.Ordinal);
+                    var atLimit = result.Status == AgentRunStatus.RateLimited;
+                    var keysGone = result.Status == AgentRunStatus.Failed && result.KeysRefused.Count > 0 && !order.Any(one =>
+                        one.Usable
+                        && string.Equals(one.Provider, entry.Provider, StringComparison.Ordinal)
+                        && string.Equals(one.Client, entry.Client, StringComparison.Ordinal)
+                        && (one.Key is not { Length: > 0 } key || !refused.Contains(key)));
+                    var agentFailed = result.Status is AgentRunStatus.Failed or AgentRunStatus.InvalidOutput or AgentRunStatus.WrongModel or AgentRunStatus.Stalled or AgentRunStatus.TimedOut
+                        && !keysGone
+                        && !result.ServiceFailed;
+
+                    if (!decline && !atLimit && !keysGone && !agentFailed)
+                    {
+                        break;
+                    }
+
+                    if (atLimit)
+                    {
+                        limits.Add((result.Limit!, entry.Client));
+                    }
+
+                    // A failed agent is tried again on its model before the step moves past it: `retries` times - the
+                    // step's own, the workflow's where it says none - waiting `backoffSeconds` before the first and
+                    // twice as long before each later one, at most fifteen minutes. The provider's service failing
+                    // past the client's own tries is never retried, for every model of the step is reached through the
+                    // same service.
+                    if (agentFailed)
+                    {
+                        var spent = retried.GetValueOrDefault(at);
+
+                        if (spent < (step.Retries ?? 0))
+                        {
+                            retried[at] = spent + 1;
+
+                            var wait = TimeSpan.FromSeconds(Math.Min(
+                                (step.BackoffSeconds ?? WorkflowBackoffSeconds) * Math.Pow(2, spent),
+                                (double)MostBackoffSeconds));
+                            var of = step.Retries ?? 0;
+
+                            await pump.EmitAsync(new WaitingToRetry(
+                                $"the agent failed: {result.Error ?? "it ended failed"}",
+                                spent + 1,
+                                of,
+                                wait,
+                                _clock.GetUtcNow() + wait)).ConfigureAwait(false);
+                            await Task.Delay(wait, _clock, cancellationToken).ConfigureAwait(false);
+
+                            continue;
+                        }
+                    }
+
+                    var from = watching.LastServed(entry);
+                    var where = PlaceOf(order, from, at);
+
+                    // A failure past its retries moves the step as a decline does: to the next model, past the model's
+                    // other keys, for another account of the same model is asked the same and answers the same.
+                    if (AgentFallback.Next(order, Math.Max(where, at), decline || agentFailed, refused, limits, _clock.GetUtcNow()) is not { } next)
+                    {
+                        break;
+                    }
+
+                    foreach (var (model, why) in next.PassedOver)
+                    {
+                        await watching.EmitAsync(new FallbackPassedOver(model, why)).ConfigureAwait(false);
+                    }
+
+                    await watching.EmitAsync(new FallbackStarted(
+                        from.Model,
+                        from.Provider,
+                        from.Client,
+                        order[next.At].Model,
+                        order[next.At].Provider,
+                        order[next.At].Client,
+                        decline ? $"declined ({result.DeclinedFor ?? "the request"})" : atLimit ? "limit" : agentFailed ? $"failed past its {(step.Retries ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture)} retries" : "key refused",
+                        AgentFallback.NewConversation,
+                        totals.Turns,
+                        ThrewAway: false,
+                        CreditAsked: false,
+                        from.Key,
+                        order[next.At].Key,
+                        from.Effort,
+                        order[next.At].Effort)).ConfigureAwait(false);
+
+                    at = next.At;
+                }
+                catch (Exception ex)
+                {
+                    var stopped = ex is OperationCanceledException && cancellationToken.IsCancellationRequested;
+                    var thrown = new AgentRunResult(
+                        stopped ? AgentRunStatus.Cancelled : AgentRunStatus.Failed,
+                        Model: step.Model,
+                        Error: stopped ? StoppedError : mask.Redact(ex.Message));
+
+                    totals.Add(thrown);
+
+                    return (totals.Finished(step), ex);
+                }
+            }
+
+            return (totals.Finished(step), null);
+        }
+        finally
+        {
+            messages.Complete();
+        }
+    }
+
+    /// <summary>The place of <paramref name="entry"/> in <paramref name="order"/>, matched by what it is - model, provider, client, key - and <paramref name="or"/> where none matches.</summary>
+    private static int PlaceOf(IReadOnlyList<AgentRunEntry> order, AgentRunEntry entry, int or)
+    {
+        for (var at = 0; at < order.Count; at++)
+        {
+            if (string.Equals(order[at].Model, entry.Model, StringComparison.Ordinal)
+                && string.Equals(order[at].Provider, entry.Provider, StringComparison.Ordinal)
+                && string.Equals(order[at].Client, entry.Client, StringComparison.Ordinal)
+                && string.Equals(order[at].Key ?? string.Empty, entry.Key ?? string.Empty, StringComparison.Ordinal))
+            {
+                return at;
+            }
+        }
+
+        return or;
+    }
+
+    /// <summary>
+    /// Records what the entry's run spent, by the key's name and never its value, for the next step's choice of one:
+    /// what the client reported the run cost where it reports one (a Claude Code launch's own number), else what the
+    /// engine counted at the configuration's prices; nothing where neither is known, for a cost no price was there
+    /// for is unknown and never zero.
+    /// </summary>
+    /// <param name="step">The step, whose sink the run records through; null where nothing is counted.</param>
+    /// <param name="entry">The entry that served the run, its key the one that spent.</param>
+    /// <param name="result">How the run ended, with what it used and what that cost.</param>
+    private static void Spent(AgentStepRequest step, AgentRunEntry entry, AgentRunResult result)
+    {
+        if (step.Spend is not { } sink || entry.Key is not { Length: > 0 } || result.Usage?.Cost?.Usd is not { } cost)
+        {
+            return;
+        }
+
+        sink.Record(entry.Provider, entry.Key, entry.Model, cost);
+    }
+
+    /// <summary>The client named, or null where none is registered under the name.</summary>
+    /// <param name="client">The client's key under <c>agentClients</c>.</param>
+    private IAgentClient? ByName(string client)
+        => _clients.FirstOrDefault(one => string.Equals(one.Name, client, StringComparison.Ordinal));
+
+    /// <summary>
+    /// The entry the step last served, watched from the events of the client that served it: a client moves inside its
+    /// own provider and client by itself and says so (<see cref="FallbackStarted"/>), and the walk goes on from where
+    /// the client said it got to, never asking an entry again.
+    /// </summary>
+    private sealed class Watching(AgentEventPump pump) : IAgentEventSink
+    {
+        private readonly AgentEventPump _pump = pump ?? throw new ArgumentNullException(nameof(pump));
+
+        private AgentRunEntry? _last;
+
+        /// <summary>A client's run begins on the entry the walk started it on: what the last run said is the last run's.</summary>
+        public void Began() => _last = null;
+
+        /// <summary>The entry the step last served: the last the client said it moved to, else <paramref name="started"/>.</summary>
+        /// <param name="started">The entry the walk started this client on.</param>
+        public AgentRunEntry LastServed(AgentRunEntry started) => _last ?? started;
+
+        public async ValueTask EmitAsync(AgentEvent @event)
+        {
+            if (@event is FallbackStarted moved)
+            {
+                _last = new AgentRunEntry(moved.ToModel, moved.ToProvider, moved.ToClient, moved.ToKey, moved.ToEffort, Usable: true);
+            }
+
+            await _pump.EmitAsync(@event).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>What every entry of the walk added to the step's one run, and the one result the step ends with.</summary>
+    private sealed class WalkTotals
+    {
+        private readonly List<AgentModelUsage> _perModel = [];
+        private readonly List<string> _keysRefused = [];
+        private readonly List<string> _files = [];
+        private readonly List<AgentServedModel> _served = [];
+        private AgentUsage _total = AgentUsage.None;
+        private decimal _counted;
+        private decimal? _reported;
+        private string? _missingPrice;
+        private AgentRunResult? _result;
+        private int _turnsSoFar;
+        private int _calls;
+        private int _denials;
+        private int _filesWritten;
+        private int _webRequests;
+        private int _compactions;
+        private int _retries;
+        private TimeSpan _ran;
+
+        /// <summary>How many turns the step took over every entry that served it.</summary>
+        public int Turns => _turnsSoFar;
+
+        /// <summary>Adds what <paramref name="result"/> did and used on the entry that served it.</summary>
+        public void Add(AgentRunResult result)
+        {
+            ArgumentNullException.ThrowIfNull(result);
+
+            _result = result;
+
+            if (result.Usage is { } usage)
+            {
+                _total = _total.Plus(usage.Total);
+                _perModel.AddRange(usage.PerModel);
+                _counted += usage.Cost?.Counted ?? 0;
+                _reported += usage.Cost?.Reported;
+                _missingPrice ??= usage.Cost?.MissingPrice;
+            }
+
+            _keysRefused.AddRange(result.KeysRefused.Where(key => !_keysRefused.Contains(key)));
+            _files.AddRange(result.Files.Where(file => !_files.Contains(file)));
+            _served.AddRange(result.Served.Select(served => served with { FromTurn = served.FromTurn + _turnsSoFar }));
+            _turnsSoFar += result.Turns;
+            _calls += result.ToolCalls;
+            _denials += result.Denials;
+            _filesWritten += result.FilesWritten;
+            _webRequests += result.WebRequests;
+            _compactions += result.Compactions;
+            _retries += result.Retries;
+            _ran += result.Duration;
+        }
+
+        /// <summary>
+        /// The step's one result: the last ending's own shape - how it ended, what it said, what it asked, what it left -
+        /// with what every entry did and used, the turns it took, the calls it ran and what the providers refused, the
+        /// keys among them, and the models that served it, each from the turn of the step it began at.
+        /// </summary>
+        /// <param name="step">The step, whose model the result names as asked for.</param>
+        public AgentRunResult Finished(AgentStepRequest step)
+            => _result is null
+                ? new AgentRunResult(AgentRunStatus.Failed, Model: step.Model, Error: "the step's order holds no entry it could run on")
+                : _result with
+                {
+                    Model = step.Model,
+                    Turns = _turnsSoFar,
+                    ToolCalls = _calls,
+                    Denials = _denials,
+                    FilesWritten = _filesWritten,
+                    WebRequests = _webRequests,
+                    Compactions = _compactions,
+                    Retries = _retries,
+                    Duration = _ran,
+                    Usage = new AgentUsageReport(_total, [.. _perModel], new AgentCost(_reported, _counted, _missingPrice)),
+                    Served = [.. _served],
+                    Files = [.. _files],
+                    KeysRefused = [.. _keysRefused],
+                };
+    }
+
+    /// <summary>
     /// Why a policy resolving the agent's paths from <paramref name="resolvedFrom"/> is not the agent's, which starts in
     /// <paramref name="startsIn"/>: the two are other directories, or one is no directory the two could be compared by
     /// (blank, or holding a character no path does); null where they are the same.
@@ -349,6 +760,15 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         }
     }
 
+    /// <summary>Whether the conversation <paramref name="run"/> begins on <paramref name="client"/> is a new one: every launch on a client that renders its conversations, and any run handed none.</summary>
+    private static bool NewConversation(IAgentClient client, AgentRun run)
+        => client.Capabilities.GoesOnWith == AgentConversationHandling.Rendered || run.Conversation is null;
+
+    /// <summary>The step's own directory, as the one owner of the paths spells it.</summary>
+    /// <param name="run">The run, whose step's records are kept there.</param>
+    private static string StepDirectoryOf(AgentRun run)
+        => run.StepDirectory;
+
     /// <summary>The client the step names, or the one there is where it names none; null where there is none.</summary>
     /// <param name="step">The step.</param>
     private IAgentClient? Client(AgentStepRequest step)
@@ -356,11 +776,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             ? _clients.FirstOrDefault(client => string.Equals(client.Name, named, StringComparison.Ordinal))
             : _clients.Count == 1 ? _clients[0] : null;
 
-    /// <summary>
-    /// Writes the run's own record beside its stream, in one step, so that one there is one written whole - and, where its
-    /// answer left notes, the notes before it (<see cref="OrchestratorLayout.StepNotesFileName"/>), so a result that holds
-    /// notes is never read without them beside it.
-    /// </summary>
+    /// <summary>Writes the run's own record beside its stream, in one step, so that one there is one written whole - and, where its answer left notes, the notes before it (<see cref="OrchestratorLayout.StepNotesFileName"/>), so a result that holds notes is never read without them beside it - and the first user message as sent, masked (<see cref="OrchestratorLayout.StepUserFileName"/>), holding the parts the attempt was given.</summary>
     /// <param name="directory">The step's own directory.</param>
     /// <param name="result">How the run ended.</param>
     /// <exception cref="InvalidOperationException">The result does not hold together, which none the runner makes does.</exception>
@@ -378,6 +794,14 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
         JsonStateFile.Write(_fileSystem, Path.Combine(directory, ResultFileName), result);
     }
+
+    /// <summary>Writes the first user message as it is sent, masked, before the client is taken: the parts the attempt was given, held by the one owner of their order, or the compaction record whole where the run begins a compacted conversation.</summary>
+    /// <param name="run">The run the client is about to work.</param>
+    /// <param name="newConversation">Whether the conversation the run begins is a new one.</param>
+    private void WroteUserMd(AgentRun run, bool newConversation)
+        => _fileSystem.WriteAllTextAtomic(
+            Path.Combine(StepDirectoryOf(run), OrchestratorLayout.StepUserFileName),
+            run.Mask.Redact(run.Compaction is { Length: > 0 } compacted ? compacted : AgentPromptParts.FirstMessage(run, newConversation)));
 
     /// <summary>The step's run, as the client takes it: the prompt filled, the places as they are, the directory its own.</summary>
     /// <param name="step">The step.</param>
@@ -401,7 +825,11 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             mask,
             directory,
             step.Handoff ?? new AgentHandoffSignal(Bound(step)),
-            messages)
+            messages,
+            step.RunContext,
+            step.PlanUpdates,
+            step.Continuation,
+            step.Compaction)
         {
             Ground = step.Ground,
             Credential = step.Credential,
@@ -414,9 +842,66 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             Entries = step.Entries,
         };
 
-    /// <summary>The step's own directory, as the one owner of the paths spells it.</summary>
+    /// <summary>
+    /// The run of one entry of the step's order, as its client takes it: the entry's model, provider, effort, entries
+    /// and credential - its key first among the credential's, for the run serves the entry it is started on - the
+    /// entries after it for the client's own walk, and the stored conversation the step goes on with, handed only where
+    /// this entry is the conversation's own client and provider and the client stores conversations - a move to another
+    /// entry is never a conversation gone on with.
+    /// </summary>
     /// <param name="step">The step.</param>
-    private static string StepDirectory(AgentStepRequest step) => Layout(step).AgentStepDirectory(step.Agent, step.StepInstance);
+    /// <param name="directory">The step's own directory.</param>
+    /// <param name="mask">What masks the secrets its lines may carry.</param>
+    /// <param name="messages">Where the engine tells the agent what it has to.</param>
+    /// <param name="entry">The entry that serves.</param>
+    /// <param name="later">The entries after it, of every client, as each may go on with.</param>
+    /// <param name="conversation">The stored conversation the step's answer goes on with, where its attempt has one.</param>
+    /// <param name="storesConversations">Whether the entry's client is one the engine hands a stored conversation to.</param>
+    private static AgentRun Resolved(AgentStepRequest step, string directory, ILineMask mask, AgentMessages messages, AgentRunEntry entry, IReadOnlyList<AgentRunEntry> later, AgentSessionRef? conversation, bool storesConversations)
+        => new(
+            step.SystemPrompt,
+            Filled(step.PromptTemplate, step.PromptValues),
+            step.Workspace,
+            step.Output,
+            Conversation: conversation is { } handed
+                && storesConversations
+                && string.Equals(entry.Client, handed.Client, StringComparison.Ordinal)
+                && string.Equals(entry.Provider ?? string.Empty, handed.Provider ?? string.Empty, StringComparison.Ordinal)
+                ? handed
+                : null,
+            step.Limits,
+            entry.Provider,
+            entry.Model,
+            entry.Effort,
+            later,
+            [],
+            [],
+            mask,
+            directory,
+            step.Handoff ?? new AgentHandoffSignal(Bound(step)),
+            messages,
+            step.RunContext,
+            step.PlanUpdates,
+            step.Continuation,
+            step.Compaction)
+        {
+            Ground = step.Ground,
+            Credential = entry.Credential is null ? null : entry.Credential with
+            {
+                Keys = [.. entry.Credential.Keys.OrderByDescending(key => entry.Key is not null && string.Equals(key.Name, entry.Key, StringComparison.Ordinal))],
+            },
+            Program = step.Program,
+            ProgramVersion = step.ProgramVersion,
+            Withheld = step.Withheld,
+            Commands = step.Commands,
+            WebSearch = step.WebSearch,
+            SessionsDirectory = Layout(step).AgentSessionsDirectory(step.Agent),
+            Entries = entry.Entries,
+        };
+
+    /// <summary>The step's own directory, as the one owner of the paths spells it - or the one its request names, for a run the engine keeps elsewhere than an agent's steps (the run's reporter, under the run's <c>asks/</c>).</summary>
+    /// <param name="step">The step.</param>
+    private static string StepDirectory(AgentStepRequest step) => step.RecordDirectory ?? Layout(step).AgentStepDirectory(step.Agent, step.StepInstance);
 
     /// <summary>The paths of the step's run, as the one owner of them spells them.</summary>
     /// <param name="step">The step.</param>

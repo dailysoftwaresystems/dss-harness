@@ -41,12 +41,13 @@ namespace DssHarness.Core.Orchestration;
 /// workflow.json               a run's status, for a person and a client to read
 /// definition.json             the workflow's definition, frozen as the run began with it
 /// questions.json              every question the run raised and every answer it was given
+/// updates.json                every plan update the run has taken, and what became of it
 /// folds.json                  the run's write-ahead ledger of its folds, and of each commit a commit step staged of them
 /// pre-existing-issues.json    each pre-existing issue the run listed
 /// events.jsonl                the run's events, one JSON object to a line
 /// report.md, report.json      the report of the run's last session
 /// inbox.json, stop.json       an answer, and a pause or a stop, handed to the engine running the run, until it takes them
-/// asks/                       the planned ask-orchestrator's calls; nothing writes it yet
+/// asks/                       one call of ask-orchestrator or ask-orchestrator-status: the facts it was given, the files of its reporter's attempt, ask.json; the engine never reads it
 /// web/searches.jsonl          what each source of the web search found once for the run, and each query it answered: the same query again is answered from here; written by every client whose step searches
 /// graph/graph.json            the run's codebase graph: the base's manifest, every file it keeps with its blob, state and extract
 /// graph/symbols.jsonl         the base's link result, as lines: every node and edge, with the digest of the manifest it was made from
@@ -129,6 +130,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The name of the file every question a run raised and every answer it was given is kept in, whole.</summary>
     public const string QuestionsFileName = "questions.json";
 
+    /// <summary>The name of the file every plan update a run has taken is kept in, whole.</summary>
+    public const string UpdatesFileName = "updates.json";
+
     /// <summary>The name of the file what another process asked of the running engine is kept in, until it is taken.</summary>
     public const string StopFileName = "stop.json";
 
@@ -142,8 +146,8 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     public const string ReportJsonFileName = "report.json";
 
     /// <summary>
-    /// The directory one call of the planned <c>ask-orchestrator</c> and <c>ask-orchestrator-status</c> will be kept in -
-    /// neither command is built yet, so nothing writes it. The engine never reads it.
+    /// The directory one call of <c>ask-orchestrator</c> and <c>ask-orchestrator-status</c> is kept in - the facts it was
+    /// given, the files of its reporter's attempt, and <c>ask.json</c>. The engine never reads it.
     /// </summary>
     public const string AsksDirectoryName = "asks";
 
@@ -161,6 +165,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// goes on, as its answer's envelope said it.
     /// </summary>
     public const string StepNotesFileName = "notes.md";
+
+    /// <summary>The name of the file a step's first user message is kept in, masked, in its directory: as sent, holding the parts it was given.</summary>
+    public const string StepUserFileName = "user.md";
 
     /// <summary>The name of the file a leg step keeps its legs' ledger in, as <c>--json</c> gives it, in its directory.</summary>
     public const string StepLedgerFileName = "ledger.json";
@@ -439,6 +446,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>Every question the run raised and every answer it was given, the open ones among them: the one owner of what a question said.</summary>
     public string QuestionsFile => Path.Combine(Directory, QuestionsFileName);
 
+    /// <summary>Every plan update the run has taken, with what raised it and where it stands: the one owner of what an update is.</summary>
+    public string UpdatesFile => Path.Combine(Directory, UpdatesFileName);
+
     /// <summary>
     /// The run's write-ahead ledger of its folds: each path a fold means to write, the digest it held before and the one
     /// the fold left; and of each commit a commit step staged of them, and what became of it.
@@ -492,8 +502,8 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     public string ReportJsonFile => Path.Combine(Directory, ReportJsonFileName);
 
     /// <summary>
-    /// Where the calls of the planned <c>ask-orchestrator</c> and <c>ask-orchestrator-status</c> will be kept, one
-    /// directory each - neither command is built yet, so nothing writes it. The engine never reads them.
+    /// Where the calls of <c>ask-orchestrator</c> and <c>ask-orchestrator-status</c> are kept, one directory each - the
+    /// facts it was given, the files of its reporter's attempt, and <c>ask.json</c>. The engine never reads them.
     /// </summary>
     public string AsksDirectory => Path.Combine(Directory, AsksDirectoryName);
 

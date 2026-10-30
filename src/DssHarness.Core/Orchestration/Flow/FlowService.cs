@@ -50,11 +50,20 @@ public interface IFlowService : IUseCase
     /// <param name="question">The question's id; null for the one the run has open.</param>
     /// <param name="text">The text the answer is given with, where it takes one.</param>
     /// <param name="textFile">A file holding that text, in the place of <paramref name="text"/>.</param>
-    /// <param name="again">Whether it changes an answer already given: a plan update, which this build does not take.</param>
+    /// <param name="again">Whether it changes the last answer a person gave: a plan update, within its window and once.</param>
     /// <param name="json">Whether to answer with the run's document.</param>
     /// <param name="interrupts">The session's interrupts, as a terminal or a front end counts them.</param>
     /// <param name="cancellationToken">A hard stop of the session: the run ends stopped, in order.</param>
     Task<CommandOutcome> AnswerAsync(string startDirectory, string run, string answer, string? question, string? text, string? textFile, bool again, bool json, FlowInterrupts? interrupts = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Amends the request a run was started with: handed to the engine where one is running it (<c>inbox.json</c>), else recorded as a plan update <c>queued</c>, taken first when the run is next gone on with. Starts nothing.</summary>
+    /// <param name="startDirectory">The directory the command acts on, and where <paramref name="textFile"/> is read from.</param>
+    /// <param name="run">The run.</param>
+    /// <param name="text">The amendment, in the person's words: it adds to the request, corrects it or narrows it.</param>
+    /// <param name="textFile">A file holding the amendment, in the place of <paramref name="text"/>.</param>
+    /// <param name="json">Whether to answer with the run's document.</param>
+    /// <param name="cancellationToken">A hard stop of the command.</param>
+    Task<CommandOutcome> AmendAsync(string startDirectory, string run, string? text, string? textFile, bool json, CancellationToken cancellationToken = default);
 
     /// <summary>The safe pause, asked of the engine running the run: waits until the pause is complete, names each handoff and each machine step still in progress.</summary>
     Task<CommandOutcome> PauseAsync(string startDirectory, string run, bool all, bool json, CancellationToken cancellationToken = default);
@@ -64,6 +73,31 @@ public interface IFlowService : IUseCase
 
     /// <summary>Every question the run raised and what became of it, the open ones first, from <c>questions.json</c>.</summary>
     Task<CommandOutcome> QuestionsAsync(string startDirectory, string run, bool json, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The tool's own question about a run - what is happening now, what is done, what is left, what it waits for, and
+    /// when it may finish - answered with the engine's facts and, where the workflow names a reporter, its words. Reads
+    /// only: nothing of the run is written or locked but the command's own record under the run's <c>asks/</c>, and its
+    /// cost is the person's, never the run's. Where no model words the facts, they are still the answer, and the command
+    /// says why no model did.
+    /// </summary>
+    /// <param name="startDirectory">The directory the command acts on.</param>
+    /// <param name="run">The run.</param>
+    /// <param name="json">Whether to answer with one JSON document.</param>
+    /// <param name="cancellationToken">Stops the command.</param>
+    Task<CommandOutcome> AskStatusAsync(string startDirectory, string run, bool json, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// A person's question about a run, answered from its records by the workflow's reporter over the engine's facts.
+    /// Reads only, as <see cref="AskStatusAsync"/> is; where no model can answer - no reporter named, no key, no Claude
+    /// Code, a limit, a failure - the command is refused, naming why.
+    /// </summary>
+    /// <param name="startDirectory">The directory the command acts on.</param>
+    /// <param name="run">The run.</param>
+    /// <param name="question">The person's question, in their words; null never reaches here, for that is the status command's own call.</param>
+    /// <param name="json">Whether to answer with one JSON document.</param>
+    /// <param name="cancellationToken">Stops the command.</param>
+    Task<CommandOutcome> AskAsync(string startDirectory, string run, string? question, bool json, CancellationToken cancellationToken = default);
 }
 
 /// <summary>How often the commands of a run look at what another process asked or recorded.</summary>
@@ -90,6 +124,9 @@ public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSp
 /// <param name="pathBudget">Reckons the run's deepest paths against this machine's limit at its start.</param>
 /// <param name="output">Says what the engine's poller met and what it did about it.</param>
 /// <param name="gitClient">Reads the checkout a run starts from, by the probe its orient step reads.</param>
+/// <param name="agents">Makes and deletes agents: the engine's own read-only agents among them.</param>
+/// <param name="agentRunner">Works the run's advisor, whatever the client is.</param>
+/// <param name="keyStore">The slot the advisor's model reads its key from.</param>
 /// <param name="clock">When the run's records are written, and how every wait of these commands is timed.</param>
 /// <param name="timings">How often the commands look; <see cref="FlowTimings.Default"/> where not given.</param>
 public sealed class FlowService(
@@ -106,6 +143,9 @@ public sealed class FlowService(
     IPathBudget pathBudget,
     IHarnessOutput output,
     Git.IGitClient gitClient,
+    IAgentService agents,
+    Agents.IAgentRunner agentRunner,
+    Secrets.AgentKeyStore keyStore,
     TimeProvider? clock = null,
     FlowTimings? timings = null) : IFlowService
 {
@@ -118,14 +158,20 @@ public sealed class FlowService(
     /// <summary>The command that answers a question of one.</summary>
     public const string AnswerCommand = "answer-orchestrator";
 
+    /// <summary>The command that amends the request one was started with.</summary>
+    public const string AmendCommand = "amend-orchestrator-request";
+
     /// <summary>The command that asks the safe pause of one.</summary>
     public const string PauseCommand = "pause-orchestrator";
 
     /// <summary>The command that stops one where it stands.</summary>
     public const string StopCommand = "stop-orchestrator";
 
-    /// <summary>The refusal of <c>answer-orchestrator --again</c>, worded once.</summary>
-    internal const string AgainRefused = $"--again {FlowCoordinator.PlanUpdateRefused}";
+    /// <summary>The command that asks the tool's own question of a run.</summary>
+    public const string AskStatusCommand = "ask-orchestrator-status";
+
+    /// <summary>The command that asks a person's question of a run.</summary>
+    public const string AskCommand = "ask-orchestrator";
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IHostPlatform _platform = platform;
@@ -140,6 +186,7 @@ public sealed class FlowService(
     private readonly IPathBudget _pathBudget = pathBudget;
     private readonly IHarnessOutput _output = output;
     private readonly Git.IGitClient _gitClient = gitClient;
+    private readonly IAgentService _agents = agents;
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly FlowTimings _timings = timings ?? FlowTimings.Default;
     private readonly FlowRunOwner _owner = new(store, identity, clock);
@@ -340,7 +387,101 @@ public sealed class FlowService(
         // The question the answer names - left out, the one the run has open, which the command shows; with several
         // open, leaving it out is a usage error that lists them. A question named that no longer waits says what
         // became of it and what is open now, so no answer lands on a question nobody saw.
+        //
+        // A changed answer names none of those: it is asked of a set already answered - the last a person answered,
+        // which the command shows and the engine holds to its window and to once.
         FlowQuestionEntry asked;
+
+        if (again)
+        {
+            var (set, why) = LastSetAnswered(questions, run);
+
+            if (set is null)
+            {
+                return Refuse(layout, AnswerCommand, why!, json);
+            }
+
+            // The answer is checked against the set's answers before anything of the run is touched: usage errors,
+            // never a run's refusals - and one that is the answer and the text the set already has is one of them.
+            if (!set.Options.Any(option => string.Equals(option.Answer, answer, StringComparison.Ordinal)) && answer != "abort")
+            {
+                return CommandOutcome.Usage(
+                    $"'{answer}' is not one of the answers '{set.Id}' takes: {string.Join(", ", set.Options.Select(option => option.Answer))}");
+            }
+
+            var changes = set.Options.FirstOrDefault(option => string.Equals(option.Answer, answer, StringComparison.Ordinal))?.Text == true;
+
+            if (changes && string.IsNullOrWhiteSpace(text))
+            {
+                return CommandOutcome.Usage($"'{answer}' is an answer '{set.Id}' takes with a text; give one");
+            }
+
+            if (!changes && !string.IsNullOrWhiteSpace(text) && set.Kind != "ask")
+            {
+                return CommandOutcome.Usage($"'{answer}' is an answer '{set.Id}' takes with no text; give none");
+            }
+
+            if (string.Equals(set.Answers[^1].Answer, answer, StringComparison.Ordinal) && set.Answers[^1].Text == text)
+            {
+                return CommandOutcome.Usage($"'{answer}' is the answer '{set.Id}' already has; a changed answer changes it");
+            }
+
+            // A set is changed one time, and the command says so as it says every other refusal of the run's own.
+            if (set.Answers.Any(answer => answer.ReplacedAt is { } changed))
+            {
+                return Refuse(layout, AnswerCommand, $"question '{set.Id}' of run '{run}' had its answer changed already, at {FlowTimeConverter.Written(set.Answers.First(answer => answer.ReplacedAt is not null).ReplacedAt!.Value)}; a set is changed one time", json);
+            }
+
+            // The definition the run began with says whether it takes a changed answer at all; where it does not, the
+            // refusal is the command's, and nothing is started for it.
+            var frozen = _store.ReadDefinition(layout)
+                ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.DefinitionFile}' is not there, so run '{layout.Name}' holds no definition to go on with");
+
+            if (frozen.Amend is not { ChangedAnswerMinutes: not null })
+            {
+                return Refuse(layout, AnswerCommand, $"orchestrator '{frozen.Name}' takes no changed answer: its amend names no changedAnswerMinutes", json);
+            }
+
+            // Where an engine is running the run, the change is handed to it and the command returns: the engine takes
+            // it at its poll, within the set's window as from the moment stamped here.
+            if (_owner.Live(layout) is not null)
+            {
+                return HandChangeOver(layout, run, set, answer, changes ? text : null, json);
+            }
+
+            // The session is held to the definition it began with, as a resume is, and begins with the change: the
+            // engine holds the set to its window and to once, and the change goes by the gates every update passes.
+            var (digestOfChange, changedDefinition) = await EntryDigestAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
+
+            if (changedDefinition is not null)
+            {
+                return Ended(layout, AnswerCommand, changedDefinition, ResultOf(layout, changedDefinition), json);
+            }
+
+            string? reclaimedChange;
+
+            try
+            {
+                reclaimedChange = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
+            }
+            catch (HarnessException ex)
+            {
+                var outcome = new CommandOutcome(ex.ExitCode, ex.Message);
+                return Ended(layout, AnswerCommand, outcome, ResultOf(layout, outcome), json);
+            }
+
+            return await SessionAsync(
+                context,
+                layout,
+                AnswerCommand,
+                reclaimedChange,
+                () => Resumed(layout, digestOfChange!),
+                (set.Id, answer, changes ? text : null),
+                interrupts,
+                json,
+                cancellationToken,
+                again: true).ConfigureAwait(false);
+        }
 
         if (question is { } named)
         {
@@ -349,24 +490,12 @@ public sealed class FlowService(
                 return Refuse(layout, AnswerCommand, $"run '{run}' holds no question '{named}'", json);
             }
 
-            // A changed answer is asked of a question already answered, which the run's file keeps with every answer
-            // it was given: it is found, and refused for what it would raise, never for being answered.
-            if (again)
-            {
-                return Refuse(layout, AnswerCommand, AgainRefused, json);
-            }
-
             if (entry.State != "open")
             {
                 return Refuse(layout, AnswerCommand, $"question '{named}' of run '{run}' is {entry.State}{(open.Count > 0 ? $"; what is open now: {string.Join(", ", open.Select(one => one.Id))}" : string.Empty)}", json);
             }
 
             asked = entry;
-        }
-        else if (again)
-        {
-            // The answer it would change is one already given, not an open question's.
-            return Refuse(layout, AnswerCommand, AgainRefused, json);
         }
         else if (open.Count == 0)
         {
@@ -408,7 +537,7 @@ public sealed class FlowService(
         // whose session ends before it took it leaves it there, and the next session of the run takes it.
         if (_owner.Live(layout) is not null)
         {
-            _store.AddToInbox(layout, new FlowInboxAnswer(FlowInboxAnswer.NewId(), asked.Id, answer, _clock.GetUtcNow(), takes ? text : null, again));
+            _store.AddToInbox(layout, new FlowInboxAnswer(FlowInboxAnswer.NewId(), asked.Id, answer, _clock.GetUtcNow(), takes ? text : null));
 
             var handed = new CommandOutcome(
                 HarnessExit.Success,
@@ -444,6 +573,137 @@ public sealed class FlowService(
         // The session begins with the answer: the question it names, answered by a person through this command, and
         // everything that can run after it.
         return await SessionAsync(context, layout, AnswerCommand, reclaimed, () => Resumed(layout, digest!), (asked.Id, answer, takes ? text : null), interrupts, json, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The last set a person answered of a run, and why there is none to change, from its questions alone.</summary>
+    /// <param name="questions">Every question the run raised, with every answer each was given.</param>
+    /// <param name="run">The run's name.</param>
+    private static (FlowQuestionEntry? Set, string? Why) LastSetAnswered(FlowQuestionsFile questions, string run)
+    {
+        FlowQuestionEntry? last = null;
+        DateTimeOffset? newest = null;
+
+        foreach (var entry in questions.Questions.Where(entry => entry.State == "answered"))
+        {
+            foreach (var answer in entry.Answers.Where(answer => answer.By?.Who == "person"))
+            {
+                if (newest is null || answer.At > newest)
+                {
+                    last = entry;
+                    newest = answer.At;
+                }
+            }
+        }
+
+        return last is null
+            ? (null, $"no answer of run '{run}' was given by a person, so there is no set to change")
+            : (last, null);
+    }
+
+    /// <summary>Holds a changed answer to the engine running the run, under an id of its own, and returns: the engine takes it at its poll, within the set's window as from the moment stamped here.</summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="run">The run's name.</param>
+    /// <param name="set">The set the answer changes.</param>
+    /// <param name="answer">The new answer, spelled as the set's options spell it.</param>
+    /// <param name="text">The text given with it, where the answer takes one.</param>
+    /// <param name="json">Whether the command answers in its own JSON shape.</param>
+    private CommandOutcome HandChangeOver(OrchestratorLayout layout, string run, FlowQuestionEntry set, string answer, string? text, bool json)
+    {
+        _store.AddToInbox(layout, new FlowInboxAnswer(FlowInboxAnswer.NewId(), set.Id, answer, _clock.GetUtcNow(), text, Again: true));
+
+        var handed = new CommandOutcome(
+            HarnessExit.Success,
+            $"handed '{answer}' to change the answer of question '{set.Id}' to the engine running '{run}'",
+            [
+                $"the engine reads it within {_timings.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s and takes it while the set is still the last a person answered and inside its window; where its session ends first, the next session of the run takes it",
+                $"inbox: {layout.InboxFile}",
+            ]);
+
+        return Ended(layout, AnswerCommand, handed, ResultOf(layout, handed) with { Records = [new FlowRecordPath("inbox", layout.InboxFile)] }, json);
+    }
+
+    /// <inheritdoc/>
+    public async Task<CommandOutcome> AmendAsync(string startDirectory, string run, string? text, string? textFile, bool json, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(startDirectory);
+
+        if (text is not null && textFile is not null)
+        {
+            return CommandOutcome.Usage("the amendment is given two ways, as the command's own argument and as --file; give one");
+        }
+
+        if (textFile is not null)
+        {
+            var (read, problem) = FlowInputs.TextOf(_fileSystem, startDirectory, textFile, "--file");
+
+            if (problem is not null)
+            {
+                return CommandOutcome.Usage(problem);
+            }
+
+            text = read;
+        }
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return CommandOutcome.Usage("the amendment is empty; give one, as the command's own argument or in a file named by --file");
+        }
+
+        var (refused, _, layout) = await LoadAsync(startDirectory, run, AmendCommand, cancellationToken).ConfigureAwait(false);
+
+        if (refused is not null)
+        {
+            return refused;
+        }
+
+        var definition = _store.ReadDefinition(layout)
+            ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.DefinitionFile}' is not there, so run '{layout.Name}' holds no definition to go on with");
+
+        if (definition.Amend is not { Input: not null })
+        {
+            return Refuse(layout, AmendCommand, $"orchestrator '{definition.Name}' takes no amended request: its amend names no input", json);
+        }
+
+        var flow = _store.ReadFlow(layout)
+            ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.FlowFile}' is not there, so run '{layout.Name}' holds no state to weigh an amendment against");
+
+        // The gates every change passes, read of the run as it stands; nothing is recorded for one they refuse.
+        if (FlowUpdateGates.Refused(definition, flow, FlowUpdateCauses.Amendment) is { } gate)
+        {
+            return Refuse(layout, AmendCommand, gate, json);
+        }
+
+        // Where an engine is running the run, the amendment is handed to it and the command returns: it lands in the
+        // inbox under an id of its own, the engine weighs it against the same gates at its poll, and no second engine
+        // is started. An engine whose session ends before it took it leaves it there, and the next session takes it.
+        if (_owner.Live(layout) is not null)
+        {
+            _store.AddAmendmentToInbox(layout, new FlowInboxAmendment(FlowInboxAmendment.NewId(), text, _clock.GetUtcNow(), AmendCommand));
+
+            var handed = new CommandOutcome(
+                HarnessExit.Success,
+                $"handed the amendment to the engine running '{run}'",
+                [
+                    $"the engine reads it within {_timings.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s and takes it where the run can carry it; where its session ends first, the next session of the run takes it",
+                    $"inbox: {layout.InboxFile}",
+                ]);
+
+            return Ended(layout, AmendCommand, handed, ResultOf(layout, handed) with { Records = [new FlowRecordPath("inbox", layout.InboxFile)] }, json);
+        }
+
+        // No engine runs the run: the amendment is recorded, and taken first when the run is next gone on with - by
+        // resume-orchestrator or by an answer. The command starts nothing, and says so.
+        var entry = _store.AddUpdate(layout, run, _clock.GetUtcNow(), id => new FlowUpdateEntry(id, FlowUpdateCauses.Amendment, FlowUpdateStates.Queued, _clock.GetUtcNow(), Amendment: text, Through: AmendCommand));
+
+        var recorded = new CommandOutcome(
+            HarnessExit.Success,
+            $"the amendment is recorded as update {entry.Id} of run '{run}', and is taken first when the run is next gone on with",
+            [
+                "this command starts nothing; resume-orchestrator, or an answer, takes it before anything else runs",
+                $"updates: {layout.UpdatesFile}",
+            ]);
+
+        return Ended(layout, AmendCommand, recorded, ResultOf(layout, recorded) with { Records = [new FlowRecordPath("updates", layout.UpdatesFile)] }, json);
     }
 
     /// <inheritdoc/>
@@ -572,6 +832,231 @@ public sealed class FlowService(
             [.. QuestionsText.Of(questions), $"questions: {layout.QuestionsFile}"]);
     }
 
+    /// <inheritdoc/>
+    public Task<CommandOutcome> AskStatusAsync(string startDirectory, string run, bool json, CancellationToken cancellationToken = default)
+        => AskAsync(startDirectory, run, question: null, json, cancellationToken);
+
+    /// <inheritdoc/>
+    public async Task<CommandOutcome> AskAsync(string startDirectory, string run, string? question, bool json, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(startDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(run);
+
+        if (question is { Length: 0 })
+        {
+            return CommandOutcome.Usage("the question is empty: ask-orchestrator takes it as its argument, in the person's words");
+        }
+
+        if (OrchestrationRules.NameProblem(run) is { } shape)
+        {
+            return CommandOutcome.Usage(shape);
+        }
+
+        // Both commands only read: no sweep of what a killed engine's steps left running, no lock, no line in the run's
+        // log - what a call leaves behind is its own record, under the run's asks/ alone.
+        var context = await MainTree.LoadAsync(_contextLoader, _platform, startDirectory, cancellationToken).ConfigureAwait(false);
+        var layout = OrchestratorLayout.Of(context.Layout, run);
+
+        if (_store.ReadOrchestrator(layout) is null)
+        {
+            return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run));
+        }
+
+        if (_store.ReadFlow(layout) is not { } flow)
+        {
+            return HandMade(layout, question is not null, json);
+        }
+
+        var definition = _store.ReadDefinition(layout);
+
+        if (definition is null)
+        {
+            return CommandOutcome.Refused($"'{layout.DefinitionFile}' is not there, so run '{run}' holds no definition to ask about");
+        }
+
+        var asOf = _clock.GetUtcNow();
+        var engine = OrchestratorService.EngineOf(_store, _owner, layout, flow);
+        var facts = FlowStatus.Facts(definition, flow, _store.ReadFlowQuestions(layout), _store.ReadFlowUpdates(layout), engine, asOf);
+        var text = string.Join("\n", facts);
+
+        // The call's own record, in a directory the engine never reads: the facts as given, and what asking cost. The
+        // files of the reporter's own attempt, where one runs, are kept by its runner under the same directory.
+        var stamp = $"{asOf.ToUniversalTime():yyyyMMddTHHmmssZ}-{Random.Shared.Next(0x10000, 0xFFFFF).ToString("x", CultureInfo.InvariantCulture)}";
+        var asks = Path.Combine(layout.AsksDirectory, stamp);
+        _fileSystem.WriteAllTextAtomic(Path.Combine(asks, "facts.md"), text + "\n");
+
+        if (definition.Reporter is not { } reporter)
+        {
+            var none = "the workflow names no reporter, so no model words the run's facts";
+
+            WriteAsk(layout, asks, question, model: null, usd: null, tokens: null, none);
+
+            return question is null
+                ? Answered(layout, CommandOutcome.Ok(facts[0], [.. facts.Skip(1), string.Empty, $"no model worded this: {none}"]), asks, text, null, null, null, null, json)
+                : CommandOutcome.Failed(
+                    HarnessExit.ConfigInvalid,
+                    $"ask-orchestrator was refused: {none}",
+                    [$"record: {Path.Combine(asks, AskFileName)}"]);
+        }
+
+        var reported = await new ReporterRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore).ReportAsync(
+            new FlowReporterCall(
+                run,
+                definition.Name,
+                reporter,
+                text,
+                question,
+                layout.Directory,
+                stamp,
+                new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, flow.StartCommit, definition, flow.Branch)),
+            cancellationToken).ConfigureAwait(false);
+
+        WriteAsk(layout, asks, question, reported.Model, reported.Usd, reported.Tokens, reported.WhyNot);
+
+        if (question is null)
+        {
+            return Answered(
+                layout,
+                reported.Answer is { } worded
+                    ? CommandOutcome.Ok(facts[0], [.. facts.Skip(1), string.Empty, worded])
+                    : CommandOutcome.Ok(facts[0], [.. facts.Skip(1), string.Empty, $"no model worded this: {reported.WhyNot}"]),
+                asks,
+                text,
+                reported.Answer,
+                reported.WhyNot,
+                reported.Model,
+                (reported.Usd, reported.Tokens),
+                json);
+        }
+
+        return reported.Answer is { } answered
+            ? Answered(
+                layout,
+                CommandOutcome.Ok($"run '{run}' answered the question, worded by {reported.Model ?? "its reporter"}", [.. facts, string.Empty, answered]),
+                asks,
+                text,
+                answered,
+                null,
+                reported.Model,
+                (reported.Usd, reported.Tokens),
+                json)
+            : CommandOutcome.Failed(
+                reported.ExitCode ?? HarnessExit.CommandFailed,
+                $"ask-orchestrator was refused: no model worded an answer: {reported.WhyNot}",
+                [.. facts, string.Empty, $"record: {Path.Combine(asks, AskFileName)}"]);
+    }
+
+    /// <summary>The name of the file one call of the two ask commands keeps its own record in.</summary>
+    private const string AskFileName = "ask.json";
+
+    /// <summary>
+    /// What one of the two ask commands answers once the run's facts are read: its own record named, what the answer
+    /// cost - the person's, never the run's - and, where <c>--json</c> was asked for, the facts and the answer apart.
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="outcome">The outcome as the facts and the answer leave it.</param>
+    /// <param name="asks">The call's own directory under the run's <c>asks/</c>.</param>
+    /// <param name="facts">The facts as text.</param>
+    /// <param name="answer">The reporter's answer; null where none worded them.</param>
+    /// <param name="whyNot">Why no model worded them; null where one did.</param>
+    /// <param name="model">The model that served the reporter, where one did.</param>
+    /// <param name="cost">What the answer cost and the tokens its clients reported; nulls where nothing is known.</param>
+    /// <param name="json">Whether to answer with one JSON document.</param>
+    private CommandOutcome Answered(
+        OrchestratorLayout layout,
+        CommandOutcome outcome,
+        string asks,
+        string facts,
+        string? answer,
+        string? whyNot,
+        string? model,
+        (double? Usd, long? Tokens)? cost,
+        bool json)
+    {
+        var said = outcome with
+        {
+            Details =
+            [
+                .. outcome.Details ?? [],
+                string.Empty,
+                cost is { Usd: { } usd } || model is { Length: > 0 }
+                    ? $"This answer cost {(cost is { Usd: { } named } ? $"{named.ToString("0.####", CultureInfo.InvariantCulture)} USD" : "an unknown amount")}{(model is { Length: > 0 } ? $" ({model}{(cost is { Tokens: { } tokens } ? $", {tokens.ToString(CultureInfo.InvariantCulture)} tokens" : string.Empty)})" : string.Empty)}. It is not counted in the run's budget."
+                    : "This answer cost nothing: no model worded it.",
+                $"Record: {asks}",
+            ],
+        };
+
+        return json
+            ? said with
+            {
+                Data = [ReportJson.Stopped(said.ExitCode, said.Message, FlowReports.AskDocument(facts, answer, whyNot, model, cost?.Usd, cost?.Tokens, asks))],
+                Quiet = true,
+            }
+            : said;
+    }
+
+    /// <summary>Writes the call's own record, <c>ask.json</c>: the question, the model, the tokens, the cost - or why no model ran.</summary>
+    private void WriteAsk(OrchestratorLayout layout, string asks, string? question, string? model, double? usd, long? tokens, string? whyNot)
+        => JsonStateFile.Write(
+            _fileSystem,
+            Path.Combine(asks, AskFileName),
+            new System.Text.Json.Nodes.JsonObject
+            {
+                ["schema"] = 1,
+                ["run"] = layout.Name,
+                ["command"] = question is null ? AskStatusCommand : AskCommand,
+                ["at"] = FlowTimeConverter.Written(_clock.GetUtcNow()),
+                ["question"] = question,
+                ["model"] = model,
+                ["usd"] = usd,
+                ["tokens"] = tokens,
+                ["whyNot"] = whyNot,
+            });
+
+    /// <summary>
+    /// What the two ask commands answer for an orchestrator that holds no run - one made by hand, which no flow runs:
+    /// the orchestrator's own facts, said to be such, and no reporter's words, for it names none.
+    /// </summary>
+    /// <param name="layout">The orchestrator's layout.</param>
+    /// <param name="asked">Whether the person's question was asked (<c>ask-orchestrator</c>), refused over the tool's own.</param>
+    /// <param name="json">Whether to answer with one JSON document.</param>
+    private CommandOutcome HandMade(OrchestratorLayout layout, bool asked, bool json)
+    {
+        var record = _store.ReadOrchestrator(layout);
+        var agents = _store.Agents(layout);
+        var facts = new List<string>
+        {
+            $"orchestrator '{layout.Name}' holds no run: it was made by hand, and these are list-orchestrator's facts of it",
+            $"model {record?.Model ?? "unrecorded"}, at most {(record?.Parallel ?? OrchestratorRecord.DefaultParallel).ToString(CultureInfo.InvariantCulture)} agents open",
+            agents.Count == 0
+                ? "no agents"
+                : $"agents: {string.Join(", ", agents.Select(agent => $"{agent.Name} ({(agent.Record?.State ?? "unreadable").ToLower(CultureInfo.InvariantCulture)})"))}",
+            "list-orchestrator names its agents' worktrees",
+        };
+
+        // The call's own record, as every call keeps one: the orchestrator's own facts, and why no model worded them.
+        var now = _clock.GetUtcNow();
+        var asks = Path.Combine(layout.AsksDirectory, $"{now.ToUniversalTime():yyyyMMddTHHmmssZ}-{Random.Shared.Next(0x10000, 0xFFFFF).ToString("x", CultureInfo.InvariantCulture)}");
+        _fileSystem.WriteAllTextAtomic(Path.Combine(asks, "facts.md"), string.Join("\n", facts) + "\n");
+        WriteAsk(layout, asks, question: null, model: null, usd: null, tokens: null, whyNot: "the orchestrator holds no run");
+
+        var text = string.Join("\n", facts);
+
+        if (!asked)
+        {
+            return Answered(layout, CommandOutcome.Ok(facts[0], [.. facts.Skip(1)]), asks, text, null, "the orchestrator holds no run", null, null, json);
+        }
+
+        var refused = CommandOutcome.Failed(
+            HarnessExit.ConfigInvalid,
+            $"ask-orchestrator was refused: orchestrator '{layout.Name}' holds no run, so there is nothing to answer from and no reporter to answer",
+            [.. facts, string.Empty, $"record: {asks}"]);
+
+        return json
+            ? refused with { Data = [ReportJson.Stopped(refused.ExitCode, refused.Message, FlowReports.AskDocument(text, null, "the orchestrator holds no run", null, null, null, asks))], Quiet = true }
+            : refused;
+    }
+
     /// <summary>
     /// Why run <paramref name="run"/> of <paramref name="workflow"/> cannot start from <paramref name="checkout"/>: its
     /// pull request's base cannot be filled, or the checkout is not one a run starts from (<see cref="FlowCheckout.StartRefusal"/>,
@@ -672,7 +1157,8 @@ public sealed class FlowService(
         (string Question, string Answer, string? Text)? answered,
         FlowInterrupts? interrupts,
         bool json,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool again = false)
     {
         var said = new List<string>();
         var inbox = false;
@@ -708,13 +1194,52 @@ public sealed class FlowService(
                 resume,
                 layout.Name,
                 new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, runContext.StartCommit, definition, runContext.Branch),
-                Agents.AgentProviders.Resolve(context.Config).Providers is { } providers ? WorkflowValidator.AgentModels(definition, providers) : null,
-                named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, definition.Name, named, "a pull request's body"));
+                Agents.AgentProviders.Resolve(context.Config).Providers is { } providers
+                    ? WorkflowValidator.AgentModels(
+                        definition,
+                        providers,
+                        named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, definition.Name, named, "an agent definition"))
+                    : null,
+                named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, definition.Name, named, "a workflow file"),
+                async (run, agent, token) =>
+                {
+                    // The engine's own deleting of a read-only agent whose work is over: applied, with nothing to fold
+                    // and no worktree to remove, and its failure said in the run's log, for the run goes on whatever
+                    // it did.
+                    var deleted = await _agents.DeleteAsync(
+                        new DeleteAgentRequest(context.Layout.MainCheckoutRoot, layout.Name, agent, new FoldAllowances(), Apply: true, DiscardUncommitted: false),
+                        token).ConfigureAwait(false);
+
+                    if (!deleted.Outcome.Succeeded)
+                    {
+                        _ = _log.Append(layout, agent, "delete-agent", deleted.Outcome);
+                    }
+
+                    return deleted.Outcome;
+                },
+                new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output),
+                updates: () => _store.ReadFlowUpdates(layout));
             var before = _store.ReadFlowQuestions(layout);
 
-            if (answered is { } given && !coordinator.TryAnswer(given.Question, given.Answer, given.Text, out var problem, AnswerCommand))
+            // What a session before this one recorded and left queued - an amendment given while no engine ran - is
+            // taken before anything else, for the next session of the run takes it first.
+            said.AddRange(coordinator.TakeQueuedUpdates());
+
+            if (answered is { } given)
             {
-                throw new HarnessException(HarnessExit.Refused, problem!);
+                // The session begins with the command's own act: an answer to its open question, or - where it changes
+                // one already given - a change held to its window and to once by the engine, which says why where it
+                // was not taken.
+                string? problem;
+
+                var taken = again
+                    ? coordinator.TryChangeAnswer(given.Answer, given.Text, out problem, AnswerCommand, given.Question)
+                    : coordinator.TryAnswer(given.Question, given.Answer, given.Text, out problem, AnswerCommand);
+
+                if (!taken)
+                {
+                    throw new HarnessException(HarnessExit.Refused, problem!);
+                }
             }
 
             // What was handed to an engine whose session ended before it took it is this session's to take - and what
@@ -759,7 +1284,7 @@ public sealed class FlowService(
                 ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.FlowFile}' is not there after the session of run '{layout.Name}', which writes it at every change");
             var questions = _store.ReadFlowQuestions(layout);
             var exit = ExitOf(end, flow);
-            var left = FlowReports.Write(_fileSystem, layout, flow, questions, end.Summary, exit, _clock.GetUtcNow());
+            var left = FlowReports.Write(_fileSystem, layout, flow, questions, end.Summary, exit, _clock.GetUtcNow(), _store.ReadFlowUpdates(layout));
             var named = RecordsOf(layout, inbox);
 
             var result = new FlowRunResult(
@@ -1022,21 +1547,26 @@ public sealed class FlowService(
         => offer is { IsCompleted: true, IsCompletedSuccessfully: false };
 
     /// <summary>
-    /// Takes every answer in the inbox the session does not hold - never offered to the loop, or handed back by it -
-    /// between two drives, each weighed by the engine under its entry's id (<see cref="FlowCoordinator.AnswerHandedOver"/>):
-    /// applied as a person's through <c>answer-orchestrator</c>; or - where the run does not take it - said, its refusal
-    /// recorded as the loop records one it refuses; or, where the run's records hold it already - a session before this
-    /// one weighed it, and its removal failed or was cut off - only emptied from the inbox. Each is settled as one the loop
-    /// weighed is - held as an offer completed - and counted then, so <see cref="Settle"/> empties it from the inbox and
-    /// tries again where that fails, and nothing takes or offers it a second time.
+    /// Takes everything in the inbox the session does not hold - never offered to the loop, or handed back by it -
+    /// between two drives: each answer weighed by the engine under its entry's id
+    /// (<see cref="FlowCoordinator.AnswerHandedOver(string, string, string?, out string?, string?, string?, bool, DateTimeOffset?)"/>) - and each amendment of
+    /// the request weighed against the same gates
+    /// (<see cref="FlowCoordinator.AmendmentHandedOver(string, string, out string?, string?, DateTimeOffset?, string?)"/>) -
+    /// applied as a person's through <c>answer-orchestrator</c> or <c>amend-orchestrator-request</c>; or - where the
+    /// run does not take it - said, its refusal recorded as the loop records one it refuses; or, where the run's
+    /// records hold it already - a session before this one weighed it, and its removal failed or was cut off - only
+    /// emptied from the inbox. Each is settled as one the loop weighed is - held as an offer completed - and counted
+    /// then, so <see cref="Settle"/> empties it from the inbox and tries again where that fails, and nothing takes or
+    /// offers it a second time.
     /// </summary>
-    /// <returns>How many answers were taken, and how many were read.</returns>
+    /// <returns>How many were taken, and how many were read.</returns>
     private (int Taken, int Seen) TakeInbox(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<FlowHandedOver>> offered, List<string> said)
     {
         var taken = 0;
         var seen = 0;
+        var held = _store.ReadInbox(layout);
 
-        foreach (var entry in _store.ReadInbox(layout)?.Answers ?? [])
+        foreach (var entry in held?.Answers ?? [])
         {
             if (offered.TryGetValue(entry.Id, out var offer) && !HandedBack(offer))
             {
@@ -1045,7 +1575,7 @@ public sealed class FlowService(
             }
 
             seen++;
-            var handed = coordinator.AnswerHandedOver(entry.Question, entry.Answer, entry.Text, out var problem, AnswerCommand, entry.Id, entry.Again);
+            var handed = coordinator.AnswerHandedOver(entry.Question, entry.Answer, entry.Text, out var problem, AnswerCommand, entry.Id, entry.Again, entry.At);
             var about = $"the answer '{entry.Answer}' handed over for question '{entry.Question}'";
 
             switch (handed)
@@ -1053,6 +1583,34 @@ public sealed class FlowService(
                 case FlowHandedOver.Taken:
                     taken++;
                     said.Add($"{about} was taken from the inbox");
+                    break;
+                case FlowHandedOver.Refused:
+                    said.Add($"{about} was not taken: {problem}");
+                    break;
+                default:
+                    said.Add($"{about} was recorded by the run already, so it is only emptied from the inbox");
+                    break;
+            }
+
+            offered[entry.Id] = Task.FromResult(handed);
+        }
+
+        foreach (var entry in held?.Amendments ?? [])
+        {
+            if (offered.TryGetValue(entry.Id, out var offer) && !HandedBack(offer))
+            {
+                continue;
+            }
+
+            seen++;
+            var handed = coordinator.AmendmentHandedOver(entry.Text, entry.Through ?? AmendCommand, out var problem, entry.Id, entry.At);
+            var about = "the amendment handed over";
+
+            switch (handed)
+            {
+                case FlowHandedOver.Taken:
+                    taken++;
+                    said.Add($"{about} was taken from the inbox: every step that starts reads the request with its amendments");
                     break;
                 case FlowHandedOver.Refused:
                     said.Add($"{about} was not taken: {problem}");
@@ -1100,6 +1658,7 @@ public sealed class FlowService(
             new("state", layout.FlowFile),
             new("status", layout.WorkflowStatusFile),
             new("questions", layout.QuestionsFile),
+            new("updates", layout.UpdatesFile),
             new("issues", layout.PreExistingIssuesFile),
             new("definition", layout.DefinitionFile),
             new("events", layout.EventsFile),

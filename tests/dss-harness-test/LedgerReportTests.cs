@@ -399,6 +399,56 @@ public sealed class LedgerReportTests
     }
 
     /// <summary>
+    /// What a leg's test invocation kept as failure evidence is its own line below the table - the directory, how
+    /// many files were kept and their size, and how many were refused over the cap, could not be read, or named
+    /// nothing - and the same facts as data, each file named.
+    /// </summary>
+    [Fact]
+    public void TheReport_NamesWhatALegKeptOnFailure_TextAndData()
+    {
+        var kept = new DssHarness.Core.Testing.KeptOnFailure(
+            "/home/dev/repo/.harness-config/runs/r/lin/kept-on-failure",
+            Bytes: 5 * 1024 * 1024,
+            Kept: ["corpus-out/report-N2-r0.json", "corpus-out/stdout.txt"],
+            RefusedOverCap: ["corpus-out/huge.bin"],
+            Unreadable: ["corpus-out/held.dat"],
+            NamedNothing: ["absent"]);
+        var report = LedgerReport.From(
+        [
+            Entry("win", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty),
+            Entry("lin", LegVerdict.Failed, TimeSpan.FromSeconds(1), string.Empty) with { KeptOnFailure = kept },
+        ],
+        durationWarningFactor: 0);
+
+        // The text line: the counts a reader needs before opening anything, beside the verdict they belong to.
+        var table = string.Join(Environment.NewLine, report.Render());
+
+        Assert.Contains(
+            "lin: kept 2 file(s) (5 MiB) as failure evidence in '/home/dev/repo/.harness-config/runs/r/lin/kept-on-failure', "
+            + "1 file(s) refused over the cap, 1 file(s) could not be read, 1 path(s) named nothing",
+            table,
+            StringComparison.Ordinal);
+
+        // A leg that kept nothing has no line, and a leg that passed no field.
+        Assert.DoesNotContain("win: kept", table, StringComparison.Ordinal);
+
+        using var document = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: [], shown: text => "~" + text));
+        var legs = document.RootElement.GetProperty("legs").EnumerateArray().ToList();
+
+        Assert.False(legs[0].TryGetProperty("keptOnFailure", out _));
+
+        var evidence = legs[1].GetProperty("keptOnFailure");
+
+        Assert.Equal(
+            ("~/home/dev/repo/.harness-config/runs/r/lin/kept-on-failure", 2, 5242880),
+            (evidence.GetProperty("directory").GetString(), evidence.GetProperty("files").GetInt32(), evidence.GetProperty("bytes").GetInt64()));
+        Assert.Equal(["corpus-out/report-N2-r0.json", "corpus-out/stdout.txt"], evidence.GetProperty("kept").EnumerateArray().Select(file => file.GetString()));
+        Assert.Equal(["corpus-out/huge.bin"], evidence.GetProperty("refusedOverCap").EnumerateArray().Select(file => file.GetString()));
+        Assert.Equal(["corpus-out/held.dat"], evidence.GetProperty("unreadable").EnumerateArray().Select(file => file.GetString()));
+        Assert.Equal(["absent"], evidence.GetProperty("namedNothing").EnumerateArray().Select(path => path.GetString()));
+    }
+
+    /// <summary>
     /// The document carries each control of a leg's sweep that did not pass - its runner, verdict, detail and red cases,
     /// where its records are as the reader is told them, and what ctest registered for its red cases: how they were
     /// matched, or why ctest could not say, and what of each test it names a sweep does not apply; a leg no control

@@ -67,7 +67,7 @@ public sealed class AgentEndingsTests
             AgentEndings.AtLimit("the provider", new AgentAccountLimit(BalanceSpent: true, Key: "WORK_KEY"), "no credit", Mask).Error);
     }
 
-    /// <summary>A run's usage is counted in all and by model, its first model serving from the turn it began on.</summary>
+    /// <summary>A run's usage is counted in all and by model, each model that served named from the turn it began at.</summary>
     [Fact]
     public void ARunsUsage_IsCountedInAllAndByModel()
     {
@@ -78,7 +78,9 @@ public sealed class AgentEndingsTests
         tally.Add("m1", new AgentUsage(100, 200, 0, 0, 0, 0), 4);
 
         Assert.Equal(new AgentUsage(111, 222, 0, 0, 0, 0), tally.Total);
-        Assert.Equal([new AgentServedModel("m1", 1)], tally.Served);
+
+        // A model that comes back - a fallback and a return among them - is named from each turn it began at.
+        Assert.Equal([new AgentServedModel("m1", 1), new AgentServedModel("m2", 3), new AgentServedModel("m1", 4)], tally.Served);
 
         var report = tally.Report(new AgentCost(Counted: 1.5m));
 

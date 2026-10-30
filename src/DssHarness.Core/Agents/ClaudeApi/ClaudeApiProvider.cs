@@ -67,6 +67,21 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
     }
 
     /// <inheritdoc/>
+    public string EffortMessage(string effort)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(effort);
+
+        // The one form a mid-conversation effort change takes on this API: a message of no content that names the
+        // level, sent under ClaudeApiRequest.MidConversationEffortBeta, which changing the top-level effort would not.
+        return new JsonObject
+        {
+            ["role"] = "system",
+            ["content"] = new JsonArray(),
+            ["output_config"] = new JsonObject { ["effort"] = effort },
+        }.ToJsonString(ApiBody.Json);
+    }
+
+    /// <inheritdoc/>
     public IReadOnlyList<string> Answers(ChatTurn turn, IReadOnlyList<ChatAnswer> answers, IReadOnlyList<string> messages)
     {
         ArgumentNullException.ThrowIfNull(turn);

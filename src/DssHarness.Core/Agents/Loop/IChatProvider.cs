@@ -38,6 +38,14 @@ public interface IChatProvider
     string UserMessage(string text);
 
     /// <summary>
+    /// An effort change told in the conversation, in the provider's own form, appended to what is stored and sent back
+    /// with every later request; null where the provider is told the level on each request instead, and changing it
+    /// there costs no cache of the conversation's.
+    /// </summary>
+    /// <param name="effort">The level the step goes on at.</param>
+    string? EffortMessage(string effort) => null;
+
+    /// <summary>
     /// The messages that answer <paramref name="turn"/>, in the provider's own form: each of its calls' answers, in the
     /// order the calls were made, and then each message of the engine's, in the order it was given - the agent reads
     /// them all before it goes on.
@@ -82,6 +90,16 @@ public interface IChatProvider
 /// Whether the agent's last answer read as no JSON and was sent back: a provider whose wire holds no answer to the schema
 /// asks this request for JSON alone, offering no tool; one whose wire holds every answer to it asks it as any other.
 /// </param>
+/// <param name="CreditToken">
+/// The credit a declined request left, sent back with the same request on the next model where one came and the move
+/// changed nothing but the model; null otherwise. Where the provider answers this request with a failure naming the
+/// token, the same request is sent again without it.
+/// </param>
+/// <param name="FirstEffort">
+/// The effort the conversation began at, where it began at one and a fallback move has since changed the level: what a
+/// provider that caches the conversation is sent top-level still - changing it there would drop the cached
+/// conversation - the change told in the conversation instead. Null where the level never changed.
+/// </param>
 public sealed record ChatRequest(
     string Model,
     string? Effort,
@@ -93,7 +111,9 @@ public sealed record ChatRequest(
     string? Schema,
     bool Credit = false,
     int? ShortenedBefore = null,
-    bool JsonAlone = false);
+    bool JsonAlone = false,
+    AgentFallbackCredit? CreditToken = null,
+    string? FirstEffort = null);
 
 /// <summary>One part of what a request answers, in the order it came.</summary>
 public abstract record ChatPart

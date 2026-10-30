@@ -44,8 +44,8 @@ public sealed record FlowRecommendation(
     string? Model = null,
     string? Advice = null)
 {
-    /// <summary>The one recommendation this build's questions carry: none sought, said plainly.</summary>
-    public static FlowRecommendation NotSought { get; } = new("notSought", Why: "no recommendation was sought: this build does not ask an advisor yet");
+    /// <summary>The recommendation a question carries where none was sought: said plainly, and nothing is put in a person's place.</summary>
+    public static FlowRecommendation NotSought { get; } = new("notSought", Why: "no recommendation was sought");
 }
 
 /// <summary>Who gave an answer: a person (and through what), the configuration (and where), or the run's input.</summary>
@@ -93,13 +93,15 @@ public sealed record FlowRefusedAnswer(
 /// <param name="By">Who gave it.</param>
 /// <param name="Did">What the engine did with it; null where the answer has not been applied yet.</param>
 /// <param name="ReplacedAt">When a later answer replaced it, where one did; null while it stands.</param>
+/// <param name="Update">The id of the plan update that changed this answer, where one did; null for every answer a person gave as its first.</param>
 public sealed record FlowAnswerRecord(
     string Answer,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At,
     string? Text = null,
     FlowAnswerBy? By = null,
     string? Did = null,
-    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? ReplacedAt = null);
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? ReplacedAt = null,
+    string? Update = null);
 
 /// <summary>
 /// One question a run raised, as <c>questions.json</c> holds it: its id, kind and state, who raised it, the problem

@@ -78,9 +78,12 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `list-orchestrator [<o>] [--steps] [--questions] [--json]` | List orchestrators, their agents and where each stands; for a run, its own lines from `flow.json` and what its engine is doing - none, running, pausing, recording what a complete pause left running, or gone - each step instance with its state, visit, attempt, agent and directory with `--steps`, and each question and what became of it with `--questions` |
 | `run-orchestrator <workflow> [--run <name>] [--input k=v]... [--json]` | Start a run of a declared workflow: validate it, make the run - `r<N>`, one more than the highest there, or `--run`'s name, refused where it is taken - claim it for this process, and drive it until nothing more can run: done `0`, failed `20` (`21` where every failure that ended it was incomplete), paused on a question `1`, paused or stopped on request `130`; `k=@<file>` gives a text input a file's text, relative to `--directory`. Refused (13) while another run of the repository is unfinished with work in the tree |
 | `resume-orchestrator <run> [--json]` | Go on with a run from its records alone, where it stood - what a stop, a crash or an answer left - under the definition it began with: what was cut off, and a failure that ended the run, run again (a failure answered `fail` stands), what the run owed is made first, and every question and answer is kept; it goes on beside an open question, and is refused (13), having written nothing, only where nothing can run until one is answered (a budget question open pauses it instead); refused (13) too where the repository's entry for it changed since, or where a record the run is made with is missing, named |
-| `answer-orchestrator <run> <answer> [--question <id>] [--text <text> \| --text-file <file>] [--again] [--json]` | Answer a question of a run: handed to the engine running it through `inbox.json`, or else a session of its own; `--again`, which changes an answer, is refused in this build |
+| `answer-orchestrator <run> <answer> [--question <id>] [--text <text> \| --text-file <file>] [--again] [--json]` | Answer a question of a run: handed to the engine running it through `inbox.json`, or else a session of its own; `--again` changes the last answer a person gave - the set the command shows - within the minutes the workflow's `amend.changedAnswerMinutes` names and once, both answers kept in `questions.json` and a `pause` step whose answer changed visited again done at once with the new one; where the run has begun the scope its plan updates are planned in, the change raises the workflow's planning step and the run is held while it plans (or is queued behind an update under way) |
+| `amend-orchestrator-request <run> [<text> \| --file <path>] [--json]` | Amend the request a run was started with: handed to the engine running it through `inbox.json`, or else recorded in `updates.json` as a plan update `queued`, taken first when the run is next gone on with - by `resume-orchestrator` or an answer; where no plan holds it, every step that starts reads the request with its amendments, in `{input.request}` and every expression alike (a `preAnswer`'s quote is looked for in the value as given), and where the plan's scope has begun the workflow's planning step is raised - a new visit of it in the newest instance of its scope, ahead of everything else - the run held while it plans (nothing started outside that scope, what is in flight untouched), its prompts reading `{update.cause}`, `{update.since}` and `{update.work}`, and its `amend.then` running the check it names again until the scope rests and the plan stands - or the step fails and its `onFailure` gives the update up, no plan holding the change; once the plan stands the pieces its `amend.scope` reads are placed - an `added` piece one more work item of the work-item group, a `changed` or `removed` piece against the instance that carries its work item (given the piece's item where it waits, withdrawn before it began, or brought to rest and visited again in its place with its agent where it has begun), checked by `validate-plan` with the items of the round they join; a `told` piece tells - a reason step in flight that it names sent one message into the conversation it is in (landing when its calls finish, never cutting its turn), a step waiting on a question told with the answer, one that starts later in named work reading it in a part of its own prompt, who was not concerned and what was not delivered recorded; a reason step ended in order is told its piece first, as the lead of its handoff question; where the round a piece joins has ended the work is owed to the loop's next iteration, which runs whatever its `until` says, one iteration added at the loop's bound for the update (once per update, at most `amend.maxAddedIterations` over the run), and the report and `list-orchestrator` say every piece, where it was carried out and how that ended, and the iteration added; one update at a time, one that arrives while another is under way queued behind it; refused (13) where the run is done, past the step its `amend.before` names, past its work items, or the workflow's `amend` names no `input`; the command starts nothing |
 | `pause-orchestrator <run> [--all] [--json]` | Ask the engine running a run for the safe pause through `stop.json` - its agents hand off, the machine steps finish unless `--all`, then the run is paused - and wait until it is complete |
 | `stop-orchestrator <run> [--now] [--json]` | Ask the engine running a run to stop where it stands, and wait 30 s; `--now` ends the engine's process - only on this machine, and only the process its owner names by its start |
+| `ask-orchestrator-status <run> [--json]` | The tool's own question of a run - what is happening now, what is done, what is left, what it waits for, and when it may finish - answered with the engine's facts (computed from the run's records, stamped with the moment they were read) and, where the workflow's `reporter` names one, its words: the facts first, then the model's, then what the answer cost - the person's, never the run's. Reads only: nothing of the run is written or locked but the command's own record under the run's `asks/`; where no model words the facts, they are still the answer, the command says why no model did, and it exits 0. `--json` gives the facts and the answer apart; an orchestrator that holds no run is answered with `list-orchestrator`'s facts of it, said to be such |
+| `ask-orchestrator <run> "<question>" [--json]` | A person's question about a run, answered from its records by the workflow's `reporter` over the engine's facts; reads only, as `ask-orchestrator-status` does. Refused where no model can answer: 12 where the workflow names no reporter, 13 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model failed, 21 where it could not be reached or its account is at its limit; neither command installs Claude Code or brings one up to date |
 | `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there (`help workflows`). Nothing is run |
 | `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there; a file that cannot be written takes back what was written |
 | `list-agent-providers [--template] [--json]` | List the agent sections config.json declares: each provider, its keys' names in the order they are tried with whether the slot holds each - `present` or `missing`, never a value - its models and whether each is priced, the tiers, the clients and each web-search source's key; exit 0 whatever is missing; `--template` prints the sections as `init` writes them into a new config, to paste into an existing one (`help agent-clients`) |
@@ -212,7 +215,13 @@ A test passes only where its runner printed its `successPattern`, and `countPatt
 many tests ran: a leg that ran a different number than the other legs of its project and
 `testSet` is marked on its own line, never as a timing and never changing its verdict. A set
 that differs on purpose, such as a platform's own tests, is named with `testSet` on that
-platform's test invocation.
+platform's test invocation. A test invocation that does not pass may name what it keeps as
+evidence: `keepOnFailure`, paths under the leg's build directory — files, directories or
+patterns — copied into `kept-on-failure/` beside the leg's log when the verdict is anything
+but a pass, within `keepOnFailureCapBytes` kept in all (64 MiB by default). A pass keeps
+nothing, and a later step reads nothing from it: it is evidence beside the verdict, never an
+output. The leg's line names the directory and the counts — files kept, refused over the cap,
+unreadable, or naming nothing.
 
 **Refuse early, with the arithmetic.** `create-worktree` will not create a worktree
 whose build paths cannot fit inside Windows' path limit, because that failure
@@ -481,10 +490,55 @@ engine raises the triage and keeps the list; until the reasoning step runner is 
 A reasoning step's `effort` is one level for every model it may run on, or a map giving each its own -
 `all` for the rest and a model's code for one; the shipped workflow runs its heaviest steps at
 `xhigh` and its other agents at `high`, or `low` on the `fast` tier, every model of a step's tier at
-the one level. Each model's level is checked against
+the one level. Where a step gives a model none, its agent file's map or level is read the same way
+below it, and a model neither names runs at its own default. Each model's level is checked against
 what that model takes, and `validate-workflow` says, under the line that says a definition holds,
 every step's models and levels, each provider's prices for the models its steps may run on and the
-date they were read, and each key a step's model would read that the slot lacks. A `test` step's
+date they were read, and each key a step's model would read that the slot lacks. A step's order over
+its tier's models is entries of a model and one of its provider's keys, each model's keys before the
+next model, and a model named outright - on the step or in its agent file - runs on that model with
+none after its own keys; `help agent-definitions` says what an agent file is and takes.
+
+A reasoning step that says `ask: true` may put its questions to a person: the step pauses on them,
+and the answer - a free text, or `decide`, which leaves them to the agent and what it recommended -
+go on in the same attempt, `askRounds` times at most, on the two API clients as the next message of
+the stored conversation and on Claude Code as a new launch whose continuation record ends with the
+questions word for word. What an agent assumed without asking is kept either way - read as
+`<step>.assumptions` and named in the run's own `run.assumptions`, so an unattended run stops for
+nothing and hides nothing. A limit of a step's own - its turns, its budget, a truncated answer, a
+full context - asks: `retry` begins a new attempt, `more` (offered only where a stored conversation
+of the attempt can be handed) grants the bound once again in the same conversation, `compact` goes
+on from the engine's reduction of it, and a configuration may answer any of it beforehand. Every
+account a step could use at its limit, and a provider's service failing past the client's own tries,
+pause the run safely instead - never a failure - and the resume runs that very step. Where an agent
+gave no handoff of its own - a limit ended its run, a crash cut the attempt off, its handoff turn
+passed its bound or failed - the engine writes one from the stored stream of the step, its first
+line saying why: the files the attempt wrote, the last commands it ran and how each ended, its last
+messages word for word, and the steps before it that left notes, named by step; a step's `writes`
+given as an expression is read where the step starts, the names it yielded narrowing what it may
+write as a written-out list does.
+
+A `pause` step asks and asks only: its question filled as a template is filled, and the questions an
+upstream step wrote (`questions`) shown under its own - the shipped `blocked` shows what triage
+found that only a person can lift - the step's answer answering them together. What the person gave
+the run answers first, where they gave it: the first `preAnswer` entry whose `when` holds answers at
+once, as a configured answer would, and an entry that quotes words holds only where they stand in
+the input they are said to be of - the shipped approval is pre-answered by `preapproved = 'yes'` or
+by the request's own words, quoted and looked for. The repository's bar for a recommendation -
+`recommendations.md` in the workflow's folder, or the file its `recommendations` key names - is read
+by `{recommendations}` in a reason step's prompt, live each time it is given, so a change holds from
+the next question on; where the folder has none, a sentence says so and a recommendation says it
+follows none.
+
+Before a person is left with a question the engine raises itself, the orchestrator's `advisor`
+recommends on it: one reason step that only reads, run wherever the asking step works with its
+records under `advice/<n>/` of the asking step, its prompt reading the question (`{question.step}`,
+`{question.kind}`, `{question.problem}`, `{question.answers}`, `{question.record}`), the run's
+inputs and `{recommendations}`, its answer held to the engine's own schema - one of the question's
+answers. The question is open while the advice runs, so a person who is there answers without
+waiting, and their answer ends the asking; where none was obtained the question says so, and where
+no advisor is named it says that plainly. The advisor takes no question a step's own agent asked
+nor the budget's own, nor a kind its `kinds` leaves out. A `test` step's
 `filter` names the tests it runs; its `filterWhen` is an
 expression that switches it - where it reads false the step gives no filter and every test of its
 legs runs, as the shipped `verify` steps do where the run's input `affectedTests` is off, each item
@@ -521,6 +575,20 @@ specific login's Claude Code directory and a program to start in place of npm's
 never a key. The credential slots - the runner's two
 value directories and this one among them - are never handed to an agent, seeded from the main tree
 or folded back into it, whatever git or the ignore block says.
+
+Choosing a key is the engine's, where it runs a run's steps: a step starts on the first key of its
+model's provider the slot holds and no remembered limit covers, or - `balanceKeyUsage` on (off by
+default) - on the one that spent least in the last seven days, keys that spent alike in the list's
+order, whatever tier, model, step, run or side-task spent it; the key is chosen when the step starts
+and kept for it, and a limit or a rejected key moves it to the next in the same order. What a key
+spent is what the engine counts for each request served with it, at the configuration's prices - or,
+for a Claude Code launch, what the launch reports - recorded by the key's name, never its value, in
+`.orchestrators/key-spend.jsonl`, the repository's records across runs: one line for each entry of a
+step's order that ran, read for a key's week, its lines older than seven days dropped when the file
+is next written. What the same key spends elsewhere - another repository, another machine, another
+tool - is not seen. Each request a step sends goes through the gate of its provider and key (the
+client's parallel bound, its optional pacing buckets and a 429's cool-down), beside the
+orchestrator's `maxReasoningAgents`.
 
 The Claude Code this tool uses is the one npm installs, and no other: the tool asks npm where its
 global packages are and starts the program the package names, by its full path - never a launcher,
@@ -572,7 +640,10 @@ a Claude Code directory of the run's and every search over one, any command nami
 `$HOME`, as a redirect's file or an option's value too - and this tool's own verbs and
 `run-side-task`, run by any program or from a response file, whatever any switch says - and so are the `gh`
 commands that hand an agent's work to another agent or install what the next launch loads (`gh copilot`,
-`gh agent-task create`, `gh skill install`, `gh skill update`, `gh skill publish`). No agent
+`gh agent-task create`, `gh skill install`, `gh skill update`, `gh skill publish`) - and so is any
+command that prints a credential (`gh auth token`, `git credential fill`, `git credential-manager get`,
+`git credential-manager-core get`, `git credential-cache get`, `git credential-store get`): a
+credential leaves its slot only by the key store that holds it, never through an agent's words. No agent
 starts while this tool itself runs elevated: its step is recorded never started, saying so, before
 any client is taken. A path is decided as asked and as resolved, and a refusal's places compare in
 any case on every system, a Windows short name read as its long one. On Windows a device prefix
@@ -615,7 +686,12 @@ substitutions as commands - so `git -C x push` is `git push`, and `env A=1 git p
 `A=1 /usr/bin/git push` are too; every word of a command is tried as the program of the words
 after it - but a word of a program that runs none of its words, its data (`grep`, `rg`, `echo`,
 `cat`, `which` and their kind) - a program read by its name in any case, a cmd line's `@` dropped, `git-push` read as `git push`. A word the shell expands where a rule reads a literal one
-makes the command one the rule may be, refused as such (`git $VERB` under `Run(git push *)`), and
+makes the command one the rule may be, refused as such (`git $VERB` under `Run(git push *)`) - and the
+expansion is read only where the shell would make it: the reader keeps, for each word, which of its
+parts were quoted, so `git 'p*sh'` is a word no rule meets and `gh api 'repos/o/r/pulls?state=open'`
+an endpoint that names no merge, while a double-quoted `$x` is a variable still and an unquoted `*`
+a glob; an argument list crosses no shell, so no word of one is an expansion however it is spelled,
+and what cmd reads again - a batch argument's `%` among it - it expands wherever it stands - and
 a pattern, a brace or a `file://` address that may name a credential slot or a Claude Code
 directory is refused as naming it. What it cannot read whole it denies, said in help, not guessed
 at: a script nested past four levels, a shell that reads its script from its input
@@ -714,8 +790,10 @@ did not give, or that refuses by itself a call the engine allows never started; 
 by itself that the engine refuses too - by its own deny rules, a file tool's told by its result
 alone - is a denial of Claude Code's, counted and recorded once; a call it ran that the engine was
 never asked about, or refused, fails the step by the tool's name; each is ended at once. A message
-no turn takes within the stall bound stalls the step; a declined request ends it `Refused`, and
-an account at its limit `RateLimited`, with when the limit lifts where Claude Code says.
+no turn takes within the stall bound stalls the step; a declined request and an account at its
+limit move the step to its next entry, a new launch on another model, `Refused` and `RateLimited`
+(where none is left) with when the limit lifts where Claude Code says. Every move on this client is
+a new launch, and a move within the step's work goes on from what the engine stored.
 `help agent-clients` says it whole.
 
 The tool runtime is the harness's own tools, built for the API clients to give their agents in
@@ -781,17 +859,117 @@ the answer to a nudge would be held to whole, is thrown away and asked again wit
 the most; past either the step is `Truncated`. A turn the provider paused is sent again with nothing added, 10 in a row
 failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request
 is asked again up to 6 times after a wait that doubles from 2 s to 60 s, or the one the provider
-names; a rate limit past them, or naming a wait past 300 s, is the account at its limit
-(`RateLimited`) - the model's on the key it was sent with, or the key's whole where its balance is
-spent, each named - a service failing past them, or naming such a wait, fails the step, and one
+names; a service failing past them, or naming such a wait, fails the step, and one
 silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it;
 a model the provider does not serve the key never starts the
-step before its first answer and fails it after; a key the provider refuses is passed over for the
-run's next, the same request sent again with it. A handoff asked abandons the request under way and cuts the calls
+step before its first answer and fails it after. The engine's fallback works inside the one
+conversation: a key the provider refuses - said, and passed over for the rest of the run - an
+account at its limit (a rate limit past those tries, or naming a wait past 300 s: the model's on
+the key it was sent with, or the key's whole where its balance is spent, each named) and a request
+the model declined each move the run to its next entry of the same provider and client, the same
+request sent again with the model or the key changed and nothing else, the declined
+turn thrown away with any part of an answer it had written; at a limit the same model's next key is
+tried first and every entry the limit covers is passed over until it lifts, a declined request
+passes over the model's other keys, and one the provider marks about what the prompt asks
+(`reasoning_extraction`) moves no step. A handoff asked abandons the request under way and cuts the calls
 running, each answered `interrupted: the run is pausing; it may have run part way`, then asks the
 agent in one more message of the conversation, held to the handoff's bound instead of the step's
 time, no tool run in that turn; a message the engine gives an agent at work is given after the
 results of the calls it is running, and an answer written while it was is not the step's.
+
+A step's engine may hand its run a whole order - the entry that serves first and each entry the
+engine's fallback may move it to, a model with one of its provider's keys, each model's keys before
+the next model, the effort the step gives each model with it, and whether each can be used on this
+machine - and the runner walks it: an entry that cannot be used here is said and passed over when
+its turn comes and never refuses a run, and a declined request, an account at its limit and a failed
+run whose provider and client have no key left unrefused move the step to its next entry by the
+cause's rule, across clients as within one, each move said by `FallbackStarted` and each entry
+passed over by `FallbackPassedOver`. Where the step gives the next model another effort, the move
+goes on at that level and says both: the request carries it, a provider that caches the conversation
+is still sent top-level the level it began at, and the change is told in the conversation - the
+Claude API a message under `mid-conversation-output-config-2026-07-01`, Z.AI the request's
+`reasoning_effort` - with no credit token, for it is not the same request. Where the next entry is
+of another provider or client -
+and for every move on `claude-code` - the step begins a new conversation with its prompt on that
+client's model, and what every entry did and used is the step's one result, each model that served
+it named from the turn it began at. A limit the run met is remembered until its end: an entry it
+covers is passed over, said so, whichever client would serve it. Where the slot holds none of the
+keys of the step's first model the run is refused before it starts; a later model's missing key is
+only said and passed over.
+
+A step that goes on with earlier work is given the engine's record of it: the continuation record,
+text put together from the step directories of the agent - what it is, the steps so far with each
+one's notes and output, the files changed, the last red build or test, the handoff, and the last
+iterations of the newest attempt word for word from its stored stream (each the agent's message as
+it wrote it, its thinking as far as the provider showed it, and each call it made with the tool,
+its input and its result as the stream holds them) - nothing in it written or shortened by a model,
+and whatever is cut named with a copy in the agent's `work/continuation/`. Its bounds are
+`agentContext.continuation`'s - `recordChars` (60000), `stepChars` (16000), `paths` (300),
+`lastIterations` (3) and `iterationChars` (120000), each at its default where the key says none,
+each a positive number - and the first user message holds the parts in their order: the run
+context, the plan updates, the continuation record and the step's prompt as the task. The record is
+sent only where the conversation is a new one - every launch on `claude-code`, and on the API
+clients a conversation that cannot be gone on with - for a handed conversation goes on with one
+more user message alone; the message as sent is kept in the step's `user.md`, masked.
+
+A conversation that has filled its model's context is compacted by the engine, and no model: a
+reduction worked out from the stored stream, the same input always the same record - the run
+context and the task whole as they were sent, the last iterations word for word by the
+continuation record's rule, every earlier message of the agent its text whole with its thinking
+left out, every earlier call one line (the tool, its input cut at `callInputChars`, how it ended,
+the path where its input names one), every earlier result left out, and every message the engine
+sent since the first whole. The reduced part is at most `agentContext.compaction.reducedChars`
+(200000); a call's input is cut at `callInputChars` (400); where the reduced part is more, the
+oldest messages of the agent are cut to their first 2000 characters each, oldest first, until it
+fits, and the record says how many were. It begins a new conversation, on every client - the
+record is the first message of one and the old is kept whole, never edited or sent again; a
+`claude-code` child is started with `DISABLE_COMPACT=1`, so it never compacts by itself and a full
+context ends the step `ContextExhausted`, which the engine's compaction is what follows.
+
+The runs of one provider and one key go through one lane of the gate: at most
+`agentClients.<client>.maxParallel` of them under way at once (3 for claude-code, 4 for claude-api and 2 for glm where
+the entry says none; a client that signs in with a login is one lane by its client, and two keys of one provider two
+lanes, keyed by a hash of the key). Beside it the API clients' optional buckets pace a lane's minute -
+`requestsPerMinute`, `inputTokensPerMinute` (a request's own counted as it enters) and `outputTokensPerMinute` (an
+answer's counted once it is had), each waited out until the oldest of the minute is a minute old - and a 429's
+cool-down holds every waiter of the lane, a later or longer one holding past a sooner one. Left out, the provider's
+answers pace the client; the orchestrator's `maxReasoningAgents` bounds agents beside the gate, and both apply. No
+command of this build runs a step yet, so no gate opens one; the engine's step runner holds the lane a run's requests
+go through (`help agent-clients`).
+
+A reason step's prompt says `{skill.<name>}` where a skill's text goes, and the engine puts the
+text there before the prompt is sent, on every client alike (`help skills`): the two API clients
+have no skill mechanism, and the `claude` child is started with `--setting-sources user`, under
+which it loads none of the worktree's. The file is Claude Code's own `SKILL.md`, unchanged - this
+tool adds no key and no syntax of its own - and `<name>` is the folder's name. The first place
+that has the folder decides: `.harness-config/skills/<name>/` in the main checkout (the tool's own
+place, tracked), `.claude/skills/<name>/` in the main checkout (the repository's Claude Code
+skills), and `skills/<name>/` in the user's Claude directory (`CLAUDE_CONFIG_DIR` where it is set,
+else `~/.claude`). The repository's come before the user's - Claude Code's own order is the other
+way round - and a `SKILL.md` that is there and cannot be used is refused, the next place not tried
+in its stead. The places are read in the main checkout, never in an agent's worktree, and each
+step reads them as it starts: a run does not freeze its skills. What is put into the prompt is the
+body, not the frontmatter, inside one block that names the skill, its place and the folder handed
+to the step; the folder is copied whole into the agent's work directory,
+`work/<agent>/skills/<name>/`, in place of any earlier copy, and that path is what
+`${CLAUDE_SKILL_DIR}` becomes. A folder that holds a link, more than 500 files or more than 16 MB
+is refused. The frontmatter's keys are each honoured, recorded or refused: `allowed-tools` is
+honoured as what the skill needs, each tool it names held to the one table of Claude Code's tools
+for each capability and the step's agent's - and it grants nothing; `model`, `effort`, `context`,
+`agent`, `background`, `hooks` and `disallowed-tools` are refused, for text put into a prompt runs
+in the step's own agent, on its model, under its policy; any other key is refused naming the keys
+this tool knows. In the body `${CLAUDE_SKILL_DIR}`, `${CLAUDE_PROJECT_DIR}`,
+`${CLAUDE_SESSION_ID}`, `${CLAUDE_EFFORT}` and `\$` are replaced, a read of an argument, a command
+run when the skill is loaded and the reads only a plugin has are refused each naming their line,
+and a body is at most 64,000 characters after its substitutions. A skill's text is not scanned for
+placeholders again: `{skill.b}` inside skill `a` is plain text. The placeholder stands in a reason
+step's `prompt` and `resumePrompt` alone - refused in an agent definition's body, which is sent as
+written, in any other template key and in an expression - and each skill once in a prompt. A skill
+that is missing or unusable fails loud, twice: when the definition is checked (`validate-workflow`,
+and the start of `run-orchestrator` and `resume-orchestrator`; exit 12, nothing started, every
+problem of every prompt together, each refusal naming every place looked for it), and when the
+step starts, for a file can go or change between - the step is not started, it ends `Failed` with
+the same sentence, and its `onFailure` decides what follows.
 
 The `claude-api` client works a step through the Claude API by the loop above, every call run by
 the tool runtime: each request is posted to its provider's `api` with `/v1/messages` after it,
@@ -807,8 +985,11 @@ clearing said in a notice; and the system prompt and the conversation cached for
 `agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said), so a budget needs the
 model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour. A
 step with a fallback that can go on here sends the `fallback-credit-2026-07-01` beta, and a request
-the model declines ends the step `Refused`, with its category and the credit the API gave for it on
-the result; no request carries `fallbacks` or a `server-side-fallback-*` beta, for the engine's
+the model declines moves the step to its next model of the same provider and client - the same
+request sent again with the model changed and the credit the API gave sent back as its
+`fallback_credit_token` (a failure naming it answered by the same request without it), `Refused`
+with its category only where none is left; no request carries
+`fallbacks` or a `server-side-fallback-*` beta, for the engine's
 fallback is the only one a step has. Two keys are `claude-api`'s alone: `betas`, sent beside the
 tool's own, each one word and never the API's fallback's, and `cacheTtl`; three are both API
 clients': `requestExtras`, an object merged into every request's body - a member it adds sent as
@@ -819,10 +1000,10 @@ itself or, here, `fallbacks` or a sampling parameter (`temperature`, `top_p`, `t
 `maxRetryWaitSeconds`, the loop's tries and longest wait (6 and 300 where nothing is said). A
 spend limit reached - the organization's monthly cap, a 429 whose error names
 `enforced_spend_limit_reached`, or one the organization or a workspace set, a 400 that says so - is
-the key's limit, the step `RateLimited` at once until the date the API names; a 401 is a key
-refused, passed over for the next; a 402 the key's balance spent, the step
-`RateLimited` at once; a 429 the model's limit on that key, waited out within those tries and the
-step `RateLimited` past them; a 413, a prompt too long or an answer the model's
+the key's limit, every entry on that key passed over until the date the API names; a 401 is a key
+refused, said and passed over for the rest of the run; a 402 the key's balance spent, every entry
+on that key passed over; a 429 the model's limit on that key, waited out within those tries and the
+same model's next key tried past them; a 413, a prompt too long or an answer the model's
 context could hold no more of is the context exhausted (`ContextExhausted`); a 403, a 404, or a 400
 answering a conversation's first request - a model the key's organization is not given, such as one
 that needs a data retention the organization does not keep - is a model the provider does not serve
@@ -851,21 +1032,24 @@ that, the context is exhausted (`ContextExhausted`). Three keys are both API cli
 `requestExtras`, refused where it sets what the tool sends itself, and `maxRetries` and
 `maxRetryWaitSeconds`, as the `claude-api` client's above - and one is `glm`'s alone:
 `preserveThinking`. A failure is read by Z.AI's code first: a key it does not take (1000, 1001,
-1003, 1005) is a key refused, passed over for the next; an empty balance (1113) is the key's limit,
-its balance spent, the step `RateLimited` at once; a usage limit that names when it resets (1308,
-1310, 1316, 1317, 1318, 1319, 1320, 1321) is the key's limit, the step `RateLimited` at once; a
-rate limit (1302) is the
-model's limit on that key, waited out within the tries and the step `RateLimited` past them; an
+1003, 1005) is a key refused, said and passed over for the rest of the run; an empty balance (1113)
+is the key's limit, its balance spent, every entry on that key passed over; a usage limit that
+names when it resets (1308, 1310, 1316, 1317, 1318, 1319, 1320, 1321) is the key's limit, every
+entry on that key passed over until it resets; a rate limit (1302) is the model's limit on that
+key, waited out within the tries and the same model's next key tried past them; an
 overload, a network error or a call failed on its side (1305, 1234, 1200, 1230) is asked again; a
 prompt too long (1261) is the context exhausted (`ContextExhausted`); content it will not answer
-(1301) ends the step `Refused`; a model unknown, an API the key may not call or a plan without the
-model (1211, 1220, 1311) is a model the provider does not serve the key; a plan that does not cover
-the call or has ended (1309, 1313, 1314, 1315) fails the step. A code that list does not hold is
-read by the status: a 401 is a key refused, passed over for the next; a 429 is the model's limit on
-that key, waited out within the tries and the step `RateLimited` past them; a 413 is the context
-exhausted (`ContextExhausted`); a 403 or a 404 is a model the provider does not serve the key; a
+(1301) moves the step to its next model, `Refused` where none is left; a model unknown, an API the
+key may not call or a plan without the model (1211, 1220, 1311) is a model the provider does not
+serve the key; a plan that does not cover the call or has ended (1309, 1313, 1314, 1315) fails the
+step. A code that list does not hold is
+read by the status: a 401 is a key refused, said and passed over for the rest of the run; a 429 is
+the model's limit on that key, waited out within the tries and the same model's next key tried past
+them; a 413 is the context exhausted (`ContextExhausted`); a 403 or a 404 is a model the provider
+does not serve the key; a
 request timed out, a conflict or a server's error is asked again, and any other fails the step. An
-answer Z.AI ends as sensitive ends the step `Refused`, one it ends for its context the context is
+answer Z.AI ends as sensitive moves the step to its next model, `Refused` where none is left, one
+it ends for its context the context is
 exhausted and one it ends for a network error is asked again; a failure Z.AI names is said in its
 own words.
 
@@ -920,6 +1104,7 @@ dssharness list-agent-providers --template   # the agent sections, to paste into
 dssharness export-workflow implementation --shipped --to ../mine  # the shipped one, to make your own
 dssharness help workflows                    # the file, every step type and every key
 dssharness help agent-clients                # providers, tiers, efforts and the key slot
+dssharness help skills                       # a step's prompt names one: {skill.<name>}
 dssharness help web-search                   # the web search's sources, kinds and keys
 ```
 
@@ -942,7 +1127,8 @@ create-agent step whose worktree it works in; the agents a run makes, `a` and a 
 workflow's `maxInstances`, fit `worktrees.maxNameLength`; and a commit step gives a value for every
 variable `commit.template` requires and none for one it does not declare - with no template, a
 `message` and no `variables`. What only a prompt reads stands where its agent is asked it:
-`{recommendations}` in a reason step's prompt and the advisor's, `{question.*}` in the advisor's
+`{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote,
+read live each time it is given - `{question.*}` in the advisor's
 alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone -
 `{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and
 `{piece.*}` in a step of the work-item group; the advisor's and the reporter's prompts read no step
@@ -954,7 +1140,7 @@ update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`
 rest), which a template reads and an expression does not. The engine starts and drives a run of a workflow
 (`run-orchestrator`, `dssharness help orchestrators`), from the main checkout's HEAD on a branch of its own: a start is
 refused where HEAD is detached, where the checkout is on the branch the run's pull request goes to, where a merge is under
-way and where changes are staged. Nineteen steps are served so far: `orient`, which reads what the repository is and has once
+way and where changes are staged. Twenty steps are served so far: `orient`, which reads what the repository is and has once
 (its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
 CI, mutation arms, what is dirty, the open agents and who holds the tree); `graphify-codebase`, which syncs the run's one map
 of the repository - every file a node, each declaration a language's implementation reads with its lines, its header and
@@ -969,7 +1155,15 @@ once its agent is no longer live - and a sync of its own that fails is said, owe
 fails the step (`dssharness help codebase-graph`; the workflow's `codebaseGraph` shapes it);
 `validate-plan`, the machine's check of a plan's
 work items; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
-first reason step runs on, both recorded before the agent is made so a step run again asks for the same one; and the leg
+first reason step runs on, both recorded before the agent is made so a step run again asks for the same one;
+`reason`, which works the step's agent - the one its `in` names or the work it goes on with (`resume`), or, where it
+names neither, the engine's own read-only agent, with no worktree, made before the step runs and deleted once no step
+can go on with its work: the step's model resolved with its agent definition below its own and its order built as
+entries of a model and one of its provider's keys, each entry's credential read from the slot; its prompt file read
+and filled where the step starts, each skill it names looked up again and the folder handed over in the agent's work
+directory; the work it goes on with rendered as its continuation record, and its going on by the client's kind - the
+stored conversation handed where the client goes on with one, a new launch rendered where it does not; and its answer,
+held to the schema its `outputs` names, the step's output; and the leg
 steps `build`, `test`, `run` and `check-mutations`, which run their legs as the commands do, in the worktree of the agent
 they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
 that failed with the phase that did not pass and its last lines, a sweep's arm with its arm - a leg in a copy letting the

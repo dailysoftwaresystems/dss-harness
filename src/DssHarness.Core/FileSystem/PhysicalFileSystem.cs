@@ -8,11 +8,13 @@ namespace DssHarness.Core.FileSystem;
 public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFileSystem
 {
     /// <summary>
-    /// Attempts at the final rename before a transient refusal is reported: about three seconds of them
-    /// (<see cref="ReplaceWait"/>). A virus scanner on a busy machine held a just-written file past the half second ten
-    /// attempts once gave.
+    /// Attempts at the final rename before a transient refusal is reported. A virus scanner on a busy machine held a
+    /// just-written file past the half second ten attempts once gave, and past the three seconds twenty-five gave under
+    /// a full test suite, so the whole bound is about five and a half seconds (<see cref="ReplaceWait"/>) - a holder
+    /// past that is outside this process, and its refusal is reported rather than outwaited at the cost of everything
+    /// that waits on the write.
     /// </summary>
-    private const int ReplaceAttempts = 25;
+    private const int ReplaceAttempts = 35;
 
     private readonly IFilePermissions _filePermissions = filePermissions;
 

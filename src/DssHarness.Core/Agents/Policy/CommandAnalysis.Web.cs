@@ -23,20 +23,32 @@ public static partial class CommandAnalysis
     /// <c>gh api</c>, which is <c>api.github.com</c>'s unless a <c>--hostname</c> or the
     /// environment's <c>GH_HOST</c> names another. Empty where the command's program is none of
     /// them. A word of an option this does not know is read as the address it may be, never
-    /// passed over.
+    /// passed over. A host named in quotes is a host of that name: read as one only where the
+    /// shell would expand it.
     /// </summary>
     /// <param name="words">One command's words, its environment first where it has one, as <see cref="AnalyzedCommand.Words"/> holds them.</param>
+    /// <param name="quoted">How each word's characters stand to the shell, kept in step with <paramref name="words"/>, or null where none was kept.</param>
     /// <exception cref="NotSupportedException">An address's host is named by an expansion, which this does not read.</exception>
-    public static IReadOnlyList<string> WebAddresses(IReadOnlyList<string> words)
+    public static IReadOnlyList<string> WebAddresses(IReadOnlyList<string> words, IReadOnlyList<string>? quoted = null)
     {
         ArgumentNullException.ThrowIfNull(words);
+        quoted ??= [];
 
         // A file URL reads the machine's own files, no network: it is a path, as the policy reads it.
-        var addresses = Fetched(words).Addresses.Where(address => !address.StartsWith("file:", StringComparison.OrdinalIgnoreCase)).ToList();
+        var addresses = Fetched(words, quoted).Addresses.Where(address => !address.StartsWith("file:", StringComparison.OrdinalIgnoreCase)).ToList();
 
-        if (addresses.FirstOrDefault(address => Expansion(Authority(address)) is not null) is { } expanded)
+        // The host an address reaches, read where the shell would expand it: an address named in quotes is an address
+        // of that name, its host included.
+        string? HostQuoted(string address)
         {
-            throw new NotSupportedException($"'{expanded}' names the host it reaches by {Expansion(Authority(expanded))}, which this does not read");
+            var at = PlaceOf(words, address);
+
+            return at >= 0 && at < quoted.Count ? Within(address, quoted[at], Authority(address)) : null;
+        }
+
+        if (addresses.FirstOrDefault(address => Expansion(Authority(address), HostQuoted(address)) is not null) is { } expanded)
+        {
+            throw new NotSupportedException($"'{expanded}' names the host it reaches by {Expansion(Authority(expanded), HostQuoted(expanded))}, which this does not read");
         }
 
         return addresses;
@@ -53,7 +65,7 @@ public static partial class CommandAnalysis
     {
         ArgumentNullException.ThrowIfNull(words);
 
-        return Fetched(words).Unread;
+        return Fetched(words, []).Unread;
     }
 
     /// <summary>The environment names a fetcher reaches the network through: a proxy any of them names is a host the request reaches.</summary>
@@ -63,7 +75,7 @@ public static partial class CommandAnalysis
     /// What one fetcher command reaches: its addresses, and the option that reads them from a file
     /// this does not read, where one does.
     /// </summary>
-    private static (IReadOnlyList<string> Addresses, string? Unread) Fetched(IReadOnlyList<string> words)
+    private static (IReadOnlyList<string> Addresses, string? Unread) Fetched(IReadOnlyList<string> words, IReadOnlyList<string> quoted)
     {
         var environment = EnvironmentOf(words);
 
@@ -74,6 +86,7 @@ public static partial class CommandAnalysis
 
         var program = Name(words[environment]);
         var arguments = words.Skip(environment + 1).ToList();
+        var argumentQuoted = quoted.Skip(environment + 1).ToList();
         var assigned = words.Take(environment).Select(assignment => new[] { AssignedName(assignment), assignment.Split('=', 2)[1] }).ToList();
         var proxies = assigned
             .Where(pair => ProxyNames.Contains(pair[0], StringComparer.OrdinalIgnoreCase) && pair[1].Length > 0)
@@ -83,7 +96,7 @@ public static partial class CommandAnalysis
         if (program.Equals("gh", StringComparison.OrdinalIgnoreCase))
         {
             var host = assigned.LastOrDefault(pair => pair[0] == "GH_HOST" && pair[1].Length > 0)?[1];
-            return (GhApi(arguments, host ?? "api.github.com") is { } endpoint ? [.. proxies, endpoint] : [], null);
+            return (GhApi(arguments, host ?? "api.github.com", argumentQuoted) is { } endpoint ? [.. proxies, endpoint] : [], null);
         }
 
         if (program.Equals("curl", StringComparison.OrdinalIgnoreCase))
@@ -440,9 +453,10 @@ public static partial class CommandAnalysis
     /// <summary>
     /// The address <c>gh api</c> reaches: its endpoint where that is a whole URL, else
     /// <paramref name="host"/> - unless a <c>--hostname</c> names another; null where the command
-    /// is no <c>gh api</c>. An option's value is never its endpoint.
+    /// is no <c>gh api</c>. An option's value is never its endpoint. An endpoint the shell expands
+    /// may be a whole URL of any host - read so only where the shell would expand it.
     /// </summary>
-    private static string? GhApi(IReadOnlyList<string> arguments, string host)
+    private static string? GhApi(IReadOnlyList<string> arguments, string host, IReadOnlyList<string> quoted)
     {
         if (arguments.Count == 0 || !arguments[0].Equals("api", StringComparison.OrdinalIgnoreCase))
         {
@@ -458,7 +472,10 @@ public static partial class CommandAnalysis
         }
 
         // An endpoint named by an expansion may be a whole URL of any host.
-        return GhApiEndpoint(arguments) is { } path && (path.Contains("://", StringComparison.Ordinal) || Expansion(path) is not null) ? path : host;
+        return GhApiEndpoint(arguments) is { } path
+            && (path.Contains("://", StringComparison.Ordinal) || Expansion(path, GhApiEndpointQuoted(arguments, quoted)) is not null)
+            ? path
+            : host;
     }
 
     /// <summary>
@@ -471,6 +488,41 @@ public static partial class CommandAnalysis
         ArgumentNullException.ThrowIfNull(arguments);
 
         return GhApiWords(arguments).FirstOrDefault(word => word.Name is null).Value;
+    }
+
+    /// <summary>
+    /// How the endpoint of <c>gh api</c> stands to the shell, where the command's own spelling was kept: the mask of
+    /// the word the endpoint is, cut to the endpoint when a word was glued to it - or null where the spelling was not
+    /// kept, which reads as wholly open.
+    /// </summary>
+    /// <param name="arguments">The words after <c>gh</c>, <c>api</c> first.</param>
+    /// <param name="quoted">How each argument's characters stand to the shell, kept in step with <paramref name="arguments"/>.</param>
+    internal static string? GhApiEndpointQuoted(IReadOnlyList<string> arguments, IReadOnlyList<string> quoted)
+    {
+        var endpoint = GhApiEndpoint(arguments);
+
+        if (endpoint is null)
+        {
+            return null;
+        }
+
+        var at = PlaceOf(arguments, endpoint);
+
+        return at >= 0 && at < quoted.Count ? Within(endpoint, quoted[at], endpoint) : null;
+    }
+
+    /// <summary>
+    /// How each field <c>gh api</c> is given stands to the shell, where the command's own spelling was kept: the mask of
+    /// the word the field is, cut to the field - or null where the spelling was not kept, which reads as wholly open.
+    /// </summary>
+    /// <param name="arguments">The words after <c>gh</c>, <c>api</c> first.</param>
+    /// <param name="quoted">How each argument's characters stand to the shell, kept in step with <paramref name="arguments"/>.</param>
+    /// <param name="field">The field, as <see cref="GhApiFields"/> gives it.</param>
+    internal static string? GhApiFieldQuoted(IReadOnlyList<string> arguments, IReadOnlyList<string> quoted, string field)
+    {
+        var at = PlaceOf(arguments, field);
+
+        return at >= 0 && at < quoted.Count ? Within(field, quoted[at], field) : null;
     }
 
     /// <summary>

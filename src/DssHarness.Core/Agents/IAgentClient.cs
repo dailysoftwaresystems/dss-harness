@@ -188,20 +188,15 @@ public sealed record AgentLimits(int? MaxTurns, decimal? MaxBudgetUsd, TimeSpan?
     public static readonly TimeSpan DefaultHandoffBound = TimeSpan.FromSeconds(180);
 }
 
-/// <summary>One model the step goes on with, in the fallback's order.</summary>
-/// <param name="Model">The model.</param>
-/// <param name="Provider">Its provider.</param>
-/// <param name="Client">Its client.</param>
-/// <param name="Effort">The effort it was asked for, where one is.</param>
-/// <param name="UsableHere">Whether it can be used on this machine.</param>
-public sealed record AgentFallbackModel(string Model, string Provider, string? Client, string? Effort, bool UsableHere);
+/// <summary>One entry of a step's order as the engine runs it, and the one shape the engine's fallback walks: see <see cref="AgentRunEntry"/>.</summary>
 
 /// <summary>One skill the step's prompt named, as the run was given it.</summary>
 /// <param name="Name">The skill's name.</param>
 /// <param name="Where">Where it was read.</param>
-/// <param name="Digest">Its digest.</param>
+/// <param name="Digest">The SHA-256 of its <c>SKILL.md</c>, lowercase hex.</param>
+/// <param name="FolderDigest">The SHA-256 of its folder, over each file's path and content in order.</param>
 /// <param name="Folder">The folder handed to the step.</param>
-public sealed record AgentSkill(string Name, string Where, string Digest, string Folder);
+public sealed record AgentSkill(string Name, string Where, string Digest, string FolderDigest, string Folder);
 
 /// <summary>
 /// The signal the engine raises when a run is pausing, beside the cancellation token, which stays the hard stop: the
@@ -369,10 +364,11 @@ public sealed class AgentMessages
 
     /// <summary>Tells the agent <paramref name="message"/>.</summary>
     /// <param name="message">The message, whole.</param>
-    public void Post(string message)
+    /// <returns>Whether the channel holds it for the agent: false where the run's messages were ended, so nothing posted to an ended run is lost unsaid.</returns>
+    public bool Post(string message)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
-        _messages.Writer.TryWrite(message);
+        return _messages.Writer.TryWrite(message);
     }
 
     /// <summary>
@@ -466,6 +462,16 @@ public sealed record AgentStepRequest(
     /// <summary>What the configuration says of the agent's commands: the names a child is given back, and their times.</summary>
     public AgentCommandSettings Commands { get; init; } = AgentCommandSettings.Default;
 
+    /// <summary>
+    /// How many times a failed agent is asked again on its model before the step moves to the next model of its order,
+    /// and how long to wait before the first ask, doubling each time: the step's own where it says them, the workflow's
+    /// where it does not. Null where the caller gives no rule, and none is retried.
+    /// </summary>
+    public int? Retries { get; init; }
+
+    /// <summary>How long to wait before the first retry of a failed agent, in seconds, doubling each time; null with <see cref="Retries"/>.</summary>
+    public int? BackoffSeconds { get; init; }
+
     /// <summary>The web search the agent is given: its sources, bounds and keys; <see langword="null"/> where it searches none.</summary>
     public AgentWebSearch? WebSearch { get; init; }
 
@@ -477,6 +483,36 @@ public sealed record AgentStepRequest(
 
     /// <summary>The configuration's entries the step's model is reached by, as the engine resolved them; null where it gave none.</summary>
     public AgentEntries? Entries { get; init; }
+
+    /// <summary>
+    /// The step's whole order as the engine resolved it for running - the entry that serves first and each entry the
+    /// engine's fallback may move it to - and null where the engine gave none, for a step worked as one run on one
+    /// client with no move. An entry the machine cannot use is said and passed over when its turn comes; where none of
+    /// the first model's keys is in the slot the run is refused before it starts.
+    /// </summary>
+    public IReadOnlyList<AgentRunEntry>? Order { get; init; }
+
+    /// <summary>The run context, the block of the run's facts the engine gives every step; null where it gave none.</summary>
+    public string? RunContext { get; init; }
+
+    /// <summary>Each plan update that told this work something, with what raised it; null where the engine gave none.</summary>
+    public string? PlanUpdates { get; init; }
+
+    /// <summary>The continuation record of the work the step goes on with; null where the step begins its own.</summary>
+    public string? Continuation { get; init; }
+
+    /// <summary>The compaction record of the conversation the run begins, where the engine compacted one; null where it did not. A run given one begins a new conversation.</summary>
+    public string? Compaction { get; init; }
+
+    /// <summary>Where the run's every entry records what its key spent, for the next step's choice of one; null where nothing is counted.</summary>
+    public IAgentSpendSink? Spend { get; init; }
+
+    /// <summary>
+    /// Where this run's own records are kept, where not under the run's agents' steps: the run's reporter keeps the files
+    /// of its attempt under the run's <c>asks/&lt;stamp&gt;/</c>, a directory of the run and of no agent. Null for every
+    /// step of a run, whose records are the runner's own rule.
+    /// </summary>
+    public string? RecordDirectory { get; init; }
 }
 
 /// <summary>
@@ -492,7 +528,7 @@ public sealed record AgentStepRequest(
 /// <param name="Provider">The provider the step's model is of.</param>
 /// <param name="Model">The model it runs on, where the step named one; null where it did not, before the resolution that names one.</param>
 /// <param name="Effort">The effort it was asked for, where one is.</param>
-/// <param name="Fallback">The models it goes on with, in order.</param>
+/// <param name="Fallback">The entries it may go on with, in order: the step's later entries, of every client, each usable or said and passed over.</param>
 /// <param name="Files">The files the run was handed, by path.</param>
 /// <param name="Skills">The skills its prompt named, as it was given them.</param>
 /// <param name="Mask">What masks the secrets its lines may carry; never null, masking nothing where the step carries none.</param>
@@ -506,6 +542,10 @@ public sealed record AgentStepRequest(
 /// </param>
 /// <param name="Handoff">The signal the engine raises when the run is pausing.</param>
 /// <param name="Messages">What the engine has to tell the agent while it works.</param>
+/// <param name="RunContext">The run context, the block of the run's facts the engine gives every step; null where it gave none.</param>
+/// <param name="PlanUpdates">Each plan update that told this work something, with what raised it; null where the engine gave none.</param>
+/// <param name="Continuation">The continuation record of the work the step goes on with; null where the step begins its own.</param>
+/// <param name="Compaction">The compaction record of the conversation this run begins, where the engine compacted one; null where it did not.</param>
 public sealed record AgentRun(
     string SystemPrompt,
     string UserPrompt,
@@ -516,13 +556,17 @@ public sealed record AgentRun(
     string? Provider,
     string? Model,
     string? Effort,
-    IReadOnlyList<AgentFallbackModel> Fallback,
+    IReadOnlyList<AgentRunEntry> Fallback,
     IReadOnlyList<string> Files,
     IReadOnlyList<AgentSkill> Skills,
     ILineMask Mask,
     string StepDirectory,
     AgentHandoffSignal Handoff,
-    AgentMessages Messages)
+    AgentMessages Messages,
+    string? RunContext = null,
+    string? PlanUpdates = null,
+    string? Continuation = null,
+    string? Compaction = null)
 {
     /// <summary>
     /// What the agent's policy is decided against - its capabilities among it, which name the tools a launch offers; null

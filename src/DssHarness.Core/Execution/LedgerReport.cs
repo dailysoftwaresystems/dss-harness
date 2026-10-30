@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Text.Json;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
+using DssHarness.Core.Testing;
 
 namespace DssHarness.Core.Execution;
 
@@ -89,6 +91,9 @@ public sealed record LedgerLine(
 
     /// <summary>Each file the leg's steps kept, as <see cref="LegEntry.KeptOutputs"/> says.</summary>
     public IReadOnlyList<string> KeptOutputs { get; init; } = [];
+
+    /// <summary>What the leg's test invocation kept as failure evidence, as <see cref="LegEntry.KeptOnFailure"/> says.</summary>
+    public KeptOnFailure? KeptOnFailure { get; init; }
 
     /// <summary>Each mutation arm the leg was asked about, as <see cref="LegEntry.Arms"/> says.</summary>
     public IReadOnlyList<ArmEntry> Arms { get; init; } = [];
@@ -386,6 +391,7 @@ public sealed class LedgerReport
                     Admission = entry.Admission,
                     Space = entry.Space,
                     KeptOutputs = entry.KeptOutputs,
+                    KeptOnFailure = entry.KeptOnFailure,
                     Arms = entry.Arms,
                     Tree = entry.Tree,
                     PendingSweep = entry.PendingSweep,
@@ -464,6 +470,44 @@ public sealed class LedgerReport
         rows.AddRange(RenderArms());
         rows.AddRange(RenderTimings());
         rows.AddRange(RenderTails());
+        rows.AddRange(RenderKeptOnFailure());
+
+        return rows;
+    }
+
+    /// <summary>
+    /// What each leg's test invocation kept as failure evidence, as a block below the table: one line a leg, naming the
+    /// directory, how many files were kept and their size, and how many were refused over the cap, could not be read, or
+    /// named nothing - the counts a reader needs before opening anything, beside the verdict they belong to.
+    /// </summary>
+    private IReadOnlyList<string> RenderKeptOnFailure()
+    {
+        var rows = new List<string>();
+
+        foreach (var line in Lines.Where(line => line.KeptOnFailure is not null))
+        {
+            var kept = line.KeptOnFailure!;
+            var said = $"{line.Leg}: kept {ReportText.Counted(kept.Kept.Count, "file")} ({DiskSpace.Size(kept.Bytes)}) as "
+                + $"failure evidence in '{kept.Directory}'";
+
+            if (kept.RefusedOverCap.Count > 0)
+            {
+                said += $", {ReportText.Counted(kept.RefusedOverCap.Count, "file")} refused over the cap";
+            }
+
+            if (kept.Unreadable.Count > 0)
+            {
+                said += $", {ReportText.Counted(kept.Unreadable.Count, "file")} could not be read";
+            }
+
+            if (kept.NamedNothing.Count > 0)
+            {
+                said += $", {ReportText.Counted(kept.NamedNothing.Count, "path")} named nothing";
+            }
+
+            rows.Add(string.Empty);
+            rows.Add(said);
+        }
 
         return rows;
     }
@@ -772,6 +816,20 @@ public sealed class LedgerReport
 
                 // Only where a step kept something, each as sync --pull takes it.
                 KeptOutputs = line.KeptOutputs.Count > 0 ? line.KeptOutputs : null,
+
+                // Only where the leg's test invocation did not pass and named paths to keep: where the evidence is, how
+                // much was kept, and each file by name - kept, refused over the cap, unreadable, or a path that named
+                // nothing. A host's directory is spelled as that host spells it, as its records are.
+                KeptOnFailure = line.KeptOnFailure is { } keptEvidence ? new
+                {
+                    Directory = show(keptEvidence.Directory),
+                    Files = keptEvidence.Kept.Count,
+                    keptEvidence.Bytes,
+                    keptEvidence.Kept,
+                    keptEvidence.RefusedOverCap,
+                    keptEvidence.Unreadable,
+                    keptEvidence.NamedNothing,
+                } : null,
 
                 // Where the leg worked: its path alone for a leg in its tree, and for a copy the tree it is a copy of and the
                 // reading it holds, where that is known - this run's, or what a run on what is staged found there.

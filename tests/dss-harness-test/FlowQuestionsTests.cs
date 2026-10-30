@@ -540,8 +540,8 @@ public sealed class FlowQuestionsTests
             """);
         var runner = new FakeRunner().Queue(
             "think",
-            FlowStepResult.AtLimit("turns", "12 turns"),
-            FlowStepResult.AtLimit("context", "the conversation filled it"),
+            FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true },
+            FlowStepResult.AtLimit("context", "the conversation filled it") with { StoredConversation = true },
             FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}""")));
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
@@ -550,6 +550,7 @@ public sealed class FlowQuestionsTests
         Assert.Equal(FlowRunStatus.Paused, end.Status);
         var first = coordinator.OpenQuestions.Single();
         Assert.Equal("turnLimit", first.Kind);
+        // A stored conversation of the attempt can be handed, so more of it is offered.
         Assert.Equal(["retry", "more", "fail", "abort"], first.Options);
 
         Assert.True(coordinator.TryAnswer(first.Id, "more", out var more));
@@ -574,6 +575,40 @@ public sealed class FlowQuestionsTests
         Assert.Equal(3, asked.Count);
         Assert.All(asked, run => Assert.Equal(1, run.Attempt));
         Assert.Equal(["more", "compact"], asked[2].Answers.Select(answer => answer.Answer));
+    }
+
+    /// <summary>
+    /// A reason step's limit offers <c>more</c> only where a stored conversation of the attempt can be handed: a runner
+    /// that says one is there offers it, and the answer goes on in the same attempt as every answer that lets the step's
+    /// work go on does.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepAtItsLimit_WhereAStoredConversationCanBeHanded_OffersMore()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var runner = new FakeRunner().Queue(
+            "think",
+            FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true },
+            FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var first = coordinator.OpenQuestions.Single();
+        Assert.Equal("turnLimit", first.Kind);
+        Assert.Equal(["retry", "more", "fail", "abort"], first.Options);
+
+        Assert.True(coordinator.TryAnswer(first.Id, "more", out _));
+        end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(FlowRunStatus.Done, end.Status);
     }
 
     /// <summary>A wait for checks asks by what it found, and its fail answer ends the step with the code each reading gives.</summary>
@@ -907,5 +942,263 @@ public sealed class FlowQuestionsTests
         Assert.Equal(FlowInstanceState.Failed, rounds.State);
         Assert.Equal(HarnessExit.ConfigInvalid, rounds.Exit);
         Assert.Equal("expression 'until' of 'rounds#1': 'done.absent' reads nothing", rounds.Error);
+    }
+
+    /// <summary>An agent's questions are answered with a text: <c>answer</c> takes one, <c>decide</c> and <c>abort</c> take none.</summary>
+    [Fact]
+    public void AnAgentsAnswer_TakesAText_AndDecideTakesNone()
+        => Assert.Equal(
+            [true, false, false],
+            FlowQuestions.HeldOptionsOf("ask", step: null, ["answer", "decide", "abort"]).Select(option => option.Text));
+
+    /// <summary>
+    /// The questions a pause step shows under its own are read from the upstream output its <c>questions</c> names,
+    /// each element in the shape of a question; one that recommends outside its choices is shown as it is with a line
+    /// under it saying so, and a list that is not questions fails the step.
+    /// </summary>
+    [Fact]
+    public async Task APauseStepShowsTheQuestionsAnUpstreamStepWrote_UnderItsOwn()
+    {
+        var definition = Parse("""
+            name: flow
+            inputs:
+              - name: request
+            steps:
+              - name: intake
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: blocked
+                type: pause
+                dependsOn: [intake]
+                question: 'Answer continue, with what you decide for each.'
+                questions: 'intake.stops'
+                options: [continue]
+            """);
+        var runner = new FakeRunner().On("intake", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""
+            {"stops": [
+              {"question": "which database?", "problem": "two are configured", "tried": "the config", "means": "the item waits",
+               "options": ["postgres", "sqlite"], "recommended": "postgres", "why": "it is already running"},
+              {"question": "whose sign-off?", "problem": "none named", "tried": "the plan", "means": "the merge waits",
+               "options": ["yours", "mine"], "recommended": "theirs", "why": "a person said so"}
+            ]}
+            """)));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var open = coordinator.OpenQuestions.Single();
+
+        Assert.Equal("pause", open.Kind);
+        Assert.Equal("which database?", open.AgentQuestions[0].Question);
+        Assert.Equal("postgres", open.AgentQuestions[0].Recommended);
+        Assert.Equal("whose sign-off?", open.AgentQuestions[1].Question);
+
+        // A recommendation outside its own choices is shown as it stands, with a line under it saying so.
+        Assert.Contains("'theirs', which is not among its own choices", open.AgentQuestions[1].Why, StringComparison.Ordinal);
+
+        Assert.True(coordinator.TryAnswer(open.Id, "continue", null, out _));
+
+        end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+    }
+
+    /// <summary>A pause step's <c>questions</c> that yields an element no question is fails the step, as a template that breaks does.</summary>
+    [Fact]
+    public async Task APauseStepsQuestionsThatYieldNoQuestion_FailsTheStep()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: intake
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: blocked
+                type: pause
+                dependsOn: [intake]
+                question: 'Answer continue.'
+                questions: 'intake.stops'
+                options: [continue]
+            """);
+        var runner = new FakeRunner().On("intake", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"stops": ["just a string"]}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        Assert.Equal(HarnessExit.ConfigInvalid, coordinator.Instances["blocked"].Exit);
+        Assert.Contains("is not a question of the shape", coordinator.Instances["blocked"].Error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// What the person gave the run answers a pause step's question beforehand: the first entry whose <c>when</c>
+    /// holds answers at once - no person asked - and an entry that quotes words holds only where they stand in the
+    /// input, every run of white space as one space; reported words that do not stand there pass it by, the record
+    /// says so, and the person is asked.
+    /// </summary>
+    [Fact]
+    public async Task WhatThePersonGaveTheRun_AnswersAPauseStepBeforehand()
+    {
+        var definition = Parse("""
+            name: flow
+            inputs:
+              - name: preapproved
+              - name: request
+            steps:
+              - name: intake
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: approval
+                type: pause
+                dependsOn: [intake]
+                preAnswer:
+                  - when: "input.preapproved == 'yes'"
+                    answer: approve
+                  - when: "input.preapproved != 'no' && intake.triage.preapproval.given"
+                    answer: approve
+                    quote:
+                      text: 'intake.triage.preapproval.sentence'
+                      input: request
+                question: 'Approve the plan?'
+                options: [approve, revise]
+                text: [revise]
+            """);
+        var approved = Output("""{"triage": {"preapproval": {"given": true, "sentence": "Build it without waiting for me to approve the plan."}}}""");
+
+        // The first entry's when holds outright: answered at once, no person asked, the input named with its value -
+        // and the run goes on, the pause step done with the answer as its output.
+        var runner = new FakeRunner().On("intake", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: approved));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["preapproved"] = "yes", ["request"] = "do it" });
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["approval"].State);
+        Assert.Equal("approve", (string?)coordinator.Instances["approval"].Output!["answer"]!);
+
+        var answered = coordinator.Questions.Single();
+
+        Assert.Equal("approve", answered.Given.Single().Answer);
+        Assert.Equal("input", answered.Given.Single().By);
+        Assert.Equal("preapproved = 'yes'", answered.Given.Single().Input);
+
+        // A quote that stands in the input holds: the person's own words, white space runs as one space - and the run
+        // goes on with the answer as it did with the first entry's.
+        coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["preapproved"] = "maybe", ["request"] = "Please   Build it without waiting\n for me to approve the plan. Thanks." });
+
+        end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+
+        var quoted = coordinator.Questions.Single();
+
+        Assert.Equal("approve", quoted.Given.Single().Answer);
+        Assert.Equal("input", quoted.Given.Single().By);
+        Assert.Contains("in input 'request'", quoted.Given.Single().Input, StringComparison.Ordinal);
+        Assert.Contains("Build it without waiting for me to approve the plan.", quoted.Given.Single().Input, StringComparison.Ordinal);
+
+        // Reported words the input does not hold answer nothing: the person is asked.
+        coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["preapproved"] = "maybe", ["request"] = "something else entirely" });
+
+        end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Empty(coordinator.OpenQuestions.Single().Given);
+    }
+
+    /// <summary>
+    /// A quote of a pre-answer is looked for in the value the run was started with, never in an amendment: words an
+    /// amendment added answer nothing, and the person is asked - while the input itself reads the request with its
+    /// amendments, in every prompt and every expression alike.
+    /// </summary>
+    [Fact]
+    public async Task APreAnswersQuote_IsLookedForInTheValueAsGiven_NeverInAnAmendment()
+    {
+        var definition = Parse("""
+            name: flow
+            inputs:
+              - name: request
+            steps:
+              - name: intake
+                type: orient
+              - name: approval
+                type: pause
+                dependsOn: [intake]
+                preAnswer:
+                  - when: 'input.request != ""'
+                    answer: approve
+                    quote:
+                      text: 'intake.sentence'
+                      input: request
+                question: 'the request says: {input.request}'
+                options: [approve, revise]
+              - name: replan
+                type: reason
+                agent: planner
+                prompt: plan.md
+                outputs: plan.json
+            """) with
+        {
+            Amend = new FlowAmend("request", null, null, "replan", null, "x", "replan", "replan", "replan", null),
+        };
+        var amendmentAt = DateTimeOffset.UtcNow;
+        FlowUpdatesFile taken = new(1, "r1", amendmentAt, [new FlowUpdateEntry("u1", "amendment", "done", amendmentAt, Amendment: "in fact, build the parser and nothing else", Through: "amend-orchestrator-request")]);
+
+        // The quoted words are the amendment's, read out of the input with its amendments - and a quote is looked for
+        // in the value as given, never in an amendment: the quote does not hold, the person is asked, and the question
+        // itself shows the request with its amendment.
+        var runner = new FakeRunner().On("intake", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"sentence": "in fact, build the parser and nothing else"}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, updates: () => taken);
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Empty(coordinator.OpenQuestions.Single().Given);
+        Assert.Equal(
+            "the request says: build the tool\n\namended at " + FlowTimeConverter.Written(amendmentAt) + ":\nin fact, build the parser and nothing else",
+            coordinator.OpenQuestions.Single().Problem);
+
+        // The quoted words of the value as given hold as they always did, amendments beside them or not.
+        FlowUpdatesFile none = new(1, "r1", DateTimeOffset.UtcNow, []);
+        runner = new FakeRunner().On("intake", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"sentence": "Build the parser   and nothing else, please"}""")));
+        coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "Build the parser   and nothing else, please" }, updates: () => none);
+
+        end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal("approve", coordinator.Questions.Single().Given.Single().Answer);
+    }
+
+    /// <summary>
+    /// The repository's bar for a recommendation is read by <c>{recommendations}</c> wherever a template may name it:
+    /// the file the orchestrator names, or its folder's own <c>recommendations.md</c> - and where neither is, a
+    /// sentence that says so, for a recommendation then says it follows none.
+    /// </summary>
+    [Fact]
+    public async Task TheRepositorysBarForARecommendation_IsReadByItsName()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: approval
+                type: pause
+                question: '{recommendations}'
+                options: [approve, revise]
+                text: [revise]
+            """);
+
+        // A run held in memory reads no files: no bar is there, and the placeholder says so, naming the orchestrator.
+        var coordinator = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(
+            "(orchestrator 'flow' has no recommendations file: no bar was written for this repository)",
+            coordinator.OpenQuestions.Single().Problem);
     }
 }

@@ -1978,6 +1978,43 @@ public static partial class HarnessConfigValidator
                 $"{setting}.coresArgs",
                 problems,
                 [CoreCounts.PlaceholderName]);
+
+            // What a run that did not pass keeps of the files its build directory holds, as evidence beside its verdict.
+            // Given empty it is refused as every such list is; an entry that is not a path inside the build directory,
+            // or names a directory besides it, could never name evidence, and saying so here names the line to fix
+            // before a run has spent its build on it.
+            RefuseGivenEmpty(invocation.KeepOnFailure, $"{setting}.keepOnFailure", "name the files a failed run keeps as evidence", "no evidence kept", problems);
+            RequireRelativePaths(invocation.KeepOnFailure ?? [], $"{setting}.keepOnFailure", problems, inside: "the build directory");
+
+            foreach (var kept in invocation.KeepOnFailure ?? [])
+            {
+                if (Escapes(kept))
+                {
+                    continue;
+                }
+
+                if (NamesTheBuildDirectory(kept))
+                {
+                    problems.Add($"{setting}.keepOnFailure names '{kept}', which is the build directory itself; name a path inside it");
+                }
+                else if (BeyondTheBuildDirectory(kept) is { } beyond)
+                {
+                    problems.Add($"{setting}.keepOnFailure names '{{{beyond}}}', which is not under the build directory; name a path inside it");
+                }
+                else if (GlobPattern.Problem(kept) is { } problem)
+                {
+                    // Asked of the entry whether it holds a wildcard or not: the misspelling rule is one the whole
+                    // file's path lists are held to, and the name the keep reports is the entry as written.
+                    problems.Add($"{setting}.keepOnFailure names '{kept}', which {problem}");
+                }
+            }
+
+            CheckPlaceholders(invocation.KeepOnFailure, $"{setting}.keepOnFailure", problems);
+
+            if (invocation.KeepOnFailureCapBytes is < 1)
+            {
+                problems.Add($"{setting}.keepOnFailureCapBytes must be at least 1 byte, found {invocation.KeepOnFailureCapBytes}");
+            }
         }
 
         // What runs on a platform is its own section merged over 'all', field by field. Every
@@ -2192,19 +2229,45 @@ public static partial class HarnessConfigValidator
     /// demand, something that belongs to another leg. Decided the same way on every platform,
     /// so a file valid on one machine is valid on all of them.
     /// </summary>
-    private static void RequireRelativePaths(IEnumerable<string> paths, string setting, List<string> problems)
+    private static void RequireRelativePaths(IEnumerable<string> paths, string setting, List<string> problems, string inside = "the tree")
     {
         foreach (var path in paths)
         {
-            var escapes = string.IsNullOrWhiteSpace(path)
-                || PlatformPaths.IsRootedOnAnyPlatform(path)
-                || PlatformPaths.ClimbsOut(path);
-
-            if (escapes)
+            if (Escapes(path))
             {
-                problems.Add($"{setting} entry '{path}' must be a relative path inside the tree, without '..'");
+                problems.Add($"{setting} entry '{path}' must be a relative path inside {inside}, without '..'");
             }
         }
+    }
+
+    /// <summary>Whether <paramref name="path"/> is blank, absolute on any platform, or climbs out with "..".</summary>
+    private static bool Escapes(string? path)
+        => string.IsNullOrWhiteSpace(path) || PlatformPaths.IsRootedOnAnyPlatform(path) || PlatformPaths.ClimbsOut(path);
+
+    /// <summary>
+    /// The first directory name <paramref name="entry"/> names that is never under a leg's build directory, or
+    /// <see langword="null"/>: the keep copies only what the build directory holds, so a directory besides it names
+    /// evidence no run could ever keep.
+    /// </summary>
+    private static string? BeyondTheBuildDirectory(string entry)
+        => LegPathNames.NamesIn(entry).FirstOrDefault(name => LegPathNames.Directories.Contains(name, StringComparer.Ordinal));
+
+    /// <summary>
+    /// Whether <paramref name="entry"/> names the build directory itself - spelled plainly, as <c>.</c>, or as
+    /// <c>{buildDir}</c> with nothing after it - which no path inside it is: an entry read as evidence that names only
+    /// where evidence lives keeps nothing on every failure.
+    /// </summary>
+    private static bool NamesTheBuildDirectory(string entry)
+    {
+        var normalized = PathPatterns.Normalize(entry);
+
+        if (normalized is "." or "")
+        {
+            return true;
+        }
+
+        return normalized.StartsWith($"{{{LegPathNames.BuildDirectory}}}", StringComparison.Ordinal)
+            && PathPatterns.Normalize(normalized[(LegPathNames.BuildDirectory.Length + 2) ..]) is "" or ".";
     }
 
     /// <summary>A CMake language name, such as <c>C</c>, <c>CXX</c> or <c>Fortran</c>.</summary>

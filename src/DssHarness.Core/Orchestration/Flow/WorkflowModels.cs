@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using DssHarness.Core.Configuration;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -171,10 +172,10 @@ public sealed record FlowBudget(double? Usd, long? Tokens, double? Minutes, int?
 public sealed record FlowAdvisor(
     string Agent,
     string Prompt,
-    string? Tier,
-    string? Model,
-    string? Effort,
-    string? Client,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Tier,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Model,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Effort,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Client,
     IReadOnlyList<string> Kinds)
 {
     /// <summary>How often its agent is tried again where it failed, on each model it may use, where the file says.</summary>
@@ -202,10 +203,10 @@ public sealed record FlowReporter(
     string Agent,
     string StatusPrompt,
     string AskPrompt,
-    string? Tier,
-    string? Model,
-    string? Effort,
-    string? Client)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Tier,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Model,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Effort,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Client)
 {
     /// <summary>How often its agent is tried again where it failed, on each model it may use, where the file says.</summary>
     public int? Retries { get; init; } = null;
@@ -232,16 +233,16 @@ public sealed record FlowReporter(
 /// <param name="WhenRemoveScope">The step that takes back an item an update withdraws, by its path from the flow's root.</param>
 /// <param name="MaxAddedIterations">How many iterations a run at the end of its loop is given to carry an update.</param>
 public sealed record FlowAmend(
-    string? Input,
-    int? ChangedAnswerMinutes,
-    string? Before,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Input,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? ChangedAnswerMinutes,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Before,
     string Step,
-    string? Then,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Then,
     string Scope,
     string WhenAddScope,
     string WhenChangeScope,
     string WhenRemoveScope,
-    int? MaxAddedIterations);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? MaxAddedIterations);
 
 /// <summary>One answer a configuration gives a question kind beforehand, and how often it holds.</summary>
 /// <param name="Answer">The answer, spelled as the question's options spell it.</param>
@@ -253,7 +254,10 @@ public sealed record FlowAmend(
 /// The answer given once <paramref name="Times"/> is spent: one of the kind's answers that ends the matter
 /// (<c>accept</c>, <c>allow</c>, <c>merge</c>, <c>stay</c>, <c>skip</c>, <c>fail</c> or <c>abort</c>).
 /// </param>
-public sealed record FlowAnswer(string Answer, int? Times, string? Then);
+public sealed record FlowAnswer(
+    string Answer,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? Times,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Then);
 
 /// <summary>One value a run of the workflow is started with.</summary>
 /// <param name="Name">The input's name, as <c>--input name=value</c> spells it.</param>
@@ -264,9 +268,9 @@ public sealed record FlowAnswer(string Answer, int? Times, string? Then);
 /// <param name="Options">The values a <c>text</c> input takes; a run started with another is refused.</param>
 public sealed record FlowInput(
     string Name,
-    string? Description,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Description,
     string Kind,
-    string? Default,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Default,
     bool Required,
     IReadOnlyList<string> Options)
 {
@@ -288,13 +292,20 @@ public sealed record FlowInput(
 /// <param name="Description">What the value is for.</param>
 /// <param name="Default">What to use where a value is neither given nor defaulted.</param>
 /// <param name="Required">Whether the run is refused when nothing supplies it and there is no default.</param>
-public sealed record FlowParam(string Name, string? Description, string? Default, bool Required);
+public sealed record FlowParam(
+    string Name,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Description,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Default,
+    bool Required);
 
 /// <summary>What a whole workflow declares it produces, so a later run or a person can be pointed at it.</summary>
 /// <param name="Name">The output's name, as the workflow's report names it.</param>
 /// <param name="Description">What the value holds.</param>
 /// <param name="From">An expression naming the step and the member that hold it.</param>
-public sealed record WorkflowOutput(string Name, string? Description, string From);
+public sealed record WorkflowOutput(
+    string Name,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Description,
+    string From);
 
 /// <summary>
 /// One step of a workflow: a definition, of one <c>type</c>, or a group holding <c>steps</c> of its own.
@@ -685,11 +696,11 @@ public sealed record FlowOn(string Step, string Outcome, IReadOnlyList<int> Code
 /// </param>
 public sealed record FlowRepeat(
     string Until,
-    int? MaxIterations,
-    int? Rounds,
-    string? Blocking,
-    int? BlockersLimitRounds,
-    string? Leftover,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? MaxIterations,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? Rounds,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Blocking,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? BlockersLimitRounds,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Leftover,
     bool BlockersUnbounded = false);
 
 /// <summary>What a fold or a deletion is allowed to carry, member for member the fold command's options.</summary>
@@ -725,4 +736,4 @@ public sealed record FlowQuote(string Text, string Input);
 /// </summary>
 /// <param name="Written">The list as written out, or empty where the value is an expression.</param>
 /// <param name="Expression">The expression, where the value is one; otherwise <see langword="null"/>.</param>
-public sealed record FlowList(IReadOnlyList<string> Written, string? Expression);
+public sealed record FlowList(IReadOnlyList<string> Written, [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Expression);

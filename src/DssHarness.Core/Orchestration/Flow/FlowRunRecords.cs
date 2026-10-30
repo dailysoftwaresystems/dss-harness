@@ -35,6 +35,13 @@ public interface IFlowRecords
     void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused);
 
     /// <summary>
+    /// Records the run's plan updates, whole, in the run's own file - written before anything the update changes, as
+    /// a question is, so a session that meets the change again reads what became of it already on disk.
+    /// </summary>
+    /// <param name="updates">Every plan update the run has taken, in the order taken, with what raised it and where it stands.</param>
+    void Updates(FlowUpdatesFile updates);
+
+    /// <summary>
     /// The name the run gives the next agent it makes (<see cref="OrchestrationRules.NextAgentName"/>), over
     /// <paramref name="recorded"/> - every name its steps' records hold or the session gave - and every agent directory
     /// the run has, read under the orchestrator's own lock. A run held in memory alone has no directory, and reckons by
@@ -461,6 +468,13 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         {
             _store.WriteFlowQuestions(_layout, new FlowQuestionsFile(1, _context.Run, _clock.GetUtcNow(), []));
         }
+
+        // The run's plan updates are created empty with it as well: the one owner of what an update is is there to
+        // read from the start, and every entry it ever holds is written whole through this one record.
+        if (_store.ReadFlowUpdates(_layout) is null)
+        {
+            _store.WriteFlowUpdates(_layout, new FlowUpdatesFile(1, _context.Run, _clock.GetUtcNow(), []));
+        }
     }
 
     /// <inheritdoc/>
@@ -468,6 +482,13 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     {
         ArgumentNullException.ThrowIfNull(questions);
         _store.WriteFlowQuestions(_layout, new FlowQuestionsFile(1, _context.Run, _clock.GetUtcNow(), questions, refused is { Count: > 0 } ? refused : null));
+    }
+
+    /// <inheritdoc/>
+    void IFlowRecords.Updates(FlowUpdatesFile updates)
+    {
+        ArgumentNullException.ThrowIfNull(updates);
+        _store.WriteFlowUpdates(_layout, updates with { Run = _context.Run, UpdatedAt = _clock.GetUtcNow() });
     }
 
     /// <inheritdoc/>
@@ -552,7 +573,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             snapshot.Pause is { } pause
                 ? new FlowPauseRecord(pause.Cause, pause.All, pause.BeganAt, [.. pause.Handoffs], pause.CompletedAt)
                 : null,
-            snapshot.Redirects);
+            snapshot.Redirects,
+            snapshot.Hold);
     }
 
     /// <summary>One step's own record, from the coordinator's snapshot of it.</summary>
@@ -587,6 +609,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.Item.IsMissing ? null : step.Item.ToNode(),
             step.Index,
             step.Iteration,
+            step.Assumptions is [_, ..] assumed ? [.. assumed] : null,
             step.Handlers,
             step.HandledBy,
             step.Leftover?.DeepClone(),
@@ -599,7 +622,9 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.Cause is OutcomeCause.None ? null : step.Cause.ToString(),
             step.Model,
             step.Copied ? true : null,
-            step.Targets);
+            step.Targets,
+            step.RaisedByUpdate,
+            step.Told);
     }
 
     /// <summary>

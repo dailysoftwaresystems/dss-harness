@@ -69,6 +69,27 @@ public sealed class AgentRunnerTests
     }
 
     /// <summary>
+    /// A run the engine keeps elsewhere than an agent's steps - the run's reporter, whose attempt's files belong under
+    /// the run's <c>asks/</c> - keeps its stream, its record and its first message there, by the directory its request
+    /// names.
+    /// </summary>
+    [Fact]
+    public async Task ARunKeptElsewhereThanAnAgentsSteps_KeepsItsRecordsWhereItsRequestNames()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient { Script = (run, _, _) => Task.FromResult(Completed(run)) };
+        var asks = Path.Combine(temp.Path, ".orchestrators", "r1", "asks", "20261030T101000Z-1f3ab");
+
+        var result = await Runner(client).RunAsync(Step(temp) with { RecordDirectory = asks }, events: null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.True(File.Exists(Path.Combine(asks, StoredStream.FileName)), "the stored stream is kept where the request names");
+        Assert.True(File.Exists(Path.Combine(asks, AgentRunner.ResultFileName)), "and the run's own record beside it");
+        Assert.True(File.Exists(Path.Combine(asks, "user.md")), "and the first user message as sent");
+        Assert.False(Directory.Exists(StepDirectory(temp)), "and nothing under the agent's steps");
+    }
+
+    /// <summary>
     /// A client that throws leaves a record that says it failed - the run's last line and <c>result.json</c> alike - and
     /// its failure is raised once both are written; where a listener failed too, the run's own failure is the one
     /// answered with.
@@ -584,7 +605,8 @@ public sealed class AgentRunnerTests
 
     /// <summary>
     /// The run's own record and its stream are written through the file system the runner was given: the stream opened
-    /// for appending, and <c>result.json</c> put in place in one step, so one that is there was written whole.
+    /// for appending, and the first user message (<c>user.md</c>, before the client is taken) and <c>result.json</c>
+    /// (after the stream's last line) each put in place in one step, so one that is there was written whole.
     /// </summary>
     [Fact]
     public async Task TheRecordsAreWritten_ThroughTheFileSystemTheRunnerWasGiven()
@@ -596,7 +618,7 @@ public sealed class AgentRunnerTests
         await new AgentRunner([client], disk, Elevation.User, TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
 
         Assert.Equal([StreamFile(temp)], disk.Appended);
-        Assert.Equal([ResultFile(temp)], disk.Written);
+        Assert.Equal([UserMdFile(temp), ResultFile(temp)], disk.Written);
     }
 
     /// <summary>
@@ -1265,6 +1287,9 @@ public sealed class AgentRunnerTests
 
     /// <summary>The run's own record, beside its stream.</summary>
     private static string ResultFile(TempDirectory temp) => Path.Combine(StepDirectory(temp), AgentRunner.ResultFileName);
+
+    /// <summary>The first user message as sent, beside its stream.</summary>
+    private static string UserMdFile(TempDirectory temp) => Path.Combine(StepDirectory(temp), "user.md");
 
     /// <summary>The stream's lines, read beside its writer, which may still hold it.</summary>
     private static List<string> Lines(TempDirectory temp) => [.. ReadBeside(StreamFile(temp))];

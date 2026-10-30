@@ -241,6 +241,12 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>Every leg the step ran, with each one's own verdict; empty for the steps that run no legs.</summary>
     public IReadOnlyList<FlowLeg> Legs { get; internal set; } = [];
 
+    /// <summary>
+    /// What the step's agent assumed where a person could have told it - the envelope's own list, masked - kept for the
+    /// step's record whatever the attempt ended by, each answer of the step adding to it; empty where nothing was assumed.
+    /// </summary>
+    public IReadOnlyList<Agents.AgentAssumption> Assumptions { get; internal set; } = [];
+
     /// <summary>The red legs alone, in the order they ran; the step's failure names the worst of them.</summary>
     public IReadOnlyList<FlowLeg> RedLegs { get; internal set; } = [];
 
@@ -284,6 +290,19 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     internal readonly List<Scope> Children = [];
     internal (int Exit, string? Error, string Member)? Failing;
     internal int ExtraIterations;
+
+    /// <summary>
+    /// The updates that owe this loop work - each one's id, added where a piece it places finds the work-item group's
+    /// round ended, so the work is owed to the loop's next iteration: the loop then runs again whatever its
+    /// <c>until</c> says, and where it is at its bound one iteration is added for the update.
+    /// </summary>
+    internal readonly HashSet<string> OwedIterationBy = [];
+
+    /// <summary>How the engine tells this attempt's agent while it runs; null for every step but a reason one, and before it starts.</summary>
+    internal FlowTelling? Telling;
+
+    /// <summary>Each telling of this step by a plan update: the update, when, and the way it reached it.</summary>
+    internal readonly List<FlowStepTold> ToldEntries = [];
     internal readonly List<FlowClaim> HeldClaims = [];
 
     /// <summary>
@@ -311,6 +330,12 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
 
     /// <summary>The id of the instance whose ending raised this one, as the record holds it until the resume resolves it.</summary>
     internal string? RaisedByRecord;
+
+    /// <summary>
+    /// The id of the plan update this instance was raised to plan: the visit of the step the <c>amend</c> block names,
+    /// raised by an update alone the way a handler is raised by an ending.
+    /// </summary>
+    internal string? RaisedByUpdate;
 
     /// <summary>
     /// Whether the failure of this instance is settled: handled by a handler, passed over, asked of a person, or ended
@@ -359,6 +384,38 @@ public sealed class FlowCoordinator
 
     /// <summary>Reads the text of a file the run's workflow names, by its name in the definition; null where the run reads none.</summary>
     private readonly Func<string, string>? _workflowFile;
+
+    /// <summary>Deletes a read-only agent of the run whose work is over, as the engine is to (<c>DeleteAsync</c>, applied); null where the run deletes none.</summary>
+    private readonly Func<string, string, CancellationToken, Task<Results.CommandOutcome>>? _deleteAgent;
+
+    /// <summary>Runs the orchestrator's advisor for a question the engine raises; null where none is named.</summary>
+    private readonly IFlowAdvisorRunner? _advisor;
+
+    /// <summary>
+    /// Reads the engine's account of a stopped or cut-off step's stored stream, the body of the handoff it writes where
+    /// the agent gave none; null where the run's runner keeps no stream, and the handoff stands on its first line alone.
+    /// </summary>
+    private readonly IFlowStreamAccount? _streamAccount;
+
+    /// <summary>
+    /// Every plan update the run has taken, as this session holds it: the one file the run's history of a change is -
+    /// its amendments read with the input, its changed answers kept with both answers - written whole at every change
+    /// through <see cref="IFlowRecords.Updates"/>. Read once as the session begins; this session is the only writer
+    /// while it runs.
+    /// </summary>
+    private FlowUpdatesFile _updates;
+
+    /// <summary>Every advice the session has begun and not yet taken: its question, how to end it, and its answer.</summary>
+    private readonly List<(FlowQuestion Asked, CancellationTokenSource Cancel, Task<FlowAdvice> Task)> _advising = [];
+
+    /// <summary>How many askings of its question each advice was: the directory under the asking step, from 1.</summary>
+    private readonly Dictionary<string, int> _adviceAsked = [];
+
+    /// <summary>The token of the session in flight, which every advice is held to; null between sessions.</summary>
+    private CancellationToken _sessionToken;
+
+    /// <summary>Every read-only agent deletion the run has begun, seen to before its session ends: a deletion left half-done by a session's end is a record the next command reads as one.</summary>
+    private readonly List<Task> _deletions = [];
 
     /// <summary>Every agent name the session gave, a spent one's among them: never given again, though no step holds it any more.</summary>
     private readonly HashSet<string> _agentNamesGiven = new(StringComparer.Ordinal);
@@ -447,6 +504,13 @@ public sealed class FlowCoordinator
     /// <summary>The alone step waiting for quiet, while it waits: nothing new is admitted until it has started.</summary>
     private FlowInstance? _barrier;
 
+    /// <summary>
+    /// The visit of the step the <c>amend</c> block names that plans the update the run is held for; null where no
+    /// update is under way. While one is, nothing is started outside its scope - no ready step, no retry that was
+    /// waiting, no next iteration, no handler and no redirect - and what is in flight goes on to its own end.
+    /// </summary>
+    private FlowInstance? _heldPlanner;
+
     /// <summary>One pre-existing issue and what became of it, as <c>{run.preExisting}</c> says it and the run counts it.</summary>
     /// <param name="State">What became of it: <c>listed</c>, <c>being fixed</c>, <c>fixed</c>, <c>duplicate of pe-&lt;n&gt;</c> or <c>unproven</c>.</param>
     /// <param name="Line">The issue as a person reads it: its title and where it is.</param>
@@ -494,13 +558,33 @@ public sealed class FlowCoordinator
     /// </param>
     /// <param name="place">Where the run works, handed to every step; null for a run held in memory alone.</param>
     /// <param name="agentModels">
-    /// The model each create-agent step makes its agent for, by the step's path (<see cref="WorkflowValidator.AgentModels"/>);
-    /// a step it names none for is handed none, which its runner refuses.
+    /// The model each create-agent step makes its agent for, and each reason step that names no agent its own read-only
+    /// one, by the step's path (<see cref="WorkflowValidator.AgentModels"/>); a step it names none for is handed none,
+    /// which its runner refuses.
     /// </param>
     /// <param name="workflowFile">
     /// Reads the text of a file the run's workflow names, by its name in the definition, throwing with why where it cannot
-    /// (<see cref="WorkflowNamedFiles.ReadText"/>): a pull request's body. Null where the run reads none, and a step that
-    /// needs one then fails 12, saying so.
+    /// (<see cref="WorkflowNamedFiles.ReadText"/>): a pull request's body, and a reason step's prompt files. Null where
+    /// the run reads none, and a step that needs one then fails 12, saying so.
+    /// </param>
+    /// <param name="deleteAgent">
+    /// Deletes a read-only agent of the run whose work is over, applied, as the engine is to
+    /// (<c>IAgentService.DeleteAsync</c>); null where the run deletes none, which a run held in memory alone never does.
+    /// </param>
+    /// <param name="advisor">
+    /// Runs the orchestrator's advisor for a question the engine raises, before a person is left with it; null where no
+    /// advisor is named, which every question then says.
+    /// </param>
+    /// <param name="streamAccount">
+    /// Reads the engine's account of a stopped or cut-off step's stored stream, the body of the handoff it writes where
+    /// the agent gave none; left out, the run's own runner is asked, and where that keeps no stream the handoff stands
+    /// on its first line alone.
+    /// </param>
+    /// <param name="updates">
+    /// Reads the run's plan updates, <c>updates.json</c>, as the run begins - every update a session before this one
+    /// took, whatever its state, which this one goes on with: its amendments are read with the input, and one still
+    /// <c>queued</c> is taken before anything runs. Left out, the run holds none, and takes none until this session
+    /// gives one.
     /// </param>
     /// <exception cref="HarnessException">An input the run needs is missing, or a value is outside the ones its input takes.</exception>
     public FlowCoordinator(
@@ -514,7 +598,11 @@ public sealed class FlowCoordinator
         string? runName = null,
         FlowRunPlace? place = null,
         IReadOnlyDictionary<string, string>? agentModels = null,
-        Func<string, string>? workflowFile = null)
+        Func<string, string>? workflowFile = null,
+        Func<string, string, CancellationToken, Task<Results.CommandOutcome>>? deleteAgent = null,
+        IFlowAdvisorRunner? advisor = null,
+        IFlowStreamAccount? streamAccount = null,
+        Func<FlowUpdatesFile?>? updates = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(runner);
@@ -530,6 +618,10 @@ public sealed class FlowCoordinator
         _place = place;
         _agentModels = agentModels ?? new Dictionary<string, string>(StringComparer.Ordinal);
         _workflowFile = workflowFile;
+        _deleteAgent = deleteAgent;
+        _advisor = advisor;
+        _streamAccount = streamAccount ?? (runner as IFlowStreamAccount);
+        _updates = updates?.Invoke() ?? new FlowUpdatesFile(1, runName ?? string.Empty, _clock.GetUtcNow(), []);
 
         foreach (var (path, _) in FlowScope.Declared(definition))
         {
@@ -802,6 +894,7 @@ public sealed class FlowCoordinator
         // is refused below, and a refused resume writes nothing of itself.
         _held = _records is null ? null : [];
         _starting = true;
+        _sessionToken = cancellationToken;
 
         try
         {
@@ -823,6 +916,7 @@ public sealed class FlowCoordinator
             else
             {
                 AnswerWhatTheConfigurationAnswers();
+                SeekOwedAdvice();
             }
 
             // A group stands open over its members whatever stopped them, and goes on as it was: it is no step that
@@ -878,6 +972,14 @@ public sealed class FlowCoordinator
             while (true)
             {
                 Progress();
+
+                if (await SettlePiecesEndingAsync().ConfigureAwait(false))
+                {
+                    // An instance the run brings to rest for an update came to rest and was visited again: its new
+                    // scope draws as any does, this same pass.
+                    Progress();
+                }
+
                 CheckBudget();
 
                 if (_hardStop && !_stopApplied)
@@ -929,10 +1031,15 @@ public sealed class FlowCoordinator
                     continue;
                 }
 
+                // What the session's askings of its advisor have answered is taken each pass: a session does not end
+                // paused while an advisor still runs, for the person it asks is to have the recommendation.
+                await TakeAdviceAsync().ConfigureAwait(false);
+
                 // Anything to wait for: a step in flight - a leaf, for a group is only bookkeeping over its members
                 // and a group whose member waits on a question can run nothing until it is answered - a stopped
-                // step's runner still ending, a retry's time coming, or a completion still unread.
-                if (_created.Any(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup) || _wakes.Count > 0 || started > 0)
+                // step's runner still ending, a retry's time coming, an advice of the run's advisor still running, or
+                // a completion still unread.
+                if (_created.Any(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup) || _wakes.Count > 0 || started > 0 || _advising.Count > 0)
                 {
                     await WaitNextAsync(cancellationToken).ConfigureAwait(false);
                     continue;
@@ -981,6 +1088,15 @@ public sealed class FlowCoordinator
             _starting = false;
             HandBackWhatIsLeft();
             _inSession = false;
+
+            // Every read-only agent deletion the session began is seen to before it ends, for a deletion left
+            // half-done by an ending session is a record the next command reads as one. Each swallows its own failure:
+            // the deleter said it, and the run is not stopped by it.
+            if (_deletions is [_, ..] && !(_pausing || _hardStop))
+            {
+                await Task.WhenAll(_deletions).ConfigureAwait(false);
+                _deletions.Clear();
+            }
         }
 
         _last = Finish();
@@ -1012,11 +1128,12 @@ public sealed class FlowCoordinator
             {
                 // The attempt before was cut off and left no handoff - a crash ended the engine, or a stop ended
                 // the run - so the engine writes one, for the next attempt is told what the cut-off one had done,
-                // on every client and after every kind of stop. One the attempt still held - an agent's account no
-                // prompt holds yet - is never written over: the next attempt is given it.
-                stopped.Handoff = FlowHandoff.ByEngine(
-                    was is FlowInstanceState.Running ? "the engine's process ended" : "the run was stopped",
-                    $"Attempt {stopped.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)} was cut off.");
+                // on every client and after every kind of stop: its body is the engine's account of that attempt's
+                // stored stream. One the attempt still held - an agent's account no prompt holds yet - is never
+                // written over: the next attempt is given it.
+                stopped.Handoff = EngineHandoffOf(
+                    stopped,
+                    was is FlowInstanceState.Running ? "the engine's process ended" : "the run was stopped");
                 Record(FlowChangeKind.Handoff, stopped, detail: stopped.Handoff.Why);
             }
 
@@ -1183,7 +1300,7 @@ public sealed class FlowCoordinator
 
                 instance.Handoff = accounts[at].Text is { Length: > 0 } written
                     ? new FlowHandoff(written, "agent")
-                    : FlowHandoff.ByEngine(accounts[at].Why);
+                    : EngineHandoffOf(instance, accounts[at].Why);
                 _pause._handoffs.Add(instance.Id);
                 Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
             }
@@ -1476,17 +1593,15 @@ public sealed class FlowCoordinator
         return true;
     }
 
-    /// <summary>What the refusal of an answer that changes one already given says: the plan update it would raise, which this build does not take.</summary>
-    internal const string PlanUpdateRefused = "changes an answer already given, which raises a plan update; this build takes no plan update yet";
-
     /// <summary>
     /// Weighs an answer handed over - through the run's inbox, to a running session or between two - as a person's, and
     /// records what became of it before anything else is said of it: taken, the answer is written into
     /// <c>questions.json</c> under the inbox entry's id; refused - its question no longer open, or it changes an answer
-    /// already given - the refusal is written there under the id too, then told as an <c>answer</c> event naming why, so
-    /// the run's own history says what became of an answer nobody saw refused. The one owner of an entry weighed once: one
-    /// whose id the run's records already hold - taken or refused by this session or any before it, its removal from the
-    /// inbox having failed or been cut off - is never weighed again, and nothing is written for it.
+    /// already given and the change was not taken - the refusal is written there under the id too, then told as an
+    /// <c>answer</c> event naming why, so the run's own history says what became of an answer nobody saw refused. The
+    /// one owner of an entry weighed once: one whose id the run's records already hold - taken or refused by this
+    /// session or any before it, its removal from the inbox having failed or been cut off - is never weighed again,
+    /// and nothing is written for it.
     /// </summary>
     /// <param name="question">The question's id.</param>
     /// <param name="answer">The answer, spelled as the question's options spell it.</param>
@@ -1494,9 +1609,10 @@ public sealed class FlowCoordinator
     /// <param name="problem">Why the answer was not taken, where it was refused.</param>
     /// <param name="through">How a person gave it; <c>answer-orchestrator</c> where the command handed it over.</param>
     /// <param name="inbox">The id of the inbox entry it was handed over under; null for an answer no inbox handed over, which is weighed as it comes, its refusal told by its event alone, for no entry waits to be settled.</param>
-    /// <param name="again">Whether it changes an answer already given: a plan update, which this build refuses.</param>
+    /// <param name="again">Whether it changes an answer already given; taken within its window and once, or refused with why (<see cref="TryChangeAnswer"/>).</param>
+    /// <param name="at">The moment the answer was given to the tool, where it was handed over: the moment its window is counted to.</param>
     /// <returns>What became of it.</returns>
-    public FlowHandedOver AnswerHandedOver(string question, string answer, string? text, out string? problem, string? through = "answer-orchestrator", string? inbox = null, bool again = false)
+    public FlowHandedOver AnswerHandedOver(string question, string answer, string? text, out string? problem, string? through = "answer-orchestrator", string? inbox = null, bool again = false, DateTimeOffset? at = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(question);
         ArgumentException.ThrowIfNullOrWhiteSpace(answer);
@@ -1509,7 +1625,12 @@ public sealed class FlowCoordinator
 
         if (again)
         {
-            problem = $"it {PlanUpdateRefused}";
+            // A changed answer is an amendment in every respect, and goes by its own path: the last set, its window,
+            // and once - and where the run cannot take it, the answer stands.
+            if (TryChangeAnswer(answer, text, out problem, through, question, at, inbox))
+            {
+                return FlowHandedOver.Taken;
+            }
         }
         else if (TryAnswer(question, answer, text, out problem, through, inbox))
         {
@@ -1531,16 +1652,718 @@ public sealed class FlowCoordinator
     /// <summary>Whether the run's records hold what it did with the inbox entry <paramref name="inbox"/>: an answer taken under it, or its refusal.</summary>
     private bool Recorded(string inbox)
         => _refused.Any(refused => string.Equals(refused.Inbox, inbox, StringComparison.Ordinal))
-            || _questions.Any(question => question.Given.Any(given => string.Equals(given.Inbox, inbox, StringComparison.Ordinal)));
+            || _questions.Any(question => question.Given.Any(given => string.Equals(given.Inbox, inbox, StringComparison.Ordinal)))
+            || _updates.Updates.Any(update => string.Equals(update.Inbox, inbox, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Whether the run has begun the scope its plan updates are planned in - the group its <c>amend.step</c> is directly
+    /// in, or the flow itself where the step is one of its top level. Where it has not, there is no plan to update: an
+    /// update is done at once. Where it has, the step the <c>amend</c> block names is raised
+    /// (<see cref="RaisePlanner"/>) in the newest instance of that scope, the run held meanwhile.
+    /// </summary>
+    private bool PlanScopeBegun()
+        => _definition.Amend is not { } amend
+            || FlowUpdateGates.ParentOf(amend.Step) is not { } scope
+            || _instances.Values.Any(instance => instance.Path == scope);
+
+    /// <summary>
+    /// The update the run is working on now, where one is under way; null where none is. Updates are taken one at a
+    /// time: one that arrives while another is under way is queued, and taken when that one is done.
+    /// </summary>
+    private FlowUpdateEntry? UnderWayUpdate
+        => _updates.Updates.FirstOrDefault(update => update.State == FlowUpdateStates.UnderWay);
+
+    /// <summary>
+    /// Raises the step the <c>amend</c> block names for <paramref name="update"/> - a new visit of it in the newest
+    /// instance of its scope, the last iteration a <c>repeat</c> began, whether or not that scope had ended - the way a
+    /// handler is raised by an ending, but by the update alone: nothing else raises it, and it takes no place in the
+    /// ordinary schedule (<see cref="Instantiate"/>). A group around it that had ended is in progress again until it
+    /// ends again. The visit is made once however often this is called - a crash between the visit and the entry that
+    /// names it finds the visit, and no second is made - and the entry names the visit's instance.
+    /// </summary>
+    /// <param name="update">The update whose planning raises it; already marked <see cref="FlowUpdateStates.UnderWay"/>.</param>
+    /// <returns>The visit that plans the update.</returns>
+    private FlowInstance RaisePlanner(FlowUpdateEntry update)
+    {
+        var declaration = FlowUpdateGates.StepOf(_definition, _definition.Amend!.Step)!;
+        var scope = NewestPlanScope();
+
+        // One visit is made once: a session that takes an entry again - its record written, its raise cut off - finds
+        // the visit the raise made, and a crash between the two leaves it to be found by id.
+        var raised = _created.FirstOrDefault(visit => visit.RaisedByUpdate == update.Id)
+            ?? NewVisit(scope, declaration, FlowInstanceState.NotStarted, made: visit => visit.RaisedByUpdate = update.Id);
+
+        if ((scope.OwnGroupInstance ?? scope.GroupInstance) is { State: not (FlowInstanceState.Running or FlowInstanceState.Paused) } group)
+        {
+            // A group that had ended is in progress again until it ends again: its scope draws its steps - the
+            // planner's visit among them - and it ends once they have ended.
+            var was = group.State;
+            group.State = FlowInstanceState.Running;
+            Record(FlowChangeKind.Step, group, from: was, to: FlowInstanceState.Running, detail: $"in progress again for update {update.Id}");
+        }
+
+        PutUpdate(update with { Step = raised.Id });
+        _heldPlanner = raised;
+
+        Record(FlowChangeKind.Answer, detail: $"update {update.Id} is under way: the run is held while '{raised.Id}' plans it");
+        return raised;
+    }
+
+    /// <summary>
+    /// The newest instance of the scope the step the <c>amend</c> block names is declared in: the last scope a
+    /// <c>repeat</c> began or a <c>forEach</c> expanded of the group around that step - where the run has begun one -
+    /// and the flow's top level otherwise.
+    /// </summary>
+    private Scope NewestPlanScope()
+    {
+        var group = FlowUpdateGates.ParentOf(_definition.Amend!.Step);
+
+        return _scopes.LastOrDefault(scope => scope.GroupPath == group && (scope.OwnGroupInstance ?? scope.GroupInstance) is not null) ?? _top;
+    }
+
+    /// <summary>Whether <paramref name="scope"/> is the scope the update under way is planned in, or one nested under it: the only scopes the hold lets start in.</summary>
+    private bool InHeldScope(Scope? scope)
+    {
+        for (var at = scope; at is not null; at = at.Parent)
+        {
+            if (ReferenceEquals(at, _heldPlanner?.DeclaredScope))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The work-item group and its three alternatives, where the definition has an <c>amend</c> block whose
+    /// <c>whenAddScope</c> names a step declared directly in a <c>forEach</c> group: that group is the work-item group,
+    /// and the three steps its items run in one another's place.
+    /// </summary>
+    private sealed record WorkItemSteps(WorkflowStep Add, WorkflowStep Change, WorkflowStep Remove, WorkflowStep Group)
+    {
+        /// <summary>The step that carries an instance of the work-item group of <paramref name="kind"/> out.</summary>
+        public WorkflowStep Carrier(string kind)
+            => kind == FlowUpdatePieceKinds.Changed ? Change : kind == FlowUpdatePieceKinds.Removed ? Remove : Add;
+
+        /// <summary>The three alternatives, the add step first.</summary>
+        public IReadOnlyList<WorkflowStep> All => [Add, Change, Remove];
+    }
+
+    /// <summary>
+    /// The work-item group's three alternatives for <paramref name="scope"/>, where it is one item scope of the
+    /// work-item group; null for every other scope.
+    /// </summary>
+    private WorkItemSteps? WorkItemStepsOf(Scope scope)
+    {
+        if (_definition.Amend is not { } amend
+            || scope.Group?.ForEach is null
+            || !string.Equals(scope.GroupPath, FlowUpdateGates.ParentOf(amend.WhenAddScope), StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var siblings = DeclarationsOf(scope);
+        WorkflowStep? Of(string path)
+            => siblings.FirstOrDefault(declared => string.Equals(declared.Name, path[(path.LastIndexOf('.') + 1)..], StringComparison.Ordinal));
+
+        return Of(amend.WhenAddScope) is { } add && Of(amend.WhenChangeScope) is { } change && Of(amend.WhenRemoveScope) is { } remove
+            ? new WorkItemSteps(add, change, remove, scope.Group)
+            : null;
+    }
+
+    /// <summary>The kind <paramref name="scope"/>'s work item is of: its own, or <c>added</c> where the group's expression made it.</summary>
+    private static string KindOf(Scope scope)
+        => scope.WorkItemKind ?? FlowUpdatePieceKinds.Added;
+
+    /// <summary>The name of <paramref name="scope"/>'s work item, where its item has one; null where it does not.</summary>
+    private static string? ItemNameOf(Scope scope)
+        => scope.Item.IsMissing ? null : (scope.Item.ToNode() as JsonObject)?["name"]?.GetValue<string>();
+
+    /// <summary>
+    /// The newest instance of the work-item group - the last round the run reached - where the run has begun one; null
+    /// before it has.
+    /// </summary>
+    private FlowInstance? CurrentRound()
+        => _definition.Amend is not { } amend
+            ? null
+            : _created.LastOrDefault(group => group.Step.IsGroup && group.Path == FlowUpdateGates.ParentOf(amend.WhenAddScope));
+
+    /// <summary>
+    /// The instance of the work-item group that carries the work item named <paramref name="name"/>: the newest item
+    /// scope of the work-item group, over every round, whose item has that name; null where none does.
+    /// </summary>
+    private Scope? ItemInstanceNamed(string name)
+    {
+        if (_definition.Amend is not { } amend)
+        {
+            return null;
+        }
+
+        var groupPath = FlowUpdateGates.ParentOf(amend.WhenAddScope);
+
+        foreach (var round in _created.Where(group => group.Step.IsGroup && group.Path == groupPath).Reverse())
+        {
+            if (round.Children.LastOrDefault(item => string.Equals(ItemNameOf(item), name, StringComparison.Ordinal)) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Whether the instance of the work-item group <paramref name="item"/> is of has begun: one of its steps has started.</summary>
+    private static bool ItemBegun(Scope item)
+        => item.Members.Values.Any(member => member.StartedAt is not null);
+
+    /// <summary>Whether the instance of the work-item group <paramref name="item"/> is of has ended: its own group instance has.</summary>
+    private static bool ItemEnded(Scope item)
+        => item.GroupInstance is { State: FlowInstanceState.Done or FlowInstanceState.Failed or FlowInstanceState.Skipped or FlowInstanceState.Stopped };
+
+    /// <summary>
+    /// The names of the work items a <c>validate-plan</c> step checked on its visit before this one, where it made a
+    /// visit that ended with items; empty where it never did.
+    /// </summary>
+    /// <param name="check">The check about to start.</param>
+    private IReadOnlyList<string> ItemsCheckedBefore(FlowInstance check)
+    {
+        var before = _created
+            .Where(visit => ReferenceEquals(visit.Step, check.Step) && ReferenceEquals(visit.DeclaredScope, check.DeclaredScope) && visit != check)
+            .OrderByDescending(visit => visit.Visit)
+            .FirstOrDefault(visit => visit.Output?["items"] is JsonArray);
+
+        return before is null
+            ? []
+            : [.. (before.Output!["items"] as JsonArray)!.Select(item => (item as JsonObject)?["name"]?.GetValue<string>()).OfType<string>()];
+    }
+
+    /// <summary>
+    /// The <c>forEach</c> expression of the work-item group, where <paramref name="check"/> is the check that opens its
+    /// rounds - the <c>validate-plan</c> step whose <c>items</c> the group expands from, declared beside it; null for
+    /// every other check.
+    /// </summary>
+    /// <param name="check">The check about to start.</param>
+    /// <param name="groupPath">The declaration path of the work-item group.</param>
+    private string? OpensTheRound(FlowInstance check, string groupPath)
+    {
+        var group = FlowUpdateGates.StepOf(_definition, groupPath);
+
+        if (group?.ForEach is not { } items
+            || !string.Equals(check.DeclaredScope?.GroupPath, FlowUpdateGates.ParentOf(groupPath), StringComparison.Ordinal)
+            || WorkflowExpressions.ReadsOf(items).Select(read => read.Root).All(root => !string.Equals(root, check.Step.Name, StringComparison.Ordinal)))
+        {
+            return null;
+        }
+
+        return items;
+    }
+
+    /// <summary>
+    /// The work items plan updates owe to the round that opens next: each piece recorded as owed that no instance of
+    /// the work-item group carries yet, in the order the updates were done.
+    /// </summary>
+    private IReadOnlyList<JsonNode?> OwedItems()
+        => [.. _updates.Updates
+            .Where(update => update.State == FlowUpdateStates.Done)
+            .SelectMany(update => update.ThePieces)
+            .Where(piece => piece.OwedTo is not null && piece.ItemName() is not null && ItemInstanceNamed(piece.ItemName()!) is null)
+            .Select(piece => piece.Item?.DeepClone())];
+
+    /// <summary>Why the run refuses a change of its plan, as it stands now; null where it takes one. The same gates as the command's, read of the run as this engine holds it.</summary>
+    private string? GatesRefused(string cause)
+    {
+        if (_definition.Amend is not { } amend)
+        {
+            return null;
+        }
+
+        var snapshot = Snapshot();
+        return FlowUpdateGates.Refused(
+            _definition,
+            _runName ?? string.Empty,
+            snapshot.Status.ToString(),
+            [.. snapshot.Steps.Select(step => new FlowStepAt(step.Step, step.State.ToString(), step.Group, step.Iteration))],
+            cause);
+    }
+
+    /// <summary>
+    /// Takes an amendment of the run's request - a person's, handed over through the inbox to this engine or read with
+    /// the run as it began - through the one path every amendment passes: weighed against the gates as the run stands
+    /// now, and recorded in <c>updates.json</c> before anything is done with it. Where another update is under way it
+    /// is recorded <c>queued</c>, and taken when that one is done, in the order given. Where the run has not begun the
+    /// scope its plan updates are planned in, no plan holds it and there is nothing to plan: the amendment is recorded
+    /// <c>done</c> at once, and every step that starts reads the request with its amendments. Where it has, the step
+    /// the <c>amend</c> block names is raised to plan it (<see cref="RaisePlanner"/>) and the run is held while it
+    /// does. Where a gate refuses it, nothing is recorded where nothing was - one the run's records already hold, an
+    /// entry it takes up again or one an inbox handed over, keeps its place in them, refused, so the run's history
+    /// says what became of it.
+    /// </summary>
+    /// <param name="text">The amendment, in the person's words: it adds to the request, corrects it or narrows it.</param>
+    /// <param name="through">How the person gave it: <c>amend-orchestrator-request</c> or <c>front-end</c>.</param>
+    /// <param name="problem">Why the amendment was not taken, where it was not.</param>
+    /// <param name="inbox">The id of the inbox entry it was handed over under; null where none was.</param>
+    /// <param name="at">When the amendment was given; where left out, now.</param>
+    /// <param name="replacing">The id of the update entry this taking takes up again - one left <c>queued</c> by a session before this; null where none was.</param>
+    /// <returns>What became of it.</returns>
+    public FlowHandedOver AmendmentHandedOver(string text, string through, out string? problem, string? inbox = null, DateTimeOffset? at = null, string? replacing = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+
+        if (inbox is not null && Recorded(inbox))
+        {
+            problem = null;
+            return FlowHandedOver.RecordedAlready;
+        }
+
+        var held = _updates.Updates.FirstOrDefault(update => update.Id == replacing);
+        var id = held?.Id ?? _updates.NextId();
+        var taken = held?.TakenAt ?? at ?? _clock.GetUtcNow();
+
+        if (_definition.Amend is not { Input: not null })
+        {
+            problem = $"orchestrator '{_definition.Name}' takes no amended request: its amend names no input";
+        }
+        else if (GatesRefused(FlowUpdateCauses.Amendment) is { } refused)
+        {
+            problem = refused;
+        }
+        else if (UnderWayUpdate is { } underWay && held?.Id != underWay.Id)
+        {
+            // Updates are taken one at a time: one that arrives while another is under way waits for that one's plan
+            // to stand, and is taken then, in the order given.
+            PutUpdate(new FlowUpdateEntry(
+                id,
+                FlowUpdateCauses.Amendment,
+                FlowUpdateStates.Queued,
+                taken,
+                Amendment: text,
+                Through: held?.Through ?? through,
+                Inbox: inbox));
+            problem = null;
+            Record(FlowChangeKind.Answer, detail: $"an amendment was queued behind update {underWay.Id}");
+            return FlowHandedOver.Taken;
+        }
+        else if (PlanScopeBegun())
+        {
+            var entry = new FlowUpdateEntry(
+                id,
+                FlowUpdateCauses.Amendment,
+                FlowUpdateStates.UnderWay,
+                taken,
+                Amendment: text,
+                Through: held?.Through ?? through,
+                Inbox: inbox);
+            _ = RaisePlanner(entry);
+            problem = null;
+            return FlowHandedOver.Taken;
+        }
+        else
+        {
+            PutUpdate(new FlowUpdateEntry(
+                id,
+                FlowUpdateCauses.Amendment,
+                FlowUpdateStates.DoneAtOnce,
+                taken,
+                Amendment: text,
+                Through: held?.Through ?? through,
+                Inbox: inbox));
+            problem = null;
+            Record(FlowChangeKind.Answer, detail: "an amendment was taken: every step that starts reads the request with its amendments");
+            return FlowHandedOver.Taken;
+        }
+
+        if (held is not null || inbox is not null)
+        {
+            // One the run's records already held is refused in them, so what became of it is said by the run itself -
+            // and a session that meets its inbox entry again only empties it.
+            PutUpdate(new FlowUpdateEntry(
+                id,
+                FlowUpdateCauses.Amendment,
+                FlowUpdateStates.Refused,
+                taken,
+                Amendment: text,
+                Through: held?.Through ?? through,
+                Inbox: inbox,
+                Why: problem!));
+        }
+
+        Record(FlowChangeKind.Answer, detail: $"an amendment was not taken: {problem}");
+        return FlowHandedOver.Refused;
+    }
+
+    /// <summary>
+    /// Takes every update a session before this one recorded and left <c>queued</c> - an amendment or a changed answer
+    /// given while no engine ran the run, and one that arrived while another update was under way - before anything
+    /// else runs: the design's order, for the next session of the run takes it first. Updates are taken one at a time:
+    /// where one is under way already, the queued ones wait for it here - and the engine takes the next of them when
+    /// that one is done (<see cref="SettleUpdates"/>). Each goes by the one path of its cause; one this session cannot
+    /// take keeps its place, for the run that could not take it stands as it did.
+    /// </summary>
+    /// <returns>What this taking said, a line to each update it took.</returns>
+    public IReadOnlyList<string> TakeQueuedUpdates()
+    {
+        List<string> said = [];
+
+        if (UnderWayUpdate is not null)
+        {
+            // One at a time: the session begins with the update under way - held, its planning step raised - and the
+            // queued ones are taken as each one before them is done.
+            return said;
+        }
+
+        foreach (var queued in _updates.Updates.Where(update => update.State == FlowUpdateStates.Queued).ToList())
+        {
+            string? problem;
+
+            if (queued.Cause == FlowUpdateCauses.Amendment)
+            {
+                var taken = AmendmentHandedOver(queued.Amendment!, queued.Through ?? "amend-orchestrator-request", out problem, queued.Inbox, queued.TakenAt, replacing: queued.Id);
+
+                if (taken is FlowHandedOver.Taken)
+                {
+                    said.Add($"update {queued.Id}, an amendment given while no engine ran the run, was taken");
+                }
+            }
+            else
+            {
+                if (TakeQueuedChange(queued, out problem))
+                {
+                    said.Add($"update {queued.Id}, a changed answer given while no engine ran the run, was taken");
+                }
+            }
+
+            if (problem is not null)
+            {
+                said.Add($"update {queued.Id} was not taken: {problem}");
+            }
+
+            if (UnderWayUpdate is not null)
+            {
+                // One at a time: the first that raised a planning step ends this taking, and the ones after it are
+                // taken when that one is done.
+                break;
+            }
+        }
+
+        return said;
+    }
+
+    /// <summary>
+    /// Takes one queued change of an answer up again: its window and its once were weighed where it was given, and are
+    /// not weighed again - the moment it was given to the tool is the one it was recorded with - but the set it changes
+    /// must still be the last a person answered, and the gates read as the run stands now.
+    /// </summary>
+    /// <param name="held">The queued entry, with the question, both answers and the text.</param>
+    /// <param name="problem">Why it was not taken, where it was not.</param>
+    /// <returns>Whether the change was taken - applied, or planned by the step the <c>amend</c> block names.</returns>
+    private bool TakeQueuedChange(FlowUpdateEntry held, out string? problem)
+    {
+        if (_questions.FirstOrDefault(asked => asked.Id == held.Question) is not { } set || set.Given.Count == 0)
+        {
+            problem = $"question '{held.Question}', which update {held.Id} changes the answer of, is not one this run asked";
+            return false;
+        }
+
+        if (LastAnsweredByAPerson()?.Id != set.Id)
+        {
+            problem = $"question '{held.Question}' is not the last a person answered any more: '{LastAnsweredByAPerson()?.Id}' is";
+            return false;
+        }
+
+        if (set.Given.Any(given => given.ReplacedAt is not null))
+        {
+            // Its one change was applied while this waited in the queue: the set is changed, one time.
+            problem = $"question '{set.Id}' of run '{_runName}' had its answer changed already; a set is changed one time";
+            return false;
+        }
+
+        if (GatesRefused(FlowUpdateCauses.ChangedAnswer) is { } refused)
+        {
+            problem = refused;
+            return false;
+        }
+
+        _answeredAtStart |= !_inSession || _starting;
+
+        problem = null;
+        ApplyTheChange(
+            set,
+            set.Given[^1],
+            held.ToAnswer!,
+            string.IsNullOrWhiteSpace(held.Text) ? null : held.Text,
+            held.Through,
+            held.TakenAt,
+            held with { State = PlanScopeBegun() ? FlowUpdateStates.UnderWay : FlowUpdateStates.DoneAtOnce });
+        return true;
+    }
+
+    /// <summary>
+    /// Changes the last answer a person gave the run, within the window its definition names and once: the entry keeps
+    /// both answers, each with when it was given, and the answer now stands; a <c>pause</c> step whose answer was
+    /// changed is visited again, done at once with the new answer, so whatever reads the step from then on reads the
+    /// new one. What the first answer set going is neither taken back by the engine nor left standing by a rule: a
+    /// change is an amendment in every respect - where the run has begun the scope its plan updates are planned in, the
+    /// step the <c>amend</c> block names is raised to plan it and the run is held while it does, and where another
+    /// update is under way the change is queued behind it, to be applied and planned when that one is done. Where a
+    /// gate refuses it, or the window is past, or the set was changed already, nothing is recorded at all and the
+    /// answer stands.
+    /// </summary>
+    /// <param name="answer">The new answer, spelled as the question's options spell it.</param>
+    /// <param name="text">The text given with it, where the answer takes one.</param>
+    /// <param name="problem">Why the answer was not changed, where it was not.</param>
+    /// <param name="through">How the person gave it: <c>answer-orchestrator</c> or <c>front-end</c>.</param>
+    /// <param name="question">
+    /// The id of the set the answer changes, as the command that took it read it; null to take the last set a person
+    /// answered. Where the set named is no longer the last one, the change is refused naming the set that is.
+    /// </param>
+    /// <param name="given">When the new answer was given to the tool: the moment its window is counted to.</param>
+    /// <param name="inbox">The id of the inbox entry it was handed over under; null where none was.</param>
+    /// <returns>Whether the answer was changed.</returns>
+    public bool TryChangeAnswer(string answer, string? text, out string? problem, string? through = null, string? question = null, DateTimeOffset? given = null, string? inbox = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(answer);
+
+        if (inbox is not null && Recorded(inbox))
+        {
+            // What became of it is the run's records' already; a session that meets the entry again only empties it.
+            problem = null;
+            return true;
+        }
+
+        var at = given ?? _clock.GetUtcNow();
+
+        if (_definition.Amend is not { ChangedAnswerMinutes: { } minutes })
+        {
+            problem = $"orchestrator '{_definition.Name}' takes no changed answer: its amend names no changedAnswerMinutes";
+
+            return false;
+        }
+
+        if (LastAnsweredByAPerson() is not { } set)
+        {
+            problem = $"no answer of run '{_runName}' was given by a person, so there is no set to change";
+
+            return false;
+        }
+
+        if (question is not null && question != set.Id)
+        {
+            problem = $"question '{question}' is not the last a person answered any more: '{set.Id}' is";
+
+            return false;
+        }
+
+        var standing = set.Given[^1];
+
+        if (!set.Options.Contains(answer, StringComparer.Ordinal))
+        {
+            problem = $"'{answer}' is not one of the answers '{set.Id}' takes: {string.Join(", ", set.Held)}";
+
+            return false;
+        }
+
+        var needsText = set.Held.Any(option => option.Text && string.Equals(option.Answer, answer, StringComparison.Ordinal));
+
+        if (needsText && string.IsNullOrWhiteSpace(text))
+        {
+            problem = $"'{answer}' is an answer '{set.Id}' takes with a text; give one";
+
+            return false;
+        }
+
+        if (!needsText && !string.IsNullOrWhiteSpace(text) && set.Kind != "ask")
+        {
+            problem = $"'{answer}' is an answer '{set.Id}' takes with no text; give none";
+
+            return false;
+        }
+
+        if (string.Equals(standing.Answer, answer, StringComparison.Ordinal) && standing.Text == text)
+        {
+            problem = $"'{answer}' is the answer '{set.Id}' already has";
+
+            return false;
+        }
+
+        if (set.Given.Any(given => given.ReplacedAt is { } changed))
+        {
+            problem = $"question '{set.Id}' of run '{_runName}' had its answer changed already, at {FlowTimeConverter.Written(set.Given.First(given => given.ReplacedAt is not null).ReplacedAt!.Value)}; a set is changed one time";
+            return false;
+        }
+
+        if (_updates.Updates.Any(update => update.Cause == FlowUpdateCauses.ChangedAnswer
+                && update.Question == set.Id
+                && update.State is FlowUpdateStates.Queued or FlowUpdateStates.UnderWay))
+        {
+            // A change queued behind an update under way is the set's one change, asked for already: a second waits
+            // with it, and nothing of either is applied until its turn.
+            var asked = _updates.Updates.First(update => update.Cause == FlowUpdateCauses.ChangedAnswer
+                && update.Question == set.Id
+                && update.State is FlowUpdateStates.Queued or FlowUpdateStates.UnderWay);
+            problem = $"question '{set.Id}' of run '{_runName}' has its answer changed already - update {asked.Id} holds the change, taken at {FlowTimeConverter.Written(asked.TakenAt)}; a set is changed one time";
+            return false;
+        }
+
+        var until = standing.At ?? set.RaisedAt;
+
+        if (at - until > TimeSpan.FromMinutes(minutes))
+        {
+            problem = $"question {set.Id} of run '{_runName}' was answered '{standing.Answer}' at {FlowTimeConverter.Written(until)} and could be answered again until {FlowTimeConverter.Written(until.AddMinutes(minutes))}; it is {FlowTimeConverter.Written(at)}. The answer stands. To change what the run builds, amend its request: amend-orchestrator-request {_runName} \"<what to change>\"";
+
+            return false;
+        }
+
+        if (GatesRefused(FlowUpdateCauses.ChangedAnswer) is { } refused)
+        {
+            problem = refused;
+
+            return false;
+        }
+
+        _answeredAtStart |= !_inSession || _starting;
+
+        if (UnderWayUpdate is { } underWay)
+        {
+            // One at a time: the change waits for the update under way to be done, and is applied and planned then.
+            PutUpdate(new FlowUpdateEntry(
+                _updates.NextId(),
+                FlowUpdateCauses.ChangedAnswer,
+                FlowUpdateStates.Queued,
+                at,
+                Through: through,
+                Question: set.Id,
+                FromAnswer: standing.Answer,
+                ToAnswer: answer,
+                Inbox: inbox,
+                Text: string.IsNullOrWhiteSpace(text) ? null : text));
+            problem = null;
+            Record(FlowChangeKind.Answer, detail: $"a changed answer was queued behind update {underWay.Id}");
+            return true;
+        }
+
+        // What became of the change is in the run's records before anything it changes: both answers kept with the
+        // update that changed them - done at once where no plan holds it, under way and planned where one does.
+        var update = new FlowUpdateEntry(
+            _updates.NextId(),
+            FlowUpdateCauses.ChangedAnswer,
+            PlanScopeBegun() ? FlowUpdateStates.UnderWay : FlowUpdateStates.DoneAtOnce,
+            at,
+            Through: through,
+            Question: set.Id,
+            FromAnswer: standing.Answer,
+            ToAnswer: answer,
+            Inbox: inbox,
+            Text: string.IsNullOrWhiteSpace(text) ? null : text);
+        ApplyTheChange(set, standing, answer, string.IsNullOrWhiteSpace(text) ? null : text, through, at, update);
+        problem = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Applies one taken change of an answer: both answers kept, each with when it was given, the new one naming the
+    /// update; a <c>pause</c> step whose answer was changed is visited again, done at once with the new answer; and
+    /// where a plan has begun, the update is marked under way and the step the <c>amend</c> block names is raised to
+    /// plan it, the run held meanwhile - where none has, the update is done at once and every step that starts reads
+    /// the answer as it now is.
+    /// </summary>
+    /// <param name="set">The question whose answer is changed.</param>
+    /// <param name="standing">The answer as it stood.</param>
+    /// <param name="answer">The answer as it is changed to.</param>
+    /// <param name="text">The text given with it, where the answer takes one.</param>
+    /// <param name="through">How the person gave it.</param>
+    /// <param name="at">When the new answer was given to the tool.</param>
+    /// <param name="update">The update's entry, its state set by the caller.</param>
+    private void ApplyTheChange(FlowQuestion set, FlowAnswerEntry standing, string answer, string? text, string? through, DateTimeOffset at, FlowUpdateEntry update)
+    {
+        if (update.State == FlowUpdateStates.UnderWay)
+        {
+            _ = RaisePlanner(update);
+        }
+        else
+        {
+            PutUpdate(update);
+        }
+
+        // Both answers kept, each with when it was given, and the new one names the update; the old one stands
+        // replaced from the moment the new one was given.
+        set.Change(standing, answer, text, through, at, update.Id, update.Inbox);
+        WriteQuestions();
+
+        if (set.Kind == "pause" && _instances.GetValueOrDefault(set.Instance) is { } paused)
+        {
+            // A pause step whose answer was changed is visited again, done at once with the new answer, so whatever
+            // reads the step from then on reads the new one.
+            RevisitPause(paused, answer, text);
+        }
+
+        Record(FlowChangeKind.Answer, detail: $"'{set.Id}' answered '{answer}', changing '{standing.Answer}'");
+    }
+
+    /// <summary>The last set a person answered: the question entry whose newest answer a person gave is the newest of all the run's, answered and standing.</summary>
+    private FlowQuestion? LastAnsweredByAPerson()
+    {
+        FlowQuestion? last = null;
+        DateTimeOffset? newest = null;
+
+        foreach (var asked in _questions.Where(asked => asked.State == "answered"))
+        {
+            foreach (var given in asked.Given)
+            {
+                if (given.By != "person")
+                {
+                    continue;
+                }
+
+                if (newest is null || (given.At ?? asked.RaisedAt) > newest)
+                {
+                    last = asked;
+                    newest = given.At ?? asked.RaisedAt;
+                }
+            }
+        }
+
+        return last;
+    }
+
+    /// <summary>Visits a pause step again, done at once with its changed answer: the visit's output is the answer as the new one reads, so every step that reads the pause from then on reads the new answer.</summary>
+    private void RevisitPause(FlowInstance paused, string answer, string? text)
+    {
+        var scope = paused.DeclaredScope ?? _top;
+        var visit = NewVisit(scope, paused.Step, FlowInstanceState.Running, made: visit =>
+        {
+            visit.Output = new JsonObject { ["answer"] = answer, ["text"] = text ?? string.Empty };
+            visit.WorksIn = paused.WorksIn;
+        });
+
+        End(visit, FlowInstanceState.Done, null, null);
+    }
+
+    /// <summary>Records the run's plan updates, whole, through the records seam: the one owner of what an update is.</summary>
+    private void PutUpdate(FlowUpdateEntry entry)
+    {
+        List<FlowUpdateEntry> updates = [.. _updates.Updates.Where(update => update.Id != entry.Id), entry];
+        _updates = _updates with { Updates = updates };
+        Put(records => records.Updates(_updates));
+    }
 
     /// <summary>
     /// Takes one answer to an open question - a person's, or the configuration's in a person's place - by the one path:
     /// the question no longer open, the answer recorded and carried out, and the record of the step that waited on it
     /// written after, from what the answer changed.
     /// </summary>
-    private void TakeAnswer(FlowQuestion asked, string answer, string? text, string by, string? where, string? through, string? inbox = null)
+    private void TakeAnswer(FlowQuestion asked, string answer, string? text, string by, string? where, string? through, string? inbox = null, string? input = null)
     {
         _answeredAtStart |= !_inSession || _starting;
+
+        // A person answering while the run's advisor still runs ends the asking, as a cancelled step is ended: its
+        // records stand under the asking step, and their answer is what the run goes on with.
+        foreach (var pending in _advising.Where(pending => pending.Asked.Id == asked.Id).ToList())
+        {
+            _advising.Remove(pending);
+            pending.Cancel.Cancel();
+        }
+
         _ = _open.Remove(asked.Id);
         var instance = _answerable.GetValueOrDefault(asked.Id);
         _ = _answerable.Remove(asked.Id);
@@ -1551,11 +2374,11 @@ public sealed class FlowCoordinator
         }
 
         var was = instance?.State;
-        ApplyAnswer(instance, asked, answer, text, by, where, through, inbox);
+        ApplyAnswer(instance, asked, answer, text, by, where, through, inbox, input);
 
         if (instance is not null)
         {
-            Record(FlowChangeKind.Step, instance, from: was, to: instance.State, detail: by == "person" ? $"'{asked.Id}' answered '{answer}'" : $"'{asked.Id}' answered '{answer}' by the configuration");
+            Record(FlowChangeKind.Step, instance, from: was, to: instance.State, detail: by == "person" ? $"'{asked.Id}' answered '{answer}'" : $"'{asked.Id}' answered '{answer}' by {(by == "input" ? "the run's input" : "the configuration")}");
         }
     }
 
@@ -1566,10 +2389,10 @@ public sealed class FlowCoordinator
     /// question, its budget's, is about no step, and <paramref name="instance"/> is null for it. An answer handed over
     /// through the inbox is written with its entry's id (<paramref name="inbox"/>), in the one write that records it.
     /// </summary>
-    private void ApplyAnswer(FlowInstance? instance, FlowQuestion asked, string answer, string? text, string by, string? where, string? through, string? inbox = null)
+    private void ApplyAnswer(FlowInstance? instance, FlowQuestion asked, string answer, string? text, string by, string? where, string? through, string? inbox = null, string? input = null)
     {
         var did = asked.Kind == "runBudget" ? answer == "more" ? "each amount is allowed once again" : "the run ends stopped" : null;
-        asked._given.Add(new FlowAnswerEntry(answer, text, by, where, through, _clock.GetUtcNow(), did, Inbox: inbox));
+        asked._given.Add(new FlowAnswerEntry(answer, text, by, where, through, _clock.GetUtcNow(), did, Input: input, Inbox: inbox));
         asked.State = "answered";
 
         if (answer == "abort")
@@ -1638,7 +2461,7 @@ public sealed class FlowCoordinator
                 AnswerPause(instance, answer, text);
                 break;
             default:
-                AnswerTheKind(instance, asked, answer);
+                AnswerTheKind(instance, asked, answer, text);
                 break;
         }
     }
@@ -1769,7 +2592,7 @@ public sealed class FlowCoordinator
     /// <c>merge</c>, <c>stay</c> and <c>compact</c> hand the answer to the runner in the same attempt;
     /// <c>skip</c> ends the step skipped; <c>fail</c> ends it failed with the question's kind.
     /// </summary>
-    private void AnswerTheKind(FlowInstance instance, FlowQuestion asked, string answer)
+    private void AnswerTheKind(FlowInstance instance, FlowQuestion asked, string answer, string? text)
     {
         switch (answer)
         {
@@ -1790,12 +2613,14 @@ public sealed class FlowCoordinator
                 HandleFailure(instance);
                 break;
             default:
-                instance._answers.Add(new FlowAnswerGiven(asked.Id, answer));
+                // The answer lets the step's work go on in the same attempt - a limit's `more` and `compact`, an agent's
+                // `answer` and `decide` - and the runner serves it from there: the answer, its text, its kind and its
+                // attempt are the attempt's, and the step is started again as the same attempt it was.
+                instance._answers.Add(new FlowAnswerGiven(asked.Id, answer, text, asked.Kind, instance.Attempt));
                 instance.State = FlowInstanceState.NotStarted;
                 break;
         }
     }
-
     /// <summary>
     /// The targets of a refresh or a rebase of <c>others</c>: every agent of the run that is open with a worktree - each
     /// create-agent's whose agent no deletion closed - but the one <c>others</c> names, in the order of their names.
@@ -2087,6 +2912,7 @@ public sealed class FlowCoordinator
 
             changed |= EndGroups();
             changed |= CarryTheStop();
+            changed |= SettleUpdates();
         }
     }
 
@@ -2110,6 +2936,896 @@ public sealed class FlowCoordinator
         }
 
         return stopped.Count > 0;
+    }
+
+    /// <summary>
+    /// Settles the plan update under way as its planning step goes: where the step failed and its failure is settled -
+    /// no handler of its ending left, no question of its own open, no retry to come - the update is given up
+    /// (<c>failed</c>, nothing placed, nobody told, the hold ended, the run going on with the plan as it was); where
+    /// it ended done, the <c>amend</c> block's <c>then</c> is followed by the redirect's machinery, and once that scope
+    /// has come to rest - the step ended, what <c>then</c> set going has ended, and a <c>repeat</c> it is in has ended
+    /// its iteration - the updated plan stands and the update is <c>done</c>: what was owed is made, and the steps that
+    /// start from here on resolve every name anew. One update at a time: the next one queued is taken as each is
+    /// settled, in the order given.
+    /// </summary>
+    /// <returns>Whether anything followed, so the pass goes round again.</returns>
+    private bool SettleUpdates()
+    {
+        var changed = false;
+
+        while (UnderWayUpdate is { } update)
+        {
+            var planner = _heldPlanner is { } held && held.RaisedByUpdate == update.Id
+                ? held
+                : _created.FirstOrDefault(visit => visit.RaisedByUpdate == update.Id);
+
+            if (planner is null)
+            {
+                // The entry was written under way and the raise was cut off - a crash between the two - so the visit
+                // is made now.
+                _ = RaisePlanner(update);
+                return true;
+            }
+
+            _heldPlanner = planner;
+
+            if (planner.State is FlowInstanceState.Failed or FlowInstanceState.Skipped
+                && planner.FailureSettled
+                && !_pendingEndings.Values.Any(pending => ReferenceEquals(pending.Source, planner))
+                && !_questions.Any(asked => asked.Instance == planner.Id && _open.Contains(asked.Id)))
+            {
+                var what = update.Cause == FlowUpdateCauses.ChangedAnswer ? "answer" : "request";
+                GiveUpUpdate(update, $"its planning step '{planner.Id}' ended {planner.State.ToString().ToLowerInvariant()}: the {what} is recorded and no plan holds it");
+                changed = true;
+                continue;
+            }
+
+            if (planner.State == FlowInstanceState.Done)
+            {
+                if (_definition.Amend?.Then is { } target
+                    && update.Then is null
+                    && !_redirects.Any(redirect => ReferenceEquals(redirect.Handler, planner))
+                    && !_created.Any(visit => visit.LeftBy == planner.Id))
+                {
+                    // The redirect then names is decided once, written into the update's entry before the machinery
+                    // that makes it: a crash between the two leaves the entry to say it was decided, and a visit the
+                    // redirect left says it was made.
+                    PutUpdate(update with { Then = target });
+                    DecideTheThen(planner, target);
+                    return true;
+                }
+
+                if (PlanStands(planner))
+                {
+                    // The updated plan stands, and only now is its scope read: until it passed what the flow has it
+                    // pass, nothing is placed and nobody is told anything.
+                if (PiecesOf(planner, update) is not { } pieces)
+                {
+                    GiveUpUpdate(
+                            update,
+                            $"its scope '{_definition.Amend!.Scope}' could not be read: the amendment or the answer is recorded and no plan holds its pieces");
+                        changed = true;
+                        continue;
+                    }
+
+                    var placed = PlaceThePieces(update, pieces);
+                    var told = TellThePieces(update, placed);
+
+                    _heldPlanner = null;
+                    PutUpdate(update with { State = FlowUpdateStates.Done, Pieces = placed, Told = told.Told, NotConcerned = told.NotConcerned, NotDelivered = told.NotDelivered });
+                    Record(
+                        FlowChangeKind.Answer,
+                        detail: placed.Count == 0
+                            ? $"update {update.Id} is done: its plan stands, and nothing of its scope changes"
+                            : $"update {update.Id} is done: its plan stands, {placed.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} piece(s) placed, and the steps that start from here on read it");
+
+                    // What the update owes a loop is carried to the loop's next iteration, whatever its until says -
+                    // an iteration added at the bound where the loop has none of its own.
+                    CarryWhatTheLoopsOwe();
+                    TakeNextQueued();
+                    changed = true;
+                    continue;
+                }
+            }
+
+            break;
+        }
+
+        return changed;
+    }
+
+    /// <summary>Gives the update under way up: <c>failed</c>, nothing placed, nobody told, the hold ended - the run goes on with the plan as it was, and the next one queued is taken.</summary>
+    /// <param name="update">The update given up.</param>
+    /// <param name="why">What the run says of it, as its entry holds it.</param>
+    private void GiveUpUpdate(FlowUpdateEntry update, string why)
+    {
+        _heldPlanner = null;
+        PutUpdate(update with { State = FlowUpdateStates.Failed, Why = why });
+        Record(FlowChangeKind.Answer, detail: $"update {update.Id} was given up: {why}");
+        TakeNextQueued();
+    }
+
+    /// <summary>Takes the next update queued, in the order given, until one is under way: one a gate refuses keeps its place, refused, and the one after it is taken.</summary>
+    private void TakeNextQueued()
+    {
+        while (_updates.Updates.FirstOrDefault(queued => queued.State == FlowUpdateStates.Queued) is { } next)
+        {
+            var taken = next.Cause == FlowUpdateCauses.Amendment
+                ? AmendmentHandedOver(next.Amendment!, next.Through ?? "amend-orchestrator-request", out _, next.Inbox, next.TakenAt, replacing: next.Id) is FlowHandedOver.Taken
+                : TakeQueuedChange(next, out _);
+
+            if (taken && UnderWayUpdate is not null)
+            {
+                break;
+            }
+        }
+    }
+
+    /// <summary>Decides the redirect the <c>amend</c> block's <c>then</c> names, by the machinery every redirect goes through, in the scope the planning step is in.</summary>
+    /// <param name="planner">The planning step, ended done.</param>
+    /// <param name="target">The step the block's <c>then</c> names, declared beside the planning step.</param>
+    private void DecideTheThen(FlowInstance planner, string target)
+    {
+        if (planner.DeclaredScope is not { } scope
+            || DeclarationsOf(scope).FirstOrDefault(declaration => declaration.Name == target) is not { } declaration)
+        {
+            return;
+        }
+
+        DecideRedirectOf(planner, scope, declaration);
+    }
+
+    /// <summary>
+    /// Whether the updated plan stands: the planning step has ended, every redirect its <c>then</c> decided has been
+    /// made and each step it reset in that scope has ended its new visit, and every <c>repeat</c> around the planning
+    /// step's scope has ended the iteration it is in - the next is drawn once the hold has ended, on the plan as it
+    /// now is.
+    /// </summary>
+    /// <param name="planner">The planning step, ended done.</param>
+    private bool PlanStands(FlowInstance planner)
+    {
+        if (planner.DeclaredScope is not { } scope)
+        {
+            return true;
+        }
+
+        if (_redirects.Any(redirect => ReferenceEquals(redirect.Handler, planner)))
+        {
+            // Decided and waiting - on steps it resets that are in flight, or on an open-agent question of its own.
+            return false;
+        }
+
+        if (_definition.Amend?.Then is { } target
+            && DeclarationsOf(scope).FirstOrDefault(declaration => declaration.Name == target) is { } declaration)
+        {
+            var reset = new PendingRedirect(planner, target);
+            Collect(reset, scope, declaration);
+
+            foreach (var (at, named) in reset.Set)
+            {
+                if (!ScopeLive(at))
+                {
+                    // A scope an earlier redirect left: that visit is over, and nothing is waited on in it.
+                    continue;
+                }
+
+                if (at.Members.GetValueOrDefault(named.Name) is not { } member)
+                {
+                    // Not drawn again yet - the schedule draws it inside the held scope.
+                    return false;
+                }
+
+                if (member.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused
+                    || member.Step.IsGroup && member.State is not (FlowInstanceState.Done or FlowInstanceState.Failed or FlowInstanceState.Skipped))
+                {
+                    return false;
+                }
+            }
+        }
+
+        for (var at = scope; at is not null; at = at.Parent)
+        {
+            if (at.LoopOf is { Step.Repeat: not null } loop
+                && loop.Children.Count > 0
+                && loop.State is FlowInstanceState.Running or FlowInstanceState.Paused
+                && !IterationAtRest(loop.Children[^1]))
+            {
+                // A repeat it is in has not ended the iteration it is in: the plan stands between its iterations.
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Whether every member of <paramref name="iteration"/>, at every depth of a group among them, has ended: the
+    /// iteration's work is over, whatever its group instance's own state - a repeat the update's hold keeps from
+    /// drawing its next iteration leaves it running over ended members.
+    /// </summary>
+    private static bool IterationAtRest(Scope iteration)
+    {
+        foreach (var member in iteration.Members.Values)
+        {
+            if (member.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped)
+            {
+                return false;
+            }
+
+            if (member.Step.IsGroup && ScopesOf(member).Any(inner => !IterationAtRest(inner)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The pieces of <paramref name="update"/>, read from the planning step's conclusion by the expression the
+    /// <c>amend</c> block's <c>scope</c> names, once the updated plan stands: null where it could not be read or a
+    /// piece is not one this build takes, each said by the update's <c>why</c> where it is given up.
+    /// </summary>
+    /// <param name="planner">The planning step, ended done.</param>
+    /// <param name="update">The update whose plan stands.</param>
+    private IReadOnlyList<FlowUpdatePiece>? PiecesOf(FlowInstance planner, FlowUpdateEntry update)
+    {
+        // A scope that reads nothing is no update, and is handed on as read.
+        var read = Evaluate(_definition.Amend!.Scope, planner.DeclaredScope!, out var problem, reader: planner, mayReadNothing: true);
+
+        if (problem is not null
+            || read is { IsMissing: false } value && value.ToNode() is not (null or JsonArray))
+        {
+            return null;
+        }
+
+        if (read.IsMissing || read.ToNode() is not JsonArray yielded)
+        {
+            // Nothing of the scope changes: the update says so, nothing is raised and nobody is told.
+            return [];
+        }
+
+        var pieces = new List<FlowUpdatePiece>();
+
+        foreach (var node in yielded)
+        {
+            var piece = ReadPiece(node, update);
+
+            if (piece is null)
+            {
+                return null;
+            }
+
+            pieces.Add(piece);
+        }
+
+        return pieces;
+
+        FlowUpdatePiece? ReadPiece(JsonNode? node, FlowUpdateEntry of)
+        {
+            string? Text(JsonObject holds, string member) => holds[member] is JsonValue text && text.TryGetValue<string>(out var written) ? written : null;
+
+            if (node is not JsonObject held
+                || held["kind"] is not JsonValue kind || !kind.TryGetValue<string>(out var what)
+                || !FlowUpdatePieceKinds.All.Contains(what, StringComparer.Ordinal))
+            {
+                return null;
+            }
+
+            var piece = new FlowUpdatePiece(
+                what,
+                held["item"]?.DeepClone(),
+                Text(held, "for"),
+                Text(held, "changed"),
+                Text(held, "keep"),
+                Text(held, "undo"),
+                Text(held, "instead"));
+
+            return piece.Problem() is null ? piece : null;
+        }
+    }
+
+    /// <summary>
+    /// Places each piece of an update whose plan stands: <c>added</c> one more work item of the work-item group, and
+    /// <c>changed</c> and <c>removed</c> against the instance that carries their work item - given the piece's item in
+    /// the place of its own where it waits, brought to rest and visited again in its place with its agent where it has
+    /// begun, one more work item of the group where it has ended - and nothing where nothing was built: a
+    /// <c>changed</c> piece as an added one, a <c>removed</c> one recorded as needing no step. A <c>told</c> piece
+    /// carries nothing out. Where the round it joins has not opened, the piece is owed to it, and joins at the check
+    /// that opens the round; where the round has ended, it is owed to the loop's next iteration. Each piece is
+    /// returned as it was placed, for the update's entry.
+    /// </summary>
+    /// <param name="update">The update whose plan stands.</param>
+    /// <param name="pieces">What its planning step concluded, as <see cref="PiecesOf"/> read it.</param>
+    private IReadOnlyList<FlowUpdatePiece> PlaceThePieces(FlowUpdateEntry update, IReadOnlyList<FlowUpdatePiece> pieces)
+    {
+        var placed = new List<FlowUpdatePiece>();
+
+        foreach (var piece in pieces)
+        {
+            if (piece.Kind == FlowUpdatePieceKinds.Told)
+            {
+                // A told piece is carried out by the telling, not by a step: nothing is placed for it here.
+                placed.Add(piece);
+                continue;
+            }
+
+            var instance = ItemInstanceNamed(piece.ItemName()!);
+
+            if (instance is null && piece.Kind == FlowUpdatePieceKinds.Removed)
+            {
+                placed.Add(piece with { Ended = "nothing was built and nothing is undone" });
+                Record(FlowChangeKind.Answer, detail: $"update {update.Id} withdraws '{piece.ItemName()}', which no instance of the run carries: nothing was built and nothing is undone");
+                continue;
+            }
+
+            if (instance is null || ItemEnded(instance))
+            {
+                // Nothing was built, or what was built has ended: the piece makes one more work item of the group, of
+                // its own kind - and where the round has ended, it is owed to the loop's next iteration.
+                placed.Add(NewItemOf(update, piece));
+                continue;
+            }
+
+            if (ItemBegun(instance) && instance.EndingFor is null)
+            {
+                // What was built is under way: the instance is brought to rest and visited again, in its place and
+                // with its agent, as the piece's kind - the hold does not wait for it to come to rest.
+                instance.EndingFor = (update.Id, piece);
+                instance.WorkItemKind = piece.Kind;
+                instance.Piece = piece;
+                instance.PieceOf = update.Id;
+                DropWhatItOwes(instance);
+                SkipWhatNeverStartedIn(instance, update.Id, piece);
+                placed.Add(piece with { Placed = instance.GroupInstance!.Id });
+                Record(
+                    FlowChangeKind.Step,
+                    instance.GroupInstance!,
+                    detail: $"ended for update {update.Id}: its work item '{piece.ItemName()}' is {(piece.Kind == FlowUpdatePieceKinds.Changed ? "done again" : "taken back")}, and it is visited again in its place");
+                continue;
+            }
+
+            if (piece.Kind == FlowUpdatePieceKinds.Removed)
+            {
+                var because = $"withdrawn by update {update.Id} before it began";
+
+                foreach (var member in instance.Members.Values.Where(member => member.State is FlowInstanceState.NotStarted or FlowInstanceState.Paused).ToList())
+                {
+                    Leave(member, because);
+                }
+
+                // Nothing of the instance will ever run, and each of its declarations ends skipped, saying why: the
+                // instance is over, and what would have been drawn in it is recorded as never to run.
+                foreach (var declaration in DeclarationsOf(instance).Where(declaration => !instance.Instantiated.Contains(declaration.Name)).ToList())
+                {
+                    _ = Create(instance, declaration, FlowInstanceState.Skipped, made: skipped => skipped.SkippedBecause = because);
+                }
+
+                instance.GroupInstance!.SkippedBecause = because;
+                End(instance.GroupInstance, FlowInstanceState.Skipped, null, null);
+                WriteStepRecordOf(instance.GroupInstance);
+                placed.Add(piece with { Placed = instance.GroupInstance.Id, Ended = "withdrawn before it began" });
+                Record(FlowChangeKind.Step, instance.GroupInstance, to: FlowInstanceState.Skipped, detail: because);
+                continue;
+            }
+
+            // It waits: it is given the piece's item in the place of its own, and runs as it would have.
+            var was = ItemNameOf(instance);
+            instance.Item = FlowValue.Of(piece.Item!.DeepClone());
+            instance.WorkItemKind = FlowUpdatePieceKinds.Changed;
+            instance.Piece = piece;
+            instance.PieceOf = update.Id;
+
+            foreach (var member in instance.Members.Values.Where(member => member.StartedAt is null))
+            {
+                member.Item = instance.Item;
+                WriteStepRecordOf(member);
+            }
+
+            if (instance.GroupInstance is { } group)
+            {
+                group.Item = instance.Item;
+                WriteStepRecordOf(group);
+            }
+
+            placed.Add(piece with { Placed = instance.GroupInstance?.Id });
+            Record(FlowChangeKind.Step, instance.GroupInstance!, detail: $"update {update.Id} changes the work item '{was}' of '{instance.GroupInstance?.Id}' for '{piece.ItemName()}', which waits: it is given the piece's item and runs as it would have");
+        }
+
+        return placed;
+    }
+
+    /// <summary>
+    /// Tells every reason step at work what the update's <c>told</c> pieces name of it, as the pieces are placed: one
+    /// message into the conversation each step that runs is in - landing when its calls have finished, never cutting
+    /// its turn - the same text with the answer for one that waits on a question of its own, and in the prompt of one
+    /// that starts or goes on later in work a piece names. A reason step in flight that no piece names is sent nothing
+    /// and listed as not concerned; a told piece that names nothing under way is not delivered and recorded with why.
+    /// The entry as it stands after the telling, for the update's own record.
+    /// </summary>
+    /// <param name="update">The update whose plan stands.</param>
+    /// <param name="placed">Its pieces, as they were placed.</param>
+    private FlowUpdateEntry TellThePieces(FlowUpdateEntry update, IReadOnlyList<FlowUpdatePiece> placed)
+    {
+        var told = placed.Where(piece => piece.Kind == FlowUpdatePieceKinds.Told).ToList();
+
+        if (told.Count == 0)
+        {
+            return update;
+        }
+
+        var who = new List<FlowUpdateTold>();
+        var notConcerned = new List<string>();
+        var notDelivered = new List<FlowNotDelivered>();
+
+        // What a step at work or waiting is told: every told piece whose work is its own instance or a scope around
+        // it, in one message - and what a step that starts later reads in its prompt (PlanToldOf, the same match).
+        foreach (var step in _created.Where(instance => !instance.Step.IsGroup && instance.Step.Type == "reason" && instance.RaisedByUpdate is null).ToList())
+        {
+            var forIt = told.Where(piece => NamesWorkOf(step, piece.For)).ToList();
+
+            if (forIt.Count == 0)
+            {
+                if (step.State is FlowInstanceState.Running && !step.Draining)
+                {
+                    notConcerned.Add(step.Id);
+                }
+
+                continue;
+            }
+
+            var what = string.Join("; ", forIt.Select(piece => $"the change of '{piece.For}'"));
+
+            if (step.State is FlowInstanceState.Running && !step.Draining)
+            {
+                if (step.Telling is { } telling && telling.Post(step.Attempt, MessageOf(update, forIt)))
+                {
+                    ToldBy(step, update, FlowStepTold.ByMessage);
+                    who.Add(new FlowUpdateTold(step.Id, what, "by a message into its conversation"));
+                }
+                else
+                {
+                    // The attempt's conversation is gone - it had ended, or its runner owns none: nothing is lost, for
+                    // the next attempt's prompt holds it (PlanToldOf), and that is what the record says.
+                    who.Add(new FlowUpdateTold(step.Id, what, "in its prompt"));
+                }
+            }
+            else if (step.State is FlowInstanceState.Paused && step.WaitingQuestion is not null)
+            {
+                // One that waits on a question of its own is told with the answer: the attempt the answer begins
+                // carries the same text beside it (PlanToldOf, read by the runner with what it is next sent).
+                ToldBy(step, update, FlowStepTold.WithTheAnswer);
+                who.Add(new FlowUpdateTold(step.Id, what, "with the answer"));
+            }
+        }
+
+        foreach (var piece in told.Where(piece => !Delivered(piece, who)))
+        {
+            notDelivered.Add(new FlowNotDelivered(
+                piece.For!,
+                _created.Any(known => string.Equals(known.Id, piece.For, StringComparison.Ordinal))
+                    ? $"'{piece.For}' had ended meanwhile: the step that goes on with its work reads it in its prompt"
+                    : $"'{piece.For}' is no id of the run: a told piece names work under way, as the planning step's prompt listed it"));
+        }
+
+        return update with { Told = who, NotConcerned = notConcerned, NotDelivered = notDelivered };
+    }
+
+    /// <summary>Records on <paramref name="step"/> that <paramref name="update"/> told it, and the way it reached it.</summary>
+    /// <param name="step">The step told.</param>
+    /// <param name="update">The update that told it.</param>
+    /// <param name="how">The way it reached it.</param>
+    private void ToldBy(FlowInstance step, FlowUpdateEntry update, string how)
+    {
+        step.ToldEntries.Add(new FlowStepTold(update.Id, _clock.GetUtcNow(), how));
+        WriteStepRecordOf(step);
+    }
+
+    /// <summary>Whether <paramref name="piece"/> reached work: a step was told - by message, with an answer or in a prompt - whose own instance or a scope around it it names.</summary>
+    private static bool Delivered(FlowUpdatePiece piece, IReadOnlyList<FlowUpdateTold> who)
+        => who.Any(told => string.Equals(told.Who, piece.For, StringComparison.Ordinal)
+            || piece.For is { } named && NamesWorkOfId(told.Who, named));
+
+    /// <summary>
+    /// Whether <paramref name="forId"/> names the work of <paramref name="instance"/>: its own instance, or a scope
+    /// around it - what a told piece's <c>for</c> is matched against, in flight and at rest alike.
+    /// </summary>
+    /// <param name="instance">The step whose work is named.</param>
+    /// <param name="forId">The id a told piece names.</param>
+    private static bool NamesWorkOf(FlowInstance instance, string? forId)
+        => forId is not null && (string.Equals(instance.Id, forId, StringComparison.Ordinal) || NamesWorkOfId(instance.Id, forId));
+
+    /// <summary>Whether <paramref name="forId"/> names <paramref name="instanceId"/> itself or a scope around it: the scopes of an id are its segments, each a prefix of it.</summary>
+    private static bool NamesWorkOfId(string instanceId, string forId)
+        => forId.Length < instanceId.Length
+            && (instanceId[forId.Length] == '.')
+            && instanceId.StartsWith(forId, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The message a reason step at work is told by <paramref name="update"/>: what changed the plan quoted, then each
+    /// piece for its work as the plan gave it, then the one sentence that its work goes on from here with this.
+    /// </summary>
+    /// <param name="update">The update whose plan stands.</param>
+    /// <param name="forIt">The told pieces that name the step's work.</param>
+    private static string MessageOf(FlowUpdateEntry update, IReadOnlyList<FlowUpdatePiece> forIt)
+        => string.Join(
+            "\n",
+            [
+                "The plan this work follows was updated while you worked.",
+                CauseLineOf(update),
+                .. forIt.Select(piece => PieceLinesOf(piece)),
+                "Go on from here, with this.",
+            ]);
+
+    /// <summary>
+    /// What a step that starts or goes on later in work a told piece names reads, in the part of its own the attempt's
+    /// first message holds: the same telling, said of work that begins now rather than work under way.
+    /// </summary>
+    /// <param name="update">The update that told the work.</param>
+    /// <param name="forIt">The told pieces that name the work.</param>
+    private static string PartOf(FlowUpdateEntry update, IReadOnlyList<FlowUpdatePiece> forIt)
+        => string.Join(
+            "\n",
+            [
+                "The plan this work follows was updated before this work began.",
+                CauseLineOf(update),
+                .. forIt.Select(piece => PieceLinesOf(piece)),
+            ]);
+
+    /// <summary>What changed the plan of <paramref name="update"/>, as every telling says it: the change, word for word.</summary>
+    private static string CauseLineOf(FlowUpdateEntry update)
+        => update.Cause == FlowUpdateCauses.ChangedAnswer
+            ? $"What changed it: question '{update.Question}' was answered '{update.FromAnswer}' and is answered '{update.ToAnswer}' now{(string.IsNullOrWhiteSpace(update.Text) ? null : $", with: {update.Text}")}"
+            : $"What changed it: the request was amended on {FlowTimeConverter.Written(update.TakenAt)}: \"{update.Amendment}\"";
+
+    /// <summary>One piece's lines, as every telling holds them: the work it names, what changed, and - where written - what stays, what is taken back and what is done instead.</summary>
+    private static string PieceLinesOf(FlowUpdatePiece piece, string? lead = null)
+    {
+        var lines = new List<string> { $"{lead ?? "For your work"} ({piece.For ?? piece.ItemName()}):", $"- What changed: {piece.Changed}" };
+
+        foreach (var (named, text) in new[] { ("Keep", piece.Keep), ("Undo", piece.Undo), ("Do instead", piece.Instead) })
+        {
+            if (text is { Length: > 0 })
+            {
+                lines.Add($"- {named}: {text}");
+            }
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    /// <summary>
+    /// The lead of the handoff question a reason step ended in order is asked with: the piece that names its work
+    /// item, whole, and the sentence that its step ends here and another goes on from where it leaves the work - the
+    /// message tells, and carries out nothing.
+    /// </summary>
+    /// <param name="update">The update whose piece ends the step.</param>
+    /// <param name="piece">The piece.</param>
+    private static string EndedInOrderLead(FlowUpdateEntry update, FlowUpdatePiece piece)
+        => string.Join(
+            "\n",
+            [
+                "The plan this work follows was updated while you worked, and the update changes your work item.",
+                CauseLineOf(update),
+                PieceLinesOf(piece with { For = piece.ItemName() }, "For your work item"),
+                "Your step ends here. Do none of this yourself: a step of its own does it, from where you leave the work.",
+            ]);
+
+    /// <summary>
+    /// What a reason step that starts now is told of the plan updates that named its work: every told piece of every
+    /// update done whose <c>for</c> names its own instance or a scope around it, with what raised each - the part of
+    /// its own its first message holds, so a step that starts or goes on later in named work reads it whole. Null
+    /// where none named it, where the step carries a piece out (its own prompt reads <c>{piece.*}</c>), and where the
+    /// update itself raised it.
+    /// </summary>
+    /// <param name="instance">The step about to start.</param>
+    private string? PlanToldOf(FlowInstance instance)
+    {
+        if (instance.Step.Type != "reason"
+            || instance.RaisedByUpdate is not null
+            || ForAPiecePlaced(instance))
+        {
+            return null;
+        }
+
+        var parts = new List<string>();
+
+        foreach (var update in _updates.Updates.Where(done => done.State == FlowUpdateStates.Done))
+        {
+            var forIt = update.ThePieces
+                .Where(piece => piece.Kind == FlowUpdatePieceKinds.Told && NamesWorkOf(instance, piece.For))
+                .ToList();
+
+            if (forIt.Count > 0)
+            {
+                parts.Add(PartOf(update, forIt));
+            }
+        }
+
+        return parts.Count == 0 ? null : string.Join("\n\n", parts);
+    }
+
+    /// <summary>Whether <paramref name="instance"/> sits in an instance a piece of a plan update placed - one made for a piece, given one in the place of its own, or visited again for one - whose own prompt reads the piece.</summary>
+    private bool ForAPiecePlaced(FlowInstance instance)
+    {
+        for (var scope = instance.DeclaredScope; scope is not null; scope = scope.Parent)
+        {
+            if (scope.PieceOf is not null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// One more work item of the work-item group, of <paramref name="piece"/>'s kind: made at once in the round in
+    /// progress, and owed to the check that opens the round where none has begun - or to the loop's next iteration
+    /// where the round has ended, for whatever carries the work there. The piece as it was placed.
+    /// </summary>
+    /// <param name="update">The update whose plan stands.</param>
+    /// <param name="piece">The piece that makes the work item.</param>
+    private FlowUpdatePiece NewItemOf(FlowUpdateEntry update, FlowUpdatePiece piece)
+    {
+        var round = CurrentRound();
+
+        if (round is not { State: FlowInstanceState.Running or FlowInstanceState.Paused })
+        {
+            var group = FlowUpdateGates.ParentOf(_definition.Amend!.WhenAddScope)!.Split('.')[^1];
+            var loop = round?.DeclaredScope?.LoopOf;
+            var owed = round is null
+                ? $"the round '{group}' when it opens"
+                : $"the next iteration of '{loop?.Step.Name ?? round.Step.Name}'";
+
+            if (round is not null && loop is { State: FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped } loopInstance)
+            {
+                // The round has ended: the work is owed to the loop's next iteration, which runs whatever its until
+                // says, and where the loop is at its bound one iteration is added for the update (Iterate, below).
+                _ = loopInstance.OwedIterationBy.Add(update.Id);
+            }
+
+            Record(
+                FlowChangeKind.Answer,
+                detail: $"update {update.Id} is owed the work item '{piece.ItemName()}' of kind '{piece.Kind}': it joins {owed}, at the check that opens the round");
+            return piece with { OwedTo = owed };
+        }
+
+        var item = NewScope($"{round.Id}[{round.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)}]", round.Path, round.DeclaredScope!, round.Step, FlowValue.Of(piece.Item!.DeepClone()), round.Children.Count, null, round);
+        item.WorkItemKind = piece.Kind;
+        item.Piece = piece;
+        item.PieceOf = update.Id;
+        round.Children.Add(item);
+        _ = Create(item, round.Step, FlowInstanceState.Running, item.Id);
+
+        Record(
+            FlowChangeKind.Step,
+            item.GroupInstance!,
+            detail: $"one more work item of '{round.Id}' for update {update.Id}: '{piece.ItemName()}', of kind '{piece.Kind}'");
+        return piece with { Placed = item.GroupInstance!.Id };
+    }
+
+    /// <summary>
+    /// What the instance being brought to rest for an update owed is dropped: a raise whose ending is inside it and a
+    /// redirect whose handler is - they were owed to work that is now done again or taken back.
+    /// </summary>
+    /// <param name="item">The item scope of the work-item group being ended for an update.</param>
+    private void DropWhatItOwes(Scope item)
+    {
+        foreach (var pending in _pendingEndings.Values.Where(pending => Inside(pending.Source, item)).ToList())
+        {
+            _ = _pendingEndings.Remove(pending.Source.Id);
+
+            foreach (var handler in pending.Handlers.Where(handler => handler.RaisedBy is not null))
+            {
+                SetHandlerState(pending.Source, handler.Step.Name, "left");
+            }
+        }
+
+        foreach (var redirect in _redirects.Where(redirect => Inside(redirect.Handler, item)).ToList())
+        {
+            _ = _redirects.Remove(redirect);
+            Record(FlowChangeKind.Step, redirect.Handler, detail: $"the run was not sent to '{redirect.Target}': its handler's instance ends for a plan update, and what it was owed is dropped");
+        }
+
+        static bool Inside(FlowInstance instance, Scope item)
+        {
+            for (var at = instance.DeclaredScope; at is not null; at = at.Parent)
+            {
+                if (ReferenceEquals(at, item))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The steps of the instance being brought to rest for an update that never started, and those waiting on a
+    /// question, are skipped with the reason: nothing more runs in it, and what is in flight is ended in order.
+    /// </summary>
+    /// <param name="item">The item scope of the work-item group being ended for an update.</param>
+    /// <param name="update">The update whose piece ends it.</param>
+    /// <param name="piece">The piece.</param>
+    private void SkipWhatNeverStartedIn(Scope item, string update, FlowUpdatePiece piece)
+    {
+        var because = $"ended for update {update}";
+
+        foreach (var member in item.Members.Values.Where(member => member.State is FlowInstanceState.NotStarted or FlowInstanceState.Paused).ToList())
+        {
+            Leave(member, because);
+        }
+    }
+
+    /// <summary>
+    /// Settles the instances the run is bringing to rest for an update, as the session goes on: each reason step in
+    /// flight in one is given the handoff turn of a safe pause - bounded, and recorded where the agent writes nothing -
+    /// and its visit then ends <c>Stopped</c>, ended for the update; a machine step in flight runs to its own end.
+    /// Once every step of one has ended, its own group instance ends <c>Stopped</c> and the instance is visited again,
+    /// in its place and with its agent: a new scope of the piece's kind, in which the agent a <c>create-agent</c> step
+    /// of the old instance made, and that is live, is taken and not made again. Whether anything followed.
+    /// </summary>
+    private async Task<bool> SettlePiecesEndingAsync()
+    {
+        var changed = false;
+        var ending = _scopes.Where(scope => scope.EndingFor is not null).ToList();
+
+        foreach (var item in ending)
+        {
+            foreach (var member in item.Members.Values.Where(member => member.State is FlowInstanceState.Running && member.Step.Type == "reason" && !member.Draining).ToList())
+            {
+                var (update, piece) = item.EndingFor!.Value;
+                var entry = _updates.Updates.FirstOrDefault(held => held.Id == update);
+                var why = $"ended for update {update}: its work item '{piece.ItemName()}' is {(piece.Kind == FlowUpdatePieceKinds.Changed ? "done again" : "taken back")}, and another goes on from where it leaves the work";
+
+                // The step is told first - the piece that names its work item, as the lead of the handoff question -
+                // and then ended in order, as a safe pause ends a reason step: its turn is ended where it stands -
+                // what it started is cancelled - it is given one more, the handoff turn, bounded, and its visit then
+                // stands stopped, ended for the update. Where the telling is live the client ends the attempt itself
+                // and answers the turn within its own bound, and the engine waits for that answer as a pause waits;
+                // where it is not, the stop ends the attempt and the engine writes the handoff.
+                var asked = member.Telling is { } telling && entry is not null && telling.Ask(member.Attempt, why, EndedInOrderLead(entry, piece));
+
+                if (asked)
+                {
+                    // The step was told its piece, in one message with the sentence that its step ends here: recorded
+                    // as any telling is, on its own record.
+                    ToldBy(member, entry!, FlowStepTold.ByMessage);
+                }
+
+                DisarmTimeLimit(member);
+
+                if (asked)
+                {
+                    await TheAgentHandoffAsync(member).ConfigureAwait(false);
+                }
+                else
+                {
+                    member.Stoppable?.Cancel();
+                }
+
+                CountMinutes(member);
+                Release(member);
+                member.State = FlowInstanceState.Stopped;
+                member.Error = why;
+
+                var account = await HandoffTurnAsync(member, _definition.HandoffSeconds ?? 180).ConfigureAwait(false);
+                _spent.Minutes += account.Minutes.TotalMinutes;
+                member.Handoff = account.Text is { Length: > 0 } written ? new FlowHandoff(written, "agent") : EngineHandoffOf(member, why);
+
+                Record(FlowChangeKind.Handoff, member, detail: member.Handoff.By);
+                WriteStepRecordOf(member);
+                changed = true;
+            }
+        }
+
+        foreach (var item in ending.Where(item => item.GroupInstance is { State: FlowInstanceState.Running or FlowInstanceState.Paused }
+                && item.Members.Values.All(member => member.State is not (FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused))))
+        {
+            var (update, piece) = item.EndingFor!.Value;
+            var round = item.LoopOf!;
+
+            // Nothing more of the instance will ever run: each of its declarations not drawn ends skipped, saying why,
+            // and its own group instance ends stopped, ended for the update.
+            foreach (var declaration in DeclarationsOf(item).Where(declaration => !item.Instantiated.Contains(declaration.Name)).ToList())
+            {
+                _ = Create(item, declaration, FlowInstanceState.Skipped, made: skipped => skipped.SkippedBecause = $"ended for update {update}");
+            }
+
+            item.GroupInstance!.Error = $"ended for update {update}";
+            End(item.GroupInstance, FlowInstanceState.Stopped, null, item.GroupInstance.Error);
+            item.EndingFor = null;
+
+            var again = NewScope($"{round.Id}[{round.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)}]", round.Path, round.DeclaredScope!, round.Step, FlowValue.Of(piece.Item!.DeepClone()), round.Children.Count, null, round);
+            again.WorkItemKind = piece.Kind;
+            again.Piece = piece;
+            again.PieceOf = update;
+            again.AgainOf = item;
+            round.Children.Add(again);
+            _ = Create(again, round.Step, FlowInstanceState.Running, again.Id);
+
+            PutUpdatePiece(update, piece.ItemName()!, placed => placed with { Placed = item.GroupInstance.Id, CarriedBy = again.GroupInstance!.Id });
+            Record(
+                FlowChangeKind.Step,
+                again.GroupInstance!,
+                detail: $"visited again in its place for update {update}: '{piece.ItemName()}', of kind '{piece.Kind}', in '{again.Id}'");
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    /// <summary>
+    /// Waits, bounded as a pause's handoff turn is, for the runner of a reason step whose telling was asked: its
+    /// client ends the attempt itself and answers the handoff turn within its own bound, and the answer is in the
+    /// step's own record once the runner has ended. A runner that outlives the bound is cancelled, and the engine
+    /// writes the handoff as a pause does where the agent gave none.
+    /// </summary>
+    /// <param name="member">The step being ended in order, its telling asked.</param>
+    private async Task TheAgentHandoffAsync(FlowInstance member)
+    {
+        if (member.Runner is not { IsCompleted: false } work)
+        {
+            return;
+        }
+
+        using var bound = new CancellationTokenSource();
+        var passed = false;
+
+        lock (_handoffBounds)
+        {
+            _handoffBounds.Add(bound);
+        }
+
+        try
+        {
+            using var timer = _clock.CreateTimer(_ =>
+            {
+                passed = true;
+                bound.Cancel();
+            }, null, TimeSpan.FromSeconds(_definition.HandoffSeconds ?? 180), TimeSpan.FromMilliseconds(-1));
+
+            await work.WaitAsync(bound.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            if (passed)
+            {
+                member.Stoppable?.Cancel();
+            }
+        }
+        catch (Exception)
+        {
+            // The runner's own failure is its message's to say; the stop stands either way, and whatever the runner
+            // answered the step is stopped, ended for the update.
+            member.Stoppable?.Cancel();
+        }
+        finally
+        {
+            lock (_handoffBounds)
+            {
+                _ = _handoffBounds.Remove(bound);
+            }
+        }
+    }
+
+    /// <summary>Rewrites one placed piece of an update's entry, found by its work item's name.</summary>
+    /// <param name="update">The update's id.</param>
+    /// <param name="name">The piece's work item's name.</param>
+    /// <param name="rewrite">How the piece is rewritten.</param>
+    private void PutUpdatePiece(string update, string name, Func<FlowUpdatePiece, FlowUpdatePiece> rewrite)
+    {
+        if (_updates.Updates.FirstOrDefault(entry => entry.Id == update) is not { } held)
+        {
+            return;
+        }
+
+        PutUpdate(held with
+        {
+            Pieces = [.. held.ThePieces.Select(piece => string.Equals(piece.ItemName(), name, StringComparison.Ordinal) ? rewrite(piece) : piece)],
+        });
     }
 
     /// <summary>
@@ -2183,7 +3899,9 @@ public sealed class FlowCoordinator
     /// not one. A pause under way starts nothing new either - no ready step, no next iteration, no expansion - save,
     /// once the machine steps it left running have ended, the always steps that are machine steps; a reason step
     /// among them does not run until the next session. A hard stop draws nothing at all: what it never reached is left
-    /// undrawn, and the resume draws it.
+    /// undrawn, and the resume draws it. The three alternatives of the work-item group are drawn as one place: the
+    /// instance's kind says which of them runs - in the add step's place, under its name, with its dependencies and
+    /// its <c>when</c> - and the other two are Skipped, saying why.
     /// </summary>
     private bool Instantiate(Scope scope)
     {
@@ -2194,12 +3912,32 @@ public sealed class FlowCoordinator
             return false;
         }
 
+        if (scope.EndingFor is not null)
+        {
+            // An instance the run is bringing to rest for a plan update draws nothing more: what is in flight in it is
+            // ended in order, and its work is done again or taken back in the instance visited in its place.
+            return false;
+        }
+
         foreach (var declaration in DeclarationsOf(scope))
         {
             if (scope.Instantiated.Contains(declaration.Name) || !Draws(scope, declaration))
             {
                 // A scope a redirect or a failure left draws nothing more: its group's visit is over - save the always
                 // steps of a visit that ended done or failed, which its ending never waited on.
+                continue;
+            }
+
+            if (WorkItemStepsOf(scope) is { } three && three.All.Any(step => ReferenceEquals(step, declaration)))
+            {
+                // The three alternatives at one place of the work-item group: nothing of the place is drawn until the
+                // add step's own wiring frees it, and then one runs and the other two are Skipped, in one moment.
+                if (!DrawWorkItemPlace(scope, three))
+                {
+                    continue;
+                }
+
+                changed = true;
                 continue;
             }
 
@@ -2220,6 +3958,13 @@ public sealed class FlowCoordinator
             {
                 // A step raised by each pre-existing issue a step reports is never scheduled either: what brings it
                 // into being is the issue, one instance of it for each.
+                continue;
+            }
+
+            if (IsPlannerOf(scope, declaration))
+            {
+                // The step that plans a plan update is never started in the course of its scope: what brings it into
+                // being is an update alone, and until one raises it its name is NotRun, satisfying nothing.
                 continue;
             }
 
@@ -2337,9 +4082,169 @@ public sealed class FlowCoordinator
         return changed;
     }
 
+    /// <summary>
+    /// Draws the one place the three alternatives of the work-item group hold in <paramref name="scope"/>: the one the
+    /// scope's kind carries runs - in the add step's place, under its name, with its dependencies and its
+    /// <c>when</c> - and the other two are Skipped, saying why. Whether anything was drawn.
+    /// </summary>
+    /// <param name="scope">An item scope of the work-item group.</param>
+    /// <param name="three">The three alternatives it holds.</param>
+    private bool DrawWorkItemPlace(Scope scope, WorkItemSteps three)
+    {
+        if (_pausing && (!_alwaysPhase || !IsAlways(three.Add, scope) || three.Add.Type == "reason"))
+        {
+            return false;
+        }
+
+        var carrier = three.Carrier(KindOf(scope));
+
+        // Every alternative is drawn as the add step's place holds it: the one that carries the item under the add
+        // step's name, the others under their own, skipped.
+        FlowInstance Draw(WorkflowStep of, FlowInstanceState state, Action<FlowInstance>? made = null)
+            => Create(
+                scope,
+                of,
+                state,
+                memberName: ReferenceEquals(of, carrier) && !ReferenceEquals(of, three.Add) ? three.Add.Name : null,
+                made: made);
+
+        void DrawNotRun(WorkflowStep of, FlowNotRunCause cause, string because)
+        {
+            NotRun(Draw(of, FlowInstanceState.NotRun), cause, because);
+        }
+
+        if (_stopping && !IsAlways(three.Add, scope))
+        {
+            // A stopping run reaches nothing that is not an always step: the place is NotRun with the rest.
+            foreach (var other in three.All)
+            {
+                DrawNotRun(other, FlowNotRunCause.RunEnded, "the run ended before it");
+            }
+
+            return true;
+        }
+
+        if (Frozen(scope, three.Add.Name))
+        {
+            // Nothing of the place is drawn while a pending redirect will reset it.
+            return false;
+        }
+
+        var (waiting, unreachable) = WaitsOf(three.Add, scope, IsAlways(three.Add, scope));
+
+        if (unreachable)
+        {
+            foreach (var other in three.All)
+            {
+                DrawNotRun(other, FlowNotRunCause.DependencyFailed, DependencyFailedLine);
+            }
+
+            return true;
+        }
+
+        if (waiting.Count > 0)
+        {
+            return false;
+        }
+
+        if (scope.Visits.GetValueOrDefault(three.Add.Name) >= 99)
+        {
+            // The place was visited ninety-nine times in this scope: the hundredth fails, as any step's does.
+            _ = NewVisit(scope, three.Add, FlowInstanceState.NotStarted);
+            return true;
+        }
+
+        if (three.Add.When is { } when)
+        {
+            var holds = Holds(when, scope, out var problem, drawing: scope.Visits.GetValueOrDefault(three.Add.Name) + 1);
+
+            if (problem is not null)
+            {
+                foreach (var other in three.All)
+                {
+                    var unread = Draw(other, FlowInstanceState.Failed, failed =>
+                    {
+                        failed.Exit = HarnessExit.ConfigInvalid;
+                        failed.Error = Unreadable("when", MemberId(scope, three.Add.Name), problem);
+                    });
+                    HandleFailure(unread);
+                }
+
+                return true;
+            }
+
+            if (!holds)
+            {
+                foreach (var other in three.All)
+                {
+                    var skipped = Draw(other, FlowInstanceState.Skipped, skipped => skipped.SkippedBecause = "its when read false");
+                    HandlersFollow(skipped, FlowInstanceState.Skipped);
+                }
+
+                return true;
+            }
+        }
+
+        // The place is drawn: the carrier runs in the add step's name - the add step's own visit, by the graph's
+        // reckoning, whatever declaration carries it - and the two alternatives beside it are Skipped under their own
+        // names, saying why. The add step itself, where another carries the instance, is said by the one that runs in
+        // its place, and no record of its own is made.
+        foreach (var name in three.All.Select(step => step.Name))
+        {
+            _ = scope.Instantiated.Add(name);
+        }
+
+        var drawn = Draw(carrier, FlowInstanceState.NotStarted);
+        MarkCarriedBy(scope, drawn);
+
+        foreach (var other in three.All.Where(step => !ReferenceEquals(step, carrier) && !ReferenceEquals(step, three.Add)))
+        {
+            var skipped = Draw(
+                other,
+                FlowInstanceState.Skipped,
+                skipped => skipped.SkippedBecause = $"not this work item's: it is '{KindOf(scope)}', and '{carrier.Name}' carries it");
+            HandlersFollow(skipped, FlowInstanceState.Skipped);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Names the visit that carries a placed piece in the update's entry, once, where the piece was placed without one:
+    /// the entry says what carries its work out.
+    /// </summary>
+    /// <param name="scope">The item scope of the work-item group the piece made or was given to.</param>
+    /// <param name="drawn">The visit drawn in the place the piece's kind carries.</param>
+    private void MarkCarriedBy(Scope scope, FlowInstance drawn)
+    {
+        if (scope.Piece is not { } piece || piece.CarriedBy is not null)
+        {
+            return;
+        }
+
+        var update = _updates.Updates.FirstOrDefault(entry => entry.Id == scope.PieceOf);
+
+        if (update is { } held)
+        {
+            PutUpdate(held with
+            {
+                Pieces = [.. held.ThePieces.Select(one => string.Equals(one.ItemName(), piece.ItemName(), StringComparison.Ordinal) ? one with { CarriedBy = drawn.Id } : one)],
+            });
+        }
+
+        scope.Piece = piece with { CarriedBy = drawn.Id };
+    }
+
     /// <summary>Whether <paramref name="scope"/> still draws its steps: the flow's top level always, and a group's scope while that visit of the group is running.</summary>
     private static bool ScopeLive(Scope scope)
         => scope.Parent is null || (scope.OwnGroupInstance ?? scope.GroupInstance) is { State: FlowInstanceState.Running or FlowInstanceState.Paused };
+
+    /// <summary>Whether <paramref name="declaration"/> is the step the <c>amend</c> block names: raised by a plan update alone, and by nothing else in the run's course.</summary>
+    /// <param name="scope">The scope the declaration is declared in.</param>
+    /// <param name="declaration">The declaration.</param>
+    private bool IsPlannerOf(Scope scope, WorkflowStep declaration)
+        => _definition.Amend is { } amend
+            && string.Equals(scope.GroupPath.Length == 0 ? declaration.Name : $"{scope.GroupPath}.{declaration.Name}", amend.Step, StringComparison.Ordinal);
 
     /// <summary>
     /// Whether <paramref name="scope"/> still draws <paramref name="declaration"/>: a live scope draws every step, and
@@ -2366,8 +4271,16 @@ public sealed class FlowCoordinator
     private bool Frozen(Scope scope, string name)
         => _redirects.Any(redirect => redirect.Frozen.TryGetValue(scope.Id, out var held) && (held is null || held.Contains(name)));
 
-    /// <summary>The visit of a create-agent declaration in <paramref name="scope"/> whose agent is live still, where one is.</summary>
+    /// <summary>
+    /// The visit of a create-agent declaration in <paramref name="scope"/> whose agent is live still, where one is -
+    /// and, where the scope visits one again that a piece of a plan update ended, that scope's, for the agent a
+    /// <c>create-agent</c> step of the old instance made, and that is live, is taken into the new visit.
+    /// </summary>
     private FlowInstance? LiveAgentOf(Scope scope, WorkflowStep declaration)
+        => LiveAgentIn(scope, declaration) ?? (scope.AgainOf is { } again ? LiveAgentIn(again, declaration) : null);
+
+    /// <summary>The visit of a create-agent declaration in <paramref name="scope"/> whose agent is live still, where one is.</summary>
+    private FlowInstance? LiveAgentIn(Scope scope, WorkflowStep declaration)
         => _created.LastOrDefault(visit => ReferenceEquals(visit.DeclaredScope, scope)
             && visit.Step.Name == declaration.Name
             && visit.Made is not null
@@ -2402,6 +4315,25 @@ public sealed class FlowCoordinator
                 var item = NewScope($"{instance.Id}[{index}]", PathOf(scope, declaration), scope, declaration, list[index], index, null, instance);
                 instance.Children.Add(item);
                 _ = Create(item, declaration, FlowInstanceState.Running, item.Id);
+
+                var owed = WorkItemGroupOf(instance)
+                    ? _updates.Updates.SelectMany(update => update.ThePieces.Select(piece => (update.Id, piece)))
+                        .FirstOrDefault(held => held.piece is not null
+                            && held.piece.OwedTo is not null
+                            && held.piece.CarriedBy is null
+                            && held.piece.Ended is null
+                            && string.Equals(held.piece.ItemName(), ItemNameOf(item), StringComparison.Ordinal))
+                    : default;
+
+                if (owed.piece is not null)
+                {
+                    // The work item a piece of a plan update was owed has joined the round: the instance that carries
+                    // it is written into the update's entry, as any placed piece's is.
+                    item.WorkItemKind = owed.piece.Kind;
+                    item.Piece = owed.piece;
+                    item.PieceOf = owed.Id;
+                    PutUpdatePiece(owed.Id, owed.piece.ItemName()!, placed => placed with { CarriedBy = item.GroupInstance!.Id });
+                }
             }
 
             if (list.Count == 0)
@@ -2513,7 +4445,11 @@ public sealed class FlowCoordinator
             return true;
         }
 
-        if (until)
+        // Work a plan update owes this loop's next iteration carries it there whatever the until says: the loop runs
+        // again, and where it is at its own bound one iteration is added for the update that owes the work.
+        var owed = IterationOwed(instance);
+
+        if (until && !owed)
         {
             End(instance, FlowInstanceState.Done, null, null);
             return true;
@@ -2531,7 +4467,7 @@ public sealed class FlowCoordinator
                 return true;
             }
 
-            if (!blocking)
+            if (!blocking && !owed)
             {
                 // Where it is false the repeat ends as it stands, with no question, and what it left is said.
                 EndRepeat(instance);
@@ -2539,8 +4475,142 @@ public sealed class FlowCoordinator
             }
         }
 
+        if (_heldPlanner is not null && !InHeldScope(instance.DeclaredScope))
+        {
+            // No next iteration while a plan update is under way and this loop is outside the scope it is planned
+            // in: no item is begun on a plan that is about to change. The repeat stands at its iterate point until
+            // the hold ends, and the update's plan stands between the iterations.
+            return true;
+        }
+
+        if (owed)
+        {
+            // At the loop's own bound the iteration an update owes the work is added: once for the update, however
+            // many pieces it owes, and at most amend.maxAddedIterations over the run.
+            AddIterationsOwedTo(instance);
+        }
+
         return NextIteration(instance.DeclaredScope!, instance.Step, instance);
     }
+
+    /// <summary>
+    /// Whether work a plan update placed is still owed to <paramref name="loop"/>'s next iteration: an update done
+    /// that owes the loop work holds a piece not yet carried by any instance of the work-item group.
+    /// </summary>
+    /// <param name="loop">The repeat around the work-item group.</param>
+    private bool IterationOwed(FlowInstance loop)
+        => _updates.Updates.Any(update => update.State == FlowUpdateStates.Done
+            && loop.OwedIterationBy.Contains(update.Id)
+            && update.ThePieces.Any(piece => piece.OwedTo is not null && piece.ItemName() is { } name && ItemInstanceNamed(name) is null));
+
+    /// <summary>
+    /// Carries what the updates done owe their loops, whatever their <c>until</c> says: a loop paused on the question
+    /// its bound asked is answered by the engine - one more iteration, for the update that owes the work - and one
+    /// that ended stands to run again; where the loop is at its bound the iteration is added, once for the update and
+    /// at most <c>amend.maxAddedIterations</c> over the run.
+    /// </summary>
+    private void CarryWhatTheLoopsOwe()
+    {
+        foreach (var loop in _created.Where(instance => instance.Step.Repeat is not null && instance.OwedIterationBy.Count > 0).ToList())
+        {
+            if (!IterationOwed(loop))
+            {
+                continue;
+            }
+
+            var allowed = _definition.Amend?.MaxAddedIterations ?? 1;
+            var given = _updates.Updates.Count(update => update.AddedIteration is { } added && added.StartsWith($"{loop.Id}#", StringComparison.Ordinal));
+
+            if (loop.State is FlowInstanceState.Paused
+                && loop.WaitingQuestion is { } waiting
+                && _questions.FirstOrDefault(asked => asked.Id == waiting && asked.Kind == "loopBound") is { } bound
+                && given < allowed)
+            {
+                // The loop stands paused on the question its bound asks: the engine answers it itself, as the answer
+                // 'more' is taken - the loop runs one more iteration, for the update that owes the work.
+                TakeAnswer(bound, "more", null, "engine", where: null, through: null);
+            }
+            else if (loop.State is FlowInstanceState.Done or FlowInstanceState.Stopped)
+            {
+                // A loop that ended - its until read true, or a stop left it - runs again: what an update owes it
+                // carries, whatever its until says.
+                var was = loop.State;
+                loop.State = FlowInstanceState.Running;
+                Record(FlowChangeKind.IterationAdded, instance: loop, from: was, to: FlowInstanceState.Running, detail: $"the loop runs again: update {loop.OwedIterationBy.First(update => IterationOwedBy(update, loop))} owes its next iteration work");
+            }
+
+            if (loop.State is FlowInstanceState.Running or FlowInstanceState.Paused)
+            {
+                AddIterationsOwedTo(loop);
+            }
+        }
+    }
+
+    /// <summary>Whether <paramref name="update"/> owes <paramref name="loop"/> its next iteration.</summary>
+    private bool IterationOwedBy(string update, FlowInstance loop)
+        => _updates.Updates.FirstOrDefault(held => held.Id == update) is { State: FlowUpdateStates.Done } entry
+            && loop.OwedIterationBy.Contains(update)
+            && entry.ThePieces.Any(piece => piece.OwedTo is not null && piece.ItemName() is { } name && ItemInstanceNamed(name) is null);
+
+    /// <summary>
+    /// Says how the pieces a plan update placed in the round <paramref name="round"/> ended, each in the update's own
+    /// entry: its instance carried them out, and that is how they ended. Called where the round's work-item group
+    /// ends, so the report and the listing say every piece whole.
+    /// </summary>
+    /// <param name="round">The work-item group instance that ended.</param>
+    private void SaidHowThePiecesEnded(FlowInstance round)
+    {
+        foreach (var child in round.Children.Where(child => child.PieceOf is { } && child.Piece is not null && child.GroupInstance is { State: FlowInstanceState.Done }))
+        {
+            PutUpdatePiece(child.PieceOf!, child.Piece!.ItemName()!, placed => placed with { Ended = "done" });
+        }
+    }
+
+    /// <summary>
+    /// Adds the iterations plan updates owe work of <paramref name="loop"/>: one for an update, however many pieces
+    /// it owes, and at most <c>amend.maxAddedIterations</c> over the run. Each is published, with the loop, the
+    /// update and how many the run has now been given, and written into the update's entry; an added iteration is an
+    /// iteration like any other.
+    /// </summary>
+    /// <param name="loop">The repeat at its bound that plan updates owe work to.</param>
+    private void AddIterationsOwedTo(FlowInstance loop)
+    {
+        var allowed = _definition.Amend?.MaxAddedIterations ?? 1;
+        var given = _updates.Updates.Count(update => update.AddedIteration is { } added && added.StartsWith($"{loop.Id}#", StringComparison.Ordinal));
+
+        foreach (var update in _updates.Updates
+            .Where(update => update.State == FlowUpdateStates.Done
+                && loop.OwedIterationBy.Contains(update.Id)
+                && update.AddedIteration is null)
+            .ToList())
+        {
+            if (given >= allowed)
+            {
+                Record(
+                    FlowChangeKind.Answer,
+                    instance: loop,
+                    detail: $"update {update.Id} is owed work of '{loop.Id}' and the run has been given the {allowed.ToString(System.Globalization.CultureInfo.InvariantCulture)} iteration(s) amend.maxAddedIterations allows: its loop asks at its bound");
+                continue;
+            }
+
+            if (loop.Children.Count >= BoundOf(loop.Step, loop))
+            {
+                loop.ExtraIterations++;
+            }
+
+            var iteration = loop.Children.Count + 1;
+            given++;
+            PutUpdate(update with { AddedIteration = $"{loop.Id}#{iteration.ToString(System.Globalization.CultureInfo.InvariantCulture)}" });
+            Record(
+                FlowChangeKind.IterationAdded,
+                instance: loop,
+                detail: $"iteration {iteration.ToString(System.Globalization.CultureInfo.InvariantCulture)} of '{loop.Step.Name}' was added for update {update.Id}: the run has been given {given.ToString(System.Globalization.CultureInfo.InvariantCulture)} of the {allowed.ToString(System.Globalization.CultureInfo.InvariantCulture)} amend.maxAddedIterations allows");
+        }
+    }
+
+    /// <summary>Whether <paramref name="group"/> is the work-item group of a plan update: the <c>forEach</c> group the step <c>amend.whenAddScope</c> names is declared directly in.</summary>
+    private bool WorkItemGroupOf(FlowInstance group)
+        => _definition.Amend is { } amend && group.Step.IsGroup && string.Equals(group.Path, FlowUpdateGates.ParentOf(amend.WhenAddScope), StringComparison.Ordinal);
 
     /// <summary>Ends the groups whose work has finished, gathers what a block gathers, and carries each ended group's failure to its policy.</summary>
     private bool EndGroups()
@@ -2578,6 +4648,13 @@ public sealed class FlowCoordinator
 
             if (instance.Step.ForEach is not null)
             {
+                if (_heldPlanner is not null && WorkItemGroupOf(instance))
+                {
+                    // While an update is under way the work-item group does not end, even with every instance of it
+                    // ended: its ending is owed with the rest, so that what the update adds finds it open.
+                    continue;
+                }
+
                 if (instance.Children.Count > 0 && instance.Children.All(ScopeEnded))
                 {
                     foreach (var child in instance.Children.Select(child => child.GroupInstance).Where(child => child is { State: FlowInstanceState.Running }))
@@ -2586,6 +4663,7 @@ public sealed class FlowCoordinator
                     }
 
                     End(instance, FlowInstanceState.Done, null, null);
+                    SaidHowThePiecesEnded(instance);
                     changed = true;
                 }
 
@@ -2606,18 +4684,41 @@ public sealed class FlowCoordinator
             }
         }
 
-        while (_redirects.Count > 0 && _redirects[0] is { Asking: null } next && !_pausing && !_hardStop && RedirectQuiet(next))
+        while (!_pausing && !_hardStop && NextRedirect() is { } apply)
         {
             // The redirects the run owes are made in the order they were decided, each once nothing it resets is
             // running: a redirect cancels nothing, and what it resets that was in flight is recorded as the visit it
-            // was. One still asking about an open agent holds the ones after it. A pause under way leaves them owed,
-            // and so does a hard stop - which makes nothing owed, and stops what the redirect waited on - for the
-            // resume makes what the run owes, from its records alone, once what was stopped stands to run again.
-            ApplyRedirect(next);
+            // was. One still asking about an open agent holds the ones after it, and so does one waiting for quiet.
+            // While a plan update holds the run, no redirect outside the scope it is planned in is made - it waits
+            // for the hold to end, and the ones behind it may go where they are inside. A pause under way leaves
+            // them owed, and so does a hard stop - which makes nothing owed, and stops what the redirect waited on -
+            // for the resume makes what the run owes, from its records alone, once what was stopped stands to run
+            // again.
+            ApplyRedirect(apply);
             changed = true;
         }
 
         return changed;
+
+        PendingRedirect? NextRedirect()
+        {
+            foreach (var next in _redirects)
+            {
+                if (next.Asking is not null)
+                {
+                    return null;
+                }
+
+                if (_heldPlanner is { } planner && !ReferenceEquals(next.Handler, planner) && !InHeldScope(next.Handler.DeclaredScope))
+                {
+                    continue;
+                }
+
+                return RedirectQuiet(next) ? next : null;
+            }
+
+            return null;
+        }
     }
 
     /// <summary>What admission decides of one step that has not started: it starts now, with the claims it takes, or what it waits on.</summary>
@@ -2632,19 +4733,20 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// The one walk admission makes, deciding nothing it does not say: every step that has not started, in the fixed
-    /// order - declaration order, then instance id - held to what keeps the run from starting it (a hard stop, a pause
-    /// under way, a stopping run, a pending redirect), to its dependencies, to the <c>alone</c> barrier, to the claims
-    /// and to the limits, all-or-nothing, each step the walk admits counted as running for the ones after it. A step
-    /// blocked on a claim reserves every claim it waits for, so no later step takes what it waits for first and a fold
-    /// waiting behind readers is not starved; one blocked on a limit, a hold or a pause reserves nothing. Admission
-    /// starts what it admits, the run's records list it as what starts next, and each step's record says what it waits
-    /// on: all three read this walk.
+    /// order - the visit a plan update raised first, then declaration order, then instance id - held to what keeps the
+    /// run from starting it (a hard stop, a pause under way, a stopping run, a pending redirect, an update's hold), to
+    /// its dependencies, to the <c>alone</c> barrier, to the claims and to the limits, all-or-nothing, each step the
+    /// walk admits counted as running for the ones after it. A step blocked on a claim reserves every claim it waits
+    /// for, so no later step takes what it waits for first and a fold waiting behind readers is not starved; one
+    /// blocked on a limit, a hold or a pause reserves nothing. Admission starts what it admits, the run's records list
+    /// it as what starts next, and each step's record says what it waits on: all three read this walk.
     /// </summary>
     private List<Admission> AdmissionWalk()
     {
         var waiting = _created
             .Where(instance => instance.State is FlowInstanceState.NotStarted && !instance.Step.IsGroup)
-            .OrderBy(instance => _declarationOrder.GetValueOrDefault(instance.Path, int.MaxValue))
+            .OrderByDescending(instance => instance.RaisedByUpdate is not null)
+            .ThenBy(instance => _declarationOrder.GetValueOrDefault(instance.Path, int.MaxValue))
             .ThenBy(instance => instance.Id, StringComparer.Ordinal)
             .ToList();
 
@@ -2718,8 +4820,10 @@ public sealed class FlowCoordinator
     /// What keeps <paramref name="instance"/> from starting before any claim or limit is asked: a hard stop or a pause
     /// under way (it runs at the resume; in a pause's always phase only an always step that is a machine step starts),
     /// an always step before the session's always phase (one carried into this session as well as one drawn in it),
-    /// a stopping run (only always steps start), a pending redirect that will reset it, or a dependency it still waits
-    /// on. Empty where nothing does.
+    /// a stopping run (only always steps start), a plan update under way (nothing starts outside the scope it is
+    /// planned in - and a step the hold keeps back reserves no claim, so nothing it waited for stands in the way of
+    /// the steps inside that scope), a pending redirect that will reset it, or a dependency it still waits on. Empty
+    /// where nothing does.
     /// </summary>
     private IReadOnlyList<string> HoldOf(FlowInstance instance)
     {
@@ -2745,12 +4849,42 @@ public sealed class FlowCoordinator
             return [];
         }
 
-        if (Frozen(scope, instance.Step.Name))
+        if (_heldPlanner is { } planner && !InHeldScope(scope))
+        {
+            // From the moment an update is taken until its plan stands, nothing starts outside the scope the update is
+            // planned in: no ready step, no retry that was waiting, no handler and no redirect. What is in flight is
+            // not touched - it goes on to its own end, on the plan as it was - and the planning step itself is inside,
+            // admitted ahead of everything else.
+            return [$"hold {planner.Id}"];
+        }
+
+        if (instance.RaisedByUpdate is not null
+            && instance.Step.Resume is { } resumed
+            && !string.Equals(resumed, instance.Step.Name, StringComparison.Ordinal)
+            && DeclarationsOf(scope).FirstOrDefault(declaration => declaration.Name == resumed) is { } goesOnWith
+            && scope.Members.GetValueOrDefault(goesOnWith.Name) is { State: FlowInstanceState.Running or FlowInstanceState.Paused } inFlight)
+        {
+            // The step that plans an update goes on with the work of a step of its own scope: where that step is in
+            // flight it waits for it to end, for its conversation is the one the planning goes on with.
+            return [$"resumes {inFlight.Id}"];
+        }
+
+        // An alternative of the work-item group runs in the add step's place, and waits on what that step waits on.
+        var place = WorkItemStepsOf(scope) is { } three && three.All.Any(step => ReferenceEquals(step, instance.Step)) ? three.Add : instance.Step;
+
+        if (Frozen(scope, place.Name))
         {
             return ["redirect"];
         }
 
-        return WaitsOf(instance.Step, scope, instance.IsAlways).Waiting;
+        if (instance.DeclaredScope is { } item && item.EndingFor is { } ending)
+        {
+            // Nothing starts in an instance the run is bringing to rest for a plan update: what is in flight in it is
+            // ended in order, and its work is done again or taken back in the instance visited in its place.
+            return [$"ended for update {ending.Update}"];
+        }
+
+        return WaitsOf(place, scope, instance.IsAlways).Waiting;
     }
 
     /// <summary>Admits every step the walk admits, in its order, and answers how many it started.</summary>
@@ -2836,19 +4970,53 @@ public sealed class FlowCoordinator
             instance.MadeModel ??= _agentModels.GetValueOrDefault(instance.Path);
         }
 
+        // A reason step that makes an agent of its own - one that reads and begins work of its own, neither working in
+        // another's worktree nor going on with another's work (a step that resumes itself begins its own again) - is
+        // given the engine's own read-only one, named the same way a create-agent's is: before the record, with the
+        // model the step resolves to. Its records live in that agent's directory, as every reason step's do. A step
+        // that resumes itself keeps one agent over all its visits - a repeat's iterations of one share the first's -
+        // and every other step's each visit makes its own.
+        if (instance.Step.Type == "reason" && WorkflowStepTypes.MakesAgent(instance.Step) && WorksInOf(instance) is null)
+        {
+            instance.Made ??= (instance.Step.Resume is { } self && string.Equals(self, instance.Step.Name, StringComparison.Ordinal)
+                ? _created.FirstOrDefault(earlier => !ReferenceEquals(earlier, instance)
+                    && string.Equals(earlier.Path, instance.Path, StringComparison.Ordinal)
+                    && earlier.Made is not null)?.Made
+                : null)
+                ?? NameAgent();
+            instance.MadeModel ??= _agentModels.GetValueOrDefault(instance.Path);
+            instance.WorksIn ??= instance.Made;
+        }
+
         Record(FlowChangeKind.Step, instance, from: was, to: FlowInstanceState.Running, attempt: instance.Attempt);
 
         if (instance.Step.Type == "pause")
         {
             // A pause step asks and asks only: the engine fills its question from the same names an expression reads,
-            // and no runner is asked. A question that cannot be filled fails the step, as any step its template
-            // breaks. Either way the graph changed where the loop was admitting, so it goes round again.
+            // the questions an upstream step wrote shown under it, and no runner is asked. A question that cannot be
+            // filled - its own or the questions it shows - fails the step, as any step its template breaks. Either way
+            // the graph changed where the loop was admitting, so it goes round again.
             Release(instance);
             _answeredAtOnce = true;
 
+            var shown = ShownQuestionsOf(instance, out var shownProblem);
+
+            if (shownProblem is not null)
+            {
+                End(instance, FlowInstanceState.Failed, HarnessExit.ConfigInvalid, Unreadable("questions", instance.Id, shownProblem));
+                HandleFailure(instance);
+                return false;
+            }
+
             if (Filled(instance, instance.Step.Question ?? string.Empty, out var problem) is { } question)
             {
-                _ = Ask(instance, "pause", question, FlowQuestions.OptionsOf("pause", instance.Step));
+                var id = Ask(instance, "pause", question, FlowQuestions.OptionsOf("pause", instance.Step), agentQuestions: shown);
+                var asked = _questions.First(asking => asking.Id == id);
+
+                // What the person gave the run answers first, where they gave it: the entry whose when holds answers
+                // at once, as a configured answer would - no person asked - and its words are looked for in the input
+                // they are said to stand in before they count.
+                AnswerWhatTheInputGave(instance, asked);
             }
             else
             {
@@ -2860,6 +5028,30 @@ public sealed class FlowCoordinator
         }
 
         ArmTimeLimit(instance);
+
+        if (instance.Step.Type == "reason")
+        {
+            // What the engine tells this attempt's agent while it runs - a plan update's message into the
+            // conversation it is in, and the handoff where one ends the step in order - posted and raised through
+            // this, one per attempt: a telling of an attempt that is over says nothing about the one the run is on
+            // now.
+            instance.Telling = new FlowTelling(instance.Attempt, TimeSpan.FromSeconds(_definition.HandoffSeconds ?? 180));
+
+            // What a plan update that told this work said, read in the part of its own this attempt's first message
+            // holds: recorded once of each update, however many attempts read it.
+            if (PlanToldOf(instance) is { Length: > 0 })
+            {
+                foreach (var told in _updates.Updates
+                    .Where(done => done.State == FlowUpdateStates.Done
+                        && instance.ToldEntries.All(said => said.Update != done.Id)
+                        && done.ThePieces.Any(piece => piece.Kind == FlowUpdatePieceKinds.Told && NamesWorkOf(instance, piece.For))))
+                {
+                    instance.ToldEntries.Add(new FlowStepTold(told.Id, _clock.GetUtcNow(), FlowStepTold.InAPrompt));
+                    WriteStepRecordOf(instance);
+                }
+            }
+        }
+
         instance.Runner = AskRunner();
 
         return true;
@@ -2902,6 +5094,20 @@ public sealed class FlowCoordinator
                     step = step with { Filter = null };
                 }
 
+                // A reason step's `writes` given as an expression is read where the step starts, and the names it
+                // yielded narrow the step as a written-out list does: the runner's ground is built of the step it is
+                // handed, so the read list is put in the place of the expression. Nothing is read where the step
+                // wrote its list out, and the written-out list narrows as it always did.
+                if (step.Type == "reason"
+                    && read.Remove("writes", out var writesNamed)
+                    && writesNamed.ToNode() is JsonArray listedWrites)
+                {
+                    step = step with
+                    {
+                        Writes = new FlowList([.. listedWrites.OfType<JsonValue>().Where(one => one.GetValueKind() == JsonValueKind.String).Select(one => one!.GetValue<string>())], Expression: null),
+                    };
+                }
+
                 // Every text the step hands on, filled where it starts by the names the step reads: the runner is given
                 // the step as it is to run. One that reads a step with no output fails the step, as an expression does.
                 if (FlowStepTemplates.Fill(step, (string text, out string? problem) => Filled(instance, text, out problem), out var key, out var broken) is not { } filled)
@@ -2911,6 +5117,29 @@ public sealed class FlowCoordinator
                 }
 
                 step = filled;
+
+                // A reason step's prompt is its runner's to fill - the skill blocks a step starts with are put in there
+                // - so the engine reads the files and fills every other name here, handing the texts as read. One that
+                // cannot be filled fails the step, as a template key's that breaks. A run held in memory alone reads
+                // no files: its runner is handed none, and refuses where it needs one.
+                if (step.Type == "reason" && _workflowFile is { } readFile)
+                {
+                    foreach (var (promptKey, promptFileNamed) in new[] { ("prompt", step.Prompt), ("resumePrompt", step.ResumePrompt) })
+                    {
+                        if (promptFileNamed is null)
+                        {
+                            continue;
+                        }
+
+                        if (Filled(instance, readFile(promptFileNamed), out var promptBroken) is not { } promptText)
+                        {
+                            _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable(promptKey, instance.Id, promptBroken!)), null, Attempt: attempt));
+                            return;
+                        }
+
+                        read[promptKey] = FlowValue.Of(promptText);
+                    }
+                }
 
                 var result = await _runner.RunAsync(RunOf(instance, step, attempt, read, handoff?.Text), token).ConfigureAwait(false);
 
@@ -2956,12 +5185,35 @@ public sealed class FlowCoordinator
         // The budget's minutes are the time reason steps ran, each attempt and each handoff turn counted.
         CountMinutes(instance);
 
+        // What the attempt's agent assumed, asked or not: kept whatever else the attempt ends by, for a later step, a
+        // report and the person read what an unattended run took for granted.
+        if (result.Assumptions is [_, ..] assumed)
+        {
+            instance.Assumptions = [.. instance.Assumptions, .. assumed];
+        }
+
         if (result.Asked is { } asking)
         {
             // A step that asks holds nothing while it waits: it gives back every claim and every counter, and is
             // admitted again, against the limits and the claims as they then are, when it is answered.
             Release(instance);
-            _ = Ask(instance, asking.Kind, asking.Problem, asking.Options);
+            _ = Ask(instance, asking.Kind, asking.Problem, asking.Options, agentQuestions: asking.AgentQuestions, agent: WorksInOf(instance) ?? instance.Made);
+            return;
+        }
+
+        if (result.Pauses is { } pausing)
+        {
+            // Every account a reason step could use is at its limit, or its provider's service failed past the client's
+            // own tries: the run pauses safely and resumes that very step, never a failure and never a question, for
+            // every model the step could move to would meet the same. The step is stopped where it stands, as a pause
+            // stops it, with why as its handoff - the resume's next attempt is told what the attempt met - and runs
+            // again at the resume.
+            Release(instance);
+            instance.Handoff ??= EngineHandoffOf(instance, pausing);
+            Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
+            End(instance, FlowInstanceState.Stopped, HarnessExit.Incomplete, pausing);
+            Record(FlowChangeKind.Step, instance, detail: "the run pauses for it");
+            RequestPause("limits");
             return;
         }
 
@@ -2992,10 +5244,23 @@ public sealed class FlowCoordinator
         if (result.Limit is { } limit)
         {
             // A reason step at a limit of its own asks and is no failure. Its question is raised however the step's
-            // onFailure reads, for the step has not failed.
+            // onFailure reads, for the step has not failed. The engine writes the attempt's handoff before the question
+            // is raised - one line saying why, for the agent's run had ended and cannot answer - so the answer `retry`
+            // begins the next attempt with it, as a pause's next attempt begins with the agent's. `more` is offered
+            // only where a stored conversation of the attempt can be handed, for more of the same conversation could
+            // not help anywhere else.
             Release(instance);
             var kind = FlowQuestions.LimitKindOf(limit);
-            _ = Ask(instance, kind, $"'{instance.Id}' reached its {limit}{(result.LimitDetail is { } detail ? $" ({detail})" : string.Empty)}", FlowQuestions.OptionsOf(kind, instance.Step));
+            var options = FlowQuestions.OptionsOf(kind, instance.Step);
+
+            if (!result.StoredConversation)
+            {
+                options = [.. options.Where(option => option != "more")];
+            }
+
+            instance.Handoff ??= EngineHandoffOf(instance, $"'{instance.Id}' reached its {limit}");
+            Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
+            _ = Ask(instance, kind, $"'{instance.Id}' reached its {limit}{(result.LimitDetail is { } detail ? $" ({detail})" : string.Empty)}", options);
             return;
         }
 
@@ -4325,6 +6590,155 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
+    /// The questions a <c>pause</c> step shows under its own, where its <c>questions</c> expression yields a list: each
+    /// element in the shape of a question, read from the upstream output it names. An element that is no question says
+    /// why, in <paramref name="problem"/>; one that recommends something not among its own choices, which no schema of
+    /// the subset can refuse, is shown as it is with a line under it saying so.
+    /// </summary>
+    /// <param name="instance">The pause step.</param>
+    /// <param name="problem">Why the questions could not be read; null where they were, and where the step names none.</param>
+    private IReadOnlyList<Agents.AgentQuestion>? ShownQuestionsOf(FlowInstance instance, out string? problem)
+    {
+        if (instance.Step.Questions is not { } expression)
+        {
+            problem = null;
+            return null;
+        }
+
+        var items = EvaluateList(expression, instance.DeclaredScope!, out var unreadable);
+
+        if (unreadable is not null)
+        {
+            problem = unreadable;
+            return null;
+        }
+
+        var shown = new List<Agents.AgentQuestion>();
+
+        foreach (var item in items)
+        {
+            if (QuestionOf(item, expression) is not { } read)
+            {
+                problem = $"'{expression}' yields an element that is not a question of the shape {{question, problem, tried, means, options, recommended, why}}";
+                return null;
+            }
+
+            shown.Add(read);
+        }
+
+        problem = null;
+        return shown;
+    }
+
+    /// <summary>
+    /// One element of a <c>pause</c> step's <c>questions</c> list, as the question it holds: every member of the
+    /// envelope's own shape, an element that lacks one refused whole. A recommendation outside its own choices is kept
+    /// as it stands with a line under it saying so.
+    /// </summary>
+    /// <param name="item">The element, as the list yielded it.</param>
+    /// <param name="expression">The expression that yielded it, as a problem names it.</param>
+    private static Agents.AgentQuestion? QuestionOf(FlowValue item, string expression)
+    {
+        if (item.ToNode() is not JsonObject held)
+        {
+            return null;
+        }
+
+        string? Member(string name)
+            => held[name] is System.Text.Json.Nodes.JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+        if (Member("question") is not { Length: > 0 } asked || Member("problem") is not { Length: > 0 })
+        {
+            return null;
+        }
+
+        var options = held["options"] as System.Text.Json.Nodes.JsonArray;
+        List<string> choices = [.. (options ?? [])
+            .OfType<System.Text.Json.Nodes.JsonValue>()
+            .Select(option => option.TryGetValue<string>(out var text) ? text : null)
+            .OfType<string>()];
+
+        if (choices.Count < 2)
+        {
+            return null;
+        }
+
+        var recommended = Member("recommended");
+        var why = Member("why") ?? string.Empty;
+
+        if (recommended is { Length: > 0 } && !choices.Contains(recommended, StringComparer.Ordinal))
+        {
+            // Shown as it is, with a line under it saying so: no schema of the subset can refuse this.
+            why = $"{why}{(why.Length == 0 ? string.Empty : " ")}(it recommends '{recommended}', which is not among its own choices, and is shown as it stands)";
+        }
+
+        return new Agents.AgentQuestion(
+            asked,
+            Member("problem")!,
+            Member("tried") ?? string.Empty,
+            Member("means") ?? string.Empty,
+            choices,
+            recommended ?? string.Empty,
+            why);
+    }
+
+    /// <summary>
+    /// Answers a <c>pause</c> step's question with what the person gave the run, where they gave it: the first
+    /// <c>preAnswer</c> entry whose <c>when</c> holds answers at once, as a configured answer would - no person asked -
+    /// its entry held only where its <c>quote</c>'s words are not empty and stand in the input they are said to be of,
+    /// every run of white space compared as one space. A quote that is reported and does not stand there passes its
+    /// entry by, the record says so, and the person is asked.
+    /// </summary>
+    /// <param name="instance">The pause step, whose pre-answers are read.</param>
+    /// <param name="asked">The question its own step just raised.</param>
+    private void AnswerWhatTheInputGave(FlowInstance instance, FlowQuestion asked)
+    {
+        foreach (var before in instance.Step.PreAnswer)
+        {
+            if (!Holds(before.When, instance.DeclaredScope!, out _, reader: instance))
+            {
+                continue;
+            }
+
+            if (before.Quote is { } quote)
+            {
+                var said = Evaluate(quote.Text, instance.DeclaredScope!, out _, reader: instance).AsScalar(quote.Text) as string;
+
+                if (said is { Length: > 0 } words && _inputs.TryGetValue(quote.Input, out var given) && StandsIn(words, given))
+                {
+                    TakeAnswer(asked, before.Answer, before.Text, "input", where: null, through: null, input: $"the words \"{words}\" in input '{quote.Input}'");
+                    return;
+                }
+
+                Record(FlowChangeKind.Answer, instance, detail: said is { Length: > 0 }
+                    ? $"a pre-answer was reported and its words are not in input '{quote.Input}': the person is asked"
+                    : $"a pre-answer's words read empty, and no answer is given by them: the person is asked");
+                continue;
+            }
+
+            // Each input its when read, with the value it had: what the person gave that the answer rests on.
+            var read = string.Join(", ", WorkflowExpressions.ReadsOf(before.When)
+                .Where(each => each.Root == "input" && each.Whole.Length > "input.".Length)
+                .Select(each => each.Whole["input.".Length..])
+                .Distinct(StringComparer.Ordinal)
+                .Select(name => $"{name} = '{_inputs.GetValueOrDefault(name) ?? string.Empty}'"));
+
+            TakeAnswer(asked, before.Answer, before.Text, "input", where: null, through: null, input: read.Length > 0 ? read : "the run's input");
+            return;
+        }
+    }
+
+    /// <summary>Whether <paramref name="words"/> stand in <paramref name="given"/> as it was given, every run of white space compared as one space.</summary>
+    /// <param name="words">The words a pre-answer quotes.</param>
+    /// <param name="given">The input's value, as the person gave it.</param>
+    private static bool StandsIn(string words, string given)
+        => Whitespace(words).Contains(Whitespace(given), StringComparison.Ordinal) || Whitespace(given).Contains(Whitespace(words), StringComparison.Ordinal);
+
+    /// <summary><paramref name="text"/> with every run of white space taken to one space, trimmed.</summary>
+    private static string Whitespace(string text)
+        => string.Join(' ', text.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+
+    /// <summary>
     /// Raises a question on <paramref name="instance"/>: a step whose work asks is paused, holding nothing while it
     /// waits, and a question of an ending already made (<see cref="FlowQuestions.AsksOfAnEnding"/>) leaves the step as
     /// it ended; either way only what depends on it is blocked. A configuration that answered the kind beforehand - the
@@ -4338,7 +6752,9 @@ public sealed class FlowCoordinator
     /// <param name="problem">What happened, as the question states it.</param>
     /// <param name="options">The answers the question takes.</param>
     /// <param name="subject">What a counted answer of this question is counted for, where it is not the instance alone: a handler's name, a source's own.</param>
-    private string Ask(FlowInstance instance, string kind, string problem, IReadOnlyList<string> options, string? subject = null)
+    /// <param name="agentQuestions">The questions the step's agent asked, where it asked; empty for the engine's own.</param>
+    /// <param name="agent">The agent that asked, where one did; null for the engine's own question.</param>
+    private string Ask(FlowInstance instance, string kind, string problem, IReadOnlyList<string> options, string? subject = null, IReadOnlyList<Agents.AgentQuestion>? agentQuestions = null, string? agent = null)
     {
         var id = FlowQuestionIds.Of(++_questionsRaised);
         var asked = new FlowQuestion(id, kind, instance.Id, problem, options)
@@ -4348,6 +6764,11 @@ public sealed class FlowCoordinator
             Means = MeansOf(instance),
             Held = FlowQuestions.HeldOptionsOf(kind, instance.Step, options),
             Handler = subject,
+            AgentQuestions = agentQuestions ?? [],
+            RaisedBy = agent is { } ? new FlowQuestionRaisedBy("step", instance.Id, agent) : new FlowQuestionRaisedBy("step", instance.Id),
+            Recommendation = agentQuestions is [{ }, ..]
+                ? new FlowRecommendation("given", Why: "each of its questions names the answer the agent recommends", By: "agent", Agent: agent)
+                : FlowRecommendation.NotSought,
         };
         _questions.Add(asked);
 
@@ -4368,8 +6789,172 @@ public sealed class FlowCoordinator
             _answeredAtOnce = true;
             TakeAnswer(asked, atOnce.Answer, null, "configuration", atOnce.Where, through: null);
         }
+        else
+        {
+            // No person has answered, and no configuration did: where the engine raised the question itself, its
+            // advisor recommends before the person is left with it - never in the person's way, for the question is
+            // open while the advice runs and an answer ends the asking.
+            SeekAdvice(instance, asked);
+        }
 
         return id;
+    }
+
+    /// <summary>
+    /// Sets the recommendation a question starts with, and starts the run's advisor where one is to run: never for a
+    /// kind only a person or an agent answers (`runBudget`, `ask`), for a `pause` step that shows questions of its own
+    /// (they carry their recommendation within them), for a kind the advisor's `kinds` leaves out, nor while the run is
+    /// pausing - no reason step is started then, and the question says the advice is sought at the resume. Where the
+    /// orchestrator names no advisor, the question says so plainly; nothing is put in its place.
+    /// </summary>
+    /// <param name="instance">The instance the question is about; null for the run's own.</param>
+    /// <param name="asked">The question, open.</param>
+    private void SeekAdvice(FlowInstance? instance, FlowQuestion asked)
+    {
+        if (asked.Recommendation is { State: "given" })
+        {
+            // An agent's own questions carry their recommendation with them; the advisor never runs for them.
+            return;
+        }
+
+        if (_definition.Advisor is not { } advisor || _advisor is null)
+        {
+            asked.Recommendation = _definition.Advisor is null
+                ? new FlowRecommendation("notSought", Why: $"no recommendation was sought: orchestrator '{_definition.Name}' names no advisor")
+                : new FlowRecommendation("notSought", Why: $"no recommendation was sought: this run starts no advisor");
+            WriteQuestions();
+            return;
+        }
+
+        if (asked.Kind is "runBudget" or "ask"
+            || asked.AgentQuestions.Count > 0)
+        {
+            // A kind only a person or an agent answers: the budget's question is the run's own, and an agent that asks
+            // recommends within each of its questions.
+            return;
+        }
+
+        if (advisor.Kinds.Count > 0 && !advisor.Kinds.Contains(asked.Kind, StringComparer.Ordinal))
+        {
+            asked.Recommendation = new FlowRecommendation("notSought", Why: $"no recommendation was sought: the advisor's kinds leave out '{asked.Kind}'");
+            WriteQuestions();
+            return;
+        }
+
+        if (_pausing || _hardStop || _pauseRequest is not null)
+        {
+            asked.Recommendation = new FlowRecommendation("deferred", Why: "the run is pausing, and no reason step is started: the recommendation is sought when the run is resumed with this question still open");
+            WriteQuestions();
+            return;
+        }
+
+        if (instance is null)
+        {
+            return;
+        }
+
+        var which = _adviceAsked.GetValueOrDefault(asked.Id) + 1;
+        _adviceAsked[asked.Id] = which;
+        asked.Recommendation = new FlowRecommendation("sought", Why: "a recommendation is being sought from the advisor");
+        WriteQuestions();
+
+        var call = new FlowAdvisorCall(
+            advisor,
+            _runName ?? "run",
+            _definition.Name,
+            asked.Id,
+            asked.Kind,
+            asked.Problem,
+            asked.Tried,
+            asked.Means,
+            asked.Held,
+            instance.Id,
+            WorksInOf(instance) ?? instance.Made,
+            instance.Id,
+            which,
+            Inputs(),
+            Record: null,
+            BarOf(),
+            _place);
+
+        var cancel = CancellationTokenSource.CreateLinkedTokenSource(_sessionToken);
+        var task = Task.Run(() => _advisor!.AdviseAsync(call, cancel.Token), CancellationToken.None);
+        _ = task.ContinueWith(_ => WakeTheLoop(), CancellationToken.None);
+        _advising.Add((asked, cancel, task));
+    }
+
+    /// <summary>
+    /// Takes the advice the session's askings have answered: a recommendation obtained is written to its question with
+    /// who gave it and where its records are, one not obtained leaves the question saying why, and either way the run's
+    /// spend counts what the advice used. An asking ended by an answer - the person was there - is dropped, its records
+    /// standing under the asking step.
+    /// </summary>
+    private async Task TakeAdviceAsync()
+    {
+        foreach (var pending in _advising.Where(pending => pending.Task.IsCompleted).ToList())
+        {
+            _advising.Remove(pending);
+
+            FlowAdvice advice;
+
+            try
+            {
+                advice = await pending.Task.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                pending.Cancel.Dispose();
+                continue;
+            }
+            catch (Exception failed)
+            {
+                advice = new FlowAdvice(Answer: null, Why: null, Text: null, NotObtained: failed.Message);
+            }
+
+            pending.Cancel.Dispose();
+
+            if (advice.Usd is { } usd)
+            {
+                _spent.Usd += usd;
+            }
+
+            if (advice.Tokens is { } tokens)
+            {
+                _spent.Tokens += tokens;
+            }
+
+            if (!_open.Contains(pending.Asked.Id))
+            {
+                // Answered while the advice ran: the person was there, and their answer stands.
+                continue;
+            }
+
+            pending.Asked.Recommendation = advice.Answer is { } answer
+                ? new FlowRecommendation("given", answer, advice.Text, advice.Why, "advisor", _definition.Advisor?.Agent, advice.Model, advice.Directory)
+                : new FlowRecommendation("notObtained", Why: $"no recommendation: one was sought and not obtained ({advice.NotObtained})");
+            WriteQuestions();
+            Record(FlowChangeKind.Advised, _answerable.GetValueOrDefault(pending.Asked.Id), detail: $"{pending.Asked.Id} {(advice.Answer is { } said ? $"advised '{said}'" : "left without a recommendation")}");
+        }
+    }
+
+    /// <summary>
+    /// Seeks the advice each open question still owes at a session's start: one marked sought by a session a crash or a
+    /// stop ended, and one deferred while the run was pausing - the run is resumed now, and the question still open.
+    /// </summary>
+    private void SeekOwedAdvice()
+    {
+        if (_advisor is null || _definition.Advisor is null)
+        {
+            return;
+        }
+
+        foreach (var asked in OpenQuestions.Where(asked => asked.Recommendation.State is "sought" or "deferred").ToList())
+        {
+            if (_answerable.GetValueOrDefault(asked.Id) is { } instance)
+            {
+                SeekAdvice(instance, asked);
+            }
+        }
     }
 
     /// <summary>
@@ -4577,6 +7162,18 @@ public sealed class FlowCoordinator
             foreach (var holder in _agentsOpen.Where(open => string.Equals(open.Value.Made, deleted, StringComparison.Ordinal)).Select(open => open.Key).ToList())
             {
                 _ = _agentsOpen.Remove(holder);
+            }
+        }
+
+        // A read-only agent's work is over when the last step that can go on with it has ended and the run goes on:
+        // deleted here, and the deletions seen to before the session ends. A run that is pausing or stopping leaves
+        // every agent live for the resume, and so does a step that failed, whose work the run may yet go on with. A
+        // group's end settles its members' work too, so it sweeps as well.
+        if (_deleteAgent is not null && instance.Step.Type is "reason" or null)
+        {
+            foreach (var readOnly in ReadOnlyAgentsOver())
+            {
+                _deletions.Add(DeleteReadOnlyAsync(readOnly));
             }
         }
 
@@ -4861,7 +7458,7 @@ public sealed class FlowCoordinator
         var unended = status == FlowRunStatus.Done
             ? [.. _created.Where(instance => instance.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused).Select(instance => instance.Id),
                 .. _scopes.SelectMany(scope => DeclarationsOf(scope)
-                    .Where(declaration => declaration.On is null && declaration.Raised is null && !scope.Instantiated.Contains(declaration.Name) && Draws(scope, declaration))
+                    .Where(declaration => declaration.On is null && declaration.Raised is null && !IsPlannerOf(scope, declaration) && !scope.Instantiated.Contains(declaration.Name) && Draws(scope, declaration))
                     .Select(declaration => MemberId(scope, declaration)))]
             : new List<string>();
 
@@ -5188,7 +7785,8 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Creates one instance of <paramref name="declaration"/> in <paramref name="scope"/>: a member of the scope - its
     /// id carrying its visit, so a name resolves to the newest - or, where <paramref name="scopeId"/> names it, the
-    /// instance a scope of a loop is.
+    /// instance a scope of a loop is. A member an alternative of the work-item group makes runs under the name of the
+    /// step it runs in the place of, <paramref name="memberName"/>.
     /// </summary>
     /// <param name="scope">The scope the instance lives in.</param>
     /// <param name="declaration">The declaration the instance is one of.</param>
@@ -5199,10 +7797,13 @@ public sealed class FlowCoordinator
     /// What the instance is made with beyond its declaration - what raised it, why it was skipped or not run, its code -
     /// set before its first record is written, so no crash leaves a record of it without them.
     /// </param>
-    private FlowInstance Create(Scope scope, WorkflowStep declaration, FlowInstanceState state, string? scopeId = null, string? memberId = null, Action<FlowInstance>? made = null)
+    /// <param name="memberName">The name the instance is a member under, where it runs in another step's place; null for its declaration's own.</param>
+    private FlowInstance Create(Scope scope, WorkflowStep declaration, FlowInstanceState state, string? scopeId = null, string? memberId = null, Action<FlowInstance>? made = null, string? memberName = null)
     {
         var member = scopeId is null;
-        var name = member ? declaration.Name : scopeId!.Split(['[', '#', '+'], 2)[0];
+        var name = member
+            ? memberName ?? (memberId is { } held ? held[(held.LastIndexOf('.') + 1)..].Split('+')[0] : declaration.Name)
+            : scopeId!.Split(['[', '#', '+'], 2)[0];
 
         // A visit after the first is +n after the name, so every id of a step the run was never sent back to is what
         // it would be without visits. A member a resume holds carries its visit in its id; one made now takes the next.
@@ -5211,7 +7812,7 @@ public sealed class FlowCoordinator
             : FlowInstanceId.VisitOf(memberId);
 
         var instance = new FlowInstance(
-            scopeId ?? memberId ?? (visit == 1 ? MemberId(scope, declaration) : $"{MemberId(scope, declaration)}+{visit}"),
+            scopeId ?? memberId ?? (visit == 1 ? MemberId(scope, name) : $"{MemberId(scope, name)}+{visit}"),
             declaration,
             PathOf(scope, declaration))
         {
@@ -5237,8 +7838,8 @@ public sealed class FlowCoordinator
 
         if (member)
         {
-            scope.Members[declaration.Name] = instance;
-            scope.Instantiated.Add(declaration.Name);
+            scope.Members[name] = instance;
+            scope.Instantiated.Add(name);
         }
         else
         {
@@ -5272,6 +7873,10 @@ public sealed class FlowCoordinator
     /// <summary>The id of a member of <paramref name="scope"/>: its name under the scope's path.</summary>
     private static string MemberId(Scope scope, WorkflowStep declaration)
         => scope.Id.Length == 0 ? declaration.Name : $"{scope.Id}.{declaration.Name}";
+
+    /// <summary>The id of a member of <paramref name="scope"/> named <paramref name="name"/>, as a member under another step's name spells it.</summary>
+    private static string MemberId(Scope scope, string name)
+        => scope.Id.Length == 0 ? name : $"{scope.Id}.{name}";
 
     /// <summary>The instance of the group a scope's members hand their failures to: a block's own, or a loop's around its items and iterations.</summary>
     private FlowInstance GroupInstanceIn(Scope scope)
@@ -5348,8 +7953,10 @@ public sealed class FlowCoordinator
     /// then (<see cref="Draws"/>). An always group's members are waited on as any group's are.
     /// </summary>
     private bool ScopeEnded(Scope scope)
-        => !_redirects.Any(redirect => redirect.Set.Any(entry => ReferenceEquals(entry.Scope, scope)))
-            && DeclarationsOf(scope).All(declaration => scope.Instantiated.Contains(declaration.Name) || RunsAfterItsGroup(declaration, scope))
+        => scope.EndingFor is null
+            && !_redirects.Any(redirect => redirect.Set.Any(entry => ReferenceEquals(entry.Scope, scope)))
+            && !(_heldPlanner is { } planner && ReferenceEquals(planner.DeclaredScope, scope))
+            && DeclarationsOf(scope).All(declaration => scope.Instantiated.Contains(declaration.Name) || RunsAfterItsGroup(declaration, scope) || IsPlannerOf(scope, declaration))
             && scope.Members.Values.All(member => member.State is FlowInstanceState.NotStarted && RunsAfterItsGroup(member.Step, scope)
                 || member.WaitingQuestion is null
                     && member.State is not (FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped)
@@ -5434,9 +8041,10 @@ public sealed class FlowCoordinator
             case "iteration":
                 return new(scope.Iteration is { } iteration ? FlowValue.Of((long)iteration) : FlowValue.Missing, 0);
             case "visit":
-                // A raised step's own visit; inside a handler that is a group, or a visit of the recovery, that visit;
-                // else the reader's, or - read in a when as it is drawn - the visit it will be.
-                return new(FlowValue.Of((long)(reader is { RaisedBy: not null } ? reader.Visit : RaisedGroupOf(scope)?.Visit ?? reader?.Visit ?? drawing ?? 1)), 0);
+                // A raised step's own visit - raised by an ending or by a plan update; inside a handler that is a
+                // group, or a visit of the recovery, that visit; else the reader's, or - read in a when as it is
+                // drawn - the visit it will be.
+                return new(FlowValue.Of((long)(reader is { RaisedBy: not null } or { RaisedByUpdate: not null } ? reader.Visit : RaisedGroupOf(scope)?.Visit ?? reader?.Visit ?? drawing ?? 1)), 0);
             case "issue":
             {
                 // The issue a raised instance or the recovery over it triages: the item itself, as a read sees it.
@@ -5466,6 +8074,19 @@ public sealed class FlowCoordinator
                 return new(reader is { Step.Type: "commit" } ? FlowValue.Of(CarriedOf(reader)) : FlowValue.Missing, 0);
             case "source":
                 return new(source is null ? FlowValue.Missing : FlowValue.Of(SourceFacts(source, RaisedGroupOf(scope))), 0);
+            case "recommendations":
+                // The repository's bar for a recommendation, read live - each time it is given, as a prompt is - so a
+                // change holds from the next question on and a run does not keep the bar it started with.
+                return new(FlowValue.Of(BarOf()), 0);
+            case "update":
+                // What raised the update under way, what has run since, and the work of the run - read by the step
+                // that plans an update and by every step of its scope; outside an update, a sentence that says none
+                // is under way.
+                return new(FlowValue.Of(UpdateValues()), 0);
+            case "piece":
+                // The piece of a plan update this work item carries, read by every step of the work-item group; in an
+                // instance no update made, the kind is 'added' and the texts are empty.
+                return new(FlowValue.Of(PieceValues(scope)), 0);
             default:
                 return StepRead(path, keysFrom: -1, scope, scope);
         }
@@ -5622,21 +8243,68 @@ public sealed class FlowCoordinator
         merged["code"] = instance.Exit;
         merged["error"] = instance.Error;
         merged["question"] = instance.EndedByQuestion;
-        merged["assumptions"] = new JsonArray();
+        merged["assumptions"] = AssumptionsOf(instance);
 
         // The newest output of the work, as its output is read: a step whose failure was passed over left nothing it
-        // is read by, so its latest is Missing too.
+        // is read by, so its latest is Missing too. The newest output of the work is the output of the step that
+        // ended done last among this step and the steps that go on with its work (resume) in its scope, so a plan
+        // read through the step that began it reads the one that spoke last.
         if (!instance.PassedOver)
         {
-            merged["latest"] = instance.Output?.DeepClone();
+            merged["latest"] = EndedDoneLastOf(instance)?.Output?.DeepClone();
         }
 
         return FlowValue.Of(merged);
     }
 
-    /// <summary>The scope before this one in its repeat's iterations, as <c>previous</c> reads it.</summary>
-    private Scope? PreviousOf(Scope scope)
+    /// <summary>
+    /// The visit that ended done last among <paramref name="instance"/> itself and the visits in its scope of the
+    /// steps that go on with its work (<c>resume</c>): whose output the work's <c>latest</c> reads. Where two ended
+    /// at one time, the newer-drawn visit is the one that spoke last. Where none of them ended done, the visit
+    /// itself, whatever its state.
+    /// </summary>
+    private FlowInstance EndedDoneLastOf(FlowInstance instance)
     {
+        if (instance.DeclaredScope is not { } scope)
+        {
+            return instance;
+        }
+
+        var chain = new List<FlowInstance> { instance };
+
+        foreach (var goesOnWith in DeclarationsOf(scope).Where(declared => declared.Resume is { } resumed && string.Equals(resumed, instance.Step.Name, StringComparison.Ordinal)))
+        {
+            chain.AddRange(_created.Where(visit => ReferenceEquals(visit.Step, goesOnWith) && ReferenceEquals(visit.DeclaredScope, scope)));
+        }
+
+        return chain
+            .Where(visit => visit.State == FlowInstanceState.Done && visit.FinishedAt is not null)
+            .Aggregate(
+                (FlowInstance?)null,
+                (newest, other) => newest is null || (other.FinishedAt!.Value, _created.IndexOf(other)).CompareTo((newest.FinishedAt!.Value, _created.IndexOf(newest))) > 0
+                    ? other
+                    : newest)
+            ?? instance;
+    }
+
+    /// <summary>
+    /// What <paramref name="instance"/>'s agents assumed, as a step's <c>assumptions</c> fact reads it: the envelope's
+    /// own shape of each - what was open, what it took, and why - of every attempt of the visit.
+    /// </summary>
+    private static JsonArray AssumptionsOf(FlowInstance instance)
+    {
+        var assumed = new JsonArray();
+
+        foreach (var one in instance.Assumptions)
+        {
+            assumed.Add(new JsonObject { ["about"] = one.About, ["assumed"] = one.Assumed, ["why"] = one.Why });
+        }
+
+        return assumed;
+    }
+
+    /// <summary>The scope before this one in its repeat's iterations, as <c>previous</c> reads it.</summary>
+    private Scope? PreviousOf(Scope scope)    {
         for (var at = scope; at is not null; at = at.Parent)
         {
             if (at.Iteration is { } iteration && at.LoopOf is { } loop)
@@ -5666,6 +8334,10 @@ public sealed class FlowCoordinator
             .Select(instance => $"'{instance.Id}' left {FlowValue.Of(instance.Leftover!.DeepClone()).AsTemplateText()}")
             .ToList();
         var preExisting = _tally.Select(entry => $"{entry.State} - {entry.Line}").ToList();
+        var assumed = _created
+            .Where(instance => instance.Assumptions is [_, ..])
+            .SelectMany(instance => instance.Assumptions.Select(one => $"'{instance.Step.Name}' assumed about {one.About}: {one.Assumed} ({one.Why})"))
+            .ToList();
 
         return new JsonObject
         {
@@ -5678,12 +8350,235 @@ public sealed class FlowCoordinator
             ["passedOver"] = main.Count(instance => instance.PassedOver),
             ["leftover"] = leftover.Count > 0 ? string.Join("; ", leftover) : FlowChecks.None,
             ["preExisting"] = preExisting.Count > 0 ? string.Join("; ", preExisting) : FlowChecks.None,
-            // What the run's agents assumed without asking: a reason step records its own (slice 31), and none does yet.
-            ["assumptions"] = FlowChecks.None,
+            // What the run's agents assumed without asking, of every step that did: a person reads it and corrects it.
+            ["assumptions"] = assumed.Count > 0 ? string.Join("; ", assumed) : FlowChecks.None,
             ["ran"] = FlowChecks.Ran(checks.Select(CheckOf)),
             ["notRun"] = FlowChecks.NotRun(checks.Select(CheckOf), PendingChecks(path => true, checks), passedOver: false),
             ["red"] = FlowChecks.Red(checks.Select(CheckOf)),
         };
+    }
+
+    /// <summary>
+    /// The plan update under way, as <c>update</c> reads it: what raised it - the request as it stood with its earlier
+    /// amendments and the amendment, or the question as it was shown with the answer before and the answer now - what
+    /// has run since, and the work of the run with what to call each piece by. Outside an update each is a sentence
+    /// that says none is under way, for the steps of the planning scope read the same three wherever the run stands.
+    /// </summary>
+    private JsonObject UpdateValues()
+    {
+        var underWay = UnderWayUpdate;
+
+        if (underWay is null)
+        {
+            return new JsonObject
+            {
+                ["cause"] = "no plan update is under way",
+                ["since"] = "no plan update is under way",
+                ["work"] = "no plan update is under way",
+            };
+        }
+
+        return new JsonObject
+        {
+            ["cause"] = CauseOf(underWay),
+            ["since"] = SinceOf(underWay),
+            ["work"] = WorkOf(),
+        };
+    }
+
+    /// <summary>What raised <paramref name="update"/>, as the planning step's prompt reads it: the change, word for word.</summary>
+    private string CauseOf(FlowUpdateEntry update)
+        => update.Cause == FlowUpdateCauses.ChangedAnswer
+            ? $"question '{update.Question}' was answered '{update.FromAnswer}' and is answered '{update.ToAnswer}' now{(string.IsNullOrWhiteSpace(update.Text) ? null : $", with: {update.Text}")}"
+            : $"the request as it stood:\n{FlowUpdatesFile.InputOf(_inputs.TryGetValue(_definition.Amend!.Input!, out var request) ? request : string.Empty, [.. _updates.Amendments().Where(amendment => amendment.Id != update.Id && amendment.TakenAt <= update.TakenAt)])}\n\namended:{update.Amendment}";
+
+    /// <summary>
+    /// What has run since the update was raised, as the planning step's prompt reads it: for a changed answer, each
+    /// step that started between the two answers; for an amendment, each step that started since the plan last stood -
+    /// each with how it stands.
+    /// </summary>
+    private string SinceOf(FlowUpdateEntry update)
+    {
+        DateTimeOffset marker;
+
+        if (update.Cause == FlowUpdateCauses.ChangedAnswer
+            && _questions.FirstOrDefault(asked => asked.Id == update.Question)?.Given.FirstOrDefault() is { } first)
+        {
+            marker = first.At ?? _questions.First(asked => asked.Id == update.Question).RaisedAt;
+        }
+        else
+        {
+            // Since the plan last stood: the work of the scope the update is planned in began when its earliest
+            // member started - before that, the plan was the one the scope's last visit stood.
+            var began = _heldPlanner?.DeclaredScope is { } scope
+                ? scope.Members.Values.Where(member => member.StartedAt is not null).Select(member => member.StartedAt).Min()
+                : null;
+            marker = began
+                ?? _created.Where(instance => instance.StartedAt is not null).Select(instance => instance.StartedAt).Min()
+                ?? update.TakenAt;
+        }
+
+        var since = _created
+            .Where(instance => !instance.Step.IsGroup && instance.StartedAt >= marker && instance.RaisedByUpdate is null)
+            .Select(instance => $"'{instance.Id}' ({instance.Step.Name}): {instance.State.ToString().ToLowerInvariant()}")
+            .ToList();
+
+        return since.Count > 0 ? string.Join("; ", since) : "nothing has started since";
+    }
+
+    /// <summary>
+    /// The work of the run, as the planning step's prompt reads it: each work item of the work-item group - the loop
+    /// around the step <c>whenAddScope</c> names - in every round, by its name, with whether it waits, is under way
+    /// (and then which of its steps are in flight) or has ended and what it left; and each other step in flight, by
+    /// its id.
+    /// </summary>
+    private string WorkOf()
+    {
+        var lines = new List<string>();
+
+        if (_definition.Amend is { } amend && FlowUpdateGates.ParentOf(amend.WhenAddScope) is { } group)
+        {
+            var items = _created.Where(instance => instance.Step.IsGroup && instance.Path == group).ToList();
+
+            foreach (var round in items)
+            {
+                foreach (var item in round.Children)
+                {
+                    var members = item.Members.Values.Where(member => !member.Step.IsGroup).ToList();
+                    var name = item.Item.IsMissing ? item.Id : item.Item.ToNode()?["name"]?.GetValue<string>() ?? item.Id;
+                    var inFlight = members.Where(member => member.State is FlowInstanceState.Running).Select(member => member.Id).ToList();
+                    string how;
+
+                    if (inFlight.Count > 0)
+                    {
+                        how = $"under way ({string.Join(", ", inFlight)} in flight)";
+                    }
+                    else if (members.Count == 0 || members.All(member => member.State is FlowInstanceState.NotStarted))
+                    {
+                        how = members.Count == 0 && item.Instantiated.Count == 0 ? "not begun" : "waits";
+                    }
+                    else if (members.All(member => member.State is not (FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.NotStarted)))
+                    {
+                        var failed = members.FirstOrDefault(member => member.State is FlowInstanceState.Failed);
+                        how = failed is { } one ? $"ended failed ({one.Exit}: {one.Error})" : "ended";
+                    }
+                    else
+                    {
+                        how = "waits";
+                    }
+
+                    lines.Add($"'{name}' of {round.Id}: {how}");
+                }
+            }
+        }
+
+        var other = _created
+            .Where(instance => !instance.Step.IsGroup && instance.State is FlowInstanceState.Running && instance.RaisedByUpdate is null)
+            .Select(instance => $"'{instance.Id}' ({instance.Step.Name})")
+            .ToList();
+
+        if (other.Count > 0)
+        {
+            lines.Add($"in flight: {string.Join(", ", other)}");
+        }
+
+        return lines.Count > 0 ? string.Join("; ", lines) : "no work of the run has begun";
+    }
+
+    /// <summary>
+    /// The piece of a plan update the work item of <paramref name="scope"/> carries, as <c>piece</c> reads it: its kind
+    /// and the planning agent's texts, what raised the update quoted, and - for a piece that runs again or takes back -
+    /// the engine's account of the work it starts from (<see cref="BeforeOf"/>). In an instance no update made, the
+    /// kind is <c>added</c> and the texts are empty.
+    /// </summary>
+    /// <param name="scope">The item scope of the work-item group the read is made in.</param>
+    private JsonObject PieceValues(Scope scope)
+    {
+        var piece = scope.PieceOf is { } update ? _updates.Updates.FirstOrDefault(entry => entry.Id == update)?.PieceOf(scope.Piece?.ItemName() ?? ItemNameOf(scope) ?? string.Empty) ?? scope.Piece : scope.Piece;
+
+        return new JsonObject
+        {
+            ["kind"] = KindOf(scope),
+            ["changed"] = piece?.Changed ?? string.Empty,
+            ["keep"] = piece?.Keep ?? string.Empty,
+            ["undo"] = piece?.Undo ?? string.Empty,
+            ["instead"] = piece?.Instead ?? string.Empty,
+            ["cause"] = piece is null ? string.Empty : CauseOf(_updates.Updates.FirstOrDefault(entry => entry.Id == scope.PieceOf) ?? UnderWayUpdate ?? _updates.Updates.Last()),
+            ["before"] = piece is { Kind: FlowUpdatePieceKinds.Changed or FlowUpdatePieceKinds.Removed } ? BeforeOf(scope) : string.Empty,
+        };
+    }
+
+    /// <summary>
+    /// The state a redo or an undo starts from, as <c>{piece.before}</c> reads it: the engine's account, from its own
+    /// records - which instance carried the work item before and how each of its steps ended; the newest output of that
+    /// work; each fold of it, with the paths it wrote and the paths it deleted; each commit made of them; the handoff
+    /// of each step ended for the update; and where the work now is.
+    /// </summary>
+    /// <param name="scope">The item scope of the work-item group the piece carries out.</param>
+    private string BeforeOf(Scope scope)
+    {
+        var before = scope.AgainOf
+            ?? _scopes.LastOrDefault(other => !ReferenceEquals(other, scope)
+                && string.Equals(ItemNameOf(other), ItemNameOf(scope), StringComparison.Ordinal)
+                && other.GroupPath == scope.GroupPath);
+        var again = scope.AgainOf is not null;
+        scope = before ?? scope;
+
+        if (before is null || before.Members.Count == 0)
+        {
+            return again ? "nothing of this work item had begun" : string.Empty;
+        }
+
+        var lines = new List<string> { $"the work item was carried by '{before.GroupInstance?.Id}'" };
+
+        foreach (var member in before.Members.Values.Where(member => !member.Step.IsGroup).OrderBy(member => member.Id, StringComparer.Ordinal))
+        {
+            var how = member.State switch
+            {
+                FlowInstanceState.Done => member.Error is null ? "done" : $"done ({member.Error})",
+                FlowInstanceState.Failed => $"failed ({member.Exit}: {member.Error})",
+                FlowInstanceState.Stopped => $"stopped ({member.Error ?? "stopped"})",
+                FlowInstanceState.Skipped => $"skipped ({member.SkippedBecause})",
+                FlowInstanceState.NotRun => $"never run ({member.NotRunBecause})",
+                _ => member.State.ToString().ToLowerInvariant(),
+            };
+
+            var account = new List<string> { $"'{member.Id}' ({member.Step.Name}): {how}" };
+
+            if (member.Output is JsonObject output)
+            {
+                if (output["written"] is JsonArray written || output["deleted"] is JsonArray deleted)
+                {
+                    var paths = (output["written"] as JsonArray ?? []).Concat(output["deleted"] as JsonArray ?? []).Select(path => path?.GetValue<string>()).OfType<string>().ToList();
+                    account.Add(paths.Count > 0 ? $"folded {string.Join(", ", paths)}" : "folded nothing");
+                }
+
+                if (output["sha"] is JsonValue sha && sha.TryGetValue<string>(out var commit) && !string.IsNullOrWhiteSpace(commit))
+                {
+                    account.Add($"committed {commit}");
+                }
+            }
+
+            if (member.Handoff is { } handoff)
+            {
+                account.Add($"its handoff: {handoff.Text.Split('\n')[0]}");
+            }
+
+            lines.Add(string.Join("; ", account));
+        }
+
+        var spoke = before.Members.Values.Where(member => !member.Step.IsGroup && member.State == FlowInstanceState.Done && member.Output is not null).MaxBy(member => member.FinishedAt);
+
+        if (spoke?.Output is JsonObject newest)
+        {
+            lines.Add($"the newest output of the work, of '{spoke.Id}': {newest.ToJsonString()}");
+        }
+
+        lines.Add(again
+            ? "the work now is in the worktree you are in, with what was not folded"
+            : "the worktree of that instance is gone: what it built is in the tree you were given, in the commits above");
+
+        return string.Join("; ", lines);
     }
 
     /// <summary>
@@ -5728,11 +8623,19 @@ public sealed class FlowCoordinator
         => FlowInstanceId.Precedes(target.Id, of.Id) ?? FlowGraph.Waits(_definition, of.Path, target.Path);
 
     /// <summary>One instance of a check, as <see cref="FlowChecks"/> reads it.</summary>
-    private static FlowCheck CheckOf(FlowInstance instance)
-        => new(
+    private FlowCheck CheckOf(FlowInstance instance)
+    {
+        // An engine-made agent is a read-only one, with no worktree: its step ran in the main tree, reading it, and
+        // the line says so - never that it ran in a worktree there is none of.
+        var worksIn = WorksInOf(instance) is { } named
+            && _created.FirstOrDefault(made => made.Made is { } madeName && string.Equals(madeName, named, StringComparison.Ordinal)) is not { Step.Type: "reason" }
+            ? named
+            : null;
+
+        return new(
             instance.Id,
             FlowChecks.KindOf(instance.Step),
-            WorksInOf(instance),
+            worksIn,
             instance.State,
             instance.Output,
             instance.Exit,
@@ -5740,6 +8643,7 @@ public sealed class FlowCoordinator
             instance.PassedOver,
             instance.HandledBy,
             instance.FinishedAt);
+    }
 
     /// <summary>
     /// The checks the definition holds that no instance <paramref name="drawn"/> holds has ended - done, failed, skipped or
@@ -5771,8 +8675,25 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>The run's inputs as one object.</summary>
-    private JsonObject Inputs() => FlowInputs.AsObject(_inputs);
+    /// <summary>
+    /// The run's inputs as one object: the values the run was started with - and the one its <c>amend</c> block names
+    /// as given with its amendments, the value as given then each amendment under a line that says when it was made,
+    /// for every prompt and every expression that reads it. The value as given alone is what a <c>preAnswer</c>'s
+    /// quote is looked for in, which reads <c>_inputs</c> and never this.
+    /// </summary>
+    private JsonObject Inputs()
+    {
+        var amended = _definition.Amend?.Input;
+
+        if (amended is null || _updates.Amendments().Count == 0)
+        {
+            return FlowInputs.AsObject(_inputs);
+        }
+
+        var with = _inputs.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+        with[amended] = FlowUpdatesFile.InputOf(_inputs.GetValueOrDefault(amended, string.Empty), _updates.Amendments());
+        return FlowInputs.AsObject(with);
+    }
 
     /// <summary>The workflow's params as one object.</summary>
     private JsonObject Params()
@@ -5959,6 +8880,7 @@ public sealed class FlowCoordinator
         {
             "test" => [("filterWhen", step.FilterWhen, false, StartRead.Truth)],
             "validate-plan" => [("items", step.Items, false, StartRead.Value), ("scope", step.Scope, true, StartRead.Value)],
+            "reason" => [("writes", step.Writes?.Expression, false, StartRead.Names)],
             "anchor-balance" => [("rows", step.Rows?.Expression, true, StartRead.Names)],
             "anchor-citations" => [("paths", step.AnchorPaths?.Expression, true, StartRead.Names)],
             "fold" or "delete-agent" =>
@@ -6011,6 +8933,14 @@ public sealed class FlowCoordinator
                     return Unreadable(key, instance.Id, unnamed);
                 }
 
+                if (key == "writes" && names.Count == 0)
+                {
+                    // A written-out empty `writes` is refused by the definition's check, and an expression that yields
+                    // one is refused here, at the step's start, by the same rule: an empty list would read as no
+                    // narrowing, and a step that owns no path cannot write.
+                    return Unreadable(key, instance.Id, $"'{expression}' names no path");
+                }
+
                 value = FlowValue.Of(new JsonArray([.. names.Select(name => (JsonNode?)name)]));
             }
 
@@ -6020,6 +8950,46 @@ public sealed class FlowCoordinator
         if (step.Type == "ci-wait" && step.Commit is null && LastPushed() is { } pushed)
         {
             read["commit"] = FlowValue.Of(pushed);
+        }
+
+        if (step.Type == "validate-plan" && _definition.Amend is { } amend && FlowUpdateGates.ParentOf(amend.WhenAddScope) is { } groupPath)
+        {
+            // What the pieces of a plan update are checked with, and what they owe: the items of the round they join,
+            // where the run has one - and the names of the work items the plan had, which a piece that changes or
+            // withdraws one names; and, where this check opens the round, the items updates owe it, which join its
+            // own as one list.
+            if (CurrentRound() is { } round)
+            {
+                read["round"] = FlowValue.Of(new JsonArray([.. round.Children
+                    .Where(item => !item.Item.IsMissing)
+                    .Select(item => item.Item.ToNode()?.DeepClone())]));
+            }
+
+            var known = new JsonArray();
+
+            foreach (var name in _created.Where(group => group.Step.IsGroup && group.Path == groupPath)
+                .SelectMany(group => group.Children)
+                .Select(ItemNameOf)
+                .OfType<string>()
+                .Distinct(StringComparer.Ordinal))
+            {
+                known.Add(name);
+            }
+
+            foreach (var name in ItemsCheckedBefore(instance))
+            {
+                if (known.All(held => !string.Equals(held?.GetValue<string>(), name, StringComparison.Ordinal)))
+                {
+                    known.Add(name);
+                }
+            }
+
+            read["known"] = FlowValue.Of(known);
+
+            if (OpensTheRound(instance, groupPath) is not null)
+            {
+                read["owed"] = FlowValue.Of(new JsonArray([.. OwedItems()]));
+            }
         }
 
         if (step.Type == "commit")
@@ -6117,13 +9087,45 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Fills a template of <paramref name="instance"/>'s step - a pause step's question, and each text its keys hand on
-    /// (<see cref="FlowStepTemplates"/>) - by the one grammar
+    /// Fills a template of <paramref name="instance"/>'s step - a pause step's question, each text its keys hand on
+    /// (<see cref="FlowStepTemplates"/>), and a reason step's prompt files - by the one grammar
     /// (<see cref="FlowTemplate.Fill"/>), each name read by the same roots an expression reads. A name that reads nothing
     /// says why, in <paramref name="problem"/>, and fills nothing.
     /// </summary>
     private string? Filled(FlowInstance instance, string template, out string? problem)
         => FlowTemplate.Fill(template, path => Read(path, instance.DeclaredScope!, reader: instance), out problem);
+
+    /// <summary>
+    /// The repository's bar for a recommendation, as a prompt reads it by <c>{recommendations}</c>: the file the
+    /// orchestrator names - which the definition's check holds to be there - or, where it names none, the
+    /// <c>recommendations.md</c> its folder has; where neither is, a sentence that says so, for a recommendation then
+    /// says it follows none. Read each time it is given, never kept by the run.
+    /// </summary>
+    private string BarOf()
+    {
+        if (_definition.Recommendations is { } named)
+        {
+            return _workflowFile is { } read ? read(named) : NoBar();
+        }
+
+        if (_workflowFile is { } defaultRead)
+        {
+            try
+            {
+                return defaultRead("recommendations.md");
+            }
+            catch (HarnessException)
+            {
+                // The folder holds no bar of its own, and none was named: said plainly, never refused, for a
+                // repository owes no bar.
+            }
+        }
+
+        return NoBar();
+
+        string NoBar()
+            => $"(orchestrator '{_definition.Name}' has no recommendations file: no bar was written for this repository)";
+    }
 
     /// <summary>Says an unreadable expression the way a step's record keeps it: which expression of which instance could not be read, and why.</summary>
     private static string Unreadable(string key, string instance, string problem)
@@ -6276,6 +9278,7 @@ public sealed class FlowCoordinator
                     redirect.Target,
                     [.. redirect.Set.Select(entry => entry.Scope.Members.GetValueOrDefault(entry.Declaration.Name)?.Id ?? MemberId(entry.Scope, entry.Declaration))],
                     redirect.Asking))],
+            UnderWayUpdate is { } underWay ? new FlowHoldRecord(underWay.Id, underWay.TakenAt) : null,
             _tally.Count == 0 ? null : new WorkflowPreExisting(
                 _tally.Count(entry => entry.State == "listed"),
                 _tally.Count(entry => entry.State == "fixed"),
@@ -6312,6 +9315,7 @@ public sealed class FlowCoordinator
             instance.Iteration,
             [.. instance._answers],
             WaitsOnOf(instance, walk),
+            [.. instance.Assumptions],
             [.. instance._handlers],
             instance.HandledBy,
             instance.Leftover?.DeepClone(),
@@ -6324,13 +9328,15 @@ public sealed class FlowCoordinator
             instance.Cause,
             instance.MadeModel,
             instance.Copied,
-            instance.Targets);
+            instance.Targets,
+            instance.RaisedByUpdate,
+            instance.ToldEntries.Count == 0 ? null : [.. instance.ToldEntries]);
 
     /// <summary>
     /// The agent this step works in: the one stored on it (<see cref="FlowInstance.WorksIn"/>), or - before it was stored -
     /// the one its <c>in</c> or <c>of</c> names now (<see cref="NamedAgentOf"/>).
     /// </summary>
-    private static string? WorksInOf(FlowInstance instance) => instance.WorksIn ?? NamedAgentOf(instance);
+    private string? WorksInOf(FlowInstance instance) => instance.WorksIn ?? NamedAgentOf(instance);
 
     /// <summary>
     /// The agent this step's <c>in</c> or <c>of</c> names as the run stands now: the one its create-agent's newest visit
@@ -6338,16 +9344,23 @@ public sealed class FlowCoordinator
     /// goes on with another's work, the one that step's names; null for the create-agent itself and every step that
     /// names none. What is stored on a step where it is drawn or starts, and read again of no step that has it.
     /// </summary>
-    private static string? NamedAgentOf(FlowInstance instance)
+    private string? NamedAgentOf(FlowInstance instance)
     {
         var working = WorkingOf(instance);
 
-        if (CreateStepNamedBy(working) is not { } create)
+        if (CreateStepNamedBy(working) is { } create)
         {
-            return null;
+            return create is { State: FlowInstanceState.Done, Made: { } made } ? made : null;
         }
 
-        return create is { State: FlowInstanceState.Done, Made: { } made } ? made : null;
+        // A reason step that goes on with another's work works as that step's agent (<see cref="WorkingOf"/> walked the
+        // chain): the one the resumed step works in, or its own engine-made one - read of no step that has one stored.
+        if (!ReferenceEquals(working, instance))
+        {
+            return working.WorksIn ?? working.Made;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -6365,16 +9378,149 @@ public sealed class FlowCoordinator
     /// in was never made. Null where its agent is made, where it names none, and where its create-agent step has not
     /// ended - a step the definition's check would refuse for not waiting starts beside it, naming no agent yet.
     /// </summary>
-    private static string? AgentNeverMade(FlowInstance instance)
+    private string? AgentNeverMade(FlowInstance instance)
     {
-        if (WorksInOf(instance) is not null || CreateStepNamedBy(WorkingOf(instance)) is not { } create)
+        if (instance.WorksIn is not null || NamedAgentOf(instance) is not null || CreateStepNamedBy(WorkingOf(instance)) is not { } create)
         {
+            // A step that goes on with another's work can never work as it where the step its chain begins with ended
+            // without an agent of its own - skipped, or never run - for there is none to work as.
+            if (instance.Step.Type == "reason" && instance.Step.Resume is not null
+                && WorkingOf(instance) is { } source && !ReferenceEquals(source, instance)
+                && source.State is FlowInstanceState.Skipped or FlowInstanceState.NotRun)
+            {
+                return $"the step it goes on with never made an agent: '{source.Id}' is {source.State}";
+            }
+
             return null;
         }
 
         return create.State is FlowInstanceState.Skipped or FlowInstanceState.Failed or FlowInstanceState.NotRun
             ? $"the agent it works in was never made: '{create.Id}' is {create.State}"
             : null;
+    }
+
+    /// <summary>
+    /// Every read-only agent of the run whose work is over, as an ending settles what can still go on with it: each
+    /// agent a reason step of this run made as its own, where its making step has ended past going on and no step
+    /// whose chain of resumed work reaches the making one can still run - none of such a step's instances is unended
+    /// or redrawable, and no group around its declaration is either, for a repeat may raise one yet. The run going on
+    /// - not pausing, not stopping - is the ground: a run that failed, was paused or was stopped leaves every agent
+    /// live for the resume.
+    /// </summary>
+    private IReadOnlyList<string> ReadOnlyAgentsOver()
+    {
+        if (_deleteAgent is null || _pausing || _hardStop)
+        {
+            return [];
+        }
+
+        var declarations = FlowScope.Declared(_definition).ToList();
+        var over = new List<string>();
+
+        foreach (var makers in _created.Where(made => made.Made is not null && made.Step.Type == "reason").GroupBy(made => made.Made!, StringComparer.Ordinal))
+        {
+            if (makers.Any(made => !PastGoingOn(made)) || ResumersCanStillRun(declarations, makers.First().Path))
+            {
+                continue;
+            }
+
+            over.Add(makers.Key);
+        }
+
+        return over;
+    }
+
+    /// <summary>Whether a step that goes on with the work made at <paramref name="makerPath"/> can still run: one of its instances is unended or not drawn yet, or a group around its declaration is unended, for a repeat may raise one yet.</summary>
+    /// <param name="declarations">Every declaration, with its path.</param>
+    /// <param name="makerPath">The making step's declaration path.</param>
+    private bool ResumersCanStillRun(IReadOnlyList<(string Path, WorkflowStep Step)> declarations, string makerPath)
+    {
+        foreach (var (path, declared) in declarations)
+        {
+            if (declared.Type != "reason" || declared.Resume is null || !ResumesTransitively(declarations, path, makerPath))
+            {
+                continue;
+            }
+
+            var drawn = _created.Where(one => string.Equals(one.Path, path, StringComparison.Ordinal)).ToList();
+
+            if (drawn.Count == 0 || drawn.Any(one => !PastGoingOn(one)) || _created.Any(one => IsAround(one.Path, path) && !PastGoingOn(one)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the step declared at <paramref name="path"/> goes on with the work declared at <paramref name="maker"/>
+    /// - resuming it, or resuming a step whose chain of resumed work reaches it: each resume in turn, until the chain
+    /// names the maker, ends, or turns on itself.
+    /// </summary>
+    /// <param name="declarations">Every declaration, with its path.</param>
+    /// <param name="path">The declaration that may go on with the maker's work.</param>
+    /// <param name="maker">The making step's declaration path.</param>
+    private static bool ResumesTransitively(IReadOnlyList<(string Path, WorkflowStep Step)> declarations, string path, string maker)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var at = path;
+
+        while (seen.Add(at))
+        {
+            if (string.Equals(at, maker, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            var current = declarations.FirstOrDefault(one => string.Equals(one.Path, at, StringComparison.Ordinal));
+
+            if (current.Step is not { Resume: { } resumed } || string.Equals(resumed, current.Step.Name, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            // The resumed step, by name: the definition's check resolved the name in its own scope, and the first of
+            // that name is the one it found.
+            var next = declarations.FirstOrDefault(one => one.Step.Type == "reason" && string.Equals(one.Step.Name, resumed, StringComparison.Ordinal));
+
+            if (next.Step is null)
+            {
+                return false;
+            }
+
+            at = next.Path;
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether <paramref name="group"/> names a group the declaration at <paramref name="declaration"/> sits in, or one around it.</summary>
+    /// <param name="group">A group's declaration path.</param>
+    /// <param name="declaration">The declaration's path.</param>
+    private static bool IsAround(string group, string declaration)
+        => declaration.StartsWith(group + ".", StringComparison.Ordinal);
+
+    /// <summary>Whether <paramref name="instance"/> has ended past going on: done or skipped. A failed, stopped, waiting or never-run step may yet go on with its agent's work - a never-run one may be drawn again once what kept it is settled.</summary>
+    private static bool PastGoingOn(FlowInstance instance)
+        => instance.State is FlowInstanceState.Done or FlowInstanceState.Skipped;
+
+    /// <summary>
+    /// Deletes the read-only agent whose work is over, apart from the run's own thread: its failure changes nothing of
+    /// the run, which goes on, and is the deleter's to say - the next command over the orchestrator sweeps what a
+    /// failed deletion leaves.
+    /// </summary>
+    /// <param name="agent">The agent to delete.</param>
+    private async Task DeleteReadOnlyAsync(string agent)
+    {
+        try
+        {
+            await _deleteAgent!(_runName ?? string.Empty, agent, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Said by the deleter, whose own words the run's log keeps: the run itself is not stopped by it.
+        }
     }
 
     /// <summary>
@@ -6401,7 +9547,20 @@ public sealed class FlowCoordinator
             instance.Made is { } made ? new FlowMadeAgent(made, instance.MadeModel) : null,
             WorksInOf(instance),
             instance.Step.Others is null ? null : CurrentTarget(instance)?.Agent,
-            WorkedFromOf(instance));
+            WorkedFromOf(instance),
+            instance.Telling is { } telling && telling.For(attempt) ? telling : null,
+            PlanToldOf(instance));
+
+    /// <summary>
+    /// The handoff the engine writes for <paramref name="instance"/>: its first line says <paramref name="why"/>, and
+    /// its body is the engine's account of the attempt's stored stream - what the stream shows and no more - where the
+    /// run's runner holds one. Nothing in it is made up, and nothing the engine wrote is given out as the agent's own
+    /// account.
+    /// </summary>
+    /// <param name="instance">The step the handoff is written for, as it was last asked.</param>
+    /// <param name="why">Why the engine writes it, as its first line says.</param>
+    private FlowHandoff EngineHandoffOf(FlowInstance instance, string why)
+        => FlowHandoff.ByEngine(why, _streamAccount?.Account(RunOf(instance, instance.Step, instance.Attempt, new Dictionary<string, FlowValue>(StringComparer.Ordinal), handoff: null)));
 
     /// <summary>
     /// The instances whose working sets a reason step's pack is seeded from (value 372), in order: the step it goes on
@@ -6520,9 +9679,12 @@ public sealed class FlowCoordinator
                 var segment = lastDot < 0 ? record.Instance : record.Instance[(lastDot + 1)..];
                 var name = segment.Split(['[', '#', '+'], 2)[0];
                 var recovery = _definition.Recover is not null && name == FlowScope.Recovery;
+                var declaredName = recovery
+                    ? name
+                    : record.Step.Contains('.', StringComparison.Ordinal) ? record.Step[(record.Step.LastIndexOf('.') + 1)..] : record.Step;
                 var declaration = recovery
                     ? RecoveryDeclaration()
-                    : DeclarationsOf(declaring).FirstOrDefault(declared => declared.Name == name)
+                    : DeclarationsOf(declaring).FirstOrDefault(declared => declared.Name == declaredName)
                         ?? throw new HarnessException(
                             HarnessExit.Refused,
                             $"'{record.Instance}' names no step of the definition among '{(declaring.Id.Length == 0 ? "the flow" : declaring.Id)}'; the run's state and the definition do not agree, and a record is never guessed at");
@@ -6651,6 +9813,60 @@ public sealed class FlowCoordinator
                 }
             }
 
+            foreach (var update in _updates.Updates)
+            {
+                foreach (var piece in update.ThePieces)
+                {
+                    if (piece.Placed is not { } placed || _scopes.FirstOrDefault(item => item.GroupInstance?.Id == placed) is not { } item)
+                    {
+                        continue;
+                    }
+
+                    // The piece of a plan update this item scope carries, read back from the run's own record of it:
+                    // its kind, and - where the piece had the instance's work done again or taken back - the scope
+                    // visited in its place, which took its agent; one whose instance had not come to rest when the
+                    // session died is still being brought to rest, its visit made again when it has.
+                    item.WorkItemKind = piece.Kind;
+                    item.Piece = piece;
+                    item.PieceOf = update.Id;
+
+                    if (piece.CarriedBy is { } carried && _scopes.FirstOrDefault(again => again.GroupInstance?.Id == carried) is { } visited)
+                    {
+                        visited.WorkItemKind = piece.Kind;
+                        visited.Piece = piece;
+                        visited.PieceOf = update.Id;
+                        visited.AgainOf = item;
+
+                        if (ItemBegun(item) && item.GroupInstance is { State: FlowInstanceState.Running or FlowInstanceState.Paused })
+                        {
+                            item.EndingFor = (update.Id, piece);
+                        }
+                    }
+                }
+            }
+
+            if (_definition.Amend is { } amend
+                && FlowUpdateGates.ParentOf(amend.WhenAddScope) is { } groupPath
+                && FlowUpdateGates.ParentOf(groupPath) is { } loopPath)
+            {
+                foreach (var loop in _created.Where(instance => instance.Step.Repeat is not null && instance.Path == loopPath))
+                {
+                    // What updates owe this loop's work, read back from the run's own record of it: each update done
+                    // that holds a piece owed to the loop's next iteration and carried by no instance yet, so a loop
+                    // standing at its iterate point between two sessions runs the iteration the work is owed to.
+                    foreach (var update in _updates.Updates.Where(done => done.State == FlowUpdateStates.Done))
+                    {
+                        if (update.ThePieces.Any(piece => piece.OwedTo is not null
+                                && piece.OwedTo.Contains("next iteration", StringComparison.Ordinal)
+                                && piece.ItemName() is { } name
+                                && ItemInstanceNamed(name) is null))
+                        {
+                            _ = loop.OwedIterationBy.Add(update.Id);
+                        }
+                    }
+                }
+            }
+
 
             _spent.Usd = resume.File.Spent.Usd;
             _spent.Tokens = resume.File.Spent.Tokens;
@@ -6770,6 +9986,20 @@ public sealed class FlowCoordinator
                 _redirects.Add(redirect);
             }
 
+            if (resume.File.Hold is { } hold)
+            {
+                // The hold a plan update left, and the update under way it is for: read back whole, for the session
+                // goes on with the update first - the run held, its planning step where it stood, the steps it kept
+                // back drawn as the schedule draws them once the hold ends.
+                var update = _updates.Updates.FirstOrDefault(held => held.Id == hold.Update && held.State == FlowUpdateStates.UnderWay);
+
+                if (update is not null)
+                {
+                    _heldPlanner = (update.Step is { } named ? _instances.GetValueOrDefault(named) : null)
+                        ?? _created.FirstOrDefault(visit => visit.RaisedByUpdate == update.Id);
+                }
+            }
+
             CountTheAnswers();
 
             if (resume.File.Pause is { } pause && pause.CompletedAt is not null)
@@ -6836,10 +10066,12 @@ public sealed class FlowCoordinator
             instance.Direction = record.Direction;
             instance.LeftBy = record.LeftBy;
             instance.RaisedByRecord = record.RaisedBy;
+            instance.RaisedByUpdate = record.RaisedByUpdate;
             instance.Targets = record.Targets;
             instance.FromResume = true;
             instance._handlers.AddRange(record.Handlers ?? []);
             instance._answers.AddRange(record.Answers);
+            instance.Assumptions = record.Assumptions ?? [];
 
             // Whether a failure is settled is read from where it left the run: passed over, ended the run, taken by its
             // group or by a handler. One still owed, or waiting on what raised for it, is not.
@@ -6847,10 +10079,11 @@ public sealed class FlowCoordinator
                 || instance.Failure is FlowFailure.PassedOver or FlowFailure.EndedRun or FlowFailure.TakenByGroup
                 || instance.HandledBy is not null;
 
-            if (instance.State is FlowInstanceState.Stopped or FlowInstanceState.Running && record.Handoff is { } handoff)
+            if (instance.State is FlowInstanceState.Stopped or FlowInstanceState.Running or FlowInstanceState.Paused && record.Handoff is { } handoff)
             {
-                // The handoff the stop left is in the step's own directory - and so is one an attempt a crash cut off
-                // still held, no prompt holding it yet: the resume is given it where it is, never one in its place.
+                // The handoff the stop or the limit left is in the step's own directory - and so is one an attempt a
+                // crash cut off still held, no prompt holding it yet, and one a step paused on a question was given for
+                // the attempt the answer goes on with: the resume is given it where it is, never one in its place.
                 instance.Handoff = from.Handoffs.TryGetValue(instance.Id, out var text)
                     ? new FlowHandoff(text, handoff.By, handoff.Why)
                     : null;
@@ -7047,7 +10280,7 @@ internal sealed class Scope(
     public WorkflowStep? Group { get; } = group;
 
     /// <summary>The work item, where the scope is one item of a <c>forEach</c>.</summary>
-    public FlowValue Item { get; } = item;
+    public FlowValue Item { get; internal set; } = item;
 
     /// <summary>The item's index, from 0, where the scope is one item of a <c>forEach</c>.</summary>
     public int? Index { get; } = index;
@@ -7057,6 +10290,25 @@ internal sealed class Scope(
 
     /// <summary>The loop group's instance, where the scope is one item or iteration of one.</summary>
     public FlowInstance? LoopOf { get; } = loopOf;
+
+    /// <summary>
+    /// The kind this scope's work item is of, where the scope is one item of the work-item group of a plan update:
+    /// <c>added</c>, <c>changed</c> or <c>removed</c> - <c>added</c> where the group's own expression made it. Null
+    /// for every other scope, and for an item of another <c>forEach</c>.
+    /// </summary>
+    internal string? WorkItemKind;
+
+    /// <summary>The piece of a plan update this scope's work item is, where one made it or was given to it; null otherwise.</summary>
+    internal FlowUpdatePiece? Piece;
+
+    /// <summary>The id of the update whose piece this scope's work item is; null where none is.</summary>
+    internal string? PieceOf;
+
+    /// <summary>The update whose piece is bringing this scope's instance to rest, with the piece itself; null where none is.</summary>
+    internal (string Update, FlowUpdatePiece Piece)? EndingFor;
+
+    /// <summary>The scope this one visits again, where a piece of a plan update ended it to have its work done again; null otherwise.</summary>
+    internal Scope? AgainOf;
 
     /// <summary>The instance this scope is: a block's own, or one item's or one iteration's; null at the top and before a loop's scope instance is made.</summary>
     public FlowInstance? GroupInstance { get; set; }

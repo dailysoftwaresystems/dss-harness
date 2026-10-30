@@ -281,6 +281,16 @@ public sealed class ToolLoop(
     /// <summary>One run of the loop: its conversation, its counts and its bounds.</summary>
     private sealed class Looping(ToolLoop loop, AgentRun run, IAgentEventSink events, IChatProvider provider, ToolLoopTerms terms)
     {
+        /// <summary>
+        /// One entry of the run's order this loop may serve: a model with one of its provider's keys, at the level the
+        /// step gives it, under the terms of its model's entry - or, where it cannot be used here, the reason it cannot,
+        /// said and passed over when its turn comes.
+        /// </summary>
+        private sealed record Serving(string Model, string? Effort, AgentKey? Key, ToolLoopTerms? Terms, string? Unusable)
+        {
+            public bool Usable => Unusable is null && Key is not null && Terms is not null;
+        }
+
         // The messages sent and not yet stored: the engine's, and what began the turn under way.
         private readonly List<string> _pending = [];
 
@@ -289,12 +299,20 @@ public sealed class ToolLoop(
 
         private readonly AgentUsageTally _used = new();
         private readonly List<string> _keysRefused = [];
-        private readonly IReadOnlyList<AgentKey> _keys = run.Credential!.Keys;
         private readonly CancellationTokenSource _pause = new();
         private readonly string _session = run.Conversation?.Id ?? Guid.NewGuid().ToString("D");
 
-        // Whether the step has a model after this one to go on with: a declined request is to leave it a credit.
-        private readonly bool _goesOn = run.Fallback.Any(model => model.UsableHere);
+        // The run's order on this provider and client: the serving model's keys in the credential's order, then each
+        // later model of the same provider and client with each of its keys, each model's keys before the next model -
+        // the loop's own walk, inside the one conversation. Entries of another provider or client are the runner's.
+        private readonly List<Serving> _order = [.. (run.Credential?.Keys ?? []).Select(key => new Serving(run.Model!, run.Effort, key, terms, null))];
+
+        // The limits the run remembers, each with the client whose entry met it: an entry a limit covers is passed
+        // over until it lifts, for the rest of the run.
+        private readonly List<(AgentAccountLimit Limit, string Client)> _limits = [];
+
+        // Whether the step has a model after this one to go on with, on any client: a declined request is to leave it a credit.
+        private readonly bool _goesOn = run.Fallback.Any(entry => entry.Usable);
 
         // The answer so far: each piece cut off at its length or paused that the agent went on from, in order.
         private readonly StringBuilder _said = new();
@@ -302,7 +320,7 @@ public sealed class ToolLoop(
         private StoredConversation? _conversation;
         private AgentToolRuntime? _runtime;
         private ClockLimit? _deadline;
-        private int _keyAt;
+        private int _at;
         private int _turns;
         private int _counted;
         private int _retries;
@@ -316,6 +334,10 @@ public sealed class ToolLoop(
         private string? _unknown;
         private bool _handing;
 
+        // The credit a declined request left, sent back with the same request on the next model; dropped where the
+        // provider answers that retry naming it, and never sent where the move changes the level.
+        private AgentFallbackCredit? _credit;
+
         // The gate of the step's answer, where it names an output; and whether the answer it last sent back read as no JSON.
         private readonly StructuredOutputGate? _gate = run.Output is { } output ? new(output, run.Mask) : null;
         private bool _jsonAlone;
@@ -324,17 +346,22 @@ public sealed class ToolLoop(
         // in words in a message of the conversation - never in its system prompt, which every stored turn was made under.
         private bool _schemaRefused;
 
+        // The effort the conversation began at, where it began at one and a move has since changed the level: a provider
+        // that caches the conversation is sent it top-level still, the change told in the conversation.
+        private string? _firstEffort;
+
         private StoredConversation Conversation => _conversation!;
 
         private AgentToolRuntime Runtime => _runtime!;
 
         private CancellationToken Deadline => _deadline!.Token;
 
-        private AgentKey Key => _keys[_keyAt];
+        private Serving Now => _order[_at];
 
         public async Task<AgentRunResult> RunAsync(CancellationToken stop)
         {
             loop._fileSystem.CreateDirectory(run.StepDirectory);
+            JoinLaterEntries();
 
             using var runtime = _runtime = loop._tools.Open(run, events);
             var system = Masked(run.SystemPrompt);
@@ -378,11 +405,18 @@ public sealed class ToolLoop(
                 run.Provider,
                 Effort: run.Effort,
                 SessionId: _session,
-                Credential: new AgentCredentialSource(AgentCredentialSource.EnvironmentFile, Key.Name))).ConfigureAwait(false);
+                Credential: new AgentCredentialSource(AgentCredentialSource.EnvironmentFile, Now.Key!.Name))).ConfigureAwait(false);
 
-            // A provider whose wire holds no answer to the schema is told it in words, in the step's first message.
+            // The first message: a compacted conversation begins with the engine's compaction record, whole; any
+            // other begins with the run's parts in their order, the continuation record only where the conversation
+            // is a new one, which on an API client a handed conversation never is. A provider whose wire holds no
+            // answer to the schema is told it in words after it.
+            var first = run.Compaction is { Length: > 0 } compacted
+                ? compacted
+                : AgentPromptParts.FirstMessage(run, newConversation: run.Conversation is null);
+
             await SayAsync(
-                _gate is { } gate && !provider.SendsSchema ? $"{run.UserPrompt}\n\n{AgentEnvelope.InWords(gate.Envelope)}" : run.UserPrompt,
+                _gate is { } gate && !provider.SendsSchema && run.Compaction is null ? $"{first}\n\n{AgentEnvelope.InWords(gate.Envelope)}" : first,
                 AgentMessageKind.FirstPrompt).ConfigureAwait(false);
 
             var result = await LoopAsync(stop).ConfigureAwait(false);
@@ -493,6 +527,22 @@ public sealed class ToolLoop(
                         var spent = !PauseAsked() && run.Limits.MaxBudgetUsd is { } cap && _cost >= cap;
                         await RunCallsAsync(turn, stop, spent ? BudgetSpent : null).ConfigureAwait(false);
                         continue;
+                    }
+
+                    case ChatStop.Declined:
+                    {
+                        await AnsweredAsync(turn).ConfigureAwait(false);
+
+                        // A decline moves the run to its next model of this provider and client, the declined turn
+                        // thrown away - none of it the agent's - where one is left; where none is, the ending stands.
+                        if (PlannedDecline(turn.Category, turn.Credit, threwAway: true) is { } declined)
+                        {
+                            await Emit(new TurnRestarted("the model declined the request: the turn is thrown away, and none of it is the agent's")).ConfigureAwait(false);
+                            await TakeAsync(declined).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        return TurnEnding(turn);
                     }
 
                     default:
@@ -685,7 +735,7 @@ public sealed class ToolLoop(
 
                     if (Regrown() is not { } larger)
                     {
-                        var why = $"the answer was cut off at {_maxTokens} tokens {where}, the most a reply of '{terms.Model.Code}' holds";
+                        var why = $"the answer was cut off at {_maxTokens} tokens {where}, the most a reply of '{Now.Terms!.Model.Code}' holds";
                         await Emit(new TurnRestarted(why)).ConfigureAwait(false);
                         await FinishTurnAsync(turn).ConfigureAwait(false);
 
@@ -735,7 +785,7 @@ public sealed class ToolLoop(
                     return new Sent(Left: true);
                 }
 
-                var request = new ChatRequest(run.Model!, run.Effort, Conversation.SystemPrompt, Conversation.Tools, [.. Conversation.Messages(), .. _pending, .. _paused], _maxTokens, Key, _schemaRefused ? null : _gate?.Envelope, Credit: _goesOn, ShortenedBefore: Conversation.ShortenedBefore, JsonAlone: _jsonAlone);
+                var request = new ChatRequest(Now.Model, Now.Effort, Conversation.SystemPrompt, Conversation.Tools, [.. Conversation.Messages(), .. _pending, .. _paused], _maxTokens, Now.Key, _schemaRefused ? null : _gate?.Envelope, Credit: _goesOn, ShortenedBefore: Conversation.ShortenedBefore, JsonAlone: _jsonAlone, CreditToken: _credit, FirstEffort: _firstEffort);
 
                 // The handoff turn is held to its bound, not to the step's time: it counts against none of the step's
                 // turns, budget or time.
@@ -780,7 +830,7 @@ public sealed class ToolLoop(
                                     break;
                                 case ChatPart.Began began:
                                     wrote = began.Model;
-                                    other = AgentModelIds.Same(run.Model!, began.Model) ? null : WrongModel(began.Model);
+                                    other = AgentModelIds.Same(Now.Model, began.Model) ? null : WrongModel(began.Model);
                                     break;
                                 case ChatPart.Notice notice:
                                     await Emit(new Notice(Masked(notice.Message))).ConfigureAwait(false);
@@ -789,7 +839,7 @@ public sealed class ToolLoop(
                                     // The first point holds: a provider that says another later is sending what it began with.
                                     if (Conversation.Shorten(shortened.Before))
                                     {
-                                        await Emit(new Notice($"The conversation {_session} is sent shortened before message {shortened.Before.ToString(CultureInfo.InvariantCulture)} from now on, to keep it within the context of '{terms.Model.Code}'; what is stored stays whole.")).ConfigureAwait(false);
+                                        await Emit(new Notice($"The conversation {_session} is sent shortened before message {shortened.Before.ToString(CultureInfo.InvariantCulture)} from now on, to keep it within the context of '{Now.Terms!.Model.Code}'; what is stored stays whole.")).ConfigureAwait(false);
                                     }
 
                                     break;
@@ -855,19 +905,37 @@ public sealed class ToolLoop(
                     await Emit(new TurnRestarted($"the answer failed part way: {Masked(failure.Message)}")).ConfigureAwait(false);
                 }
 
+                // A credit the provider refused - a failure naming the token, of the first request of a conversation
+                // among them, which the API classes as a model it will not serve - is answered by the same request
+                // sent again without it, no try of the service's.
+                if (request.CreditToken is { } notTaken && failure.Kind is ChatFailureKind.Fatal or ChatFailureKind.Unserved && failure.Message.Contains(notTaken.Token, StringComparison.Ordinal))
+                {
+                    if (soFar is { } read)
+                    {
+                        await CountedAsync(read).ConfigureAwait(false);
+                    }
+
+                    await Emit(new Notice($"The provider refused the credit token the declined request left ({Masked(failure.Message.Replace(notTaken.Token, "the token it named", StringComparison.Ordinal))}); the same request is sent again without it.")).ConfigureAwait(false);
+                    _credit = null;
+                    continue;
+                }
+
                 // What a request that failed said it used is counted as an answer's is: its input was read, and billed.
                 var uncounted = soFar is { } used ? await CountedAsync(used).ConfigureAwait(false) : null;
 
-                // A refused key is passed over for the next, where there is one, and the same request sent again: no try of
-                // the service's.
-                var passedOver = failure.Kind == ChatFailureKind.KeyRefused && NextKey();
+                // The engine's fallback, inside the one conversation (part 03, "How it moves"): a refused key, an
+                // account at its limit and a declined request move the run to its next entry of this provider and
+                // client - the same request sent again, with the model or the key changed - where one is left. The
+                // rest of the step's order is the runner's, and the ending stands for it to read. The move is planned
+                // here and taken only where a request will follow it: none is, once the budget is spent.
+                var move = PlannedFor(failure, tried, parts > 0);
 
-                // A schema the provider refused is said in words from now on, and the request sent again without it: no try
-                // of the service's either. A request that sent no schema has none to drop, and its refusal ends the run.
-                var inWords = failure.Kind == ChatFailureKind.SchemaRefused && request.Schema is not null;
+                // A schema the provider refused is said in words from now on, and the request sent again without it: no
+                // try of the service's. A request that sent no schema has none to drop, and its refusal ends the run.
+                var inWords = move is null && failure.Kind == ChatFailureKind.SchemaRefused && request.Schema is not null;
 
                 // The failure's own end outranks a cost that cannot be counted.
-                if (!passedOver && !inWords && Failure(failure, tried, stall.IsCancellationRequested) is { } ending)
+                if (move is null && !inWords && Failure(failure, tried, stall.IsCancellationRequested) is { } ending)
                 {
                     return new Sent(Ending: ending);
                 }
@@ -878,21 +946,23 @@ public sealed class ToolLoop(
                 }
 
                 // No request is sent again once the budget is spent - by what the failed ones used - but the handoff turn's:
-                // the loop's top says how the run ends, the pause before the time and the time before the budget.
+                // the loop's top says how the run ends, the pause before the time and the time before the budget. The
+                // entry the failure moved to is the one a handoff turn asked meanwhile goes with, said by no event, for
+                // no request of it was sent.
                 if (!_handing && run.Limits.MaxBudgetUsd is { } budget && _cost >= budget)
                 {
-                    // A refused key is never asked again: a handoff turn asked meanwhile goes with the next.
-                    if (passedOver)
+                    if (move is { } planned)
                     {
-                        _keyAt++;
+                        _at = planned.At;
+                        Forget();
                     }
 
                     return new Sent(Left: true);
                 }
 
-                if (passedOver)
+                if (move is { } take)
                 {
-                    await PassedOverAsync(failure, parts > 0).ConfigureAwait(false);
+                    await TakeAsync(take).ConfigureAwait(false);
                     continue;
                 }
 
@@ -949,32 +1019,236 @@ public sealed class ToolLoop(
             return timedOut ? new Sent(Ending: TimedOut()) : new Sent(Left: true);
         }
 
-        /// <summary>Records the key the provider refused, and whether the run has one after it.</summary>
-        private bool NextKey()
+        /// <summary>
+        /// The run's later entries of this provider and client, joined to the serving model's keys as the loop's order -
+        /// each model's keys before the next model, an entry the machine cannot use held with its reason, said and
+        /// passed over when its turn comes. Entries of another provider or client are the runner's, never the loop's.
+        /// </summary>
+        private void JoinLaterEntries()
         {
-            _keysRefused.Add(Key.Name);
+            foreach (var entry in run.Fallback)
+            {
+                if (!string.Equals(entry.Provider, terms.Provider.Name, StringComparison.Ordinal)
+                    || !string.Equals(entry.Client, terms.Client, StringComparison.Ordinal))
+                {
+                    continue;
+                }
 
-            return _keyAt + 1 < _keys.Count;
+                // The serving model's keys are the order already, every key of the credential: an entry of the same
+                // model and key is that entry, not another one.
+                if (_order.Any(held => held.Usable && string.Equals(held.Model, entry.Model, StringComparison.Ordinal) && string.Equals(held.Key?.Name, entry.Key, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                if (!entry.Usable || entry.Entries is null)
+                {
+                    _order.Add(new Serving(entry.Model, entry.Effort, null, null, entry.Usable ? $"the run was given no entries of '{entry.Model}'" : entry.WhyNot ?? "it cannot be used on this machine"));
+                    continue;
+                }
+
+                var held = entry.Key is null ? null : run.Credential?.Keys.FirstOrDefault(key => string.Equals(key.Name, entry.Key, StringComparison.Ordinal));
+
+                _order.Add(held is null
+                    ? new Serving(entry.Model, entry.Effort, null, null, $"its key {entry.Key} is not held by the run's credential")
+                    : new Serving(entry.Model, entry.Effort, held, ToolLoopTerms.Of(terms.Client, entry.Entries), null));
+            }
+        }
+
+        /// <summary>An entry of the loop's order as the shared rules of the fallback read one.</summary>
+        private AgentRunEntry EntryOf(Serving entry) => new(entry.Model, terms.Provider.Name, terms.Client, entry.Key?.Name, entry.Effort, entry.Usable);
+
+        /// <summary>A move of the engine's fallback the loop has planned and not yet taken: where it goes, why, and what it throws away.</summary>
+        private sealed record Planned(int At, string Why, bool ThrewAway, AgentFallbackCredit? Credit, IReadOnlyList<(string Model, string Why)> PassedOver);
+
+        /// <summary>
+        /// Whether a rate limit is the account at its - past the client's tries, or naming a wait past its longest - and
+        /// not a wait the client still has in it, which stays a wait.
+        /// </summary>
+        private bool AtItsLimit(ChatFailure failure, int tried)
+            => tried > terms.MaxRetries || (failure.RetryAfter is { } named && named > terms.LongestWait);
+
+        /// <summary>
+        /// The engine's fallback planned for a request that failed: a key the provider refused, an account at its limit
+        /// and a declined request each move the run to its next entry of this provider and client. What the failure made
+        /// true - a key refused, a limit met - is remembered here; the move itself is only planned, and taken where a
+        /// request will follow it. Null where no entry is left.
+        /// </summary>
+        /// <param name="failure">The failure.</param>
+        /// <param name="tried">Which try after the failure this is, from one.</param>
+        /// <param name="threwAway">Whether the failure threw away part of an answer.</param>
+        private Planned? PlannedFor(ChatFailure failure, int tried, bool threwAway)
+        {
+            switch (failure.Kind)
+            {
+                case ChatFailureKind.KeyRefused:
+                {
+                    // Said, passed over for the rest of the run - never asked again, of this model or another - and the
+                    // next entry taken.
+                    var refused = Now.Key!.Name;
+                    _keysRefused.Add(refused);
+
+                    return Plan(Masked($"key refused: the provider refused {refused}: {failure.Message}"), decline: false, credit: null, threwAway);
+                }
+
+                case ChatFailureKind.RateLimited when AtItsLimit(failure, tried):
+                {
+                    // The model's limit on the key: the same model's next key is tried first, and every entry the limit
+                    // covers - that model on that key - is passed over until it lifts.
+                    var limit = new AgentAccountLimit(false, failure.RetryAfter is { } after ? loop._clock.GetUtcNow() + after : failure.Lifts, Now.Key!.Name, Now.Model);
+                    _limits.Add((limit, terms.Client));
+
+                    return Plan(LimitSaid(limit, failure), decline: false, credit: null, threwAway);
+                }
+
+                case ChatFailureKind.AccountLimit:
+                {
+                    // The key's whole - its balance, its plan: every entry on that key is passed over, and the same
+                    // model on another key is tried.
+                    var limit = new AgentAccountLimit(failure.BalanceSpent, failure.Lifts, Now.Key!.Name);
+                    _limits.Add((limit, terms.Client));
+
+                    return Plan(LimitSaid(limit, failure), decline: false, credit: null, threwAway);
+                }
+
+                case ChatFailureKind.Declined:
+                {
+                    return PlannedDecline(failure.Category, credit: null, threwAway);
+                }
+
+                default:
+                    return null;
+            }
         }
 
         /// <summary>
-        /// Passes over the key the provider refused for the next of the run's, told as a fallback to the same model - once
-        /// the request is to be sent again with it, nothing ending the run first.
+        /// The engine's fallback planned for a declined request: the next model of this provider and client takes over,
+        /// past the model's other keys, which would be asked the same and answer the same. Null where none is left.
         /// </summary>
-        private async Task PassedOverAsync(ChatFailure failure, bool threwAway)
+        /// <param name="category">What the declined request was of, where the provider names it.</param>
+        /// <param name="credit">The credit the declined request left, where it left one.</param>
+        /// <param name="threwAway">Whether a part of an answer was thrown away with the turn.</param>
+        private Planned? PlannedDecline(string? category, AgentFallbackCredit? credit, bool threwAway)
         {
-            var refused = Key;
-            _keyAt++;
-            await Emit(FallbackStarted.KeyRefused(
-                run.Model!,
+            // A decline the provider marks as being about what the prompt asks is no other model's to answer
+            // differently: the step ends Refused with the category said.
+            if (string.Equals(category, AgentFallback.ReasoningExtraction, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            return Plan(Masked($"declined ({category ?? "the request"})"), decline: true, credit, threwAway);
+        }
+
+        /// <summary>What a limit the run moved on was said to be, with when it lifts where the provider said.</summary>
+        private string LimitSaid(AgentAccountLimit limit, ChatFailure failure)
+            => Masked($"limit{(limit.Lifts is { } lifts ? $", until {lifts:u}" : string.Empty)}: {failure.Message}");
+
+        /// <summary>
+        /// The move planned for <paramref name="why"/>: the next entry of this provider and client, with the entries
+        /// passed over to reach it - the model's other keys on a decline, an entry the machine cannot use, a key the run
+        /// has seen refused, and one a remembered limit covers until it lifts. Null where none is left.
+        /// </summary>
+        /// <param name="why">Why the run moves, as the record says it.</param>
+        /// <param name="decline">Whether the cause is a decline, which passes the model's other keys.</param>
+        /// <param name="credit">The credit a declined request left, where it left one.</param>
+        /// <param name="threwAway">Whether a part of an answer was thrown away with the turn.</param>
+        private Planned? Plan(string why, bool decline, AgentFallbackCredit? credit, bool threwAway)
+        {
+            var passed = new List<(string Model, string Why)>();
+
+            for (var at = _at + 1; at < _order.Count; at++)
+            {
+                var entry = _order[at];
+
+                if (decline && string.Equals(entry.Model, Now.Model, StringComparison.Ordinal))
+                {
+                    passed.Add((entry.Model, "a decline passes over the model's other keys"));
+                    continue;
+                }
+
+                var whyNot = !entry.Usable ? entry.Unusable
+                    : entry.Key is { } key && _keysRefused.Contains(key.Name) ? $"its key {key.Name} was refused"
+                    : _limits.FirstOrDefault(limit => AgentFallback.Covers(limit.Limit, limit.Client, EntryOf(entry)) && (limit.Limit.Lifts is null || limit.Limit.Lifts > loop._clock.GetUtcNow())) is { Limit: { } covers }
+                        ? $"a limit the run remembers covers it{(covers.Lifts is { } lifts ? $" until {lifts:u}" : string.Empty)}"
+                        : null;
+
+                if (whyNot is not null)
+                {
+                    passed.Add((entry.Model, whyNot));
+                    continue;
+                }
+
+                return new Planned(at, why, threwAway, credit, passed);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Takes <paramref name="move"/>: the entries passed over and the move itself said and recorded, the answer so
+        /// far thrown away, the room a reply holds the new model's, and a level the step gives this model that differs
+        /// told in the conversation - with no credit token, for the request that follows is not the same request.
+        /// </summary>
+        /// <param name="move">The move planned.</param>
+        private async Task TakeAsync(Planned move)
+        {
+            foreach (var (model, why) in move.PassedOver)
+            {
+                await Emit(new FallbackPassedOver(model, why)).ConfigureAwait(false);
+            }
+
+            var from = Now;
+            var to = _order[move.At];
+            _at = move.At;
+            Forget();
+            _maxTokens = FirstMaxTokens(to.Terms!.Model.MaxOutputTokens);
+
+            var changed = !string.Equals(from.Effort, to.Effort, StringComparison.Ordinal);
+
+            // The credit goes with the same request on the next model, and only where the request is the same: a level
+            // the step gives that model makes it another.
+            _credit = changed ? null : move.Credit;
+
+            await Emit(new FallbackStarted(
+                from.Model,
                 terms.Provider.Name,
                 terms.Client,
-                refused.Name,
-                Key.Name,
-                Masked($"the provider refused {refused.Name}: {failure.Message}"),
-                "the request sent again",
+                to.Model,
+                terms.Provider.Name,
+                terms.Client,
+                move.Why,
+                AgentFallback.SentAgain,
                 _turns,
-                threwAway)).ConfigureAwait(false);
+                move.ThrewAway,
+                CreditAsked: move.Credit is not null && !changed,
+                from.Key?.Name,
+                to.Key?.Name,
+                from.Effort,
+                to.Effort)).ConfigureAwait(false);
+
+            if (to.Effort is { } level && changed)
+            {
+                // The level the conversation began at is what a provider that caches it is sent top-level still; the
+                // change is told in the conversation, where the provider takes a message of its own for it.
+                _firstEffort ??= from.Effort ?? string.Empty;
+
+                await Emit(new MessageSent(Masked($"The step goes on at effort '{level}'."), AgentMessageKind.Effort)).ConfigureAwait(false);
+
+                if (provider.EffortMessage(level) is { } message)
+                {
+                    _pending.Add(message);
+                }
+            }
+            else if (changed && from.Effort is not null)
+            {
+                // The entry goes on at its model's own default, and no level is named to tell: the conversation's
+                // top-level stays what it began at - changing it would drop its cache - and the change is said as an
+                // event alone.
+                _firstEffort ??= from.Effort;
+
+                await Emit(new MessageSent(Masked("The step goes on at its model's own default effort."), AgentMessageKind.Effort)).ConfigureAwait(false);
+            }
         }
 
         /// <summary>
@@ -1013,18 +1287,18 @@ public sealed class ToolLoop(
             {
                 ChatFailureKind.RateLimited when past || tooLong is not null => AgentEndings.AtLimit(
                     "the provider",
-                    new AgentAccountLimit(BalanceSpent: false, failure.RetryAfter is { } after ? loop._clock.GetUtcNow() + after : failure.Lifts, Key.Name, run.Model),
+                    new AgentAccountLimit(BalanceSpent: false, failure.RetryAfter is { } after ? loop._clock.GetUtcNow() + after : failure.Lifts, Now.Key!.Name, Now.Model),
                     past ? $"still limited after {terms.MaxRetries} tries: {said}" : $"it {tooLong}: {said}",
                     run.Mask),
-                ChatFailureKind.Transient when past && silent => Ended(AgentRunStatus.Stalled, $"the provider's answer went silent past its {terms.MaxRetries} tries: {said}"),
-                ChatFailureKind.Transient when past => Ended(AgentRunStatus.Failed, $"the provider's service failed past its {terms.MaxRetries} tries: {said}"),
-                ChatFailureKind.Transient when tooLong is not null => Ended(AgentRunStatus.Failed, $"the provider {tooLong}: {said}"),
+                ChatFailureKind.Transient when past && silent => Ended(AgentRunStatus.Stalled, $"the provider's answer went silent past its {terms.MaxRetries} tries: {said}") with { ServiceFailed = true },
+                ChatFailureKind.Transient when past => Ended(AgentRunStatus.Failed, $"the provider's service failed past its {terms.MaxRetries} tries: {said}") with { ServiceFailed = true },
+                ChatFailureKind.Transient when tooLong is not null => Ended(AgentRunStatus.Failed, $"the provider {tooLong}: {said}") with { ServiceFailed = true },
                 ChatFailureKind.Transient or ChatFailureKind.RateLimited => null,
-                ChatFailureKind.AccountLimit => AgentEndings.AtLimit("the provider", new AgentAccountLimit(failure.BalanceSpent, failure.Lifts, Key.Name), said, run.Mask),
+                ChatFailureKind.AccountLimit => AgentEndings.AtLimit("the provider", new AgentAccountLimit(failure.BalanceSpent, failure.Lifts, Now.Key!.Name), said, run.Mask),
                 ChatFailureKind.KeyRefused => Ended(AgentRunStatus.Failed, $"the provider refused every key the run was given ({string.Join(", ", _keysRefused)}): {said}"),
                 ChatFailureKind.Declined => AgentEndings.Declined(failure.Category, said, run.Mask),
                 ChatFailureKind.ContextFull => Ended(AgentRunStatus.ContextExhausted, said),
-                ChatFailureKind.Unserved when !_answered => AgentEndings.NotStarted(terms.Client, AgentNotStartedBecause.ConfigurationWrong, said, run.Model, run.Mask),
+                ChatFailureKind.Unserved when !_answered => AgentEndings.NotStarted(terms.Client, AgentNotStartedBecause.ConfigurationWrong, said, Now.Model, run.Mask),
                 ChatFailureKind.Unserved or ChatFailureKind.Fatal or ChatFailureKind.SchemaRefused => Ended(AgentRunStatus.Failed, said),
                 _ => throw new InvalidOperationException($"'{failure.Kind}' is no failure a provider classes."),
             };
@@ -1092,7 +1366,7 @@ public sealed class ToolLoop(
         /// </summary>
         private async Task<AgentRunResult?> CountedAsync(ChatTurn turn)
         {
-            if (!AgentModelIds.Same(run.Model!, turn.Model))
+            if (!AgentModelIds.Same(Now.Model, turn.Model))
             {
                 await TalliedAsync(turn.Model, turn.Usage).ConfigureAwait(false);
                 await FinishTurnAsync(turn).ConfigureAwait(false);
@@ -1114,15 +1388,15 @@ public sealed class ToolLoop(
         /// </summary>
         private async Task<AgentRunResult?> CountedAsync(AgentUsage usage)
         {
-            await TalliedAsync(run.Model!, usage).ConfigureAwait(false);
+            await TalliedAsync(Now.Model, usage).ConfigureAwait(false);
 
-            if (AgentPrices.CostOf(terms.Provider, terms.Model, usage) is { } cost)
+            if (AgentPrices.CostOf(Now.Terms!.Provider, Now.Terms.Model, usage) is { } cost)
             {
                 _cost += (decimal)cost;
                 return null;
             }
 
-            var unknown = AgentPrices.UnknownOf(terms.Provider, terms.Model, usage);
+            var unknown = AgentPrices.UnknownOf(Now.Terms.Provider, Now.Terms.Model, usage);
             _unknown ??= unknown;
 
             return run.Limits.MaxBudgetUsd is null || _handing ? null : Ended(AgentRunStatus.Failed, $"the step's cost cannot be counted against its budget: {unknown}");
@@ -1140,7 +1414,7 @@ public sealed class ToolLoop(
         /// The room a turn thrown away as it was cut off - while it called a tool, before it wrote anything, or while its
         /// request held it to a schema - is asked again with: double, up to the most; null where it had the most.
         /// </summary>
-        private long? Regrown() => _maxTokens >= terms.Model.MaxOutputTokens ? null : Math.Min(terms.Model.MaxOutputTokens, _maxTokens * 2);
+        private long? Regrown() => _maxTokens >= Now.Terms!.Model.MaxOutputTokens ? null : Math.Min(Now.Terms.Model.MaxOutputTokens, _maxTokens * 2);
 
         /// <summary>The run's end a turn that ends the conversation comes to: declined, with the credit it left where it left one, or out of context.</summary>
         private AgentRunResult TurnEnding(ChatTurn turn)
@@ -1193,7 +1467,7 @@ public sealed class ToolLoop(
             if (_inTurn)
             {
                 _inTurn = false;
-                await Emit(new TurnFinished(_turns, run.Model!, _turnUsage, Masked(why))).ConfigureAwait(false);
+                await Emit(new TurnFinished(_turns, Now.Model, _turnUsage, Masked(why))).ConfigureAwait(false);
             }
         }
 
@@ -1290,7 +1564,7 @@ public sealed class ToolLoop(
         private AgentRunResult Spent(decimal budget)
             => Ended(AgentRunStatus.BudgetSpent, string.Create(CultureInfo.InvariantCulture, $"the step spent {_cost:0.######} of its {budget} {AgentPrices.BudgetCurrency} budget"));
 
-        private AgentRunResult WrongModel(string named) => AgentEndings.WrongModel(run.Model!, named, $"its turn {_turns}", run.Mask);
+        private AgentRunResult WrongModel(string named) => AgentEndings.WrongModel(Now.Model, named, $"its turn {_turns}", run.Mask);
 
         private ValueTask Emit(AgentEvent @event) => events.EmitAsync(@event);
 

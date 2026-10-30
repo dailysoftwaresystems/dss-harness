@@ -7,9 +7,10 @@ using DssHarness.Core.Results;
 namespace DssHarness.Cli.Commands;
 
 /// <summary>
-/// Wires the five run verbs: <c>run-orchestrator</c>, <c>resume-orchestrator</c>, <c>answer-orchestrator</c>,
-/// <c>pause-orchestrator</c> and <c>stop-orchestrator</c>. The three sessions count two interrupts through their
-/// terminal (<see cref="FlowTerminal"/>): the first asks the engine for a safe pause, the second stops it where it stands.
+/// Wires the six run verbs: <c>run-orchestrator</c>, <c>resume-orchestrator</c>, <c>answer-orchestrator</c>,
+/// <c>amend-orchestrator-request</c>, <c>pause-orchestrator</c> and <c>stop-orchestrator</c>. The three sessions count
+/// two interrupts through their terminal (<see cref="FlowTerminal"/>): the first asks the engine for a safe pause,
+/// the second stops it where it stands.
 /// </summary>
 internal static class FlowCommands
 {
@@ -32,6 +33,12 @@ internal static class FlowCommands
         Func<FlowInterrupts, CancellationToken, Task<CommandOutcome>> session,
         CancellationToken commandToken)
         => new FlowTerminal(context.Get<IHarnessOutput>(), command).RunAsync(session, commandToken);
+
+    /// <summary>
+    /// The <c>--json</c> answer of the two ask commands: the same document wherever they stop, the facts and the answer
+    /// apart.
+    /// </summary>
+    internal static readonly JsonAnswer AskAnswer = new(OrchestrationArguments.Json, (_, exitCode, summary, _, _) => FlowReports.AskStopped(exitCode, summary));
 }
 
 /// <summary>Wires <c>DssHarness run-orchestrator</c>.</summary>
@@ -133,7 +140,7 @@ internal static class AnswerOrchestratorCommand
 
     private static readonly Option<bool> AgainOption = new("--again")
     {
-        Description = "Change an answer already given. This build takes no plan update yet, so it is refused.",
+        Description = "Change the last answer a person gave the run - the one set the command shows - within the minutes its workflow names and once; where the run has begun to plan, this build records the change as refused, for it plans no update yet.",
     };
 
     private static readonly Option<string?> TextOption = new("--text")
@@ -183,6 +190,44 @@ internal static class AnswerOrchestratorCommand
     }
 }
 
+/// <summary>Wires <c>DssHarness amend-orchestrator-request</c>.</summary>
+internal static class AmendOrchestratorRequestCommand
+{
+    internal const string Name = FlowService.AmendCommand;
+
+    private static readonly Argument<string> RunArgument = OrchestrationArguments.Orchestrator("The run whose request is amended.");
+
+    private static readonly Argument<string?> TextArgument = new("text")
+    {
+        Description = "The amendment, in the person's words: it adds to the request, corrects it or narrows it. The request as it was given is never rewritten - the amendment is read with it.",
+        Arity = ArgumentArity.ZeroOrOne,
+    };
+
+    private static readonly Option<string?> FileOption = new("--file")
+    {
+        HelpName = "path",
+        Description = "A file holding the amendment, read relative to --directory, in the place of the text argument.",
+    };
+
+    internal static Command Create()
+    {
+        var command = new Command(Name, "Amend the request a run was started with: handed to the engine where one is running the run, else recorded as a plan update that the next session takes first. Starts nothing.");
+        command.Arguments.Add(RunArgument);
+        command.Arguments.Add(TextArgument);
+        command.Options.Add(FileOption);
+        command.Options.Add(OrchestrationArguments.Json);
+        GlobalOptions.AddTo(command);
+
+        CommandRunner.Wire(
+            command,
+            (context, cancellationToken) => context.Get<IFlowService>()
+                .AmendAsync(context.Directory, context.ParseResult.GetRequiredValue(RunArgument), context.ParseResult.GetValue(TextArgument), context.ParseResult.GetValue(FileOption), context.Json, cancellationToken),
+            FlowCommands.Answer);
+
+        return command;
+    }
+}
+
 /// <summary>Wires <c>DssHarness pause-orchestrator</c>.</summary>
 internal static class PauseOrchestratorCommand
 {
@@ -220,7 +265,7 @@ internal static class StopOrchestratorCommand
 
     private static readonly Argument<string> RunArgument = OrchestrationArguments.Orchestrator("The run to stop.");
 
-    internal static readonly Option<bool> NowOption = new("--now")
+    private static readonly Option<bool> NowOption = new("--now")
     {
         Description = "End the engine's process and all it started, without asking it - only an engine of this machine, and only the process its owner names by its start: for an engine that no longer answers. What its steps left running - a contained child's session, the process group of what its legs started - is ended with it.",
     };
@@ -238,6 +283,60 @@ internal static class StopOrchestratorCommand
             (context, cancellationToken) => context.Get<IFlowService>()
                 .StopAsync(context.Directory, context.ParseResult.GetRequiredValue(RunArgument), context.ParseResult.GetValue(NowOption), context.Json, cancellationToken),
             FlowCommands.Answer);
+
+        return command;
+    }
+}
+
+/// <summary>Wires <c>DssHarness ask-orchestrator-status</c>.</summary>
+internal static class AskOrchestratorStatusCommand
+{
+    internal const string Name = FlowService.AskStatusCommand;
+
+    private static readonly Argument<string> RunArgument = OrchestrationArguments.Orchestrator("The run to ask about.");
+
+    internal static Command Create()
+    {
+        var command = new Command(Name, "The tool's own question of a run - what is happening now, what is done, what is left, what it waits for, and when it may finish - answered with the engine's facts and, where the workflow names a reporter, its words. Reads only: nothing of the run is written or locked but the command's own record under the run's asks/, and what the answer costs is the person's, never the run's. Where no model words the facts, they are still the answer, and the command says why no model did.");
+        command.Arguments.Add(RunArgument);
+        command.Options.Add(OrchestrationArguments.Json);
+        GlobalOptions.AddTo(command);
+
+        CommandRunner.Wire(
+            command,
+            (context, cancellationToken) => context.Get<IFlowService>()
+                .AskStatusAsync(context.Directory, context.ParseResult.GetRequiredValue(RunArgument), context.Json, cancellationToken),
+            FlowCommands.AskAnswer);
+
+        return command;
+    }
+}
+
+/// <summary>Wires <c>DssHarness ask-orchestrator</c>.</summary>
+internal static class AskOrchestratorCommand
+{
+    internal const string Name = FlowService.AskCommand;
+
+    private static readonly Argument<string> RunArgument = OrchestrationArguments.Orchestrator("The run to ask about.");
+
+    private static readonly Argument<string> QuestionArgument = new("question")
+    {
+        Description = "The question, in the person's words, answered from the run's records by its reporter.",
+    };
+
+    internal static Command Create()
+    {
+        var command = new Command(Name, "A person's question about a run, answered from its records by the workflow's reporter over the engine's facts. Reads only, as ask-orchestrator-status does; where no model can answer - no reporter named, no key, no Claude Code, a limit, a failure - the command is refused, naming why.");
+        command.Arguments.Add(RunArgument);
+        command.Arguments.Add(QuestionArgument);
+        command.Options.Add(OrchestrationArguments.Json);
+        GlobalOptions.AddTo(command);
+
+        CommandRunner.Wire(
+            command,
+            (context, cancellationToken) => context.Get<IFlowService>()
+                .AskAsync(context.Directory, context.ParseResult.GetRequiredValue(RunArgument), context.ParseResult.GetRequiredValue(QuestionArgument), context.Json, cancellationToken),
+            FlowCommands.AskAnswer);
 
         return command;
     }

@@ -183,6 +183,15 @@ public static class FlowTemplate
                 return null;
             }
 
+            // A skill's name is a reason step's prompt's alone, and is not read here: the folder is handed over where
+            // the step starts, by its runner, which puts the skill's block where the placeholder stands. The
+            // definition's check refuses the name in every other key a template fills.
+            if (name == "skill" || name.StartsWith("skill.", StringComparison.Ordinal))
+            {
+                filled.Append($"{{{piece.Text}}}");
+                continue;
+            }
+
             try
             {
                 var value = FlowExpression.Parse(name).Evaluate(read);

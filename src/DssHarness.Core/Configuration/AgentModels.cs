@@ -83,6 +83,32 @@ public sealed class AgentClientConfig
     /// <c>server-side-fallback-</c> one, for the engine's fallback is the only one a step has.
     /// </summary>
     public List<string>? Betas { get; init; }
+
+    /// <summary>
+    /// The most runs (requests, for an API) the client has under way at once on one provider and one key (a key of
+    /// every client; the client's own where nothing is said - 3 for claude-code, 4 for claude-api, 2 for glm). The
+    /// gate holds them apart, one lane per provider and key; the orchestrator's <c>maxReasoningAgents</c> bounds
+    /// agents beside it, and both apply.
+    /// </summary>
+    public int? MaxParallel { get; init; }
+
+    /// <summary>
+    /// At most this many requests in any minute on one lane (a key of the API clients): the gate holds a request that
+    /// would pass it until the oldest of its minute is a minute old. Left out, the provider's answers pace the client.
+    /// </summary>
+    public int? RequestsPerMinute { get; init; }
+
+    /// <summary>
+    /// At most this many input tokens in any minute on one lane (a key of the API clients), a request's own counted
+    /// against it as it enters. Left out, the provider's answers pace the client.
+    /// </summary>
+    public int? InputTokensPerMinute { get; init; }
+
+    /// <summary>
+    /// At most this many output tokens in any minute on one lane (a key of the API clients), an answer's counted
+    /// against it once it is had. Left out, the provider's answers pace the client.
+    /// </summary>
+    public int? OutputTokensPerMinute { get; init; }
 }
 
 /// <summary>

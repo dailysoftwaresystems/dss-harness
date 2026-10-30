@@ -203,6 +203,10 @@ public sealed class FlowPauseTests
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
         {
         }
+
+        public void Updates(FlowUpdatesFile updates)
+        {
+        }
     }
 
     /// <summary>A safe pause writes every reason step in flight a handoff, leaves the machine steps to finish and be recorded, and starts nothing more.</summary>
@@ -332,6 +336,81 @@ public sealed class FlowPauseTests
         Assert.Equal("Written by the engine: the agent's answer to its handoff turn held no account.", think.Handoff.Text);
         Assert.Equal("the agent's answer to its handoff turn held no account", think.Handoff.Why);
         Assert.Equal(["think"], end.Pause!.Handoffs);
+    }
+
+    /// <summary>
+    /// The handoff the engine writes carries the account of the attempt's stored stream - what the stream shows and no
+    /// more - read through the run's own runner, under its first line that says why the engine wrote it.
+    /// </summary>
+    [Fact]
+    public async Task TheHandoffTheEngineWrites_CarriesTheAccountOfTheAttemptsStoredStream()
+    {
+        var definition = Parse("""
+            name: flow
+            handoffSeconds: 60
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var runner = new FakeRunner();
+        _ = runner.Hold("think");
+        var account = new StreamAccount("- src/one.cs (create_file)");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), streamAccount: account);
+
+        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+        await runner.StartedAsync("think");
+        coordinator.RequestPause("command");
+
+        _ = await session;
+
+        var think = coordinator.Instances["think"];
+        Assert.Equal("engine", think.Handoff!.By);
+        Assert.Equal("Written by the engine: the agent's answer to its handoff turn held no account.\n- src/one.cs (create_file)", think.Handoff.Text);
+        var asked = Assert.Single(account.Asked);
+        Assert.Equal(("think", runner.Runs.Single().Attempt), (asked.Instance, asked.Attempt));
+    }
+
+    /// <summary>
+    /// The handoff a limit writes - the engine's, for the agent's run had ended and cannot answer - carries the account
+    /// of the attempt's stored stream under its first line, as a pause's does.
+    /// </summary>
+    [Fact]
+    public async Task TheHandoffALimitWrites_CarriesTheAccountOfTheAttemptsStoredStream()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var account = new StreamAccount("The files the attempt wrote: none.");
+        var runner = new FakeRunner().On("think", FlowStepResult.AtLimit("turns"));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), streamAccount: account);
+
+        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+        var end = await session;
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var think = coordinator.Instances["think"];
+        Assert.Equal("Written by the engine: 'think' reached its turns.\nThe files the attempt wrote: none.", think.Handoff!.Text);
+        Assert.Single(account.Asked);
+    }
+
+    /// <summary>An account of a stored stream, as a run's runner answers one for the engine's handoff to carry.</summary>
+    private sealed class StreamAccount(string body) : IFlowStreamAccount
+    {
+        /// <summary>Every run the account was asked of, in order.</summary>
+        public List<FlowStepRun> Asked { get; } = [];
+
+        public string? Account(FlowStepRun run)
+        {
+            Asked.Add(run);
+            return body;
+        }
     }
 
     /// <summary>A handoff turn that runs past its bound - the workflow's handoffSeconds, or 180 where it says none - is ended there, and the engine writes the handoff, saying the bound it passed.</summary>

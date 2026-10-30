@@ -2701,6 +2701,19 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)];
 
+    /// <summary>
+    /// Every path the worktree holds that a fold of the agent would weigh - each its status lists, and each its seed
+    /// record shares with the main tree - less the floor: the paths its work is not yet folded under, as the
+    /// continuation record lists them beside the paths its folds wrote (<see cref="Flow.FoldLedger"/>). The one rule
+    /// of what an agent's change is, opened to the record as it is asked of the fold.
+    /// </summary>
+    /// <param name="worktree">The agent's worktree, which must be its own registered worktree.</param>
+    /// <param name="seed">What it shares with the main tree, where it was ever seeded.</param>
+    /// <param name="floor">The paths never moved between trees.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    public Task<IReadOnlyList<string>> WeighedAsync(string worktree, SeedRecord? seed, IReadOnlyList<string> floor, CancellationToken cancellationToken)
+        => CandidatesAsync(worktree, seed, floor, "what the agent holds cannot be recorded", cancellationToken);
+
     /// <summary>Whether a commit's entry is one that can be run, where the platform keeps such a bit: never on Windows, which keeps none.</summary>
     private bool Bit(GitEntry? entry) => _platform.Current != PlatformId.Windows && entry is { IsExecutable: true };
 

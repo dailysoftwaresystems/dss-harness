@@ -1799,10 +1799,21 @@ public sealed partial class CliEndToEndTests
                 var result = await CliRunner.RunAsync([.. command, "--legs", "native", "-C", temp.Path], token);
 
                 Assert.Equal(HarnessExit.Success, result.ExitCode);
-                Assert.Contains(
-                    $"dotnet (pid {tool.Id}), working in the build directory of worktree plain's leg 'native'",
-                    result.StandardError,
-                    StringComparison.Ordinal);
+
+                // The warning names the tool working in that tree's build directory: its pid alone where the sample
+                // found one process, or a span of pids where the sleeping tool had children of its own by then - both
+                // say the same leg, on a draw slow enough for children to appear inside the sample.
+                var line = Assert.Single(
+                    result.StandardError.Split('\n'),
+                    held => held.Contains("working in the build directory of worktree plain's leg 'native'", StringComparison.Ordinal));
+
+                Assert.Contains("dotnet (", line, StringComparison.Ordinal);
+                Assert.True(
+                    line.Contains($"dotnet (pid {tool.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)})", StringComparison.Ordinal)
+                        || (System.Text.RegularExpressions.Regex.Match(line, @"dotnet \(\d+ processes, pids (\d+)-(\d+)\)") is { Success: true } span
+                            && int.Parse(span.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) <= tool.Id
+                            && tool.Id <= int.Parse(span.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture)),
+                    $"the warning names neither the tool's pid {tool.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)} nor a span holding it: {line.Trim()}");
             }
         }
         finally

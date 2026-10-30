@@ -102,6 +102,16 @@ public sealed class AgentPolicy
         ["gh copilot", "gh agent-task create", "gh skill install", "gh skill update", "gh skill publish"];
 
     /// <summary>
+    /// The commands that print a credential - gh's own token, and git's credential helpers' <c>get</c> and <c>fill</c>,
+    /// which write the credential they find to what reads them - refused whatever <c>worktreeRules</c> says, as
+    /// <c>run-side-task</c> is: a credential leaves its slot only by the key store that holds it, never through an
+    /// agent's words. Printed by <c>help agent-clients</c> and pinned by a test, so a change in it is a change someone
+    /// made.
+    /// </summary>
+    public static IReadOnlyList<string> CredentialPrintingCommands { get; } =
+        ["gh auth token", "git credential fill", "git credential-manager get", "git credential-manager-core get", "git credential-cache get", "git credential-store get"];
+
+    /// <summary>
     /// Every way <c>gh</c> merges or starts CI, refused by the worktree rules - never merges, never
     /// starts CI binds the agents too, not only the engine's own steps: each REST endpoint and GraphQL
     /// mutation that does it, with the <c>gh</c> commands that reach it. The one list the four below
@@ -231,6 +241,7 @@ public sealed class AgentPolicy
     private readonly IReadOnlyList<(GlobPattern Pattern, string Text)> _writes;
     private readonly IReadOnlyList<AgentRule> _worktreeRunRules;
     private readonly IReadOnlyList<AgentRule> _outOfStepRules = [.. GhOutOfStepCommands.Select(command => AgentRule.Parse($"Run({command} *)"))];
+    private readonly IReadOnlyList<AgentRule> _credentialPrintingRules = [.. CredentialPrintingCommands.Select(command => AgentRule.Parse($"Run({command} *)"))];
     private readonly IReadOnlyList<(GlobPattern Pattern, string Text)> _worktreePolicyWrites;
     private readonly IReadOnlyList<(GlobPattern Pattern, string Text)> _protectedPaths;
     private readonly string _workingRoot;
@@ -826,10 +837,11 @@ public sealed class AgentPolicy
     /// not read here: a character of its own (<see cref="BatchFiles"/>), an expansion the shell fills in first, or the
     /// word another program fills in as it starts it (find's <c>-exec</c>, fd's <c>-x</c>, parallel), an expansion as
     /// <see cref="CommandAnalysis"/> reads it - with a file's name, which may hold anything. A redirect is the shell's
-    /// own, never among the arguments cmd is handed.
+    /// own, never among the arguments cmd is handed. The expansion is read only where the shell would make it: a word in
+    /// quotes is that word.
     /// </summary>
-    private static bool CmdReadsAgain(string word)
-        => BatchFiles.Reread([word]) is not null || CommandAnalysis.Expansion(word) is not null;
+    private static bool CmdReadsAgain(string word, string? quoted)
+        => BatchFiles.Reread([word]) is not null || CommandAnalysis.Expansion(word, quoted) is not null;
 
     /// <summary>
     /// The rules on one command's words from <paramref name="start"/>, as the program there would run them: the words it
@@ -852,9 +864,23 @@ public sealed class AgentPolicy
         // A batch file is started on Windows by cmd.exe, which reads its arguments a second time: one holding what cmd
         // reads as its own, or what the shell expands into it, would run another command than the one read here - wherever
         // it stands, for a wrapper this does not strip starts it as well.
-        if (_platform.Current is PlatformId.Windows && start < command.Count && BatchFiles.Is(command[start]) && command.Skip(start + 1).FirstOrDefault(CmdReadsAgain) is { } reread)
+        if (_platform.Current is PlatformId.Windows && start < command.Count && BatchFiles.Is(command[start]))
         {
-            return Undecided(whole, new NotSupportedException($"'{command[start]}' is a batch file, whose arguments cmd.exe reads again, and '{reread}' holds what cmd reads as its own or what the shell expands"));
+            string? reread = null;
+
+            for (var at = start + 1; at < command.Count; at++)
+            {
+                if (CmdReadsAgain(command[at], analyzed.QuotedWord(at)))
+                {
+                    reread = command[at];
+                    break;
+                }
+            }
+
+            if (reread is not null)
+            {
+                return Undecided(whole, new NotSupportedException($"'{command[start]}' is a batch file, whose arguments cmd.exe reads again, and '{reread}' holds what cmd reads as its own or what the shell expands"));
+            }
         }
 
         // The tool's own verbs and run-side-task are refused whatever worktreeRules says: an agent
@@ -884,13 +910,34 @@ public sealed class AgentPolicy
         // before its subcommand.
         var environment = CommandAnalysis.EnvironmentOf(command);
         var runs = start == environment;
-        var readings = CommandAnalysis.ForRules(words, program: runs);
+
+        // How each word stands to the shell, where the command's own spelling was kept: the readings keep step with
+        // it, so every expansion is read where the shell would make it.
+        var spelled = CommandAnalysis.QuotedOf(analyzed, start);
+
+        var readings = CommandAnalysis.ForRules(words, runs, spelled);
+
+        // The commands that print a credential are refused whatever worktreeRules says, as run-side-task is: a
+        // credential leaves its slot only by the key store that holds it, never through an agent's words.
+        foreach (var (reading, rule) in readings.SelectMany(reading => _credentialPrintingRules.Select(rule => (reading, rule))))
+        {
+            switch (rule.Match(reading.Words, comparison, reading.Quoted))
+            {
+                case AgentRuleMatch.Yes:
+                    return new AgentPolicyAnswer.Denied(
+                        rule.Text,
+                        AgentPolicySource.Builtin,
+                        $"'{whole}' is denied by {rule.Text}, a rule of this tool: it prints a credential, which an agent of this tool is never handed");
+                case AgentRuleMatch.Expanded:
+                    return MayBe(rule.Text, AgentPolicySource.Builtin, whole);
+            }
+        }
 
         // The gh commands that hand the work to another agent, or install what the next launch loads, are refused whatever
         // worktreeRules says: an agent does not leave its step's limits.
         foreach (var (reading, rule) in readings.SelectMany(reading => _outOfStepRules.Select(rule => (reading, rule))))
         {
-            switch (rule.Match(reading, comparison))
+            switch (rule.Match(reading.Words, comparison, reading.Quoted))
             {
                 case AgentRuleMatch.Yes:
                     return new AgentPolicyAnswer.Denied(
@@ -906,7 +953,7 @@ public sealed class AgentPolicy
         {
             foreach (var (rule, declared) in _rules.Where(pair => pair.Rule.Verb is AgentRuleVerb.Run))
             {
-                switch (rule.Match(reading, comparison))
+                switch (rule.Match(reading.Words, comparison, reading.Quoted))
                 {
                     case AgentRuleMatch.Yes:
                         return DeniedBy(declared, whole);
@@ -922,7 +969,7 @@ public sealed class AgentPolicy
         {
             foreach (var (reading, rule) in readings.SelectMany(reading => _worktreeRunRules.Select(rule => (reading, rule))))
             {
-                switch (rule.Match(reading, comparison))
+                switch (rule.Match(reading.Words, comparison, reading.Quoted))
                 {
                     case AgentRuleMatch.Yes:
                         return new AgentPolicyAnswer.Denied(
@@ -950,7 +997,7 @@ public sealed class AgentPolicy
         // A command that runs a program which fetches from the network is decided as a web request
         // too, by each address it names - and where the web is held to rules, one whose addresses
         // are in a file this does not read is denied.
-        foreach (var address in CommandAnalysis.WebAddresses(words))
+        foreach (var address in CommandAnalysis.WebAddresses(words, spelled))
         {
             if (WebDecided(address, whole, domains: true, agentRules: true).Refusal() is { } denied)
             {
@@ -1104,14 +1151,16 @@ public sealed class AgentPolicy
     /// run, or - where gh is the command's program - a command named by none of <see cref="GhCommands"/>;
     /// null where it reaches none.
     /// </summary>
-    /// <param name="words">The command as its rules read it.</param>
+    /// <param name="reading">The command as its rules read it, each word with how it stands to the shell.</param>
     /// <param name="runs">
     /// Whether the gh the words begin with runs: the command's own program, or a word past a program that runs the words
     /// after it (<see cref="CommandAnalysis.CommandRunners"/>); among any other program's words (<c>git grep gh src</c>,
     /// <c>Get-Command gh -ErrorAction SilentlyContinue</c>) a gh is that program's data, and its next word no command of gh's.
     /// </param>
-    private static string? MergesOrStartsCi(IReadOnlyList<string> words, bool runs)
+    private static string? MergesOrStartsCi(RuleReading reading, bool runs)
     {
+        var words = reading.Words;
+
         if (words.Count < 2 || !CommandAnalysis.Name(words[0]).Equals("gh", StringComparison.OrdinalIgnoreCase))
         {
             return null;
@@ -1142,6 +1191,7 @@ public sealed class AgentPolicy
         }
 
         var arguments = words.Skip(1).ToList();
+        var argumentQuoted = reading.Quoted.Skip(1).ToList();
         var writes = CommandAnalysis.GhApiWrites(arguments);
 
         foreach (var word in words.Skip(2))
@@ -1164,8 +1214,11 @@ public sealed class AgentPolicy
             }
         }
 
-        // An endpoint the shell expands may be any endpoint, a merge's among them.
-        if (CommandAnalysis.GhApiEndpoint(arguments) is { } endpoint && CommandAnalysis.Expansion(endpoint) is { } expansion)
+        // An endpoint the shell expands may be any endpoint, a merge's among them - read so only where the shell would
+        // expand it: an endpoint named in quotes is an endpoint of that spelling. Its query string is never stripped to
+        // read it, for a quoted one is part of the path it names.
+        if (CommandAnalysis.GhApiEndpoint(arguments) is { } endpoint
+            && CommandAnalysis.Expansion(endpoint, CommandAnalysis.GhApiEndpointQuoted(arguments, argumentQuoted)) is { } expansion)
         {
             return $"an endpoint named by {expansion} ('{endpoint}'), which this does not read";
         }
@@ -1179,7 +1232,8 @@ public sealed class AgentPolicy
                 return "a GraphQL query read from a file, which this does not read";
             }
 
-            if (CommandAnalysis.GhApiFields(arguments).FirstOrDefault(field => field.StartsWith("query=", StringComparison.OrdinalIgnoreCase) && CommandAnalysis.Expansion(field) is not null) is { } query)
+            if (CommandAnalysis.GhApiFields(arguments).FirstOrDefault(field => field.StartsWith("query=", StringComparison.OrdinalIgnoreCase)
+                    && CommandAnalysis.Expansion(field, CommandAnalysis.GhApiFieldQuoted(arguments, argumentQuoted, field)) is not null) is { } query)
             {
                 return $"a GraphQL query the shell expands ('{query}'), which this does not read";
             }

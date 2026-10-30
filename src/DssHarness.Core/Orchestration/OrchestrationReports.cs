@@ -96,6 +96,14 @@ public static class OrchestrationReports
             }
         }
 
+        foreach (var update in run.Updates?.Updates ?? [])
+        {
+            foreach (var line in UpdateLines(update))
+            {
+                yield return line;
+            }
+        }
+
         if (steps)
         {
             foreach (var step in flow.Steps)
@@ -110,6 +118,38 @@ public static class OrchestrationReports
             {
                 yield return line;
             }
+        }
+    }
+
+    /// <summary>
+    /// Where one plan update stands, as the listing says it: what raised it, what became of it - and, of one that is
+    /// done, each piece that has not ended yet with the step that carries it, and the iteration it added.
+    /// </summary>
+    private static IEnumerable<string> UpdateLines(Flow.FlowUpdateEntry update)
+    {
+        var raised = update.Cause == Flow.FlowUpdateCauses.ChangedAnswer
+            ? $"changed answer of {update.Question}, '{update.FromAnswer}' to '{update.ToAnswer}'"
+            : "amendment";
+
+        yield return $"plan update {update.Id} ({raised}): {update.State}{(update.State == Flow.FlowUpdateStates.UnderWay && update.Step is { } planning ? $" - the run is held while '{planning}' plans it" : update.Why is { } why ? $" - {why}" : string.Empty)}";
+
+        if (update.State != Flow.FlowUpdateStates.Done)
+        {
+            yield break;
+        }
+
+        foreach (var piece in update.ThePieces.Where(piece => piece.Kind != Flow.FlowUpdatePieceKinds.Told && piece.Ended is null))
+        {
+            yield return piece.CarriedBy is { } carried
+                ? $"  piece {piece.Kind} '{piece.ItemName()}' is carried out by '{carried}'"
+                : piece.Placed is { } placed
+                    ? $"  piece {piece.Kind} '{piece.ItemName()}' is placed in '{placed}' and not drawn yet"
+                    : $"  piece {piece.Kind} '{piece.ItemName()}' is owed to {piece.OwedTo}";
+        }
+
+        if (update.AddedIteration is { } added)
+        {
+            yield return $"  {Flow.FlowReports.IterationSaidOf(added)} was added for update {update.Id}";
         }
     }
 

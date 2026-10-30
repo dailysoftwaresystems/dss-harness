@@ -189,6 +189,39 @@ public sealed class ReadingAgentTests
     }
 
     /// <summary>
+    /// A directory the run itself placed under the agent's name - holding the step records the engine wrote before the
+    /// agent was made, and nothing else - is made in: the naming writes the record before the making, and a crash between
+    /// the two leaves exactly that. Anything else the directory holds is unknown, and refused as one.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryTheRunPlaced_UnderAnUnmadeAgent_IsMadeIn()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+
+        Directory.CreateDirectory(Path.Combine(kit.Layout.AgentDirectory("a7"), "steps", "plan"));
+        File.WriteAllText(Path.Combine(kit.Layout.AgentDirectory("a7"), "steps", "plan", "step.json"), "{}");
+
+        var made = await kit.Harness.AgentService.CreateAsync(
+            new AgentCreateRequest(kit.Main, OrchestrationKit.Orchestrator, "a7", "model-b", Empty: false, Session: null, NoWorktree: true), Token);
+
+        Assert.Equal(HarnessExit.Success, made.Outcome.ExitCode);
+        Assert.Equal("live", kit.Record("a7").State);
+        Assert.True(kit.Record("a7").Reads);
+
+        Directory.CreateDirectory(kit.Layout.AgentDirectory("a8"));
+        File.WriteAllText(Path.Combine(kit.Layout.AgentDirectory("a8"), "unknown.txt"), "not the engine's");
+
+        var refused = await kit.Harness.AgentService.CreateAsync(
+            new AgentCreateRequest(kit.Main, OrchestrationKit.Orchestrator, "a8", "model-b", Empty: false, Session: null, NoWorktree: true), Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
+        Assert.Equal(
+            $"'{kit.Layout.AgentDirectory("a8")}' is there already, and no record in it names an agent. Nothing was created.",
+            refused.Outcome.Message);
+    }
+
+    /// <summary>
     /// Every verb that works a worktree refuses it with the one sentence that is all four of them, before git is asked
     /// anything about the agent: the service's own git, which every question about an agent goes through, fails any
     /// call, so a guard that let one through first would fail the verb rather than refuse it - and counts the calls

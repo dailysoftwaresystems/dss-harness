@@ -54,7 +54,7 @@ public sealed class FlowWorkingSetsTests
                 dependsOn: [again]
             """);
 
-        Assert.Equal([new FlowWorkedFrom("think", "a1"), new FlowWorkedFrom("review", null)], WorkedFrom(runner, "again"));
+        Assert.Equal([new FlowWorkedFrom("think", "a1"), new FlowWorkedFrom("review", "a2")], WorkedFrom(runner, "again"));
         Assert.Empty(WorkedFrom(runner, "think"));
         Assert.Empty(WorkedFrom(runner, "after"));
         Assert.Equal([new FlowWorkedFrom("think", "a1")], WorkedFrom(runner, "review"));
@@ -112,15 +112,15 @@ public sealed class FlowWorkingSetsTests
             ("rework", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["done"] = ++rounds == 3 })));
 
         Assert.Equal(
-            [new FlowWorkedFrom("implement", "a1"), new FlowWorkedFrom("fix#3.review.correctness", null), new FlowWorkedFrom("fix#3.review.errors", null), new FlowWorkedFrom("fix#2.revise.rework", "a1"), new FlowWorkedFrom("fix#1.revise.rework", "a1")],
+            [new FlowWorkedFrom("implement", "a1"), new FlowWorkedFrom("fix#3.review.correctness", "a6"), new FlowWorkedFrom("fix#3.review.errors", "a7"), new FlowWorkedFrom("fix#2.revise.rework", "a1"), new FlowWorkedFrom("fix#1.revise.rework", "a1")],
             WorkedFrom(runner, "fix#3.revise.rework"));
         Assert.Equal(
-            [new FlowWorkedFrom("implement", "a1"), new FlowWorkedFrom("fix#2.review.correctness", null), new FlowWorkedFrom("fix#2.review.errors", null), new FlowWorkedFrom("fix#1.revise.rework", "a1")],
+            [new FlowWorkedFrom("implement", "a1"), new FlowWorkedFrom("fix#2.review.correctness", "a4"), new FlowWorkedFrom("fix#2.review.errors", "a5"), new FlowWorkedFrom("fix#1.revise.rework", "a1")],
             WorkedFrom(runner, "fix#2.revise.rework"));
         Assert.Equal(
-            [new FlowWorkedFrom("implement", "a1"), new FlowWorkedFrom("fix#1.review.correctness", null), new FlowWorkedFrom("fix#1.review.errors", null)],
+            [new FlowWorkedFrom("implement", "a1"), new FlowWorkedFrom("fix#1.review.correctness", "a2"), new FlowWorkedFrom("fix#1.review.errors", "a3")],
             WorkedFrom(runner, "fix#1.revise.rework"));
-        Assert.Equal([new FlowWorkedFrom("implement", "a1"), new FlowWorkedFrom("fix#1.review.correctness", null)], WorkedFrom(runner, "fix#2.review.correctness"));
+        Assert.Equal([new FlowWorkedFrom("implement", "a1"), new FlowWorkedFrom("fix#1.review.correctness", "a2")], WorkedFrom(runner, "fix#2.review.correctness"));
     }
 
     /// <summary>A step that goes on with its own work is seeded from its earlier visits, never from itself.</summary>
@@ -169,7 +169,7 @@ public sealed class FlowWorkingSetsTests
                 on: {step: think, outcome: success}
             """);
 
-        Assert.Equal([new FlowWorkedFrom("think", null)], WorkedFrom(runner, "mend"));
+        Assert.Equal([new FlowWorkedFrom("think", "a1")], WorkedFrom(runner, "mend"));
     }
 
     /// <summary>Each item of a forEach is seeded from its own item's steps alone, never a sibling item's.</summary>
@@ -201,7 +201,7 @@ public sealed class FlowWorkingSetsTests
         var think = runner.Runs.Where(run => run.Step.Name == "think").Select(run => run.Instance).ToList();
 
         Assert.Equal(2, again.Count);
-        Assert.Equal([[new FlowWorkedFrom(think[0], null)], [new FlowWorkedFrom(think[1], null)]], again.Select(run => run.WorkedFrom!.ToArray()));
+        Assert.Equal([[new FlowWorkedFrom(think[0], "a1")], [new FlowWorkedFrom(think[1], "a2")]], again.Select(run => run.WorkedFrom!.ToArray()));
         Assert.All(runner.Runs.Where(run => run.Step.Name == "think"), run => Assert.Empty(run.WorkedFrom!));
     }
 

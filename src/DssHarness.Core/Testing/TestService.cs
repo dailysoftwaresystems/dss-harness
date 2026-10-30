@@ -297,9 +297,10 @@ public sealed class TestService(
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(request);
 
-        var (settings, invocation, cores, command, counter) = Command(config, request, built: true);
+        var (settings, invocation, cores, command, counter, paths) = Command(config, request, built: true);
 
-        var logFile = new LegRecords(request.RunDirectory, request.Leg).PhaseLog(request.PhaseName);
+        var records = new LegRecords(request.RunDirectory, request.Leg);
+        var logFile = records.PhaseLog(request.PhaseName);
         var (inputs, unmeasurable) = await ResolveInputsAsync(settings, request, cancellationToken).ConfigureAwait(false);
 
         var elapsed = Stopwatch.StartNew();
@@ -363,6 +364,23 @@ public sealed class TestService(
         ContentionWarnings.Write(_output, CommandName, request.Leg, contention, config.Contention);
 
         var reached = seen.Decide(request.Leg, [Explained(phase, command)]);
+
+        // Evidence beside the verdict, never part of it: what the invocation named is copied out of the build
+        // directory, which the next run overwrites, into the run's own directory - whatever the leg came to,
+        // short of a pass. A keep that could not happen is said on the line, never raised: the verdict is reached.
+        var kept = reached.Verdict == LegVerdict.Passed
+            ? null
+            : await KeptOnFailure
+                .KeepAsync(
+                    _fileSystem,
+                    invocation.KeepOnFailure,
+                    invocation.KeepOnFailureCapBytes ?? KeptOnFailure.DefaultCapBytes,
+                    paths,
+                    request.BuildDirectory,
+                    records.Under(KeptOnFailure.DirectoryName),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
         var entry = new LegEntry
         {
             Leg = request.Leg,
@@ -372,6 +390,7 @@ public sealed class TestService(
             CommandTime = phase.Duration,
             Emulated = request.Emulated,
             TestCount = CountFrom(counter, phase.Output),
+            KeptOnFailure = kept,
 
             // What the count belongs to, decided here with the invocation that made it: the report
             // compares it only with the other legs of the same project and test set.
@@ -397,7 +416,7 @@ public sealed class TestService(
     }
 
     /// <summary>
-    /// The settings, invocation, core count, command and count pattern <paramref name="request"/> runs its
+    /// The settings, invocation, core count, command, count pattern and leg paths <paramref name="request"/> runs its
     /// tests with, refused wherever the run could not start as asked.
     /// </summary>
     /// <param name="config">The whole configuration.</param>
@@ -408,7 +427,7 @@ public sealed class TestService(
     /// is refused where none ever does; the command made then is never started.
     /// </param>
     /// <exception cref="HarnessException">The tests could not be run as asked.</exception>
-    private (TestConfig Settings, ResolvedTestInvocation Invocation, CoreCount Cores, TestCommand Command, Regex? Counter) Command(
+    private (TestConfig Settings, ResolvedTestInvocation Invocation, CoreCount Cores, TestCommand Command, Regex? Counter, LegPaths Paths) Command(
         HarnessConfig config,
         TestRequest request,
         bool built)
@@ -457,7 +476,7 @@ public sealed class TestService(
 
         _ = PhaseRunner.Patterns(request.Leg, request.PhaseName, invocation.SuccessPattern, TimingPatterns(config, request));
 
-        return (settings, invocation, cores, command, counter);
+        return (settings, invocation, cores, command, counter, paths);
     }
 
     /// <summary>

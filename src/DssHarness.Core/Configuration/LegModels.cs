@@ -266,4 +266,26 @@ public sealed class TestInvocation
     /// project's shared set.
     /// </summary>
     public string? TestSet { get; init; }
+
+    /// <summary>
+    /// Paths - files, directories, patterns - relative to the leg's build directory, named as
+    /// <see cref="Args"/> names its directories, that a run keeping evidence copies into
+    /// <c>kept-on-failure/</c> beside the leg's log when this invocation does not pass, whatever the
+    /// verdict. A pass keeps nothing; a later step reads nothing from it, for it is evidence beside
+    /// the verdict, never an output. A path naming nothing is said on the leg's line, not refused:
+    /// the failure may have been before it was written. Given empty in the file, it is refused when
+    /// the file is read; a list a caller builds empty reads as left out.
+    /// </summary>
+    /// <remarks>
+    /// The build directory is where a failing suite leaves what says why - a report, a capture, a
+    /// core dump - and the next run overwrites it there. The copy keeps the tree the files hold under
+    /// the build directory, so evidence and log read as one witness.
+    /// </remarks>
+    public List<string>? KeepOnFailure { get; init; }
+
+    /// <summary>
+    /// The most to keep in all, in bytes, when <see cref="KeepOnFailure"/> names paths; 64 MiB where
+    /// it is left out. Files past the cap are not copied and are named on the leg's line.
+    /// </summary>
+    public long? KeepOnFailureCapBytes { get; init; }
 }

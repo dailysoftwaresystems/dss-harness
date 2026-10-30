@@ -168,10 +168,12 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowService, FlowService>();
         services.AddSingleton<PlanValidator>();
         services.AddSingleton<CreateAgentRunner>();
+        services.AddSingleton<ReasonStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, OrientRunner>();
         services.AddSingleton<IFlowStepTypeRunner, GraphifyCodebaseRunner>();
         services.AddSingleton<IFlowStepTypeRunner, PlanCheckRunner>();
         services.AddSingleton<IFlowStepTypeRunner>(provider => provider.GetRequiredService<CreateAgentRunner>());
+        services.AddSingleton<IFlowStepTypeRunner>(provider => provider.GetRequiredService<ReasonStepRunner>());
         services.AddSingleton<IFlowStepTypeRunner, BuildStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, TestStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, RunStepRunner>();
@@ -201,7 +203,11 @@ public static class ServiceRegistration
 
         // The one way an agent's step is worked, whatever the client is: each client built in is registered here as its
         // slice lands - claude-code, then claude-api over the one connection the API clients share - and a test registers
-        // its fake the same way.
+        // its fake the same way. The lanes a run's requests go through are one registry for the whole process, one per
+        // provider and key, paced by the clock.
+        services.AddSingleton<ClientGates>(provider => new ClientGates(
+            provider.GetRequiredService<TimeProvider>(),
+            (wait, token) => Task.Delay(wait, provider.GetRequiredService<TimeProvider>(), token)));
         services.AddSingleton<IAgentClient>(provider => new Agents.ClaudeCode.ClaudeCodeClient(
             provider.GetRequiredService<IProcessRunner>(),
             provider.GetRequiredService<IFileSystem>(),

@@ -64,6 +64,31 @@ public sealed record FlowInboxAnswer(
 }
 
 /// <summary>
+/// One amendment of the request on its way to an engine that is running the run, in <c>inbox.json</c>: taken by the
+/// engine as <c>amend-orchestrator-request</c> takes one given while no engine runs - weighed against the same gates,
+/// and what became of it written into <c>updates.json</c> - and removed from the inbox by its id once it has been.
+/// </summary>
+/// <param name="Id">What tells this entry from every other the inbox ever held: given by the command that handed it over.</param>
+/// <param name="Text">The amendment, in the person's words: it adds to the request, corrects it or narrows it.</param>
+/// <param name="At">The moment the command took it: the moment its run's answers are held to, if one changes while it waits.</param>
+/// <param name="Through">How the person gave it: <c>amend-orchestrator-request</c> or <c>front-end</c>.</param>
+public sealed record FlowInboxAmendment(
+    string Id,
+    string Text,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At,
+    string? Through = null)
+{
+    /// <summary>A new entry's id: random, so two commands handing changes at once can never give one id twice.</summary>
+    public static string NewId() => Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+
+    /// <summary>What is wrong with this entry; null when nothing is.</summary>
+    public string? Problem()
+        => string.IsNullOrWhiteSpace(Id) ? "it names no id"
+            : string.IsNullOrWhiteSpace(Text) ? "its amendment is empty"
+            : null;
+}
+
+/// <summary>
 /// <c>inbox.json</c>: what a person gave from another terminal while the engine runs - here an answer, a changed
 /// answer and an amendment being theirs to carry - written under the store's lock, read as <c>stop.json</c> is, and
 /// emptied of each thing once the engine has written it where it belongs. What a session ends without taking stays for
@@ -71,13 +96,16 @@ public sealed record FlowInboxAnswer(
 /// </summary>
 /// <param name="Schema">The file's schema, 1.</param>
 /// <param name="Answers">The answers on their way to the engine, in the order given.</param>
-public sealed record FlowInboxFile(int Schema, IReadOnlyList<FlowInboxAnswer> Answers)
+/// <param name="Amendments">The amendments of the request on their way to the engine, in the order given.</param>
+public sealed record FlowInboxFile(int Schema, IReadOnlyList<FlowInboxAnswer> Answers, IReadOnlyList<FlowInboxAmendment>? Amendments = null)
 {
     /// <summary>What is wrong with this file; null when nothing is.</summary>
     public string? Problem()
         => Schema != 1 ? $"its schema is {Schema.ToString(CultureInfo.InvariantCulture)}, and this build reads 1"
             : Answers.Any(answer => answer.Problem() is { } problem) ? $"its answer '{Answers.First(answer => answer.Problem() is not null).Question}': {Answers.First(answer => answer.Problem() is not null).Problem()}"
+            : (Amendments ?? []).Any(amendment => amendment.Problem() is { } problem) ? $"its amendment: {(Amendments ?? []).First(amendment => amendment.Problem() is not null).Problem()}"
             : Answers.GroupBy(answer => answer.Id, StringComparer.Ordinal).Any(group => group.Count() > 1) ? "one id holds two answers"
+            : (Amendments ?? []).GroupBy(amendment => amendment.Id, StringComparer.Ordinal).Any(group => group.Count() > 1) ? "one id holds two amendments"
             : null;
 }
 

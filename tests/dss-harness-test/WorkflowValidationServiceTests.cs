@@ -99,6 +99,36 @@ public sealed class WorkflowValidationServiceTests
     }
 
     /// <summary>
+    /// A skill a step's prompt names is looked for by the service's own check, in the repository's places: the missing
+    /// sentence names every one, under the definition's refusal, and nothing is run.
+    /// </summary>
+    [Fact]
+    public async Task ASkillAStepsPromptNames_IsLookedForInTheRepositorysOwnPlaces()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["flow"] });
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "flow");
+
+        Directory.CreateDirectory(Path.Combine(directory, "prompts"));
+        Directory.CreateDirectory(Path.Combine(directory, "agents"));
+        Directory.CreateDirectory(Path.Combine(directory, "schemas"));
+        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: implement\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n");
+        File.WriteAllText(Path.Combine(directory, "prompts", "implement.md"), "Use {skill.release-notes}.\n");
+        File.WriteAllText(Path.Combine(directory, "agents", "worker.md"), "---\nname: worker\ndescription: does the work\n---\nYou do the work.\n");
+        File.WriteAllText(Path.Combine(directory, "schemas", "implement.json"), """{ "type": "object", "properties": { } }""");
+
+        var report = await Service(repository).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
+
+        Assert.False(report.Passed);
+        var problem = Assert.Single(report.Workflows[0].Lines);
+        Assert.StartsWith(
+            $"{Shown("flow")}: prompt 'prompts/implement.md' line 1 names {{skill.release-notes}}, and there is no such skill. Looked for:",
+            problem);
+        Assert.Contains(Path.Combine(repository.Path, ".harness-config", "skills", "release-notes", "SKILL.md"), problem);
+        Assert.Contains(Path.Combine(repository.Path, ".claude", "skills", "release-notes", "SKILL.md"), problem);
+        Assert.EndsWith("A plugin's skill, a managed one and a .claude/commands file are not looked for: copy the skill's folder to .harness-config/skills/release-notes.", problem.TrimEnd());
+    }
+
+    /// <summary>
     /// A slot that holds a provider's key takes its missing-key line away, and the check passes either way: which names
     /// the slot holds is no problem of the definition, so a machine that only checks a configuration needs no key.
     /// </summary>
@@ -1047,24 +1077,21 @@ public sealed class WorkflowValidationServiceTests
         var architecture = Prose.Document("docs", "architecture.md");
 
         Assert.Contains(
-            "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the advisor's, "
-                + "{question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its askPrompt alone - "
+            "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the advisor's - the bar the repository wrote, the orchestrator's recommendations file or its folder's own recommendations.md, read live each time it is given so a change holds from the next question on, and a sentence saying none was written where the folder has no one - {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its askPrompt alone - "
                 + "{update.<name>} in the prompts of the step that plans an update and of the steps of its scope, and {piece.<name>} in a step of "
                 + "the work-item group; the advisor's and the reporter's prompts read no step by name, and a pull request's body, which the "
                 + "engine fills and no agent reads, reads what a template key reads and no skill.",
             help,
             StringComparison.Ordinal);
         Assert.Contains(
-            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's, "
-                + "`{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
+            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote, read live each time it is given - `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
                 + "`{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and `{piece.*}` in a step of the "
                 + "work-item group; the advisor's and the reporter's prompts read no step by name, and a pull request's `body`, which the engine "
                 + "fills and no agent reads, reads what a template key reads and no skill.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
-            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's, "
-                + "`{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
+            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote, read live each time it is given - `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
                 + "`{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and `{piece.*}` in a step of the "
                 + "work-item group; the advisor's and the reporter's prompts are read too, and read no step by name, and a pull request's "
                 + "`body`, which the engine fills and no agent reads, reads what a template key reads and no skill.",
@@ -1364,7 +1391,14 @@ public sealed class WorkflowValidationServiceTests
             var path = Path.Combine([directory, .. file.Split('/')]);
 
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            await File.WriteAllTextAsync(path, file.EndsWith(".json", StringComparison.Ordinal) ? "{}\n" : "text\n", cancellationToken);
+            await File.WriteAllTextAsync(
+                path,
+                file.EndsWith(".json", StringComparison.Ordinal)
+                    ? "{}\n"
+                    : file.EndsWith(".md", StringComparison.Ordinal)
+                        ? $"---\nname: {Path.GetFileNameWithoutExtension(file)}\ndescription: does the work the steps ask of it\n---\nYou do the work the steps ask of you.\n"
+                        : "text\n",
+                cancellationToken);
         }
     }
 
