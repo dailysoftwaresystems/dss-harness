@@ -185,6 +185,7 @@ public sealed record FlowEvent(
 /// The plan update this instance was raised to plan, by its id - the visit of the step the <c>amend</c> block names; null
 /// for every step an update did not raise.
 /// </param>
+/// <param name="Told">Each telling of the step by a plan update: the update, when, and the way it reached it; null where none did.</param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -225,7 +226,8 @@ public sealed record FlowStepRecord(
     string? Model = null,
     bool? Copied = null,
     IReadOnlyList<FlowTargetRecord>? Targets = null,
-    string? RaisedByUpdate = null)
+    string? RaisedByUpdate = null,
+    IReadOnlyList<FlowStepTold>? Told = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -266,10 +268,34 @@ public sealed record FlowStepRecord(
             : RaisedBy is not null && !FlowInstanceId.IsWellFormed(RaisedBy) ? $"'{RaisedBy}' is not an instance id"
             : RaisedByUpdate is not null && !FlowUpdateIds.IsId(RaisedByUpdate) ? $"'{RaisedByUpdate}' is not an update's id"
             : LeftBy is not null && !FlowInstanceId.IsWellFormed(LeftBy) ? $"'{LeftBy}' is not an instance id"
+            : Told?.Any(told => !FlowUpdateIds.IsId(told.Update) || string.IsNullOrWhiteSpace(told.How)) == true ? "one it was told holds no update or no way it reached it"
             : Handoff?.Problem() is { } handoff ? $"its handoff: {handoff}"
             : Targets?.FirstOrDefault(target => target.Problem() is not null) is { } target ? $"its target '{target.Agent}': {target.Problem()}"
             : Targets?.GroupBy(target => target.Agent, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice ? $"it names target '{twice.Key}' twice"
             : null;
+}
+
+/// <summary>
+/// One telling of a step by a plan update, as its own record holds it: the update, when it was told, and the way it
+/// reached it - <c>a message</c> into the conversation it was in, <c>the answer</c> it was given with, or <c>a
+/// prompt</c> of an attempt that began after.
+/// </summary>
+/// <param name="Update">The update's id.</param>
+/// <param name="At">When the step was told.</param>
+/// <param name="How">The way it reached it.</param>
+public sealed record FlowStepTold(
+    string Update,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At,
+    string How)
+{
+    /// <summary>How a message into the conversation the step was in is said.</summary>
+    public const string ByMessage = "a message";
+
+    /// <summary>How a telling given with the answer the step waited on is said.</summary>
+    public const string WithTheAnswer = "the answer";
+
+    /// <summary>How a telling read in the prompt of an attempt that began after is said.</summary>
+    public const string InAPrompt = "a prompt";
 }
 
 /// <summary>The handoff a step's record names: who wrote it and why, for the file is its own record beside the step's.</summary>
@@ -720,6 +746,9 @@ public enum FlowChangeKind
 
     /// <summary>The run's advisor answered an open question with a recommendation, or left it without one.</summary>
     Advised,
+
+    /// <summary>An iteration was added to a loop at its bound, for a plan update that owes it work.</summary>
+    IterationAdded,
 }
 
 /// <summary>
@@ -798,6 +827,7 @@ public sealed record FlowSnapshot(
 /// <param name="Copied">Whether the leg step's attempt let its tree go while its legs work on, every copy made (<see cref="FlowStepRecord.Copied"/>).</param>
 /// <param name="Targets">A step of others' targets, each with where it stands (<see cref="FlowStepRecord.Targets"/>); null for every other step.</param>
 /// <param name="RaisedByUpdate">The plan update this instance was raised to plan, by its id; null for every step an update did not raise.</param>
+/// <param name="Told">Each telling of the step by a plan update, as its own record holds it (<see cref="FlowStepRecord.Told"/>); null where none did.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -838,4 +868,5 @@ public sealed record FlowSnapshotStep(
     string? Model = null,
     bool Copied = false,
     IReadOnlyList<FlowTargetRecord>? Targets = null,
-    string? RaisedByUpdate = null);
+    string? RaisedByUpdate = null,
+    IReadOnlyList<FlowStepTold>? Told = null);

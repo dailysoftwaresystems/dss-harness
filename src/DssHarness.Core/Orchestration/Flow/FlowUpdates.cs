@@ -109,6 +109,25 @@ public sealed record FlowUpdatePiece(
 }
 
 /// <summary>
+/// Who a plan update told something, and how: one reason step, what it was told - the pieces that named its work -
+/// and the way it reached it, <c>by a message into its conversation</c>, <c>with the answer</c> or <c>in its
+/// prompt</c>.
+/// </summary>
+/// <param name="Who">The step instance that was told.</param>
+/// <param name="What">What it was told, as the entry names it.</param>
+/// <param name="How">The way it reached it.</param>
+public sealed record FlowUpdateTold(string Who, string What, string How);
+
+/// <summary>
+/// A told piece a plan update could not deliver: the work under way it named, and why nothing was told - the work
+/// had ended meanwhile, or it is no id of the run. The step that goes on with the work has it in its prompt, where
+/// one does.
+/// </summary>
+/// <param name="For">The work the piece named.</param>
+/// <param name="Why">Why nothing was told.</param>
+public sealed record FlowNotDelivered(string For, string Why);
+
+/// <summary>
 /// One plan update a run has taken, as <c>updates.json</c> holds it: its id, what raised it, and where it stands. Of
 /// what raised it, an amendment holds its text, when it was made and through what; a changed answer holds the id of
 /// the question whose answer was changed with the answer before and the answer now. Of where it stands, an update
@@ -145,6 +164,10 @@ public sealed record FlowUpdatePiece(
 /// Each piece of the update as it was placed: what it is, its work item, where it went and what carries it - written
 /// as the updated plan stood, before the update was done; empty where the planning concluded no piece.
 /// </param>
+/// <param name="Told">Who was told what, and how: each reason step a piece of the update told, with the way it reached it.</param>
+/// <param name="NotConcerned">Each reason step that was in flight when the pieces were placed and that no piece named: sent nothing.</param>
+/// <param name="NotDelivered">Each told piece that could not be delivered, with why: the work it named had ended, or it is no id of the run.</param>
+/// <param name="AddedIteration">The iteration an update added at a loop's bound, where it added one: the iteration's own id; null where it added none.</param>
 public sealed record FlowUpdateEntry(
     string Id,
     string Cause,
@@ -160,7 +183,11 @@ public sealed record FlowUpdateEntry(
     string? Step = null,
     string? Then = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Text = null,
-    IReadOnlyList<FlowUpdatePiece>? Pieces = null)
+    IReadOnlyList<FlowUpdatePiece>? Pieces = null,
+    IReadOnlyList<FlowUpdateTold>? Told = null,
+    IReadOnlyList<string>? NotConcerned = null,
+    IReadOnlyList<FlowNotDelivered>? NotDelivered = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? AddedIteration = null)
 {
     /// <summary>Each piece of the update, as it was placed; empty where the planning concluded no piece.</summary>
     public IReadOnlyList<FlowUpdatePiece> ThePieces => Pieces ?? [];
@@ -178,6 +205,11 @@ public sealed record FlowUpdateEntry(
             : Step is not null && !FlowInstanceId.IsWellFormed(Step) ? $"'{Step}' is not an instance's id"
             : ThePieces.Any(piece => piece.Problem() is not null) ? $"its pieces hold one that is not a piece: {ThePieces.First(piece => piece.Problem() is not null).Problem()}"
             : ThePieces.Where(piece => piece.ItemName() is not null).GroupBy(piece => piece.ItemName(), StringComparer.Ordinal).Any(group => group.Count() > 1) ? "one work item is named by two pieces of one update"
+            : Told?.Any(told => !FlowInstanceId.IsWellFormed(told.Who) || string.IsNullOrWhiteSpace(told.What) || string.IsNullOrWhiteSpace(told.How)) == true ? "one it told holds no step, nothing told or no way it reached it"
+            : Told?.GroupBy(told => told.Who, StringComparer.Ordinal).Any(group => group.Count() > 1) == true ? "one step was told twice by one update"
+            : NotConcerned?.Any(concerned => !FlowInstanceId.IsWellFormed(concerned)) == true ? "one it names as not concerned is not an instance's id"
+            : NotDelivered?.Any(not => string.IsNullOrWhiteSpace(not.For) || string.IsNullOrWhiteSpace(not.Why)) == true ? "one not delivered names neither the work nor why"
+            : AddedIteration is not null && !FlowInstanceId.IsWellFormed(AddedIteration) ? $"'{AddedIteration}' is not an instance's id"
             : null;
 
     /// <summary>The piece of this update that names the work item <paramref name="name"/>, where one does; null where none does.</summary>

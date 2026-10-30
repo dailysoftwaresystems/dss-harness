@@ -109,6 +109,17 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// order - the step it goes on with, each reason step it depends on directly (a group by each one in it), then its own
 /// earlier visits, newest first - each that began once and no other; none for every other step.
 /// </param>
+/// <param name="Telling">
+/// How the engine tells the attempt's agent while it runs: what it posts into the conversation the attempt is in, and
+/// the handoff it raises where a plan update ends the step in order. One per attempt - a telling of an attempt that is
+/// over says nothing about the one the run is on now; null for every step but a reason one.
+/// </param>
+/// <param name="PlanTold">
+/// What a plan update that told this work said, with what raised it: the part of its own (<c>&lt;plan-updates&gt;</c>)
+/// that an attempt's first message holds, so a step that starts or goes on later in work a <c>told</c> piece named
+/// reads it whole. Null where no update told this work, and for a step that carries a piece out, which its own prompt
+/// reads as <c>{piece.*}</c>.
+/// </param>
 public sealed record FlowStepRun(
     WorkflowStep Step,
     string Instance,
@@ -126,7 +137,9 @@ public sealed record FlowStepRun(
     FlowMadeAgent? Made = null,
     string? WorksIn = null,
     string? Target = null,
-    IReadOnlyList<FlowWorkedFrom>? WorkedFrom = null);
+    IReadOnlyList<FlowWorkedFrom>? WorkedFrom = null,
+    FlowTelling? Telling = null,
+    string? PlanTold = null);
 
 /// <summary>
 /// The one who runs a step: the code a step type calls - a machine step's service, a reason step's client runner - asked
@@ -148,6 +161,69 @@ public interface IFlowStepRunner
     /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
     /// <param name="cancellationToken">Cancels the turn: a hard stop, or the bound the engine applies, ends it.</param>
     Task<string?> HandoffAsync(FlowStepRun run, CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// How the engine tells the agent of a reason step that runs: the messages it posts into the conversation the attempt
+/// is in - landing when the agent's calls have finished, never cutting its turn - and the handoff it raises where a
+/// plan update ends the step in order, whose lead tells the piece before the agent is asked where the work stands.
+/// Made where the attempt starts, one per attempt: a telling of an attempt that is over says nothing about the one the
+/// run is on now, and nothing posted to one is lost unsaid, for the channel of an ended attempt takes nothing.
+/// </summary>
+public sealed class FlowTelling(int attempt, TimeSpan handoffBound)
+{
+    /// <summary>The attempt this telling belongs to, from one.</summary>
+    public int Attempt { get; } = attempt;
+
+    /// <summary>Where the engine posts what it has to tell the agent while it works.</summary>
+    public Agents.AgentMessages Messages { get; } = new();
+
+    /// <summary>The handoff signal the engine raises where a plan update ends the step in order.</summary>
+    public Agents.AgentHandoffSignal Handoff { get; } = new(handoffBound);
+
+    /// <summary>Why the handoff was raised and what the agent was told before it was asked, where it was; null where it was not.</summary>
+    public Agents.AgentHandoffAsked? Asked { get; private set; }
+
+    /// <summary>Whether this is the telling of <paramref name="attempt"/>: one of an attempt that is over is spoken to no more.</summary>
+    /// <param name="attempt">The attempt the engine would tell.</param>
+    public bool For(int attempt) => Attempt == attempt;
+
+    /// <summary>
+    /// Posts <paramref name="message"/> into the conversation the attempt is in, where this is the attempt's telling:
+    /// the client gives it to the agent when the calls it is running have finished, and its turn is not cut for it.
+    /// </summary>
+    /// <param name="attempt">The attempt the engine would tell.</param>
+    /// <param name="message">The message, whole.</param>
+    /// <returns>Whether the attempt's conversation holds it now.</returns>
+    public bool Post(int attempt, string message)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+
+        return For(attempt) && Messages.Post(message);
+    }
+
+    /// <summary>
+    /// Raises the handoff for the attempt's own agent - its turn ended where it stands, one more asked of it, the
+    /// handoff turn, with <paramref name="lead"/> told before the question - where this is the attempt's telling and
+    /// none was raised before.
+    /// </summary>
+    /// <param name="attempt">The attempt the engine would tell.</param>
+    /// <param name="why">Why the step is ended in order, as the record says it.</param>
+    /// <param name="lead">What the agent is told first: the piece that names its work, whole.</param>
+    /// <returns>Whether the handoff was raised for a live attempt of the step.</returns>
+    public bool Ask(int attempt, string why, string? lead)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(why);
+
+        if (!For(attempt) || Asked is not null)
+        {
+            return false;
+        }
+
+        Handoff.Ask(why, lead);
+        Asked = new Agents.AgentHandoffAsked(why, lead);
+        return true;
+    }
 }
 
 /// <summary>

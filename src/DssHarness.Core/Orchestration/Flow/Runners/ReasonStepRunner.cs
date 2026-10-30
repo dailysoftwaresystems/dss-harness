@@ -272,6 +272,13 @@ public sealed class ReasonStepRunner(
             BackoffSeconds = run.Step.BackoffSeconds ?? place.Definition.BackoffSeconds,
             Program = program,
             ProgramVersion = programVersion,
+
+            // What the engine tells the attempt's agent while it works - a plan update's message into the
+            // conversation, its handoff where one ends the step in order - and what a plan update that told this
+            // work said, in the part of its own the attempt's first message holds.
+            Handoff = run.Telling?.Handoff,
+            Messages = run.Telling?.Messages,
+            PlanUpdates = run.PlanTold,
         };
 
         try

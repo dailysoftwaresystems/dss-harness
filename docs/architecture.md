@@ -71,9 +71,12 @@ never held as one text: a codebase graph's link result runs to tens of megabytes
 size again, in buffers the runtime's shared pool keeps. A file is renamed into place as POSIX renames, on Windows too
 (`Win32Files.TryReplace`): one who holds the old file open - every read here shares its deletion - goes on reading it
 while the new one takes its name, where Windows' own rename is refused while the old file is open at all, so a writer
-could not replace a record another sync was streaming. A volume that cannot rename so - FAT, some shares - is renamed
-Windows' own way. Off Windows, a read refuses a pipe, a socket or a device before it opens one (`UnixFiles`, the
-runtime's own stat, where .NET's attributes call each a plain file): a pipe's open waits for a writer, past any stop.
+could not replace a record another sync was streaming. A holder that shares nothing - a virus scanner reading a file
+just written, on a machine busy enough to outlast a short wait - is waited out instead: the rename is retried for
+about five and a half seconds (`PhysicalFileSystem.ReplaceAttempts`) before its refusal is reported. A volume that
+cannot rename so - FAT, some shares - is renamed Windows' own way. Off Windows, a read refuses a pipe, a socket or a
+device before it opens one (`UnixFiles`, the runtime's own stat, where .NET's attributes call each a plain file): a
+pipe's open waits for a writer, past any stop.
 A walk that must not stop at what it cannot read (`EnumerateReachableFiles`) goes a directory at a time, passing by
 and naming one beneath it that cannot be read.
 
@@ -2118,6 +2121,22 @@ are empty. `PlanValidator.CheckPieces` checks the pieces with the items where a 
 them - each of the four kinds and its texts, an `added` or `changed` item an item of the plan's list by name and member
 for member, no two pieces one work item, a `changed` or `removed` piece naming a work item the plan had - and the items
 an update places are checked with those of the round they join as one list, only the bound of eight not carried over.
+The pieces are told as they are placed (slice 31d4): every `told` piece's message is sent through the attempt's own
+telling (`FlowTelling`, made where a reason attempt starts and handed to the runner - `ReasonStepRunner` wires its
+messages channel and its handoff signal into the agent run) - a reason step in flight that a piece names, by its own
+instance or a scope around it, in one message into the conversation it is in, which lands when its calls have
+finished and never cuts its turn; a step that waits on a question of its own with the answer; a step that starts or
+goes on later in named work in the `<plan-updates>` part of its own prompt (`FlowCoordinator.PlanToldOf`). A reason
+step in flight that no piece names is listed as not concerned and a piece naming nothing under way as not delivered
+with why (`FlowUpdateEntry.Told`/`NotConcerned`/`NotDelivered`, each telling also in the step's own record,
+`FlowStepTold`); a reason step ended in order is told its piece first, as the lead of the handoff question
+(`FlowCoordinator.EndedInOrderLead`, the engine waiting for the client's own turn where the telling is live). Where
+the round a piece joins has ended, the work is owed to the loop's next iteration (`FlowInstance.OwedIterationBy`,
+rebuilt at the resume), which runs whatever its `until` says; where that loop is at its own bound one iteration is
+added for the update - once per update, at most `amend.maxAddedIterations` over the run, published as an
+`iterationAdded` event and kept in the entry (`FlowUpdateEntry.AddedIteration`) - and the report and
+`list-orchestrator` say every piece, where it was carried out and how that ended, the iteration added, and who was
+told what, who was not concerned and what was not delivered.
 Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`

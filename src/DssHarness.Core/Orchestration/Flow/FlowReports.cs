@@ -310,7 +310,47 @@ public static class FlowReports
         ["step"] = update.Step,
         ["then"] = update.Then,
         ["why"] = update.Why,
+        ["pieces"] = update.ThePieces.Count == 0 ? null : new JsonArray([.. update.ThePieces.Select(PieceOf)]),
+        ["told"] = update.Told is { Count: > 0 } told ? new JsonArray([.. told.Select(one => new JsonObject
+        {
+            ["who"] = one.Who,
+            ["what"] = one.What,
+            ["how"] = one.How,
+        })]) : null,
+        ["notConcerned"] = update.NotConcerned is { Count: > 0 } concerned ? new JsonArray([.. concerned.Select(one => (JsonNode?)one)]) : null,
+        ["notDelivered"] = update.NotDelivered is { Count: > 0 } not ? new JsonArray([.. not.Select(one => new JsonObject
+        {
+            ["for"] = one.For,
+            ["why"] = one.Why,
+        })]) : null,
+        ["addedIteration"] = update.AddedIteration,
     };
+
+    /// <summary>One piece of a plan update as the report's JSON document holds it: its kind, its work item, and where it stands.</summary>
+    private static JsonObject PieceOf(FlowUpdatePiece piece) => new()
+    {
+        ["kind"] = piece.Kind,
+        ["item"] = piece.ItemName(),
+        ["for"] = piece.For,
+        ["placed"] = piece.Placed,
+        ["owedTo"] = piece.OwedTo,
+        ["carriedBy"] = piece.CarriedBy,
+        ["ended"] = piece.Ended,
+    };
+
+    /// <summary>
+    /// An iteration an update added, as the report says it - <c>round 3 of 'rounds'</c> - read of its own id, which
+    /// names the loop and the iteration.
+    /// </summary>
+    /// <param name="iteration">The iteration's id, as the update's entry holds it.</param>
+    internal static string IterationSaidOf(string iteration)
+    {
+        var at = iteration.LastIndexOf('#');
+
+        return at > 0 && int.TryParse(iteration[(at + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var round)
+            ? $"round {round.ToString(CultureInfo.InvariantCulture)} of '{iteration[..at]}'"
+            : $"'{iteration}'";
+    }
 
     /// <summary>One step as the report's JSON document holds it.</summary>
     private static JsonObject StepOf(FlowStepRecord step) => new()
@@ -441,6 +481,35 @@ public static class FlowReports
                 text.Add(update.Cause == FlowUpdateCauses.ChangedAnswer
                     ? $"- {update.Id} (changed answer of {update.Question}, '{update.FromAnswer}' to '{update.ToAnswer}'), taken at {FlowTimeConverter.Written(update.TakenAt)}: {update.State}{step}{why}"
                     : $"- {update.Id} (amendment), taken at {FlowTimeConverter.Written(update.TakenAt)}: {update.State}{step}{why}{(update.Amendment is { } amendment ? $"\n  > {amendment.Replace("\n", "\n  > ")}" : string.Empty)}");
+
+                foreach (var piece in update.ThePieces.Where(piece => piece.Kind != FlowUpdatePieceKinds.Told))
+                {
+                    // Each piece that carries work out: where it was carried out, and how that ended.
+                    var where = piece.CarriedBy is { } carried
+                        ? $"carried out by '{carried}'"
+                        : piece.Placed is { } placed ? $"placed in '{placed}'" : $"owed to {piece.OwedTo}";
+                    text.Add($"  - {piece.Kind} '{piece.ItemName()}': {where}{(piece.Ended is { } ended ? $", {ended}" : ", still under way")}");
+                }
+
+                if (update.AddedIteration is { } added)
+                {
+                    text.Add($"  - {IterationSaidOf(added)} was added for update {update.Id}");
+                }
+
+                foreach (var one in update.Told ?? [])
+                {
+                    text.Add($"  - told '{one.Who}' {one.What}, {one.How}");
+                }
+
+                if (update.NotConcerned is { Count: > 0 } concerned)
+                {
+                    text.Add($"  - not concerned: {string.Join(", ", concerned.Select(id => $"'{id}'"))}");
+                }
+
+                foreach (var not in update.NotDelivered ?? [])
+                {
+                    text.Add($"  - not delivered: {not.Why}");
+                }
             }
         }
 

@@ -364,10 +364,11 @@ public sealed class AgentMessages
 
     /// <summary>Tells the agent <paramref name="message"/>.</summary>
     /// <param name="message">The message, whole.</param>
-    public void Post(string message)
+    /// <returns>Whether the channel holds it for the agent: false where the run's messages were ended, so nothing posted to an ended run is lost unsaid.</returns>
+    public bool Post(string message)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
-        _messages.Writer.TryWrite(message);
+        return _messages.Writer.TryWrite(message);
     }
 
     /// <summary>
