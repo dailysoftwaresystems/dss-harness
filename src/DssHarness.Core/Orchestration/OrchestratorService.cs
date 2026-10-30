@@ -556,24 +556,41 @@ public sealed class OrchestratorService(
     /// process has ended.
     /// </summary>
     private FlowEngineState EngineOf(OrchestratorLayout orchestrator, Flow.FlowFile flow)
+        => EngineOf(_store, _owner, orchestrator, flow);
+
+    /// <summary>
+    /// The one rule of what a run's engine is doing, as <c>list-orchestrator</c> and a run's own facts read it: no owner
+    /// recorded; a live one running the run; pausing, its handoffs being written; recording the machine steps a completed
+    /// pause left running; or gone - an owner recorded whose process has ended.
+    /// </summary>
+    /// <param name="store">Reads the run's owner.</param>
+    /// <param name="owner">Tells whether a recorded owner still stands.</param>
+    /// <param name="orchestrator">The run.</param>
+    /// <param name="flow">The run's state in one file.</param>
+    internal static FlowEngineState EngineOf(OrchestrationStore store, Flow.FlowRunOwner owner, OrchestratorLayout orchestrator, Flow.FlowFile flow)
     {
-        if (_store.ReadOwner(orchestrator) is not { } held)
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(flow);
+
+        if (store.ReadOwner(orchestrator) is not { } held)
         {
             return new FlowEngineState(FlowEngineState.None, null, []);
         }
 
-        if (!_owner.Stands(held))
+        if (!owner.Stands(held))
         {
-            return new FlowEngineState(FlowEngineState.Gone, _owner.Named(held), []);
+            return new FlowEngineState(FlowEngineState.Gone, owner.Named(held), []);
         }
 
         // Once the pause is complete, what its record still holds as running is what the pause left to finish: the
         // machine steps, the only ones a pause lets run on.
         return flow.Pause switch
         {
-            { CompletedAt: null } => new FlowEngineState(FlowEngineState.Pausing, _owner.Named(held), []),
-            { CompletedAt: not null } => new FlowEngineState(FlowEngineState.Recording, _owner.Named(held), flow.MachineStepsRunning()),
-            _ => new FlowEngineState(FlowEngineState.Running, _owner.Named(held), []),
+            { CompletedAt: null } => new FlowEngineState(FlowEngineState.Pausing, owner.Named(held), []),
+            { CompletedAt: not null } => new FlowEngineState(FlowEngineState.Recording, owner.Named(held), flow.MachineStepsRunning()),
+            _ => new FlowEngineState(FlowEngineState.Running, owner.Named(held), []),
         };
     }
 

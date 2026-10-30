@@ -24,6 +24,9 @@ public sealed class StoppedDocumentTests
     /// <summary>The flow document's members, in its order: the session a run verb would have run, empty.</summary>
     private static readonly string[] FlowDocument = ["exitCode", "summary", "run", "status", "questions", "answered", "passedOver", "handoffs", "leftForAPerson", "spent", "records"];
 
+    /// <summary>The ask document's members, in its order: the facts and the answer apart, both empty where the command stops before a run.</summary>
+    private static readonly string[] AskDocument = ["exitCode", "summary", "facts", "worded", "answer", "whyNot", "cost", "record"];
+
     /// <summary>
     /// Every command that takes --json, with the members of the document it answers with where it stops before its body
     /// has an outcome, in their order - an empty list where its document is an array, which it answers with empty.
@@ -39,6 +42,8 @@ public sealed class StoppedDocumentTests
         ["amend-orchestrator-request"] = FlowDocument,
         ["pause-orchestrator"] = FlowDocument,
         ["stop-orchestrator"] = FlowDocument,
+        ["ask-orchestrator-status"] = AskDocument,
+        ["ask-orchestrator"] = AskDocument,
         ["refresh-agent"] = AgentDocument,
         ["rebase-agent"] = AgentDocument,
         ["fold-agent"] = AgentDocument,

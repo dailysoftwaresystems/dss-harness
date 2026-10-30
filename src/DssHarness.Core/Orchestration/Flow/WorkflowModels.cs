@@ -206,7 +206,7 @@ public sealed record FlowReporter(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Tier,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Model,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Effort,
-    string? Client)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Client)
 {
     /// <summary>How often its agent is tried again where it failed, on each model it may use, where the file says.</summary>
     public int? Retries { get; init; } = null;

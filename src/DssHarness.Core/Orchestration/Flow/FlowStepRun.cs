@@ -554,3 +554,57 @@ public interface IFlowAdvisorRunner
     /// <param name="cancellationToken">Ends the asking: a person answered, or the run stopped.</param>
     Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// One asking of a run about itself, as the two commands put it (<c>ask-orchestrator-status</c> and
+/// <c>ask-orchestrator</c>): the run's facts, the person's question where one was typed, and where the attempt's own
+/// records are kept - under the run's <c>asks/&lt;stamp&gt;/</c>, a directory the engine never reads.
+/// </summary>
+/// <param name="Run">The run's name.</param>
+/// <param name="Workflow">The workflow's name, whose folder holds the reporter's agent and prompts.</param>
+/// <param name="Reporter">The orchestrator's reporter block, as the definition declares it.</param>
+/// <param name="Facts">The engine's facts, as text - what the status prompt and the ask prompt read as <c>{status.facts}</c>.</param>
+/// <param name="Question">The person's question; null for the status, the tool's own.</param>
+/// <param name="Records">Where the run's records are, as <c>{status.records}</c> reads it: the run's directory, and the only place the reporter may read.</param>
+/// <param name="Stamp">The call's own stamp: the name of its directory under the run's <c>asks/</c>.</param>
+/// <param name="Place">Where the run works.</param>
+public sealed record FlowReporterCall(
+    string Run,
+    string Workflow,
+    FlowReporter Reporter,
+    string Facts,
+    string? Question,
+    string Records,
+    string Stamp,
+    FlowRunPlace? Place = null);
+
+/// <summary>
+/// What one asking of a run about itself was answered with: the reporter's words, masked - or why no model worded it,
+/// which <c>ask-orchestrator-status</c> still answers with the facts and <c>ask-orchestrator</c> is refused over - and
+/// what the words cost, which is the person's and not the run's.
+/// </summary>
+/// <param name="Answer">The reporter's answer, masked; null where no model worded it.</param>
+/// <param name="WhyNot">Why no model worded it; null where one did.</param>
+/// <param name="ExitCode">The code the asking ends with where no model worded it: the mapping every agent run answers by.</param>
+/// <param name="Model">The model that served the reporter, where one did.</param>
+/// <param name="Usd">What the answer cost, where a model served it; null where nothing is known.</param>
+/// <param name="Tokens">The tokens its clients reported, where a model served it; null where nothing is known.</param>
+public sealed record FlowReported(
+    string? Answer,
+    string? WhyNot = null,
+    int? ExitCode = null,
+    string? Model = null,
+    double? Usd = null,
+    long? Tokens = null);
+
+/// <summary>
+/// The run's reporter: one reason step that only reads, worked wherever the run's records are and nowhere else, run for
+/// a person who asks - it changes nothing of the run, and what it costs is the person's, never the run's.
+/// </summary>
+public interface IFlowReporterRunner
+{
+    /// <summary>Words what the call asks of the run, or why no model worded it.</summary>
+    /// <param name="call">The asking: the run's facts, the person's question where one was typed, and where its records are.</param>
+    /// <param name="cancellationToken">Ends the asking.</param>
+    Task<FlowReported> ReportAsync(FlowReporterCall call, CancellationToken cancellationToken);
+}

@@ -47,7 +47,7 @@ namespace DssHarness.Core.Orchestration;
 /// events.jsonl                the run's events, one JSON object to a line
 /// report.md, report.json      the report of the run's last session
 /// inbox.json, stop.json       an answer, and a pause or a stop, handed to the engine running the run, until it takes them
-/// asks/                       the planned ask-orchestrator's calls; nothing writes it yet
+/// asks/                       one call of ask-orchestrator or ask-orchestrator-status: the facts it was given, the files of its reporter's attempt, ask.json; the engine never reads it
 /// web/searches.jsonl          what each source of the web search found once for the run, and each query it answered: the same query again is answered from here; written by every client whose step searches
 /// graph/graph.json            the run's codebase graph: the base's manifest, every file it keeps with its blob, state and extract
 /// graph/symbols.jsonl         the base's link result, as lines: every node and edge, with the digest of the manifest it was made from
@@ -146,8 +146,8 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     public const string ReportJsonFileName = "report.json";
 
     /// <summary>
-    /// The directory one call of the planned <c>ask-orchestrator</c> and <c>ask-orchestrator-status</c> will be kept in -
-    /// neither command is built yet, so nothing writes it. The engine never reads it.
+    /// The directory one call of <c>ask-orchestrator</c> and <c>ask-orchestrator-status</c> is kept in - the facts it was
+    /// given, the files of its reporter's attempt, and <c>ask.json</c>. The engine never reads it.
     /// </summary>
     public const string AsksDirectoryName = "asks";
 
@@ -502,8 +502,8 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     public string ReportJsonFile => Path.Combine(Directory, ReportJsonFileName);
 
     /// <summary>
-    /// Where the calls of the planned <c>ask-orchestrator</c> and <c>ask-orchestrator-status</c> will be kept, one
-    /// directory each - neither command is built yet, so nothing writes it. The engine never reads them.
+    /// Where the calls of <c>ask-orchestrator</c> and <c>ask-orchestrator-status</c> are kept, one directory each - the
+    /// facts it was given, the files of its reporter's attempt, and <c>ask.json</c>. The engine never reads them.
     /// </summary>
     public string AsksDirectory => Path.Combine(Directory, AsksDirectoryName);
 

@@ -3567,6 +3567,36 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
+            $"Asking a run about itself. {FlowService.AskStatusCommand} asks the tool's own question of a run - what is happening now, "
+            + "what is done, what is left, what it waits for, and when it may finish - and "
+            + $"{FlowService.AskCommand} a person's, both answered with the engine's facts, computed from the run's records and never "
+            + "guessed: how the run stands and for how long, its engine and its pause; each step instance in progress with its type, "
+            + "its agent, a reason step's model, its attempt and how long it has run; what it waits for - each open question with "
+            + "since when and the command that answers it, a plan update under way or queued, an instance waiting on another or on a "
+            + "claim or room, a ci-wait reading the checks of the commit the run last pushed; what is done, the failures a handler "
+            + "took and what was spent of the budget; what is left at least and at most, with the bound that gave the most - a loop's "
+            + "iterations to its bound, a handler's visits to its maxVisits, a forEach not yet expanded and a piece of a plan update "
+            + "not carried out named - and when it may finish, as a range that rests on this run alone: of each step of the "
+            + "definition, the shortest and the longest time an instance of it took to end Done, the lower end laying what is left "
+            + "along what depends on what so work that runs side by side is counted once, the upper end summing every instance and "
+            + "every one a loop or a handler can add, one after another; a step no instance of which has ended Done in this run is "
+            + "counted and named and in neither end, the time a person takes to answer and a wait for a claim or room are left out "
+            + "and said to be, and where nothing has ended or the run has ended there is no estimate, and the facts say which. Where "
+            + "the workflow's reporter names an agent, its words follow the facts - it is the run's own reporter, offered the tools "
+            + "that read and no other, reading the run's directory and nowhere else, its answer masked and what it costs the "
+            + "person's, never the run's; each call keeps its own record under the run's asks/, the facts as given, the files of its "
+            + "reporter's attempt and ask.json, a directory the engine never reads. Both commands only read: no state file, no "
+            + "step, no agent, no budget, no lock an engine needs - they take no lock at all - and they work while a run goes on, is "
+            + "paused, waits, or has ended. Where no model words them the status still prints the facts, says no model worded this "
+            + "and why, and exits 0: the facts are the answer, and the words were a service; the person's question is refused - 12 "
+            + "where the workflow names no reporter, 13 where the key is not there, 14 where npm or Claude Code is missing or too "
+            + "old, 20 where the model failed, 21 where it could not be reached or its account is at its limit - and neither "
+            + "command installs Claude Code or brings one up to date: that is a run's to do, and these only read. An orchestrator "
+            + "made by hand, which no flow runs, has no reporter and fewer facts: its status prints what list-orchestrator has of it "
+            + "and says so, and the person's question is refused (12).");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
             "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, and "
             + "what a machine step's legs start a process group of its own, apart from the engine's terminal; nothing ends either "
             + "when the process that started it is killed, so each session, and the group of each phase - a set-up's up line apart - "

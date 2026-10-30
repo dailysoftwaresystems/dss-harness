@@ -899,9 +899,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             Entries = entry.Entries,
         };
 
-    /// <summary>The step's own directory, as the one owner of the paths spells it.</summary>
+    /// <summary>The step's own directory, as the one owner of the paths spells it - or the one its request names, for a run the engine keeps elsewhere than an agent's steps (the run's reporter, under the run's <c>asks/</c>).</summary>
     /// <param name="step">The step.</param>
-    private static string StepDirectory(AgentStepRequest step) => Layout(step).AgentStepDirectory(step.Agent, step.StepInstance);
+    private static string StepDirectory(AgentStepRequest step) => step.RecordDirectory ?? Layout(step).AgentStepDirectory(step.Agent, step.StepInstance);
 
     /// <summary>The paths of the step's run, as the one owner of them spells them.</summary>
     /// <param name="step">The step.</param>

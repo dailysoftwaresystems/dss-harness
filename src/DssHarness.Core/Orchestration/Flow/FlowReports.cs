@@ -179,6 +179,51 @@ public static class FlowReports
             });
     }
 
+    /// <summary>
+    /// The <c>--json</c> document of the two ask commands - <c>ask-orchestrator-status</c> and <c>ask-orchestrator</c> -
+    /// with the facts and the answer apart, so a caller that wants no model's words reads the facts alone: the facts as
+    /// text, the answer where a model worded them and why not where none did, what the answer cost, and where the call's
+    /// own record is.
+    /// </summary>
+    /// <param name="facts">The engine's facts, as text.</param>
+    /// <param name="answer">The reporter's answer; null where none worded them.</param>
+    /// <param name="whyNot">Why no model worded them; null where one did.</param>
+    /// <param name="model">The model that served the reporter, where one did.</param>
+    /// <param name="usd">What the answer cost; null where nothing is known.</param>
+    /// <param name="tokens">The tokens its clients reported; null where nothing is known.</param>
+    /// <param name="record">Where the call's own record is, under the run's <c>asks/</c>.</param>
+    public static JsonObject AskDocument(string facts, string? answer, string? whyNot, string? model, double? usd, long? tokens, string record)
+    {
+        ArgumentNullException.ThrowIfNull(facts);
+        ArgumentNullException.ThrowIfNull(record);
+
+        return new JsonObject
+        {
+            ["facts"] = facts,
+            ["worded"] = answer is not null,
+            ["answer"] = answer,
+            ["whyNot"] = whyNot,
+            ["cost"] = model is null && usd is null && tokens is null
+                ? null
+                : new JsonObject
+                {
+                    ["model"] = model,
+                    ["usd"] = usd,
+                    ["tokens"] = tokens,
+                },
+            ["record"] = record,
+        };
+    }
+
+    /// <summary>
+    /// The ask document a stopped-early answer holds: the same members, holding nothing but the code it exits with and
+    /// the line it ends on - the shape every answer of the two commands keeps.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    public static string AskStopped(int exitCode, string summary)
+        => ReportJson.Stopped(exitCode, summary, AskDocument(string.Empty, null, null, null, null, null, string.Empty));
+
     /// <summary>Every handoff a run's steps hold, each by its step, who wrote it and its file in the step's own directory.</summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="flow">The run's state in one file.</param>

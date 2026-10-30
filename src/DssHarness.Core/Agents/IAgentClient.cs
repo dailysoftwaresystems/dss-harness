@@ -506,6 +506,13 @@ public sealed record AgentStepRequest(
 
     /// <summary>Where the run's every entry records what its key spent, for the next step's choice of one; null where nothing is counted.</summary>
     public IAgentSpendSink? Spend { get; init; }
+
+    /// <summary>
+    /// Where this run's own records are kept, where not under the run's agents' steps: the run's reporter keeps the files
+    /// of its attempt under the run's <c>asks/&lt;stamp&gt;/</c>, a directory of the run and of no agent. Null for every
+    /// step of a run, whose records are the runner's own rule.
+    /// </summary>
+    public string? RecordDirectory { get; init; }
 }
 
 /// <summary>

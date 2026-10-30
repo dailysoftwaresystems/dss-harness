@@ -69,6 +69,27 @@ public sealed class AgentRunnerTests
     }
 
     /// <summary>
+    /// A run the engine keeps elsewhere than an agent's steps - the run's reporter, whose attempt's files belong under
+    /// the run's <c>asks/</c> - keeps its stream, its record and its first message there, by the directory its request
+    /// names.
+    /// </summary>
+    [Fact]
+    public async Task ARunKeptElsewhereThanAnAgentsSteps_KeepsItsRecordsWhereItsRequestNames()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient { Script = (run, _, _) => Task.FromResult(Completed(run)) };
+        var asks = Path.Combine(temp.Path, ".orchestrators", "r1", "asks", "20261030T101000Z-1f3ab");
+
+        var result = await Runner(client).RunAsync(Step(temp) with { RecordDirectory = asks }, events: null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.True(File.Exists(Path.Combine(asks, StoredStream.FileName)), "the stored stream is kept where the request names");
+        Assert.True(File.Exists(Path.Combine(asks, AgentRunner.ResultFileName)), "and the run's own record beside it");
+        Assert.True(File.Exists(Path.Combine(asks, "user.md")), "and the first user message as sent");
+        Assert.False(Directory.Exists(StepDirectory(temp)), "and nothing under the agent's steps");
+    }
+
+    /// <summary>
     /// A client that throws leaves a record that says it failed - the run's last line and <c>result.json</c> alike - and
     /// its failure is raised once both are written; where a listener failed too, the run's own failure is the one
     /// answered with.

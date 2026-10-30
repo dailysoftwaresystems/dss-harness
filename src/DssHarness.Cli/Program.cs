@@ -31,6 +31,8 @@ root.Subcommands.Add(AnswerOrchestratorCommand.Create());
 root.Subcommands.Add(AmendOrchestratorRequestCommand.Create());
 root.Subcommands.Add(PauseOrchestratorCommand.Create());
 root.Subcommands.Add(StopOrchestratorCommand.Create());
+root.Subcommands.Add(AskOrchestratorStatusCommand.Create());
+root.Subcommands.Add(AskOrchestratorCommand.Create());
 root.Subcommands.Add(CreateAgentCommand.Create());
 root.Subcommands.Add(SeedAgentCommand.Create());
 root.Subcommands.Add(RefreshAgentCommand.Create());

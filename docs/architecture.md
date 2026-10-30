@@ -16,7 +16,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `amend-orchestrator-request`, `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `query-codebase-graph`, `clean`, `up`,
@@ -2388,6 +2388,41 @@ removes the owner once it is gone. Whether a run's engine is live is asked of on
 naming `pause-orchestrator` and `stop-orchestrator`) and removes a gone engine's owner with the run,
 and `list-orchestrator` says what the engine is doing - none, running, pausing, recording what a
 complete pause left running, or gone.
+
+Two commands answer a person's question about a run (`FlowService.AskStatusAsync`,
+`FlowService.AskAsync`): `ask-orchestrator-status` the tool's own - what is happening now, what is
+done, what is left, what it waits for, and when it may finish - and `ask-orchestrator` a person's,
+over the same facts. The facts are the engine's (`FlowStatus`, pure, over the records the same store
+methods `list-orchestrator` reads: `flow.json`, `questions.json`, `updates.json`, the frozen
+`definition.json` and the run's owner), computed and never guessed, stamped with the moment they
+were read: how the run stands and for how long, its engine and its pause; each step instance in
+progress; what it waits for - each open question with the command that answers it, a plan update
+under way or queued, an instance waiting on another or on a claim or room, a `ci-wait` reading the
+checks of the commit the run last pushed; what is done and what was spent of the budget; what is
+left at least and at most, with the bound that gave the most - a loop's iterations to its bound, a
+handler's visits to its `maxVisits`, a `forEach` not yet expanded and a piece of a plan update not
+carried out named - and when it may finish, as a range that rests on this run alone: of each step of
+the definition the shortest and the longest time an instance of it took to end `Done` (the lower end
+laying what is left along what depends on what, so work that runs side by side is counted once; the
+upper end summing every instance and every one a loop or a handler can add, one after another), a
+step no instance of which has ended `Done` in this run counted and named and in neither end, the
+time a person takes to answer and a wait for a claim or room left out and said to be, and no
+estimate at all where nothing has ended or the run has ended, the facts saying which. Where the
+workflow's `reporter` names an agent, its words follow the facts, run by the reason step's own
+runner as the advisor is (`ReporterRunner`), its reads narrowed to the run's directory alone
+(`AgentPolicyGround.ReporterRoot`: no command, no write, no web - the three tools that read and no
+other), its answer masked, its cost the person's and never the run's. Both commands only read: no
+state file, no step, no agent, no budget, no lock an engine needs, not even the sweep every other
+command over an orchestrator makes first - what a call leaves behind is its own record under the
+run's `asks/<stamp>/` (the facts as given, the files of its reporter's attempt, `ask.json`), a
+directory the engine never reads. Where no model words them the status still prints the facts, says
+`no model worded this` and why, and exits 0 - the facts are the answer, and the words were a
+service; the person's question is refused, naming why (12 where the workflow names no reporter, 13
+where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model
+failed, 21 where it could not be reached or its account is at its limit - `AgentRunResult.ToOutcome`
+the one mapping), and neither command installs Claude Code or brings one up to date. An orchestrator
+made by hand, which no flow runs, has no reporter and fewer facts: its status prints what
+`list-orchestrator` has of it and says so, and the person's question is refused (12).
 
 A session's interrupts are its own (`FlowTerminal`, `FlowInterrupts`): Ctrl+C, and off Windows
 SIGTERM and a hang-up, are taken by `PosixSignalRegistration` and never end the process, and the
