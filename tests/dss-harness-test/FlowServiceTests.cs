@@ -237,7 +237,7 @@ public sealed class FlowServiceTests
             {
                 ["agents/planner.md"] = "---\nname: planner\ndescription: plans the change\n---\nYou plan the change.\n",
                 ["update.md"] = "plan the change\n",
-                ["update.json"] = "{ \"type\": \"object\", \"properties\": { } }",
+                ["update.json"] = "{ \"type\": \"object\", \"additionalProperties\": false, \"properties\": { } }",
             });
         return (repository, Service(repository.Harness, runner), runner);
     }
@@ -1080,6 +1080,42 @@ public sealed class FlowServiceTests
 
         Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
         Assert.False(Directory.Exists(Path.Combine(repository.Path, ".orchestrators", "r1")));
+    }
+
+    /// <summary>
+    /// A start over a reason step whose schema says what the engine does not read is refused (12) as validate-workflow
+    /// refuses it, naming the step, the file and the problem, before anything of a run is made - never first where the
+    /// step's client is about to be paid.
+    /// </summary>
+    [Fact]
+    public async Task AStartOverASchemaOutsideTheSubset_IsRefused_BeforeAnythingOfARunIsMade()
+    {
+        var (repository, service, _) = await AmendedAsync(
+            """
+            name: flow
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                prompt: update.md
+                outputs: open.json
+            """);
+        using var disposed = repository;
+
+        await File.WriteAllTextAsync(
+            Path.Combine(repository.Path, ".harness-config", "workflows", Workflow, "open.json"),
+            """{"type":"object","properties":{}}""",
+            Token);
+
+        var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token);
+
+        Assert.Equal(
+            (HarnessExit.ConfigInvalid, "workflow 'flow' is not one this run can start"),
+            (outcome.ExitCode, outcome.Message));
+        Assert.Equal(
+            [".harness-config/workflows/flow/flow.yml: 'open.json', step 'plan''s outputs, is not a schema the engine reads: $: an object holds additionalProperties: false, saying every property is one it names"],
+            outcome.Details);
+        Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repository.Path, ".orchestrators")));
     }
 
     /// <summary>A run's name is held to the length the repository's worktrees take, as an orchestrator's is: a usage error, and nothing made.</summary>

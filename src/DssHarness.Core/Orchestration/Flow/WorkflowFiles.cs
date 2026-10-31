@@ -12,8 +12,23 @@ public static class WorkflowFiles
     /// <summary>One file a definition names.</summary>
     /// <param name="File">The file, as the definition names it, relative to the workflow's directory.</param>
     /// <param name="What">What names it, as a problem about it says it.</param>
-    /// <param name="IsSchema">Whether it is a step's schema, which is read as a JSON object as well as found.</param>
+    /// <param name="IsSchema">Whether it is a step's schema, which is held to the subset the engine reads as well as found.</param>
     public sealed record Named(string File, string What, bool IsSchema);
+
+    /// <summary>
+    /// Why a schema the definition names is not one the engine reads, each problem
+    /// <see cref="Schemas.JsonSchemaSubset.TextProblems"/> says on its own line naming the file and what names it; none
+    /// where it is one. Said where a repository's workflow is checked and where this build's own is read, so a
+    /// definition never holds over a schema no answer could be held to.
+    /// </summary>
+    /// <param name="named">The schema, as the definition names it.</param>
+    /// <param name="text">Its text.</param>
+    public static IReadOnlyList<string> SchemaProblems(Named named, string text)
+    {
+        ArgumentNullException.ThrowIfNull(named);
+
+        return [.. Schemas.JsonSchemaSubset.TextProblems(text).Select(problem => $"'{named.File}', {named.What}, is not a schema the engine reads: {problem}")];
+    }
 
     /// <summary>
     /// The files the definition itself names, beside its steps: the bar for recommendations, the advisor's agent and

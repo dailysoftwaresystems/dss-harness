@@ -565,7 +565,7 @@ public sealed class AgentSkillsTests
             ? "name: flow\nsteps:\n  - name: implement\n    type: reason\n    agent: implementer\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n"
             : "name: flow\nsteps:\n  - name: planning\n    repeat:\n      until: implement.done\n      maxIterations: 3\n    steps:\n      - name: implement\n        type: reason\n        agent: implementer\n        prompt: prompts/implement.md\n        resumePrompt: prompts/again.md\n        resume: implement\n        outputs: schemas/implement.json\n";
 
-        files["schemas/implement.json"] = """{ "type": "object", "properties": { } }""";
+        files["schemas/implement.json"] = """{ "type": "object", "additionalProperties": false, "properties": { "done": { "type": "boolean" } }, "required": ["done"] }""";
 
         return [.. WorkflowValidator.Validate(
             WorkflowFileParser.Parse("flow.yml", text),

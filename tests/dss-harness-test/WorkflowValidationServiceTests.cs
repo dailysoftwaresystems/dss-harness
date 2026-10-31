@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Help;
@@ -12,7 +13,7 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// What only the repository can answer about the workflows it declares: that each definition file is there, reads,
-/// holds, and names files that are there - the one command that reads a workflow's whole definition and its files
+/// holds, and names files that are there, each schema one the engine reads - the one command that reads a workflow's whole definition and its files
 /// together, changing nothing.
 /// </summary>
 public sealed class WorkflowValidationServiceTests
@@ -148,7 +149,7 @@ public sealed class WorkflowValidationServiceTests
         File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: implement\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n");
         File.WriteAllText(Path.Combine(directory, "prompts", "implement.md"), "Use {skill.release-notes}.\n");
         File.WriteAllText(Path.Combine(directory, "agents", "worker.md"), "---\nname: worker\ndescription: does the work\n---\nYou do the work.\n");
-        File.WriteAllText(Path.Combine(directory, "schemas", "implement.json"), """{ "type": "object", "properties": { } }""");
+        File.WriteAllText(Path.Combine(directory, "schemas", "implement.json"), """{ "type": "object", "additionalProperties": false, "properties": { } }""");
 
         var report = await Service(repository).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
 
@@ -752,8 +753,61 @@ public sealed class WorkflowValidationServiceTests
 
         Assert.Equal(
             [
-                $"{Shown("small")}: 'schemas/broken.json', step 'broken''s outputs, is not valid JSON ({JsonReason("{ not json")})",
-                $"{Shown("small")}: 'schemas/listed.json', step 'listed''s outputs, holds no JSON object; a schema is a mapping of properties",
+                $"{Shown("small")}: 'schemas/broken.json', step 'broken''s outputs, is not a schema the engine reads: $: is not JSON ({JsonReason("{ not json")})",
+                $"{Shown("small")}: 'schemas/listed.json', step 'listed''s outputs, is not a schema the engine reads: $: a schema is a JSON object",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// A schema that says what the engine does not read is refused where the workflow is checked, never first where a
+    /// step's client is about to be paid: each problem on its own line, naming the file, the step that names it and the
+    /// place in the schema that says it - a schema two steps name said for each.
+    /// </summary>
+    [Fact]
+    public async Task ASchemaOutsideTheSubset_IsRefused_EachProblemNamingTheStepAndTheFile()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: draft
+                type: reason
+                agent: worker
+                prompt: prompts/work.md
+                outputs: schemas/open.json
+              - name: again
+                type: reason
+                agent: worker
+                prompt: prompts/work.md
+                outputs: schemas/open.json
+                dependsOn: [draft]
+            """,
+            cancellationToken,
+            "agents/worker.md",
+            "prompts/work.md",
+            "schemas/open.json");
+        await File.WriteAllTextAsync(
+            Path.Combine(repository.Path, ".harness-config", "workflows", "small", "schemas", "open.json"),
+            """{"type":"object","properties":{"plan":{"type":"string","minLength":1}},"required":["plan"]}""",
+            cancellationToken);
+
+        var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
+        var open = $"{Shown("small")}: 'schemas/open.json'";
+        var unread = "is not a schema the engine reads:";
+
+        Assert.False(report.Passed);
+        Assert.Equal(
+            [
+                $"{open}, step 'draft''s outputs, {unread} $.properties.plan.minLength: is said by no schema this engine reads",
+                $"{open}, step 'draft''s outputs, {unread} $: an object holds additionalProperties: false, saying every property is one it names",
+                $"{open}, step 'again''s outputs, {unread} $.properties.plan.minLength: is said by no schema this engine reads",
+                $"{open}, step 'again''s outputs, {unread} $: an object holds additionalProperties: false, saying every property is one it names",
             ],
             report.Lines);
     }
@@ -1354,7 +1408,7 @@ public sealed class WorkflowValidationServiceTests
     {
         try
         {
-            using var document = JsonDocument.Parse(text);
+            _ = JsonNode.Parse(text);
         }
         catch (JsonException ex)
         {

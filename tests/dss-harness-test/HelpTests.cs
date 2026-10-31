@@ -4315,7 +4315,8 @@ public sealed partial class HelpTests
                 + "step can go on with its work; the step's model resolved with its agent definition below its own and its order built as entries of a model and one of its provider's keys, each entry's credential read from the slot "
                 + "('help agent-clients'); its prompt file read and filled where the step starts, its writes given as an expression read there too - the names it yielded narrowing what it may write as a written-out list does - "
                 + "and each skill it names looked up again and the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, "
-                + "and its going on by the client's kind - the stored conversation handed where the client goes on with one, a new launch rendered where it does not; and its answer, held to the schema its outputs names, the step's output. A failed "
+                + "and its going on by the client's kind - the stored conversation handed where the client goes on with one, a new launch rendered where it does not; and its answer, held to the schema its outputs names - one the engine reads, "
+                + "refused otherwise where the workflow is checked and again before any client is asked - the step's output. A failed "
                 + "agent is tried again on its model - the step's retries, absent the workflow's maxRetries, waiting its backoffSeconds, absent the workflow's, twice as long before each later try - and then on each model of its order; what its agents "
                 + "assumed without asking is kept, read as the step's own assumptions fact and named in the run's. Where the step may ask (ask) its agent's questions pause it - askRounds times in one attempt, the answer or decide going on in the same "
                 + "attempt as the agent's next message; a limit of its own (turns, budget, a truncated answer, a full context) asks, more offered only where a stored conversation of the attempt can be handed, and compact for a full context goes on "
@@ -4446,7 +4447,8 @@ public sealed partial class HelpTests
         // The refusals' codes are the ones the command answers with, held here so the sentence cannot drift from them.
         Assert.Contains(
             "'dssharness validate-workflow' checks the definition - the shape of every key, every name an expression, a template key "
-                + "or a prompt reads, every file the definition names - and refuses "
+                + "or a prompt reads, every file the definition names, each step's schema one the engine reads (each problem naming "
+                + "the file, the step and the place in the schema; a step's start holds it there again) - and refuses "
                 + $"({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
                 + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it "
                 + $"is refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] "

@@ -165,25 +165,11 @@ public sealed record AgentOutput(string Name, string Schema, int MaxRepairs = 2,
     public int? AskRounds { get; init => field = value is { } rounds ? Counted(rounds, nameof(AskRounds)) : null; } = AskRounds is { } rounds ? Counted(rounds, nameof(AskRounds)) : null;
 
     /// <summary>
-    /// Why <see cref="Schema"/> is no schema an answer can be held to - not a JSON object, or saying what the subset
-    /// does not read (<see cref="Schemas.JsonSchemaSubset.SubsetProblems"/>) - or nothing where it is one: the one check
-    /// of an output's schema, made before any client is taken, so no model is paid for an answer nothing could read.
+    /// Why <see cref="Schema"/> is no schema an answer can be held to, as <see cref="Schemas.JsonSchemaSubset.TextProblems"/>
+    /// says it, or nothing where it is one: checked before any client is taken, so no model is paid for an answer
+    /// nothing could read.
     /// </summary>
-    public IReadOnlyList<string> SchemaProblems()
-    {
-        System.Text.Json.Nodes.JsonNode? parsed;
-
-        try
-        {
-            parsed = System.Text.Json.Nodes.JsonNode.Parse(Schema);
-        }
-        catch (System.Text.Json.JsonException ex)
-        {
-            return [$"$: is not JSON ({ex.Message})"];
-        }
-
-        return parsed is System.Text.Json.Nodes.JsonObject ? Schemas.JsonSchemaSubset.SubsetProblems(parsed) : ["$: a schema is a JSON object"];
-    }
+    public IReadOnlyList<string> SchemaProblems() => Schemas.JsonSchemaSubset.TextProblems(Schema);
 
     /// <summary>A count, as given; refused below naught, which no count of repairs or rounds is.</summary>
     private static int Counted(int value, string name)

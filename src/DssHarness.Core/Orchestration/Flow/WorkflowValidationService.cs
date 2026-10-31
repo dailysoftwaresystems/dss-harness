@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
@@ -19,7 +18,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// The pure rules live in <see cref="WorkflowValidator"/>, the file's shape in
 /// <see cref="WorkflowFileParser"/>; this adds what only the repository can answer: that the file
 /// is where the configuration says it is, that the workflow's directory, its definition and the
-/// files the definition names are the repository's own, inside the workflow's directory, and that
+/// files the definition names are the repository's own, inside the workflow's directory, that each
+/// schema a step names is one the engine reads, and that
 /// what the definition asks of the configuration holds: the legs and runners it names are
 /// declared, a runner that writes the tree works in an agent's worktree, a commit step fills the
 /// commit template, and the agents a run makes are named within the worktrees' bound.
@@ -454,7 +454,7 @@ public sealed class WorkflowValidationService(
     {
         if (named.IsSchema)
         {
-            return Schema(named.File, directory, name, named.What);
+            return Schema(named, directory, name);
         }
 
         var problems = new List<string>();
@@ -484,30 +484,30 @@ public sealed class WorkflowValidationService(
         }
     }
 
-    /// <summary>That a schema file is there, can be read, and holds a JSON object.</summary>
-    private IReadOnlyList<string> Schema(string named, string directory, string name, string what)
+    /// <summary>
+    /// That a schema file is there, can be read, and is a schema the engine reads (<see cref="WorkflowFiles.SchemaProblems"/>):
+    /// the check a step's schema is held to again before its client is taken, made here so that no run starts over a
+    /// schema no answer could be held to.
+    /// </summary>
+    private IReadOnlyList<string> Schema(WorkflowFiles.Named named, string directory, string name)
     {
-        if (_named.Problem(named, directory, name, what, out var path) is { } problem)
+        if (_named.Problem(named.File, directory, name, named.What, out var path) is { } problem)
         {
             return [problem];
         }
 
+        string text;
+
         try
         {
-            using var document = JsonDocument.Parse(_fileSystem.ReadAllText(path));
-
-            return document.RootElement.ValueKind == JsonValueKind.Object
-                ? []
-                : [$"'{named}', {what}, holds no JSON object; a schema is a mapping of properties"];
-        }
-        catch (JsonException exception)
-        {
-            return [$"'{named}', {what}, is not valid JSON ({exception.Message})"];
+            text = _fileSystem.ReadAllText(path);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            return [$"'{named}', {what}, could not be read: {exception.Message}"];
+            return [$"'{named.File}', {named.What}, could not be read: {exception.Message}"];
         }
+
+        return WorkflowFiles.SchemaProblems(named, text);
     }
 
     private static string Shown(string name)

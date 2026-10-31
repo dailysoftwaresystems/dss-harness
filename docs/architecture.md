@@ -1437,7 +1437,10 @@ agent definition - the system prompt, sent as written - names none. The lookup i
 check by whoever reads the repository's files, so the shipped definition is checked without one and
 a skill it does not name is never looked for. It checks every question
 kind an answer names, and every file the
-definition points at, beside the definition that names it - a runner or a leg no configuration
+definition points at, beside the definition that names it - each schema a step names held to the subset the engine
+reads by the one check of a schema's text (`JsonSchemaSubset.TextProblems`, through `WorkflowFiles.SchemaProblems`),
+each problem on its own line naming the file, the step and the place in the schema, so no run starts over a schema no
+answer could be held to; the shipped definition's schemas are held to it where this build reads them - a runner or a leg no configuration
 declares is said the same way, as is a definition that cannot be read, and a workflow whose
 directory leads out of the workflows directory, or whose definition out of its own directory, once
 their links are followed. Every problem is collected and reported together (12), without running
@@ -2100,8 +2103,10 @@ filled by the one grammar with the question as an object of its texts (`{questio
 asking step's own records rendered as a continuation record renders a step), the run's inputs and `{recommendations}`,
 and its output the engine's own schema in the subset every answer is held to - closed objects, `anyOf` one shape for
 the answers that take a text, which it requires, and one for those that do not - whose `answer` enum is the question's
-own answers so the schema itself refuses any other. A step's schema outside the subset never reaches a client
-(`AgentRunner` refuses it `NotStarted`, the configuration wrong, before any request is sent). The question is raised at
+own answers so the schema itself refuses any other. A step's schema outside the subset never reaches a client:
+`validate-workflow` and a run's start refuse it (12), and since its file can change between, `AgentRunner` refuses it
+again `NotStarted`, the configuration wrong, before any request is sent - both by `JsonSchemaSubset.TextProblems`, the
+one check of a schema's text. The question is raised at
 once with its recommendation marked sought, and the session does not end while the advice runs
 (`FlowCoordinator.TakeAdviceAsync`, the loop's wait); an answer ends the asking (`TakeAnswer` dropping it, the
 recommendation `cancelled`), the asking step not admitted again until the advice's runner has ended (the hold
