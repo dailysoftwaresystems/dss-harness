@@ -2,8 +2,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
 /// The chain of work a reason step goes on with (<c>resume</c>): the step at its root - the one that began the work,
-/// whose agent definition, client, tier, model and <c>writes</c> every step that goes on with it inherits, naming none
-/// of them itself - found as the engine finds the step a resume names: a reason step of the step's own scope or
+/// whose agent definition, client, tier, model, <c>writes</c> and <c>search</c> every step that goes on with it inherits,
+/// naming none of them itself - found as the engine finds the step a resume names: a reason step of the step's own scope or
 /// one around it, through each resume in turn. The one owner of the walk, which the reason step's runner and the
 /// definition's check both ask, so that what a step is checked as is what it runs as.
 /// </summary>

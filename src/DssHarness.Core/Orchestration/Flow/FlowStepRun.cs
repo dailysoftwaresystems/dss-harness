@@ -604,7 +604,7 @@ public sealed record FlowAdvisorCall(
 /// <param name="Model">The model that served the advisor, where one did.</param>
 /// <param name="Directory">Where the advisor's own records are, under the asking step; null where none were kept.</param>
 /// <param name="NotObtained">Why no recommendation was obtained, where it was sought and not had; null otherwise.</param>
-/// <param name="Usd">What the advice cost at the configuration's prices, counted from its turns as they were reported - an asking ended part way among them; null where none was.</param>
+/// <param name="Usd">What the advice cost at the configuration's prices, counted from its turns as they were reported - an asking ended part way among them (<see cref="AgentRunSpend.Spent"/>); null where none was, or where a turn's cost is not known.</param>
 /// <param name="Tokens">Every token its turns used, of every kind; null where none was reported.</param>
 public sealed record FlowAdvice(
     string? Answer,
@@ -662,10 +662,13 @@ public sealed record FlowReporterCall(
 /// </summary>
 /// <param name="Answer">The reporter's answer, masked; null where no model worded it.</param>
 /// <param name="WhyNot">Why no model worded it; null where one did.</param>
-/// <param name="ExitCode">The code the asking ends with where no model worded it: the mapping every agent run answers by.</param>
+/// <param name="ExitCode">
+/// The code the asking ends with where no model worded it: the mapping every agent run answers by, and a failed
+/// command's for a run that completed without a word - never a code that says it passed.
+/// </param>
 /// <param name="Model">The model that served the reporter, where one did.</param>
-/// <param name="Usd">What the answer cost, where a model served it; null where nothing is known.</param>
-/// <param name="Tokens">The tokens its clients reported, where a model served it; null where nothing is known.</param>
+/// <param name="Usd">What the answer cost at the configuration's prices (<see cref="AgentRunSpend.Spent"/>); null where it is not known.</param>
+/// <param name="Tokens">Every token of every kind the reporter's run used (<see cref="AgentRunSpend.Spent"/>); null where none was reported.</param>
 public sealed record FlowReported(
     string? Answer,
     string? WhyNot = null,

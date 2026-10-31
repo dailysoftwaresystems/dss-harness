@@ -36,10 +36,19 @@ public sealed class RunReporterTests
         /// <summary>How the run answers; a completed run with no answer unless a test changes it.</summary>
         public Func<AgentStepRequest, AgentRunResult> Answer { get; set; } = _ => new AgentRunResult(AgentRunStatus.Completed, FinalText: "All good.");
 
-        public Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
+        /// <summary>The events the run says before it answers, as a client says them.</summary>
+        public List<AgentEvent> Says { get; } = [];
+
+        public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
         {
             Asked.Add(step);
-            return Task.FromResult(Answer(step));
+
+            foreach (var said in Says)
+            {
+                await events!.EmitAsync(said);
+            }
+
+            return Answer(step);
         }
 
         public async IAsyncEnumerable<AgentEvent> Stream(AgentStepRequest step, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -163,6 +172,12 @@ public sealed class RunReporterTests
         using var disposed = temp;
         var runDirectory = Path.Combine(temp.Path, ".orchestrators", run);
         var before = Snapshot(runDirectory);
+        var startsIn = (Directory: (string?)null, There: false);
+        reporter.Answer = step =>
+        {
+            startsIn = (step.Workspace.WorkingDirectory, Directory.Exists(step.Workspace.WorkingDirectory));
+            return new AgentRunResult(AgentRunStatus.Completed, FinalText: "All good.");
+        };
 
         var outcome = await service.AskStatusAsync(temp.Path, run, json: false, Token).WaitAsync(Bound, Token);
 
@@ -188,6 +203,10 @@ public sealed class RunReporterTests
         Assert.Equal(asks, asked.RecordDirectory);
         Assert.Equal(Path.Combine(asks, OrchestratorLayout.SessionsDirectoryName), asked.SessionsDirectory);
         Assert.Equal(runDirectory, asked.Workspace.RunDirectory);
+
+        // The reporter starts in its own work directory under the call's asks/, which is there before its client is
+        // handed it: a program is never started in a directory that is not there.
+        Assert.Equal((Path.Combine(asks, "work"), true), startsIn);
         Assert.Null(asked.Output);
         Assert.Equal("reporter", asked.Agent);
 
@@ -296,7 +315,7 @@ public sealed class RunReporterTests
         Assert.All(
             Directory.EnumerateFiles(Path.Combine(temp.Path, ".orchestrators", run, "asks"), "*", SearchOption.AllDirectories),
             file => Assert.DoesNotContain("sk-test-one", File.ReadAllText(file), StringComparison.Ordinal));
-        Assert.Contains(new ClaudeTranscripts(harness.FileSystem, harness.Platform).ConfigDirectory, reporter.Asked.Single().Ground!.ClaudeCodeDirectories);
+        Assert.Equal([new ClaudeTranscripts(harness.FileSystem, harness.Platform).ConfigDirectory], reporter.Asked.Single().Ground!.ClaudeCodeDirectories);
     }
 
     /// <summary>
@@ -355,23 +374,60 @@ public sealed class RunReporterTests
         Assert.Equal((HarnessExit.ConfigInvalid, $"ask-orchestrator was refused: no model worded an answer: {why}"), (asked.ExitCode, asked.Message));
     }
 
-    /// <summary>The <c>--json</c> answer holds the facts and the answer apart, with the cost and the record.</summary>
+    /// <summary>
+    /// The <c>--json</c> answer holds the facts and the answer apart, with the cost and the record - the cost counted as
+    /// every agent run of the engine's is (<see cref="AgentRunSpend"/>): every token of every kind its turns used, at the
+    /// configuration's prices.
+    /// </summary>
     [Fact]
     public async Task TheJsonAnswerHoldsTheFactsAndTheAnswerApart()
     {
-        var (_, temp, reporter, service, run) = await PausedAsync();
+        var (harness, temp, reporter, service, run) = await PausedAsync();
         using var disposed = temp;
-        reporter.Answer = _ => new AgentRunResult(AgentRunStatus.Completed, FinalText: "All good.") { Model = "glm-5.3", Usage = new AgentUsageReport(new AgentUsage(1, 2, 3, 4, 5, 6), []), };
+        var turn = new AgentUsage(1, 2, 3, 4, 5, 6);
+        reporter.Says.Add(new UsageReported(turn, turn));
+        reporter.Answer = step => new AgentRunResult(AgentRunStatus.Completed, FinalText: "All good.") { Model = step.Model, Usage = new AgentUsageReport(turn, []), };
 
         var outcome = await service.AskStatusAsync(temp.Path, run, json: true, Token).WaitAsync(Bound, Token);
         var document = JsonNode.Parse(Assert.Single(outcome.Data))!.AsObject();
+        var served = reporter.Asked.Single().Model!;
+        var priced = AgentProviders.Resolve(harness.ConfigStore.Load(HarnessFactory.ConfigPath(temp.Path)))!.Providers!.Of(served)
+            ?? throw new InvalidOperationException($"'{served}' is no model the configuration lists");
 
         Assert.Equal(HarnessExit.Success, (int)document["exitCode"]!);
         Assert.True((bool)document["worded"]!);
         Assert.Equal("All good.", (string)document["answer"]!);
         Assert.StartsWith($"run '{run}' (workflow '{Workflow}'), as of ", (string)document["facts"]!, StringComparison.Ordinal);
-        Assert.Equal("glm-5.3", (string)document["cost"]!["model"]!);
+        Assert.Equal(
+            (served, AgentPrices.CostOf(priced.Provider, priced.Model, turn), turn.AllTokens),
+            ((string)document["cost"]!["model"]!, (double?)document["cost"]!["usd"], (long)document["cost"]!["tokens"]!));
+        Assert.Equal(15, turn.AllTokens);
         Assert.NotNull((string)document["record"]!);
+    }
+
+    /// <summary>
+    /// A reporter's run that completed without a word worded nothing: the person's question is refused as a failed
+    /// command - never with a code that says it passed - and the status still answers with the facts, saying why.
+    /// </summary>
+    [Fact]
+    public async Task AReporterThatCompletedWithoutAWord_RefusesTheAskAsAFailedCommand()
+    {
+        var (_, temp, reporter, service, run) = await PausedAsync();
+        using var disposed = temp;
+        reporter.Answer = _ => new AgentRunResult(AgentRunStatus.Completed);
+
+        var asked = await service.AskAsync(temp.Path, run, "what is it doing?", json: false, Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(
+            (HarnessExit.CommandFailed, "ask-orchestrator was refused: no model worded an answer: the reporter's run completed without a word"),
+            (asked.ExitCode, asked.Message));
+
+        var status = await service.AskStatusAsync(temp.Path, run, json: false, Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, status.ExitCode);
+        Assert.Equal(
+            "no model worded this: the reporter's run completed without a word",
+            status.Details!.Single(line => line.StartsWith("no model worded this", StringComparison.Ordinal)));
     }
 
     /// <summary>

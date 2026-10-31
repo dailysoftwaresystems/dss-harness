@@ -66,8 +66,8 @@ public sealed class AdvisorRunner(
                 Text: null,
                 Directory: directory,
                 NotObtained: "the asking was ended before the advisor answered",
-                Usd: spend is { Reported: true } ? spend.Usd : null,
-                Tokens: spend is { Reported: true } ? spend.Tokens : null);
+                Usd: spend?.Spent?.Usd,
+                Tokens: spend?.Spent?.Tokens);
         }
     }
 
@@ -139,7 +139,7 @@ public sealed class AdvisorRunner(
         var agentRecord = working is null ? null : store.ReadAgent(layout, working);
         var directory = NextAdviceDirectory(layout, call);
         made(directory);
-        var workspace = ReasonLaunch.Workspace(agentRecord, context.Layout, Path.Combine(directory, "work"), layout.Directory);
+        var workspace = launch.Workspace(agentRecord, context.Layout, Path.Combine(directory, "work"), layout.Directory);
         var ground = AgentStepGround.Of(
             context.Config,
             definition,
@@ -212,7 +212,7 @@ public sealed class AdvisorRunner(
 
             return advice is null
                 ? NotObtained(result.Error ?? "the advisor's run ended without an answer", result)
-                : advice with { Model = result.Model, Directory = directory, Usd = Spent(spend)?.Usd, Tokens = Spent(spend)?.Tokens };
+                : advice with { Model = result.Model, Directory = directory, Usd = spend.Spent?.Usd, Tokens = spend.Spent?.Tokens };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -235,11 +235,8 @@ public sealed class AdvisorRunner(
                 Model: result?.Model,
                 Directory: directory,
                 NotObtained: why,
-                Usd: Spent(spend)?.Usd,
-                Tokens: Spent(spend)?.Tokens);
-
-        static (double Usd, long Tokens)? Spent(AgentRunSpend counted)
-            => counted.Reported ? (counted.Usd, counted.Tokens) : null;
+                Usd: spend.Spent?.Usd,
+                Tokens: spend.Spent?.Tokens);
 
         // Before the advice has a directory or a model, nothing was made and nothing spent.
         static FlowAdvice Unasked(string why)

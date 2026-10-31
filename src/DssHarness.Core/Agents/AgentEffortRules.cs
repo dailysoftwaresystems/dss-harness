@@ -4,7 +4,7 @@ using DssHarness.Core.Orchestration.Flow;
 namespace DssHarness.Core.Agents;
 
 /// <summary>
-/// The one check of the effort an agent is given against the models it runs on (V38): each model's level, resolved
+/// The one check of the effort an agent is given against the models it runs on: each model's level, resolved
 /// through the four sources an effort is read from, held to that model's <c>efforts</c>, and every code an effort map
 /// names that the agent does not run on - which would be dead. What a workflow's step is checked by, and a side-task's
 /// command line and its chat's <c>/effort</c> alike.

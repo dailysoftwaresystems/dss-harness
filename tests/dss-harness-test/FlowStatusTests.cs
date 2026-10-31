@@ -656,7 +656,7 @@ public sealed class FlowStatusTests
             [
                 Step("build", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 2)),
                 Step("verify", nameof(FlowInstanceState.Done), "test", started: At(10, 2), finished: At(10, 4)),
-                Step("verify+2", nameof(FlowInstanceState.Stopped), "test", started: At(10, 4), visit: 2, waitsOn: ["resume"]),
+                Step("verify+2", nameof(FlowInstanceState.Stopped), "test", started: At(10, 4), visit: 2, waitsOn: [FlowWaits.Resume]),
             ]);
 
         var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, NoEngine, AsOf);
@@ -665,7 +665,7 @@ public sealed class FlowStatusTests
             """
             run 'r1' (workflow 'flow'), as of 10:10:00Z: stopped, for 10m00s; no engine
             running   nothing is running
-            waits     verify+2 waits for resume
+            waits     verify+2 waits for the resume
             done      2 step instances ended; 0.00 USD, 0 tokens spent
             left      at least 1 step instance, at most 1 step instance (nothing more can come)
             estimate  between 2m00s and 2m00s more, from the 2 step instances that ended Done in this run

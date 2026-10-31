@@ -2827,7 +2827,10 @@ public static class HelpTopics
         builder.AppendLine("tool's own environment (a setting of the person's, never a key) turn installing and");
         builder.AppendLine("updating off, and a run that then needs one that is missing or too old is refused with the");
         builder.AppendLine("command to run by hand. A run readies Claude Code so before a reasoning step that reaches it");
-        builder.AppendLine("starts its agent, and run-side-task before its chat.");
+        builder.AppendLine("starts its agent, and run-side-task before its chat. The run's advisor and its reporter only");
+        builder.AppendLine("read, so they only find Claude Code and never install or update it: where it is missing or");
+        builder.AppendLine("too old, no advice is obtained - the question says why - and no model words the reporter's");
+        builder.AppendLine("answer, the status answering with the facts alone and ask-orchestrator refused.");
         builder.AppendLine();
         builder.AppendLine("What an agent may do is one policy, the same on every client: everything is allowed except");
         builder.AppendLine("the root actions, the places no agent reaches, and the restrictions - which only ever");

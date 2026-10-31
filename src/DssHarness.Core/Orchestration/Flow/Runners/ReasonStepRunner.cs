@@ -115,8 +115,8 @@ public sealed class ReasonStepRunner(
         }
 
         // The step the work it goes on with began with - itself, where it begins its own - whose agent definition, client,
-        // tier, model and writes it works with: a step that goes on with another's work is the same agent going on, and
-        // names none of them. The definition, read as the definition's check reads it, is the one the step
+        // tier, model, writes and web search it works with: a step that goes on with another's work is the same agent
+        // going on, and names none of them. The definition, read as the definition's check reads it, is the one the step
         // works by everywhere: its system prompt sent as written, its capabilities, restrictions and writes on the
         // ground, its limits, and the level below the step's own for the model, the effort and the client.
         var root = ResumeChain.Root(place.Definition, FlowInstanceId.PathOf(run.Instance), run.Step);
@@ -151,8 +151,8 @@ public sealed class ReasonStepRunner(
             return FlowStepResult.Ended(passed: false, program.ExitCode, program.Message);
         }
 
-        var workspace = ReasonLaunch.Workspace(agentRecord, context.Layout, layout.WorkDirectory(agent), layout.Directory);
-        var (webSearch, webMask) = await WebSearchOf(context, providers, run.Step, cancellationToken).ConfigureAwait(false);
+        var workspace = launch.Workspace(agentRecord, context.Layout, layout.WorkDirectory(agent), layout.Directory);
+        var (webSearch, webMask) = await WebSearchOf(context, providers, root, cancellationToken).ConfigureAwait(false);
         var ground = AgentStepGround.Of(
             context.Config,
             definition,
@@ -591,7 +591,7 @@ public sealed class ReasonStepRunner(
     /// </summary>
     /// <param name="context">The repository's context, whose configuration names the sources.</param>
     /// <param name="providers">The configuration's providers and tiers, resolved, whose appointed names the slot holds.</param>
-    /// <param name="step">The step, whose <c>search</c> picks its sources.</param>
+    /// <param name="step">The step at the root of the step's chain of work (<see cref="ResumeChain.Root"/>), whose <c>search</c> picks its sources.</param>
     /// <param name="cancellationToken">Stops the reading of keys.</param>
     private async Task<(AgentWebSearch? Search, Runners.ActionValues? Mask)> WebSearchOf(HarnessContext context, AgentProviders providers, WorkflowStep step, CancellationToken cancellationToken)
     {

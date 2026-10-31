@@ -107,7 +107,7 @@ public sealed class AgentStepGroundTests
         {
             Assert.Equal(["C:/runs/r1/agents/a1/work"], ground.WritableRoots);
             Assert.Equal("C:/trees/w1", ground.WorkingDirectory);
-            Assert.Contains("C:/trees/w1", ground.ReadRoots);
+            Assert.Equal(["C:/trees/w1", "C:/runs/r1/agents/a1/work"], ground.ReadRoots);
         }
     }
 

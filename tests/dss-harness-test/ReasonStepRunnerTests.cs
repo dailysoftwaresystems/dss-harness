@@ -349,9 +349,10 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
-    /// A step that goes on with another's work is the same agent going on: it works by the definition, the client and
-    /// the writes of the step its chain of work began with - none of which it names - the definition's system prompt
-    /// sent, its limits held and its capabilities on the ground, with its own effort beside them.
+    /// A step that goes on with another's work is the same agent going on: it works by the definition, the client, the
+    /// writes and the web search of the step its chain of work began with - none of which it names - the definition's
+    /// system prompt sent, its limits held, its capabilities on the ground and its <c>web_search</c> asking the sources
+    /// that step's <c>search</c> picks, with its own effort beside them.
     /// </summary>
     [Fact]
     public async Task AStepThatGoesOnWithAnothersWork_WorksByTheDefinitionItsChainBeganWith()
@@ -359,11 +360,11 @@ public sealed class ReasonStepRunnerTests
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
         await kit.CreateReadingAgentAsync("reader");
-        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", "flow", "agents", "planner.md"), "---\nname: planner\ndescription: plans\ncapabilities: [read, run]\nmaxTurns: 7\nstallSeconds: 90\n---\nYou plan.\n");
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", "flow", "agents", "planner.md"), "---\nname: planner\ndescription: plans\ncapabilities: [read, run, web]\nmaxTurns: 7\nstallSeconds: 90\n---\nYou plan.\n");
         var definition = WorkflowFileParser.Parse(
             "workflows/flow/flow.yml",
             "name: flow\nsteps:\n"
-                + "  - name: plan\n    type: reason\n    agent: planner\n    client: claude-code\n    writes: [src/**]\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n"
+                + "  - name: plan\n    type: reason\n    agent: planner\n    client: claude-code\n    writes: [src/**]\n    search: [npm]\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n"
                 + "  - name: go-on\n    type: reason\n    resume: plan\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n"
                 + "  - name: think\n    type: reason\n    resume: go-on\n    effort: high\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
         var run = Run(kit, agent: "reader");
@@ -374,8 +375,9 @@ public sealed class ReasonStepRunnerTests
         var asked = agents.Asked.Single();
         Assert.Equal(("planner", "You plan.\n", "claude-code", "high"), (asked.AgentDefinition, asked.SystemPrompt, asked.Client, asked.Effort));
         Assert.Equal((7, 90), (asked.Limits.MaxTurns, asked.Limits.StallSeconds));
-        Assert.Equal([AgentCapability.Read, AgentCapability.Run], asked.Ground!.Capabilities);
+        Assert.Equal([AgentCapability.Read, AgentCapability.Run, AgentCapability.Web], asked.Ground!.Capabilities);
         Assert.Equal(["src/**"], asked.Ground.Writes);
+        Assert.Equal(["npm"], asked.WebSearch!.Sources.Select(source => source.Name));
     }
 
     /// <summary>

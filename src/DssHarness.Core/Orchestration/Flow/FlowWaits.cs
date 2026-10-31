@@ -23,6 +23,33 @@ public static class FlowWaits
     /// <summary>Room among the agents the run lets be open at once.</summary>
     public const string OpenAgents = "open agents";
 
+    /// <summary>The run's resume: a hard stop or a pause under way, or a step a stop left stopped.</summary>
+    public const string Resume = "the resume";
+
+    /// <summary>The always phase, which begins once the rest of the run is quiescent.</summary>
+    public const string Always = "the always phase";
+
+    /// <summary>A stop under way to end: a stopping run starts its always steps alone.</summary>
+    public const string Stop = "the stop to end";
+
+    /// <summary>An advice of the step's own question that was ended, and whose runner has not ended yet.</summary>
+    public const string Advice = "an advice to end";
+
+    /// <summary>A redirect not yet made, which will reset the step.</summary>
+    public const string Redirect = "a redirect";
+
+    /// <summary>A plan update under way, planned by <paramref name="planner"/>: nothing starts outside the scope it is planned in until its plan stands.</summary>
+    /// <param name="planner">The id of the step instance that plans the update.</param>
+    public static string Hold(string planner) => $"hold {planner}";
+
+    /// <summary>The step whose work the planning of an update goes on with, in flight: the planning starts once it has ended.</summary>
+    /// <param name="inFlight">The id of the step instance in flight.</param>
+    public static string Resumes(string inFlight) => $"resumes {inFlight}";
+
+    /// <summary>The run bringing the step's instance to rest for a plan update: nothing starts in it.</summary>
+    /// <param name="update">The update's id.</param>
+    public static string EndedForUpdate(string update) => $"ended for update {update}";
+
     /// <summary>
     /// Whether <paramref name="wait"/> is a wait for room - a claim, the run to be quiet, or a counter of the run's
     /// limits - which only the run's own pace ends, and whose length no step's time says.

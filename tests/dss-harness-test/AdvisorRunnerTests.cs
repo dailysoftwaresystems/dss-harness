@@ -153,8 +153,13 @@ public sealed class AdvisorRunnerTests
         var (kit, agents) = await ReadyAsync(temp);
         await kit.CreateReadingAgentAsync("reader");
         var runner = Runner(kit, agents);
+        var startsIn = (Directory: (string?)null, There: false);
 
-        agents.Answer = _ => new AgentRunResult(AgentRunStatus.Completed, StructuredOutput: """{"answer":"more","why":"it was nearly done"}""") { Model = "claude-opus-5-5" };
+        agents.Answer = step =>
+        {
+            startsIn = (step.Workspace.WorkingDirectory, Directory.Exists(step.Workspace.WorkingDirectory));
+            return new AgentRunResult(AgentRunStatus.Completed, StructuredOutput: """{"answer":"more","why":"it was nearly done"}""") { Model = "claude-opus-5-5" };
+        };
 
         var advice = await runner.AdviseAsync(Call(kit), Token);
         var directory = Path.Combine(kit.Layout.InstanceDirectory("think", "reader"), "advice", "1");
@@ -167,6 +172,10 @@ public sealed class AdvisorRunnerTests
         Assert.Equal((directory, Path.Combine(directory, "sessions")), (asked.RecordDirectory, asked.SessionsDirectory));
         Assert.Null(asked.Workspace.Worktree);
         Assert.Equal(Path.Combine(directory, "work"), asked.Workspace.WorkDirectory);
+
+        // An agent with no worktree starts the advice in the advice's own work directory, which is there before its
+        // client is handed it: a program is never started in a directory that is not there.
+        Assert.Equal((Path.Combine(directory, "work"), true), startsIn);
         Assert.Equal(
             "Question of\nthink\nkind\nturnLimit\nproblem\n'think' reached its turns (12 turns)\nTried: attempt 1 of the step\nThe answers:\n- more: one more of what was bounded\n- retry: the step runs again as a new attempt\nThe bar:\nPrefer the cheaper answer.\n\nThe input:\nbuild the login\n",
             asked.Prompt);
@@ -246,7 +255,11 @@ public sealed class AdvisorRunnerTests
         var missing = await Runner(kit, agents, updates).AdviseAsync(Call(kit), Token);
 
         Assert.Null(missing.Answer);
-        Assert.Contains("not-there", missing.NotObtained, StringComparison.Ordinal);
+        // The finder's own words, whole but for why the machine could not start the program, which is the machine's.
+        Assert.Matches(
+            $"(?s)^{System.Text.RegularExpressions.Regex.Escape($"'{Path.Combine(kit.Main, "not-there.exe")}', the program the slot names, would not answer its --version: ")}.+"
+                + $"{System.Text.RegularExpressions.Regex.Escape(". Update it by hand, or take CLAUDE_EXECUTABLE out of the slot")}$",
+            missing.NotObtained!);
         Assert.Single(agents.Asked);
     }
 
@@ -385,6 +398,26 @@ public sealed class AdvisorRunnerTests
 
         Assert.Equal(4820, advice.Tokens);
         Assert.Equal((1100 * 10 + 220 * 50 + 3000 * 1 + 500 * 12.5) / 1_000_000.0, advice.Usd!.Value, 9);
+    }
+
+    /// <summary>
+    /// On a model the configuration gives no price, what the advice spent is its tokens and a cost not known - never a
+    /// cost of nothing - as the reporter's answer says it, by the one count of what a run spent.
+    /// </summary>
+    [Fact]
+    public async Task AnAdviceOnAModelWithNoPrice_SaysItsTokens_AndItsCostNotKnown()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var config = Path.Combine(kit.Main, ".harness-config", "config.json");
+        File.WriteAllText(config, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(config), @",\s*""priceInputMiss""[^}]*", " "));
+        agents.Says.Add(new UsageReported(new AgentUsage(1000, 200, 0, 0, 0, 0), new AgentUsage(1000, 200, 0, 0, 0, 0)));
+        agents.Answer = _ => new AgentRunResult(AgentRunStatus.Completed, StructuredOutput: """{"answer":"retry","why":"it went wrong"}""");
+
+        var advice = await Runner(kit, agents).AdviseAsync(Call(kit), Token);
+
+        Assert.Equal<(string?, long?, double?)>(("retry", 1200L, null), (advice.Answer, advice.Tokens, advice.Usd));
     }
 
     /// <summary>

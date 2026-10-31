@@ -2004,14 +2004,17 @@ given - the one its `in` names, the work a `resume` goes on with (`FlowCoordinat
 the engine's own read-only one, named with its model before its record (`FlowCoordinator.Start`) and made through
 `CreateAgentRunner.MakeAsync(noWorktree: true)` where the step names none - the definition it works by read where
 the chain of work it goes on with began (`ResumeChain.Root`, the one owner the validator reads it by too: a step that
-goes on with another's work is the same agent going on, and works by that step's definition, client, tier, model
-and writes - its system prompt sent, its limits held, its capabilities and `writes: false` on the ground - with its
-own effort and restrictions beside them), the model resolved by `AgentResolution.Of` with that definition below its
-own through the one pick the validator checks by (`AgentResolution.Picked`: the step's model, else its tier, else the
-definition's model, else its tier, each level whole), the order, the workspace, the Claude Code directories its
-ground keeps every action from and the mask built as every launch builds them (`ReasonLaunch`, shared with the
-advisor and the reporter: the agent's worktree at the path its record resolves, the tool's own `~/.claude` always
-among the directories, every secret the slot answers in the mask), the policy's ground by `AgentStepGround.Of` (a
+goes on with another's work is the same agent going on, and works by that step's definition, client, tier, model,
+writes and web search - its system prompt sent, its limits held, its capabilities and `writes: false` on the ground,
+the sources that step's `search` picks its `web_search`'s - with its own effort and restrictions beside them; a step
+whose chain's root names no definition is refused by the check, never run with no system prompt), the model resolved
+by `AgentResolution.Of` with that definition below its own through the one pick the validator checks by
+(`AgentResolution.Picked`: the step's model, else its tier, else the definition's model, else its tier, each level
+whole), the order, the workspace, the Claude Code directories its ground keeps every action from and the mask built
+as every launch builds them (`ReasonLaunch`, shared with the advisor and the reporter: the agent's worktree at the
+path its record resolves, the run's work directory made before any client is handed it - the advisor's and the
+reporter's, which no agent of the run made, among them - the tool's own `~/.claude` always among the directories,
+every secret the slot answers in the mask), the policy's ground by `AgentStepGround.Of` (a
 read-only agent reading the main tree and writing its work directory alone), each skill its prompt names looked up
 again where the step starts (`AgentSkills.Find`, its name by `AgentSkills.NameIn`'s one rule), the folder copied
 whole into `work/<agent>/skills/<name>/` and the block put where the placeholder stood, its `${CLAUDE_SESSION_ID}` the
@@ -2102,7 +2105,9 @@ read, and an entry that quotes words holds only where they are not empty and sta
 the event log says so, and the person is asked. The advisor: before a person is left with a
 question the engine raises itself, `FlowCoordinator.SeekAdvice` runs the orchestrator's `advisor` block through
 `IFlowAdvisorRunner` (`Runners\AdvisorRunner.cs`) - one reason step that only reads, wherever the asking step works,
-its model resolved and its order built as a step's is, its records and its own conversations under `advice/<n>/` of
+its model resolved and its order built as a step's is, the Claude Code its order starts only found and never installed
+or updated (`ReasonLaunch.ProgramAsync` with `change: false`, as the reporter's is: one missing or too old leaves the
+advice not obtained, saying why), its records and its own conversations under `advice/<n>/` of
 the asking step's own directory (`OrchestratorLayout.InstanceDirectory`, named on the request as `RecordDirectory` and
 `SessionsDirectory`, whatever agent the step names or none), numbered one past the highest already there, its prompt
 filled by the one grammar with the question as an object of its texts (`{question.step}`, `{question.kind}`,
@@ -2117,7 +2122,7 @@ one check of a schema's text. The question is raised at
 once with its recommendation marked sought, and the session does not end while the advice runs
 (`FlowCoordinator.TakeAdviceAsync`, the loop's wait); an answer ends the asking (`TakeAnswer` dropping it, the
 recommendation `cancelled`), the asking step not admitted again until the advice's runner has ended (the hold
-`advice`); a safe pause and a stop end it too (`DeferAdvice`, `BeginHardStop` through the session's advice stop), the
+`FlowWaits.Advice`); a safe pause and a stop end it too (`DeferAdvice`, `BeginHardStop` through the session's advice stop), the
 question `deferred`, and a session's end ends and waits for whatever is left (`EndAdviceAsync`); a recommendation
 obtained is written with who gave it and where its records are, none obtained said so, and what every advice spent - an
 ended one's among them, counted from its turns (`AgentRunSpend`) - is counted in the run's spend, each held to what is

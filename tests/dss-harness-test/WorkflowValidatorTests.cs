@@ -576,9 +576,9 @@ public sealed class WorkflowValidatorTests
 
     /// <summary>
     /// A step goes on with its own work only where it runs again - inside a repeat, where a handler's then sends the run
-    /// back to it, or in the recovery - and only such a step has a resume prompt to be asked with when it does. A step
-    /// that goes on with another's work runs in that step's agent, on its model and in its worktree, and so names none of
-    /// them, nor what it writes.
+    /// back to it, or in the recovery - and only such a step has a resume prompt to be asked with when it does; it began
+    /// that work, so it names the agent definition it works by. A step that goes on with another's work runs in that
+    /// step's agent, on its model and in its worktree, and so names none of them, nor what it writes.
     /// </summary>
     [Fact]
     public void AStepGoesOnWithItsOwnWork_OnlyWhereItRunsAgain_AndWithAnothersNamingNothingOfItsOwn()
@@ -608,6 +608,17 @@ public sealed class WorkflowValidatorTests
                     resume: again
                     prompt: prompts/think.md
                     resumePrompt: prompts/again.md
+                    outputs: schemas/think.json
+                  - name: alone
+                    type: reason
+                    resume: alone
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: after-alone
+                    type: reason
+                    resume: alone
+                    dependsOn: [alone]
+                    prompt: prompts/think.md
                     outputs: schemas/think.json
               - name: sent-back
                 type: reason
@@ -662,6 +673,10 @@ public sealed class WorkflowValidatorTests
         Assert.Equal(
             [
                 "step 'once' resumes itself and runs once; a step goes on with its own work only where it runs again - inside a repeat, where a handler's then sends the run back to it, or as a step of the recovery",
+
+                // A step that goes on with its own work begins it, so the definition it works by is its own to name: the
+                // check refuses it once there, never again at each step that goes on with it.
+                "step 'looped.alone' names no agent and resumes itself; a step that goes on with its own work works by the agent definition it began it with, which it names",
                 "step 'borrows' resumes 'builder' and names agent, client, tier, access, in, writes; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, client, tier, model, access, in or writes",
                 "step 'borrows' says resumePrompt and does not resume itself; resumePrompt is what a step that goes on with its own work is asked with when it runs again, and any other step is asked with its prompt",
             ],

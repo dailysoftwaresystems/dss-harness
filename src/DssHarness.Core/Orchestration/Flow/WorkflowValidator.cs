@@ -961,14 +961,19 @@ public static class WorkflowValidator
         {
             var step = entry.Step;
             var where = $"step '{entry.Path}'";
-
-            if (step.Agent is null && step.Resume is null)
-            {
-                _problems.Add($"{where} names no agent and resumes no step; a reason step runs an agent of its own, or goes on with the agent of the step it resumes");
-            }
-
             var resumesItself = string.Equals(step.Resume, step.Name, StringComparison.Ordinal);
             var resumesAnother = step.Resume is not null && !resumesItself;
+
+            // The agent definition a reason step works by is the one at the root of its chain of work, read as its run reads
+            // it (ResumeChain.Root): its own where it begins its own work - resuming no step, or itself - and else that of
+            // the step whose work it goes on with. A root that names none is refused once, at the root, never again at
+            // each step that goes on with it; a resume that leads to no reason step is refused below for that.
+            if (!resumesAnother && ResumeChain.Root(_definition, entry.Path, step).Agent is null)
+            {
+                _problems.Add(resumesItself
+                    ? $"{where} names no agent and resumes itself; a step that goes on with its own work works by the agent definition it began it with, which it names"
+                    : $"{where} names no agent and resumes no step; a reason step runs an agent of its own, or goes on with the agent of the step it resumes");
+            }
 
             if (step.Resume is not null)
             {

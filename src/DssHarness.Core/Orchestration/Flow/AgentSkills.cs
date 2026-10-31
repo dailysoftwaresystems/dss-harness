@@ -544,6 +544,9 @@ public sealed class AgentSkills(IFileSystem fileSystem, IHostPlatform platform, 
         return WorkflowExpressions.ReadOf(placeholder, template: true, insideAny: false).Root == Root;
     }
 
+    /// <summary>The one rule of a skill's name, as every refusal of a name says it.</summary>
+    private const string NameRule = "a skill is named by its folder's name alone, in letters, digits, '-' and '_', a '.' between two words";
+
     /// <summary>
     /// The skill <paramref name="placeholder"/> names, by the one rule of a skill's name: the folder's name, written
     /// right after <c>skill.</c> - words of letters, digits, <c>-</c> and <c>_</c>, a <c>.</c> between two - so a name
@@ -567,7 +570,7 @@ public sealed class AgentSkills(IFileSystem fileSystem, IHostPlatform platform, 
 
         if (name is null || !name.Split('.').All(word => word.Length > 0 && word.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_')))
         {
-            problem = $"{{{placeholder}}}, which is no skill's name: a skill is named by its folder's name alone, in letters, digits, '-' and '_', a '.' between two words";
+            problem = $"{{{placeholder}}}, which is no skill's name: {NameRule}";
             return null;
         }
 
@@ -604,9 +607,9 @@ public sealed class AgentSkills(IFileSystem fileSystem, IHostPlatform platform, 
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
         // A name the one rule refuses could reach past the places: none is looked for, whoever asks.
-        if (NameIn($"{Root}.{name}", out var problem) is null)
+        if (NameIn($"{Root}.{name}", out _) is null)
         {
-            throw new ArgumentException($"'{name}' is no skill's name: the placeholder names {problem}", nameof(name));
+            throw new ArgumentException($"'{name}' is no skill's name: {NameRule}", nameof(name));
         }
 
         return

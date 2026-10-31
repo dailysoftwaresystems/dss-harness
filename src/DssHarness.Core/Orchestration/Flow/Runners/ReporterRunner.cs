@@ -124,7 +124,7 @@ public sealed class ReporterRunner(
         // stores under the call's own asks/ directory, which is inside the run's and which the engine never reads - never
         // under an agent's of the run - and its reads narrowed to the run's directory by the policy's one rule for it.
         var asks = Path.Combine(layout.AsksDirectory, call.Stamp);
-        var workspace = ReasonLaunch.Workspace(record: null, context.Layout, Path.Combine(asks, "work"), layout.Directory);
+        var workspace = _launch.Workspace(record: null, context.Layout, Path.Combine(asks, "work"), layout.Directory);
         var ground = AgentStepGround.Of(
             context.Config,
             definition,
@@ -171,23 +171,31 @@ public sealed class ReporterRunner(
             ProgramVersion = program?.Version,
         };
 
-        var result = await _runner.RunAsync(request, events: null, cancellationToken).ConfigureAwait(false);
+        // What the reporter spends is counted as every agent run of the engine's is, from its turns as they come: every
+        // token of every kind, at the configuration's prices.
+        var spend = new AgentRunSpend(providers, resolution.Serving.Model);
+        var result = await _runner.RunAsync(request, spend, cancellationToken).ConfigureAwait(false);
 
         // The answer is masked as the run's records are: whatever the reporter read or was told, no secret the slot holds
-        // reaches the person's terminal or the call's record in its words.
+        // reaches the person's terminal or the call's record in its words. A run that completed without a word worded
+        // nothing, and failed: the asking it was for is refused as a failed command, never answered as one that passed.
         return result.Problem() is { } wrong
-            ? Wordless($"the reporter answered a result that does not hold together: {wrong}", HarnessExit.CommandFailed, result)
-            : result.Status == AgentRunStatus.Completed && result.FinalText is { Length: > 0 } worded
-                ? new FlowReported(mask?.Redact(worded) ?? worded, Model: result.Model, Usd: (double?)result.Usage?.Cost?.Usd, Tokens: result.Usage?.Total.OutputTokens)
-                : Wordless(result.Error is { } error ? mask?.Redact(error) ?? error : $"the reporter's run ended {result.Status}", result.ToOutcome().ExitCode, result);
+            ? Wordless($"the reporter answered a result that does not hold together: {wrong}", HarnessExit.CommandFailed, result, spend)
+            : (result.Status, result.FinalText) switch
+            {
+                (AgentRunStatus.Completed, { Length: > 0 } worded) => new FlowReported(mask?.Redact(worded) ?? worded, Model: result.Model, Usd: spend.Spent?.Usd, Tokens: spend.Spent?.Tokens),
+                (AgentRunStatus.Completed, _) => Wordless("the reporter's run completed without a word", HarnessExit.CommandFailed, result, spend),
+                _ => Wordless(result.Error is { } error ? mask?.Redact(error) ?? error : $"the reporter's run ended {result.Status}", result.ToOutcome().ExitCode, result, spend),
+            };
     }
 
     /// <summary>Why no model worded the facts, with the code it means and what the reporter's run cost where one ran.</summary>
     /// <param name="why">Why, said whole.</param>
     /// <param name="exitCode">The code it means.</param>
     /// <param name="result">The reporter's run, where one ran.</param>
-    private static FlowReported Wordless(string why, int exitCode, AgentRunResult? result = null)
-        => new(Answer: null, WhyNot: why, ExitCode: exitCode, result?.Model, (double?)result?.Usage?.Cost?.Usd, result?.Usage?.Total.OutputTokens);
+    /// <param name="spend">What the reporter's run spent, where one ran.</param>
+    private static FlowReported Wordless(string why, int exitCode, AgentRunResult? result = null, AgentRunSpend? spend = null)
+        => new(Answer: null, WhyNot: why, ExitCode: exitCode, result?.Model, spend?.Spent?.Usd, spend?.Spent?.Tokens);
 
     /// <summary>
     /// The reporter's prompt, filled with what it reads: the facts as text, the person's question where one was typed,

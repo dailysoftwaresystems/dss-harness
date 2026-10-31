@@ -1512,6 +1512,49 @@ public sealed class FlowCoordinatorTests
     }
 
     /// <summary>
+    /// What keeps a step from starting is said in its record by the step it waits for, or by a word the admission writes
+    /// from <see cref="FlowWaits"/> - each holding a space, so none reads as a step of the same name: an alone step beside
+    /// one named <c>resume</c> waits for the run to be quiet, and in a paused run for <c>the resume</c>, never for
+    /// <c>resume</c>.
+    /// </summary>
+    [Fact]
+    public async Task AWaitWord_NeverReadsAsAStepOfTheSameName()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: resume
+                type: build
+              - name: after
+                type: orient
+                alone: true
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var gate = runner.Hold("resume");
+        var records = new Snapshots();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+        var quiet = records.SeenAsync(snapshot => snapshot.Steps.Any(step => step.Instance == "after" && step.WaitsOn.Count > 0));
+
+        var session = coordinator.RunAsync(cancel);
+        var waiting = (await quiet.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Steps.Single(step => step.Instance == "after");
+
+        Assert.Equal(["the run to be quiet"], waiting.WaitsOn);
+
+        coordinator.RequestPause("interrupt");
+        gate.Done();
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var paused = records.Last!.Steps.Single(step => step.Instance == "after");
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(FlowInstanceState.NotStarted, paused.State);
+        Assert.Equal(["the resume"], paused.WaitsOn);
+        Assert.Equal(
+            ["the resume", "the always phase", "the stop to end", "an advice to end", "a redirect", "hold p1", "resumes p1", "ended for update u1"],
+            [FlowWaits.Resume, FlowWaits.Always, FlowWaits.Stop, FlowWaits.Advice, FlowWaits.Redirect, FlowWaits.Hold("p1"), FlowWaits.Resumes("p1"), FlowWaits.EndedForUpdate("u1")]);
+    }
+
+    /// <summary>
     /// A step failed past its drain's bound keeps what it claimed until its runner ends, for that runner may still be at
     /// work in the tree: a step that claims the same tree waits on the claim, and runs once the runner has answered.
     /// </summary>

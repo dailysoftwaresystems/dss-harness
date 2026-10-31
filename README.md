@@ -552,7 +552,9 @@ records and its own conversations under `advice/<n>/` of the asking step's own d
 after those already there, its prompt reading the question (`{question.step}`,
 `{question.kind}`, `{question.problem}`, `{question.answers}`, `{question.record}`), the run's
 inputs and `{recommendations}`, its answer held to the engine's own schema - one of the question's
-answers, with a text where that answer takes one. The question is open while the advice runs, so a
+answers, with a text where that answer takes one. Unlike a run's reasoning step, it only finds the
+Claude Code its model is reached through and never installs or updates it: where that is missing or
+too old, the advice was not obtained, and the question says why. The question is open while the advice runs, so a
 person who is there answers without waiting, and their answer ends the asking - the question says
 so, and the step that asked starts again only once the advice's runner has ended; a pause or a stop
 ends a running advice too, its question saying the recommendation is sought at the resume. What
@@ -628,7 +630,10 @@ alone refuses the change, saying why. The change runs under the same machine-wid
 same never-stopped, read-back sequence `update-tool` has: after a change that failed, as after
 one that ran, it says what npm holds since.
 A run takes that step before a reasoning step that reaches Claude Code starts its agent, and
-`run-side-task` before its chat, each with its refusals. A program the slot names (`CLAUDE_EXECUTABLE`, or the name the client's
+`run-side-task` before its chat, each with its refusals. The run's advisor and its reporter only
+read, so they only find Claude Code and never take that step: where it is missing or too old, no
+advice is obtained - the question says why - and no model words the reporter's answer, the status
+answering with the facts alone and `ask-orchestrator` refused. A program the slot names (`CLAUDE_EXECUTABLE`, or the name the client's
 `executable` gives) is a person's own choice:
 started as named and never installed or updated, and a slot that cannot give it is refused, never
 passed over for npm's. A client's `update` key (`agentClients.<client>.update`, true by default)
@@ -1172,7 +1177,9 @@ made, so no folder is left with part of a workflow in it - or the refusal says w
 This build checks workflow definitions - the shape of every key, every step, input, param and
 output an expression, a template or a prompt names, every path typed by the schema or the built-in
 output that holds it, every operator and every key held to what it takes (a `when` a boolean, a
-`forEach` a list), every file the definition points at - and refuses (12) naming each
+`forEach` a list), every file the definition points at, and every schema a step names held to the
+subset of JSON Schema the engine reads, so no run starts over a schema no answer could be held to -
+and refuses (12) naming each
 problem, without running anything, as a `config.json` that does not hold is refused. A
 `config.json` that declares no workflow has nothing to check and is refused (13), saying how to
 declare the implementation one. It holds a definition to the configuration too: a `run` step whose

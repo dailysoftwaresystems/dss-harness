@@ -15,7 +15,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// starts. The one builder of each for the three runners, so a rule of where an agent works or what it may not reach is
 /// written once.
 /// </summary>
-/// <param name="fileSystem">Finds the tool's own Claude Code directory.</param>
+/// <param name="fileSystem">Makes a run's work directory and finds the tool's own Claude Code directory.</param>
 /// <param name="platform">This machine, whose home holds that directory.</param>
 /// <param name="keys">The slot every key and secret is read from.</param>
 /// <param name="updates">Makes ready, or only finds, the Claude Code a run starts; null where nothing starts one.</param>
@@ -25,19 +25,22 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
     /// Where an agent's run works: its agent's worktree where it has one - at the path its record resolves under the
     /// worktrees root it was made under, never the record's address - which is also where it starts; else, for an agent
     /// that reads the main tree or none at all, the main checkout, which it only reads, starting in its own work
-    /// directory. Its work directory and the run's directory either way.
+    /// directory. Its work directory and the run's directory either way. The work directory is made here, before any
+    /// client is handed the workspace: a run that starts in it - the advisor's and the reporter's, whose directories no
+    /// agent of the run's made - starts nowhere else, and a program is never started in a directory that is not there.
     /// </summary>
     /// <param name="record">The agent's record; null where the run works as no agent of the run's.</param>
     /// <param name="repository">The repository's layout, the main checkout's.</param>
     /// <param name="workDirectory">The run's own work directory.</param>
     /// <param name="runDirectory">The run's directory.</param>
-    public static AgentWorkspace Workspace(AgentRecord? record, HarnessLayout repository, string workDirectory, string runDirectory)
+    public AgentWorkspace Workspace(AgentRecord? record, HarnessLayout repository, string workDirectory, string runDirectory)
     {
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentException.ThrowIfNullOrWhiteSpace(workDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(runDirectory);
 
         var worktree = record?.WorktreePath(repository);
+        fileSystem.CreateDirectory(workDirectory);
 
         return new AgentWorkspace(worktree, workDirectory, repository.MainCheckoutRoot, [], worktree ?? workDirectory, runDirectory);
     }

@@ -479,7 +479,7 @@ public sealed class AgentSkillsTests
             Checked(prompt: "Use {skill.a/../../outside} here.\n"));
 
         Assert.Equal(
-            $"'../outside' is no skill's name: the placeholder names {{skill.../outside}}, {NoName} (Parameter 'name')",
+            "'../outside' is no skill's name: a skill is named by its folder's name alone, in letters, digits, '-' and '_', a '.' between two words (Parameter 'name')",
             Assert.Throws<ArgumentException>(() => Find("../outside")).Message);
     }
 

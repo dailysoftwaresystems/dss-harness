@@ -5385,26 +5385,26 @@ public sealed class FlowCoordinator
     {
         if (_hardStop || _pausing && (!_alwaysPhase || !instance.IsAlways || instance.Step.Type == "reason"))
         {
-            return ["resume"];
+            return [FlowWaits.Resume];
         }
 
         if (instance.IsAlways && !_alwaysPhase)
         {
             // The always steps run once the rest is quiescent: one a pause stopped in the last session's always phase
             // waits for this one's, as the ones this session draws do.
-            return ["always"];
+            return [FlowWaits.Always];
         }
 
         if (_stopping && !instance.IsAlways)
         {
-            return ["stop"];
+            return [FlowWaits.Stop];
         }
 
         if (_advising.Any(pending => ReferenceEquals(pending.Instance, instance) && !pending.Task.IsCompleted))
         {
             // An advice of this step's question still ends - an answer ended it, and its runner is being torn down in
             // the place the step works in: the step's next attempt starts once it has ended, never beside it.
-            return ["advice"];
+            return [FlowWaits.Advice];
         }
 
         if (instance.DeclaredScope is not { } scope)
@@ -5418,7 +5418,7 @@ public sealed class FlowCoordinator
             // planned in: no ready step, no retry that was waiting, no handler and no redirect. What is in flight is
             // not touched - it goes on to its own end, on the plan as it was - and the planning step itself is inside,
             // admitted ahead of everything else.
-            return [$"hold {planner.Id}"];
+            return [FlowWaits.Hold(planner.Id)];
         }
 
         if (instance.RaisedByUpdate is not null
@@ -5429,7 +5429,7 @@ public sealed class FlowCoordinator
         {
             // The step that plans an update goes on with the work of a step of its own scope: where that step is in
             // flight it waits for it to end, for its conversation is the one the planning goes on with.
-            return [$"resumes {inFlight.Id}"];
+            return [FlowWaits.Resumes(inFlight.Id)];
         }
 
         // An alternative of the work-item group runs in the add step's place, and waits on what that step waits on.
@@ -5437,14 +5437,14 @@ public sealed class FlowCoordinator
 
         if (Frozen(scope, place.Name))
         {
-            return ["redirect"];
+            return [FlowWaits.Redirect];
         }
 
         if (instance.DeclaredScope is { } item && item.EndingFor is { } ending)
         {
             // Nothing starts in an instance the run is bringing to rest for a plan update: what is in flight in it is
             // ended in order, and its work is done again or taken back in the instance visited in its place.
-            return [$"ended for update {ending.Update}"];
+            return [FlowWaits.EndedForUpdate(ending.Update)];
         }
 
         return WaitsOf(place, scope, instance.IsAlways).Waiting;
@@ -10350,7 +10350,7 @@ public sealed class FlowCoordinator
         => instance.State switch
         {
             FlowInstanceState.Paused when instance.WaitingQuestion is { } waiting => [waiting],
-            FlowInstanceState.Stopped => ["resume"],
+            FlowInstanceState.Stopped => [FlowWaits.Resume],
             FlowInstanceState.NotStarted when walk.TryGetValue(instance, out var admission) => admission.WaitsOn,
             _ => [],
         };
