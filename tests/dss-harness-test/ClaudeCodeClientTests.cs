@@ -1850,7 +1850,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
             {
                 run.Messages.Post("and now?");
             }
-            else if (@event is AssistantMessage { Text: "second said" })
+            else if (@event is TurnFinished { Turn: 2 })
             {
                 run.Messages.Complete();
             }
@@ -1885,7 +1885,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
             {
                 run.Messages.Post("go on");
             }
-            else if (@event is AssistantMessage { Text: "after the cut" })
+            else if (@event is TurnFinished { Turn: 2 })
             {
                 run.Messages.Complete();
             }
@@ -1922,7 +1922,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
             {
                 run.Messages.Post("go on");
             }
-            else if (@event is AssistantMessage { Text: "after the cut" })
+            else if (@event is TurnFinished { Turn: 2 })
             {
                 run.Messages.Complete();
             }
@@ -1966,7 +1966,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
             {
                 run.Messages.Post("go on");
             }
-            else if (@event is AssistantMessage { Text: "after the cut" })
+            else if (@event is TurnFinished { Turn: 2 })
             {
                 run.Messages.Complete();
             }
