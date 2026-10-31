@@ -399,7 +399,7 @@ public static class FlowUpdateGates
             definition,
             flow.Run,
             flow.Status,
-            [.. flow.Steps.Select(step => new FlowStepAt(step.Step, step.State, step.Group, step.Iteration))],
+            [.. flow.Steps.Select(step => new FlowStepAt(step.Step, step.State, step.Group, step.Iteration, step.Index, step.Visit))],
             cause);
 
     /// <summary>
@@ -435,7 +435,9 @@ public static class FlowUpdateGates
     /// Why nothing the run could run would carry a change out - the work items of its last round past - where that
     /// is settled by the definition's own bounds; null where it is not. A loop the definition leaves open - an
     /// <c>until</c> with no <c>maxIterations</c> - is never past its work items by this reckoning: what it carries is
-    /// decided where an update is taken.
+    /// decided where an update is taken. A work-item group with no loop around it runs one round of its own and at
+    /// most the rounds <c>amend.maxAddedIterations</c> lets updates add, each a visit of the group run again for an
+    /// update's work; once the last it may run has ended, it is past its work items as a loop at its bound is.
     /// </summary>
     private static string? PastItsWorkItems(WorkflowDefinition definition, string run, IReadOnlyList<FlowStepAt> steps, string what)
     {
@@ -446,6 +448,21 @@ public static class FlowUpdateGates
 
         var group = ParentOf(amend.WhenAddScope);
         var loopPath = group is null ? null : LoopAround(definition, group);
+
+        if (loopPath is null && group is not null)
+        {
+            // The group's own visits, never the instances of its work items: the round it ran, and each run again.
+            var visits = steps.Where(step => step.Group && step.Step == group && step.Index is null).ToList();
+            var runs = 1 + amend.AddedIterationsAllowed;
+
+            if (visits.Count < runs
+                || visits.MaxBy(step => step.Visit) is not { State: nameof(FlowInstanceState.Done) or nameof(FlowInstanceState.Failed) or nameof(FlowInstanceState.Skipped) })
+            {
+                return null;
+            }
+
+            return $"run '{run}' is past the work items of '{group}', which has run {visits.Count.ToString(CultureInfo.InvariantCulture)} round(s), the last it can run (1 of its own, and the {amend.AddedIterationsAllowed.ToString(CultureInfo.InvariantCulture)} that amend.maxAddedIterations lets updates add), with no loop around it: nothing would carry the change out. Start a run for the {what} once this one has ended";
+        }
 
         if (loopPath is null || StepOf(definition, loopPath) is not { Repeat: { MaxIterations: { } bound } } loop)
         {
@@ -518,4 +535,6 @@ public static class FlowUpdateGates
 /// <param name="State">How the instance stands, as the engine's identifiers spell it.</param>
 /// <param name="Group">Whether this is a group's own record.</param>
 /// <param name="Iteration">The iteration of the repeat this instance is one of; null outside every one.</param>
-public readonly record struct FlowStepAt(string Step, string State, bool Group, int? Iteration);
+/// <param name="Index">The index of the work item an instance of a <c>forEach</c> group carries; null for the group's own visit and for every other step.</param>
+/// <param name="Visit">Which visit of its step in its scope the instance is, from 1: a group run again for a plan update is its next visit.</param>
+public readonly record struct FlowStepAt(string Step, string State, bool Group, int? Iteration, int? Index = null, int Visit = 1);

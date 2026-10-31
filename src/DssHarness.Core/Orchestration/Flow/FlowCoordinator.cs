@@ -2140,7 +2140,7 @@ public sealed class FlowCoordinator
             _definition,
             _runName ?? string.Empty,
             snapshot.Status.ToString(),
-            [.. snapshot.Steps.Select(step => new FlowStepAt(step.Step, step.State.ToString(), step.Group, step.Iteration))],
+            [.. snapshot.Steps.Select(step => new FlowStepAt(step.Step, step.State.ToString(), step.Group, step.Iteration, step.Index, step.Visit))],
             cause);
     }
 
@@ -3283,6 +3283,15 @@ public sealed class FlowCoordinator
                         PutUpdate(update);
                     }
 
+                    if (NoRoundForTheWork(update) is { } nowhere)
+                    {
+                        // Its work would be owed to a work-item group that has run every round it may: nothing is
+                        // placed, and the update is given up with why, as nothing would carry it out.
+                        GiveUpUpdate(update, nowhere);
+                        changed = true;
+                        continue;
+                    }
+
                     var placed = PlaceThePieces(update);
                     var told = TellThePieces(update, placed);
 
@@ -3295,8 +3304,10 @@ public sealed class FlowCoordinator
                             : $"update {update.Id} is done: its plan stands, {placed.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} piece(s) placed, and the steps that start from here on read it");
 
                     // What the update owes a loop is carried to the loop's next iteration, whatever its until says -
-                    // an iteration added at the bound where the loop has none of its own.
+                    // an iteration added at the bound where the loop has none of its own - and what it owes a
+                    // work-item group with no loop around it, by a round of the group added for it.
                     CarryWhatTheLoopsOwe();
+                    AddARoundOwed(update);
                     _ = TakeQueuedUpdates();
                     changed = true;
                     continue;
@@ -3315,10 +3326,21 @@ public sealed class FlowCoordinator
     private void GiveUpUpdate(FlowUpdateEntry update, string why)
     {
         _heldPlanner = null;
-        PutUpdate(update with { State = FlowUpdateStates.Failed, Why = why });
+
+        // The pieces its planning decided, where it decided them, stay in its entry as decided - each saying it was never
+        // carried out, for nothing of it was placed.
+        PutUpdate(update with
+        {
+            State = FlowUpdateStates.Failed,
+            Why = why,
+            Pieces = update.Pieces is { } decided ? [.. decided.Select(piece => piece.Kind == FlowUpdatePieceKinds.Told ? piece : piece with { Ended = NeverCarriedOut })] : null,
+        });
         Record(FlowChangeKind.Answer, detail: $"update {update.Id} was given up: {why}");
         _ = TakeQueuedUpdates();
     }
+
+    /// <summary>How a piece of an update given up after its plan stood ended: it was never placed.</summary>
+    private const string NeverCarriedOut = "never carried out: its update was given up";
 
     /// <summary>Decides the redirect the <c>amend</c> block's <c>then</c> names, by the machinery every redirect goes through, in the scope the planning step is in.</summary>
     /// <param name="planner">The planning step, ended done.</param>
@@ -3902,15 +3924,16 @@ public sealed class FlowCoordinator
         {
             var group = FlowUpdateGates.ParentOf(_definition.Amend!.WhenAddScope)!.Split('.')[^1];
             var loop = round is null ? null : LoopAround(round);
-            var owed = round is null
-                ? $"the round '{group}' when it opens"
-                : $"the next iteration of '{loop?.Step.Name ?? round.Step.Name}'";
+            var owed = round is null ? $"the round '{group}' when it opens"
+                : loop is not null ? $"the next iteration of '{loop.Step.Name}'"
+                : RoundAddedTo(group);
 
             if (loop is not null)
             {
                 // The round has ended: the work is owed to the loop's next iteration, which runs whatever its until
                 // says - a loop that ended done runs again for it - and where the loop is at its bound one iteration
-                // is added for the update (CarryWhatTheLoopsOwe, Iterate).
+                // is added for the update (CarryWhatTheLoopsOwe, Iterate). With no loop around the round, the group
+                // itself is run once more for the work, as an added iteration is (AddARoundOwed).
                 _ = loop.OwedIterationBy.Add(update.Id);
             }
 
@@ -4585,6 +4608,15 @@ public sealed class FlowCoordinator
                 return;
             }
 
+            if (WorkItemGroupOf(instance) && _updates.Updates.Any(update => update.AddedIteration == instance.Id))
+            {
+                // A round added to a work-item group with no loop around it carries the work plan updates owe it, and
+                // that alone: what the check that opens it checked as one list holds the round's own items too, which
+                // the group's round before carried already.
+                var owed = OwedItems().Select(FlowWorkItems.NameOf).OfType<string>().ToHashSet(StringComparer.Ordinal);
+                list = [.. list.Where(item => FlowWorkItems.NameOf(item.ToNode()) is { } named && owed.Contains(named))];
+            }
+
             var members = SubtreeSize(PathOf(scope, declaration));
             var wouldBring = _created.Count + list.Count * (1 + members);
 
@@ -4802,6 +4834,143 @@ public sealed class FlowCoordinator
         => loop.OwedIterationBy.Contains(update)
             && _updates.Updates.FirstOrDefault(held => held.Id == update) is { State: FlowUpdateStates.Done } entry
             && entry.ThePieces.Any(piece => piece.IsOwed);
+
+    /// <summary>Where work owed to a work-item group with no loop around it goes, as a piece's entry says it: the round added to the group for it.</summary>
+    /// <param name="group">The work-item group's name.</param>
+    private static string RoundAddedTo(string group) => $"a round added to '{group}'";
+
+    /// <summary>
+    /// The round an update added to a work-item group with no loop around it that has not opened yet, by the id of the
+    /// group's visit it will be; null where none waits. An added loop iteration ends in its iteration (<c>#n</c>); a
+    /// round added to a group is a visit of the group (<c>+n</c>).
+    /// </summary>
+    private string? PendingAddedRound()
+        => _updates.Updates
+            .Select(update => update.AddedIteration)
+            .FirstOrDefault(added => added is not null && !added[(added.LastIndexOf('.') + 1)..].Contains('#', StringComparison.Ordinal) && !_instances.ContainsKey(added));
+
+    /// <summary>
+    /// Why the plan of <paramref name="update"/> cannot be carried out where it now stands, or null where it can: its work
+    /// would be owed to a work-item group whose round has ended with no loop around it - so the group would have to run
+    /// once more for it - and the run has been given every round <c>amend.maxAddedIterations</c> allows. Read once the plan
+    /// stands and before anything is placed, so an update nothing would carry out is given up whole, as one past a loop's
+    /// last round is refused before it is taken; a round another update added and that has not opened yet carries it.
+    /// </summary>
+    /// <param name="update">The update whose plan stands, its decided pieces in its entry.</param>
+    private string? NoRoundForTheWork(FlowUpdateEntry update)
+    {
+        if (update.AddedIteration is not null
+            || CurrentRound() is not { State: not (FlowInstanceState.Running or FlowInstanceState.Paused) } round
+            || LoopAround(round) is not null
+            || PendingAddedRound() is not null
+            || !update.ThePieces.Any(piece => FlowUpdatePieceKinds.Carried.Contains(piece.Kind, StringComparer.Ordinal)
+                && PlacedAlready(update, piece) is null
+                && !(piece.Kind == FlowUpdatePieceKinds.Removed && ItemInstanceNamed(piece.ItemName()!) is null)))
+        {
+            return null;
+        }
+
+        var allowed = _definition.Amend!.AddedIterationsAllowed;
+
+        if (AddedIterationsGiven() < allowed)
+        {
+            return null;
+        }
+
+        var what = update.Cause == FlowUpdateCauses.ChangedAnswer ? "answer" : "request";
+        return $"its work is owed to '{round.Path}', whose round has ended with no loop around it, and the run has been given the {allowed.ToString(System.Globalization.CultureInfo.InvariantCulture)} round(s) amend.maxAddedIterations allows: nothing would carry it out, the {what} is recorded and no plan holds it";
+    }
+
+    /// <summary>
+    /// Runs a work-item group with no loop around it once more for the work <paramref name="update"/> owes it, as an added
+    /// iteration of a loop is run: once for the update, however many pieces it owes, and none where another update's
+    /// added round has not opened yet - that round carries this work too - counted against <c>amend.maxAddedIterations</c>
+    /// over the run, written into the update's entry before anything it changes, and published. The round opens as a new
+    /// visit of the group, through a new visit of the check that opens it - handed the owed work with its own items, the
+    /// one list it checks - and the visit carries the owed work alone: the work the group's round carried before is not
+    /// done again (<see cref="OpenGroup"/>).
+    /// </summary>
+    /// <param name="update">The update just done.</param>
+    private void AddARoundOwed(FlowUpdateEntry update)
+    {
+        if (_updates.Updates.FirstOrDefault(entry => entry.Id == update.Id) is not { State: FlowUpdateStates.Done, AddedIteration: null } done
+            || !done.ThePieces.Any(piece => piece.IsOwed)
+            || CurrentRound() is not { State: not (FlowInstanceState.Running or FlowInstanceState.Paused) } round
+            || LoopAround(round) is not null
+            || PendingAddedRound() is not null)
+        {
+            return;
+        }
+
+        var allowed = _definition.Amend!.AddedIterationsAllowed;
+        var given = AddedIterationsGiven();
+
+        if (given >= allowed)
+        {
+            // Read before anything was placed (NoRoundForTheWork): an update is never done owing a round it cannot have.
+            return;
+        }
+
+        var scope = round.DeclaredScope!;
+        var visit = scope.Visits.GetValueOrDefault(round.Step.Name) + 1;
+        var added = $"{MemberId(scope, round.Step.Name)}+{visit.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+        PutUpdate(done with { AddedIteration = added });
+        Record(
+            FlowChangeKind.IterationAdded,
+            instance: round,
+            detail: $"round {visit.ToString(System.Globalization.CultureInfo.InvariantCulture)} of '{MemberId(scope, round.Step.Name)}' was added for update {done.Id}: the run has been given {(given + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)} of the {allowed.ToString(System.Globalization.CultureInfo.InvariantCulture)} amend.maxAddedIterations allows");
+        OpenTheRoundAgain(round, done.Id);
+    }
+
+    /// <summary>
+    /// Lets the schedule draw the work-item group <paramref name="round"/> is a visit of once more, with the check that
+    /// opens its rounds where that check was drawn before the round ended - each drawn again as it was first, so what
+    /// depends on either waits for the new visit - and every group around it that had ended done in progress again until
+    /// it ends again. Made once, however often it is called: a session that takes the run up again after a crash
+    /// between the update's entry and the drawing calls it from the entry.
+    /// </summary>
+    /// <param name="round">The newest visit of the work-item group, ended.</param>
+    /// <param name="update">The update the round is added for.</param>
+    private void OpenTheRoundAgain(FlowInstance round, string update)
+    {
+        var scope = round.DeclaredScope!;
+
+        if (OpeningCheckOf(scope, round.Step) is { } check
+            && scope.Members.GetValueOrDefault(check.Name) is { } checkVisit
+            && _created.IndexOf(checkVisit) < _created.IndexOf(round))
+        {
+            _ = scope.Members.Remove(check.Name);
+            _ = scope.Instantiated.Remove(check.Name);
+        }
+
+        if (ReferenceEquals(scope.Members.GetValueOrDefault(round.Step.Name), round))
+        {
+            _ = scope.Members.Remove(round.Step.Name);
+            _ = scope.Instantiated.Remove(round.Step.Name);
+        }
+
+        for (var at = scope; at.Parent is not null; at = at.Parent)
+        {
+            if ((at.OwnGroupInstance ?? at.GroupInstance) is { State: FlowInstanceState.Done } around)
+            {
+                around.State = FlowInstanceState.Running;
+                around.FinishedAt = null;
+                Record(FlowChangeKind.Step, around, from: FlowInstanceState.Done, to: FlowInstanceState.Running, detail: $"in progress again: update {update} added a round of '{round.Step.Name}'");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The <c>validate-plan</c> step declared beside the work-item group <paramref name="group"/> whose output its
+    /// <c>forEach</c> reads - the check that opens its rounds, which is handed the work plan updates owe them; null where
+    /// the group expands from anything else.
+    /// </summary>
+    private WorkflowStep? OpeningCheckOf(Scope scope, WorkflowStep group)
+        => group.ForEach is { } items
+            ? DeclarationsOf(scope).FirstOrDefault(step => step.Type == "validate-plan"
+                && WorkflowExpressions.ReadsOf(items).Any(read => string.Equals(read.Root, step.Name, StringComparison.Ordinal)))
+            : null;
 
     /// <summary>
     /// Carries what the updates done owe their loops, whatever their <c>until</c> says: a loop that ended - done, or
@@ -10312,6 +10481,15 @@ public sealed class FlowCoordinator
                 loop.ExtraIterations += _updates.Updates.Count(update => FlowGrants.AddedTo(update, loop.Id));
             }
 
+            if (PendingAddedRound() is { } pending
+                && CurrentRound() is { State: not (FlowInstanceState.Running or FlowInstanceState.Paused) } ended
+                && LoopAround(ended) is null
+                && _updates.Updates.FirstOrDefault(update => update.AddedIteration == pending) is { } adding)
+            {
+                // A round an update added to a work-item group with no loop around it, written into the update's entry
+                // and not opened before the session ended: the group is drawn once more, as the update left it to be.
+                OpenTheRoundAgain(ended, adding.Id);
+            }
 
             _spent.Usd = resume.File.Spent.Usd;
             _spent.Tokens = resume.File.Spent.Tokens;

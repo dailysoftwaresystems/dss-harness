@@ -482,11 +482,16 @@ public sealed class FlowStatusTests
     }
 
     /// <summary>
-    /// A piece of a plan update not carried out to an end and an iteration an update owes its loop are named among
-    /// what is left, and a failure a handler took is counted among what is done.
+    /// A piece of a plan update not carried out to an end and an iteration an update added and the run has not made yet
+    /// - of a loop, or a round of a work-item group with no loop around it - are named among what is left, and a failure
+    /// a handler took is counted among what is done.
     /// </summary>
-    [Fact]
-    public void APieceNotCarriedOutAndAnOwedIteration_AreNamedAmongWhatIsLeft()
+    /// <param name="added">The iteration the update added, as its entry holds it.</param>
+    /// <param name="said">How what is left says it.</param>
+    [Theory]
+    [InlineData("rounds#2", "round 2 of 'rounds'")]
+    [InlineData("rounds.items+2", "round 2 of 'rounds.items'")]
+    public void APieceNotCarriedOutAndAnOwedIteration_AreNamedAmongWhatIsLeft(string added, string said)
     {
         var definition = Definition("""
             name: flow
@@ -513,7 +518,7 @@ public sealed class FlowStatusTests
                     At(10, 3),
                     Amendment: "narrow it",
                     Pieces: [new FlowUpdatePiece(FlowUpdatePieceKinds.Added, Item: new System.Text.Json.Nodes.JsonObject { ["name"] = "the parser" }, Changed: "only the parser")],
-                    AddedIteration: "rounds#2"),
+                    AddedIteration: added),
             ]);
 
         var facts = FlowStatus.Facts(definition, flow, questions: null, updates, Engine, AsOf);
@@ -522,7 +527,7 @@ public sealed class FlowStatusTests
             "done      2 step instances ended, 1 failure a handler took; 0.00 USD, 0 tokens spent",
             facts.First(fact => fact.StartsWith("done", StringComparison.Ordinal)));
         Assert.Equal(
-            "left      at least 1 step instance, at most 1 step instance (nothing more can come); 1 piece of plan updates not carried out to an end yet; update u1 owes 'rounds#2' to its loop, and it is not made yet",
+            $"left      at least 1 step instance, at most 1 step instance (nothing more can come); 1 piece of plan updates not carried out to an end yet; update u1 added {said}, and it is not made yet",
             facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
     }
 

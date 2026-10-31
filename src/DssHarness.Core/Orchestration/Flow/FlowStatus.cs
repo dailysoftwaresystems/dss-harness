@@ -208,7 +208,7 @@ public static class FlowStatus
 
         foreach (var owed in (updates?.Updates ?? []).Where(update => update.AddedIteration is { } added && flow.Steps.All(step => !string.Equals(step.Instance, added, StringComparison.Ordinal))))
         {
-            line += $"; update {owed.Id} owes '{owed.AddedIteration}' to its loop, and it is not made yet";
+            line += $"; update {owed.Id} added {FlowReports.IterationSaidOf(owed.AddedIteration!)}, and it is not made yet";
         }
 
         return [line];

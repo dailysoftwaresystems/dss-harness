@@ -272,6 +272,67 @@ public sealed class FlowUpdatesTests
         Assert.Null(FlowUpdateGates.Refused(definition with { Amend = open }, Flow("Paused", round: 0), FlowUpdateCauses.Amendment));
     }
 
+    /// <summary>
+    /// A work-item group with no loop around it runs its own round and each round <c>amend.maxAddedIterations</c> lets
+    /// updates add - a visit of the group run again: the gates take a change while a round may still be added or the
+    /// last one is under way, and refuse it, saying why, once the last round it may run has ended. The instances of its
+    /// work items are never counted as rounds.
+    /// </summary>
+    [Fact]
+    public void AGroupWithNoLoopAroundIt_IsPastItsWorkItems_OnceTheLastRoundItMayRunHasEnded()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: rounds
+                steps:
+                  - name: items
+                    forEach: 'check.items'
+                    steps:
+                      - name: build
+                        type: orient
+              - name: last
+                type: pause
+                question: done?
+                options: [yes]
+            """);
+
+        var one = definition with { Amend = new FlowAmend(Input: "request", ChangedAnswerMinutes: 5, Before: null, Step: "planner.replan", Then: null, Scope: "x", WhenAddScope: "rounds.items.build", WhenChangeScope: "rounds.items.build", WhenRemoveScope: "rounds.items.build", MaxAddedIterations: null) };
+        var none = one with { Amend = one.Amend! with { MaxAddedIterations = 0 } };
+
+        // Its own round ended, with one round still to be added; the added round under way; its own under way.
+        Assert.Null(FlowUpdateGates.Refused(one, Rounds("Done"), FlowUpdateCauses.Amendment));
+        Assert.Null(FlowUpdateGates.Refused(one, Rounds("Done", "Running"), FlowUpdateCauses.Amendment));
+        Assert.Null(FlowUpdateGates.Refused(none, Rounds("Running"), FlowUpdateCauses.Amendment));
+
+        // The last round it may run has ended - the added one, or its own where none may be added.
+        Assert.Equal(
+            "run 'r1' is past the work items of 'rounds.items', which has run 2 round(s), the last it can run (1 of its own, and the 1 that amend.maxAddedIterations lets updates add), with no loop around it: nothing would carry the change out. Start a run for the request once this one has ended",
+            FlowUpdateGates.Refused(one, Rounds("Done", "Failed"), FlowUpdateCauses.Amendment));
+        Assert.Equal(
+            "run 'r1' is past the work items of 'rounds.items', which has run 1 round(s), the last it can run (1 of its own, and the 0 that amend.maxAddedIterations lets updates add), with no loop around it: nothing would carry the change out. Start a run for the answer once this one has ended",
+            FlowUpdateGates.Refused(none, Rounds("Done"), FlowUpdateCauses.ChangedAnswer));
+    }
+
+    /// <summary>
+    /// The run's state in one file: paused, the work-item group with no loop around it visited once for each of
+    /// <paramref name="rounds"/> - each visit as it stands - every visit with a work item of its own, ended.
+    /// </summary>
+    private static FlowFile Rounds(params string[] rounds)
+    {
+        List<FlowStepRecord> steps = [new FlowStepRecord("rounds", "rounds", true, "Running", 1, 1, [], [])];
+
+        for (var at = 0; at < rounds.Length; at++)
+        {
+            var visit = at == 0 ? "rounds.items" : $"rounds.items+{(at + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+            steps.Add(new FlowStepRecord(visit, "rounds.items", true, rounds[at], 1, at + 1, [], []));
+            steps.Add(new FlowStepRecord($"{visit}[0]", "rounds.items.items", true, "Done", 1, 1, [], [], Index: 0));
+            steps.Add(new FlowStepRecord($"{visit}[0].build", "rounds.items.build", false, "Done", 1, 1, [], [], Index: 0));
+        }
+
+        return new FlowFile(1, "r1", "flow", "digest", new Dictionary<string, string>(), "Paused", new FlowBudgetRecord(0, 0, 0), 0, steps, [], At(0));
+    }
+
     /// <summary>The store takes one update into the run's record under its own lock: the id over every update the file holds, so two taken at once never share one.</summary>
     [Fact]
     public async Task TheStoreGivesEachUpdateItsOwnId_UnderTheRunsOwnLock()

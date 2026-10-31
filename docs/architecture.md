@@ -2170,7 +2170,9 @@ hands over, and once, and what an answer may be is one rule the command and the 
 at once with the new answer (`FlowCoordinator.RevisitPause`) - the update's entry written first, and the change
 finished from it by a session's start where a crash came between the two (`FlowCoordinator.FinishTheChanges`). Both pass the one table of gates
 (`FlowUpdateGates.Refused`, read by the command over the run's files and by the engine over its own state): a run that
-is done, one past the step its `amend.before` names, one past the work items of its last round, a definition whose
+is done, one past the step its `amend.before` names, one past the work items of its last round (a loop at its bound,
+or a work-item group with no loop around it that has run its own round and every one `amend.maxAddedIterations`
+allows, its last ended - each visit of the group a round, `FlowStepAt.Visit`, never an instance of its work items), a definition whose
 `amend` names no such change - nothing recorded for one. The report lists every update, and `list-orchestrator` says
 where each stands.
 The planning of a plan update is built (slice 31d2): where the run has begun the scope its plan updates are planned in
@@ -2237,10 +2239,18 @@ with why (`FlowUpdateEntry.Told`/`NotConcerned`/`NotDelivered`, each telling als
 the round a piece joins has ended, the work is owed to the loop's next iteration (`FlowInstance.OwedIterationBy`,
 rebuilt at the resume, by each piece's own state, `FlowUpdatePiece.IsOwed`), which runs whatever its `until` says - a
 loop that ended done runs again for it; only where that loop is at its own bound is one iteration
-added for the update - once per update, at most `amend.maxAddedIterations` over the run, published as an
-`iterationAdded` event and kept in the entry (`FlowUpdateEntry.AddedIteration`) - and the report and
-`list-orchestrator` say every piece, where it was carried out and how that ended, the iteration added, and who was
-told what, who was not concerned and what was not delivered.
+added for the update. With no loop around the work-item group, the piece is owed to a round added to the group
+(`FlowCoordinator.AddARoundOwed`): the group is drawn once more as its next visit (`build.items+2`), with the check that
+opens its rounds where that was drawn before the round ended and every group around it that had ended done in
+progress again (`FlowCoordinator.OpenTheRoundAgain`, called again from the entry by a resume that finds the round
+not yet drawn); the check is handed the owed work with its own items as one list, and the visit carries the owed work
+alone (`FlowCoordinator.OpenGroup`), never the items the round before built. An iteration or a round is added once per
+update, at most `amend.maxAddedIterations` over the run, published as an `iterationAdded` event and kept in the entry
+(`FlowUpdateEntry.AddedIteration`, said by `FlowReports.IterationSaidOf` as round n of the loop or of the group); where
+the run has none left to add, an update whose work only an added round would carry is given up with why before
+anything is placed, its pieces never carried out (`FlowCoordinator.NoRoundForTheWork`). The report and
+`list-orchestrator` say every piece, where it was carried out and how that ended, the iteration or round added, and who
+was told what, who was not concerned and what was not delivered.
 Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`

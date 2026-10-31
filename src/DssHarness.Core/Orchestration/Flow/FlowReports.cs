@@ -385,17 +385,22 @@ public static class FlowReports
     };
 
     /// <summary>
-    /// An iteration an update added, as the report says it - <c>round 3 of 'rounds'</c> - read of its own id, which
-    /// names the loop and the iteration.
+    /// An iteration or a round an update added, as the report says it - <c>round 3 of 'rounds'</c> - read of its own id:
+    /// an iteration of a loop names the loop and the iteration (<c>rounds#3</c>), and a round added to a work-item group
+    /// with no loop around it is the group's visit that runs it (<c>build.items+2</c>, round 2 of <c>build.items</c>).
     /// </summary>
     /// <param name="iteration">The iteration's id, as the update's entry holds it.</param>
     internal static string IterationSaidOf(string iteration)
     {
+        var segment = iteration.LastIndexOf('.') + 1;
         var at = iteration.LastIndexOf('#');
+        var visit = iteration.LastIndexOf('+');
 
-        return at > 0 && int.TryParse(iteration[(at + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var round)
+        return at >= segment && at > 0 && int.TryParse(iteration[(at + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var round)
             ? $"round {round.ToString(CultureInfo.InvariantCulture)} of '{iteration[..at]}'"
-            : $"'{iteration}'";
+            : at < segment && visit >= segment && visit > 0 && int.TryParse(iteration[(visit + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var run)
+                ? $"round {run.ToString(CultureInfo.InvariantCulture)} of '{iteration[..visit]}'"
+                : $"'{iteration}'";
     }
 
     /// <summary>One step as the report's JSON document holds it.</summary>
