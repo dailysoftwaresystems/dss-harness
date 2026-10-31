@@ -272,9 +272,9 @@ public static partial class CommandAnalysis
     /// prefix of it from <c>-wo</c>, its value the next word or glued after a <c>:</c>): sought among every word, past where
     /// its command begins too, so a place it may start in is never missed.
     /// </summary>
-    private static List<string> PowerShellDirectories(IReadOnlyList<string> words)
+    private static List<(string Directory, int Word)> PowerShellDirectories(IReadOnlyList<string> words)
     {
-        var directories = new List<string>();
+        var directories = new List<(string Directory, int Word)>();
 
         for (var at = 1; at < words.Count; at++)
         {
@@ -289,7 +289,7 @@ public static partial class CommandAnalysis
             {
                 if ((named.Length == 2 ? words[at].Split(':', 2)[1] : words.ElementAtOrDefault(at + 1)) is { } directory)
                 {
-                    directories.Add(directory);
+                    directories.Add((directory, named.Length == 2 ? at : at + 1));
                 }
             }
         }
@@ -902,7 +902,7 @@ public static partial class CommandAnalysis
     /// script it is. The redirects the shell makes for the words stay with the command they are made for, or a command
     /// of their own where the words' own is gone into, so the files they name are decided.
     /// </summary>
-    private static IEnumerable<AnalyzedCommand> FromWords(IReadOnlyList<string> words, IReadOnlyList<string> quoted, IReadOnlyList<ShellRedirect> redirects, int depth, IReadOnlyList<string> environment)
+    private static IEnumerable<AnalyzedCommand> FromWords(IReadOnlyList<string> words, IReadOnlyList<string> quoted, IReadOnlyList<ShellRedirect> redirects, int depth, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? outerWrappers = null)
     {
         // Each word with how its characters stand to the shell, kept in step: a word whose spelling was not kept - a
         // mask short of it - reads as wholly open, refused as an expansion rather than quietly passed.
@@ -915,6 +915,9 @@ public static partial class CommandAnalysis
 
         // The assignments this level gives, whose program-valued names run their values.
         var given = new List<string>();
+
+        // Each wrapper's words as they stood before it was stripped, outermost first: what it does to the environment.
+        var wrapped = new List<IReadOnlyList<string>>(outerWrappers ?? []);
 
         // Each wrapper is stripped in turn, here rather than by going into it, so no length of
         // wrappers overflows the stack.
@@ -943,10 +946,10 @@ public static partial class CommandAnalysis
                 // program one names is read.
                 if (environment.Count > 0 || redirects.Count > 0)
                 {
-                    yield return new AnalyzedCommand(environment, redirects);
+                    yield return new AnalyzedCommand(environment, redirects) { Wrappers = wrapped };
                 }
 
-                foreach (var command in ProgramsNamed(given, depth, environment))
+                foreach (var command in ProgramsNamed(given, depth, environment, wrapped))
                 {
                     yield return command;
                 }
@@ -973,12 +976,12 @@ public static partial class CommandAnalysis
                     yield return new AnalyzedCommand([], redirects);
                 }
 
-                foreach (var command in GoneInto(scripts, depth, environment))
+                foreach (var command in GoneInto(scripts, depth, environment, [.. wrapped, words]))
                 {
                     yield return command;
                 }
 
-                foreach (var command in ProgramsNamed(given, depth, environment))
+                foreach (var command in ProgramsNamed(given, depth, environment, wrapped))
                 {
                     yield return command;
                 }
@@ -995,7 +998,7 @@ public static partial class CommandAnalysis
                     throw Nested(words);
                 }
 
-                foreach (var command in FromWords(SplitInto(split), [], redirects, depth + 1, environment))
+                foreach (var command in FromWords(SplitInto(split), [], redirects, depth + 1, environment, [.. wrapped, words]))
                 {
                     yield return command;
                 }
@@ -1013,7 +1016,7 @@ public static partial class CommandAnalysis
 
                 if (words.Count > 1)
                 {
-                    foreach (var command in GoneInto([string.Join(' ', words.Skip(1))], depth, environment))
+                    foreach (var command in GoneInto([string.Join(' ', words.Skip(1))], depth, environment, [.. wrapped, words]))
                     {
                         yield return command;
                     }
@@ -1029,6 +1032,7 @@ public static partial class CommandAnalysis
                 break;
             }
 
+            wrapped.Add(words);
             (words, masks) = (stripped.Words, stripped.Quoted);
         }
 
@@ -1062,11 +1066,14 @@ public static partial class CommandAnalysis
         yield return new AnalyzedCommand(
             environment.Count == 0 ? words : [.. environment, .. words],
             redirects,
-            environment.Count == 0 ? masks : [.. environment.Select(_ => string.Empty), .. masks]);
+            environment.Count == 0 ? masks : [.. environment.Select(_ => string.Empty), .. masks])
+        {
+            Wrappers = wrapped,
+        };
 
         // A program another runs by a variable: the environment's own, and what the command
         // declares (Declarations).
-        foreach (var command in ProgramsNamed([.. given, .. Declarations(words, masks)], depth, environment))
+        foreach (var command in ProgramsNamed([.. given, .. Declarations(words, masks)], depth, environment, [.. wrapped, words]))
         {
             yield return command;
         }
@@ -1075,7 +1082,7 @@ public static partial class CommandAnalysis
         // alias's '!' line, as the variables above are read.
         if (GitWords(words) is { } git && GitSettingScripts(git, environment) is { Count: > 0 } settings)
         {
-            foreach (var command in GoneInto(settings, depth, environment))
+            foreach (var command in GoneInto(settings, depth, environment, [.. wrapped, words]))
             {
                 yield return command;
             }
@@ -1084,7 +1091,7 @@ public static partial class CommandAnalysis
         // The command line gh alias set gives a name, which a later command calls by that name alone.
         if (GhAliasScript(words) is { } aliased)
         {
-            foreach (var command in GoneInto([aliased], depth, environment))
+            foreach (var command in GoneInto([aliased], depth, environment, [.. wrapped, words]))
             {
                 yield return command;
             }
@@ -1099,7 +1106,7 @@ public static partial class CommandAnalysis
                 throw Nested(words);
             }
 
-            foreach (var command in FromWords(executed, [], redirects, depth + 1, environment))
+            foreach (var command in FromWords(executed, [], redirects, depth + 1, environment, [.. wrapped, words]))
             {
                 yield return command;
             }
@@ -1114,7 +1121,7 @@ public static partial class CommandAnalysis
 
             if (Into(Name(words[at]), rest, restMasks, redirects, program: false) is { } inner)
             {
-                foreach (var command in GoneInto(inner, depth, environment))
+                foreach (var command in GoneInto(inner, depth, environment, [.. wrapped, words]))
                 {
                     yield return command;
                 }
@@ -1126,7 +1133,7 @@ public static partial class CommandAnalysis
                     throw Nested(rest);
                 }
 
-                foreach (var command in FromWords(SplitInto(innerSplit), [], redirects, depth + 1, environment))
+                foreach (var command in FromWords(SplitInto(innerSplit), [], redirects, depth + 1, environment, [.. wrapped, rest]))
                 {
                     yield return command;
                 }
@@ -1152,7 +1159,7 @@ public static partial class CommandAnalysis
     /// of a key git runs as a command line (<see cref="RunsProgram"/>) or of none named, and each such setting
     /// <c>GIT_CONFIG_PARAMETERS</c> holds.
     /// </summary>
-    private static IEnumerable<AnalyzedCommand> ProgramsNamed(IReadOnlyList<string> assignments, int depth, IReadOnlyList<string> environment)
+    private static IEnumerable<AnalyzedCommand> ProgramsNamed(IReadOnlyList<string> assignments, int depth, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? wrappers = null)
     {
         var pairs = assignments
             .Select(assignment => new[] { AssignedName(assignment), assignment.Split('=', 2)[1] })
@@ -1190,7 +1197,7 @@ public static partial class CommandAnalysis
             }
         }
 
-        return values.Count == 0 ? [] : GoneInto(values, depth, environment);
+        return values.Count == 0 ? [] : GoneInto(values, depth, environment, wrappers);
     }
 
     /// <summary>
@@ -1426,7 +1433,7 @@ public static partial class CommandAnalysis
          ".sendmailcmd", ".smtpserver", ".uploadpack", ".receivepack", ".update"];
 
     /// <summary>The commands each script runs, one level further in: refused past <see cref="Depth"/>.</summary>
-    private static IEnumerable<AnalyzedCommand> GoneInto(IReadOnlyList<string> scripts, int depth, IReadOnlyList<string> environment)
+    private static IEnumerable<AnalyzedCommand> GoneInto(IReadOnlyList<string> scripts, int depth, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? wrappers = null)
     {
         if (depth > Depth)
         {
@@ -1442,7 +1449,7 @@ public static partial class CommandAnalysis
 
         foreach (var script in scripts)
         {
-            foreach (var command in FromScript(script, depth + 1, environment))
+            foreach (var command in FromScript(script, depth + 1, environment, wrappers))
             {
                 yield return command;
             }
@@ -1979,10 +1986,10 @@ public static partial class CommandAnalysis
     /// version runs nothing. An option it does not know is where its command begins, as a word this reads. Directories
     /// are those <c>-C</c> and <c>--chdir</c> start its command in, each in the order given.
     /// </summary>
-    private static (List<string> Pairs, int At, string? Split, List<string> Directories) EnvWords(IReadOnlyList<string> words)
+    private static (List<string> Pairs, int At, string? Split, List<(string Directory, int Word)> Directories) EnvWords(IReadOnlyList<string> words)
     {
         var pairs = new List<string>();
-        var directories = new List<string>();
+        var directories = new List<(string Directory, int Word)>();
 
         for (var at = 1; at < words.Count; at++)
         {
@@ -2020,7 +2027,7 @@ public static partial class CommandAnalysis
                 {
                     if (named == "--chdir" && (equals > 0 ? option[(equals + 1)..] : words.ElementAtOrDefault(at + 1)) is { } directory)
                     {
-                        directories.Add(directory);
+                        directories.Add((directory, equals > 0 ? at : at + 1));
                     }
 
                     at += equals > 0 ? 0 : 1;
@@ -2053,7 +2060,7 @@ public static partial class CommandAnalysis
                     case 'u' or 'C' or 'a':
                         if (option[letter] == 'C' && (letter + 1 < option.Length ? option[(letter + 1)..] : words.ElementAtOrDefault(at + 1)) is { } directory)
                         {
-                            directories.Add(directory);
+                            directories.Add((directory, letter + 1 < option.Length ? at : at + 1));
                         }
 
                         at += letter + 1 < option.Length ? 0 : 1;
@@ -2074,10 +2081,37 @@ public static partial class CommandAnalysis
     /// (<see cref="Moved"/>); none where the program moves nothing.
     /// </summary>
     private static IReadOnlyList<string> MovesOf(IReadOnlyList<string> words)
+        => [.. MoveWordsOf(words).Select(move => move.Directory)];
+
+    /// <summary>The moves of <see cref="MovesOf"/>, each with the word of <paramref name="words"/> that names its directory.</summary>
+    private static IReadOnlyList<(string Directory, int Word)> MoveWordsOf(IReadOnlyList<string> words)
         => words.Count == 0 ? []
             : Is(Name(words[0]), "env") ? EnvWords(words).Directories
             : Is(Name(words[0]), "powershell", "pwsh") ? PowerShellDirectories(words)
             : [];
+
+    /// <summary>
+    /// The words of <paramref name="command"/> that name a directory a program among them starts what it runs in - env's
+    /// <c>-C</c> and <c>--chdir</c>, PowerShell's <c>-WorkingDirectory</c>, each followed as a <c>cd</c> before the command
+    /// (<see cref="Moved"/>) - by where each stands: a word that moves reads nothing where it goes.
+    /// </summary>
+    /// <param name="command">A command's words, its environment before them.</param>
+    public static IReadOnlySet<int> MoveWords(IReadOnlyList<string> command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var moving = new HashSet<int>();
+
+        for (var at = 0; at < command.Count; at++)
+        {
+            if (MayMove(command[at]))
+            {
+                moving.UnionWith(MoveWordsOf([.. command.Skip(at)]).Select(move => at + move.Word));
+            }
+        }
+
+        return moving;
+    }
 
     /// <summary>
     /// Whether <paramref name="word"/> names a program that may start what it runs in another directory (<see cref="MovesOf"/>):
@@ -2823,11 +2857,11 @@ public static partial class CommandAnalysis
     /// separators, its command substitutions and subshells read as commands of their own, each
     /// command then flattened again - its own words may name a script or carry a wrapper.
     /// </summary>
-    private static IEnumerable<AnalyzedCommand> FromScript(string script, int depth, IReadOnlyList<string> environment)
+    private static IEnumerable<AnalyzedCommand> FromScript(string script, int depth, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? wrappers = null)
     {
         foreach (var command in Script(script, 0))
         {
-            foreach (var flat in FromWords(command.Words, [.. command.Quoted ?? command.Words.Select(_ => string.Empty)], command.Redirects, depth, environment))
+            foreach (var flat in FromWords(command.Words, [.. command.Quoted ?? command.Words.Select(_ => string.Empty)], command.Redirects, depth, environment, wrappers))
             {
                 yield return flat;
             }

@@ -579,7 +579,36 @@ public sealed partial class HelpTests
         Assert.Contains("the root actions (sudo, su, doas, pkexec, run0, gsudo, sudoedit, runas,", prose, StringComparison.Ordinal);
         Assert.Contains("psexec, PowerShell's -Verb RunAs, wsl -u root, systemd-run, schtasks with /ru, wherever", prose, StringComparison.Ordinal);
         Assert.Contains("writes outside an agent's writable roots, every read and write of a", prose, StringComparison.Ordinal);
-        Assert.Contains("this tool's own verbs and run-side-task, run by any program or from a response file, whatever any switch says: an agent", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "any command naming one - by ~ or $HOME, as a redirect's file, an option's value after an = or a PowerShell parameter's :, a value glued to "
+                + "a short option (ssh -i./key), the file an @ or a < makes curl, httpie or gh read (-d @x, -F f=@x;type=y), a word of a script - and any "
+                + "word that names a directory holding one whole (.harness-config, .., ~, /, or a pattern that may match one), for a program handed a "
+                + "directory may walk it: but the agent's working directory, which every command over the tree names (.) and every program given no "
+                + "path works over, and a cd's own word, which reads nothing where it goes. This tool's own verbs and run-side-task, run by any program "
+                + "or from a response file, or by a verb the shell expands (run-side-$T, dssharness $V), past its own options (-C, -v), are refused, and "
+                + "so is a command that takes DSSHARNESS_UNDER_AGENT, the mark of every program an agent starts, away - a word naming it (an assignment, "
+                + "empty or not, unset, env -u, PowerShell's env:, cmd's set) or a start with no environment (env -i, env -, exec -c) - whatever any "
+                + "switch says: an agent",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "agent's words. Nor is git or gh called by a name none of its own commands is - an alias, an extension - on any ground, as the reading "
+                + "of a command below says.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "This is policy, not a sandbox: it decides what a call names, never what a program reads by itself - a program an agent runs opens files "
+                + "as the user it runs as, and one that walks its working directory unnamed (an archive of ., a search given no path) reaches a "
+                + "credential slot's files where that directory holds one, as a side-task's main tree does; what it is never given is a key in its "
+                + "environment, and what no file tool and no command's word of an agent names is the slot itself, in any root, or a directory that holds "
+                + "one but that working directory.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"On every ground, worktree rules or none, git and gh are called by their own commands: a git command whose first word, a name a setting "
+                + $"of git's may have, is none of git's own ({string.Join(", ", AgentPolicy.GitCommands)}) and no program git-<name> git finds",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains(
             $"nor leave its step's limits - nor do the gh commands that hand its work to another agent or install what the next launch loads ({string.Join(", ", AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too - nor does any command print a credential, whatever the worktree rules say ({string.Join(", ", AgentPolicy.CredentialPrintingCommands)}; a * any helper's name, and the words after a command met anywhere after it, options before or between them): a credential leaves its slot only by the key store that holds it, never through an agent's words.",
             prose,
@@ -637,9 +666,36 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             $"and so are the gh commands that merge or start CI ({string.Join(", ", AgentPolicy.NeverCiCommands)}), the gh api endpoints and GraphQL "
-                + $"mutations that reach the same, gh alias set, gh extension exec, and a gh command named by none of gh's own ({string.Join(", ", AgentPolicy.GhCommands)}) - an alias, gh's own co among them, or an extension, a name for any command, where gh runs - its command's own program, or past one that runs the words after it "
-                + $"({string.Join(", ", CommandAnalysis.CommandRunners)}), never among another program's words, its data - and, where the request writes, the gh api endpoints "
+                + "mutations that reach the same, gh alias set, and, where the request writes, the gh api endpoints "
                 + "that push, open a pull request or make a release - for never merges,",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"and a gh command named by none of gh's own ({string.Join(", ", AgentPolicy.GhCommands)}) an alias, gh's own co among them, or an extension, "
+                + "as gh extension exec runs one, where gh runs - its command's own program, or past one that runs the words after it "
+                + $"({string.Join(", ", CommandAnalysis.CommandRunners)}), never among another program's words, its data: each runs a command line from a "
+                + "configuration file or an extension no rule reads, one an agent may have written, and is refused; an alias the command gives itself "
+                + "(git -c alias.x=... x) is read as the command it is.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "on Windows, where a program splits its own command line and a Cygwin or MSYS program - told by the runtime beside it, cygwin1.dll or "
+                + "msys-2.0.dll, the program the list starts and one a wrapper among its words starts both asked - expands a pattern or a brace in it, "
+                + "those are read as the expansions they may be for such a program and for one this cannot find, while gh, git, dotnet and every other "
+                + "program take them as the text they are",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A star, a question mark or a bracket matches a name that begins with a dot only where its shell would: a segment that begins with a dot "
+                + "itself; or anywhere in a string that names bash's dotglob (shopt -s dotglob, bash -O dotglob), zsh's globdots, sets GLOBIGNORE or "
+                + "carries zsh's D qualifier (*(D)), that PowerShell or cmd reads, whose wildcards list every name, or that gives PowerShell's -Force - so "
+                + "rm -rf * and build/* run, and .g* is git's own.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What a command writes is each file its output redirects name and each a writing program's words name - a copy's destination however an "
+                + "option names it (cp, install and ln's -t and --target-directory, alone, glued or in a cluster, else the last word; Copy-Item's "
+                + "-Destination by any prefix or glued after its :, else its second word)",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -656,7 +712,8 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "git's own files - a .git, file or directory, at any depth beneath a root and in any case, a nested repository's and a "
-                + "submodule's too (Write(**/.git/**)) - are not written by a tool, whatever protectedPaths says",
+                + "submodule's too (Write(**/.git/**)), beneath each tree the agent touches, the main checkout a worktree was made from among "
+                + "them - are not written by a tool or a command, whatever protectedPaths says",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("an agent does not edit its own policy or what the next launch loads", prose, StringComparison.Ordinal);
@@ -2031,13 +2088,16 @@ public sealed partial class HelpTests
                 + $"in all ({DiskSpace.Size(DssHarness.Core.Testing.KeptOnFailure.DefaultCapBytes)} where it is left out). A pass keeps "
                 + "nothing, and a later step reads nothing from it: it is evidence beside the verdict, never an output, and "
                 + "a failed step still keeps nothing of what one reads. Only a file of its own is copied: a link is never "
-                + "kept through - what it leads to is kept where an entry names that - and a pipe or a device is no file to "
-                + "read. Each is measured by what it holds as it is read, and no more of it is copied than the cap has "
-                + "left, so a file that grows past the cap as it is read is refused over it. A directory beneath an entry "
-                + "that cannot be read is passed by and named, the files beside it kept, and a stop while the evidence "
-                + "crosses keeps what is already kept and names what it left. The leg's line names the directory, how many "
-                + "files were kept and their size, and how many were refused over the cap, could not be read, were left as "
-                + "links, named nothing or were left uncopied by a stop - a path naming nothing is said, not refused, for "
+                + "kept through, wherever on the way from the build directory it stands - an entry that is one, a file "
+                + "beneath a linked directory, and no walk of a directory or a pattern follows one; what it leads to is kept "
+                + "where an entry names that - and a pipe or a device is no file to read. Each is measured by what it holds "
+                + "as it is read, and no more of it is copied than the cap has left, so a file that grows past the cap as it "
+                + "is read is refused over it. A directory that cannot be read is passed by and named where an entry could "
+                + "have named what it holds - beneath a directory an entry names, or one a pattern could reach - the files "
+                + "beside it kept, and a stop while the evidence crosses keeps what is already kept and names what it left. "
+                + "The leg's line names the directory, how many files were kept and their size, and how many were refused "
+                + "over the cap, could not be read, were left as links, named nothing or were left uncopied by a stop, and "
+                + "how many directories could not be read - a path naming nothing is said, not refused, for "
                 + "the failure may have been before it was written. A keepOnFailureCapBytes given where no keepOnFailure it "
                 + "applies to names a path caps nothing, and is refused. On a "
                 + "leg a WSL or ssh host runs, the copy is kept beside that host's own log and crosses back over the host's "

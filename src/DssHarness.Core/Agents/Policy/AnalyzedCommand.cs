@@ -19,6 +19,15 @@ public sealed record AnalyzedCommand(IReadOnlyList<string> Words, IReadOnlyList<
     public IReadOnlyList<string> Whole => [.. Words, .. Redirects.Select(redirect => redirect.ToString())];
 
     /// <summary>
+    /// The words of each command that runs this one, outermost first, as each stood: a wrapper stripped before the
+    /// program (<c>env</c>, <c>exec</c>, <c>nohup</c>), and a shell or a program that runs it as its script or its words
+    /// (<c>bash -c</c>, <c>pwsh -c</c>, <c>find -exec</c>, <c>eval</c>, git's settings). Their own options say what this
+    /// one inherits - an environment taken away (<c>env -i</c>, <c>env -u NAME</c>, <c>exec -c</c>), a shell's setting
+    /// (<c>bash -O dotglob</c>), the shell that reads it. Empty where nothing runs it but the shell the string was given to.
+    /// </summary>
+    public IReadOnlyList<IReadOnlyList<string>> Wrappers { get; init; } = [];
+
+    /// <summary>
     /// How one word's characters stand to the shell, where the word's own spelling was kept: <see cref="WordQuoting"/>
     /// for each of its characters, in step.
     /// </summary>

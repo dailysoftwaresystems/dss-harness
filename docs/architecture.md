@@ -1532,8 +1532,26 @@ actions (`sudo`, `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `
 PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command
 names one), writes outside an agent's writable roots, every read and write of a credential slot or a
 Claude Code directory of the run's and every search over one (`AgentPolicy.Search`), and any command
-naming one - by `~` or `$HOME`, as a redirect's file or an option's value, against every directory a
-`cd` of it reached; no agent starts while the tool itself runs elevated
+naming one - by `~` or `$HOME`, against every directory a `cd` of it reached, by every path a word
+may name to its program, read by one owner for the places no command reaches and the places a
+command writes alike (`CommandAnalysis.PathsNamed`: the word, the value after its `=` or a
+PowerShell parameter's `:`, a value glued to a short option, each with the `@` or `<` that makes
+curl, httpie or gh read a file taken off and a `-F` field's `;` fields cut, a script's words, its
+braces' words, a `file://` address's path) - or naming whole a directory that holds one
+(`.harness-config`, `..`, `~`, `/`, a pattern that may match one), for a program handed a directory
+may walk it, but the agent's working directory, which every command over the tree names and every
+program given no path works over, and a move's own word (a `cd`'s, `env -C`'s), which reads
+nothing where it goes (`AgentPolicy.Named`, `CommandAnalysis.MoveWords`); this tool's verbs and
+`run-side-task` by a verb the shell expands, past the tool's own options (`AgentPolicy.ToolVerbOf`),
+and a command that takes `AgentChildEnvironment.AgentMarker` away - a word naming it, or a start
+with no environment (`env -i`, `env -`, `exec -c`), read in the command's words and in those of
+every command that runs it (`AnalyzedCommand.Wrappers`, `AgentPolicy.MarkerTouched`); a git or gh
+command called by a name none of its own commands is (`AgentPolicy.GitCommands`, git 2.51's
+`git help -a`, and `AgentPolicy.GhCommands`) - an alias or an extension, whose command line a
+configuration file or an extension holds, one an agent may have written - on every ground, but a
+program git finds as `git-<name>` on the PATH the agent's commands start with or where git keeps
+its own beside it (`git lfs`, `AgentPolicy.GitProgram`), a word no setting of git's can name, and
+an alias the command gives itself, read as the command it is (`AgentPolicy.CalledByAnotherName`); no agent starts while the tool itself runs elevated
 (`IHostPlatform.IsPrivilegedProcess`, the runtime's own answer): `AgentRunner`, which every client's
 launch passes, records such a step `NotStarted` (`AgentNotStartedBecause.Elevated`, in the words of
 `AgentPolicy.RefusedWhileElevated`) before it takes a client. A path is decided as asked and as
@@ -1648,9 +1666,15 @@ Linux and macOS expands them; a program is never named by a pattern, however its
 quoted (`CommandAnalysis.ProgramPatterns`), for PowerShell's call operator finds
 `& 'C:\Git\cmd\gi?.exe'` by its wildcards; an argument list
 (`Commands(IReadOnlyList<string>, bool)`) crosses no shell, so a variable in it is the text it spells -
-but on Windows a program splits its own command line, and a Cygwin or MSYS program or one a C
-runtime's wildcard expansion is linked into expands the patterns and braces in it, so the policy
-there reads those characters as open (`CommandAnalysis.ExpandedByItsProgram`);
+but on Windows a program splits its own command line, and a Cygwin or MSYS program expands the
+patterns and braces in it: told by the runtime library beside it (`cygwin1.dll`, `msys-2.0.dll`),
+the program the list starts and each one a wrapper among its words starts asked, found on the PATH
+the agent's commands start with (`AgentPolicyGround.ProgramPath`), the policy reads those characters
+as open for such a program and for one it cannot find (`AgentPolicy.ExpandsItsOwnWords`,
+`CommandAnalysis.ExpandedByItsProgram`), and as the text they are for gh, git, dotnet and every
+other program, so `gh api repos/o/r/pulls?state=open` is the endpoint it spells - a program linked
+with its C runtime's own wildcard expansion (`setargv`) is not told apart, and its patterns are
+read as text;
 a word another program fills in as it runs (`CommandAnalysis.InputWord`) stands as an expansion
 whatever quotes a reader put around it, and what cmd reads again - a batch argument's `%` among it -
 it expands wherever it stands; git's own options, valued ones with their values, are dropped
@@ -1662,9 +1686,17 @@ ones that only shape what git prints, `--exec-path`, clone's own `-c` or `--conf
 `GIT_TEMPLATE_DIR` and the homes git reads its global configuration from (`HOME`, `XDG_CONFIG_HOME`,
 `HOMEDRIVE`, `HOMEPATH`, `USERPROFILE`) its assignments set, never a word of data that spells one - is the `git config` it is, and still the command it runs,
 each reading met by the rules. A word that names a path is read
-as each candidate it may be - the word, a redirect's file, an option's value, the words a script in
-it names, each word its braces spell and the path a `file://` address names - and a pattern the
-shell expands is refused where it may reach a credential slot or a Claude Code directory; and a command that runs a program which fetches from the network
+as each candidate it may be (`CommandAnalysis.PathsNamed`) - and a pattern the shell expands is
+refused where it may reach a credential slot or a Claude Code directory or match a directory that
+holds one, a `*`, a `?` or a bracket matching a name that begins with a dot only where its shell
+would (`AgentPolicy.DotNamed`: a segment that begins with a dot, or a string that names bash's
+`dotglob` or zsh's `globdots`, sets `GLOBIGNORE`, carries zsh's `D` qualifier, is read by
+PowerShell or cmd, or gives `-Force`, `AgentPolicy.PatternsMatchDotNames`), so `rm -rf *` runs and
+`.g*` is git's own; what a command writes (`CommandAnalysis.WriteTargets`) - its output redirects,
+and each path a writer's words name, a copy's destination however an option names it (GNU's `-t`
+and `--target-directory` in every spelling, else the last word; `Copy-Item`'s `-Destination` by
+any prefix or glued, else its second word) - meets the refusals every ground keeps on a write, a
+pattern within a root of the agent's own that stands inside the state its own place; and a command that runs a program which fetches from the network
 (`curl`, `wget`, `Invoke-WebRequest` and `Invoke-RestMethod` with `iwr` and `irm`, `http`, `https`,
 `gh api`) is decided as a web request too, by each address it names and each host it reaches (a
 proxy, curl's `--connect-to` and `--resolve` targets, the proxy of its environment), under the
@@ -1683,14 +1715,15 @@ commands that reach it, one list (`AgentPolicy.GhCiReaches`) that `AgentPolicy.N
 `gh release create`, `gh release edit`), `AgentPolicy.GhApiEndpoints` (each word's path read to its first `?` or `#`,
 for gh's client sends no fragment), `AgentPolicy.GhApiWriteEndpoints` (a ref, a
 file, a pull request or a release written: refused where `CommandAnalysis.GhApiWrites` says the request writes) and
-`AgentPolicy.GhApiMutations` are read from, `gh alias set`, `gh extension exec`, and a `gh` command
-named by none of gh's own (`AgentPolicy.GhCommands`: an alias, `co` among them, or an extension), where `gh` runs -
-its command's own program, or past one that runs the words after it (`CommandAnalysis.CommandRunners`) - keep git's own files unwritten whatever `protectedPaths` says (`AgentPolicy.GitsOwnRule`:
-a `.git` segment at any depth beneath a root, in any case, so a nested repository's hooks are as
-safe as the root's), and hold the tool's own
+`AgentPolicy.GhApiMutations` are read from, and `gh alias set` (a `gh` command named by none of gh's own,
+`gh extension exec` among them, is refused on every ground, above) - keep git's own files unwritten whatever
+`protectedPaths` says (`AgentPolicy.GitsOwnRule`: a `.git` segment at any depth beneath each tree the agent
+touches, `AgentPolicyGround.Trees` - its roots and the main checkout a worktree was made from - in any case, so a
+nested repository's hooks and the hooks every worktree runs are as safe as the root's), and hold the tool's own
 policy and what the next launch loads unwritten by any agent; its own state
-(`HarnessLayout.StatePaths`, the one owner of where that state is) is held so whatever any switch
-says, a writable root standing inside it - the agent's own work directory - the one exception; the
+(`HarnessLayout.StatePaths`, the one owner of where that state is, under each tree the agent touches) is held so
+whatever any switch says, a writable root standing inside it - the agent's worktree under the worktrees root,
+its work directory under the run's records, and a pattern within either - the one exception; the
 tool's own verbs (`AgentPolicy.ToolVerbs`, each the command's own name as its service declares it)
 and `run-side-task` are refused, run by any program or from a response file, whatever the switch
 says, and so are the `gh` commands that hand the work to another agent or install what the next launch loads
@@ -2034,7 +2067,10 @@ as every launch builds them (`ReasonLaunch`, shared with the advisor and the rep
 path its record resolves, the run's work directory made before any client is handed it - the advisor's and the
 reporter's, which no agent of the run made, among them - the tool's own `~/.claude` always among the directories,
 every secret the slot answers in the mask), the policy's ground by `AgentStepGround.Of` (a
-read-only agent reading the main tree and writing its work directory alone), each skill its prompt names looked up
+read-only agent reading the main tree and writing its work directory alone; the tool's state guarded under each
+tree the agent touches - its worktree, and always the main checkout, whose run records and other worktrees a command
+reaches from the worktree - and git's own files beneath both, `AgentPolicyGround.Trees`), each skill its prompt names
+looked up
 again where the step starts (`AgentSkills.Find`, its name by `AgentSkills.NameIn`'s one rule), the folder copied
 whole into `work/<agent>/skills/<name>/` and the block put where the placeholder stood, its `${CLAUDE_SESSION_ID}` the
 id the run's first session begins as (`AgentStepRequest.SessionId`), each skill handed recorded on the request, in
@@ -2637,11 +2673,16 @@ ground (`SideTaskPolicy`) - no restriction list, no allow list of pages, all fou
 main checkout the writable root, the worktree rules and the protected paths off, this tool's own
 verbs open to it as the person's own session's are - with the built-in refusals kept (root
 actions, every credential slot of the main checkout and every Claude Code directory its clients
-use, to its file tools and its commands alike, `Write(.git/**)` and a command's redirection into
-`.git`, the tool's own state - each state path under the main tree, `HarnessLayout.StatePathsUnder`,
-never the tree itself - the commands that print a credential, and `run-side-task` itself, refused
-to every agent by any name of the program and refusing itself where the agent's mark,
-`AgentChildEnvironment.AgentMarker`, is in its environment); no limits, no output envelope; the web
+use, to its file tools and to every path a word of its commands names (`CommandAnalysis.PathsNamed`),
+a directory that holds one given whole among them but the main tree it works in - a command over
+that tree whole, `.` or no path, is not told from one over its sources and reaches the slots'
+files: the policy decides what a command names, it is not a sandbox - `Write(.git/**)` and a
+command's write into `.git`, the tool's own state - each state path under the main tree,
+`HarnessLayout.StatePathsUnder`, never the tree itself - the commands that print a credential, a
+git or gh command called by a name none of its own commands is, and `run-side-task` itself,
+refused to every agent by any name of the program and by a verb the shell expands, and refusing
+itself where the agent's mark, `AgentChildEnvironment.AgentMarker`, is in its environment, which
+no command of an agent takes away); no limits, no output envelope; the web
 search of every configured source turned on, with one more asked beside them: `native`, the
 provider's own search - on the Claude API a request of the harness's own whose only tool is the
 provider's web search (`ClaudeApiNativeSearch`, no server tool in any conversation), its usage
@@ -4292,18 +4333,21 @@ tool replaces, where a green result had quietly stopped meaning anything.
   left out; files past the cap are not copied and are named). A pass keeps nothing; a later
   step reads nothing from it, for it is evidence beside the verdict and never an output, and
   a failed step still keeps nothing of what one reads. Only a file of its own is copied: a
-  link is never kept through, for what it leads to may lie outside the build directory or be
-  of any size (the file it leads to is kept where an entry names that), and a pipe or a device
-  is no file to read. A file is measured by what it holds as it is read - never by its
+  link is never kept through, wherever on the way from the build directory it stands - an entry
+  that is one, a file beneath a linked directory, each part of the path asked by one helper
+  (`KeptOnFailure.LinkOnTheWay`), and no walk of a directory or of a pattern follows one - for
+  what it leads to may lie outside the build directory or be of any size (the file it leads to
+  is kept where an entry names that), and a pipe or a device is no file to read. A file is measured by what it holds as it is read - never by its
   directory entry, which says a link's own size and nothing of a file still growing - and no
   more of it is copied than the cap has left, so one that grows past the cap is refused over
-  it. A directory beneath an entry that cannot be read is passed by and named among the
-  unreadable, every file beside it kept, and a stop while the evidence crosses ends the file
+  it. A directory that cannot be read is passed by and named among the unreadable directories
+  (`KeptOnFailure.UnreadableDirectories`) where an entry could have named what it holds -
+  beneath a directory an entry names, or one a pattern could reach - every file beside it kept, and a stop while the evidence crosses ends the file
   it stopped in, keeps what is already kept and names what it left. A path naming nothing is
   said on the leg's line, not refused, for the failure may have been before it was written;
   the line (text and `--json`) names the directory, how many files were kept and their size,
   and how many were refused over the cap, could not be read, were left as links, named
-  nothing or were left uncopied by a stop. On a leg a WSL or ssh
+  nothing or were left uncopied by a stop, and how many directories could not be read. On a leg a WSL or ssh
   host runs, the copy is kept beside that host's own log and crosses back over the host's
   transport: `sync --pull` takes the kept-on-failure directory within that host's run. Entries
   that are absolute, climb out of the build directory, name the build directory itself or a

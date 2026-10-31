@@ -17,8 +17,9 @@ public static class AgentStepGround
     /// The ground of a reason step working in <paramref name="workspace"/>: its agent's worktree where it has one -
     /// which it writes below, unless its definition says <c>writes: false</c> or the run only reads, its work directory
     /// always - or, for an agent with none, the main checkout, which it only reads. The tool's own state under each tree
-    /// it touches, and every credential slot of the main checkout (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>),
-    /// no action of the agent's reaches.
+    /// it touches - its worktree, and always the main checkout, whose run records and other worktrees a command reaches
+    /// from the worktree - git's own files beneath both under the worktree rules, and every credential slot of the main
+    /// checkout (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>), no action of the agent's reaches.
     /// </summary>
     /// <param name="config">The configuration, whose <c>agentPolicy</c> restricts and whose state paths are guarded.</param>
     /// <param name="definition">The agent definition the step works by, where there is one; null where it names none.</param>
@@ -45,16 +46,10 @@ public static class AgentStepGround
         ArgumentNullException.ThrowIfNull(claudeDirectories);
 
         var policy = config.AgentPolicy ?? new AgentPolicyConfig();
-        var trees = new List<string>();
 
-        if (workspace.Worktree is { Length: > 0 } worktree)
-        {
-            trees.Add(worktree);
-        }
-        else
-        {
-            trees.Add(workspace.MainCheckout);
-        }
+        // Every tree the agent touches: its worktree where it has one, and always the main checkout it was made from, whose
+        // state - the run's records among it - and whose git's own files a command's write reaches from the worktree.
+        IReadOnlyList<string> trees = workspace.Worktree is { Length: > 0 } worktree ? Distinct([worktree, workspace.MainCheckout]) : [workspace.MainCheckout];
 
         // The capabilities its definition names - all four where it names none - less the web where this run is given
         // none: without it every web request is refused, and no client offers the agent another way.
@@ -107,7 +102,7 @@ public static class AgentStepGround
             ProtectedPaths: policy.ProtectedPaths ?? true,
             [.. trees.SelectMany(tree => HarnessLayout.StatePathsUnder(tree, config.Worktrees?.Root ?? WorktreeSettings.DefaultRoot)).Distinct(StringComparer.OrdinalIgnoreCase)])
         {
-            // The main checkout is read by an agent that has no worktree; written by none of them.
+            Trees = trees,
         };
     }
 

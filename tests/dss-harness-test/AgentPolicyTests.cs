@@ -177,7 +177,7 @@ public sealed class AgentPolicyTests
         {
             (IReadOnlyList<string>)["git", "push"],
             ["git", "push", "origin", "main"],
-            ["git", "-C", "..", "push", "origin"],
+            ["git", "-C", "sub", "push", "origin"],
             ["env", "A=1", "git", "push"],
 
             // Configured where it runs, it is the git config it is and still the push it is.
@@ -1228,7 +1228,7 @@ public sealed class AgentPolicyTests
             Assert.Contains("it holds a NUL", denied.Reason, StringComparison.Ordinal);
         }
 
-        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(["git", "pushx", "origin"]));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(["git", "fetch", "origin"]));
     }
 
     /// <summary>
@@ -2206,11 +2206,16 @@ public sealed class AgentPolicyTests
             foreach (var command in new[]
             {
                 "gh auth status", "gh auth status --hostname github.com", "gh auth login --with-token", "gh config get editor",
-                "git credential approve https://example.com", "git credential-store store", "git credential-cache exit", "git credentials",
+                "git credential approve https://example.com", "git credential-store store", "git credential-cache exit",
             })
             {
                 Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
             }
+
+            // A name none of git's own commands is calls an alias, which may print one from a file no rule reads.
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied("git's and gh's own commands", AgentPolicySource.Builtin, "'git credentials' calls 'git credentials', none of git's own commands and no program git-credentials git finds: an alias, which runs a command line from a file no rule here reads: an agent calls git and gh by their own commands"),
+                policy.Run("git credentials"));
         }
     }
 
@@ -2549,17 +2554,17 @@ public sealed class AgentPolicyTests
     }
 
     /// <summary>
-    /// A gh command named by none of gh's own - an alias, gh's own co for pr checkout among them, or an extension - is a
-    /// name for any command, and the worktree rules refuse it as they refuse gh alias set; gh's own commands stay as their
-    /// rules decide them.
+    /// A gh command named by none of gh's own - an alias, gh's own co for pr checkout among them, or an extension - runs a
+    /// command line from gh's configuration or an extension no rule reads, so it is refused on every ground, the worktree
+    /// rules off too; gh's own commands stay as their rules decide them.
     /// </summary>
     [Fact]
-    public void AGhCommandNamedByNoneOfGhsOwn_IsRefusedAsAnAliasIs()
+    public void AGhCommandNamedByNoneOfGhsOwn_IsRefusedOnEveryGround()
     {
-        foreach (var platform in new[] { PlatformId.Linux, PlatformId.Windows })
+        foreach (var (platform, worktreeRules) in new[] { (PlatformId.Linux, true), (PlatformId.Windows, true), (PlatformId.Linux, false) })
         {
             using var ground = Ground(platform);
-            var policy = ground.Policy();
+            var policy = ground.Policy(worktreeRules: worktreeRules);
 
             // Past a program that runs the words after it, gh runs all the same: it is read as where it leads.
             foreach (var (command, named) in new[]
@@ -2572,12 +2577,14 @@ public sealed class AgentPolicyTests
                 var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
 
                 Assert.Equal(
-                    ("the merges and CI starts of gh", $"'{command}' is denied by a worktree rule of this tool: it reaches 'gh {named}', an alias or an extension, a name for any command, and never merges, never starts CI binds the agents too"),
+                    ("git's and gh's own commands", $"'{command}' calls 'gh {named}', none of gh's own commands: an alias or an extension, which runs a command line from a file no rule here reads: an agent calls git and gh by their own commands"),
                     (denied.Rule, denied.Reason));
             }
 
             // A wrapper stripped before a program that runs the words after it: the command it leaves is read so.
-            Assert.Contains("it reaches 'gh co', an alias or an extension", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("nice setsid gh co 42")).Reason, StringComparison.Ordinal);
+            Assert.Equal(
+                "'setsid gh co 42' calls 'gh co', none of gh's own commands: an alias or an extension, which runs a command line from a file no rule here reads: an agent calls git and gh by their own commands",
+                Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("nice setsid gh co 42")).Reason);
 
             // gh's own alias of extension is the command it names; past a wrapper too.
             foreach (var command in new[] { "gh extension exec any-ext 42", "gh ext exec any-ext 42", "setsid gh extensions exec any-ext" })
@@ -2585,7 +2592,7 @@ public sealed class AgentPolicyTests
                 var exec = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
 
                 Assert.Equal(
-                    ("the merges and CI starts of gh", $"'{command}' is denied by a worktree rule of this tool: it reaches gh extension exec, an extension run: a command no rule here reads, and never merges, never starts CI binds the agents too"),
+                    ("git's and gh's own commands", $"'{command}' calls gh extension exec, an extension run, which runs a command line from a file no rule here reads: an agent calls git and gh by their own commands"),
                     (exec.Rule, exec.Reason));
             }
 
@@ -2610,8 +2617,6 @@ public sealed class AgentPolicyTests
                 var answer = policy.Run(command);
                 Assert.True(answer is not AgentPolicyAnswer.Denied, $"{command}: {(answer as AgentPolicyAnswer.Denied)?.Reason}");
             }
-
-            Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false).Run("gh co 42"));
         }
     }
 
@@ -2753,10 +2758,10 @@ public sealed class AgentPolicyTests
             Assert.Equal("Run(git config *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(["pwsh", "-c", "$env:HOME = '/tmp/evil'; git st"])).Rule);
 
             // A name that only begins as a home's, and a home's name as a word of data, configure no git.
-            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git st"));
-            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("HOMEBREW_NO_AUTO_UPDATE=1 git st"));
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git status"));
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("HOMEBREW_NO_AUTO_UPDATE=1 git status"));
             Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("echo HOME=/tmp/evil"));
-            Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false).Run("HOME=/tmp/evil git st"));
+            Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false).Run("HOME=/tmp/evil git status"));
         }
     }
 

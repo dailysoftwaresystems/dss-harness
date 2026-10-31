@@ -26,9 +26,8 @@ namespace DssHarness.Core.Testing;
 /// cap, named as <see cref="Kept"/> names one.
 /// </param>
 /// <param name="Unreadable">
-/// Each file that could not be read - a pipe, a socket or a device among them, which is no file to read - each entry
-/// naming a directory that could not be, and each directory beneath one that a walk passed by because it could not be
-/// read, named as <see cref="Kept"/> names one.
+/// Each file that could not be read - a pipe, a socket or a device among them, which is no file to read - and each entry
+/// naming a directory that could not be, named as <see cref="Kept"/> names one.
 /// </param>
 /// <param name="NamedNothing">
 /// Each declared entry that names nothing: said, not refused, because the failure may have been before it was written.
@@ -42,10 +41,18 @@ public sealed record KeptOnFailure(
     IReadOnlyList<string> NamedNothing)
 {
     /// <summary>
-    /// Each file an entry named that is a link, left as it is: nothing is kept through a link - what it leads to may be
-    /// outside the build directory, or of any size - and the file it leads to is kept where an entry names that.
+    /// Each file or directory an entry named that is a link, or lies beneath one, from the build directory down, left as it
+    /// is: nothing is kept through a link - what it leads to may be outside the build directory, or of any size - and what
+    /// it leads to is kept where an entry names that.
     /// </summary>
     public IReadOnlyList<string> Links { get; init; } = [];
+
+    /// <summary>
+    /// Each directory a walk passed by because it could not be read, where an entry could have named what it holds - one
+    /// beneath a directory an entry names, or one a pattern could reach - named as <see cref="Kept"/> names one: what it
+    /// holds is evidence asked for and not kept, and the files beside it are kept all the same.
+    /// </summary>
+    public IReadOnlyList<string> UnreadableDirectories { get; init; } = [];
 
     /// <summary>
     /// Each file a stop left uncopied: the keep ends between one file and the next, and mid-file, when its run is stopped,
@@ -104,21 +111,25 @@ public sealed record KeptOnFailure(
         var overCap = new List<string>();
         var unreadable = new List<string>();
         var links = new List<string>();
+        var unreadableDirectories = new List<string>();
         var leftAtStop = new List<string>();
         var namedNothing = new List<string>();
         long bytes = 0;
 
-        // A directory beneath what a walk lists that cannot be read is passed by, and named, once: what it holds is
-        // evidence asked for and not kept, and the files beside it are kept all the same.
-        void Unread(string directory, Exception _)
+        // A directory beneath what a walk lists that cannot be read is passed by, and named once where an entry could have
+        // named what it holds: what it holds is evidence asked for and not kept, and the files beside it are kept all the same.
+        void PassedBy(string directory)
         {
             var relative = PathPatterns.Normalize(Path.GetRelativePath(buildDirectory, directory));
 
-            if (!unreadable.Contains(relative, StringComparer.Ordinal))
+            if (!unreadableDirectories.Contains(relative, StringComparer.Ordinal))
             {
-                unreadable.Add(relative);
+                unreadableDirectories.Add(relative);
             }
         }
+
+        // The directories the listing of the whole build directory passed by, which each pattern is asked about.
+        var unlisted = new List<string>();
 
         // Every file the entries name, relative to the build directory with forward slashes, each once: the order the
         // cap spends itself in, so the same configuration keeps the same files on every machine.
@@ -138,7 +149,7 @@ public sealed record KeptOnFailure(
             listed =
             [
                 .. fileSystem
-                    .EnumerateReachableFiles(buildDirectory, Unread)
+                    .EnumerateReachableFiles(buildDirectory, (directory, _) => unlisted.Add(directory))
                     .Select(file => (Relative: PathPatterns.Normalize(Path.GetRelativePath(buildDirectory, file)), File: file))
                     .Where(entry => GlobPattern.Reads(entry.Relative)),
             ];
@@ -175,9 +186,22 @@ public sealed record KeptOnFailure(
                     var pattern = GlobPattern.Parse(relative);
                     var found = List().Where(file => pattern.Matches(file.Relative)).Select(file => file.Relative).ToList();
 
+                    // A directory the listing passed by is named where the pattern could have named what it holds, and
+                    // no other.
+                    var reachable = unlisted
+                        .Where(directory => PathPatterns.Normalize(Path.GetRelativePath(buildDirectory, directory)) is var under
+                            && GlobPattern.Reads(under) && pattern.Overlaps(GlobPattern.Parse(under + "/**")))
+                        .ToList();
+
+                    reachable.ForEach(PassedBy);
+
                     if (found.Count == 0)
                     {
-                        namedNothing.Add(entry);
+                        if (reachable.Count == 0)
+                        {
+                            namedNothing.Add(entry);
+                        }
+
                         continue;
                     }
 
@@ -190,7 +214,12 @@ public sealed record KeptOnFailure(
                 {
                     var full = Path.Combine(buildDirectory, relative);
 
-                    if (fileSystem.FileExists(full))
+                    // Never through a link, wherever on the way from the build directory it stands.
+                    if (LinkOnTheWay(fileSystem, buildDirectory, relative) is not null)
+                    {
+                        links.Add(relative);
+                    }
+                    else if (fileSystem.FileExists(full))
                     {
                         matched[relative] = relative;
                     }
@@ -198,7 +227,7 @@ public sealed record KeptOnFailure(
                     {
                         // Walked as the patterns' listing is: one subdirectory that cannot be read is passed by and
                         // named, never the whole entry lost with it.
-                        foreach (var file in fileSystem.EnumerateReachableFiles(full, Unread).Select(file => PathPatterns.Normalize(Path.GetRelativePath(buildDirectory, file))))
+                        foreach (var file in fileSystem.EnumerateReachableFiles(full, (directory, _) => PassedBy(directory)).Select(file => PathPatterns.Normalize(Path.GetRelativePath(buildDirectory, file))))
                         {
                             matched[file] = file;
                         }
@@ -233,8 +262,9 @@ public sealed record KeptOnFailure(
 
             try
             {
-                // Never through a link: what it leads to may lie outside the build directory, and is of any size.
-                if (fileSystem.KindOf(full) is PathKind.Link)
+                // Never through a link, the file's own or a directory's on the way to it: what it leads to may lie outside the
+                // build directory, and is of any size.
+                if (LinkOnTheWay(fileSystem, buildDirectory, relative) is not null)
                 {
                     links.Add(relative);
                     continue;
@@ -277,7 +307,36 @@ public sealed record KeptOnFailure(
             }
         }
 
-        return new KeptOnFailure(destination, bytes, kept, overCap, unreadable, namedNothing) { Links = links, LeftAtStop = leftAtStop };
+        return new KeptOnFailure(destination, bytes, kept, overCap, unreadable, namedNothing)
+        {
+            Links = links,
+            UnreadableDirectories = unreadableDirectories,
+            LeftAtStop = leftAtStop,
+        };
+    }
+
+    /// <summary>
+    /// The first part of <paramref name="relative"/>, from the build directory down - the path itself among them - that is
+    /// a link, a symbolic link or a junction alike; null where none is. The one test of whether a keep goes through a link.
+    /// </summary>
+    /// <param name="fileSystem">Reads what each part is.</param>
+    /// <param name="buildDirectory">The build directory, which is never asked about itself.</param>
+    /// <param name="relative">A path below it, with forward slashes.</param>
+    private static string? LinkOnTheWay(IFileSystem fileSystem, string buildDirectory, string relative)
+    {
+        var parts = relative.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        for (var count = 1; count <= parts.Length; count++)
+        {
+            var part = string.Join('/', parts.Take(count));
+
+            if (fileSystem.KindOf(Path.Combine(buildDirectory, part)) is PathKind.Link)
+            {
+                return part;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

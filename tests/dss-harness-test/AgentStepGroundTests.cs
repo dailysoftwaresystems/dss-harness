@@ -1,7 +1,9 @@
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Platform;
 
 namespace DssHarness.Tests;
 
@@ -136,17 +138,78 @@ public sealed class AgentStepGroundTests
 
     /// <summary>
     /// The tool's own state a step's ground guards is each state path under the tree it works in - the configured
-    /// worktrees root among them - never that tree itself, which its agent writes.
+    /// worktrees root among them - and always under the main checkout, whose run records and other worktrees a command
+    /// reaches from the worktree; never either tree itself. Both trees are the ones whose git's own files no command
+    /// writes; a read-only step's one tree is the main checkout.
     /// </summary>
     [Fact]
-    public void TheStateGuarded_IsEachStatePathUnderTheTree_NeverTheTreeItself()
+    public void TheStateGuarded_IsEachStatePathUnderEachTree_TheMainCheckoutAlways_NeverATreeItself()
     {
         var ground = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: []);
+        var statePaths = DssHarness.Core.Repository.HarnessLayout.StatePaths(WorktreeSettings.DefaultRoot);
 
         Assert.Equal(
-            [.. DssHarness.Core.Repository.HarnessLayout.StatePaths(WorktreeSettings.DefaultRoot).Select(path => Path.Combine("C:/trees/w1", path))],
+            [.. statePaths.Select(path => Path.Combine("C:/trees/w1", path)), .. statePaths.Select(path => Path.Combine("C:/source/repo", path))],
             ground.StateDirectories);
-        Assert.DoesNotContain("C:/trees/w1", ground.StateDirectories);
+        Assert.Equal(["C:/trees/w1", "C:/source/repo"], ground.Trees);
+
+        var readOnly = AgentStepGround.Of(
+            new HarnessConfig(),
+            Definition(),
+            Step(),
+            new AgentWorkspace(null, "C:/runs/r1/agents/a1/work", "C:/source/repo", [], "C:/runs/r1/agents/a1/work", "C:/source/repo/.orchestrators/r1"),
+            webSearchGiven: false,
+            claudeDirectories: []);
+
+        Assert.Equal([.. statePaths.Select(path => Path.Combine("C:/source/repo", path))], readOnly.StateDirectories);
+        Assert.Equal(["C:/source/repo"], readOnly.Trees);
+    }
+
+    /// <summary>
+    /// From a worktree, a command's write reaches none of the main checkout's own: its git's files - the hooks every
+    /// worktree runs - the run's records, another agent's worktree; the agent's own worktree and its work directory,
+    /// under the run's records, it writes.
+    /// </summary>
+    [Fact]
+    public void AWorktreeStepsCommand_WritesNoneOfTheMainCheckoutsOwn_ItsWorktreeAndWorkDirectoryItWrites()
+    {
+        using var main = new TempDirectory();
+        var worktree = Path.Combine(main.Path, ".harness-config", "worktrees", "w1");
+        var other = Path.Combine(main.Path, ".harness-config", "worktrees", "w2");
+        var run = Path.Combine(main.Path, ".orchestrators", "r1");
+        var work = Path.Combine(run, "agents", "a1", "work");
+
+        foreach (var directory in new[] { worktree, other, work, Path.Combine(main.Path, ".git", "hooks") })
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var ground = AgentStepGround.Of(
+            new HarnessConfig(),
+            Definition(),
+            Step(),
+            new AgentWorkspace(worktree, work, main.Path, [], worktree, run),
+            webSearchGiven: false,
+            claudeDirectories: []);
+        var policy = new AgentPolicy(new PhysicalFileSystem(FilePermissionsFactory.Create()), HostDoubles.Platform(), ground);
+        var whole = Path.GetFullPath(main.Path).Replace('\\', '/');
+
+        foreach (var (command, rule) in new[]
+        {
+            ("echo x > ../../../.git/hooks/pre-commit", AgentPolicy.GitsOwnRule),
+            ($"echo x > {whole}/.git/hooks/pre-commit", AgentPolicy.GitsOwnRule),
+            ($"cp -t {whole}/.git/hooks pre-commit", AgentPolicy.GitsOwnRule),
+            ($"echo x > {whole}/.orchestrators/r1/flow.json", "the tool's own state"),
+            ($"echo x > {whole}/.harness-config/worktrees/w2/f", "the tool's own state"),
+        })
+        {
+            Assert.Equal(rule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command)).Rule);
+        }
+
+        foreach (var command in new[] { "echo x > notes.md", $"echo x > {work.Replace('\\', '/')}/notes.md", "cp a.txt b.txt" })
+        {
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+        }
     }
 
     /// <summary>A workspace over a worktree, the shape most of the tests use.</summary>

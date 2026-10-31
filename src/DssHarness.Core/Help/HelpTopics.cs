@@ -2479,13 +2479,19 @@ public static class HelpTopics
             + "own search - on the Claude API a request of the harness's own whose only tool is the provider's search, "
             + "what it costs counted in the turn's, a failure of it one failed part of the search saying why; on Claude "
             + "Code its own WebSearch kept in the side-task's tools; on Z.AI none - and web_fetch takes any address. What "
-            + "stays, and why: the built-in refusals - no root action, no agent while the tool runs elevated, no read or "
-            + "write of any credential slot or a Claude Code directory by a file tool or a command, no command that prints "
-            + "a credential - each refused to the agent and said in the chat for the person to do by hand; git's own files "
+            + "stays, and why: the built-in refusals - no root action, no agent while the tool runs elevated, no file "
+            + "tool's read or write of a credential slot or a Claude Code directory, no command whose words name one or a "
+            + $"directory that holds one other than its working directory ('{ToolPackage.Command} help agent-clients' says how a word is read), no "
+            + "command that prints a credential, no git or gh command called by a name none of their own commands is - "
+            + "each refused to the agent and said in the chat for the person to do by hand; git's own files "
             + "(Write(.git/**)), written by git's verbs and this tool's, never by an agent's file tool or a command's "
-            + "redirection; the tool's own state, written only by its verbs; each search source's own pace and rate "
-            + "limits; and run-side-task itself, refused to every agent by any name of the program, and refusing itself "
-            + "where it is started under one - a side-task is a person's own conversation, and no agent starts another.");
+            + "write; the tool's own state, written only by its verbs; each search source's own pace and rate limits; and "
+            + "run-side-task itself, refused to every agent by any name of the program and by a verb the shell expands, "
+            + "and refusing itself where it is started under one, whose mark (DSSHARNESS_UNDER_AGENT) no command of an "
+            + "agent takes away - a side-task is a person's own conversation, and no agent starts another. The main tree "
+            + "is the side-task's working directory and holds the credential slots: a command over it whole - named . or "
+            + "given no path, an archive of it or a search - is not told from one over its sources, and reaches their "
+            + "files; this is a policy of what a command names, not a sandbox.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2874,8 +2880,18 @@ public static class HelpTopics
         builder.AppendLine("psexec, PowerShell's -Verb RunAs, wsl -u root, systemd-run, schtasks with /ru, wherever a");
         builder.AppendLine("command names one), writes outside an agent's writable roots, every read and write of a");
         builder.AppendLine("credential slot or a Claude Code directory of the run's and every search over one, any");
-        builder.AppendLine("command naming one - by ~ or $HOME, as a redirect's file or an option's value too - and");
-        builder.AppendLine("this tool's own verbs and run-side-task, run by any program or from a response file,");
+        builder.AppendLine("command naming one - by ~ or $HOME, as a redirect's file, an option's value after an =");
+        builder.AppendLine("or a PowerShell parameter's :, a value glued to a short option (ssh -i./key), the file an");
+        builder.AppendLine("@ or a < makes curl, httpie or gh read (-d @x, -F f=@x;type=y), a word of a script - and");
+        builder.AppendLine("any word that names a directory holding one whole (.harness-config, .., ~, /, or a");
+        builder.AppendLine("pattern that may match one), for a program handed a directory may walk it: but the");
+        builder.AppendLine("agent's working directory, which every command over the tree names (.) and every program");
+        builder.AppendLine("given no path works over, and a cd's own word, which reads nothing where it goes. This");
+        builder.AppendLine("tool's own verbs and run-side-task, run by any program or from a response file, or by a");
+        builder.AppendLine("verb the shell expands (run-side-$T, dssharness $V), past its own options (-C, -v), are");
+        builder.AppendLine("refused, and so is a command that takes DSSHARNESS_UNDER_AGENT, the mark of every program");
+        builder.AppendLine("an agent starts, away - a word naming it (an assignment, empty or not, unset, env -u,");
+        builder.AppendLine("PowerShell's env:, cmd's set) or a start with no environment (env -i, env -, exec -c) -");
         builder.AppendLine("whatever any switch says: an agent does not move its own run, nor leave its step's limits -");
         builder.AppendLine("nor do the gh commands that hand its work to another agent or install what the next launch");
         builder.AppendLine($"loads ({string.Join(", ", Agents.Policy.AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too -");
@@ -2883,7 +2899,8 @@ public static class HelpTopics
         builder.AppendLine($"({string.Join(", ", Agents.Policy.AgentPolicy.CredentialPrintingCommands)}; a * any helper's name, and");
         builder.AppendLine("the words after a command met anywhere after it, options before or between them):");
         builder.AppendLine("a credential leaves its slot only by the key store that holds it, never through an");
-        builder.AppendLine("agent's words.");
+        builder.AppendLine("agent's words. Nor is git or gh called by a name none of its own commands is - an alias,");
+        builder.AppendLine("an extension - on any ground, as the reading of a command below says.");
         builder.AppendLine("No agent starts while this tool itself runs elevated: its step is recorded never started,");
         builder.AppendLine("saying so, before any client is taken. A path is decided as asked and as resolved, and a");
         builder.AppendLine("refusal's places compare in any case on every system, a Windows short name read as its long");
@@ -2920,10 +2937,14 @@ public static class HelpTopics
         builder.AppendLine("and Claude Code directory beside them -");
         builder.AppendLine("a second layer, for the engine is asked about every other call");
         builder.AppendLine("and answers from this policy in its own process, and a call those rules refuse first is");
-        builder.AppendLine("counted and recorded as Claude Code's own denial. This is policy, not a sandbox - a");
-        builder.AppendLine("program an agent runs opens files as the user it runs as, a file of the credential slot");
-        builder.AppendLine("among them; what it is never given is a key in its environment, and what no file tool");
-        builder.AppendLine("of an agent touches is the slot itself, in any root. Where this tool cannot decide a");
+        builder.AppendLine("counted and recorded as Claude Code's own denial. This is policy, not a sandbox: it");
+        builder.AppendLine("decides what a call names, never what a program reads by itself - a program an agent");
+        builder.AppendLine("runs opens files as the user it runs as, and one that walks its working directory unnamed");
+        builder.AppendLine("(an archive of ., a search given no path) reaches a credential slot's files where that");
+        builder.AppendLine("directory holds one, as a side-task's main tree does; what it is never given is a key in");
+        builder.AppendLine("its environment, and what no file tool and no command's word of an agent names is the");
+        builder.AppendLine("slot itself, in any root, or a directory that holds one but that working directory.");
+        builder.AppendLine("Where this tool cannot decide a");
         builder.AppendLine("call it denies it, never allows: nothing runs while the host that would answer is");
         builder.AppendLine("silent or gone. The policy is built and holds every action behind it; the claude-code");
         builder.AppendLine("client below asks it of every call, the tool runtime below decides by it each call it");
@@ -2988,15 +3009,19 @@ public static class HelpTopics
             + "variable still and an unquoted * a glob - each word's quoting taken by where it stands, never lent it by "
             + "another word spelled alike, and a PowerShell bareword's wildcards open, as pwsh on Linux and macOS "
             + "expands them; an argument list crosses no shell, so a variable in one is the text it spells - but on "
-            + "Windows, where a program splits its own command line and a Cygwin or MSYS program expands a pattern or a "
-            + "brace in it, those are read as the expansions they may be - and what cmd reads again - a batch "
+            + "Windows, where a program splits its own command line and a Cygwin or MSYS program - told by the runtime "
+            + "beside it, cygwin1.dll or msys-2.0.dll, the program the list starts and one a wrapper among its words "
+            + "starts both asked - expands a pattern or a brace in it, those are read as the expansions they may be for "
+            + "such a program and for one this cannot find, while gh, git, dotnet and every other program take them as "
+            + "the text they are - and what cmd reads again - a batch "
             + "argument's percent among it - it expands wherever it stands; a program is never named by a pattern, "
             + "however its characters are quoted, for PowerShell's call operator finds & 'C:\\Git\\cmd\\gi?.exe' by its "
             + "wildcards; an alias given a command line - git config's setting of a key git runs, -c's, gh alias set's "
             + "expansion - is read as that command where it is given, gh alias import's file refused; the rule a refusal "
             + "names is the one that decided, a rule the command is before one it may be, and of those the person's "
-            + "own first; a pattern or a brace that may name a credential slot or a Claude Code directory is "
-            + "refused as naming it, and a file:// address is read as the path it names. What it cannot read whole it "
+            + "own first; a pattern or a brace that may name a credential slot or a Claude Code directory, or a "
+            + "directory holding one, is refused as naming it, and a file:// address is read as the path it names. What "
+            + "it cannot read whole it "
             + "denies, said here, not guessed at: a script nested past four levels, a shell that reads its script from "
             + "its input (curl ... | sh), from a process substitution or from another open descriptor (/dev/fd/3, <&3), "
             + "an env -S string holding a backslash, whose escapes are env's own, an alias it gives, a script another program fills in "
@@ -3019,21 +3044,38 @@ public static class HelpTopics
             + "one from) is the git "
             + "config it is - and so are the gh commands that merge or start CI "
             + $"({string.Join(", ", Agents.Policy.AgentPolicy.NeverCiCommands)}), the gh api endpoints and GraphQL "
-            + "mutations that reach the same, gh alias set, gh extension exec, and a gh command named by none of gh's own "
-            + $"({string.Join(", ", Agents.Policy.AgentPolicy.GhCommands)}) - an alias, gh's own co among them, or an extension, "
-            + "a name for any command, where gh runs - its command's own program, or past one that runs the words after it "
-            + $"({string.Join(", ", Agents.Policy.CommandAnalysis.CommandRunners)}), never among another program's words, its data - "
+            + "mutations that reach the same, gh alias set, "
             + "and, where the request writes, the gh api endpoints that push, open a pull request or make a release - "
             + "for never merges, never starts CI binds the agents too; git's own files - a "
             + ".git, file or directory, at any depth beneath a root and in any case, a nested repository's and a "
-            + $"submodule's too ({Agents.Policy.AgentPolicy.GitsOwnRule}) - are not written by a tool, whatever "
+            + $"submodule's too ({Agents.Policy.AgentPolicy.GitsOwnRule}), beneath each tree the agent touches, the main "
+            + "checkout a worktree was made from among them - are not written by a tool or a command, whatever "
             + "protectedPaths says; and an agent does not edit its own policy or what the next launch loads: "
             + ".harness-config/config.json, "
             + ".harness-config/orchestrators/**, .harness-config/skills/** (but for a step whose writes names one "
             + "skill's own directory by name, .harness-config/skills/<name>/..., which opens that skill alone), "
             + ".harness-config/runner/**, .claude/settings*.json and .mcp.json are not written. Whatever any switch says, "
-            + "the tool's own state, in any root, is written by its verbs alone - a place of the agent's own within it, "
-            + "as its work directory is, the one exception.";
+            + "the tool's own state, in any root and under each tree the agent touches - a worktree's main checkout, its "
+            + "run records and its other worktrees among it - is written by its verbs alone - a place of the agent's own "
+            + "within it, as its worktree and its work directory are, the one exception. What a command writes is each "
+            + "file its output redirects name and each a writing program's words name - a copy's destination however an "
+            + "option names it (cp, install and ln's -t and --target-directory, alone, glued or in a cluster, else the last "
+            + "word; Copy-Item's -Destination by any prefix or glued after its :, else its second word) - and a pattern "
+            + "among them is refused where it may reach git's own files or the state. A star, a question mark or a "
+            + "bracket matches a name that begins with a dot only where its shell would: a segment that begins with a dot "
+            + "itself; or anywhere in a string that names bash's dotglob (shopt -s dotglob, bash -O dotglob), zsh's "
+            + "globdots, sets GLOBIGNORE or carries zsh's D qualifier (*(D)), that PowerShell or cmd reads, whose "
+            + "wildcards list every name, or that gives PowerShell's -Force - so rm -rf * and build/* run, and .g* is "
+            + "git's own. On every ground, worktree rules or none, git and gh are called by their own commands: a git "
+            + $"command whose first word, a name a setting of git's may have, is none of git's own ({string.Join(", ", Agents.Policy.AgentPolicy.GitCommands)}) "
+            + "and no program git-<name> git finds - on the PATH the agent's commands start with, or where git keeps its "
+            + "own beside it, as git lfs is found - calls an alias, and a gh command named by none of gh's own "
+            + $"({string.Join(", ", Agents.Policy.AgentPolicy.GhCommands)}) an alias, gh's own co among them, or an "
+            + "extension, as gh extension exec runs one, where gh runs - its command's own program, or past one that runs "
+            + $"the words after it ({string.Join(", ", Agents.Policy.CommandAnalysis.CommandRunners)}), never among another "
+            + "program's words, its data: each runs a command line from a configuration file or an extension no rule "
+            + "reads, one an agent may have written, and is refused; an alias the command gives itself (git -c alias.x=... "
+            + "x) is read as the command it is.";
 
     /// <summary>
     /// What the claude-code client does with a launch, its tools from the one table that gives them, the names it sets
@@ -4931,6 +4973,11 @@ public static class HelpTopics
             + "tree, never sent to a host by sync"),
         ($"{HarnessLayout.RunsDirectoryRelative}/", "ignored; one directory of records per run, in the tree that ran it"),
         ($"{HarnessLayout.DirectoryName}/{HarnessLayout.LockFileName}", "ignored; records in-progress runs"),
+        ($"{HarnessLayout.DependencySourcesDirectoryRelative}/<name>/",
+            "a mutation worker's alone, never sent by a sync nor deleted by one: its own copy of each dependency source its "
+            + $"leg's build fetched ('{ToolPackage.Command} help mutations')"),
+        ($"{HarnessLayout.DirectoryName}/{HarnessLayout.SyncedCopyMarkerName}",
+            "a host's copy's alone: the mark the sync that made it leaves, which tells a synced copy from a tree of its own"),
         ($"{HarnessLayout.HostCopiesDirectoryRelative}/",
             "ignores itself; which hosts hold a copy of which worktree, in the main checkout"),
         ($"{HarnessLayout.MutationRecordDirectoryRelative}/",
@@ -5280,13 +5327,16 @@ public static class HelpTopics
             + $"in all ({DiskSpace.Size(Testing.KeptOnFailure.DefaultCapBytes)} where it is left out). A pass keeps "
             + "nothing, and a later step reads nothing from it: it is evidence beside the verdict, never an output, and "
             + "a failed step still keeps nothing of what one reads. Only a file of its own is copied: a link is never "
-            + "kept through - what it leads to is kept where an entry names that - and a pipe or a device is no file to "
-            + "read. Each is measured by what it holds as it is read, and no more of it is copied than the cap has "
-            + "left, so a file that grows past the cap as it is read is refused over it. A directory beneath an entry "
-            + "that cannot be read is passed by and named, the files beside it kept, and a stop while the evidence "
-            + "crosses keeps what is already kept and names what it left. The leg's line names the directory, how many "
-            + "files were kept and their size, and how many were refused over the cap, could not be read, were left as "
-            + "links, named nothing or were left uncopied by a stop - a path naming nothing is said, not refused, for "
+            + "kept through, wherever on the way from the build directory it stands - an entry that is one, a file "
+            + "beneath a linked directory, and no walk of a directory or a pattern follows one; what it leads to is kept "
+            + "where an entry names that - and a pipe or a device is no file to read. Each is measured by what it holds "
+            + "as it is read, and no more of it is copied than the cap has left, so a file that grows past the cap as it "
+            + "is read is refused over it. A directory that cannot be read is passed by and named where an entry could "
+            + "have named what it holds - beneath a directory an entry names, or one a pattern could reach - the files "
+            + "beside it kept, and a stop while the evidence crosses keeps what is already kept and names what it left. "
+            + "The leg's line names the directory, how many files were kept and their size, and how many were refused "
+            + "over the cap, could not be read, were left as links, named nothing or were left uncopied by a stop, and "
+            + "how many directories could not be read - a path naming nothing is said, not refused, for "
             + "the failure may have been before it was written. A keepOnFailureCapBytes given where no keepOnFailure it "
             + "applies to names a path caps nothing, and is refused. On a "
             + "leg a WSL or ssh host runs, the copy is kept beside that host's own log and crosses back over the host's "

@@ -427,25 +427,52 @@ public sealed class TestServiceTests
     }
 
     /// <summary>
-    /// A directory beneath what an entry names that cannot be read is passed by and named, and every file beside it kept:
-    /// a directory entry is not lost whole for one subdirectory, and a pattern's walk says what it passed by rather than
-    /// that its entry named nothing.
+    /// A directory beneath what an entry names that cannot be read is passed by and named as a directory, and every file
+    /// beside it kept: a directory entry is not lost whole for one subdirectory, and a pattern's walk says what it passed
+    /// by where the pattern could have named what it holds - never a directory no entry reaches - rather than that its
+    /// entry named nothing.
     /// </summary>
     [Fact]
-    public async Task ADirectoryThatCannotBeRead_IsNamed_AndEverythingBesideItKept()
+    public async Task ADirectoryThatCannotBeRead_IsNamedWhereAnEntryReachesIt_AndEverythingBesideItKept()
     {
         using var temp = new TempDirectory();
         temp.WriteFile("build/out/a.txt", "a");
         temp.WriteFile("build/out/locked/b.txt", "b");
         temp.WriteFile("build/logs/c.log", "c");
         temp.WriteFile("build/logs/locked/d.log", "d");
-        var fileSystem = new PassedBy(new HarnessFactory().FileSystem, [temp.Combine("build", "out", "locked"), temp.Combine("build", "logs", "locked")]);
+        temp.WriteFile("build/other/locked/e.log", "e");
+        var fileSystem = new PassedBy(
+            new HarnessFactory().FileSystem,
+            [temp.Combine("build", "out", "locked"), temp.Combine("build", "logs", "locked"), temp.Combine("build", "other", "locked")]);
 
         var kept = await Keep(fileSystem, temp, ["out", "logs/**/*.log", "nothing/**/*.json"], capBytes: 1024);
 
         Assert.Equal(["logs/c.log", "out/a.txt"], kept.Kept);
-        Assert.Equal(["out/locked", "logs/locked"], kept.Unreadable);
+        Assert.Equal(["out/locked", "logs/locked"], kept.UnreadableDirectories);
+        Assert.Empty(kept.Unreadable);
         Assert.Equal(["nothing/**/*.json"], kept.NamedNothing);
+    }
+
+    /// <summary>
+    /// Nothing is kept through a directory link, wherever on the way from the build directory it stands: an entry that is
+    /// one, a file named beneath one, and a pattern's match beneath one - its walk never follows one - are each named as a
+    /// link or left, and what the link leads to is never copied.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryLinkOnTheWay_IsNeverKeptThrough()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("outside/secret.txt", "far outside the build directory");
+        temp.WriteFile("build/own/a.txt", "a");
+
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("build", "linked"), temp.Combine("outside")));
+
+        var kept = await Keep(new HarnessFactory().FileSystem, temp, ["linked", "linked/secret.txt", "**/*.txt"], capBytes: 1024);
+
+        Assert.Equal(["own/a.txt"], kept.Kept);
+        Assert.Equal(["linked", "linked/secret.txt"], kept.Links);
+        Assert.Empty(kept.Unreadable);
+        Assert.False(Directory.Exists(temp.Combine("kept", "linked")));
     }
 
     /// <summary>

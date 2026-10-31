@@ -191,6 +191,21 @@ public sealed record AgentPolicyGround(
     /// <inheritdoc cref="AgentPolicyGround" path="/param[@name='Writes']"/>
     public IReadOnlyList<string>? Writes { get; init => field = Listed(value, nameof(Writes)); } = Listed(Writes, nameof(Writes));
 
+    /// <summary>
+    /// The PATH the agent's commands find their programs on, which the policy looks a program up on where what it decides
+    /// rests on the program itself - a git command that is a program of git's own rather than an alias, a Windows program
+    /// that expands its own words; null where it is this process's own, which every agent's child inherits.
+    /// </summary>
+    public string? ProgramPath { get; init; }
+
+    /// <summary>
+    /// Every tree the agent touches - its worktree and the main checkout it was made from, or the main checkout alone -
+    /// whose git's own files no write of an agent's reaches under the worktree rules, wherever the agent's own roots stand:
+    /// a worktree's own <c>.git</c> is a file, and the hooks every worktree runs are the main checkout's. Null where they
+    /// are the agent's roots alone.
+    /// </summary>
+    public IReadOnlyList<string>? Trees { get; init; }
+
     /// <summary>Every capability, in the order a definition names them.</summary>
     public static IReadOnlyList<AgentCapability> EveryCapability { get; } = [AgentCapability.Read, AgentCapability.Write, AgentCapability.Run, AgentCapability.Web];
 
