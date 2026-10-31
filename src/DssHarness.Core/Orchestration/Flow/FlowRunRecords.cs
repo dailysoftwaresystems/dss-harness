@@ -624,7 +624,10 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.Copied ? true : null,
             step.Targets,
             step.RaisedByUpdate,
-            step.Told);
+            step.Told,
+            step.EndedFor,
+            step.PieceOf,
+            step.AgainOf);
     }
 
     /// <summary>

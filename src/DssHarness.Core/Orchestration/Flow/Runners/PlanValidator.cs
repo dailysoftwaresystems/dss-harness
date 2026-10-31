@@ -109,11 +109,12 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
     /// <summary>
     /// Checks the pieces of a plan update, as the plan's scope concluded them, with the items the plan holds: each
-    /// piece of one of the four kinds and its texts; an <c>added</c> or a <c>changed</c> piece's item an item of the
-    /// list, by name and member for member; a <c>removed</c> piece's of a work item's shape; no two pieces naming one
-    /// work item; a <c>changed</c> or a <c>removed</c> piece naming a work item the plan had before the update; and the
-    /// items the update places checked with those of the round it joins, as one list - where the run has one; among
-    /// themselves where it does not.
+    /// piece of the shape the engine takes - by the one rule of a piece's shape the engine reads it by
+    /// (<see cref="FlowUpdatePiece.Read"/>), its first breach said; an <c>added</c> or a <c>changed</c> piece's item
+    /// an item of the list, by name and member for member; a <c>removed</c> piece's of a work item's shape; no two
+    /// pieces naming one work item; a <c>changed</c> or a <c>removed</c> piece naming a work item the plan had before
+    /// the update; and the items the update places checked with those of the round it joins, as one list - where the
+    /// run has one; among themselves where it does not.
     /// </summary>
     /// <param name="pieces">The pieces, as the plan's scope yielded them.</param>
     /// <param name="items">The plan's items, as its <c>items</c> yielded them.</param>
@@ -138,85 +139,48 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         var problems = new List<string>();
 
-        var held = new List<(string Kind, JsonObject Item)>();
+        // Each piece read by the one rule of a piece's shape the engine reads it by, its first breach said of it.
+        var held = new List<FlowUpdatePiece>();
 
         foreach (var (node, at) in pieces.Select((node, at) => (node, at)))
         {
-            var place = $"piece {(at + 1).ToString(CultureInfo.InvariantCulture)} of the plan's scope";
-
-            if (node is not JsonObject piece || piece["kind"] is not JsonValue kind || !kind.TryGetValue<string>(out var what))
+            if (FlowUpdatePiece.Read(node, out var wrong) is not { } piece)
             {
-                problems.Add($"{place} is of the wrong shape: it is no object with a kind, and a piece is one of 'added', 'changed', 'removed' or 'told'");
+                problems.Add($"piece {(at + 1).ToString(CultureInfo.InvariantCulture)} of the plan's scope {wrong}");
                 continue;
             }
 
-            string? Text(string member) => piece[member] is JsonValue text && text.TryGetValue<string>(out var written) ? written : null;
-
-            if (!FlowUpdatePieceKinds.All.Contains(what, StringComparer.Ordinal))
+            if (piece.Kind == FlowUpdatePieceKinds.Told)
             {
-                problems.Add($"{place} is of the kind '{what}', and a piece is one of 'added', 'changed', 'removed' or 'told'");
                 continue;
             }
 
-            if (string.IsNullOrWhiteSpace(Text("changed")))
-            {
-                problems.Add($"{place} says not what the update changes for its work, and a piece always does");
-            }
+            var name = piece.ItemName()!;
 
-            if (what == FlowUpdatePieceKinds.Told)
-            {
-                if (string.IsNullOrWhiteSpace(Text("for")))
-                {
-                    problems.Add($"{place} is told, and names no work under way: a told piece tells work that is going on");
-                }
-                else if (piece["item"] is not null)
-                {
-                    problems.Add($"{place} is told and holds a work item: it names work under way instead");
-                }
-
-                continue;
-            }
-
-            if (piece["item"] is not JsonObject item)
-            {
-                problems.Add($"{place} is '{what}', and holds no work item: a piece that carries a work item out holds one");
-                continue;
-            }
-
-            var name = TextOf(item["name"]);
-
-            if (name is null)
-            {
-                problems.Add($"{place} holds a work item with no name, and a work item is known by its name");
-                continue;
-            }
-
-            if (what == FlowUpdatePieceKinds.Removed)
+            if (piece.Kind == FlowUpdatePieceKinds.Removed)
             {
                 // The item under the name it had, written for the step that takes it back: of a work item's shape,
                 // so the step that takes back owns the paths it may write.
-                _ = ItemOf(item, 0, problems);
+                _ = ItemOf(piece.Item, 0, problems);
             }
-            else if (!items.Any(other => other is JsonObject held && string.Equals(TextOf(held["name"]), name, StringComparison.Ordinal) && JsonNode.DeepEquals(held, item)))
+            else if (!items.Any(other => string.Equals(FlowWorkItems.NameOf(other), name, StringComparison.Ordinal) && JsonNode.DeepEquals(other, piece.Item)))
             {
                 problems.Add($"the piece for '{name}' is not an item of the plan's list, by name and member for member: an item the update adds or changes is an item of the updated plan");
             }
 
-            held.Add((what, item));
+            held.Add(piece);
         }
 
-        foreach (var named in held.GroupBy(piece => TextOf(piece.Item["name"])!, StringComparer.Ordinal).Where(group => group.Count() > 1))
+        if (FlowUpdatePiece.NamedTwice(held) is { } twice)
         {
-            problems.Add($"two pieces of the plan's scope name the work item '{named.Key}', and a work item is named once");
+            problems.Add($"the pieces of the plan's scope {twice}");
         }
 
-        foreach (var (what, item) in held.Where(piece => piece.Kind is FlowUpdatePieceKinds.Changed or FlowUpdatePieceKinds.Removed))
+        foreach (var piece in held.Where(piece => piece.Kind is FlowUpdatePieceKinds.Changed or FlowUpdatePieceKinds.Removed))
         {
-            var name = TextOf(item["name"])!;
-
-            if (!known.Contains(name, StringComparer.Ordinal))
+            if (!known.Contains(piece.ItemName()!, StringComparer.Ordinal))
             {
-                problems.Add($"the piece for '{name}' is '{what}', and no work item the plan had is named so: one an instance of the work-item group carries, or an item of the list this check checked on its visit before");
+                problems.Add($"the piece for '{piece.ItemName()}' is '{piece.Kind}', and no work item the plan had is named so: one an instance of the work-item group carries, or an item of the list this check checked on its visit before");
             }
         }
 
@@ -224,22 +188,18 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         // items a changed or a removed piece names, for their item replaces them - or, where the run has no round,
         // among themselves.
         var namedByPieces = held.Where(piece => piece.Kind is FlowUpdatePieceKinds.Changed or FlowUpdatePieceKinds.Removed)
-            .Select(piece => TextOf(piece.Item["name"])!)
+            .Select(piece => piece.ItemName()!)
             .ToList();
 
         var joined = (round ?? [])
-            .Where(other => other is not JsonObject held || !namedByPieces.Contains(TextOf(held["name"]) ?? string.Empty, StringComparer.Ordinal))
-            .Concat(held.Select(piece => (JsonNode?)piece.Item))
+            .Where(other => FlowWorkItems.NameOf(other) is not { } named || !namedByPieces.Contains(named, StringComparer.Ordinal))
+            .Concat(held.Select(piece => piece.Item))
             .ToList();
 
         problems.AddRange(Check(joined, context, run, definition, mostItems: false, noItems: false));
 
         return problems;
     }
-
-    /// <summary>A member's text, where it is one that is not blank; null otherwise.</summary>
-    private static string? TextOf(JsonNode? node)
-        => node is JsonValue value && value.TryGetValue<string>(out var text) && !string.IsNullOrWhiteSpace(text) ? text : null;
 
     /// <summary>A work item read whole: its name, the paths it owns and must not touch, and its three lists.</summary>
     private sealed record Item(string Name, IReadOnlyList<(string Text, GlobPattern Pattern)> Owned, IReadOnlyList<(string Text, GlobPattern Pattern)> Forbidden, JsonObject Node);
@@ -258,7 +218,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             return null;
         }
 
-        if (Text(item["name"]) is not { } name)
+        if (FlowWorkItems.NameOf(item) is not { } name)
         {
             problems.Add($"{place} is of the wrong shape: it has no name, and a work item is known by its name");
             return null;

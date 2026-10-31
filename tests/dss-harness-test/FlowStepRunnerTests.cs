@@ -644,7 +644,12 @@ public sealed class FlowStepRunnerTests : IDisposable
             ["instead"] = "what is done instead",
         };
 
-    /// <summary>Each breach of the pieces, worded once: the wrong shape, the wrong kind, no change said, an item the plan does not hold, a piece that names what the plan never had, a piece named twice, a told piece that names nothing.</summary>
+    /// <summary>
+    /// Each breach of the pieces, worded once - by the one rule of a piece's shape the engine reads a planning step's
+    /// conclusion by, so a piece the check passes is one the engine takes: the wrong shape, the wrong kind, no change
+    /// said (the first breach of a piece is its problem), an item the plan does not hold, a piece that names what the
+    /// plan never had, a piece named twice, a told piece that names nothing.
+    /// </summary>
     [Fact]
     public async Task EachBreachOfThePieces_IsAProblem()
     {
@@ -665,7 +670,6 @@ public sealed class FlowStepRunnerTests : IDisposable
                 "piece 1 of the plan's scope is of the wrong shape: it is no object with a kind, and a piece is one of 'added', 'changed', 'removed' or 'told'",
                 "piece 2 of the plan's scope is of the kind 'redone', and a piece is one of 'added', 'changed', 'removed' or 'told'",
                 "piece 3 of the plan's scope says not what the update changes for its work, and a piece always does",
-                "the piece for 'two' is not an item of the plan's list, by name and member for member: an item the update adds or changes is an item of the updated plan",
                 "piece 4 of the plan's scope is told, and names no work under way: a told piece tells work that is going on",
             ],
             await ProblemsAsync(new Dictionary<string, FlowValue>
@@ -689,7 +693,7 @@ public sealed class FlowStepRunnerTests : IDisposable
 
         Assert.Equal(
             [
-                "two pieces of the plan's scope name the work item 'two', and a work item is named once",
+                "the pieces of the plan's scope name the work item 'two' twice, and a work item is named by one piece of an update",
                 "the piece for 'two' is 'removed', and no work item the plan had is named so: one an instance of the work-item group carries, or an item of the list this check checked on its visit before",
                 "the piece for 'one' is 'removed', and no work item the plan had is named so: one an instance of the work-item group carries, or an item of the list this check checked on its visit before",
                 "2 work items are named 'two', and a work item is known by its name: name each once",
@@ -755,7 +759,7 @@ public sealed class FlowStepRunnerTests : IDisposable
         // Where the run has no round yet, the pieces are checked among themselves.
         Assert.Equal(
             [
-                "two pieces of the plan's scope name the work item 'one', and a work item is named once",
+                "the pieces of the plan's scope name the work item 'one' twice, and a work item is named by one piece of an update",
                 "2 work items are named 'one', and a work item is known by its name: name each once",
                 "work items 'one' and 'one' both own what 'src/one/**' and 'src/one/**' match: no file is written by two items, so give it to one",
             ],

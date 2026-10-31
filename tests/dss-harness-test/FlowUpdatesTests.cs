@@ -8,7 +8,7 @@ using DssHarness.Core.Results;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The records of a plan update (31d1): what an update is in <c>updates.json</c> - its id, cause and state, held to
+/// The records of a plan update: what an update is in <c>updates.json</c> - its id, cause and state, held to
 /// their own rules - the request as its amendments are read with it, the gates every change passes as both the
 /// command and the engine read them, and the store's one writer of an entry under the run's own lock.
 /// </summary>
@@ -49,6 +49,125 @@ public sealed class FlowUpdatesTests
         Assert.Equal("one inbox entry holds two updates", twoInbox.Problem());
 
         Assert.Equal("u2", new FlowUpdatesFile(1, "r1", At(0), [new FlowUpdateEntry("u1", "amendment", "done", At(0), Amendment: "one")]).NextId());
+    }
+
+    /// <summary>
+    /// A piece is held to its own shape by one rule - the engine reading a planning step's conclusion, the check of a
+    /// plan's scope and <c>updates.json</c> alike - and an entry to its pieces, the steps it told, the ones it did not
+    /// concern, what it could not deliver and the iteration it added: each breach said of what breaks it.
+    /// </summary>
+    [Fact]
+    public void APiece_IsHeldToItsOwnShape_AndAnEntryToItsPiecesAndWhatItTold()
+    {
+        static JsonObject Item(string name) => new() { ["name"] = name };
+        var added = new FlowUpdatePiece("added", Item("one"), Changed: "one more item");
+
+        Assert.Null(added.Problem());
+        Assert.Null(new FlowUpdatePiece("told", For: "rounds.items[0].build", Changed: "the parser moved").Problem());
+        Assert.Null((added with { Placed = "rounds.items[1]", CarriedBy = "rounds.items[1].build", Again = "rounds.items[2]" }).Problem());
+
+        Assert.Equal("is of the kind 'moved', and a piece is one of 'added', 'changed', 'removed' or 'told'", (added with { Kind = "moved" }).Problem());
+        Assert.Equal("says not what the update changes for its work, and a piece always does", (added with { Changed = " " }).Problem());
+        Assert.Equal("is told, and names no work under way: a told piece tells work that is going on", new FlowUpdatePiece("told", Changed: "the parser moved").Problem());
+        Assert.Equal("is told and holds a work item: it names work under way instead", new FlowUpdatePiece("told", Item("one"), For: "rounds.items[0].build", Changed: "the parser moved").Problem());
+        Assert.Equal("is 'added', and holds no work item: a piece that carries a work item out holds one", (added with { Item = JsonValue.Create("one") }).Problem());
+        Assert.Equal("holds a work item with no name, and a work item is known by its name", (added with { Item = new JsonObject { ["name"] = 5 } }).Problem());
+        Assert.Equal("is placed in 'nowhere!', which is not an instance's id", (added with { Placed = "nowhere!" }).Problem());
+        Assert.Equal("is owed to a round, and says not which", (added with { OwedTo = " " }).Problem());
+        Assert.Equal("is carried by 'nobody!', which is not an instance's id", (added with { CarriedBy = "nobody!" }).Problem());
+        Assert.Equal("is visited again in 'elsewhere!', which is not an instance's id", (added with { Again = "elsewhere!" }).Problem());
+
+        // A planning step's conclusion is read by the same rule, and a name of another type is a piece the engine gives
+        // the update up over, never a failure of whoever reads it.
+        var read = FlowUpdatePiece.Read(new JsonObject { ["kind"] = "added", ["item"] = Item("one"), ["changed"] = "one more item", ["keep"] = "the lexer" }, out var none);
+        Assert.Null(none);
+        Assert.Equal(("added", "one", "one more item", "the lexer", null, null), (read!.Kind, read.ItemName(), read.Changed, read.Keep, read.Undo, read.For));
+        Assert.Null(FlowUpdatePiece.Read(new JsonObject { ["kind"] = "added", ["item"] = new JsonObject { ["name"] = 5 }, ["changed"] = "one more item" }, out var unnamed));
+        Assert.Equal("holds a work item with no name, and a work item is known by its name", unnamed);
+        Assert.Null(FlowUpdatePiece.Read(new JsonObject { ["kind"] = 7 }, out var shapeless));
+        Assert.Equal("is of the wrong shape: it is no object with a kind, and a piece is one of 'added', 'changed', 'removed' or 'told'", shapeless);
+        Assert.Null(FlowWorkItems.NameOf(new JsonObject { ["name"] = 5 }));
+        Assert.Equal("one", FlowWorkItems.NameOf(Item("one")));
+
+        Assert.Null(FlowUpdatePiece.NamedTwice([added, added with { Kind = "changed" } with { Item = Item("two") }]));
+        Assert.Equal("name the work item 'one' twice, and a work item is named by one piece of an update", FlowUpdatePiece.NamedTwice([added, added with { Kind = "changed" }]));
+
+        var entry = new FlowUpdateEntry("u1", "amendment", "done", At(0), Amendment: "narrow it", Pieces: [added]);
+        Assert.Null(entry.Problem());
+        Assert.Null((entry with
+        {
+            Told = [new FlowUpdateTold("rounds.items[0].build", "the parser moved", "by a message into its conversation")],
+            NotConcerned = ["rounds.items[1].build"],
+            NotDelivered = [new FlowNotDelivered("rounds.items[2].build", "the work it named had ended")],
+            AddedIteration = "rounds#2",
+        }).Problem());
+
+        Assert.Equal(
+            "its piece 2 is of the kind 'moved', and a piece is one of 'added', 'changed', 'removed' or 'told'",
+            (entry with { Pieces = [added with { Item = Item("two") }, added with { Kind = "moved" }] }).Problem());
+        Assert.Equal(
+            "its pieces name the work item 'one' twice, and a work item is named by one piece of an update",
+            (entry with { Pieces = [added, added with { Kind = "changed" }] }).Problem());
+        Assert.Equal(
+            "one it told holds no step, nothing told or no way it reached it",
+            (entry with { Told = [new FlowUpdateTold("rounds.items[0].build", " ", "with the answer")] }).Problem());
+        Assert.Equal(
+            "one step was told twice by one update",
+            (entry with { Told = [new FlowUpdateTold("rounds.items[0].build", "one", "with the answer"), new FlowUpdateTold("rounds.items[0].build", "two", "in its prompt")] }).Problem());
+        Assert.Equal("one it names as not concerned is not an instance's id", (entry with { NotConcerned = ["nobody!"] }).Problem());
+        Assert.Equal("one not delivered names neither the work nor why", (entry with { NotDelivered = [new FlowNotDelivered("rounds.items[2].build", " ")] }).Problem());
+        Assert.Equal("'later!' is not an instance's id", (entry with { AddedIteration = "later!" }).Problem());
+    }
+
+    /// <summary>
+    /// What an answer may be is one rule, held by the command and the engine alike: one of the question's own - abort
+    /// among them for a first answer and never for a change - with a text where its option takes one and none where it
+    /// takes none, whatever the question's kind, and a change that changes something; the answers a question takes are
+    /// said as their names. The last set a person answered is the one with the newest answer a person gave.
+    /// </summary>
+    [Fact]
+    public void TheAnswerRules_AreOneRuleForTheCommandAndTheEngine()
+    {
+        IReadOnlyList<FlowQuestionOption> pause = [new("go", "goes on"), new("stay", "stays"), new("abort", "ends the run")];
+        IReadOnlyList<FlowQuestionOption> ask = [new("answer", "the text is read", Text: true), new("decide", "the agent decides"), new("abort", "ends the run")];
+
+        Assert.Null(FlowAnswerRules.Problem("q1", pause, "go", text: null));
+        Assert.Null(FlowAnswerRules.Problem("q1", pause, "abort", text: null));
+        Assert.Null(FlowAnswerRules.Problem("q2", ask, "answer", "only the parser"));
+        Assert.Null(FlowAnswerRules.Problem("q1", pause, "stay", text: null, standing: ("go", null)));
+
+        Assert.Equal("'later' is not one of the answers 'q1' takes: go, stay, abort", FlowAnswerRules.Problem("q1", pause, "later", text: null));
+        Assert.Equal("'later' is not one of the answers 'q1' takes: go, stay", FlowAnswerRules.Problem("q1", pause, "later", text: null, standing: ("go", null)));
+        Assert.Equal(
+            "'abort' does not change an answer: a run is ended by stop-orchestrator, and one an abort ended is gone on with by resume-orchestrator",
+            FlowAnswerRules.Problem("q1", pause, "abort", text: null, standing: ("go", null)));
+        Assert.Equal("'answer' is an answer 'q2' takes with a text; give one", FlowAnswerRules.Problem("q2", ask, "answer", "  "));
+        Assert.Equal("'decide' is an answer 'q2' takes with no text; give none", FlowAnswerRules.Problem("q2", ask, "decide", "only the parser"));
+        Assert.Equal("'go' is an answer 'q1' takes with no text; give none", FlowAnswerRules.Problem("q1", pause, "go", "a note"));
+        Assert.Equal("'go' is the answer 'q1' already has; a changed answer changes it", FlowAnswerRules.Problem("q1", pause, "go", text: null, standing: ("go", null)));
+        Assert.Null(FlowAnswerRules.Problem("q2", ask, "answer", "the registry too", standing: ("answer", "only the parser")));
+
+        Assert.Null(FlowAnswerRules.TextOf("  "));
+        Assert.Equal("a note", FlowAnswerRules.TextOf("a note"));
+
+        static FlowQuestionEntry Answered(string id, string by, int minute)
+            => new(id, "answered", "pause", At(0), [], [new("go", "goes on"), new("stay", "stays")], [new FlowAnswerRecord("go", At(minute), By: new FlowAnswerBy(by))]);
+
+        Assert.Equal("q2", FlowAnswerRules.LastSetAnswered([Answered("q1", "person", 1), Answered("q2", "person", 3), Answered("q3", "configuration", 5)])!.Id);
+        Assert.Null(FlowAnswerRules.LastSetAnswered([Answered("q1", "input", 1)]));
+        Assert.Equal("no answer of run 'r1' was given by a person, so there is no set to change", FlowAnswerRules.NoSetToChange("r1"));
+    }
+
+    /// <summary>The number of iterations updates may add to a loop at its bound is one property of the amend block: what it names, else one.</summary>
+    [Fact]
+    public void TheIterationsUpdatesMayAdd_AreWhatTheAmendBlockNames_ElseOne()
+    {
+        var amend = new FlowAmend(Input: "request", ChangedAnswerMinutes: 5, Before: null, Step: "planner.replan", Then: null, Scope: "x", WhenAddScope: "a", WhenChangeScope: "a", WhenRemoveScope: "a", MaxAddedIterations: null);
+
+        Assert.Equal(1, FlowAmend.DefaultMaxAddedIterations);
+        Assert.Equal(FlowAmend.DefaultMaxAddedIterations, amend.AddedIterationsAllowed);
+        Assert.Equal(3, (amend with { MaxAddedIterations = 3 }).AddedIterationsAllowed);
+        Assert.Equal(0, (amend with { MaxAddedIterations = 0 }).AddedIterationsAllowed);
     }
 
     /// <summary>

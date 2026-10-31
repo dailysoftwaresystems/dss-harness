@@ -510,6 +510,151 @@ public sealed class FlowPlanUpdateTests
         }
     }
 
+    /// <summary>
+    /// An amendment a running engine queued behind the update under way keeps the inbox entry it was handed over under,
+    /// and is taken at its turn all the same - the entry that holds that inbox id is the one being taken, not one weighed
+    /// before - by the session that goes on with the run after a crash, which drives both whole and ends.
+    /// </summary>
+    [Fact]
+    public async Task AnAmendmentQueuedUnderItsInboxEntry_IsTakenAtItsTurn_AcrossACrash()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Lean);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = new FakeRunner();
+        string gate;
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            _ = await coordinator.RunAsync(Token);
+            gate = coordinator.OpenQuestions.Single().Id;
+
+            // Both handed over through the inbox: the first under way, the second queued behind it under its own entry.
+            Assert.Equal(FlowHandedOver.Taken, coordinator.AmendmentHandedOver("first change", "amend-orchestrator-request", out _, inbox: "e1"));
+            Assert.Equal(FlowHandedOver.Taken, coordinator.AmendmentHandedOver("second change", "amend-orchestrator-request", out _, inbox: "e2"));
+            Assert.Equal(
+                [("u1", FlowUpdateStates.UnderWay, "e1"), ("u2", FlowUpdateStates.Queued, "e2")],
+                UpdatesOf(harness, layout).Updates.Select(update => (update.Id, update.State, update.Inbox)));
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            Assert.True(resumed.TryAnswer(gate, "go", null, out _));
+            var end = await Task.Run(() => resumed.RunAsync(Token), Token).WaitAsync(Bound, Token);
+
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            Assert.Equal(
+                [("u1", FlowUpdateStates.Done, "e1"), ("u2", FlowUpdateStates.Done, "e2")],
+                UpdatesOf(harness, layout).Updates.Select(update => (update.Id, update.State, update.Inbox)));
+            Assert.Equal(["u1", "u2"], harness.OrchestrationStore.ReadFlow(layout)!.Steps.Where(step => step.Step == "planning.planupdate").Select(step => step.RaisedByUpdate));
+        }
+    }
+
+    /// <summary>
+    /// A queued change the run cannot take at its turn - its set is no longer the last a person answered - is recorded
+    /// <c>refused</c> with why, under its own id, as a queued amendment the run cannot take is: the taking that met it
+    /// settles it, the answer it would have changed stands, and the session goes on to its end.
+    /// </summary>
+    [Fact]
+    public async Task AQueuedChangeTheRunCannotTakeAtItsTurn_IsRecordedRefusedWithWhy_AndTheSessionGoesOn()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Lean);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = new FakeRunner();
+        var clock = new JumpingClock();
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            var ask = coordinator.OpenQuestions.Single().Id;
+            Assert.True(coordinator.TryAnswer(ask, "go", null, out _));
+            _ = await coordinator.RunAsync(Token);
+            var gate = coordinator.OpenQuestions.Single().Id;
+
+            // The amendment is under way and the change of the last answer queued behind it; then a later answer makes
+            // another set the last a person answered.
+            Assert.Equal(FlowHandedOver.Taken, coordinator.AmendmentHandedOver("first change", "amend-orchestrator-request", out _));
+            Assert.True(coordinator.TryChangeAnswer("stay", null, out var notTaken, "answer-orchestrator"), notTaken ?? "changed");
+            clock.Advance(TimeSpan.FromMinutes(1));
+            Assert.True(coordinator.TryAnswer(gate, "go", null, out _));
+
+            var end = await Task.Run(() => coordinator.RunAsync(Token), Token).WaitAsync(Bound, Token);
+
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            var updates = UpdatesOf(harness, layout).Updates;
+            Assert.Equal(
+                [("u1", FlowUpdateStates.Done, null), ("u2", FlowUpdateStates.Refused, $"question '{ask}' is not the last a person answered any more: '{gate}' is")],
+                updates.Select(update => (update.Id, update.State, update.Why)));
+            Assert.Equal(["go"], QuestionsOf(harness, layout).Questions.First(question => question.Id == ask).Answers.Select(answer => answer.Answer));
+            Assert.Equal(["u1"], harness.OrchestrationStore.ReadFlow(layout)!.Steps.Where(step => step.Step == "planning.planupdate").Select(step => step.RaisedByUpdate));
+        }
+    }
+
+    /// <summary>
+    /// A changed answer whose update was written before the change itself - a crash between the two - is finished by the
+    /// session that goes on with the run, from the update's entry: both answers kept, the new one naming the update, and
+    /// the pause step that asked visited again with the new answer, once.
+    /// </summary>
+    [Fact]
+    public async Task AChangedAnswerWrittenButNotCarriedOutBeforeACrash_IsFinishedByTheNextSession()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Lean);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = new FakeRunner();
+        var crashing = new CrashingRecords(records, update => update.Updates.Any(entry => entry.Cause == FlowUpdateCauses.ChangedAnswer));
+        string ask;
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            ask = coordinator.OpenQuestions.Single().Id;
+            Assert.True(coordinator.TryAnswer(ask, "go", null, out _));
+            _ = await coordinator.RunAsync(Token);
+
+            // The change's entry is written - under way, for the plan has begun - and the process dies before the
+            // answer is changed: nothing after the entry reaches the disk.
+            Assert.True(coordinator.TryChangeAnswer("stay", null, out var notTaken, "answer-orchestrator"), notTaken ?? "changed");
+            Assert.Equal(("u1", FlowUpdateStates.UnderWay), UpdatesOf(harness, layout).Updates.Select(update => (update.Id, update.State)).Single());
+            Assert.Equal(["go"], QuestionsOf(harness, layout).Questions.First(question => question.Id == ask).Answers.Select(answer => answer.Answer));
+            Assert.Single(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Step == "ask");
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            Assert.True(resumed.TryAnswer(resumed.OpenQuestions.Single().Id, "go", null, out _));
+            var end = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            var answers = QuestionsOf(harness, layout).Questions.First(question => question.Id == ask).Answers;
+            Assert.Equal([("go", (string?)null), ("stay", "u1")], answers.Select(answer => (answer.Answer, answer.Update)));
+            var asked = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Where(step => step.Step == "ask").ToList();
+            Assert.Equal(2, asked.Count);
+            Assert.Equal((nameof(FlowInstanceState.Done), "stay"), (asked[^1].State, (string?)asked[^1].Output!["answer"]));
+        }
+    }
+
+    /// <summary>The run's updates, read whole from the store.</summary>
+    private static FlowUpdatesFile UpdatesOf(HarnessFactory harness, OrchestratorLayout layout)
+        => harness.OrchestrationStore.ReadFlowUpdates(layout)!;
+
     /// <summary>The run's questions, read whole from the store.</summary>
     private static FlowQuestionsFile QuestionsOf(HarnessFactory harness, OrchestratorLayout layout)
         => harness.OrchestrationStore.ReadFlowQuestions(layout)!;

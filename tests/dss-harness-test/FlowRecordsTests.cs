@@ -214,6 +214,26 @@ public sealed class FlowRecordsTests
     }
 
     /// <summary>
+    /// What a plan update did to an instance is held to its own rules in the instance's record: it was ended for an
+    /// update by that update's id, and only an instance of the work-item group carries an update's piece or visits
+    /// another again - for a piece, by that instance's id.
+    /// </summary>
+    [Fact]
+    public void WhatAPlanUpdateDidToAnInstance_IsHeldToItsOwnRules()
+    {
+        var group = new FlowStepRecord("rounds.items[1]", "rounds.items", true, "Running", 1, 1, [], [], PieceOf: "u1", AgainOf: "rounds.items[0]");
+        var step = new FlowStepRecord("rounds.items[0].build", "rounds.items.build", false, "Stopped", 1, 1, [], [], EndedFor: "u1");
+
+        Assert.Null(group.Problem());
+        Assert.Null(step.Problem());
+        Assert.Equal("it was ended for 'later', which is not an update's id", (step with { EndedFor = "later" }).Problem());
+        Assert.Equal("it carries a piece of 'x1', which is not an update's id", (group with { PieceOf = "x1" }).Problem());
+        Assert.Equal("it carries a piece of a plan update, and only an instance of the work-item group does", (step with { PieceOf = "u1" }).Problem());
+        Assert.Equal("it visits 'nowhere!' again, which is not an instance id", (group with { AgainOf = "nowhere!" }).Problem());
+        Assert.Equal("it visits an instance again for no piece of a plan update", (group with { PieceOf = null }).Problem());
+    }
+
+    /// <summary>
     /// Every time a run's records hold is written in the one form, and one that has not come yet is written null, never
     /// left out: a step's record, the run's state and its pause have the same members whatever has happened.
     /// </summary>

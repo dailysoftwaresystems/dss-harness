@@ -206,6 +206,98 @@ public sealed record FlowQuestionsFile(
     public FlowQuestionEntry? Of(string id) => Questions.FirstOrDefault(question => string.Equals(question.Id, id, StringComparison.Ordinal));
 }
 
+/// <summary>
+/// The rules every path into an answer is held to - <c>answer-orchestrator</c> before anything of the run is touched,
+/// and the engine where it weighs an answer handed over, or a change of one - written once, so the command and the
+/// engine never disagree about what an answer may be.
+/// </summary>
+public static class FlowAnswerRules
+{
+    /// <summary>
+    /// Why <paramref name="answer"/>, with <paramref name="text"/>, is no answer the question <paramref name="question"/>
+    /// takes; null where it is one. The answer is one of the question's own - <c>abort</c> among them for a first answer,
+    /// whatever the kind, and never for a changed one, for a run is ended by <c>stop-orchestrator</c> and gone on with by
+    /// <c>resume-orchestrator</c>. An answer whose option takes a text is given one, and one whose option takes none is
+    /// given none, whatever the question's kind: a text no step reads would be recorded and never read. A changed answer
+    /// changes the answer or its text.
+    /// </summary>
+    /// <param name="question">The question's id, for the words.</param>
+    /// <param name="options">The answers the question takes, as its record holds them: each with whether it takes a text.</param>
+    /// <param name="answer">The answer given.</param>
+    /// <param name="text">The text given with it; a blank one reads as none.</param>
+    /// <param name="standing">For a change of an answer, the answer it changes and its text; null for a first answer.</param>
+    public static string? Problem(string question, IReadOnlyList<FlowQuestionOption> options, string answer, string? text, (string Answer, string? Text)? standing = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var change = standing is not null;
+
+        if (change && answer == "abort")
+        {
+            return "'abort' does not change an answer: a run is ended by stop-orchestrator, and one an abort ended is gone on with by resume-orchestrator";
+        }
+
+        var option = options.FirstOrDefault(option => string.Equals(option.Answer, answer, StringComparison.Ordinal));
+
+        if (option is null && (change || answer != "abort"))
+        {
+            return $"'{answer}' is not one of the answers '{question}' takes: {string.Join(", ", options.Select(option => option.Answer).Where(taken => !change || taken != "abort"))}";
+        }
+
+        var given = TextOf(text);
+
+        if (option is { Text: true } && given is null)
+        {
+            return $"'{answer}' is an answer '{question}' takes with a text; give one";
+        }
+
+        if (option is not { Text: true } && given is not null)
+        {
+            return $"'{answer}' is an answer '{question}' takes with no text; give none";
+        }
+
+        return standing is { } was && string.Equals(was.Answer, answer, StringComparison.Ordinal) && was.Text == given
+            ? $"'{answer}' is the answer '{question}' already has; a changed answer changes it"
+            : null;
+    }
+
+    /// <summary>The text an answer is given, as every record holds it: none where it is blank.</summary>
+    /// <param name="text">The text as it was given.</param>
+    public static string? TextOf(string? text) => string.IsNullOrWhiteSpace(text) ? null : text;
+
+    /// <summary>
+    /// The last set a person answered: the question whose newest answer by a person is the newest of all the run's,
+    /// answered and standing - the one set a changed answer may change. An answer the configuration or the run's input
+    /// gave is no set, and is never counted. Null where no person has answered the run.
+    /// </summary>
+    /// <param name="questions">Every question the run raised, with every answer each was given.</param>
+    public static FlowQuestionEntry? LastSetAnswered(IEnumerable<FlowQuestionEntry> questions)
+    {
+        ArgumentNullException.ThrowIfNull(questions);
+
+        FlowQuestionEntry? last = null;
+        DateTimeOffset? newest = null;
+
+        foreach (var entry in questions.Where(entry => entry.State == "answered"))
+        {
+            foreach (var answer in entry.Answers.Where(answer => answer.By?.Who == "person"))
+            {
+                if (newest is null || answer.At > newest)
+                {
+                    last = entry;
+                    newest = answer.At;
+                }
+            }
+        }
+
+        return last;
+    }
+
+    /// <summary>Why a run has no set to change: no person answered it.</summary>
+    /// <param name="run">The run's name.</param>
+    public static string NoSetToChange(string? run) => $"no answer of run '{run}' was given by a person, so there is no set to change";
+}
+
 /// <summary>What each answer a question takes does, one sentence each, as the option is shown with it.</summary>
 public static class FlowAnswerDoes
 {

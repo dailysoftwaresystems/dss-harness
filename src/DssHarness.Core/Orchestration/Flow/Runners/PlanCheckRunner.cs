@@ -42,8 +42,8 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
 
         if (read.TryGetValue("owed", out var owing) && !owing.IsMissing && owing.ToNode() is JsonArray owingList)
         {
-            owed = [.. owingList.Where(item => item is JsonObject held
-                && !items.Any(other => (other as JsonObject)?["name"]?.GetValue<string>() is { } named && string.Equals(named, held["name"]?.GetValue<string>(), StringComparison.Ordinal)))];
+            owed = [.. owingList.Where(item => item is JsonObject
+                && !items.Any(other => FlowWorkItems.NameOf(other) is { } named && string.Equals(named, FlowWorkItems.NameOf(item), StringComparison.Ordinal)))];
         }
 
         if (owed is not null)
@@ -74,7 +74,7 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
             {
                 IReadOnlyList<JsonNode?>? round = read.TryGetValue("round", out var joining) && !joining.IsMissing && joining.ToNode() is JsonArray joiningList ? [.. joiningList] : null;
                 var known = read.TryGetValue("known", out var had) && !had.IsMissing && had.ToNode() is JsonArray hadList
-                    ? (IReadOnlyList<string>)[.. hadList.Select(name => (name as JsonValue)?.GetValue<string>()).OfType<string>()]
+                    ? (IReadOnlyList<string>)[.. hadList.Select(name => name is JsonValue value && value.TryGetValue<string>(out var text) ? text : null).OfType<string>()]
                     : [];
 
                 problems.AddRange(validator.CheckPieces([.. pieces], [.. items], round, known, context, place.Run, place.Definition));

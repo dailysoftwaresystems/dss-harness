@@ -2119,15 +2119,20 @@ person gave - both through one record, `updates.json` (`Flow\FlowUpdates.cs`: it
 `amendment` or `changedAnswer`, state `queued`/`underWay`/`done`/`failed`/`refused`), the one owner of what an update
 is, written by the store under the run's lock (`AddUpdate`) and by the engine's records seam
 (`IFlowRecords.Updates`). An amendment handed to a running engine goes by `inbox.json`
-(`FlowInboxAmendment`) and is taken at the poll (`FlowCoordinator.AmendmentHandedOver`); given while no engine runs it
-is recorded `queued`, and the next session takes it before anything else (`FlowCoordinator.TakeQueuedUpdates`). The
+(`FlowInboxAmendment`) and is taken at the poll that first reads it, as a changed answer handed over is - weighed
+against the run as it then stands, never only when the drive ends (`FlowService.Tick`,
+`FlowCoordinator.OfferAmendmentAsync` -> `AmendmentHandedOver`); given while no engine runs it is recorded `queued`, the
+command deciding which of the two in the repository's one section every engine claims its run in
+(`FlowSessions.AcrossRuns`), and the next session takes it before anything else (`FlowCoordinator.TakeQueuedUpdates`). The
 request is never rewritten: the input reads as the value as given with each amendment under a line that says when it
 was made (`FlowUpdatesFile.InputOf`, read wherever `{input.<name>}` is), while a `preAnswer`'s quote is looked for in
 the value as given and never in an amendment. A changed answer is held to the last set a person answered, its
 `changedAnswerMinutes` window from the moment the answer was recorded to the moment the command stamps on what it
-hands over, and once: both answers are kept, each with when it was given, the new one naming the update
+hands over, and once, and what an answer may be is one rule the command and the engine both hold it to
+(`FlowAnswerRules`): both answers are kept, each with when it was given, the new one naming the update
 (`FlowAnswerRecord.Update`, `FlowQuestion.Change`), and a `pause` step whose answer was changed is visited again done
-at once with the new answer (`FlowCoordinator.RevisitPause`). Both pass the one table of gates
+at once with the new answer (`FlowCoordinator.RevisitPause`) - the update's entry written first, and the change
+finished from it by a session's start where a crash came between the two (`FlowCoordinator.FinishTheChanges`). Both pass the one table of gates
 (`FlowUpdateGates.Refused`, read by the command over the run's files and by the engine over its own state): a run that
 is done, one past the step its `amend.before` names, one past the work items of its last round, a definition whose
 `amend` names no such change - nothing recorded for one. The report lists every update, and `list-orchestrator` says
@@ -2150,7 +2155,10 @@ entry saying the request or the answer is recorded and no plan holds it. The pro
 scope read the update (`{update.cause}`, `{update.since}` and `{update.work}`, `FlowCoordinator.UpdateValues`) -
 outside an update each is a sentence that says none is under way. Updates are taken one at a time: one that arrives
 while another is under way is `queued` behind it and taken when that one is done, in the order given
-(`FlowCoordinator.TakeNextQueued`), and a changed answer queued behind an update is applied when its turn comes. The
+(`FlowCoordinator.TakeQueuedUpdates`, the one owner of taking what is queued, which settles each queued entry it meets -
+taken, or `refused` with why), and a changed answer queued behind an update is applied when its turn comes. A planning
+step declared in the same iteration of a `repeat` as the work-item group it plans is no circular wait: the group the
+hold keeps open is no work that iteration waits on to come to rest (`FlowCoordinator.HeldOpenForTheUpdate`). The
 whole of it is across a crash and a safe pause: the hold and the raised visit are read back from the run's records at
 the resume, which goes on with the update first.
 The pieces of an update are placed once its plan stands (slice 31d3): the pieces the `amend.scope` expression reads -
@@ -2162,10 +2170,14 @@ round where it has not begun - which checks its own items and the owed ones as o
 `items` that list, so nothing joins a round unchecked. A `changed` or a `removed` piece finds the newest instance of the
 group whose item has its name: where it waits it is given the piece's item in the place of its own, or - `removed` -
 withdrawn before it began; where it has begun it is brought to rest (nothing more started in it, what it owed dropped,
-each reason step in flight given the handoff turn of a safe pause and stopped, `FlowCoordinator.SettlePiecesEndingAsync`)
-and then visited again, in its place and with its agent - a new scope of the piece's kind in which the live agent a
-`create-agent` step made is taken and not made again; where it has ended, one more work item of the group, with new
-agents. Every instance of the group is of one kind, and the step its kind names runs in the place of the one
+each reason step in flight given the handoff turn of a safe pause and stopped, `FlowCoordinator.SettlePiecesEndingAsync`,
+a runner that outlives its stop keeping what it claimed until it answers) and then visited again, in its place and with
+its agent - a new scope of the piece's kind in which the live agent a `create-agent` step made is taken and not made
+again; where it has ended, one more work item of the group, with new agents. What an update did to an instance is in
+the instance's own records - ended for the update (`FlowStepRecord.EndedFor`), the piece it carries (`PieceOf`) and the
+instance it was visited again in place of (`AgainOf`) - so no session after runs an instance an update ended, a resume
+goes on bringing one to rest, and the pieces are placed once from the update's entry however often a crash makes the
+engine meet its plan standing. Every instance of the group is of one kind, and the step its kind names runs in the place of the one
 `whenAddScope` names - under its name, with its dependencies and its `when` (`FlowCoordinator.DrawWorkItemPlace`) - the
 other two alternatives skipped in its instance, saying why; a read of the add step (`{add.latest}`) or a resume of it
 follows whichever ran (`FlowCoordinator.EndedDoneLastOf`, which `<step>.latest` reads for every step that goes on with
@@ -2187,7 +2199,8 @@ with why (`FlowUpdateEntry.Told`/`NotConcerned`/`NotDelivered`, each telling als
 `FlowStepTold`); a reason step ended in order is told its piece first, as the lead of the handoff question
 (`FlowCoordinator.EndedInOrderLead`, the engine waiting for the client's own turn where the telling is live). Where
 the round a piece joins has ended, the work is owed to the loop's next iteration (`FlowInstance.OwedIterationBy`,
-rebuilt at the resume), which runs whatever its `until` says; where that loop is at its own bound one iteration is
+rebuilt at the resume, by each piece's own state, `FlowUpdatePiece.IsOwed`), which runs whatever its `until` says - a
+loop that ended done runs again for it; only where that loop is at its own bound is one iteration
 added for the update - once per update, at most `amend.maxAddedIterations` over the run, published as an
 `iterationAdded` event and kept in the entry (`FlowUpdateEntry.AddedIteration`) - and the report and
 `list-orchestrator` say every piece, where it was carried out and how that ended, the iteration added, and who was

@@ -123,6 +123,101 @@ public sealed class FlowPlanToldTests
             StringComparison.Ordinal);
 
     /// <summary>
+    /// The flow of <see cref="Flow"/> whose round of work items sits in a repeat of at most three iterations that ends
+    /// at its first - its until reads true - and an audit after it, where a plan update finds the loop ended done.
+    /// </summary>
+    private static string EndedLoop()
+        => Flow.Replace(
+            "  - name: rounds\n    dependsOn: [planning]\n    steps:",
+            "  - name: rounds\n    dependsOn: [planning]\n    repeat:\n      until: 'true'\n      maxIterations: 3\n    steps:",
+            StringComparison.Ordinal)
+            + "\n  - name: audit\n    type: pause\n    question: anything else?\n    options: [stay, go]\n    dependsOn: [rounds]";
+
+    /// <summary>
+    /// The flow of <see cref="Flow"/> whose round of work items sits in a repeat that runs three iterations, each
+    /// ending at a review after its work items, where a plan update finds the round of the iteration ended and the loop
+    /// still running, below its bound.
+    /// </summary>
+    private static string Reviewed()
+        => Flow.Replace(
+            "  - name: rounds\n    dependsOn: [planning]\n    steps:",
+            "  - name: rounds\n    dependsOn: [planning]\n    repeat:\n      until: 'false'\n      maxIterations: 3\n    steps:",
+            StringComparison.Ordinal)
+            + "\n      - name: review\n        type: pause\n        question: reviewed?\n        options: [stay, go]\n        dependsOn: [items]";
+
+    /// <summary>
+    /// A flow whose planner is declared in the same repeat iteration as the work-item group it plans: each iteration
+    /// plans, checks and expands its round, so a plan update is planned in the iteration whose round it changes.
+    /// </summary>
+    private const string Planned = """
+        name: flow
+        inputs:
+          - name: request
+        steps:
+          - name: ask
+            type: pause
+            question: '{input.request}'
+            options: [stay, go]
+          - name: rounds
+            dependsOn: [ask]
+            repeat:
+              until: 'true'
+              maxIterations: 2
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                resume: plan
+                prompt: plan.md
+                outputs: plan.json
+              - name: planupdate
+                type: reason
+                agent: planner
+                resume: plan
+                prompt: plan-update.md
+                outputs: plan.json
+              - name: check
+                type: validate-plan
+                items: 'rounds.plan.latest.items'
+                dependsOn: [plan]
+              - name: items
+                dependsOn: [check]
+                forEach: 'check.items'
+                steps:
+                  - name: make
+                    type: create-agent
+                    agent: builder
+                  - name: build
+                    type: reason
+                    agent: builder
+                    in: make
+                    dependsOn: [make]
+                    prompt: build.md
+                    outputs: out.json
+                  - name: rebuild
+                    type: reason
+                    agent: builder
+                    in: make
+                    prompt: rebuild.md
+                    outputs: out.json
+                  - name: withdraw
+                    type: reason
+                    agent: builder
+                    in: make
+                    prompt: withdraw.md
+                    outputs: out.json
+                  - name: probe
+                    type: pause
+                    question: '{piece.kind}|{piece.changed}'
+                    options: [go, stop]
+                    dependsOn: [build]
+                  - name: drop
+                    type: delete-agent
+                    of: make
+                    dependsOn: [probe]
+        """;
+
+    /// <summary>
     /// The flow of <see cref="Flow"/> whose second watcher starts only once the first has ended, so it reads what a
     /// plan update told the planning scope in the part of its own prompt.
     /// </summary>
@@ -266,9 +361,12 @@ public sealed class FlowPlanToldTests
     /// <summary>Drives the run on, answering every question it reaches but the one of its kind <paramref name="held"/>, until it is done or only that one is left.</summary>
     private static async Task<FlowSessionEnd> DriveAsync(FlowCoordinator coordinator, string? held = null)
     {
-        while (true)
+        for (var sessions = 0; ; sessions++)
         {
-            var end = await coordinator.RunAsync(Token);
+            // A run that asks without end fails the test, saying what it kept asking, rather than holding it for ever.
+            Assert.True(sessions < 50, $"the run kept asking: {string.Join("; ", coordinator.OpenQuestions.Select(asked => $"{asked.Id} ({asked.Kind}) {asked.Problem}"))}");
+
+            var end = await Task.Run(() => coordinator.RunAsync(Token), Token).WaitAsync(Bound, Token);
 
             if (end.Status == FlowRunStatus.Done)
             {
@@ -483,13 +581,18 @@ public sealed class FlowPlanToldTests
             // and the one sentence that its work goes on from here with this.
             var telling = runner.Tellings["planning.watch"]!;
             Assert.True(telling.Messages.TryTake(out var message), "the message was not posted");
-            Assert.StartsWith("The plan this work follows was updated while you worked.", message, StringComparison.Ordinal);
-            Assert.Contains("What changed it: the request was amended on ", message, StringComparison.Ordinal);
-            Assert.Contains(": \"tell the watcher\"", message, StringComparison.Ordinal);
-            Assert.Contains("For your work (planning.watch):", message, StringComparison.Ordinal);
-            Assert.Contains("- What changed: the watcher reads this", message, StringComparison.Ordinal);
-            Assert.Contains("- Keep: what stays", message, StringComparison.Ordinal);
-            Assert.EndsWith("Go on from here, with this.", message, StringComparison.Ordinal);
+            Assert.Equal(
+                """
+                The plan this work follows was updated while you worked.
+                What changed it: the request was amended on 2026-09-30 16:32:14: "tell the watcher"
+                For your work (planning.watch):
+                - What changed: the watcher reads this
+                - Keep: what stays
+                - Undo: what is taken back
+                - Do instead: what is done instead
+                Go on from here, with this.
+                """,
+                message);
 
             // The watcher beside it was sent nothing, and the update's record says so.
             Assert.False(runner.Tellings["planning.beside"]!.Messages.TryTake(out _));
@@ -575,9 +678,17 @@ public sealed class FlowPlanToldTests
 
             var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
             Assert.Equal([("u1", "the answer")], steps["planning.watch"].Told!.Select(one => (one.Update, one.How)));
-            Assert.StartsWith("The plan this work follows was updated before this work began.", runner.PlanTolds["planning.watch"], StringComparison.Ordinal);
-            Assert.Contains("For your work (planning.watch):", runner.PlanTolds["planning.watch"], StringComparison.Ordinal);
-            Assert.Contains("- What changed: the watcher reads this too", runner.PlanTolds["planning.watch"], StringComparison.Ordinal);
+            Assert.Equal(
+                """
+                The plan this work follows was updated before this work began.
+                What changed it: the request was amended on 2026-09-30 16:32:14: "tell the waiting watcher"
+                For your work (planning.watch):
+                - What changed: the watcher reads this too
+                - Keep: what stays
+                - Undo: what is taken back
+                - Do instead: what is done instead
+                """,
+                runner.PlanTolds["planning.watch"]);
         }
     }
 
@@ -641,9 +752,17 @@ public sealed class FlowPlanToldTests
             await session.WaitAsync(Bound, Token);
 
             Assert.True(FlowRunStatus.Done == (await DriveAsync(coordinator)).Status);
-            Assert.StartsWith("The plan this work follows was updated before this work began.", runner.PlanTolds["planning.beside"], StringComparison.Ordinal);
-            Assert.Contains("For your work (planning):", runner.PlanTolds["planning.beside"], StringComparison.Ordinal);
-            Assert.Contains("whoever works in the planning block reads this", runner.PlanTolds["planning.beside"], StringComparison.Ordinal);
+            Assert.Equal(
+                """
+                The plan this work follows was updated before this work began.
+                What changed it: the request was amended on 2026-09-30 16:32:14: "tell the planning scope"
+                For your work (planning):
+                - What changed: whoever works in the planning block reads this
+                - Keep: what stays
+                - Undo: what is taken back
+                - Do instead: what is done instead
+                """,
+                runner.PlanTolds["planning.beside"]);
             Assert.Null(runner.PlanTolds["rounds.items[1].build"]);
         }
     }
@@ -784,7 +903,9 @@ public sealed class FlowPlanToldTests
             Assert.Equal("rounds#2", update.AddedIteration);
 
             var events = FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events;
-            Assert.Contains(events, written => written.Kind == "iterationAdded" && written.Detail!.Contains("iteration 2 of 'rounds' was added for update u1", StringComparison.Ordinal));
+            Assert.Equal(
+                ["iteration 2 of 'rounds' was added for update u1: the run has been given 1 of the 1 amend.maxAddedIterations allows"],
+                events.Where(written => written.Kind == "iterationAdded").Select(written => written.Detail));
 
             var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
             var built = steps.Values.Where(step => step.Step == "rounds.items.build" && step.State == nameof(FlowInstanceState.Done)).ToList();
@@ -835,7 +956,7 @@ public sealed class FlowPlanToldTests
         var runner = new FakeRunner()
             .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
             .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
-                new JsonArray(Piece("changed", again.DeepClone(), "the one item is done differently")),
+                new JsonArray(Piece("changed", again.DeepClone(), "the one item is done differently"), Told("planning.plan", "too late for the plan")),
                 again)))
             .On("check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
             {
@@ -881,7 +1002,7 @@ public sealed class FlowPlanToldTests
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
             await DriveAsync(coordinator, held: "pause");
             var probe = coordinator.OpenQuestions.Single(asked => asked.Kind == "pause");
-            Assert.StartsWith("added|", probe.Problem, StringComparison.Ordinal);
+            Assert.Equal("added|", probe.Problem);
 
             Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("the one item is different", "amend-orchestrator-request", out var problem), problem ?? "taken");
             Assert.True(coordinator.TryAnswer(probe.Id, "go", null, out _));
@@ -893,22 +1014,303 @@ public sealed class FlowPlanToldTests
 
             var asked = runner.Tellings.GetValueOrDefault("planning.items[0].build")?.Asked;
             Assert.True(asked is not null, $"the carrier was never asked for its handoff; started: {string.Join(", ", runner.Started)}; async: {string.Join(", ", runner.AsyncRuns.Select(one => $"{one.Instance}:{one.Path}"))}; states: {string.Join(", ", harness.OrchestrationStore.ReadFlow(layout)!.Steps.Select(step => $"{step.Instance}={step.State}"))}; events: {string.Join(" | ", FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Select(written => $"{written.Kind}:{written.Instance} {written.From}->{written.To}{(written.Detail is { } detail ? $" ({detail})" : string.Empty)}"))}");
-            Assert.StartsWith("ended for update u1", asked.Why, StringComparison.Ordinal);
-            Assert.StartsWith("The plan this work follows was updated while you worked, and the update changes your work item.", asked.Lead, StringComparison.Ordinal);
-            Assert.Contains("What changed it: the request was amended on ", asked.Lead, StringComparison.Ordinal);
-            Assert.Contains("For your work item (one):", asked.Lead, StringComparison.Ordinal);
-            Assert.Contains("- What changed: the one item is done differently", asked.Lead, StringComparison.Ordinal);
-            Assert.EndsWith("Your step ends here. Do none of this yourself: a step of its own does it, from where you leave the work.", asked.Lead, StringComparison.Ordinal);
+            Assert.Equal("ended for update u1: its work item 'one' is done again, and another goes on from where it leaves the work", asked.Why);
+            Assert.Equal(
+                """
+                The plan this work follows was updated while you worked, and the update changes your work item.
+                What changed it: the request was amended on 2026-09-30 16:32:14: "the one item is different"
+                For your work item (one):
+                - What changed: the one item is done differently
+                - Keep: what stays
+                - Undo: what is taken back
+                - Do instead: what is done instead
+                Your step ends here. Do none of this yourself: a step of its own does it, from where you leave the work.
+                """,
+                asked.Lead);
+
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            var update = UpdatesOf(harness, layout).Updates.Single();
+            var piece = update.ThePieces.First();
+            Assert.Equal(("changed", "planning.items[0]", "planning.items[1].build"), (piece.Kind, piece.Placed, piece.CarriedBy));
+
+            // The carrier this update ended in order was told by its own handoff question, and is no step the update
+            // did not concern; the told piece for the plan, which had ended, was not delivered.
+            Assert.Empty(update.NotConcerned ?? []);
+            Assert.Equal(["planning.plan"], (update.NotDelivered ?? []).Select(one => one.For));
+
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal([("u1", "a message")], steps["planning.items[0].build"].Told!.Select(one => (one.Update, one.How)));
+        }
+    }
+
+    /// <summary>
+    /// Work a plan update owes a loop that has ended done - its until read true - is carried all the same: the loop
+    /// runs its next iteration, below its bound, with no iteration added, and a changed piece whose item had ended in
+    /// the iteration before - owed though the instance that ended bears its name - joins the round there, carried by the
+    /// step its kind names, with an added piece beside it where the update has one; the run ends done once they are.
+    /// </summary>
+    /// <param name="alsoAdded">Whether the update adds a work item beside the one it changes.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WorkOwedToALoopThatEndedDone_IsCarriedToItsNextIteration(bool alsoAdded)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(EndedLoop());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var differently = Item("one");
+        differently["title"] = "The one item, done differently";
+        var scope = new JsonArray(Piece("changed", differently.DeepClone(), "the one item is done differently"));
+
+        if (alsoAdded)
+        {
+            scope.Add(Piece("added", Item("three"), "the registry is a third work item"));
+        }
+
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: alsoAdded
+                ? Concluded((JsonArray)scope.DeepClone(), differently.DeepClone(), Item("three"))
+                : Concluded((JsonArray)scope.DeepClone(), differently.DeepClone())))
+            .On("check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            }))
+            .On("item-check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            }));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            // The round runs and the loop ends done at its first iteration; the audit after it asks, and the amendment is
+            // taken there.
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var audit = await UntilAskedAsync(coordinator, "anything else?");
+            Assert.Equal(nameof(FlowInstanceState.Done), harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "rounds").State);
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("the one item differently, and the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(audit.Id, "go", null, out _));
+
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            var update = UpdatesOf(harness, layout).Updates.Single();
+            List<(string, string, string?, string?, string?)> placed = [("changed", "one", "the next iteration of 'rounds'", "rounds#2.items[0]", "rounds#2.items[0].build")];
+
+            if (alsoAdded)
+            {
+                placed.Add(("added", "three", "the next iteration of 'rounds'", "rounds#2.items[1]", "rounds#2.items[1].build"));
+            }
+
+            Assert.Equal(placed, update.ThePieces.Select(piece => (piece.Kind, piece.ItemName()!, piece.OwedTo, piece.Placed, piece.CarriedBy)));
+            Assert.Null(update.AddedIteration);
+
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal(("rounds.items.rebuild", nameof(FlowInstanceState.Done)), (steps["rounds#2.items[0].build"].Step, steps["rounds#2.items[0].build"].State));
+            Assert.Equal(
+                alsoAdded ? ("rounds.items.build", nameof(FlowInstanceState.Done)) : default((string, string)?),
+                steps.TryGetValue("rounds#2.items[1].build", out var added) ? (added.Step, added.State) : default((string, string)?));
+            Assert.DoesNotContain("rounds#3", steps.Keys, StringComparer.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// Work owed to a loop below its bound is carried by the iteration the loop runs anyway: no iteration is added for
+    /// the update, none is said to be, and nothing of what <c>amend.maxAddedIterations</c> allows is used up.
+    /// </summary>
+    [Fact]
+    public async Task WorkOwedToALoopBelowItsBound_AddsNoIteration()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Reviewed());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                new JsonArray(Piece("added", Item("three"), "the registry is a third work item")),
+                Item("one"),
+                Item("three"))))
+            .On("check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            }))
+            .On("item-check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            }));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            // The first iteration's round ends, and its review asks: the amendment is taken there, with the loop at the
+            // first of its three iterations.
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var review = await UntilAskedAsync(coordinator, "reviewed?");
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(review.Id, "go", null, out _));
 
             var end = await DriveAsync(coordinator);
             Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
 
             var update = UpdatesOf(harness, layout).Updates.Single();
             var piece = update.ThePieces.Single();
-            Assert.Equal(("changed", "planning.items[0]", "planning.items[1].build"), (piece.Kind, piece.Placed, piece.CarriedBy));
+            Assert.Equal(("the next iteration of 'rounds'", "rounds#2.items[1]"), (piece.OwedTo, piece.Placed));
+            Assert.Null(update.AddedIteration);
+            Assert.DoesNotContain(FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events, written => written.Kind == "iterationAdded");
 
-            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
-            Assert.Equal([("u1", "a message")], steps["planning.items[0].build"].Told!.Select(one => (one.Update, one.How)));
+            var iterations = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Where(step => step.Step == "rounds.item-check").Select(step => step.Instance);
+            Assert.Equal(["rounds#1.item-check", "rounds#2.item-check", "rounds#3.item-check"], iterations);
         }
+    }
+
+    /// <summary>
+    /// A planner declared in the same repeat iteration as the work-item group it plans: the group the update holds open
+    /// is no work the iteration waits on to come to rest, so the plan stands, the added piece joins the round the group
+    /// holds open, and the run ends done - no circular wait between the hold and the plan.
+    /// </summary>
+    [Fact]
+    public async Task APlannerInTheIterationOfItsWorkItems_LetsThePlanStand()
+    {
+        using var temp = new TempDirectory();
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", Planned) with
+        {
+            Amend = new FlowAmend("request", 5, null, "rounds.planupdate", null, "rounds.plan.latest.scope", "rounds.items.build", "rounds.items.rebuild", "rounds.items.withdraw", null),
+        };
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                new JsonArray(Piece("added", Item("two"), "the parser is a second work item")),
+                Item("one"),
+                Item("two"))))
+            .On("check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            }));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var probe = await UntilAskedAsync(coordinator, "added|");
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("build the parser too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(probe.Id, "go", null, out _));
+
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            var update = UpdatesOf(harness, layout).Updates.Single();
+            Assert.Equal((FlowUpdateStates.Done, "rounds#1.items[1]", "rounds#1.items[1].build"), (update.State, update.ThePieces.Single().Placed, update.ThePieces.Single().CarriedBy));
+            var built = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Where(step => step.Step == "rounds.items.build" && step.State == nameof(FlowInstanceState.Done)).Select(step => step.Instance);
+            Assert.Equal(["rounds#1.items[0].build", "rounds#1.items[1].build"], built.Order(StringComparer.Ordinal));
+        }
+    }
+
+    /// <summary>
+    /// A told piece naming a scope reaches every reason step that starts later in it - in the part of its own prompt -
+    /// save a step of an instance a piece of an update placed, which its own prompt's <c>{piece.*}</c> tells: the item
+    /// that waited reads the part, and the one the update added reads none.
+    /// </summary>
+    [Fact]
+    public async Task AToldPieceNamingARound_IsReadByItsLaterSteps_SaveThoseOfAPiecePlaced()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse() with { MaxOpenAgents = 1 };
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"), Item("two"))))
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                new JsonArray(Told("rounds", "whoever builds in the round reads this"), Piece("added", Item("three"), "the registry is a third work item")),
+                Item("one"),
+                Item("two"),
+                Item("three"))))
+            .On("check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            }))
+            .On("item-check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            }));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            // To the first item's probe: the second waits for the run's one open agent.
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var probe = await UntilAskedAsync(coordinator, "added|");
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("tell the round, and add the registry", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(probe.Id, "go", null, out _));
+
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            Assert.Equal(PlanToldOfTheRound, runner.PlanTolds["rounds.items[1].build"]);
+            Assert.Null(runner.PlanTolds["rounds.items[2].build"]);
+        }
+    }
+
+    /// <summary>What a step that starts later in the round reads of the told piece naming it, in the part of its own prompt.</summary>
+    private const string PlanToldOfTheRound = """
+        The plan this work follows was updated before this work began.
+        What changed it: the request was amended on 2026-09-30 16:32:14: "tell the round, and add the registry"
+        For your work (rounds):
+        - What changed: whoever builds in the round reads this
+        - Keep: what stays
+        - Undo: what is taken back
+        - Do instead: what is done instead
+        """;
+
+    /// <summary>Drives the run on, answering every question it reaches, until one whose problem begins with <paramref name="asks"/> is open: that one, left unanswered.</summary>
+    private static async Task<FlowQuestion> UntilAskedAsync(FlowCoordinator coordinator, string asks)
+    {
+        for (var sessions = 0; sessions < 20; sessions++)
+        {
+            _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            if (coordinator.OpenQuestions.FirstOrDefault(asked => asked.Problem.StartsWith(asks, StringComparison.Ordinal)) is { } found)
+            {
+                return found;
+            }
+
+            foreach (var asked in coordinator.OpenQuestions.ToList())
+            {
+                Assert.True(coordinator.TryAnswer(asked.Id, asked.Kind == "loopBound" ? "accept" : "go", null, out _), asked.Problem);
+            }
+        }
+
+        throw new TimeoutException($"no question asking '{asks}' was raised");
     }
 }

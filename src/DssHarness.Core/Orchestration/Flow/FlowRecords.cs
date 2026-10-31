@@ -186,6 +186,20 @@ public sealed record FlowEvent(
 /// for every step an update did not raise.
 /// </param>
 /// <param name="Told">Each telling of the step by a plan update: the update, when, and the way it reached it; null where none did.</param>
+/// <param name="EndedFor">
+/// The plan update a piece of which ended this visit in order, by its id: a step in flight in an instance of the work-item
+/// group the piece brought to rest, from when it was stopped, and that instance's own group record from the moment the
+/// piece marked it - running while it is brought to rest, stopped once it has come to rest. Its visit is over: no session
+/// runs it again, its group counts it ended, and its work is done again or taken back in the instance visited in its
+/// place. Null for every other instance.
+/// </param>
+/// <param name="PieceOf">
+/// An instance of the work-item group's own record: the plan update whose piece it carries or withdrew, by its id - one
+/// made for the piece, given its item in the place of its own, joined at the check that opens a round, brought to rest
+/// for it, or visited again for it; the piece is that update's entry's piece of the instance's work item. Null for every
+/// other record.
+/// </param>
+/// <param name="AgainOf">An instance of the work-item group's own record: the instance it visits again in its place and with its agent, by its id; null where it visits none.</param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -227,7 +241,10 @@ public sealed record FlowStepRecord(
     bool? Copied = null,
     IReadOnlyList<FlowTargetRecord>? Targets = null,
     string? RaisedByUpdate = null,
-    IReadOnlyList<FlowStepTold>? Told = null)
+    IReadOnlyList<FlowStepTold>? Told = null,
+    string? EndedFor = null,
+    string? PieceOf = null,
+    string? AgainOf = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -269,6 +286,11 @@ public sealed record FlowStepRecord(
             : RaisedByUpdate is not null && !FlowUpdateIds.IsId(RaisedByUpdate) ? $"'{RaisedByUpdate}' is not an update's id"
             : LeftBy is not null && !FlowInstanceId.IsWellFormed(LeftBy) ? $"'{LeftBy}' is not an instance id"
             : Told?.Any(told => !FlowUpdateIds.IsId(told.Update) || string.IsNullOrWhiteSpace(told.How)) == true ? "one it was told holds no update or no way it reached it"
+            : EndedFor is not null && !FlowUpdateIds.IsId(EndedFor) ? $"it was ended for '{EndedFor}', which is not an update's id"
+            : PieceOf is not null && !FlowUpdateIds.IsId(PieceOf) ? $"it carries a piece of '{PieceOf}', which is not an update's id"
+            : (PieceOf is not null || AgainOf is not null) && !Group ? "it carries a piece of a plan update, and only an instance of the work-item group does"
+            : AgainOf is not null && !FlowInstanceId.IsWellFormed(AgainOf) ? $"it visits '{AgainOf}' again, which is not an instance id"
+            : AgainOf is not null && PieceOf is null ? "it visits an instance again for no piece of a plan update"
             : Handoff?.Problem() is { } handoff ? $"its handoff: {handoff}"
             : Targets?.FirstOrDefault(target => target.Problem() is not null) is { } target ? $"its target '{target.Agent}': {target.Problem()}"
             : Targets?.GroupBy(target => target.Agent, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice ? $"it names target '{twice.Key}' twice"
@@ -828,6 +850,9 @@ public sealed record FlowSnapshot(
 /// <param name="Targets">A step of others' targets, each with where it stands (<see cref="FlowStepRecord.Targets"/>); null for every other step.</param>
 /// <param name="RaisedByUpdate">The plan update this instance was raised to plan, by its id; null for every step an update did not raise.</param>
 /// <param name="Told">Each telling of the step by a plan update, as its own record holds it (<see cref="FlowStepRecord.Told"/>); null where none did.</param>
+/// <param name="EndedFor">The plan update a piece of which ended this visit in order (<see cref="FlowStepRecord.EndedFor"/>); null for every other instance.</param>
+/// <param name="PieceOf">An instance of the work-item group's: the plan update whose piece it carries or withdrew (<see cref="FlowStepRecord.PieceOf"/>); null otherwise.</param>
+/// <param name="AgainOf">An instance of the work-item group's: the instance it visits again (<see cref="FlowStepRecord.AgainOf"/>); null where it visits none.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -869,4 +894,7 @@ public sealed record FlowSnapshotStep(
     bool Copied = false,
     IReadOnlyList<FlowTargetRecord>? Targets = null,
     string? RaisedByUpdate = null,
-    IReadOnlyList<FlowStepTold>? Told = null);
+    IReadOnlyList<FlowStepTold>? Told = null,
+    string? EndedFor = null,
+    string? PieceOf = null,
+    string? AgainOf = null);

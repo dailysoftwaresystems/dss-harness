@@ -247,7 +247,7 @@ public sealed record FlowReporter(
 /// <param name="WhenAddScope">The step that builds scope an update adds, by its path from the flow's root.</param>
 /// <param name="WhenChangeScope">The step that does again an item an update changes, by its path from the flow's root.</param>
 /// <param name="WhenRemoveScope">The step that takes back an item an update withdraws, by its path from the flow's root.</param>
-/// <param name="MaxAddedIterations">How many iterations a run at the end of its loop is given to carry an update.</param>
+/// <param name="MaxAddedIterations">How many iterations a run at the end of its loop is given to carry an update, as the file says it; null where it says none.</param>
 public sealed record FlowAmend(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Input,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? ChangedAnswerMinutes,
@@ -258,7 +258,19 @@ public sealed record FlowAmend(
     string WhenAddScope,
     string WhenChangeScope,
     string WhenRemoveScope,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? MaxAddedIterations);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? MaxAddedIterations)
+{
+    /// <summary>What <see cref="MaxAddedIterations"/> is where the file says nothing: one iteration over the run.</summary>
+    public const int DefaultMaxAddedIterations = 1;
+
+    /// <summary>
+    /// How many iterations plan updates may add, over the whole run, to a loop at its bound that an update owes work: the
+    /// file's <c>maxAddedIterations</c>, or <see cref="DefaultMaxAddedIterations"/> where it says none - the one owner of
+    /// the default the gates and the engine both read.
+    /// </summary>
+    [JsonIgnore]
+    public int AddedIterationsAllowed => MaxAddedIterations ?? DefaultMaxAddedIterations;
+}
 
 /// <summary>One answer a configuration gives a question kind beforehand, and how often it holds.</summary>
 /// <param name="Answer">The answer, spelled as the question's options spell it.</param>

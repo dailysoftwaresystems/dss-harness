@@ -115,6 +115,34 @@ public sealed class FlowServiceTests
             timings ?? Quick);
     }
 
+    /// <summary>
+    /// Waits, within the test's bound, until <paramref name="read"/> answers something - a record another process writes
+    /// read as it stands, one being replaced read again at the next look.
+    /// </summary>
+    private static async Task<T> UntilAsync<T>(Func<T?> read)
+        where T : class
+    {
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        bound.CancelAfter(Bound);
+
+        while (true)
+        {
+            try
+            {
+                if (read() is { } found)
+                {
+                    return found;
+                }
+            }
+            catch (IOException)
+            {
+                // Being replaced: read again at the next look.
+            }
+
+            await Task.Delay(10, bound.Token);
+        }
+    }
+
     private static OrchestratorLayout RunOf(Repository repository, string run = "r1")
         => new(run, Path.Combine(repository.Path, ".orchestrators", run));
 
@@ -266,7 +294,7 @@ public sealed class FlowServiceTests
         Assert.Equal(FlowExit.Paused, answered.ExitCode);
         var taken = Assert.Single(store.ReadFlowUpdates(run)!.Updates);
         Assert.Equal(("u1", "done"), (taken.Id, taken.State));
-        Assert.Contains(answered.Details ?? [], line => line.StartsWith("update u1, an amendment given while no engine ran the run, was taken", StringComparison.Ordinal));
+        Assert.Contains("update u1, an amendment queued until the run could take it, was taken", answered.Details ?? []);
 
         await DoneAsync(repository, service);
 
@@ -284,11 +312,12 @@ public sealed class FlowServiceTests
 
     /// <summary>
     /// An amendment given while an engine runs the run is handed to it through <c>inbox.json</c> and taken at its
-    /// poll: weighed against the same gates, recorded in <c>updates.json</c> under the inbox entry's id, and read
-    /// with the request by every step that starts from then on.
+    /// poll, while the step it is running still runs - not when the drive ends, when the run may be done and have
+    /// nothing left to go back to: weighed against the same gates, recorded in <c>updates.json</c> under the inbox
+    /// entry's id, emptied from the inbox, and read with the request by every step that starts from then on.
     /// </summary>
     [Fact]
-    public async Task AnAmendmentGivenToARunningEngine_IsTakenFromTheInbox_AndReadWithTheRequest()
+    public async Task AnAmendmentGivenToARunningEngine_IsTakenAtItsPoll_AndReadWithTheRequest()
     {
         var (repository, service, runner) = await AmendedAsync();
         using var disposed = repository;
@@ -306,12 +335,17 @@ public sealed class FlowServiceTests
         var amended = await service.AmendAsync(repository.Path, "r1", "in fact, only the parser", textFile: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         Assert.Equal(HarnessExit.Success, amended.ExitCode);
-        Assert.Contains(amended.Details ?? [], line => line == $"inbox: {run.InboxFile}");
+        Assert.Contains($"inbox: {run.InboxFile}", amended.Details ?? []);
+
+        // Taken at the engine's poll, with the step it was handed over beside still running.
+        var recorded = await UntilAsync(() => store.ReadFlowUpdates(run)?.Updates.SingleOrDefault());
+        Assert.Equal(("u1", "amendment"), (recorded.Id, recorded.Cause));
+        Assert.NotNull(recorded.Inbox);
+        Assert.False(answering.IsCompleted);
 
         held.SetResult();
         var outcome = await answering.WaitAsync(Bound, Token);
 
-        Assert.Contains(outcome.Details ?? [], line => line.StartsWith("the amendment handed over was taken from the inbox", StringComparison.Ordinal));
         Assert.Equal(FlowExit.Paused, outcome.ExitCode);
 
         await DoneAsync(repository, service);
@@ -323,6 +357,42 @@ public sealed class FlowServiceTests
 
         var asked = store.ReadFlowQuestions(run)!.Questions[^1];
         Assert.EndsWith(":\nin fact, only the parser", asked.ProblemShown!.Happened, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A changed answer given while an engine runs the run is handed to it through <c>inbox.json</c> and taken at its
+    /// poll, as the command says, while the step it is running still runs: the set's one change, recorded as an update
+    /// under the inbox entry's id, both answers kept.
+    /// </summary>
+    [Fact]
+    public async Task AChangedAnswerGivenToARunningEngine_IsTakenAtItsPoll()
+    {
+        var (repository, service, runner) = await AmendedAsync();
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["request=build the thing"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+
+        var held = new TaskCompletionSource();
+        runner.Holds("warmup", held.Task);
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token);
+        await runner.WaitStartedAsync("warmup");
+
+        var changed = await service.AnswerAsync(repository.Path, "r1", "stay", question: null, text: null, textFile: null, again: true, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, changed.ExitCode);
+
+        var recorded = await UntilAsync(() => store.ReadFlowUpdates(run)?.Updates.SingleOrDefault());
+        Assert.Equal(("u1", "changedAnswer", "q1", "go", "stay"), (recorded.Id, recorded.Cause, recorded.Question, recorded.FromAnswer, recorded.ToAnswer));
+        Assert.NotNull(recorded.Inbox);
+        Assert.False(answering.IsCompleted);
+
+        held.SetResult();
+        _ = await answering.WaitAsync(Bound, Token);
+
+        Assert.Equal(["go", "stay"], store.ReadFlowQuestions(run)!.Questions[0].Answers.Select(answer => answer.Answer));
     }
 
     /// <summary>
@@ -424,6 +494,43 @@ public sealed class FlowServiceTests
         // An empty amendment, and one given two ways, are usage errors.
         Assert.Equal(HarnessExit.UsageError, (await service.AmendAsync(repository.Path, "r1", "  ", textFile: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
         Assert.Equal(HarnessExit.UsageError, (await service.AmendAsync(repository.Path, "r1", "one", textFile: "two.txt", json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+    }
+
+    /// <summary>
+    /// Whether an engine runs the run is decided where every engine claims it - in the repository's one section - so an
+    /// engine that claims the run while an amendment is given either claims it first, and the amendment is handed to
+    /// it, or claims it once the entry is written and reads it then: never in between, where it would write the run's
+    /// updates whole over an entry it never read.
+    /// </summary>
+    [Fact]
+    public async Task AnAmendmentGivenAsAnEngineClaimsTheRun_IsDecidedInTheSectionTheClaimIsMadeIn()
+    {
+        var (repository, service, runner) = await AmendedAsync();
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["request=build the thing"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+        var identity = repository.Harness.Identity;
+        Task<CommandOutcome>? amending = null;
+
+        // An engine claims the run while the amendment is given: its claim holds the section, and the command waits
+        // for it rather than deciding while the claim is made.
+        _ = store.AcrossRuns(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), () =>
+        {
+            amending = Task.Run(() => service.AmendAsync(repository.Path, "r1", "in fact, only the parser", textFile: null, json: false, cancellationToken: Token), Token);
+            _ = SpinWait.SpinUntil(() => amending.IsCompleted, TimeSpan.FromSeconds(2));
+            store.WriteOwner(run, new RunOwner(identity.CurrentMachine, identity.CurrentId, DateTimeOffset.UtcNow, identity.Current));
+            return true;
+        });
+
+        var amended = await amending!.WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, amended.ExitCode);
+        Assert.Equal("handed the amendment to the engine running 'r1'", amended.Message);
+        Assert.Equal("in fact, only the parser", Assert.Single(store.ReadInbox(run)!.Amendments ?? []).Text);
+        Assert.Empty(store.ReadFlowUpdates(run)?.Updates ?? []);
     }
 
     /// <summary>

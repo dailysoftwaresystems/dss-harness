@@ -49,6 +49,20 @@ public static class FlowUpdatePieceKinds
     public static readonly IReadOnlyList<string> Carried = [Added, Changed, Removed];
 }
 
+/// <summary>What a work item is known by: its name, read by the one rule every reader of a plan's items uses.</summary>
+public static class FlowWorkItems
+{
+    /// <summary>
+    /// The name of the work item <paramref name="item"/>, where it is an object whose <c>name</c> is a text that is not
+    /// blank; null for anything else - a name of another type reads as none, never as a failure of whoever reads it.
+    /// </summary>
+    /// <param name="item">The work item, as a plan, a piece or a scope holds it.</param>
+    public static string? NameOf(JsonNode? item)
+        => item is JsonObject held && held["name"] is JsonValue value && value.TryGetValue<string>(out var name) && !string.IsNullOrWhiteSpace(name)
+            ? name
+            : null;
+}
+
 /// <summary>
 /// One piece of a plan update, as the planning step concluded it and <c>updates.json</c> holds it: what the update
 /// does to one work item - adds it, changes it, withdraws it, or tells the work under way - with the planning agent's
@@ -68,15 +82,22 @@ public static class FlowUpdatePieceKinds
 /// <param name="Undo">What is taken back, where the piece is one that runs.</param>
 /// <param name="Instead">What is done in its place, where the piece is one that runs.</param>
 /// <param name="Placed">
-/// Where the piece was placed: the instance of the work-item group that carries it out - a new one made for it, or
-/// the one it was given to in the place of its own, or the one it ends to be visited again - null until it is placed,
-/// and for a piece owed to a round that has not opened.
+/// Where the piece was placed: the instance of the work-item group that carries it out - a new one made for it, the one
+/// it was given to in the place of its own, the one it joined at the check that opens a round, or the one it ends to be
+/// visited again - null until it is placed, and while it is owed to a round that has not opened.
 /// </param>
 /// <param name="OwedTo">
-/// Where a piece is owed that no instance carries yet: the round it joins when that round opens; null where one does.
+/// Where a piece was owed that no instance carried when it was placed: the round it joins when that round opens, or the
+/// next iteration of the loop around a round that had ended; null where an instance carried it at once. It stays as it
+/// was written once the piece joins a round, which <paramref name="Placed"/> then names.
 /// </param>
 /// <param name="CarriedBy">The visit that carries the piece out - the step that runs in the work-item group's place; null until it is drawn.</param>
-/// <param name="Ended">How the piece's work ended, where it has; null until then, and for a piece that needs no step.</param>
+/// <param name="Ended">How the piece's work ended, where it has; null until then.</param>
+/// <param name="Again">
+/// The instance of the work-item group visited again in the place of the one <paramref name="Placed"/> names, where the
+/// piece brought that one to rest: it carries the piece's work out, with the agent of the one it replaces; null until it
+/// is made, and for every piece that brought nothing to rest.
+/// </param>
 public sealed record FlowUpdatePiece(
     string Kind,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] JsonNode? Item = null,
@@ -88,24 +109,72 @@ public sealed record FlowUpdatePiece(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Placed = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? OwedTo = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? CarriedBy = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Ended = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Ended = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Again = null)
 {
     /// <summary>The name of the work item the piece is, where it is one; null where it is not.</summary>
     public string? ItemName()
-        => Kind == FlowUpdatePieceKinds.Told ? null : (Item as JsonObject)?["name"]?.GetValue<string>();
+        => Kind == FlowUpdatePieceKinds.Told ? null : FlowWorkItems.NameOf(Item);
 
-    /// <summary>What is wrong with this piece as the engine takes it; null when nothing is.</summary>
+    /// <summary>
+    /// Whether the piece is owed still: it was owed to a round when it was placed, has joined none since, and has not
+    /// ended - what the check that opens the next round is handed, and what makes the loop around the round run again.
+    /// </summary>
+    public bool IsOwed => OwedTo is not null && Placed is null && Ended is null;
+
+    /// <summary>
+    /// What is wrong with this piece, said of it as its subject: <c>says not what the update changes for its work, and a
+    /// piece always does</c>; null when nothing is. The one owner of a piece's shape: the engine reads a planning step's
+    /// conclusion by it, <c>validate-plan</c> checks the plan's scope by it, and <c>updates.json</c> is held to it.
+    /// </summary>
     public string? Problem()
-        => !FlowUpdatePieceKinds.All.Contains(Kind, StringComparer.Ordinal) ? $"'{Kind}' is not what a piece of a plan update is"
-            : string.IsNullOrWhiteSpace(Changed) ? "a piece says not what the update changes for its work"
-            : Kind == FlowUpdatePieceKinds.Told && string.IsNullOrWhiteSpace(For) ? "a piece that tells names no work under way"
-            : Kind != FlowUpdatePieceKinds.Told && Item is not JsonObject ? "a piece that carries a work item out holds one, and it holds none"
-            : Kind != FlowUpdatePieceKinds.Told && string.IsNullOrWhiteSpace(ItemName()) ? "a piece's work item is known by its name, and it has none"
-            : Kind == FlowUpdatePieceKinds.Told && Item is not null ? "a piece that tells holds no work item: it names work under way instead"
-            : Placed is not null && !FlowInstanceId.IsWellFormed(Placed) ? $"'{Placed}' is not an instance's id"
-            : OwedTo is not null && string.IsNullOrWhiteSpace(OwedTo) ? "a piece owed to a round says not which"
-            : CarriedBy is not null && !FlowInstanceId.IsWellFormed(CarriedBy) ? $"'{CarriedBy}' is not an instance's id"
+        => !FlowUpdatePieceKinds.All.Contains(Kind, StringComparer.Ordinal) ? $"is of the kind '{Kind}', and a piece is one of {KindsSaid}"
+            : string.IsNullOrWhiteSpace(Changed) ? "says not what the update changes for its work, and a piece always does"
+            : Kind == FlowUpdatePieceKinds.Told && string.IsNullOrWhiteSpace(For) ? "is told, and names no work under way: a told piece tells work that is going on"
+            : Kind == FlowUpdatePieceKinds.Told && Item is not null ? "is told and holds a work item: it names work under way instead"
+            : Kind != FlowUpdatePieceKinds.Told && Item is not JsonObject ? $"is '{Kind}', and holds no work item: a piece that carries a work item out holds one"
+            : Kind != FlowUpdatePieceKinds.Told && ItemName() is null ? "holds a work item with no name, and a work item is known by its name"
+            : Placed is not null && !FlowInstanceId.IsWellFormed(Placed) ? $"is placed in '{Placed}', which is not an instance's id"
+            : OwedTo is not null && string.IsNullOrWhiteSpace(OwedTo) ? "is owed to a round, and says not which"
+            : CarriedBy is not null && !FlowInstanceId.IsWellFormed(CarriedBy) ? $"is carried by '{CarriedBy}', which is not an instance's id"
+            : Again is not null && !FlowInstanceId.IsWellFormed(Again) ? $"is visited again in '{Again}', which is not an instance's id"
             : null;
+
+    /// <summary>
+    /// The piece a planning step's conclusion holds in <paramref name="node"/>, read by the one rule of a piece's shape;
+    /// null with why where it is none (<see cref="Problem"/>'s words, said of the piece as their subject).
+    /// </summary>
+    /// <param name="node">One element of the list the <c>amend</c> block's <c>scope</c> yields.</param>
+    /// <param name="problem">What is wrong with it, where it is no piece the engine takes; null where it is one.</param>
+    public static FlowUpdatePiece? Read(JsonNode? node, out string? problem)
+    {
+        if (node is not JsonObject held || held["kind"] is not JsonValue kind || !kind.TryGetValue<string>(out var what))
+        {
+            problem = $"is of the wrong shape: it is no object with a kind, and a piece is one of {KindsSaid}";
+            return null;
+        }
+
+        string? Text(string member) => held[member] is JsonValue text && text.TryGetValue<string>(out var written) ? written : null;
+
+        var piece = new FlowUpdatePiece(what, held["item"]?.DeepClone(), Text("for"), Text("changed"), Text("keep"), Text("undo"), Text("instead"));
+        problem = piece.Problem();
+        return problem is null ? piece : null;
+    }
+
+    /// <summary>
+    /// What is wrong with <paramref name="pieces"/> as one update's, said with the pieces as its subject - <c>name the
+    /// work item 'one' twice, and a work item is named by one piece of an update</c> - where two of them name one work
+    /// item; null where none is named twice. The one owner of the rule and its words: the check of a plan's scope, the
+    /// engine's reading of it and <c>updates.json</c> are each held to it, each naming the pieces its own way.
+    /// </summary>
+    /// <param name="pieces">The pieces of one update.</param>
+    public static string? NamedTwice(IEnumerable<FlowUpdatePiece> pieces)
+        => pieces.Select(piece => piece.ItemName()).OfType<string>().GroupBy(name => name, StringComparer.Ordinal).FirstOrDefault(named => named.Count() > 1)?.Key is { } twice
+            ? $"name the work item '{twice}' twice, and a work item is named by one piece of an update"
+            : null;
+
+    /// <summary>The kinds a piece is, as every sentence about a piece's kind says them.</summary>
+    private static string KindsSaid => $"{string.Join(", ", FlowUpdatePieceKinds.All.SkipLast(1).Select(kind => $"'{kind}'"))} or '{FlowUpdatePieceKinds.All[^1]}'";
 }
 
 /// <summary>
@@ -203,8 +272,8 @@ public sealed record FlowUpdateEntry(
             : State == FlowUpdateStates.Refused && string.IsNullOrWhiteSpace(Why) ? "it says not why it was refused"
             : Inbox is not null && string.IsNullOrWhiteSpace(Inbox) ? "it names no inbox entry"
             : Step is not null && !FlowInstanceId.IsWellFormed(Step) ? $"'{Step}' is not an instance's id"
-            : ThePieces.Any(piece => piece.Problem() is not null) ? $"its pieces hold one that is not a piece: {ThePieces.First(piece => piece.Problem() is not null).Problem()}"
-            : ThePieces.Where(piece => piece.ItemName() is not null).GroupBy(piece => piece.ItemName(), StringComparer.Ordinal).Any(group => group.Count() > 1) ? "one work item is named by two pieces of one update"
+            : ThePieces.Select((piece, at) => (Problem: piece.Problem(), At: at + 1)).FirstOrDefault(piece => piece.Problem is not null) is { Problem: { } wrong } first ? $"its piece {first.At.ToString(CultureInfo.InvariantCulture)} {wrong}"
+            : FlowUpdatePiece.NamedTwice(ThePieces) is { } twice ? $"its pieces {twice}"
             : Told?.Any(told => !FlowInstanceId.IsWellFormed(told.Who) || string.IsNullOrWhiteSpace(told.What) || string.IsNullOrWhiteSpace(told.How)) == true ? "one it told holds no step, nothing told or no way it reached it"
             : Told?.GroupBy(told => told.Who, StringComparer.Ordinal).Any(group => group.Count() > 1) == true ? "one step was told twice by one update"
             : NotConcerned?.Any(concerned => !FlowInstanceId.IsWellFormed(concerned)) == true ? "one it names as not concerned is not an instance's id"
@@ -376,7 +445,7 @@ public static class FlowUpdateGates
         }
 
         var group = ParentOf(amend.WhenAddScope);
-        var loopPath = group is null ? null : ParentOf(group);
+        var loopPath = group is null ? null : LoopAround(definition, group);
 
         if (loopPath is null || StepOf(definition, loopPath) is not { Repeat: { MaxIterations: { } bound } } loop)
         {
@@ -385,14 +454,33 @@ public static class FlowUpdateGates
 
         var rounds = steps.Where(step => step.Group && step.Step == group).ToList();
         var last = rounds.Max(step => step.Iteration) ?? 0;
-        var allowed = bound + (amend.MaxAddedIterations ?? 1);
+        var allowed = bound + amend.AddedIterationsAllowed;
 
         if (last < allowed || rounds.Any(step => step.Iteration == last && step.State is not (nameof(FlowInstanceState.Done) or nameof(FlowInstanceState.Failed) or nameof(FlowInstanceState.Skipped))))
         {
             return null;
         }
 
-        return $"run '{run}' is past the work items of round {last.ToString(CultureInfo.InvariantCulture)} of '{loop.Name}', the last it can run ({bound.ToString(CultureInfo.InvariantCulture)} by its own bound, and the {(amend.MaxAddedIterations ?? 1).ToString(CultureInfo.InvariantCulture)} that amend.maxAddedIterations lets updates add): nothing would carry the change out. Start a run for the {what} once this one has ended";
+        return $"run '{run}' is past the work items of round {last.ToString(CultureInfo.InvariantCulture)} of '{loop.Name}', the last it can run ({bound.ToString(CultureInfo.InvariantCulture)} by its own bound, and the {amend.AddedIterationsAllowed.ToString(CultureInfo.InvariantCulture)} that amend.maxAddedIterations lets updates add): nothing would carry the change out. Start a run for the {what} once this one has ended";
+    }
+
+    /// <summary>
+    /// The path of the nearest <c>repeat</c> around the group at <paramref name="groupPath"/>: the loop whose next
+    /// iteration work is owed to where the group's round has ended; null where no repeat is around it.
+    /// </summary>
+    /// <param name="definition">The definition.</param>
+    /// <param name="groupPath">The path of the group, the work-item group.</param>
+    internal static string? LoopAround(WorkflowDefinition definition, string groupPath)
+    {
+        for (var around = ParentOf(groupPath); around is not null; around = ParentOf(around))
+        {
+            if (StepOf(definition, around) is { Repeat: not null })
+            {
+                return around;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>The declaration a path names, walking the definition's groups; null where the path names no step.</summary>

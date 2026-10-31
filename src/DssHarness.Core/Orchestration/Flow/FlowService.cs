@@ -396,37 +396,20 @@ public sealed class FlowService(
 
         if (again)
         {
-            var (set, why) = LastSetAnswered(questions, run);
-
-            if (set is null)
+            if (FlowAnswerRules.LastSetAnswered(questions.Questions) is not { } set)
             {
-                return Refuse(layout, AnswerCommand, why!, json);
+                return Refuse(layout, AnswerCommand, FlowAnswerRules.NoSetToChange(run), json);
             }
 
-            // The answer is checked against the set's answers before anything of the run is touched: usage errors,
-            // never a run's refusals - and one that is the answer and the text the set already has is one of them.
-            if (!set.Options.Any(option => string.Equals(option.Answer, answer, StringComparison.Ordinal)) && answer != "abort")
+            // The answer is checked against the set's answers before anything of the run is touched, by the one rule
+            // the engine holds it to: usage errors, never a run's refusals - and one that is the answer and the text
+            // the set already has is one of them.
+            if (FlowAnswerRules.Problem(set.Id, set.Options, answer, text, (set.Answers[^1].Answer, set.Answers[^1].Text)) is { } notAChange)
             {
-                return CommandOutcome.Usage(
-                    $"'{answer}' is not one of the answers '{set.Id}' takes: {string.Join(", ", set.Options.Select(option => option.Answer))}");
+                return CommandOutcome.Usage(notAChange);
             }
 
-            var changes = set.Options.FirstOrDefault(option => string.Equals(option.Answer, answer, StringComparison.Ordinal))?.Text == true;
-
-            if (changes && string.IsNullOrWhiteSpace(text))
-            {
-                return CommandOutcome.Usage($"'{answer}' is an answer '{set.Id}' takes with a text; give one");
-            }
-
-            if (!changes && !string.IsNullOrWhiteSpace(text) && set.Kind != "ask")
-            {
-                return CommandOutcome.Usage($"'{answer}' is an answer '{set.Id}' takes with no text; give none");
-            }
-
-            if (string.Equals(set.Answers[^1].Answer, answer, StringComparison.Ordinal) && set.Answers[^1].Text == text)
-            {
-                return CommandOutcome.Usage($"'{answer}' is the answer '{set.Id}' already has; a changed answer changes it");
-            }
+            var changes = FlowAnswerRules.TextOf(text);
 
             // A set is changed one time, and the command says so as it says every other refusal of the run's own.
             if (set.Answers.Any(answer => answer.ReplacedAt is { } changed))
@@ -448,7 +431,7 @@ public sealed class FlowService(
             // it at its poll, within the set's window as from the moment stamped here.
             if (_owner.Live(layout) is not null)
             {
-                return HandChangeOver(layout, run, set, answer, changes ? text : null, json);
+                return HandChangeOver(layout, run, set, answer, changes, json);
             }
 
             // The session is held to the definition it began with, as a resume is, and begins with the change: the
@@ -478,7 +461,7 @@ public sealed class FlowService(
                 AnswerCommand,
                 reclaimedChange,
                 () => Resumed(layout, digestOfChange!),
-                (set.Id, answer, changes ? text : null),
+                (set.Id, answer, changes),
                 interrupts,
                 json,
                 cancellationToken,
@@ -514,32 +497,21 @@ public sealed class FlowService(
             asked = open[0];
         }
 
-        // The answer is checked against the question's answers before anything of the run is touched: a usage error,
-        // never a run's refusal.
-        if (!asked.Options.Any(option => string.Equals(option.Answer, answer, StringComparison.Ordinal)) && answer != "abort")
+        // The answer is checked against the question's answers before anything of the run is touched, by the one rule
+        // the engine holds it to: a usage error, never a run's refusal.
+        if (FlowAnswerRules.Problem(asked.Id, asked.Options, answer, text) is { } wrong)
         {
-            return CommandOutcome.Usage(
-                $"'{answer}' is not one of the answers '{asked.Id}' takes: {string.Join(", ", asked.Options.Select(option => option.Answer))}");
+            return CommandOutcome.Usage(wrong);
         }
 
-        var takes = asked.Options.FirstOrDefault(option => string.Equals(option.Answer, answer, StringComparison.Ordinal))?.Text == true;
-
-        if (takes && string.IsNullOrWhiteSpace(text))
-        {
-            return CommandOutcome.Usage($"'{answer}' is an answer '{asked.Id}' takes with a text; give one");
-        }
-
-        if (!takes && !string.IsNullOrWhiteSpace(text))
-        {
-            return CommandOutcome.Usage($"'{answer}' is an answer '{asked.Id}' takes with no text; give none");
-        }
+        var takes = FlowAnswerRules.TextOf(text);
 
         // Where an engine is running the run, the answer is handed to it and the command returns: it lands in the
         // inbox under an id of its own, the engine takes it at its poll, and no second engine is started. An engine
         // whose session ends before it took it leaves it there, and the next session of the run takes it.
         if (_owner.Live(layout) is not null)
         {
-            _store.AddToInbox(layout, new FlowInboxAnswer(FlowInboxAnswer.NewId(), asked.Id, answer, _clock.GetUtcNow(), takes ? text : null));
+            _store.AddToInbox(layout, new FlowInboxAnswer(FlowInboxAnswer.NewId(), asked.Id, answer, _clock.GetUtcNow(), takes));
 
             var handed = new CommandOutcome(
                 HarnessExit.Success,
@@ -574,32 +546,7 @@ public sealed class FlowService(
 
         // The session begins with the answer: the question it names, answered by a person through this command, and
         // everything that can run after it.
-        return await SessionAsync(context, layout, AnswerCommand, reclaimed, () => Resumed(layout, digest!), (asked.Id, answer, takes ? text : null), interrupts, json, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <summary>The last set a person answered of a run, and why there is none to change, from its questions alone.</summary>
-    /// <param name="questions">Every question the run raised, with every answer each was given.</param>
-    /// <param name="run">The run's name.</param>
-    private static (FlowQuestionEntry? Set, string? Why) LastSetAnswered(FlowQuestionsFile questions, string run)
-    {
-        FlowQuestionEntry? last = null;
-        DateTimeOffset? newest = null;
-
-        foreach (var entry in questions.Questions.Where(entry => entry.State == "answered"))
-        {
-            foreach (var answer in entry.Answers.Where(answer => answer.By?.Who == "person"))
-            {
-                if (newest is null || answer.At > newest)
-                {
-                    last = entry;
-                    newest = answer.At;
-                }
-            }
-        }
-
-        return last is null
-            ? (null, $"no answer of run '{run}' was given by a person, so there is no set to change")
-            : (last, null);
+        return await SessionAsync(context, layout, AnswerCommand, reclaimed, () => Resumed(layout, digest!), (asked.Id, answer, takes), interrupts, json, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Holds a changed answer to the engine running the run, under an id of its own, and returns: the engine takes it at its poll, within the set's window as from the moment stamped here.</summary>
@@ -651,7 +598,7 @@ public sealed class FlowService(
             return CommandOutcome.Usage("the amendment is empty; give one, as the command's own argument or in a file named by --file");
         }
 
-        var (refused, _, layout) = await LoadAsync(startDirectory, run, AmendCommand, cancellationToken).ConfigureAwait(false);
+        var (refused, context, layout) = await LoadAsync(startDirectory, run, AmendCommand, cancellationToken).ConfigureAwait(false);
 
         if (refused is not null)
         {
@@ -678,10 +625,24 @@ public sealed class FlowService(
         // Where an engine is running the run, the amendment is handed to it and the command returns: it lands in the
         // inbox under an id of its own, the engine weighs it against the same gates at its poll, and no second engine
         // is started. An engine whose session ends before it took it leaves it there, and the next session takes it.
-        if (_owner.Live(layout) is not null)
+        // Where none is, the amendment is recorded queued, and taken first when the run is next gone on with. Which of
+        // the two is decided in the repository's one section, where every session claims the run: an engine that starts
+        // meanwhile claims the run either before - and the amendment is handed to it - or after the entry is written,
+        // and reads it then; never between, where it would write the run's updates whole over an entry it never read.
+        var given = _clock.GetUtcNow();
+        var entry = _sessions.AcrossRuns(context!.Layout, () =>
         {
-            _store.AddAmendmentToInbox(layout, new FlowInboxAmendment(FlowInboxAmendment.NewId(), text, _clock.GetUtcNow(), AmendCommand));
+            if (_owner.Live(layout) is not null)
+            {
+                _store.AddAmendmentToInbox(layout, new FlowInboxAmendment(FlowInboxAmendment.NewId(), text, given, AmendCommand));
+                return null;
+            }
 
+            return _store.AddUpdate(layout, run, given, id => new FlowUpdateEntry(id, FlowUpdateCauses.Amendment, FlowUpdateStates.Queued, given, Amendment: text, Through: AmendCommand));
+        });
+
+        if (entry is null)
+        {
             var handed = new CommandOutcome(
                 HarnessExit.Success,
                 $"handed the amendment to the engine running '{run}'",
@@ -695,8 +656,6 @@ public sealed class FlowService(
 
         // No engine runs the run: the amendment is recorded, and taken first when the run is next gone on with - by
         // resume-orchestrator or by an answer. The command starts nothing, and says so.
-        var entry = _store.AddUpdate(layout, run, _clock.GetUtcNow(), id => new FlowUpdateEntry(id, FlowUpdateCauses.Amendment, FlowUpdateStates.Queued, _clock.GetUtcNow(), Amendment: text, Through: AmendCommand));
-
         var recorded = new CommandOutcome(
             HarnessExit.Success,
             $"the amendment is recorded as update {entry.Id} of run '{run}', and is taken first when the run is next gone on with",
@@ -1374,9 +1333,9 @@ public sealed class FlowService(
 
     /// <summary>
     /// Reads what another process asked of the engine - at once, then every <see cref="FlowTimings.PollEvery"/>: a pause
-    /// or a stop in <c>stop.json</c>, an answer in <c>inbox.json</c> - and hands each to the engine, which alone applies
-    /// it. It never waits on what it handed: an answer is offered, and emptied from the inbox once the loop has taken or
-    /// refused it. What a tick meets that can pass - a file being replaced, a lock held - is said once and read again
+    /// or a stop in <c>stop.json</c>, an answer, a changed answer or an amendment in <c>inbox.json</c> - and hands each to
+    /// the engine, which alone applies it. It never waits on what it handed: each is offered, and emptied from the inbox
+    /// once the loop has taken or refused it. What a tick meets that can pass - a file being replaced, a lock held - is said once and read again
     /// at the next; anything else is said, and the run is asked to pause rather than be left with nobody reading what
     /// is asked of it.
     /// </summary>
@@ -1416,9 +1375,9 @@ public sealed class FlowService(
     }
 
     /// <summary>
-    /// One poll: the request taken and handed on, the answers the loop has settled emptied from the inbox, and each answer
-    /// not yet offered offered under its entry's id - which the loop weighs once, never again where the run's records
-    /// already hold it.
+    /// One poll: the request taken and handed on, what the loop has settled emptied from the inbox, and each answer, change
+    /// of an answer and amendment not yet offered offered under its entry's id - which the loop weighs once, never again
+    /// where the run's records already hold it.
     /// </summary>
     private void Tick(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<FlowHandedOver>> offered)
     {
@@ -1437,12 +1396,24 @@ public sealed class FlowService(
 
         Settle(layout, offered);
 
-        foreach (var entry in _store.ReadInbox(layout)?.Answers ?? [])
+        var inbox = _store.ReadInbox(layout);
+
+        // Every answer, change of an answer and amendment handed over is offered at the poll that first reads it, as
+        // the command that handed it over says: the loop weighs each once, a change within its window as from the
+        // moment the command stamped, and an amendment against the gates as the run then stands.
+        foreach (var entry in inbox?.Answers ?? [])
         {
-            // An answer that changes another is a plan update, which the session's end says it does not take.
-            if (!entry.Again && !offered.ContainsKey(entry.Id))
+            if (!offered.ContainsKey(entry.Id))
             {
-                offered[entry.Id] = coordinator.OfferAnswerAsync(entry.Question, entry.Answer, entry.Text, AnswerCommand, entry.Id);
+                offered[entry.Id] = coordinator.OfferAnswerAsync(entry.Question, entry.Answer, entry.Text, AnswerCommand, entry.Id, entry.Again, entry.At);
+            }
+        }
+
+        foreach (var entry in inbox?.Amendments ?? [])
+        {
+            if (!offered.ContainsKey(entry.Id))
+            {
+                offered[entry.Id] = coordinator.OfferAmendmentAsync(entry.Text, entry.Through ?? AmendCommand, entry.Id, entry.At);
             }
         }
     }

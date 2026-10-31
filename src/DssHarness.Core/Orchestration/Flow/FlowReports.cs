@@ -380,6 +380,7 @@ public static class FlowReports
         ["placed"] = piece.Placed,
         ["owedTo"] = piece.OwedTo,
         ["carriedBy"] = piece.CarriedBy,
+        ["again"] = piece.Again,
         ["ended"] = piece.Ended,
     };
 
@@ -529,10 +530,13 @@ public static class FlowReports
 
                 foreach (var piece in update.ThePieces.Where(piece => piece.Kind != FlowUpdatePieceKinds.Told))
                 {
-                    // Each piece that carries work out: where it was carried out, and how that ended.
-                    var where = piece.CarriedBy is { } carried
-                        ? $"carried out by '{carried}'"
-                        : piece.Placed is { } placed ? $"placed in '{placed}'" : $"owed to {piece.OwedTo}";
+                    // Each piece that carries work out: where it was carried out, and how that ended - or that no
+                    // instance carried it, where it needed none.
+                    var where = piece.CarriedBy is { } carried ? $"carried out by '{carried}'"
+                        : piece.Again is { } again ? $"visited again in '{again}'"
+                        : piece.Placed is { } placed ? $"placed in '{placed}'"
+                        : piece.OwedTo is { } owed ? $"owed to {owed}"
+                        : "carried by no instance";
                     text.Add($"  - {piece.Kind} '{piece.ItemName()}': {where}{(piece.Ended is { } ended ? $", {ended}" : ", still under way")}");
                 }
 
