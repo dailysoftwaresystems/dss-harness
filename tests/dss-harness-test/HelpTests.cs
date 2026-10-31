@@ -1951,7 +1951,8 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "In the terminal a session runs in, the first Ctrl+C - and off Windows SIGTERM or a hang-up - asks the safe pause, which starts no "
-                + "clock: an agent's handoff and a build may take as long as they take. The second stops the run where it stands - a step whose "
+                + "clock of its own: each agent is asked for its handoff in its own conversation and answers within the workflow's handoffSeconds, "
+                + "and a build may take as long as it takes. The second stops the run where it stands - a step whose "
                 + "runner does not end within 90 s is recorded stopped all the same - and the command ends within 120 s whatever is left;",
             prose,
             StringComparison.Ordinal);
@@ -4316,9 +4317,22 @@ public sealed partial class HelpTests
                 + "agent is tried again on its model - the step's retries, absent the workflow's maxRetries, waiting its backoffSeconds, absent the workflow's, twice as long before each later try - and then on each model of its order; what its agents "
                 + "assumed without asking is kept, read as the step's own assumptions fact and named in the run's. Where the step may ask (ask) its agent's questions pause it - askRounds times in one attempt, the answer or decide going on in the same "
                 + "attempt as the agent's next message; a limit of its own (turns, budget, a truncated answer, a full context) asks, more offered only where a stored conversation of the attempt can be handed, and compact for a full context goes on "
-                + "from the engine's reduction of it, the attempt's bounds counting still; every account at a limit, and a provider's service failing past the client's own tries, pause the run safely, and the resume runs that very step. Where an "
+                + "from the engine's reduction of it, the attempt's bounds counting still; every account at a limit, and a provider's service failing past the client's own tries, pause the run safely, and the resume runs that very step. What a "
+                + "step spends is charged to the run's budget turn by turn as its agent works - every token of every kind, and its cost at the configuration's prices for the model serving it - and each launch is held to what is left of the "
+                + "run's dollars before its reserve where that is less than its agent's own maxBudgetUsd: a launch that bound ended has reached the run's reserve, not the step's own budget, so the workflow's answers may allow more and the step "
+                + "runs again given its handoff, or else the run pauses for its budget. A safe pause asks each reason step in flight for its handoff in its own conversation, all at once, and waits for the agent's answer within the "
+                + "workflow's handoffSeconds; an agent that has not answered by then is ended. Where an "
                 + "agent gave no handoff of its own - a limit ended its run, a crash cut the attempt off, its handoff turn passed its bound or failed - the engine writes one from the stored stream of the step, its first line saying why: the files the "
                 + "attempt wrote, the last commands it ran and how each ended, its last messages word for word, and the steps before it that left notes, named by step.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the question is open while the advice runs - an answer ends the asking, the question saying so, and the step that asked starts again only once the advice's runner has ended; "
+                + "a pause or a stop ends it too, the question saying the recommendation is sought at the resume - the recommendation written to the question with who gave it and where its records are, "
+                + "and none obtained said so, a bar that could not be read among the reasons; what every advice spent, an ended one's among them, is counted against the run's budget; "
+                + "and where the orchestrator names no advisor the question says so plainly. The advisor takes no question of a step that may ask (its agent recommends within its own), "
+                + "nor a pause step's that shows an upstream step's questions (they carry their recommendations), nor one the run's input answers, nor the budget's own, nor a kind its kinds leave out, "
+                + "and while the run is pausing the question says the recommendation is sought at the resume.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("params - its own knobs, defaulted in the file and read as param.<name>", prose, StringComparison.Ordinal);

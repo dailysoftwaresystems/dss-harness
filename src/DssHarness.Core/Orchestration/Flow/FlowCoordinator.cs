@@ -399,6 +399,9 @@ public sealed class FlowCoordinator
     /// <summary>Reads the text of a file the run's workflow names, by its name in the definition; null where the run reads none.</summary>
     private readonly Func<string, string>? _workflowFile;
 
+    /// <summary>Reads the text of a file the run's workflow may hold and owes none of; null where it is not there, and null itself where the run reads none.</summary>
+    private readonly Func<string, string?>? _workflowFileIfThere;
+
     /// <summary>Deletes a read-only agent of the run whose work is over, as the engine is to (<c>DeleteAsync</c>, applied); null where the run deletes none.</summary>
     private readonly Func<string, string, CancellationToken, Task<Results.CommandOutcome>>? _deleteAgent;
 
@@ -419,17 +422,36 @@ public sealed class FlowCoordinator
     /// </summary>
     private FlowUpdatesFile _updates;
 
-    /// <summary>Every advice the session has begun and not yet taken: its question, how to end it, and its answer.</summary>
-    private readonly List<(FlowQuestion Asked, CancellationTokenSource Cancel, Task<FlowAdvice> Task)> _advising = [];
-
-    /// <summary>How many askings of its question each advice was: the directory under the asking step, from 1.</summary>
-    private readonly Dictionary<string, int> _adviceAsked = [];
+    /// <summary>
+    /// Every advice the session has begun and not yet taken - one an answer or a stop ended among them, kept until its
+    /// runner has ended, for what it spent is counted and the asking step is not started again beside it.
+    /// </summary>
+    private readonly List<Advising> _advising = [];
 
     /// <summary>The token of the session in flight, which every advice is held to; null between sessions.</summary>
     private CancellationToken _sessionToken;
 
+    /// <summary>
+    /// Ends every advice of the session in flight at once, from whatever thread a hard stop is asked on: each advice is
+    /// held to it beside the session's token. Made anew as each session begins.
+    /// </summary>
+    private CancellationTokenSource _adviceStop = new();
+
     /// <summary>Every read-only agent deletion the run has begun, seen to before its session ends: a deletion left half-done by a session's end is a record the next command reads as one.</summary>
     private readonly List<Task> _deletions = [];
+
+    /// <summary>Every read-only agent whose deletion this run has begun: asked once, however many endings find its work over.</summary>
+    private readonly HashSet<string> _deletedAgents = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The grant of the budget at which an agent's launch was ended by what was left of the run's dollars before the
+    /// reserve: the reserve is reached for that grant whatever the run's own count says, for the launch was bound to
+    /// it; -1 where none was.
+    /// </summary>
+    private int _reserveMetAt = -1;
+
+    /// <summary>Held while a pause is asked for, so two asks at once merge into one request and neither is lost.</summary>
+    private readonly Lock _pauseAsks = new();
 
     /// <summary>Every agent name the session gave, a spent one's among them: never given again, though no step holds it any more.</summary>
     private readonly HashSet<string> _agentNamesGiven = new(StringComparer.Ordinal);
@@ -600,6 +622,13 @@ public sealed class FlowCoordinator
     /// <c>queued</c> is taken before anything runs. Left out, the run holds none, and takes none until this session
     /// gives one.
     /// </param>
+    /// <param name="workflowFileIfThere">
+    /// Reads the text of a file the run's workflow may hold and owes none of - the bar its folder's own
+    /// <c>recommendations.md</c> is where the orchestrator names none - answering null where the folder holds no such
+    /// file, looked at and not there, and throwing with why where it could not tell or could not read it
+    /// (<see cref="WorkflowNamedFiles.ReadTextIfThere"/>). Null where the run reads none, and the folder is taken to hold
+    /// no bar.
+    /// </param>
     /// <exception cref="HarnessException">An input the run needs is missing, or a value is outside the ones its input takes.</exception>
     public FlowCoordinator(
         WorkflowDefinition definition,
@@ -616,7 +645,8 @@ public sealed class FlowCoordinator
         Func<string, string, CancellationToken, Task<Results.CommandOutcome>>? deleteAgent = null,
         IFlowAdvisorRunner? advisor = null,
         IFlowStreamAccount? streamAccount = null,
-        Func<FlowUpdatesFile?>? updates = null)
+        Func<FlowUpdatesFile?>? updates = null,
+        Func<string, string?>? workflowFileIfThere = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(runner);
@@ -632,6 +662,7 @@ public sealed class FlowCoordinator
         _place = place;
         _agentModels = agentModels ?? new Dictionary<string, string>(StringComparer.Ordinal);
         _workflowFile = workflowFile;
+        _workflowFileIfThere = workflowFileIfThere;
         _deleteAgent = deleteAgent;
         _advisor = advisor;
         _streamAccount = streamAccount ?? (runner as IFlowStreamAccount);
@@ -701,8 +732,10 @@ public sealed class FlowCoordinator
     /// this run is in ends in order: no step more is started, every reason step in progress hands off, the machine
     /// steps in progress are left to finish (<paramref name="all"/> stops them) and are recorded, and the run ends
     /// <see cref="FlowRunStatus.Paused"/>. A later request that says <paramref name="all"/> after one that did not
-    /// stops the machine steps the first left running. A step its time limit stopped already is neither handed off nor
-    /// stopped again: it ends as that stop ends it.
+    /// stops the machine steps the first left running - once the pause is under way, and before it as well: a request
+    /// the loop has not taken yet keeps the cause that asked first, and stops the machine steps where either said
+    /// <paramref name="all"/>. A step its time limit stopped already is neither handed off nor stopped again: it ends as
+    /// that stop ends it.
     /// </summary>
     /// <param name="cause">Who asks for the pause, one of <see cref="FlowPauseRequest.Causes"/>.</param>
     /// <param name="all">Whether the machine steps in progress are stopped too.</param>
@@ -710,30 +743,67 @@ public sealed class FlowCoordinator
     {
         if (!FlowPauseRequest.Causes.Contains(cause, StringComparer.Ordinal))
         {
-            throw new ArgumentOutOfRangeException(nameof(cause), cause, "a pause is asked for by an interrupt, a command, a front end, or the budget");
+            throw new ArgumentOutOfRangeException(nameof(cause), cause, "a pause is asked for by an interrupt, a command, a front end, the budget, or a step at its limits");
         }
 
-        if (_hardStop)
+        lock (_pauseAsks)
         {
-            return;
-        }
-
-        if (_pausing)
-        {
-            // A later request changes one thing at most: one that says all, after one that did not, stops the machine
-            // steps the first left running. The loop applies it, for the graph is the loop's alone to change; this
-            // only asks.
-            if (all)
+            if (_hardStop)
             {
-                _pauseAllAsked = true;
-                WakeTheLoop();
+                return;
             }
 
-            return;
+            if (_pausing)
+            {
+                // A later request changes one thing at most: one that says all, after one that did not, stops the
+                // machine steps the first left running. The loop applies it, for the graph is the loop's alone to
+                // change; this only asks.
+                if (all)
+                {
+                    _pauseAllAsked = true;
+                    WakeTheLoop();
+                }
+
+                return;
+            }
+
+            // A request the loop has not taken yet is merged with this one, never written over: the pause is the first
+            // asker's, and stops the machine steps where any asker said all.
+            _pauseRequest = _pauseRequest is { } earlier
+                ? earlier with { All = earlier.All || all }
+                : new FlowPauseRequest(cause, all);
         }
 
-        _pauseRequest = new FlowPauseRequest(cause, all);
         WakeTheLoop();
+    }
+
+    /// <summary>
+    /// Takes the pause request the loop is to carry out, where one waits and no pause is under way, and marks the run
+    /// pausing in the same breath - so a request made from here on joins the pause under way, never one that is let go
+    /// of; null where there is none to take.
+    /// </summary>
+    private FlowPauseRequest? TakePauseRequest()
+    {
+        lock (_pauseAsks)
+        {
+            if (_pausing || _pauseRequest is not { } request)
+            {
+                return null;
+            }
+
+            _pauseRequest = null;
+            _pausing = true;
+            return request;
+        }
+    }
+
+    /// <summary>Lets go of a pause request not yet taken: a hard stop is asked, and stops the run in its place.</summary>
+    private void DropPauseRequest()
+    {
+        lock (_pauseAsks)
+        {
+            _pauseRequest = null;
+        }
     }
 
     /// <summary>
@@ -760,27 +830,35 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Asks for the hard stop: what a second interrupt, <c>stop-orchestrator</c> and the answer <c>abort</c> share. It
     /// changes nothing of the graph, which is the loop's alone: it cancels the handoff turns under way - a turn that
-    /// begins after it ends at once - and wakes the loop, which applies it.
+    /// begins after it ends at once - and every advice of the run's advisor still running, and wakes the loop, which
+    /// applies it.
     /// </summary>
     private void BeginHardStop()
     {
-        _hardStop = true;
-        _pauseRequest = null;
+        lock (_pauseAsks)
+        {
+            _hardStop = true;
+        }
+
+        DropPauseRequest();
         CancelHandoffTurns();
+        CancelAdvice();
         WakeTheLoop();
     }
 
     /// <summary>
     /// The stop itself, applied by the one who owns the graph: the loop, or a session that begins over a stop asked
-    /// between sessions. Every step in flight is stopped - each waited for until its runner has ended - and nothing that
-    /// waits is touched: a step that never started stays as it was and a question stays open, for the resume goes on
-    /// with them by the same path a pause's resume takes.
+    /// between sessions. Every step in flight is stopped - each waited for until its runner has ended - and every advice
+    /// still running is ended, its question saying the recommendation is sought at the resume; nothing that waits is
+    /// touched: a step that never started stays as it was and a question stays open, for the resume goes on with them by
+    /// the same path a pause's resume takes.
     /// </summary>
     private void ApplyTheStop()
     {
         _stopApplied = true;
         _pausing = false;
-        _pauseRequest = null;
+        DropPauseRequest();
+        DeferAdvice("the run was stopped while the advisor ran");
 
         foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup).ToList())
         {
@@ -843,6 +921,10 @@ public sealed class FlowCoordinator
     /// <summary>What a step whose runner did not end within the drain's bound of its stop says of it.</summary>
     private static string RunnerNotEnded
         => $"its runner did not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s of the stop";
+
+    /// <summary>Ends every advice of the session in flight, from whatever thread: the loop takes each as its runner ends.</summary>
+    private void CancelAdvice()
+        => _adviceStop.TryCancel();
 
     /// <summary>Cancels every handoff turn in flight, wherever the loop is parked awaiting them.</summary>
     private void CancelHandoffTurns()
@@ -909,6 +991,8 @@ public sealed class FlowCoordinator
         _held = _records is null ? null : [];
         _starting = true;
         _sessionToken = cancellationToken;
+        _adviceStop.Dispose();
+        _adviceStop = new CancellationTokenSource();
 
         try
         {
@@ -934,7 +1018,6 @@ public sealed class FlowCoordinator
             else
             {
                 AnswerWhatTheConfigurationAnswers();
-                SeekOwedAdvice();
             }
 
             // A group stands open over its members whatever stopped them, and goes on as it was: it is no step that
@@ -987,6 +1070,13 @@ public sealed class FlowCoordinator
             _starting = false;
             MakeTheHold();
 
+            // The advice each open question still owes is sought once it is known the session goes on - a resume
+            // refused above starts no advisor, for the advisor is a paid run and the refusal writes nothing of itself.
+            if (!stopPending)
+            {
+                SeekOwedAdvice();
+            }
+
             while (true)
             {
                 Progress();
@@ -1030,7 +1120,7 @@ public sealed class FlowCoordinator
                     continue;
                 }
 
-                if (_pauseRequest is { } request && !_pausing)
+                if (TakePauseRequest() is { } request)
                 {
                     // The safe pause, in order: recorded, nothing more started from here on, the handoffs written,
                     // the machine steps left to finish or stopped.
@@ -1104,6 +1194,11 @@ public sealed class FlowCoordinator
             _held = null;
             Drop(dropped ?? []);
             _starting = false;
+
+            // An advice the session leaves running - it ended by a defect, or its token was cancelled - is ended and
+            // waited for before the session ends, for no advisor outlives the session that started it: what it spent
+            // is counted, and its question, still marked sought, is advised again at the next session's start.
+            await EndAdviceAsync().ConfigureAwait(false);
             HandBackWhatIsLeft();
             _inSession = false;
 
@@ -1265,18 +1360,23 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// One safe pause, in order: recorded before anything is touched; nothing more started from here on; every reason
-    /// step in progress handed off, all at once, each within the run's <c>handoffSeconds</c> - an agent that gives no
-    /// account leaves a handoff the engine writes; the machine steps in progress left to finish - or stopped, where
-    /// the request says <c>all</c> - and recorded as they end; a <c>ci-wait</c> ends Stopped at once, for it runs
-    /// nothing between two reads. A step its time limit stopped already is left to end as that stop ends it.
+    /// One safe pause, in order: recorded before anything is touched; nothing more started from here on, and every
+    /// advice still running ended, its question saying the recommendation is sought at the resume; every reason step in
+    /// progress asked for its handoff in its own conversation, all at once, each answered within the run's
+    /// <c>handoffSeconds</c> - an agent that gives no account in that time is ended and leaves a handoff the engine
+    /// writes; the machine steps in progress left to finish - or stopped, where the request says <c>all</c> - and
+    /// recorded as they end; a <c>ci-wait</c> ends Stopped at once, for it runs nothing between two reads. A step its
+    /// time limit stopped already is left to end as that stop ends it. The loop has marked the run pausing already, as
+    /// it took the request (<see cref="TakePauseRequest"/>).
     /// </summary>
     private async Task PauseInOrderAsync(FlowPauseRequest request, CancellationToken cancellationToken)
     {
-        _pausing = true;
-        _pauseRequest = null;
         _pause = new FlowPauseState(request.Cause, request.All, _clock.GetUtcNow());
         Record(FlowChangeKind.PauseBegan, detail: $"{request.Cause}{(request.All ? ", all" : string.Empty)}");
+
+        // An advisor is a reason step, and none runs while the run is pausing: what is running is ended, and its
+        // question is advised at the resume, as one raised while the run pauses is.
+        DeferAdvice("the run paused while the advisor ran");
 
         // No retry that was waiting is started: the run goes on with it at the resume, as the instance it belongs to.
         foreach (var wake in _wakes.Where(wake => !wake.Drain).ToList())
@@ -1286,7 +1386,7 @@ public sealed class FlowCoordinator
         }
 
         var bound = _definition.HandoffSeconds ?? 180;
-        var handingOff = new List<FlowInstance>();
+        var handingOff = new List<(FlowInstance Instance, bool Asked)>();
 
         // A step its time limit has stopped already is left to end as that stop ends it - incomplete, whatever its runner
         // answers or once the drain's bound passes, and recorded as the pause records an ending: failed, or stopped where
@@ -1295,13 +1395,14 @@ public sealed class FlowCoordinator
         {
             if (instance.Step.Type == "reason")
             {
-                // Its turn is ended where it stands - what it started is cancelled - and it is given one more, the
-                // handoff turn, beside the others - which its time limit does not bound: the pause's own does.
-                instance.Stoppable?.Cancel();
+                // Its agent is asked for the handoff in the conversation it is in: the client ends its turn where it
+                // stands - what it started is cancelled - and asks it one more, the handoff turn, beside the others,
+                // which its time limit does not bound: the pause's own does.
+                var asked = AskTheHandoff(instance, "the run is pausing", lead: null);
                 DisarmTimeLimit(instance);
                 CountMinutes(instance);
                 Release(instance);
-                handingOff.Add(instance);
+                handingOff.Add((instance, asked));
             }
             else if (instance.Step.Type == "ci-wait" || request.All)
             {
@@ -1309,7 +1410,7 @@ public sealed class FlowCoordinator
             }
         }
 
-        foreach (var instance in handingOff)
+        foreach (var (instance, _) in handingOff)
         {
             instance.State = FlowInstanceState.Stopped;
         }
@@ -1318,12 +1419,12 @@ public sealed class FlowCoordinator
         {
             // All the turns at once, each bounded; what each spent is counted, for the budget counts a handoff turn
             // as it counts the attempt it ends.
-            var turns = handingOff.Select(instance => HandoffTurnAsync(instance, bound)).ToList();
+            var turns = handingOff.Select(each => HandoffTurnAsync(each.Instance, bound, each.Asked)).ToList();
             var accounts = await Task.WhenAll(turns).ConfigureAwait(false);
 
             for (var at = 0; at < handingOff.Count; at++)
             {
-                var instance = handingOff[at];
+                var instance = handingOff[at].Instance;
                 _spent.Minutes += accounts[at].Minutes.TotalMinutes;
 
                 if (_hardStop)
@@ -1365,24 +1466,55 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// One reason step's handoff turn: the agent's account where it gives one, what the turn spent, and - where it gave
-    /// none - why, as the handoff the engine writes says it.
+    /// Asks <paramref name="instance"/>'s agent for its handoff in the conversation its attempt is in, where its telling is
+    /// live: raised once - a plan update or a pause that asked first stands, and the turn it began is the one waited for.
+    /// Whether the agent is asked, so the engine waits for its answer; false where the attempt has no telling, and the
+    /// step is stopped where it stands.
     /// </summary>
-    private async Task<(string? Text, TimeSpan Minutes, string Why)> HandoffTurnAsync(FlowInstance instance, int seconds)
+    /// <param name="instance">The reason step in flight.</param>
+    /// <param name="why">Why the step is ended in order, as the record says it.</param>
+    /// <param name="lead">What the agent is told before the question; null where it stands alone.</param>
+    private static bool AskTheHandoff(FlowInstance instance, string why, string? lead)
+    {
+        _ = instance.Telling?.Ask(instance.Attempt, why, lead);
+        return HandoffAsked(instance);
+    }
+
+    /// <summary>Whether <paramref name="instance"/>'s agent has been asked for its handoff in the conversation its attempt is in, by whatever asked first.</summary>
+    /// <param name="instance">The reason step in flight.</param>
+    private static bool HandoffAsked(FlowInstance instance)
+        => instance.Telling is { } telling && telling.For(instance.Attempt) && telling.Asked is not null;
+
+    /// <summary>
+    /// One reason step's handoff turn, the one way a step in flight is handed off - by a safe pause and by a plan update
+    /// that ends it in order alike: where its agent was asked (<paramref name="asked"/>), its runner is waited for within
+    /// <paramref name="seconds"/> - the client ends the attempt itself once the agent has answered the turn - and ended
+    /// where it outlives them or a stop comes first; where it was not, it is ended where it stands. Either way the
+    /// runner is waited for until it has ended, within <see cref="PointOfNoReturn.SafePauseDrain"/> of being ended, and
+    /// only then is the step's own record read (<see cref="IFlowHandoffRunner.HandoffAsync"/>), for the runner writes
+    /// the answer there as it ends. What the turn answers: the agent's account where it gave one, what the turn spent,
+    /// and - where it gave none - why, as the handoff the engine writes says it.
+    /// </summary>
+    /// <param name="instance">The reason step being handed off.</param>
+    /// <param name="seconds">The run's <c>handoffSeconds</c>.</param>
+    /// <param name="asked">Whether its agent was asked for the handoff in its own conversation.</param>
+    private async Task<(string? Text, TimeSpan Minutes, string Why)> HandoffTurnAsync(FlowInstance instance, int seconds, bool asked)
     {
         var began = _clock.GetUtcNow();
+        var said = seconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
         string? text = null;
-        var why = "the agent's answer to its handoff turn held no account";
+        string? why = null;
         var boundPassed = false;
+
+        using var boundToCancel = new CancellationTokenSource();
+
+        lock (_handoffBounds)
+        {
+            _handoffBounds.Add(boundToCancel);
+        }
 
         try
         {
-            using var boundToCancel = new CancellationTokenSource();
-            lock (_handoffBounds)
-            {
-                _handoffBounds.Add(boundToCancel);
-            }
-
             if (_hardStop)
             {
                 // A stop asked before this turn was listed found nothing of it to cancel: the turn ends at once, for a
@@ -1390,52 +1522,96 @@ public sealed class FlowCoordinator
                 boundToCancel.Cancel();
             }
 
-            try
+            using var timer = _clock.CreateTimer(_ =>
             {
-                using var timer = _clock.CreateTimer(_ =>
-                {
-                    // A turn answered inside its bound has let go of the source: the timer outlived it.
-                    boundPassed = true;
-                    boundToCancel.TryCancel();
-                }, null, TimeSpan.FromSeconds(seconds), TimeSpan.FromMilliseconds(-1));
+                // A turn answered inside its bound has let go of the source: the timer outlived it.
+                boundPassed = true;
+                boundToCancel.TryCancel();
+            }, null, TimeSpan.FromSeconds(seconds), TimeSpan.FromMilliseconds(-1));
 
-                // The turn is asked of the attempt the pause stopped, with every fact that attempt was asked with: a reason
-                // step reads nothing where it starts, and fills no template key.
-                var run = RunOf(instance, instance.Step, instance.Attempt, new Dictionary<string, FlowValue>(StringComparer.Ordinal), handoff: null);
+            if (!asked)
+            {
+                // No conversation of the attempt to ask in: the attempt is ended where it stands.
+                instance.Stoppable?.Cancel();
+            }
 
+            if (instance.Runner is { IsCompleted: false } work)
+            {
                 try
                 {
-                    text = await _runner.HandoffAsync(run, boundToCancel.Token).ConfigureAwait(false);
+                    await work.WaitAsync(boundToCancel.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (boundToCancel.IsCancellationRequested)
+                {
+                    // The bound passed, or a stop came, before the agent answered: the attempt is ended, and its runner
+                    // is waited for no longer than a stopped step's is, for it may still be writing.
+                    why = boundPassed ? $"the agent's handoff turn passed its {said} s" : "the run was stopped before the agent answered its handoff turn";
+                    instance.Stoppable?.Cancel();
 
-                    if (boundPassed)
+                    if (!await EndedWithinTheDrainAsync(work).ConfigureAwait(false))
                     {
-                        why = $"the agent's handoff turn passed its {seconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s";
+                        why = $"{why}, and {RunnerNotEnded}";
                     }
                 }
-                catch (OperationCanceledException)
+                catch (Exception)
                 {
-                    why = $"the agent's handoff turn passed its {seconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s";
-                }
-                catch (Exception failed)
-                {
-                    // An agent that cannot answer - its client ended, its conversation out of context - still leaves
-                    // a handoff: the engine writes it, saying what the turn failed with.
-                    why = $"the agent's handoff turn failed: {failed.Message}";
+                    // The runner's own failure is its answer's to say; what its record holds is read all the same.
                 }
             }
-            finally
+
+            // The turn is asked of the attempt the pause stopped, with every fact that attempt was asked with: a reason
+            // step reads nothing where it starts, and fills no template key.
+            var run = RunOf(instance, instance.Step, instance.Attempt, new Dictionary<string, FlowValue>(StringComparer.Ordinal), handoff: null);
+
+            try
             {
-                lock (_handoffBounds)
+                text = await _runner.HandoffAsync(run, boundToCancel.Token).ConfigureAwait(false);
+
+                if (boundPassed)
                 {
-                    _ = _handoffBounds.Remove(boundToCancel);
+                    why ??= $"the agent's handoff turn passed its {said} s";
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                why ??= boundPassed ? $"the agent's handoff turn passed its {said} s" : "the run was stopped before the agent answered its handoff turn";
+            }
+            catch (Exception failed)
+            {
+                // An agent that cannot answer - its client ended, its conversation out of context - still leaves a
+                // handoff: the engine writes it, saying what the turn failed with.
+                why ??= $"the agent's handoff turn failed: {failed.Message}";
             }
         }
         finally
         {
+            lock (_handoffBounds)
+            {
+                _ = _handoffBounds.Remove(boundToCancel);
+            }
         }
 
-        return (text, _clock.GetUtcNow() - began, why);
+        return (text, _clock.GetUtcNow() - began, why ?? "the agent's answer to its handoff turn held no account");
+    }
+
+    /// <summary>Whether <paramref name="work"/>, a runner just ended, has ended within <see cref="PointOfNoReturn.SafePauseDrain"/>.</summary>
+    /// <param name="work">The runner.</param>
+    private async Task<bool> EndedWithinTheDrainAsync(Task work)
+    {
+        try
+        {
+            await work.WaitAsync(PointOfNoReturn.SafePauseDrain, _clock).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+        catch (Exception)
+        {
+            // It ended, with a failure of its own.
+            return true;
+        }
     }
 
     /// <summary>
@@ -1503,7 +1679,7 @@ public sealed class FlowCoordinator
         {
             // Asked already - by an earlier session, or answered abort and open again: a person answers it, and the
             // configuration that gave nothing then, or the abort, is not given again.
-            _pauseRequest = new FlowPauseRequest("budget", false);
+            RequestPause("budget");
             return;
         }
 
@@ -1523,15 +1699,24 @@ public sealed class FlowCoordinator
         }
 
         // The reserve is what the handoffs are written in, so the pause begins before the budget ends and not at it.
-        _pauseRequest = new FlowPauseRequest("budget", false);
+        RequestPause("budget");
     }
+
+    /// <summary>
+    /// What is left of the run's budget in dollars before its reserve, as an agent starts now - the bound a launch of
+    /// it is held to where that is less than its own; null where the run budgets no dollars.
+    /// </summary>
+    private double? BudgetLeftUsd()
+        => _definition.Budget is { Usd: { } usd } budget ? Math.Max(0, ReserveOf(budget, usd) - _spent.Usd) : null;
 
     /// <summary>The amount of <paramref name="budget"/> whose reserve the run has reached, with what was spent against it; null where none has.</summary>
     private (string Kind, string SpentOf)? ReachedOf(FlowBudget budget)
     {
         var times = _budgetGranted + 1;
 
-        if (budget.Usd is { } usd && _spent.Usd >= ReserveOf(budget, usd))
+        // A launch the run's share ended reached the reserve for this grant whatever the run's own count says: the
+        // client counted it at its own reckoning, and stopped there.
+        if (budget.Usd is { } usd && (_spent.Usd >= ReserveOf(budget, usd) || _reserveMetAt == _budgetGranted))
         {
             return ("usd", $"{_spent.Usd.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)} of {(usd * times).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)} USD");
         }
@@ -2406,12 +2591,17 @@ public sealed class FlowCoordinator
     {
         _answeredAtStart |= !_inSession || _starting;
 
-        // A person answering while the run's advisor still runs ends the asking, as a cancelled step is ended: its
-        // records stand under the asking step, and their answer is what the run goes on with.
-        foreach (var pending in _advising.Where(pending => pending.Asked.Id == asked.Id).ToList())
+        // An answer given while the run's advisor still runs ends the asking, as a cancelled step is ended: its records
+        // stand under the asking step, the question says the asking was ended - or, where the answer is abort and leaves
+        // the question open, that the recommendation is sought at the resume - and the answer is what the run goes on
+        // with. The ended asking is kept until its runner has ended - what it spent is counted, and the asking step is
+        // not started again beside it.
+        foreach (var pending in _advising.Where(pending => pending.Asked.Id == asked.Id && !pending.Dropped))
         {
-            _advising.Remove(pending);
-            pending.Cancel.Cancel();
+            pending.Drop();
+            asked.Recommendation = answer == "abort"
+                ? new FlowRecommendation("deferred", Why: "the run was stopped while the advisor ran: the recommendation is sought when the run is resumed with this question still open")
+                : new FlowRecommendation("cancelled", Why: $"no recommendation: the question was answered by {(by == "person" ? "a person" : by == "input" ? "the run's input" : "the configuration")} while the advisor ran, and its asking was ended");
         }
 
         _ = _open.Remove(asked.Id);
@@ -3797,14 +3987,13 @@ public sealed class FlowCoordinator
                 var why = EndedForWhy(update, piece);
 
                 // The step is told first - the piece that names its work item, as the lead of the handoff question -
-                // and then ended in order, as a safe pause ends a reason step: its turn is ended where it stands -
-                // what it started is cancelled - it is given one more, the handoff turn, bounded, and its visit then
-                // stands stopped, ended for the update. Where the telling is live the client ends the attempt itself
-                // and answers the turn within its own bound, and the engine waits for that answer as a pause waits;
-                // where it is not, the stop ends the attempt and the engine writes the handoff.
-                var asked = member.Telling is { } telling && entry is not null && telling.Ask(member.Attempt, why, EndedInOrderLead(entry, piece));
+                // and then ended in order, as a safe pause ends a reason step, by the same handoff turn: where the
+                // telling is live the client ends the attempt itself and answers the turn within its own bound, and
+                // the engine waits for that answer as a pause waits; where it is not, the attempt is ended where it
+                // stands and the engine writes the handoff. Its visit then stands stopped, ended for the update.
+                var told = entry is not null && member.Telling is { } telling && telling.Ask(member.Attempt, why, EndedInOrderLead(entry, piece));
 
-                if (asked)
+                if (told)
                 {
                     // The step was told its piece, in one message with the sentence that its step ends here: recorded
                     // as any telling is, on its own record.
@@ -3812,16 +4001,6 @@ public sealed class FlowCoordinator
                 }
 
                 DisarmTimeLimit(member);
-
-                if (asked)
-                {
-                    await TheAgentHandoffAsync(member).ConfigureAwait(false);
-                }
-                else
-                {
-                    member.Stoppable?.Cancel();
-                }
-
                 CountMinutes(member);
 
                 if (member.Runner is { IsCompleted: false })
@@ -3840,7 +4019,7 @@ public sealed class FlowCoordinator
                 member.EndedFor = update;
                 member.Error = why;
 
-                var account = await HandoffTurnAsync(member, _definition.HandoffSeconds ?? 180).ConfigureAwait(false);
+                var account = await HandoffTurnAsync(member, _definition.HandoffSeconds ?? 180, HandoffAsked(member)).ConfigureAwait(false);
                 _spent.Minutes += account.Minutes.TotalMinutes;
                 member.Handoff = account.Text is { Length: > 0 } written ? new FlowHandoff(written, "agent") : EngineHandoffOf(member, why);
 
@@ -3886,62 +4065,6 @@ public sealed class FlowCoordinator
         }
 
         return changed;
-    }
-
-    /// <summary>
-    /// Waits, bounded as a pause's handoff turn is, for the runner of a reason step whose telling was asked: its
-    /// client ends the attempt itself and answers the handoff turn within its own bound, and the answer is in the
-    /// step's own record once the runner has ended. A runner that outlives the bound is cancelled, and the engine
-    /// writes the handoff as a pause does where the agent gave none.
-    /// </summary>
-    /// <param name="member">The step being ended in order, its telling asked.</param>
-    private async Task TheAgentHandoffAsync(FlowInstance member)
-    {
-        if (member.Runner is not { IsCompleted: false } work)
-        {
-            return;
-        }
-
-        using var bound = new CancellationTokenSource();
-        var passed = false;
-
-        lock (_handoffBounds)
-        {
-            _handoffBounds.Add(bound);
-        }
-
-        try
-        {
-            // The timer's callback may run on a pool thread after the bound is disposed: it cancels only what is still
-            // there to cancel.
-            using var timer = _clock.CreateTimer(_ =>
-            {
-                passed = true;
-                bound.TryCancel();
-            }, null, TimeSpan.FromSeconds(_definition.HandoffSeconds ?? 180), TimeSpan.FromMilliseconds(-1));
-
-            await work.WaitAsync(bound.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            if (passed)
-            {
-                member.Stoppable?.Cancel();
-            }
-        }
-        catch (Exception)
-        {
-            // The runner's own failure is its message's to say; the stop stands either way, and whatever the runner
-            // answered the step is stopped, ended for the update.
-            member.Stoppable?.Cancel();
-        }
-        finally
-        {
-            lock (_handoffBounds)
-            {
-                _ = _handoffBounds.Remove(bound);
-            }
-        }
     }
 
     /// <summary>Rewrites one placed piece of an update's entry, found by its work item's name.</summary>
@@ -4998,7 +5121,8 @@ public sealed class FlowCoordinator
     /// What keeps <paramref name="instance"/> from starting before any claim or limit is asked: a hard stop or a pause
     /// under way (it runs at the resume; in a pause's always phase only an always step that is a machine step starts),
     /// an always step before the session's always phase (one carried into this session as well as one drawn in it),
-    /// a stopping run (only always steps start), a plan update under way (nothing starts outside the scope it is
+    /// a stopping run (only always steps start), an advice of its own question that was ended and whose runner has not
+    /// yet (it would work beside the step's next attempt), a plan update under way (nothing starts outside the scope it is
     /// planned in - and a step the hold keeps back reserves no claim, so nothing it waited for stands in the way of
     /// the steps inside that scope), a pending redirect that will reset it, or a dependency it still waits on. Empty
     /// where nothing does.
@@ -5020,6 +5144,13 @@ public sealed class FlowCoordinator
         if (_stopping && !instance.IsAlways)
         {
             return ["stop"];
+        }
+
+        if (_advising.Any(pending => ReferenceEquals(pending.Instance, instance) && !pending.Task.IsCompleted))
+        {
+            // An advice of this step's question still ends - an answer ended it, and its runner is being torn down in
+            // the place the step works in: the step's next attempt starts once it has ended, never beside it.
+            return ["advice"];
         }
 
         if (instance.DeclaredScope is not { } scope)
@@ -5188,13 +5319,22 @@ public sealed class FlowCoordinator
 
             if (Filled(instance, instance.Step.Question ?? string.Empty, out var problem) is { } question)
             {
-                var id = Ask(instance, "pause", question, FlowQuestions.OptionsOf("pause", instance.Step), agentQuestions: shown);
+                var id = Ask(instance, "pause", question, FlowQuestions.OptionsOf("pause", instance.Step), agentQuestions: shown, seekAdvice: false);
                 var asked = _questions.First(asking => asking.Id == id);
 
                 // What the person gave the run answers first, where they gave it: the entry whose when holds answers
                 // at once, as a configured answer would - no person asked - and its words are looked for in the input
-                // they are said to stand in before they count.
-                AnswerWhatTheInputGave(instance, asked);
+                // they are said to stand in before they count. Only a question still open after is advised: the
+                // advisor is never started for one the input answers.
+                if (_open.Contains(id))
+                {
+                    AnswerWhatTheInputGave(instance, asked);
+                }
+
+                if (_open.Contains(id))
+                {
+                    SeekAdvice(instance, asked);
+                }
             }
             else
             {
@@ -5392,9 +5532,26 @@ public sealed class FlowCoordinator
             Release(instance);
             instance.Handoff ??= EngineHandoffOf(instance, pausing);
             Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
+
+            if (result.PauseCause == "budget")
+            {
+                // What was left of the run's dollars before its reserve ended the launch: the reserve is reached for
+                // this grant, and the budget's own path decides - the workflow's answers may allow each amount once
+                // again, and the step then runs again at once, given its handoff; else the run pauses for its budget.
+                _reserveMetAt = _budgetGranted;
+                CheckBudget();
+
+                if (_reserveMetAt != _budgetGranted)
+                {
+                    _wakes.Add(new Wake(instance, _clock.GetUtcNow(), Task.CompletedTask));
+                    Record(FlowChangeKind.Step, instance, detail: "the run's budget allows more: it runs again, given its handoff");
+                    return;
+                }
+            }
+
             End(instance, FlowInstanceState.Stopped, HarnessExit.Incomplete, pausing);
             Record(FlowChangeKind.Step, instance, detail: "the run pauses for it");
-            RequestPause("limits");
+            RequestPause(result.PauseCause);
             return;
         }
 
@@ -6935,7 +7092,11 @@ public sealed class FlowCoordinator
     /// <param name="subject">What a counted answer of this question is counted for, where it is not the instance alone: a handler's name, a source's own.</param>
     /// <param name="agentQuestions">The questions the step's agent asked, where it asked; empty for the engine's own.</param>
     /// <param name="agent">The agent that asked, where one did; null for the engine's own question.</param>
-    private string Ask(FlowInstance instance, string kind, string problem, IReadOnlyList<string> options, string? subject = null, IReadOnlyList<Agents.AgentQuestion>? agentQuestions = null, string? agent = null)
+    /// <param name="seekAdvice">
+    /// Whether the advisor is sought here where no configuration answered; false where the caller may answer the question
+    /// at once itself - a <c>pause</c> step's pre-answer - and seeks it only where the question is still open after.
+    /// </param>
+    private string Ask(FlowInstance instance, string kind, string problem, IReadOnlyList<string> options, string? subject = null, IReadOnlyList<Agents.AgentQuestion>? agentQuestions = null, string? agent = null, bool seekAdvice = true)
     {
         var id = FlowQuestionIds.Of(++_questionsRaised);
         var asked = new FlowQuestion(id, kind, instance.Id, problem, options)
@@ -6970,7 +7131,7 @@ public sealed class FlowCoordinator
             _answeredAtOnce = true;
             TakeAnswer(asked, atOnce.Answer, null, "configuration", atOnce.Where, through: null);
         }
-        else
+        else if (seekAdvice)
         {
             // No person has answered, and no configuration did: where the engine raised the question itself, its
             // advisor recommends before the person is left with it - never in the person's way, for the question is
@@ -7034,8 +7195,23 @@ public sealed class FlowCoordinator
             return;
         }
 
-        var which = _adviceAsked.GetValueOrDefault(asked.Id) + 1;
-        _adviceAsked[asked.Id] = which;
+        // The bar is read where the question is raised, as the prompt reads it: one that cannot be read - a file the
+        // orchestrator names gone, one the file system would not let be looked at - leaves the question saying why, and
+        // no advisor is started without it.
+        string bar;
+
+        try
+        {
+            bar = BarOf();
+        }
+        catch (HarnessException unread)
+        {
+            asked.Recommendation = new FlowRecommendation("notObtained", Why: $"no recommendation: the bar for one could not be read ({unread.Message})");
+            WriteQuestions();
+            Record(FlowChangeKind.Advised, instance, detail: $"{asked.Id} left without a recommendation");
+            return;
+        }
+
         asked.Recommendation = new FlowRecommendation("sought", Why: "a recommendation is being sought from the advisor");
         WriteQuestions();
 
@@ -7049,64 +7225,36 @@ public sealed class FlowCoordinator
             asked.Tried,
             asked.Means,
             asked.Held,
-            instance.Id,
             WorksInOf(instance) ?? instance.Made,
             instance.Id,
-            which,
             Inputs(),
             Record: null,
-            BarOf(),
-            _place);
+            bar,
+            _place,
+            BudgetLeftUsd());
 
-        var cancel = CancellationTokenSource.CreateLinkedTokenSource(_sessionToken);
+        var cancel = CancellationTokenSource.CreateLinkedTokenSource(_sessionToken, _adviceStop.Token);
         var task = Task.Run(() => _advisor!.AdviseAsync(call, cancel.Token), CancellationToken.None);
-        _ = task.ContinueWith(_ => WakeTheLoop(), CancellationToken.None);
-        _advising.Add((asked, cancel, task));
+        _ = task.ContinueWith(_ => WakeTheLoop(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+        _advising.Add(new Advising(asked, instance, cancel, task));
     }
 
     /// <summary>
-    /// Takes the advice the session's askings have answered: a recommendation obtained is written to its question with
-    /// who gave it and where its records are, one not obtained leaves the question saying why, and either way the run's
-    /// spend counts what the advice used. An asking ended by an answer - the person was there - is dropped, its records
-    /// standing under the asking step.
+    /// Takes the advice the session's askings have answered: what each spent is counted against the run's budget - an
+    /// asking an answer or a stop ended among them, for what it spent was spent - a recommendation obtained is written
+    /// to its question with who gave it and where its records are, and one not obtained leaves the question saying why.
+    /// An asking that was ended leaves its question as the ending said it, its records standing under the asking step.
     /// </summary>
     private async Task TakeAdviceAsync()
     {
         foreach (var pending in _advising.Where(pending => pending.Task.IsCompleted).ToList())
         {
             _advising.Remove(pending);
+            var advice = await AdviceOfAsync(pending).ConfigureAwait(false);
 
-            FlowAdvice advice;
-
-            try
+            if (pending.Dropped || !_open.Contains(pending.Asked.Id))
             {
-                advice = await pending.Task.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                pending.Cancel.Dispose();
-                continue;
-            }
-            catch (Exception failed)
-            {
-                advice = new FlowAdvice(Answer: null, Why: null, Text: null, NotObtained: failed.Message);
-            }
-
-            pending.Cancel.Dispose();
-
-            if (advice.Usd is { } usd)
-            {
-                _spent.Usd += usd;
-            }
-
-            if (advice.Tokens is { } tokens)
-            {
-                _spent.Tokens += tokens;
-            }
-
-            if (!_open.Contains(pending.Asked.Id))
-            {
-                // Answered while the advice ran: the person was there, and their answer stands.
+                // Ended while it ran - an answer was given, or the run paused or stopped - and its question says so.
                 continue;
             }
 
@@ -7119,8 +7267,104 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
+    /// What one asking that has ended answered, its spend counted against the run's budget: the one place an advice's
+    /// spend is counted, however it ended.
+    /// </summary>
+    /// <param name="pending">The asking, ended.</param>
+    private async Task<FlowAdvice> AdviceOfAsync(Advising pending)
+    {
+        FlowAdvice advice;
+
+        try
+        {
+            advice = await pending.Task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            advice = new FlowAdvice(Answer: null, Why: null, Text: null, NotObtained: "the asking was ended before the advisor answered");
+        }
+        catch (Exception failed)
+        {
+            advice = new FlowAdvice(Answer: null, Why: null, Text: null, NotObtained: failed.Message);
+        }
+        finally
+        {
+            pending.Cancel.Dispose();
+        }
+
+        _spent.Usd += advice.Usd ?? 0;
+        _spent.Tokens += advice.Tokens ?? 0;
+        return advice;
+    }
+
+    /// <summary>
+    /// Ends every advice still running, where the run pauses or stops: an advisor is a reason step, and none runs past
+    /// either. Each question it was sought for, still open, says the recommendation is sought when the run is resumed;
+    /// the asking is kept until its runner has ended, so what it spent is counted.
+    /// </summary>
+    /// <param name="why">What ended it, as the question says it.</param>
+    private void DeferAdvice(string why)
+    {
+        var deferred = false;
+
+        foreach (var pending in _advising.Where(pending => !pending.Dropped))
+        {
+            pending.Drop();
+
+            if (_open.Contains(pending.Asked.Id))
+            {
+                pending.Asked.Recommendation = new FlowRecommendation("deferred", Why: $"{why}: the recommendation is sought when the run is resumed with this question still open");
+                deferred = true;
+            }
+        }
+
+        if (deferred)
+        {
+            WriteQuestions();
+        }
+    }
+
+    /// <summary>
+    /// Ends every advice the session leaves and waits for each runner to end, no longer than a stopped step's runner is
+    /// waited for - what it spent counted - as a session ends however it ends: no advisor outlives the session that
+    /// started it. A question it was sought for keeps what it says, and one still marked sought is advised again at the
+    /// next session's start.
+    /// </summary>
+    private async Task EndAdviceAsync()
+    {
+        if (_advising.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var pending in _advising)
+        {
+            pending.Drop();
+        }
+
+        try
+        {
+            await Task.WhenAll(_advising.Select(pending => pending.Task)).WaitAsync(PointOfNoReturn.SafePauseDrain, _clock).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // An asking that failed, was ended or outlived the wait answers for itself below, or not at all.
+        }
+
+        foreach (var pending in _advising.Where(pending => pending.Task.IsCompleted).ToList())
+        {
+            _advising.Remove(pending);
+            _ = await AdviceOfAsync(pending).ConfigureAwait(false);
+        }
+
+        // One whose runner outlived the wait is let go of: its token is ended, and nothing of the run waits on it.
+        _advising.Clear();
+    }
+
+    /// <summary>
     /// Seeks the advice each open question still owes at a session's start: one marked sought by a session a crash or a
-    /// stop ended, and one deferred while the run was pausing - the run is resumed now, and the question still open.
+    /// stop ended, and one deferred while the run was pausing or stopping - the run is resumed now, and the question
+    /// still open.
     /// </summary>
     private void SeekOwedAdvice()
     {
@@ -7348,13 +7592,14 @@ public sealed class FlowCoordinator
         }
 
         // A read-only agent's work is over when the last step that can go on with it has ended and the run goes on:
-        // deleted here, and the deletions seen to before the session ends. A run that is pausing or stopping leaves
-        // every agent live for the resume, and so does a step that failed, whose work the run may yet go on with. A
-        // group's end settles its members' work too, so it sweeps as well.
+        // deleted here, once, and the deletions seen to before the session ends. A run that is pausing or stopping
+        // leaves every agent live for the resume, and so does a step that failed, whose work the run may yet go on
+        // with. A group's end settles its members' work too, so it sweeps as well.
         if (_deleteAgent is not null && instance.Step.Type is "reason" or null)
         {
             foreach (var readOnly in ReadOnlyAgentsOver())
             {
+                _ = _deletedAgents.Add(readOnly);
                 _deletions.Add(DeleteReadOnlyAsync(readOnly));
             }
         }
@@ -8261,8 +8506,16 @@ public sealed class FlowCoordinator
                 return new(source is null ? FlowValue.Missing : FlowValue.Of(SourceFacts(source, RaisedGroupOf(scope))), 0);
             case "recommendations":
                 // The repository's bar for a recommendation, read live - each time it is given, as a prompt is - so a
-                // change holds from the next question on and a run does not keep the bar it started with.
-                return new(FlowValue.Of(BarOf()), 0);
+                // change holds from the next question on and a run does not keep the bar it started with. One that
+                // cannot be read reads nothing, saying why, as any name that reads nothing does.
+                try
+                {
+                    return new(FlowValue.Of(BarOf()), 0);
+                }
+                catch (HarnessException unread)
+                {
+                    throw new UnresolvedReadException(unread.Message);
+                }
             case "update":
                 // What raised the update under way, what has run since, and the work of the run - read by the step
                 // that plans an update and by every step of its scope; outside an update, a sentence that says none
@@ -9278,9 +9531,11 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The repository's bar for a recommendation, as a prompt reads it by <c>{recommendations}</c>: the file the
     /// orchestrator names - which the definition's check holds to be there - or, where it names none, the
-    /// <c>recommendations.md</c> its folder has; where neither is, a sentence that says so, for a recommendation then
-    /// says it follows none. Read each time it is given, never kept by the run.
+    /// <c>recommendations.md</c> its folder has; where the folder was looked in and holds none, a sentence that says
+    /// so, for a recommendation then says it follows none. A file that could not be looked at or read is never taken for
+    /// one that is not there: that throws, saying why. Read each time it is given, never kept by the run.
     /// </summary>
+    /// <exception cref="HarnessException">The file the orchestrator names, or the folder's own, could not be read, saying why.</exception>
     private string BarOf()
     {
         if (_definition.Recommendations is { } named)
@@ -9288,20 +9543,9 @@ public sealed class FlowCoordinator
             return _workflowFile is { } read ? read(named) : NoBar();
         }
 
-        if (_workflowFile is { } defaultRead)
-        {
-            try
-            {
-                return defaultRead("recommendations.md");
-            }
-            catch (HarnessException)
-            {
-                // The folder holds no bar of its own, and none was named: said plainly, never refused, for a
-                // repository owes no bar.
-            }
-        }
-
-        return NoBar();
+        // The folder holds no bar of its own, and none was named: said plainly, never refused, for a repository owes
+        // no bar.
+        return _workflowFileIfThere?.Invoke("recommendations.md") ?? NoBar();
 
         string NoBar()
             => $"(orchestrator '{_definition.Name}' has no recommendations file: no bar was written for this repository)";
@@ -9586,9 +9830,9 @@ public sealed class FlowCoordinator
     /// Every read-only agent of the run whose work is over, as an ending settles what can still go on with it: each
     /// agent a reason step of this run made as its own, where its making step has ended past going on and no step
     /// whose chain of resumed work reaches the making one can still run - none of such a step's instances is unended
-    /// or redrawable, and no group around its declaration is either, for a repeat may raise one yet. The run going on
-    /// - not pausing, not stopping - is the ground: a run that failed, was paused or was stopped leaves every agent
-    /// live for the resume.
+    /// or redrawable, and no group around its declaration is either, for a repeat may raise one yet - and whose deletion
+    /// this run has not begun already. The run going on - not pausing, not stopping - is the ground: a run that failed,
+    /// was paused or was stopped leaves every agent live for the resume.
     /// </summary>
     private IReadOnlyList<string> ReadOnlyAgentsOver()
     {
@@ -9600,7 +9844,7 @@ public sealed class FlowCoordinator
         var declarations = FlowScope.Declared(_definition).ToList();
         var over = new List<string>();
 
-        foreach (var makers in _created.Where(made => made.Made is not null && made.Step.Type == "reason").GroupBy(made => made.Made!, StringComparer.Ordinal))
+        foreach (var makers in _created.Where(made => made.Made is not null && made.Step.Type == "reason" && !_deletedAgents.Contains(made.Made)).GroupBy(made => made.Made!, StringComparer.Ordinal))
         {
             if (makers.Any(made => !PastGoingOn(made)) || ResumersCanStillRun(declarations, makers.First().Path))
             {
@@ -9690,8 +9934,8 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Deletes the read-only agent whose work is over, apart from the run's own thread: its failure changes nothing of
-    /// the run, which goes on, and is the deleter's to say - the next command over the orchestrator sweeps what a
-    /// failed deletion leaves.
+    /// the run, which goes on, and is the deleter's to say - the service's deleter writes a refusal and a throw alike in
+    /// the run's log - and the next command over the orchestrator sweeps what a failed deletion leaves.
     /// </summary>
     /// <param name="agent">The agent to delete.</param>
     private async Task DeleteReadOnlyAsync(string agent)
@@ -9702,7 +9946,7 @@ public sealed class FlowCoordinator
         }
         catch (Exception)
         {
-            // Said by the deleter, whose own words the run's log keeps: the run itself is not stopped by it.
+            // A deleter that throws past its own log - one a test gives - stops nothing of the run either.
         }
     }
 
@@ -9732,7 +9976,8 @@ public sealed class FlowCoordinator
             instance.Step.Others is null ? null : CurrentTarget(instance)?.Agent,
             WorkedFromOf(instance),
             instance.Telling is { } telling && telling.For(attempt) ? telling : null,
-            PlanToldOf(instance));
+            PlanToldOf(instance),
+            BudgetLeftUsd: BudgetLeftUsd());
 
     /// <summary>
     /// The handoff the engine writes for <paramref name="instance"/>: its first line says <paramref name="why"/>, and
@@ -10443,6 +10688,24 @@ public sealed class FlowCoordinator
     /// <param name="Delay">The wait itself, by the run's clock.</param>
     /// <param name="Drain">Whether it bounds a stopped step's drain rather than a retry's turn.</param>
     private sealed record Wake(FlowInstance Instance, DateTimeOffset At, Task Delay, bool Drain = false);
+
+    /// <summary>One asking of the run's advisor the session began: its question, the step that asked, how to end it, and its answer.</summary>
+    /// <param name="Asked">The question advised on.</param>
+    /// <param name="Instance">The step that asked, which is not started again while the asking's runner has not ended.</param>
+    /// <param name="Cancel">Ends the asking.</param>
+    /// <param name="Task">The asking, answering the advice.</param>
+    private sealed record Advising(FlowQuestion Asked, FlowInstance Instance, CancellationTokenSource Cancel, Task<FlowAdvice> Task)
+    {
+        /// <summary>Whether the asking was ended - an answer was given, or the run paused or stopped - and its advice is not the question's.</summary>
+        public bool Dropped { get; private set; }
+
+        /// <summary>Ends the asking: its advice is no longer the question's, and its runner is told to end.</summary>
+        public void Drop()
+        {
+            Dropped = true;
+            Cancel.TryCancel();
+        }
+    }
 
     /// <summary>The events of one running step, posted to the coordinator's channel.</summary>
     private sealed class RunEvents(FlowCoordinator coordinator, FlowInstance instance, int attempt) : IFlowRunEvents

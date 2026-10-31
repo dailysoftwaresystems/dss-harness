@@ -161,6 +161,11 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// runner hands each skill over and never reads filled text as a template again. Null for every other step, and for a
 /// run held in memory alone, which reads no files.
 /// </param>
+/// <param name="BudgetLeftUsd">
+/// What is left of the run's budget in dollars before its reserve, as the attempt starts: a reason step's agent is held to
+/// it where it is less than its own bound (<see cref="FlowRunBudget.Bound"/>), so one long attempt cannot run through the
+/// reserve. Null where the run budgets no dollars.
+/// </param>
 public sealed record FlowStepRun(
     WorkflowStep Step,
     string Instance,
@@ -181,7 +186,8 @@ public sealed record FlowStepRun(
     IReadOnlyList<FlowWorkedFrom>? WorkedFrom = null,
     FlowTelling? Telling = null,
     string? PlanTold = null,
-    IReadOnlyDictionary<string, IReadOnlyList<FlowTemplate.Piece>>? Prompts = null);
+    IReadOnlyDictionary<string, IReadOnlyList<FlowTemplate.Piece>>? Prompts = null,
+    double? BudgetLeftUsd = null);
 
 /// <summary>
 /// The one who runs a step: the code a step type calls - a machine step's service, a reason step's client runner - asked
@@ -208,7 +214,8 @@ public interface IFlowStepRunner
 /// <summary>
 /// How the engine tells the agent of a reason step that runs: the messages it posts into the conversation the attempt
 /// is in - landing when the agent's calls have finished, never cutting its turn - and the handoff it raises where a
-/// plan update ends the step in order, whose lead tells the piece before the agent is asked where the work stands.
+/// safe pause or a plan update ends the step in order, a plan update's lead telling the piece before the agent is asked
+/// where the work stands.
 /// Made where the attempt starts, one per attempt: a telling of an attempt that is over says nothing about the one the
 /// run is on now, and nothing posted to one is lost unsaid, for the channel of an ended attempt takes nothing.
 /// </summary>
@@ -220,7 +227,7 @@ public sealed class FlowTelling(int attempt, TimeSpan handoffBound)
     /// <summary>Where the engine posts what it has to tell the agent while it works.</summary>
     public Agents.AgentMessages Messages { get; } = new();
 
-    /// <summary>The handoff signal the engine raises where a plan update ends the step in order.</summary>
+    /// <summary>The handoff signal the engine raises where a safe pause or a plan update ends the step in order.</summary>
     public Agents.AgentHandoffSignal Handoff { get; } = new(handoffBound);
 
     /// <summary>Why the handoff was raised and what the agent was told before it was asked, where it was; null where it was not.</summary>
@@ -251,7 +258,7 @@ public sealed class FlowTelling(int attempt, TimeSpan handoffBound)
     /// </summary>
     /// <param name="attempt">The attempt the engine would tell.</param>
     /// <param name="why">Why the step is ended in order, as the record says it.</param>
-    /// <param name="lead">What the agent is told first: the piece that names its work, whole.</param>
+    /// <param name="lead">What the agent is told first - the piece that names its work, whole - or null where the question stands alone, as a safe pause asks it.</param>
     /// <returns>Whether the handoff was raised for a live attempt of the step.</returns>
     public bool Ask(int attempt, string why, string? lead)
     {
@@ -467,9 +474,17 @@ public sealed record FlowStepResult
     /// <summary>
     /// The run must pause safely and this step runs again at the resume, never a failure: every account a reason step
     /// could use is at its limit, or its provider's service failed past the client's own tries - the run's own answer,
-    /// for every model the step could move to would meet the same. Holds why; null for every other result.
+    /// for every model the step could move to would meet the same - or its agent spent what was left of the run's budget
+    /// before its reserve. Holds why; null for every other result.
     /// </summary>
     public string? Pauses { get; init; }
+
+    /// <summary>
+    /// Who asks for the pause <see cref="Pauses"/> says, one of <see cref="FlowPauseRequest.Causes"/>: <c>limits</c> for
+    /// the accounts or the service, <c>budget</c> where the run's own reserve ended the step - which then asks the run's
+    /// budget question as the reserve does, never the step's own.
+    /// </summary>
+    public string PauseCause { get; init; } = "limits";
 
     /// <summary>
     /// What the step's agent assumed where a person could have told it - the envelope's own list, masked - kept for the
@@ -520,6 +535,15 @@ public sealed record FlowStepResult
     public static FlowStepResult SafelyPausing(string why)
         => new() { Asked = null, Passed = false, Exit = HarnessExit.Incomplete, Pauses = why };
 
+    /// <summary>
+    /// A result for a reason step whose agent spent what was left of the run's budget before its reserve: the run pauses
+    /// for its budget and resumes that very step once a person allows the budget once again - never the step's own limit,
+    /// whose question asks for more of the step's bound.
+    /// </summary>
+    /// <param name="why">Why the step ended, as its agent's run said it.</param>
+    public static FlowStepResult AtTheRunsReserve(string why)
+        => SafelyPausing(why) with { PauseCause = "budget" };
+
     /// <summary>A result for a wait for checks that came to nothing it could end on.</summary>
     public static FlowStepResult Found(string checks, string? detail = null)
         => new() { Asked = null, Passed = false, Exit = HarnessExit.CommandFailed, Checks = checks, ChecksDetail = detail };
@@ -535,14 +559,16 @@ public sealed record FlowStepResult
 /// <param name="Tried">What the run tried before it asked.</param>
 /// <param name="Means">What the answer changes; null where the run has not said.</param>
 /// <param name="Answers">The answers it takes, each with what it does and whether it takes a text.</param>
-/// <param name="Step">The asking step's instance id, its advice recorded under its own directory.</param>
-/// <param name="Agent">The agent the asking step works as, whose directory and workspace the advice shares; null where it names none yet.</param>
-/// <param name="Instance">The asking step's instance id, as its records name it.</param>
-/// <param name="Advice">Which asking of this question this is, from 1: the directory under the asking step.</param>
+/// <param name="Agent">The agent the asking step works as, whose directory and workspace the advice shares; null where it names none.</param>
+/// <param name="Instance">
+/// The asking step's instance id, as its records name it: the step the prompt's <c>{question.step}</c> reads, and the one
+/// under whose own directory each advice keeps its records in <c>advice/&lt;n&gt;/</c>, numbered after those already there.
+/// </param>
 /// <param name="Inputs">The run's inputs, as its person gave them.</param>
 /// <param name="Record">What the run stored of the asking step, rendered as a continuation record renders a step.</param>
 /// <param name="Bar">The repository's bar for a recommendation, read where the question was raised.</param>
 /// <param name="Place">Where the run works; null for a run held in memory alone.</param>
+/// <param name="BudgetLeftUsd">What is left of the run's budget in dollars before its reserve, which the advice's agent is held to where it is less than its own bound; null where the run budgets no dollars.</param>
 public sealed record FlowAdvisorCall(
     FlowAdvisor Advisor,
     string Run,
@@ -553,14 +579,13 @@ public sealed record FlowAdvisorCall(
     string? Tried,
     string? Means,
     IReadOnlyList<FlowQuestionOption> Answers,
-    string Step,
     string? Agent,
     string Instance,
-    int Advice,
     System.Text.Json.Nodes.JsonObject Inputs,
     string? Record,
     string Bar,
-    FlowRunPlace? Place = null);
+    FlowRunPlace? Place = null,
+    double? BudgetLeftUsd = null);
 
 /// <summary>
 /// The advice one question of the run's was given: the answer its advisor recommends with why and a text where the
@@ -572,8 +597,8 @@ public sealed record FlowAdvisorCall(
 /// <param name="Model">The model that served the advisor, where one did.</param>
 /// <param name="Directory">Where the advisor's own records are, under the asking step; null where none were kept.</param>
 /// <param name="NotObtained">Why no recommendation was obtained, where it was sought and not had; null otherwise.</param>
-/// <param name="Usd">What the advice cost, where a model served it; null where nothing is known.</param>
-/// <param name="Tokens">The tokens its clients reported, where a model served it; null where nothing is known.</param>
+/// <param name="Usd">What the advice cost at the configuration's prices, counted from its turns as they were reported - an asking ended part way among them; null where none was.</param>
+/// <param name="Tokens">Every token its turns used, of every kind; null where none was reported.</param>
 public sealed record FlowAdvice(
     string? Answer,
     string? Why,
@@ -591,7 +616,10 @@ public sealed record FlowAdvice(
 /// </summary>
 public interface IFlowAdvisorRunner
 {
-    /// <summary>Recommends an answer to the question <paramref name="call"/> names, or why none was obtained.</summary>
+    /// <summary>
+    /// Recommends an answer to the question <paramref name="call"/> names, or says why none was obtained - an asking the
+    /// token ended among them, answered with what it had spent by then, for that was spent.
+    /// </summary>
     /// <param name="call">The asking: the question, its texts, and the asking step's place.</param>
     /// <param name="cancellationToken">Ends the asking: a person answered, or the run stopped.</param>
     Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, CancellationToken cancellationToken);

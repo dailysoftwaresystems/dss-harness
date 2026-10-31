@@ -51,6 +51,40 @@ public sealed class WorkflowValidationServiceTests
     }
 
     /// <summary>
+    /// A file the workflow may hold and owes none of is read by the same rule, with one difference: one looked for and
+    /// not there answers nothing, never a refusal - and one the file system would not let be looked at, or that is spelt
+    /// out of the workflow's directory, is refused all the same, never taken for one that is not there.
+    /// </summary>
+    [Fact]
+    public void AFileTheWorkflowMayHold_IsNoneOnlyWhereItWasLookedForAndIsNotThere()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        Directory.CreateDirectory(layout.WorkflowDirectory("flow"));
+        File.WriteAllText(Path.Combine(layout.WorkflowDirectory("flow"), "recommendations.md"), "the bar\n");
+        var named = new WorkflowNamedFiles(harness.FileSystem, harness.Platform.PathComparison);
+
+        Assert.Equal("the bar\n", named.ReadTextIfThere(layout, "flow", "recommendations.md", "a workflow file"));
+        Assert.Null(named.ReadTextIfThere(layout, "flow", "absent.md", "a workflow file"));
+
+        var outside = Assert.Throws<HarnessException>(() => named.ReadTextIfThere(layout, "flow", "../flow.yml", "a workflow file"));
+
+        Assert.StartsWith("'../flow.yml', a workflow file, does not name a file inside the workflow's directory", outside.Message, StringComparison.Ordinal);
+
+        // A file the file system would not let be looked at: it may be there, and is refused saying why.
+        var unlookable = Substitute.For<IFileSystem>();
+        unlookable.ResolveLinks(Arg.Any<string>()).Returns(call => call.Arg<string>());
+        unlookable.FileExists(Arg.Any<string>()).Returns(false);
+        unlookable.KindOf(Arg.Any<string>()).Returns(_ => throw new UnauthorizedAccessException("access to the path is denied."));
+        var denied = Assert.Throws<HarnessException>(() => new WorkflowNamedFiles(unlookable, harness.Platform.PathComparison).ReadTextIfThere(layout, "flow", "recommendations.md", "a workflow file"));
+
+        Assert.Equal(
+            (HarnessExit.ConfigInvalid, "'recommendations.md', a workflow file, could not be looked at: access to the path is denied"),
+            (denied.ExitCode, denied.Message));
+    }
+
+    /// <summary>
     /// The implementation workflow, initialized into a repository and declared in its config, passes its check: the one
     /// line says what it is, and under it each reason step's models and the level each runs at - the plan's own among
     /// them, xhigh on Fable 5.1 and on GLM 5.3 - and the outcome says every one checked.

@@ -252,12 +252,13 @@ public sealed class ReasonStepRunner(
             Conversation: conversation,
             new AgentLimits(
                 definition?.MaxTurns,
-                definition?.MaxBudgetUsd,
+                FlowRunBudget.Bound(definition?.MaxBudgetUsd, run.BudgetLeftUsd),
                 definition?.MaxMinutes is { } minutes ? TimeSpan.FromMinutes(minutes) : null,
                 definition?.StallSeconds,
                 place.Definition.HandoffSeconds),
             Mask: launch.Mask(context.Layout, providers, webMask))
         {
+            RecordDirectory = StepDirectoryOf(layout, run.Instance, agent),
             Ground = ground,
             Credential = order.FirstOrDefault(entry => entry.Usable)?.Credential,
             Withheld = [.. providers.Appointed().Select(appointed => appointed.Name)],
@@ -283,7 +284,9 @@ public sealed class ReasonStepRunner(
 
         try
         {
-            var result = await runner.RunAsync(request, events: null, cancellationToken).ConfigureAwait(false);
+            // What the attempt spends is charged to the run's budget turn by turn, as its agent works, at the prices of
+            // the model serving it then: the run's reserve is reached while a long attempt runs, not only once it ends.
+            var result = await runner.RunAsync(request, new AgentRunSpend(providers, resolution.Serving.Model, run.Events), cancellationToken).ConfigureAwait(false);
 
             // A limit's question says whether a stored conversation of the attempt can be handed, which is where the
             // answer `more` is offered; no other ending reads it.
@@ -298,7 +301,7 @@ public sealed class ReasonStepRunner(
                 run.Events.HandoffTaken();
             }
 
-            return Ended(result, run.Instance, stored);
+            return Ended(result, run.Instance, stored, FlowRunBudget.RunsShareBinds(definition?.MaxBudgetUsd, run.BudgetLeftUsd));
         }
         catch (HarnessException refused)
         {
@@ -308,8 +311,8 @@ public sealed class ReasonStepRunner(
 
     /// <summary>
     /// The handoff turn's answer of a step a pause stopped: what the agent answered where it answered, read of the
-    /// step's own record - the runner's run, ended by the stop, holds it - and null where it gave none, for the engine
-    /// to write the handoff itself.
+    /// step's own record - the engine raised the handoff in the attempt's own conversation and waited for the runner,
+    /// whose run, ended by the turn, holds it - and null where it gave none, for the engine to write the handoff itself.
     /// </summary>
     /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
     /// <param name="cancellationToken">Cancels the turn.</param>
@@ -324,7 +327,7 @@ public sealed class ReasonStepRunner(
             return Task.FromResult<string?>(null);
         }
 
-        var directory = OrchestratorLayout.Of(new HarnessLayout(place.Repository, place.Repository), place.Run).AgentStepDirectory(agent, run.Instance);
+        var directory = StepDirectoryOf(OrchestratorLayout.Of(new HarnessLayout(place.Repository, place.Repository), place.Run), run.Instance, agent);
         var resultFile = Path.Combine(directory, AgentRunner.ResultFileName);
 
         if (!fileSystem.FileExists(resultFile))
@@ -377,9 +380,7 @@ public sealed class ReasonStepRunner(
         // The steps before it that left notes: each source of the work its directory holds a record of, named by step
         // and never by path, for the next attempt has their notes in what it is given.
         var before = (run.WorkedFrom ?? [])
-            .Where(source => fileSystem.KindOf(Path.Combine(
-                source.Agent is { } sourceAgent ? layout.AgentStepDirectory(sourceAgent, source.Instance) : layout.StepDirectory(source.Instance),
-                OrchestratorLayout.StepNotesFileName)) == PathKind.File)
+            .Where(source => fileSystem.KindOf(Path.Combine(DirectoryOf(layout, source), OrchestratorLayout.StepNotesFileName)) == PathKind.File)
             .Select(source => new AgentContinuedStep(source.Instance, "done", string.Empty))
             .ToList();
 
@@ -404,14 +405,16 @@ public sealed class ReasonStepRunner(
     /// The step's ending as its run's maps it: an answer that read against its schema is the step's output, with the
     /// issues it reports that were there before the run (<see cref="FlowPreExistingReport.In"/>); a stop is
     /// incomplete, whatever it ended; the person asked is the step's question; a limit of the step's own asks, saying
-    /// whether a stored conversation of the attempt can be handed, which is where the answer <c>more</c> is offered;
-    /// every account at its limit, or the provider's service failing past the client's own tries, pauses the run safely
-    /// and resumes this very step; and a failure or a refusal ends the step with its own words.
+    /// whether a stored conversation of the attempt can be handed, which is where the answer <c>more</c> is offered - save
+    /// a budget the run's share of its own budget bounded, which is the run's reserve reached and pauses the run for its
+    /// budget; every account at its limit, or the provider's service failing past the client's own tries, pauses the run
+    /// safely and resumes this very step; and a failure or a refusal ends the step with its own words.
     /// </summary>
     /// <param name="result">How the agent's run ended.</param>
     /// <param name="instance">The step instance's name, for the words that name it.</param>
     /// <param name="storedConversation">Whether a stored conversation of the attempt exists for a client to be handed.</param>
-    private static FlowStepResult Ended(AgentRunResult result, string instance, bool storedConversation)
+    /// <param name="runsShare">Whether the agent's budget was the run's share before its reserve, and not its own bound (<see cref="FlowRunBudget.RunsShareBinds"/>).</param>
+    private static FlowStepResult Ended(AgentRunResult result, string instance, bool storedConversation, bool runsShare)
     {
         if (result.Problem() is { } wrong)
         {
@@ -446,6 +449,7 @@ public sealed class ReasonStepRunner(
             AgentRunStatus.Stalled or AgentRunStatus.TimedOut or AgentRunStatus.Truncated
                 => FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, result.Error ?? "the step's agent ended incomplete"),
             AgentRunStatus.MaxTurns => AtLimit(result, "turns", instance, storedConversation),
+            AgentRunStatus.BudgetSpent when runsShare => FlowStepResult.AtTheRunsReserve($"'{instance}' spent what was left of the run's budget before its reserve{(result.Error is { } spent ? $" ({spent})" : string.Empty)}"),
             AgentRunStatus.BudgetSpent => AtLimit(result, "budget", instance, storedConversation),
             AgentRunStatus.ContextExhausted => AtLimit(result, "context", instance, storedConversation),
             _ => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, result.Error ?? $"'{instance}'s agent failed") with { Assumptions = result.Assumptions },
@@ -664,7 +668,7 @@ public sealed class ReasonStepRunner(
     {
         var work = new AgentContinuationWork(
             run.Instance,
-            [new AgentContinuedStep(run.Instance, "done", layout.AgentStepDirectory(agent, run.Instance))],
+            [new AgentContinuedStep(run.Instance, "done", StepDirectoryOf(layout, run.Instance, agent))],
             await ChangedPathsOfAsync(layout, agent, context, cancellationToken).ConfigureAwait(false),
             RedLegsOf(layout, agent),
             CutOff: false);
@@ -679,7 +683,18 @@ public sealed class ReasonStepRunner(
     /// <param name="layout">The run's own paths.</param>
     /// <param name="source">The source, as the engine named it.</param>
     private static string DirectoryOf(OrchestratorLayout layout, FlowWorkedFrom source)
-        => source.Agent is { } sourceAgent ? layout.AgentStepDirectory(sourceAgent, source.Instance) : layout.StepDirectory(source.Instance);
+        => layout.InstanceDirectory(source.Instance, source.Agent);
+
+    /// <summary>
+    /// Where the step keeps its records - its stream, its result, its first message, its notes - as the one owner of
+    /// where a step instance is kept spells it (<see cref="OrchestratorLayout.InstanceDirectory"/>): the runner's request
+    /// names it, and every read of what the step recorded reads it there.
+    /// </summary>
+    /// <param name="layout">The run's own paths.</param>
+    /// <param name="instance">The step instance's id, as <see cref="FlowInstanceId"/> spells it.</param>
+    /// <param name="agent">The agent the step works as, whose directory keeps the step's records.</param>
+    private static string StepDirectoryOf(OrchestratorLayout layout, string instance, string agent)
+        => layout.InstanceDirectory(instance, agent);
 
     /// <summary>One source's own record, where its directory holds one; null where none was written.</summary>
     /// <param name="layout">The run's own paths.</param>
@@ -789,7 +804,7 @@ public sealed class ReasonStepRunner(
     /// <param name="agent">The agent the step works as, whose directory keeps the step's records.</param>
     /// <param name="instance">The step instance's name.</param>
     private IReadOnlyList<AgentEvent> StreamOf(OrchestratorLayout layout, string agent, string instance)
-        => store.ReadStepStream(layout.AgentStepDirectory(agent, instance));
+        => store.ReadStepStream(StepDirectoryOf(layout, instance, agent));
 
     /// <summary>
     /// The stored conversation the step's own stream names last, where the engine holds one it can hand: the session's

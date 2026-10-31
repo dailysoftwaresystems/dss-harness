@@ -28,7 +28,7 @@ public sealed class FlowAskTests
     /// <summary>A runner that answers each step as its test scripted it.</summary>
     private sealed class FakeRunner : IFlowStepRunner
     {
-        private readonly Dictionary<string, Func<FlowStepRun, Task<FlowStepResult>>> _scripts = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Func<FlowStepRun, CancellationToken, Task<FlowStepResult>>> _scripts = new(StringComparer.Ordinal);
 
         /// <summary>Every run asked, whole.</summary>
         public List<FlowStepRun> Runs { get; } = [];
@@ -36,7 +36,7 @@ public sealed class FlowAskTests
         /// <summary>Answers <paramref name="step"/> by its script, which sees the whole run.</summary>
         public FakeRunner On(string step, Func<FlowStepRun, FlowStepResult> script)
         {
-            _scripts[step] = run => Task.FromResult(script(run));
+            _scripts[step] = (run, _) => Task.FromResult(script(run));
             return this;
         }
 
@@ -44,12 +44,22 @@ public sealed class FlowAskTests
         public FakeRunner On(string step, FlowStepResult result)
             => On(step, _ => result);
 
+        /// <summary>Holds <paramref name="step"/> until <paramref name="gate"/> answers, or a stop ends it.</summary>
+        public FakeRunner Holds(string step, Task<FlowStepResult> gate)
+        {
+            _scripts[step] = (_, token) => gate.WaitAsync(token);
+            return this;
+        }
+
         /// <inheritdoc/>
         public Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
         {
-            Runs.Add(run);
+            lock (Runs)
+            {
+                Runs.Add(run);
+            }
 
-            return _scripts.GetValueOrDefault(run.Step.Name, _ => Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)))(run);
+            return _scripts.GetValueOrDefault(run.Step.Name, (_, _) => Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)))(run, cancellationToken);
         }
 
         /// <inheritdoc/>
@@ -192,8 +202,9 @@ public sealed class FlowAskTests
 
         var open = coordinator.OpenQuestions.Single();
 
-        Assert.Contains("think' assumed about the framework: the newest (the plan names none)", open.Problem, StringComparison.Ordinal);
-        Assert.Contains("the framework", open.Problem, StringComparison.Ordinal);
+        Assert.Equal(
+            """'think' assumed about the framework: the newest (the plan names none) and [{"about":"the framework","assumed":"the newest","why":"the plan names none"}]""",
+            open.Problem);
     }
 
     /// <summary>
@@ -220,13 +231,21 @@ public sealed class FlowAskTests
         runner.On("think", FlowStepResult.SafelyPausing("still limited after 4 tries: every account is at its limit"));
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+        var think = coordinator.Instances["think"];
 
+        // The run is paused by the cause the step's limits are, the step stopped incomplete with why, and the engine's
+        // handoff written for its next attempt, saying what the attempt met.
         Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal("limits", end.Pause!.Cause);
         Assert.Empty(coordinator.OpenQuestions);
-        Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["think"].State);
-        Assert.Contains("every account is at its limit", coordinator.Instances["think"].Error, StringComparison.Ordinal);
+        Assert.Equal(
+            (FlowInstanceState.Stopped, HarnessExit.Incomplete, "still limited after 4 tries: every account is at its limit"),
+            (think.State, think.Exit, think.Error));
+        Assert.Equal(
+            new FlowHandoff("Written by the engine: still limited after 4 tries: every account is at its limit.", "engine", "still limited after 4 tries: every account is at its limit"),
+            think.Handoff);
 
-        // The resume runs that very step: a new attempt of the same visit, which this time finishes.
+        // The resume runs that very step: a new attempt of the same visit, given the handoff, which this time finishes.
         runner.On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}""")));
 
         end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
@@ -235,6 +254,66 @@ public sealed class FlowAskTests
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["think"].State);
         Assert.Equal(2, coordinator.Instances["think"].Attempt);
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["after"].State);
+        Assert.Equal("Written by the engine: still limited after 4 tries: every account is at its limit.", runner.Runs.Last(run => run.Step.Name == "think").Handoff);
+    }
+
+    /// <summary>
+    /// A step at its limits asks for the pause while a person's own ask waits for the loop to take it: the two are one
+    /// pause - the cause the first asker's, the machine steps stopped because the person said all - and neither is lost.
+    /// </summary>
+    [Fact]
+    public async Task AStepsLimitsBesideAPersonsPauseAll_AreOnePause_TheFirstCauseAndAllKept()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: gate
+                type: build
+            """);
+        var gate = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .Holds("gate", gate.Task)
+            .On("think", FlowStepResult.SafelyPausing("every account is at its limit"));
+        FlowCoordinator? coordinator = null;
+
+        // The person's pause --all is asked on the run's own thread the moment the step's handoff is recorded - before
+        // the step asks for its own pause, and before the loop can take the person's.
+        var records = new HandoffWatch(() => coordinator!.RequestPause("command", all: true));
+        coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        gate.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(("command", true), (end.Pause!.Cause, end.Pause.All));
+        Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["gate"].State);
+    }
+
+    /// <summary>A run's records that keep nothing, and do one thing the first time a handoff is recorded, on the run's own thread.</summary>
+    private sealed class HandoffWatch(Action atTheFirstHandoff) : IFlowRecords
+    {
+        private bool _done;
+
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+        {
+            if (kind == FlowChangeKind.Handoff && !_done)
+            {
+                _done = true;
+                atTheFirstHandoff();
+            }
+        }
+
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+        {
+        }
+
+        public void Updates(FlowUpdatesFile updates)
+        {
+        }
     }
 
     /// <summary>

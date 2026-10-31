@@ -145,8 +145,9 @@ is about. A refresh or a rebase over a path both trees changed whose merge is cl
 `dssharness help orchestrators` explains seeding, rebasing, folding and deleting agents, and the five verbs of a run.
 
 A run's session - `run-orchestrator`, `resume-orchestrator`, `answer-orchestrator` - takes its terminal's interrupts
-itself: the first Ctrl+C (off Windows, SIGTERM or a hang-up as well) asks the safe pause - the agents hand off, the machine
-steps finish, then the run is paused - and starts no clock; the second stops the run where it stands: a step whose runner
+itself: the first Ctrl+C (off Windows, SIGTERM or a hang-up as well) asks the safe pause - each agent is asked for its
+handoff in its own conversation and answers within the workflow's `handoffSeconds` (180 where it says none), the machine
+steps finish, then the run is paused - and starts no clock of its own; the second stops the run where it stands: a step whose runner
 does not end within 90 s is recorded stopped all the same, and the command ends within 120 s whatever is left - the
 engine's 90 s and 30 s to write the end - which `resume-orchestrator` goes on from. Every session writes the run's report
 (`report.md`, `report.json`) and names each record it wrote, in text and in `--json`.
@@ -518,7 +519,13 @@ full context - asks: `retry` begins a new attempt, `more` (offered only where a 
 of the attempt can be handed) grants the bound once again in the same conversation, `compact` goes
 on from the engine's reduction of it, and a configuration may answer any of it beforehand. Every
 account a step could use at its limit, and a provider's service failing past the client's own tries,
-pause the run safely instead - never a failure - and the resume runs that very step. Where an agent
+pause the run safely instead - never a failure - and the resume runs that very step. What a step
+spends is charged to the run's `budget` turn by turn as its agent works - every token of every kind,
+and its cost at the configuration's prices for the model serving it - and each launch is held to
+what is left of the run's dollars before its reserve where that is less than its agent's own
+`maxBudgetUsd`: a launch that bound ended has reached the run's reserve, not the step's own budget,
+so the workflow's answers may allow more and the step runs again given its handoff, or else the run
+pauses for its budget. Where an agent
 gave no handoff of its own - a limit ended its run, a crash cut the attempt off, its handoff turn
 passed its bound or failed - the engine writes one from the stored stream of the step, its first
 line saying why: the files the attempt wrote, the last commands it ran and how each ended, its last
@@ -540,13 +547,19 @@ follows none.
 
 Before a person is left with a question the engine raises itself, the orchestrator's `advisor`
 recommends on it: one reason step that only reads, run wherever the asking step works with its
-records under `advice/<n>/` of the asking step, its prompt reading the question (`{question.step}`,
+records and its own conversations under `advice/<n>/` of the asking step's own directory, numbered
+after those already there, its prompt reading the question (`{question.step}`,
 `{question.kind}`, `{question.problem}`, `{question.answers}`, `{question.record}`), the run's
 inputs and `{recommendations}`, its answer held to the engine's own schema - one of the question's
-answers. The question is open while the advice runs, so a person who is there answers without
-waiting, and their answer ends the asking; where none was obtained the question says so, and where
-no advisor is named it says that plainly. The advisor takes no question a step's own agent asked
-nor the budget's own, nor a kind its `kinds` leaves out. A `test` step's
+answers, with a text where that answer takes one. The question is open while the advice runs, so a
+person who is there answers without waiting, and their answer ends the asking - the question says
+so, and the step that asked starts again only once the advice's runner has ended; a pause or a stop
+ends a running advice too, its question saying the recommendation is sought at the resume. What
+every advice spent is counted against the run's budget, an ended one's among them. Where none was
+obtained - a bar that could not be read among the reasons - the question says so, and where no
+advisor is named it says that plainly. The advisor takes no question a step's own agent asked, nor
+a `pause` step's that shows an upstream step's questions (they carry their recommendations), nor one
+the run's input answers, nor the budget's own, nor a kind its `kinds` leaves out. A `test` step's
 `filter` names the tests it runs; its `filterWhen` is an
 expression that switches it - where it reads false the step gives no filter and every test of its
 legs runs, as the shipped `verify` steps do where the run's input `affectedTests` is off, each item

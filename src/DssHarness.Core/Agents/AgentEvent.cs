@@ -143,6 +143,13 @@ public sealed record AgentUsage(long InputTokens, long OutputTokens, long CacheR
     /// <summary>Nothing used.</summary>
     public static AgentUsage None { get; } = new(0, 0, 0, 0, 0, 0);
 
+    /// <summary>
+    /// Every token the usage holds - input, the cache's writes of both lifetimes and its reads, and output - as a run's
+    /// budget and an asking's spend count them: each kind is billed, so none is left out.
+    /// </summary>
+    [JsonIgnore]
+    public long AllTokens => InputTokens + CacheWriteTokens + CacheWrite1hTokens + CacheReadTokens + OutputTokens;
+
     /// <summary><paramref name="other"/> added to this, member by member.</summary>
     /// <param name="other">Another usage.</param>
     public AgentUsage Plus(AgentUsage other)

@@ -44,10 +44,19 @@ public sealed class ReasonStepRunnerTests
         /// <summary>How the run answers; a completed run with no output unless a test changes it.</summary>
         public Func<AgentStepRequest, AgentRunResult> Answer { get; set; } = _ => new AgentRunResult(AgentRunStatus.Completed, FinalText: "done");
 
-        public Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
+        /// <summary>The events the run says before it answers, as a client says them.</summary>
+        public List<AgentEvent> Says { get; } = [];
+
+        public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
         {
             Asked.Add(step);
-            return Task.FromResult(Answer(step));
+
+            foreach (var said in Says)
+            {
+                await events!.EmitAsync(said);
+            }
+
+            return Answer(step);
         }
 
         public async IAsyncEnumerable<AgentEvent> Stream(AgentStepRequest step, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -100,7 +109,7 @@ public sealed class ReasonStepRunnerTests
         return (kit, runner);
     }
 
-    private ReasonStepRunner Runner(OrchestrationKit kit, Agents agents, ClaudeCodeUpdateService? updates = null)
+    private static ReasonStepRunner Runner(OrchestrationKit kit, IAgentRunner agents, ClaudeCodeUpdateService? updates = null)
         => new(
             kit.Harness.ContextLoader,
             kit.Harness.Platform,
@@ -974,6 +983,214 @@ public sealed class ReasonStepRunnerTests
 
         Assert.NotNull(service.Pauses);
         Assert.Null(service.Error);
+    }
+
+    /// <summary>The kit's configuration with its model priced, as a run budgeted in dollars needs it.</summary>
+    private static void Priced(OrchestrationKit kit)
+        => File.WriteAllText(
+            Path.Combine(kit.Main, ".harness-config", "config.json"),
+            """
+            {
+              "worktrees": { "root": ".worktrees" },
+              "providers": [
+                {
+                  "name": "anthropic",
+                  "type": "anthropic",
+                  "api": "https://api.anthropic.com",
+                  "apiKeyNames": ["ANTHROPIC_KEY"],
+                  "client": "claude-api",
+                  "currency": "USD",
+                  "readOn": "2026-10-01",
+                  "models": [
+                    { "code": "claude-opus-5-5", "name": "Opus", "tiers": ["best"], "efforts": ["high"], "contextTokens": 200000, "maxOutputTokens": 32000,
+                      "priceInputMiss": 10, "priceInputHit": 1, "priceOutput": 50, "priceCacheWrite": 12.5, "priceCacheWrite1h": 20 }
+                  ]
+                }
+              ],
+              "tierConfig": { "best": ["claude-opus-5-5"] },
+              "defaults": { "agentTier": "best" }
+            }
+            """);
+
+    /// <summary>
+    /// What an attempt spends is handed on to the run turn by turn as its agent works - each turn's every token of every
+    /// kind, and its cost at the configuration's prices for the model serving it - so the run's budget is charged while
+    /// the attempt runs, not once it has ended.
+    /// </summary>
+    [Fact]
+    public async Task WhatAnAttemptSpends_IsHandedOnTurnByTurn_EveryKindOfToken_AtTheConfigurationsPrices()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        Priced(kit);
+        await kit.CreateReadingAgentAsync("reader");
+        var events = new SpendingEvents();
+        agents.Says.Add(new UsageReported(new AgentUsage(1000, 200, 3000, 500, 0, 0), new AgentUsage(1000, 200, 3000, 500, 0, 0)));
+        agents.Says.Add(new UsageReported(new AgentUsage(100, 20, 0, 0, 0, 0), new AgentUsage(1100, 220, 3000, 500, 0, 0)));
+
+        var result = await Runner(kit, agents).RunAsync(Run(kit, agent: "reader") with { Events = events }, Token);
+
+        Assert.True(result.Passed, result.Error);
+        Assert.Equal(
+            [(4700L, 0.02925), (120L, 0.002)],
+            events.Spent.Select(spent => (spent.Tokens, Math.Round(spent.Usd, 9))));
+    }
+
+    /// <summary>
+    /// An attempt's launch is held to what is left of the run's dollars before its reserve where that is less than its
+    /// agent's own bound, and a launch that bound ended reaches the run's reserve - the run pauses for its budget - never
+    /// the step's own budget; where its own bound is the less, it ends at the step's own budget, which asks.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchHeldToTheRunsShare_EndsAtTheRunsReserve_NotAtItsOwnBudget()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        Priced(kit);
+        await kit.CreateReadingAgentAsync("reader");
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", "flow", "agents", "planner.md"), "---\nname: planner\ndescription: plans\nmaxBudgetUsd: 2\n---\nYou plan.\n");
+        var step = new WorkflowStep { Name = "think", Type = "reason", Agent = "planner", Prompt = "prompts/plan.md", Outputs = "schemas/plan.schema.json" };
+        var runner = Runner(kit, agents);
+        agents.Answer = _ => new AgentRunResult(AgentRunStatus.BudgetSpent, Error: "spent 0.75 USD");
+
+        var share = await runner.RunAsync(Run(kit, agent: "reader") with { Step = step, BudgetLeftUsd = 0.75 }, Token);
+        var own = await runner.RunAsync(Run(kit, agent: "reader") with { Step = step, BudgetLeftUsd = 30.0 }, Token);
+
+        Assert.Equal([0.75m, 2m], agents.Asked.Select(asked => asked.Limits.MaxBudgetUsd));
+        Assert.Equal(("'think' spent what was left of the run's budget before its reserve (spent 0.75 USD)", "budget", null), (share.Pauses, share.PauseCause, share.Limit));
+        Assert.Equal((null, "budget"), (own.Pauses, own.Limit));
+    }
+
+    /// <summary>
+    /// A step of a work item keeps its records where the run keeps the step - the one owner of a step instance's
+    /// directory, its item's brackets as the run's store writes them - and its handoff turn's answer is read there.
+    /// </summary>
+    [Fact]
+    public async Task AStepOfAWorkItem_KeepsItsRecordsWhereTheRunKeepsTheStep_AndItsHandoffIsReadThere()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var runner = Runner(kit, agents);
+        var run = Run(kit, agent: "reader") with { Instance = "items[0].think" };
+        var directory = kit.Layout.InstanceDirectory("items[0].think", "reader");
+
+        _ = await runner.RunAsync(run, Token);
+
+        Assert.Equal(Path.Combine(kit.Layout.AgentStepsDirectory("reader"), "items@0.think"), directory);
+        Assert.Equal(directory, agents.Asked.Single().RecordDirectory);
+
+        DssHarness.Core.FileSystem.JsonStateFile.Write(
+            kit.Harness.FileSystem,
+            Path.Combine(directory, AgentRunner.ResultFileName),
+            new AgentRunResult(AgentRunStatus.HandedOff, Handoff: new AgentHandoff("Done: the parser. Left: its tests.")));
+
+        Assert.Equal("Done: the parser. Left: its tests.", await runner.HandoffAsync(run, Token));
+    }
+
+    /// <summary>
+    /// A safe pause asks the agent of a reason step in flight for its handoff in the conversation it is in - composed
+    /// here with the real reason step runner and an agent runner that answers the turn as a client does - waits for its
+    /// runner to end, and keeps the agent's own answer, read of the step's own record, as the step's handoff.
+    /// </summary>
+    [Fact]
+    public async Task ASafePause_AsksTheAgentForItsHandoff_AndKeepsItsAnswer()
+    {
+        using var temp = new TempDirectory();
+        var (kit, _) = await ReadyAsync(temp);
+        var agents = new HandingOff(kit.Harness.FileSystem, "Done: the parser. Left: its tests.");
+        var definition = WorkflowFileParser.Parse(
+            "workflows/flow/flow.yml",
+            "name: flow\nhandoffSeconds: 60\nsteps:\n  - name: think\n    type: reason\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
+        var coordinator = new FlowCoordinator(
+            definition,
+            new Reasoned(Runner(kit, agents.AsRunner())),
+            new ConfiguredRunnerFacts(new DssHarness.Core.Configuration.HarnessConfig()),
+            TimeProvider.System,
+            runName: "o1",
+            place: new FlowRunPlace(kit.Main, "o1", StartCommit: null, definition),
+            agentModels: new Dictionary<string, string>(StringComparer.Ordinal) { ["think"] = "claude-opus-5-5" },
+            workflowFile: named => File.ReadAllText(Path.Combine(kit.Main, ".harness-config", "workflows", "flow", named)));
+
+        var session = coordinator.RunAsync(Token);
+        await agents.Started.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
+        coordinator.RequestPause("interrupt");
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), Token);
+        var think = coordinator.Instances["think"];
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(["think"], end.Pause!.Handoffs);
+        Assert.Equal(new AgentHandoffAsked("the run is pausing", null), agents.AskedWith);
+        Assert.Equal((FlowInstanceState.Stopped, new FlowHandoff("Done: the parser. Left: its tests.", "agent")), (think.State, think.Handoff));
+    }
+
+    /// <summary>The step runner a composed run is driven by: every step the real reason step runner's, as the service routes a reason step.</summary>
+    private sealed class Reasoned(ReasonStepRunner reason) : IFlowStepRunner
+    {
+        public Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
+            => reason.RunAsync(run, cancellationToken);
+
+        public Task<string?> HandoffAsync(FlowStepRun run, CancellationToken cancellationToken)
+            => reason.HandoffAsync(run, cancellationToken);
+    }
+
+    /// <summary>
+    /// An agent runner that works until the engine asks for the handoff, and answers it as a client does: the turn is
+    /// answered, the run ends handed off, and the result - its answer in it - is written to the step's own directory.
+    /// </summary>
+    private sealed class HandingOff(DssHarness.Core.FileSystem.IFileSystem fileSystem, string answer)
+    {
+        /// <summary>Completes once the run has begun.</summary>
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>What the engine asked the handoff with, once it did.</summary>
+        public AgentHandoffAsked? AskedWith { get; private set; }
+
+        public IAgentRunner AsRunner() => new Running(this);
+
+        private sealed class Running(HandingOff owner) : IAgentRunner
+        {
+            public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
+            {
+                owner.Started.TrySetResult();
+                owner.AskedWith = await step.Handoff!.WhenAsked.WaitAsync(cancellationToken);
+
+                var result = new AgentRunResult(AgentRunStatus.HandedOff, Handoff: new AgentHandoff(owner.Answer));
+                DssHarness.Core.FileSystem.JsonStateFile.Write(owner.FileSystem, Path.Combine(step.RecordDirectory!, AgentRunner.ResultFileName), result);
+                return result;
+            }
+
+            public async IAsyncEnumerable<AgentEvent> Stream(AgentStepRequest step, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+            {
+                _ = await RunAsync(step, null, cancellationToken);
+                yield break;
+            }
+        }
+
+        /// <summary>Where the result is written.</summary>
+        private DssHarness.Core.FileSystem.IFileSystem FileSystem { get; } = fileSystem;
+
+        /// <summary>The handoff the agent answers.</summary>
+        private string Answer { get; } = answer;
+    }
+
+    /// <summary>The events of a run, keeping what each turn spent as it was handed on.</summary>
+    private sealed class SpendingEvents : IFlowRunEvents
+    {
+        /// <summary>Every turn's spend, in the order handed on.</summary>
+        public List<(long Tokens, double Usd)> Spent { get; } = [];
+
+        public void LegPlaced(string leg, bool inACopy) { }
+
+        public void EveryLegPlaced() { }
+
+        public void LegCopyMade(string leg) { }
+
+        public void LegEnded(string leg) { }
+
+        public void Used(long tokens, double usd) => Spent.Add((tokens, usd));
+
+        public void HandoffTaken() { }
     }
 
     /// <summary>The events of a run, counting the handoff it says was taken.</summary>

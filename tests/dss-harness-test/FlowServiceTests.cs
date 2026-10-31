@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Application;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -11,6 +12,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using NSubstitute;
 
 namespace DssHarness.Tests;
 
@@ -88,7 +90,8 @@ public sealed class FlowServiceTests
         IProcessIdentity? identity = null,
         ChildSessions? children = null,
         DssHarness.Core.Agents.IAgentRunner? agentRunner = null,
-        DssHarness.Core.Secrets.AgentKeyStore? keyStore = null)
+        DssHarness.Core.Secrets.AgentKeyStore? keyStore = null,
+        IAgentService? agents = null)
     {
         var files = fileSystem ?? harness.FileSystem;
         var store = fileSystem is null ? harness.OrchestrationStore : new OrchestrationStore(files, harness.Output);
@@ -108,7 +111,7 @@ public sealed class FlowServiceTests
             harness.PathBudget,
             output ?? harness.Output,
             harness.GitClient,
-            harness.AgentService,
+            agents ?? harness.AgentService,
             agentRunner ?? new OfNoStep(),
             keyStore ?? new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform),
             clock,
@@ -237,6 +240,53 @@ public sealed class FlowServiceTests
                 ["update.json"] = "{ \"type\": \"object\", \"properties\": { } }",
             });
         return (repository, Service(repository.Harness, runner), runner);
+    }
+
+    /// <summary>
+    /// The engine's deleting of a read-only agent whose work is over says its failure in the agent's own log however it
+    /// failed - a throw as well as a refusal answered - and the run goes on all the same; an agent with no record left
+    /// is deleted already, and nothing is asked or said of it.
+    /// </summary>
+    [Fact]
+    public async Task AReadOnlyAgentsDeletionThatThrows_IsSaidInItsLog_AndAnAgentGoneIsNotAskedAgain()
+    {
+        var (repository, _, runner) = await AmendedAsync("""
+            name: flow
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                prompt: update.md
+                outputs: update.json
+              - name: check
+                type: reason
+                agent: planner
+                prompt: update.md
+                outputs: update.json
+                dependsOn: [plan]
+            """);
+        using var disposed = repository;
+        var agents = Substitute.For<IAgentService>();
+        agents.DeleteAsync(Arg.Any<DeleteAgentRequest>(), Arg.Any<CancellationToken>())
+            .Returns<Task<UseCaseResult<AgentVerbFacts>>>(_ => throw new IOException("the disk went away"));
+
+        // The first step's agent is made as its runner makes it; the second's never is, as one an earlier session of the
+        // run deleted already.
+        runner.OnStart("plan", () => repository.Harness.OrchestrationStore.WriteAgent(
+            RunOf(repository),
+            new AgentRecord { Kind = AgentRecord.KindName, Name = "a1", Orchestrator = "r1", Model = "m", CreatedAt = DateTimeOffset.UnixEpoch, Access = AgentRecord.AccessRead, State = AgentStates.Live }));
+        var service = Service(repository.Harness, runner, agents: agents);
+
+        var ended = await service.RunAsync(repository.Path, Workflow, run: null, inputs: [], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.True(ended.ExitCode == HarnessExit.Success, $"{ended.Message} {string.Join(" | ", ended.Details ?? [])}");
+        var said = File.ReadAllLines(RunOf(repository).LogFile("a1")).Select(line => JsonNode.Parse(line)!).Last();
+        Assert.Equal(
+            ("delete-agent", HarnessExit.InternalError, "deleting agent 'a1' failed: the disk went away"),
+            ((string?)said["command"], (int?)said["exitCode"], (string?)said["message"]));
+        await agents.Received(1).DeleteAsync(Arg.Is<DeleteAgentRequest>(request => request.Agent == "a1"), Arg.Any<CancellationToken>());
+        await agents.DidNotReceive().DeleteAsync(Arg.Is<DeleteAgentRequest>(request => request.Agent == "a2"), Arg.Any<CancellationToken>());
+        Assert.False(File.Exists(RunOf(repository).LogFile("a2")));
     }
 
     /// <summary>Every step of a scripted run passes, and the planner and the plan check answer what the flow reads of them.</summary>

@@ -271,6 +271,39 @@ public sealed class FlowReasonStepTests
         Assert.Equal(["a1"], resumedDeletions.Agents);
     }
 
+    /// <summary>
+    /// A read-only agent is deleted once, however many later endings find its work over: each step's own agent is asked
+    /// for deletion as its work ends, and never again.
+    /// </summary>
+    [Fact]
+    public async Task AReadOnlyAgentIsDeletedOnce_HoweverManyEndingsFindItsWorkOver()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: reason
+                prompt: prompts/plan.md
+                outputs: schemas/plan.schema.json
+              - name: two
+                type: reason
+                prompt: prompts/plan.md
+                outputs: schemas/plan.schema.json
+                dependsOn: [one]
+              - name: three
+                type: reason
+                prompt: prompts/plan.md
+                outputs: schemas/plan.schema.json
+                dependsOn: [two]
+            """);
+        var deletions = new Deletions();
+
+        var end = await Coordinator(definition, new Runner(), deletions: deletions).RunAsync(Token);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["a1", "a2", "a3"], deletions.Agents);
+    }
+
     /// <summary>A step that fails keeps its agent live, for its work may yet be gone on with.</summary>
     [Fact]
     public async Task AReasonStepThatFails_KeepsItsAgentLive()

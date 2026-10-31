@@ -291,6 +291,18 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 null);
         }
 
+        if (step.Output is { } output && output.SchemaProblems() is [_, ..] unreadable)
+        {
+            // Never begun: an answer held to a schema the harness cannot read could never be checked, so no model is
+            // paid for one - the check every client's gate would make after the answer is made here, before any is asked.
+            return (new AgentRunResult(
+                AgentRunStatus.NotStarted,
+                AgentNotStartedBecause.ConfigurationWrong,
+                Model: step.Model,
+                Error: $"The step's output '{output.Name}' is held to a schema this engine does not read: {string.Join("; ", unreadable)}."),
+                null);
+        }
+
         if (step.Order is { Count: > 0 } order)
         {
             // The step's whole order is the engine's to walk: a decline, a limit and a refused key move it from entry
@@ -1135,9 +1147,13 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             Interrupt = step.Interrupt,
         };
 
-    /// <summary>The step's own directory, as the one owner of the paths spells it - or the one its request names, for a run the engine keeps elsewhere than an agent's steps (the run's reporter, under the run's <c>asks/</c>).</summary>
+    /// <summary>
+    /// The step's own directory: the one its request names - every runner of the engine names it - or, where it names
+    /// none, the one owner of where a step instance is kept (<see cref="OrchestratorLayout.InstanceDirectory"/>), which
+    /// spells an item's brackets as the run's store does.
+    /// </summary>
     /// <param name="step">The step.</param>
-    private static string StepDirectory(AgentStepRequest step) => step.RecordDirectory ?? Layout(step).AgentStepDirectory(step.Agent, step.StepInstance);
+    private static string StepDirectory(AgentStepRequest step) => step.RecordDirectory ?? Layout(step).InstanceDirectory(step.StepInstance, step.Agent);
 
     /// <summary>The paths of the step's run, as the one owner of them spells them.</summary>
     /// <param name="step">The step.</param>

@@ -1165,21 +1165,41 @@ public sealed class FlowService(
                 async (run, agent, token) =>
                 {
                     // The engine's own deleting of a read-only agent whose work is over: applied, with nothing to fold
-                    // and no worktree to remove, and its failure said in the run's log, for the run goes on whatever
-                    // it did.
-                    var deleted = await _agents.DeleteAsync(
-                        new DeleteAgentRequest(context.Layout.MainCheckoutRoot, layout.Name, agent, new FoldAllowances(), Apply: true, DiscardUncommitted: false),
-                        token).ConfigureAwait(false);
+                    // and no worktree to remove, and its failure - refused, or thrown - said in the run's log, for the
+                    // run goes on whatever it did. An agent with no record is deleted already, by an earlier session of
+                    // the run's or by its person, and nothing is left to delete or to say.
+                    CommandOutcome outcome;
 
-                    if (!deleted.Outcome.Succeeded)
+                    try
                     {
-                        _ = _log.Append(layout, agent, "delete-agent", deleted.Outcome);
+                        if (_store.ReadAgent(layout, agent) is null)
+                        {
+                            return CommandOutcome.Ok($"agent '{agent}' of '{layout.Name}' is deleted already");
+                        }
+
+                        outcome = (await _agents.DeleteAsync(
+                            new DeleteAgentRequest(context.Layout.MainCheckoutRoot, layout.Name, agent, new FoldAllowances(), Apply: true, DiscardUncommitted: false),
+                            token).ConfigureAwait(false)).Outcome;
+                    }
+                    catch (HarnessException refused)
+                    {
+                        outcome = CommandOutcome.Failed(refused.ExitCode, refused.Message);
+                    }
+                    catch (Exception failed) when (failed is not OperationCanceledException)
+                    {
+                        outcome = CommandOutcome.Failed(HarnessExit.InternalError, $"deleting agent '{agent}' failed: {failed.Message}");
                     }
 
-                    return deleted.Outcome;
+                    if (!outcome.Succeeded)
+                    {
+                        _ = _log.Append(layout, agent, "delete-agent", outcome);
+                    }
+
+                    return outcome;
                 },
                 new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output, updates),
-                updates: () => _store.ReadFlowUpdates(layout));
+                updates: () => _store.ReadFlowUpdates(layout),
+                workflowFileIfThere: named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"));
             var before = _store.ReadFlowQuestions(layout);
 
             // What a session before this one recorded and left queued - an amendment given while no engine ran - is

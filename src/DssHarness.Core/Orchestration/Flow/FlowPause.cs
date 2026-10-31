@@ -58,6 +58,32 @@ public sealed class FlowBudgetSpent
 }
 
 /// <summary>
+/// The bound in dollars an agent of the run is held to: its own, or what is left of the run's budget before its reserve
+/// where that is less - the one place the two meet, for a reason step's agent and the advisor's alike - so one long
+/// launch cannot spend through the reserve, which is what the handoffs are written in.
+/// </summary>
+public static class FlowRunBudget
+{
+    /// <summary>The bound the agent is held to; null where neither its own definition nor the run bounds it.</summary>
+    /// <param name="own">The agent's own bound, as its definition says it; null where it says none.</param>
+    /// <param name="left">What is left of the run's budget in dollars before its reserve; null where the run budgets no dollars.</param>
+    public static decimal? Bound(decimal? own, double? left)
+        => left is not { } run ? own
+            : (decimal)Math.Round(Math.Max(0, run), 6, MidpointRounding.ToZero) is var share && (own is not { } mine || share < mine) ? share
+            : own;
+
+    /// <summary>
+    /// Whether the run's share, and not the agent's own bound, is what ended an agent at its budget: where the run's is
+    /// less than its own, or the agent has none - so the run pauses for its budget rather than asking the step's own
+    /// question.
+    /// </summary>
+    /// <param name="own">The agent's own bound, as its definition says it; null where it says none.</param>
+    /// <param name="left">What is left of the run's budget in dollars before its reserve; null where the run budgets no dollars.</param>
+    public static bool RunsShareBinds(decimal? own, double? left)
+        => left is not null && Bound(own, left) != own;
+}
+
+/// <summary>
 /// A safe pause the run is under or was ended by: what asked for it, when it began, whether the machine steps were
 /// stopped too, and every handoff it wrote.
 /// </summary>

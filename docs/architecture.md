@@ -2020,10 +2020,20 @@ as its continuation record (`AgentContinuation.Render` over its `FlowStepRun.Wor
 through `IAgentRunner`, its ending mapped to the step's own (`FlowStepResult.AtLimit` for a limit of its own,
 incomplete for a stop, the schema-validated output the step's, with the issues it reports under `preExisting`). The
 step's stream is read by the store's one reader of it (`OrchestrationStore.ReadStepStream`): a whole line that does
-not read refuses the attempt that goes on with it. A stopped step's handoff turn is answered of its own record
-(`IFlowHandoffRunner.HandoffAsync`, `AgentRunner.ResultFileName`), and the coordinator deletes the read-only agent
-once no step can go on with its work (`FlowCoordinator.ReadOnlyAgentOver`, over the declarations that resume its
-maker and the instances drawn of them, through the `deleteAgent` the service wires to `IAgentService.DeleteAsync`).
+not read refuses the attempt that goes on with it.
+A step's records are kept where the one owner of a step instance's
+directory spells it (`OrchestratorLayout.InstanceDirectory`, a work item's brackets as `FlowInstanceId.DirectoryOf`
+writes them), named on the request (`AgentStepRequest.RecordDirectory`) for the runner, the advisor and the handoff's
+read alike. A safe pause - and a plan update that ends a step in order - hands a reason step off by one path
+(`FlowCoordinator.HandoffTurnAsync`): the agent is asked in its own conversation (`FlowTelling.Ask`, the attempt's
+`AgentHandoffSignal`, which the client answers by ending the attempt after the handoff turn), its runner is waited for
+within `handoffSeconds` - all the steps at once - and ended where it outlives them or a stop comes, then waited for
+within `PointOfNoReturn.SafePauseDrain`; only then is the answer read of the step's own record
+(`IFlowHandoffRunner.HandoffAsync`, `AgentRunner.ResultFileName`), the engine writing the handoff where it holds none.
+The coordinator deletes the read-only agent once no step can go on with its work (`FlowCoordinator.ReadOnlyAgentsOver`,
+over the declarations that resume its maker and the instances drawn of them, each agent once - `_deletedAgents` - through
+the `deleteAgent` the service wires to `IAgentService.DeleteAsync`, which writes a refusal and a throw alike in the
+agent's log and takes an agent with no record as deleted already).
 The key a step starts on is chosen with the order (`balanceKeyUsage`, value 425): the resolution's entries built by
 `AgentStepOrder.Of` keep the list's order, or - where the configuration balances the keys - each model's keys run by
 least spent in the last seven days (a tie in the list's order, for `OrderBy` keeps it), the week read by
@@ -2045,7 +2055,15 @@ then moved to the next model as a decline moves, past the model's other keys; th
 client's own tries (`AgentRunResult.ServiceFailed`, set where the loop says so) is neither retried nor moved past, nor
 is a run that ended `RateLimited` with no entry left ended a failure: each is answered `FlowStepResult.SafelyPausing`,
 and the coordinator ends the step stopped and asks the run for a safe pause of the cause `limits`
-(`FlowPauseRequest.Causes`), which resumes that very step. A step that says `ask` is paused on its agent's questions
+(`FlowPauseRequest.Causes`), which resumes that very step - merged with a pause a person asked that the loop has not
+taken yet (`FlowCoordinator.RequestPause`: the first asker's cause, `all` where either said it). What a reason step
+spends is charged to the run's budget as its agent works (`AgentRunSpend`, the request's event sink: each turn's
+`UsageReported`, every token of every kind - `AgentUsage.AllTokens` - and its cost at the configuration's prices for the
+model serving it, handed on by `IFlowRunEvents.Used`), and each launch is held to what is left of the run's dollars
+before its reserve where that is less than its agent's own `maxBudgetUsd` (`FlowStepRun.BudgetLeftUsd`,
+`FlowRunBudget.Bound`); a launch that bound ended is the run's reserve reached and not the step's own budget
+(`FlowStepResult.AtTheRunsReserve`, `PauseCause` `budget`): the workflow's answers may allow more, the step running again
+at once given its handoff, else the run pauses for its budget. A step that says `ask` is paused on its agent's questions
 (`AgentRunStatus.Asked` mapped to a question of the kind `ask`, the agent's questions riding with it and the
 recommendation saying the agent recommends within each), and the answer - `answer` with a text, or `decide` - goes back
 into the same attempt (`FlowAnswerGiven` carrying its text and kind): the runner sends the person's words as the
@@ -2074,18 +2092,30 @@ read, and an entry that quotes words holds only where they are not empty and sta
 the event log says so, and the person is asked. The advisor is built too (slice 31b3): before a person is left with a
 question the engine raises itself, `FlowCoordinator.SeekAdvice` runs the orchestrator's `advisor` block through
 `IFlowAdvisorRunner` (`Runners\AdvisorRunner.cs`) - one reason step that only reads, wherever the asking step works,
-its model resolved and its order built as a step's is, its records under `advice/<n>/` of the asking step, its prompt
+its model resolved and its order built as a step's is, its records and its own conversations under `advice/<n>/` of
+the asking step's own directory (`OrchestratorLayout.InstanceDirectory`, named on the request as `RecordDirectory` and
+`SessionsDirectory`, whatever agent the step names or none), numbered one past the highest already there, its prompt
 filled by the one grammar with the question as an object of its texts (`{question.step}`, `{question.kind}`,
 `{question.problem}` with what was tried, `{question.answers}` each with what it does, `{question.record}` - the
 asking step's own records rendered as a continuation record renders a step), the run's inputs and `{recommendations}`,
-and its output the engine's own schema, whose `answer` enum is the question's own answers so the schema itself refuses
-any other. The question is raised at once with its recommendation marked sought, and the session does not end while
-the advice runs (`FlowCoordinator.TakeAdviceAsync`, the loop's wait); a person's answer ends the asking
-(`TakeAnswer` cancelling it), the recommendation written with who gave it and where its records are, none obtained
-said so, and what the advice used counted in the run's spend; an advice owed at a resume - sought by a session a
-crash ended, or deferred while the run was pausing - is sought at its start (`SeekOwedAdvice`). No advisor named, the
-question says so plainly; a kind only a person or an agent answers (`runBudget`, `ask`), a `pause` step's own shown
-questions, and a kind the advisor's `kinds` leaves out, are never advised.
+and its output the engine's own schema in the subset every answer is held to - closed objects, `anyOf` one shape for
+the answers that take a text, which it requires, and one for those that do not - whose `answer` enum is the question's
+own answers so the schema itself refuses any other. A step's schema outside the subset never reaches a client
+(`AgentRunner` refuses it `NotStarted`, the configuration wrong, before any request is sent). The question is raised at
+once with its recommendation marked sought, and the session does not end while the advice runs
+(`FlowCoordinator.TakeAdviceAsync`, the loop's wait); an answer ends the asking (`TakeAnswer` dropping it, the
+recommendation `cancelled`), the asking step not admitted again until the advice's runner has ended (the hold
+`advice`); a safe pause and a stop end it too (`DeferAdvice`, `BeginHardStop` through the session's advice stop), the
+question `deferred`, and a session's end ends and waits for whatever is left (`EndAdviceAsync`); a recommendation
+obtained is written with who gave it and where its records are, none obtained said so, and what every advice spent - an
+ended one's among them, counted from its turns (`AgentRunSpend`) - is counted in the run's spend, each held to what is
+left of the run's dollars as a step is; a bar that cannot be read leaves the question `notObtained` saying why, and a
+default `recommendations.md` that could not be looked at is never taken for one that is not there
+(`WorkflowNamedFiles.ReadTextIfThere`); an advice owed at a resume - sought by a session a crash ended, or deferred
+while the run was pausing or stopping - is sought once the session is known to go on (`SeekOwedAdvice` after
+`MakeTheHold`), never by a resume refused. No advisor named, the question says so plainly; a kind only a person or an
+agent answers (`runBudget`, `ask`), a `pause` step's own shown questions, one its `preAnswer` answers (weighed before
+the advisor is sought), and a kind the advisor's `kinds` leaves out, are never advised.
 The handoff, the checks and the stream's account (slice 31c): where an agent gave no handoff of its own - the pause's
 turn gave none, a limit ended its run, or a resume found the attempt cut off by a crash or a stop - the engine writes
 one from the stored stream of the step (`FlowCoordinator.EngineHandoffOf` over `IFlowStreamAccount`, routed by

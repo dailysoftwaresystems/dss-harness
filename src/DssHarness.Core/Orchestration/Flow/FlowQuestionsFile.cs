@@ -23,10 +23,14 @@ public sealed record FlowQuestionProblem(string Happened, string? Tried = null, 
 public sealed record FlowQuestionOption(string Answer, string Does, bool Text = false);
 
 /// <summary>
-/// The recommendation a question carries: an answer, why, and who gave it - or the plain statement that none was
-/// sought. Nothing is put in a person's place.
+/// The recommendation a question carries: an answer, why, and who gave it - or the plain statement of where it stands
+/// where there is none. Nothing is put in a person's place.
 /// </summary>
-/// <param name="State"><c>given</c> or <c>notSought</c>.</param>
+/// <param name="State">
+/// <c>given</c>; <c>sought</c> while the advisor runs; <c>deferred</c> where a pause or a stop came first, sought again at
+/// the resume; <c>cancelled</c> where an answer came while the advisor ran; <c>notObtained</c> where it was sought and none
+/// was had; or <c>notSought</c>.
+/// </param>
 /// <param name="Answer">The answer recommended, where one was.</param>
 /// <param name="Text">The text recommended with it, where the answer takes one.</param>
 /// <param name="Why">Why that answer, by the bar the recommender was given.</param>

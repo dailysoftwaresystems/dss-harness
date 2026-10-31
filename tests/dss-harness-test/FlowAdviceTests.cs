@@ -7,10 +7,16 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// The run's advisor: a question the engine raises is recommended on before a person is left with it - never in the
-/// person's way - and where none was sought the question says so plainly. Over a fake advisor, in memory.
+/// person's way - and where none was sought the question says so plainly; an answer, a pause and a stop each end an
+/// advice still running, what it spent counted all the same. Over a fake advisor, in memory.
 /// </summary>
 public sealed class FlowAdviceTests
 {
+    /// <summary>Every bound a test of a session waits for: a session that hangs fails the test rather than the run's minutes.</summary>
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
+    private static CancellationToken Token => TestContext.Current.CancellationToken;
+
     /// <summary>Parses a definition, refusing a file that does not read: these tests run one that does.</summary>
     private static WorkflowDefinition Parse(string text)
         => WorkflowFileParser.Parse("workflows/flow/flow.yml", text);
@@ -43,21 +49,63 @@ public sealed class FlowAdviceTests
             => Task.FromResult<string?>(null);
     }
 
-    /// <summary>The advisor as a fake: each asking held until the test lets it answer, and every call kept.</summary>
+    /// <summary>The advisor as a fake: each asking answered as the test says, and every call kept with the token it was given.</summary>
     private sealed class Advisor : IFlowAdvisorRunner
     {
-        private readonly Func<FlowAdvisorCall, Task<FlowAdvice>> _answer;
+        private readonly Func<FlowAdvisorCall, CancellationToken, Task<FlowAdvice>> _answer;
 
         /// <summary>Every asking, in order.</summary>
         public List<FlowAdvisorCall> Asked { get; } = [];
 
-        public Advisor(Func<FlowAdvisorCall, Task<FlowAdvice>> answer) => _answer = answer;
+        /// <summary>The token of every asking, in order.</summary>
+        public List<CancellationToken> Tokens { get; } = [];
+
+        public Advisor(Func<FlowAdvisorCall, Task<FlowAdvice>> answer) => _answer = (call, _) => answer(call);
+
+        public Advisor(Func<FlowAdvisorCall, CancellationToken, Task<FlowAdvice>> answer) => _answer = answer;
 
         /// <inheritdoc/>
         public Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, CancellationToken cancellationToken)
         {
-            Asked.Add(call);
-            return _answer(call);
+            lock (Asked)
+            {
+                Asked.Add(call);
+                Tokens.Add(cancellationToken);
+            }
+
+            return _answer(call, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// An advisor that runs until its token ends it, as the real one does - spending as it goes - and answers then with
+    /// what it spent, once the test lets its runner end.
+    /// </summary>
+    private sealed class HeldAdvisor
+    {
+        /// <summary>Lets an ended asking's runner end: until then it is still being torn down.</summary>
+        public TaskCompletionSource TornDown { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes once an asking's token has ended it.</summary>
+        public TaskCompletionSource Ended { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Whether an asking's runner has ended.</summary>
+        public bool RunnerEnded { get; private set; }
+
+        public async Task<FlowAdvice> AdviseAsync(CancellationToken token)
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            catch (OperationCanceledException)
+            {
+                Ended.TrySetResult();
+            }
+
+            await TornDown.Task;
+            RunnerEnded = true;
+            return new FlowAdvice(null, null, null, Directory: "steps/think/advice/1", NotObtained: "the asking was ended before the advisor answered", Usd: 0.02, Tokens: 1500);
         }
     }
 
@@ -68,33 +116,43 @@ public sealed class FlowAdviceTests
         public bool WritesTree(string runner) => false;
     }
 
-    private static WorkflowDefinition Advised(string? kinds = null)
-        => Parse(kinds is null
-            ? """
+    /// <summary>The run's records as a test reads them: nothing kept but the last snapshot written, and every question as last written.</summary>
+    private sealed class Records : IFlowRecords
+    {
+        /// <summary>The run as the last change wrote it.</summary>
+        public FlowSnapshot? Last { get; private set; }
+
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+            => Last = snapshot;
+
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+        {
+        }
+
+        public void Updates(FlowUpdatesFile updates)
+        {
+        }
+    }
+
+    private static WorkflowDefinition Advised(string? kinds = null, string? budget = null)
+        => Parse($"""
             name: flow
             advisor:
               agent: advisor
               prompt: prompts/recommend.md
-              tier: best
-            steps:
-              - name: think
-                type: reason
-                prompt: work.md
-                outputs: work.json
-            """
-            : $"""
-            name: flow
-            advisor:
-              agent: advisor
-              prompt: prompts/recommend.md
-              tier: best
-              kinds: [{kinds}]
+              tier: best{(kinds is null ? string.Empty : $"\n  kinds: [{kinds}]")}{(budget is null ? string.Empty : $"\nbudget:\n  {budget}")}
             steps:
               - name: think
                 type: reason
                 prompt: work.md
                 outputs: work.json
             """);
+
+    /// <summary>The step's first attempt reaches its turns, a question the engine raises; every later one passes.</summary>
+    private static FakeRunner AtItsTurnsFirst()
+        => new FakeRunner().On("think", run => run.Attempt == 1
+            ? FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true }
+            : FlowStepResult.Ended(passed: true, HarnessExit.Success));
 
     /// <summary>
     /// A question the engine raises is recommended on before a person is left with it: the recommendation marked
@@ -106,78 +164,205 @@ public sealed class FlowAdviceTests
     {
         var gate = new TaskCompletionSource<FlowAdvice>(TaskCreationOptions.RunContinuationsAsynchronously);
         var advisor = new Advisor(_ => gate.Task);
-        var runner = new FakeRunner().On("think", FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true });
-        var coordinator = new FlowCoordinator(Advised(), runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
+        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
 
-        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+        var session = coordinator.RunAsync(Token);
 
         // The question is raised at once, its recommendation marked sought; the session does not end while the
         // advisor runs.
         await TestEventuallyAsync(() => coordinator.OpenQuestions.Count == 1 && advisor.Asked.Count == 1);
 
         var open = coordinator.OpenQuestions.Single();
+        var call = advisor.Asked.Single();
 
         Assert.Equal("sought", open.Recommendation.State);
-        Assert.Equal("think", advisor.Asked.Single().Step);
-        Assert.Equal("turnLimit", advisor.Asked.Single().Kind);
-        Assert.Equal(1, advisor.Asked.Single().Advice);
-        Assert.Contains("no recommendations file", advisor.Asked.Single().Bar, StringComparison.Ordinal);
+        Assert.Equal(("think", "turnLimit", "a1"), (call.Instance, call.Kind, call.Agent));
+        Assert.Equal("(orchestrator 'flow' has no recommendations file: no bar was written for this repository)", call.Bar);
         Assert.False(session.IsCompleted);
 
         gate.SetResult(new FlowAdvice("more", "the step was nearly done", null, Model: "claude-opus-5-5", Directory: "steps/think/advice/1", Usd: 0.01, Tokens: 900));
 
-        await TestEventuallyAsync(() => coordinator.OpenQuestions.Single().Recommendation.State == "given");
-
+        var end = await session.WaitAsync(Bound, Token);
         var advised = coordinator.OpenQuestions.Single();
 
-        Assert.Equal("more", advised.Recommendation.Answer);
-        Assert.Equal("advisor", advised.Recommendation.By);
-        Assert.Equal("claude-opus-5-5", advised.Recommendation.Model);
-        Assert.Equal("steps/think/advice/1", advised.Recommendation.Advice);
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(
+            new FlowRecommendation("given", "more", null, "the step was nearly done", "advisor", "advisor", "claude-opus-5-5", "steps/think/advice/1"),
+            advised.Recommendation);
 
         // The person's answer settles it, whatever was recommended.
         Assert.True(coordinator.TryAnswer(advised.Id, "fail", null, out _));
+        end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
-        gate = new TaskCompletionSource<FlowAdvice>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await session;
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
     }
 
     /// <summary>
-    /// A person answering while the advisor still runs ends the asking: their answer is what the run goes on with,
-    /// and the advice that lands after it changes nothing.
+    /// An answer given while the advisor still runs ends the asking: the advisor's token is ended, the question says the
+    /// asking was ended, what the asking spent is counted against the run's budget all the same, the asking step's next
+    /// attempt starts only once the advice's runner has ended - never beside it in the place the step works - and the
+    /// run goes on with the answer.
     /// </summary>
     [Fact]
-    public async Task APersonAnsweringWhileTheAdvisorRuns_EndsTheAsking()
+    public async Task AnAnswerWhileTheAdvisorRuns_EndsTheAsking_AndTheStepWaitsForItsRunner()
     {
-        var gate = new TaskCompletionSource<FlowAdvice>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var advisor = new Advisor(_ => gate.Task);
-        var runner = new FakeRunner().On("think", run => run.Attempt == 1
-            ? FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true }
-            : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(Advised(), runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
+        var held = new HeldAdvisor();
+        var advisor = new Advisor((_, token) => held.AdviseAsync(token));
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool? secondBesideTheAdvice = null;
+        var runner = new FakeRunner().On("think", run =>
+        {
+            if (run.Attempt == 1)
+            {
+                return FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true };
+            }
 
-        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+            secondBesideTheAdvice = !held.RunnerEnded;
+            secondStarted.TrySetResult();
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var records = new Records();
+        var coordinator = new FlowCoordinator(Advised(), runner, new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
 
-        await TestEventuallyAsync(() => coordinator.OpenQuestions.Count == 1);
-
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => coordinator.OpenQuestions.Count == 1 && advisor.Asked.Count == 1);
         var open = coordinator.OpenQuestions.Single();
 
-        Assert.Equal("sought", open.Recommendation.State);
+        // The person answers retry through the session, as the inbox hands an answer over.
+        _ = await coordinator.OfferAnswerAsync(open.Id, "retry").WaitAsync(Bound, Token);
+        await held.Ended.Task.WaitAsync(Bound, Token);
 
-        // The person answers retry; the next attempt passes, and the run ends done.
-        Assert.True(coordinator.TryAnswer(open.Id, "retry", null, out _));
+        // The step does not start again while the advice's runner is still being torn down.
+        _ = await Task.WhenAny(secondStarted.Task, Task.Delay(TimeSpan.FromSeconds(2), Token));
+        held.TornDown.SetResult();
 
-        gate.SetResult(new FlowAdvice("more", "too late", null));
-
-        var end = await session;
-
-        Assert.Equal(FlowRunStatus.Done, end.Status);
-
-        // The advice that landed after the answer changed nothing: the answered question keeps the person's answer.
+        var end = await session.WaitAsync(Bound, Token);
         var answered = coordinator.Questions.Single(question => question.Id == open.Id);
 
+        Assert.True(advisor.Tokens.Single().IsCancellationRequested);
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.False(secondBesideTheAdvice);
         Assert.Equal("retry", answered.Given.Single().Answer);
-        Assert.Equal("sought", answered.Recommendation.State);
+        Assert.Equal(
+            new FlowRecommendation("cancelled", Why: "no recommendation: the question was answered by a person while the advisor ran, and its asking was ended"),
+            answered.Recommendation);
+        Assert.Equal((0.02, 1500L), (records.Last!.Spent.Usd, records.Last.Spent.Tokens));
+    }
+
+    /// <summary>What an advice spent - in dollars, and every token of every kind - is counted against the run's budget.</summary>
+    [Fact]
+    public async Task WhatAnAdviceSpent_IsCountedAgainstTheRunsBudget()
+    {
+        var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice("retry", "it went wrong", null, Usd: 0.25, Tokens: 4800)));
+        var records = new Records();
+        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
+
+        var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal((0.25, 4800L), (records.Last!.Spent.Usd, records.Last.Spent.Tokens));
+    }
+
+    /// <summary>
+    /// An advice is held to what is left of the run's dollars before its reserve, the run's share handed with its call;
+    /// a run that budgets no dollars hands none.
+    /// </summary>
+    [Fact]
+    public async Task AnAdvice_IsHandedWhatIsLeftOfTheRunsDollars()
+    {
+        var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice("retry", "it went wrong", null, Usd: 1.0)));
+
+        _ = await new FlowCoordinator(Advised(budget: "usd: 10"), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor).RunAsync(Token).WaitAsync(Bound, Token);
+        _ = await new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor).RunAsync(Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(new double?[] { 9.0, null }, advisor.Asked.Select(call => call.BudgetLeftUsd));
+    }
+
+    /// <summary>
+    /// A stop while the advisor runs ends it at once - the session does not wait out the advisor's minutes - and its
+    /// question says the recommendation is sought at the resume, which seeks it again.
+    /// </summary>
+    [Fact]
+    public async Task AStopWhileTheAdvisorRuns_EndsIt_AndTheResumeSeeksItAgain()
+    {
+        var held = new HeldAdvisor();
+        held.TornDown.SetResult();
+        var calls = 0;
+        var advisor = new Advisor((_, token) => Interlocked.Increment(ref calls) == 1 ? held.AdviseAsync(token) : Task.FromResult(new FlowAdvice("more", "now", null)));
+        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
+
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => advisor.Asked.Count == 1);
+        coordinator.RequestStop();
+
+        var end = await session.WaitAsync(Bound, Token);
+        var open = coordinator.OpenQuestions.Single();
+
+        Assert.Equal(FlowRunStatus.Stopped, end.Status);
+        Assert.True(advisor.Tokens.Single().IsCancellationRequested);
+        Assert.Equal(
+            new FlowRecommendation("deferred", Why: "the run was stopped while the advisor ran: the recommendation is sought when the run is resumed with this question still open"),
+            open.Recommendation);
+
+        end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(2, advisor.Asked.Count);
+        Assert.Equal("given", coordinator.OpenQuestions.Single().Recommendation.State);
+    }
+
+    /// <summary>
+    /// A safe pause while the advisor runs ends it - an advisor is a reason step, and none runs past a pause - its question
+    /// saying the recommendation is sought at the resume.
+    /// </summary>
+    [Fact]
+    public async Task APauseWhileTheAdvisorRuns_EndsIt_ItsQuestionSayingItIsSoughtAtTheResume()
+    {
+        var held = new HeldAdvisor();
+        held.TornDown.SetResult();
+        var advisor = new Advisor((_, token) => held.AdviseAsync(token));
+        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
+
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => advisor.Asked.Count == 1);
+        coordinator.RequestPause("command");
+
+        var end = await session.WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.True(advisor.Tokens.Single().IsCancellationRequested);
+        Assert.Equal(
+            new FlowRecommendation("deferred", Why: "the run paused while the advisor ran: the recommendation is sought when the run is resumed with this question still open"),
+            coordinator.OpenQuestions.Single().Recommendation);
+    }
+
+    /// <summary>
+    /// A session that ends while the advisor runs - its token cancelled - ends the advice and waits for its runner before
+    /// it ends: no advisor outlives the session that started it.
+    /// </summary>
+    [Fact]
+    public async Task ASessionEndedWhileTheAdvisorRuns_EndsItAndWaitsForItsRunner()
+    {
+        var held = new HeldAdvisor();
+        var advisor = new Advisor((_, token) => held.AdviseAsync(token));
+
+        // A clock whose waits pass in real time: the session's wait for the advisor's runner is bounded, not skipped.
+        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new ManualClock(), advisor: advisor);
+        using var ending = CancellationTokenSource.CreateLinkedTokenSource(Token);
+
+        var session = coordinator.RunAsync(ending.Token);
+        await TestEventuallyAsync(() => advisor.Asked.Count == 1);
+        await ending.CancelAsync();
+        await held.Ended.Task.WaitAsync(Bound, Token);
+
+        // The runner is still being torn down: the session waits for it.
+        _ = await Task.WhenAny(session, Task.Delay(TimeSpan.FromSeconds(1), Token));
+        var endedFirst = session.IsCompleted;
+        held.TornDown.SetResult();
+        _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.WaitAsync(Bound, Token));
+
+        Assert.False(endedFirst);
+        Assert.True(held.RunnerEnded);
     }
 
     /// <summary>
@@ -188,16 +373,54 @@ public sealed class FlowAdviceTests
     public async Task WhereTheAdvisorObtainsNothing_TheQuestionSaysSo()
     {
         var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice(null, null, null, NotObtained: "agent 'advisor' reached its 10 minutes")));
-        var runner = new FakeRunner().On("think", FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true });
-        var coordinator = new FlowCoordinator(Advised(), runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
+        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
 
-        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+        var end = await coordinator.RunAsync(Token);
 
         Assert.Equal(FlowRunStatus.Paused, end.Status);
-        var open = coordinator.OpenQuestions.Single();
+        Assert.Equal(
+            new FlowRecommendation("notObtained", Why: "no recommendation: one was sought and not obtained (agent 'advisor' reached its 10 minutes)"),
+            coordinator.OpenQuestions.Single().Recommendation);
+    }
 
-        Assert.Equal("notObtained", open.Recommendation.State);
-        Assert.Contains("one was sought and not obtained (agent 'advisor' reached its 10 minutes)", open.Recommendation.Why, StringComparison.Ordinal);
+    /// <summary>
+    /// A bar that cannot be read - the file the orchestrator names is gone - leaves the question saying why, and no
+    /// advisor is started without it; the session goes on, paused on the question.
+    /// </summary>
+    [Fact]
+    public async Task ABarThatCannotBeRead_LeavesTheQuestionSayingWhy()
+    {
+        var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice("more", "never read", null)));
+        var definition = Parse("""
+            name: flow
+            recommendations: bar.md
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var coordinator = new FlowCoordinator(
+            definition,
+            AtItsTurnsFirst(),
+            new RunnerFacts(),
+            new JumpingClock(),
+            workflowFile: named => named == "bar.md"
+                ? throw new HarnessException(HarnessExit.ConfigInvalid, $"'{named}', a workflow file, is not at '.harness-config/workflows/flow/{named}'; write it there, beside the definition that names it")
+                : "Do the work.",
+            advisor: advisor);
+
+        var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Empty(advisor.Asked);
+        Assert.Equal(
+            new FlowRecommendation("notObtained", Why: "no recommendation: the bar for one could not be read ('bar.md', a workflow file, is not at '.harness-config/workflows/flow/bar.md'; write it there, beside the definition that names it)"),
+            coordinator.OpenQuestions.Single().Recommendation);
     }
 
     /// <summary>
@@ -218,7 +441,7 @@ public sealed class FlowAdviceTests
         var runner = new FakeRunner().On("think", FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true });
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
-        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+        var end = await coordinator.RunAsync(Token);
 
         Assert.Equal(FlowRunStatus.Paused, end.Status);
         Assert.Equal(
@@ -229,7 +452,7 @@ public sealed class FlowAdviceTests
         var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice("more", "never read", null)));
         coordinator = new FlowCoordinator(Advised(kinds: "loopBound"), runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
 
-        end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+        end = await coordinator.RunAsync(Token);
 
         Assert.Equal(FlowRunStatus.Paused, end.Status);
         Assert.Empty(advisor.Asked);
@@ -263,11 +486,45 @@ public sealed class FlowAdviceTests
             }));
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
 
-        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+        var end = await coordinator.RunAsync(Token);
 
         Assert.Equal(FlowRunStatus.Paused, end.Status);
         Assert.Empty(advisor.Asked);
         Assert.Equal("agent", coordinator.OpenQuestions.Single().Recommendation.By);
+    }
+
+    /// <summary>
+    /// A <c>pause</c> step its run's input answers at once is never advised: the input is weighed before the advisor is
+    /// sought, so no advisor is started only to be ended.
+    /// </summary>
+    [Fact]
+    public async Task APauseStepTheInputAnswers_IsNeverAdvised()
+    {
+        var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice("approve", "never read", null)));
+        var definition = Parse("""
+            name: flow
+            inputs:
+              - name: preapproved
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            steps:
+              - name: approval
+                type: pause
+                preAnswer:
+                  - when: "input.preapproved == 'yes'"
+                    answer: approve
+                question: 'Approve the plan?'
+                options: [approve, revise]
+            """);
+        var coordinator = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["preapproved"] = "yes" }, advisor: advisor);
+
+        var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Empty(advisor.Asked);
+        Assert.Equal(FlowRecommendation.NotSought, coordinator.Questions.Single().Recommendation);
     }
 
     /// <summary>Waits a little at a time for <paramref name="done"/>, failing the test where it does not within ten seconds.</summary>
@@ -275,7 +532,7 @@ public sealed class FlowAdviceTests
     {
         for (var waited = 0; waited < 500 && !done(); waited++)
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(20), TestContext.Current.CancellationToken);
+            await Task.Delay(TimeSpan.FromMilliseconds(20), Token);
         }
 
         Assert.True(done(), "what was waited for did not happen within ten seconds");

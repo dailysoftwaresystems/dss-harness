@@ -66,12 +66,12 @@ public sealed class FlowResumeTests
         Directory.CreateDirectory(Path.GetDirectoryName(bar)!);
         File.WriteAllText(bar, "Prefer the cheaper answer.\n");
 
-        string ReadBar(string named)
-            => new WorkflowNamedFiles(harness.FileSystem, harness.Platform.PathComparison).ReadText(new HarnessLayout(temp.Path, temp.Path), "flow", named, "a workflow file");
+        string? ReadBar(string named)
+            => new WorkflowNamedFiles(harness.FileSystem, harness.Platform.PathComparison).ReadTextIfThere(new HarnessLayout(temp.Path, temp.Path), "flow", named, "a workflow file");
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records, workflowFile: ReadBar);
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records, workflowFileIfThere: ReadBar);
             _ = coordinator.RunAsync(Token);
 
             var first = coordinator.OpenQuestions.Single();
@@ -1082,6 +1082,80 @@ public sealed class FlowResumeTests
         }
 
         Assert.Equal(new FlowMadeAgent("a1", "model-one"), asked);
+    }
+
+    /// <summary>The advisor as a fake: every asking kept, each held until its token ends it.</summary>
+    private sealed class HeldAdvisor : IFlowAdvisorRunner
+    {
+        /// <summary>Every asking, in order.</summary>
+        public List<FlowAdvisorCall> Asked { get; } = [];
+
+        /// <summary>Completes once the first asking has begun.</summary>
+        public TaskCompletionSource Begun { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, CancellationToken cancellationToken)
+        {
+            lock (Asked)
+            {
+                Asked.Add(call);
+            }
+
+            Begun.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new FlowAdvice(null, null, null, NotObtained: "never");
+        }
+    }
+
+    /// <summary>
+    /// A resume refused - nothing can run until the open question is answered - starts no advisor, though the question
+    /// still owes its advice: the advisor is a paid run, and a refused resume writes and starts nothing of its own.
+    /// </summary>
+    [Fact]
+    public async Task ARefusedResume_StartsNoAdvisor()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            steps:
+              - name: asker
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var first = new HeldAdvisor();
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner().On("asker", _ => FlowStepResult.AtLimit("turns", "12 turns")), new RunnerFacts(), records: records, advisor: first);
+            _ = coordinator.RunAsync(Token);
+            await first.Begun.Task.WaitAsync(Bound, Token);
+
+            // The crash, while the advisor runs: the question is written marked sought.
+        }
+
+        var taken = TakeUp(harness, layout, definition);
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var resumed = new HeldAdvisor();
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: taken, records: again, advisor: resumed);
+
+            var raised = await Assert.ThrowsAsync<HarnessException>(() => coordinator.RunAsync(Token)).WaitAsync(Bound, Token);
+
+            Assert.Equal(
+                (HarnessExit.Refused, "nothing of this run can run until the question of step 'asker' is answered; answer-orchestrator answers it"),
+                (raised.ExitCode, raised.Message));
+        }
+
+        // An advisor started on the thread pool would be asked within moments: none is.
+        _ = await Task.WhenAny(resumed.Begun.Task, Task.Delay(TimeSpan.FromSeconds(2), Token));
+        Assert.Empty(resumed.Asked);
     }
 
     /// <summary>A resume beside an open question is not refused where something can run; it is refused only where nothing can until the question is answered, naming answer-orchestrator.</summary>
@@ -3371,10 +3445,22 @@ public sealed class FlowResumeTests
 
             if (_gates.TryGetValue(run.Instance, out var gate) || _gates.TryGetValue(run.Step.Name, out gate))
             {
-                return gate.Task.WaitAsync(cancellationToken);
+                return HeldAsync(gate.Task, run, cancellationToken);
             }
 
             return Task.FromResult(FlowStepResult.Ended(passed: true, 0));
+        }
+
+        /// <summary>A held step's answer: its gate's, or - for a reason step the engine asks for its handoff - the attempt ended by the turn its client answers.</summary>
+        private static async Task<FlowStepResult> HeldAsync(Task<FlowStepResult> gate, FlowStepRun run, CancellationToken cancellationToken)
+        {
+            if (run.Telling is not { } telling)
+            {
+                return await gate.WaitAsync(cancellationToken);
+            }
+
+            var first = await Task.WhenAny(gate, telling.Handoff.WhenAsked).WaitAsync(cancellationToken);
+            return first == gate ? await gate : FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "handed off");
         }
 
         public Task<string?> HandoffAsync(FlowStepRun run, CancellationToken cancellationToken)

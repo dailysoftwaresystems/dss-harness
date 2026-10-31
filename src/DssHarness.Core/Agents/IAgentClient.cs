@@ -164,6 +164,27 @@ public sealed record AgentOutput(string Name, string Schema, int MaxRepairs = 2,
     /// <inheritdoc cref="AgentOutput" path="/param[@name='AskRounds']"/>
     public int? AskRounds { get; init => field = value is { } rounds ? Counted(rounds, nameof(AskRounds)) : null; } = AskRounds is { } rounds ? Counted(rounds, nameof(AskRounds)) : null;
 
+    /// <summary>
+    /// Why <see cref="Schema"/> is no schema an answer can be held to - not a JSON object, or saying what the subset
+    /// does not read (<see cref="Schemas.JsonSchemaSubset.SubsetProblems"/>) - or nothing where it is one: the one check
+    /// of an output's schema, made before any client is taken, so no model is paid for an answer nothing could read.
+    /// </summary>
+    public IReadOnlyList<string> SchemaProblems()
+    {
+        System.Text.Json.Nodes.JsonNode? parsed;
+
+        try
+        {
+            parsed = System.Text.Json.Nodes.JsonNode.Parse(Schema);
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            return [$"$: is not JSON ({ex.Message})"];
+        }
+
+        return parsed is System.Text.Json.Nodes.JsonObject ? Schemas.JsonSchemaSubset.SubsetProblems(parsed) : ["$: a schema is a JSON object"];
+    }
+
     /// <summary>A count, as given; refused below naught, which no count of repairs or rounds is.</summary>
     private static int Counted(int value, string name)
     {
@@ -547,15 +568,17 @@ public sealed record AgentStepRequest(
     public IAgentSpendSink? Spend { get; init; }
 
     /// <summary>
-    /// Where this run's own records are kept, where not under the run's agents' steps: the run's reporter keeps the files
-    /// of its attempt under the run's <c>asks/&lt;stamp&gt;/</c>, a directory of the run and of no agent. Null for every
-    /// step of a run, whose records are the runner's own rule.
+    /// Where this run's own records are kept: a reason step's own directory as the one owner of where a step instance is
+    /// kept spells it (<see cref="Orchestration.OrchestratorLayout.InstanceDirectory"/>), an advice's under the asking
+    /// step's <c>advice/&lt;n&gt;/</c>, the run's reporter's under the run's <c>asks/&lt;stamp&gt;/</c>. Null where the
+    /// caller names none, and the runner keeps them where that owner says of the request's agent and instance.
     /// </summary>
     public string? RecordDirectory { get; init; }
 
     /// <summary>
-    /// Where a client handed a conversation stores it, where not under the run's agents' own sessions: a side-task keeps
-    /// its conversation under its own records. Null for every step of a run, whose sessions are the layout's own rule.
+    /// Where a client handed a conversation stores it, where not under the request's agent's own sessions: a side-task
+    /// keeps its conversation under its own records, and an advice under its own directory, whatever agent - if any - the
+    /// step it was asked for names. Null where the agent's own sessions hold it.
     /// </summary>
     public string? SessionsDirectory { get; init; }
 

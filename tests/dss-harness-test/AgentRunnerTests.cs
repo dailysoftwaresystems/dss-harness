@@ -786,6 +786,27 @@ public sealed class AgentRunnerTests
     }
 
     /// <summary>
+    /// A step whose output is held to a schema outside the subset every answer is held to never begins: the client is
+    /// never asked - no paid request is sent for an answer no gate could read - and the run says the configuration is
+    /// why, naming each place in the schema the subset does not read.
+    /// </summary>
+    [Fact]
+    public async Task AStepWhoseOutputSchemaIsOutsideTheSubset_NeverBegins_AndNoClientIsAsked()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient();
+        const string schema = """{"type":"object","properties":{"answer":{"type":"string"},"text":null},"allOf":[{"if":{},"then":{}}]}""";
+        var problems = string.Join("; ", DssHarness.Core.Schemas.JsonSchemaSubset.SubsetProblems(System.Text.Json.Nodes.JsonNode.Parse(schema)!));
+
+        var result = await Runner(client).RunAsync(Step(temp) with { Output = new AgentOutput("advice", schema) }, events: null, TestContext.Current.CancellationToken);
+
+        Assert.Null(client.Run);
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (result.Status, result.NotStartedBecause));
+        Assert.NotEmpty(problems);
+        Assert.Equal($"The step's output 'advice' is held to a schema this engine does not read: {problems}.", result.Error);
+    }
+
+    /// <summary>
     /// A step that names no client is worked by the one there is; where there are two, none is taken, and the run never
     /// began, saying which are registered.
     /// </summary>

@@ -14,10 +14,11 @@ using DssHarness.Core.Secrets;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// The engine's advisor (part 04, "A question the engine raises has no model behind it"): one reason step that only
-/// reads, independent of every other conversation, worked wherever the run works - the asking step's records under
-/// <c>advice/&lt;n&gt;/</c> of its own directory - and held to the engine's own schema for an advice, whose
-/// <c>answer</c> the schema itself refuses unless it is one of the question's.
+/// The engine's advisor, the model behind a question the engine raises: one reason step that only reads, independent of every other conversation, worked wherever the run works - its records and its own
+/// conversations under <c>advice/&lt;n&gt;/</c> of the asking step's own directory, numbered after the advices already
+/// there, whatever agent the asking step names or none - and held to the engine's own schema for an advice, in the
+/// subset every answer is held to, whose <c>answer</c> the schema itself refuses unless it is one of the question's and
+/// whose <c>text</c> it asks for exactly where the answer takes one.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
@@ -37,15 +38,50 @@ public sealed class AdvisorRunner(
     Output.IHarnessOutput harnessOutput,
     Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null) : IFlowAdvisorRunner
 {
+    /// <summary>The directory under the asking step's own that holds its advices, one numbered directory for each.</summary>
+    public const string AdviceDirectoryName = "advice";
+
+    /// <summary>Held while an advice's number is chosen and its directory made, so two askings at once never take one number.</summary>
+    private readonly Lock _numbering = new();
+
     /// <inheritdoc/>
     public async Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(call);
 
+        // What the asking spends is counted from its turns as they come, so an asking a person's answer or a stop ends
+        // part way still says what it had spent: that was spent, and the run's budget is charged with it.
+        AgentRunSpend? spend = null;
+        string? directory = null;
+
+        try
+        {
+            return await AdviseAsync(call, made => spend = made, made => directory = made, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new FlowAdvice(
+                Answer: null,
+                Why: null,
+                Text: null,
+                Directory: directory,
+                NotObtained: "the asking was ended before the advisor answered",
+                Usd: spend is { Reported: true } ? spend.Usd : null,
+                Tokens: spend is { Reported: true } ? spend.Tokens : null);
+        }
+    }
+
+    /// <summary>The asking itself, saying the count of its spend and its directory as each is made, for an ending part way to read them.</summary>
+    /// <param name="call">The asking.</param>
+    /// <param name="counting">Told the count of what the asking spends, once it is made.</param>
+    /// <param name="made">Told the advice's own directory, once it is made.</param>
+    /// <param name="cancellationToken">Ends the asking.</param>
+    private async Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, Action<AgentRunSpend> counting, Action<string> made, CancellationToken cancellationToken)
+    {
         var (place, context) = await FlowStepRunners.PlaceOf(
             new FlowStepRun(
                 new WorkflowStep { Name = "advisor", Type = "reason" },
-                call.Step,
+                call.Instance,
                 Attempt: 1,
                 FlowValue.Missing,
                 null,
@@ -73,14 +109,14 @@ public sealed class AdvisorRunner(
 
         if (AgentProviders.Resolve(context.Config) is not { Providers: { } providers })
         {
-            return NotObtained("the configuration's agent providers do not resolve, so the advisor has no model to run on");
+            return Unasked("the configuration's agent providers do not resolve, so the advisor has no model to run on");
         }
 
         var resolution = AgentResolution.Of(providers, call.Advisor.Tier, call.Advisor.Model, call.Advisor.Effort, call.Advisor.EffortByModel, call.Advisor.Client, definition);
 
         if (resolution is null)
         {
-            return NotObtained($"the advisor has no model to run on: name a tier or a model on it, or a tier under defaults.agentTier");
+            return Unasked("the advisor has no model to run on: name a tier or a model on it, or a tier under defaults.agentTier");
         }
 
         var launch = new ReasonLaunch(fileSystem, platform, keys, updates);
@@ -92,15 +128,18 @@ public sealed class AdvisorRunner(
 
         if (program is { Ready: false })
         {
-            return NotObtained(program.Message);
+            return Unasked(program.Message);
         }
 
         // The asking step's agent decides where the advice works: its worktree where it has one - at the path its record
         // resolves, as every launch's is - else the main tree; the advice only reads either way, its own work directory
-        // the one place it writes, and its records sit under the asking step's own directory, whichever agent it names.
+        // the one place it writes. Its records sit under the asking step's own directory, whichever agent it names, in
+        // the next number after the advices that directory holds already: a session before this one may have left some.
         var working = call.Agent;
         var agentRecord = working is null ? null : store.ReadAgent(layout, working);
-        var workspace = ReasonLaunch.Workspace(agentRecord, context.Layout, Path.Combine(StepDirectoryOf(layout, call), "work"), layout.Directory);
+        var directory = NextAdviceDirectory(layout, call);
+        made(directory);
+        var workspace = ReasonLaunch.Workspace(agentRecord, context.Layout, Path.Combine(directory, "work"), layout.Directory);
         var ground = AgentStepGround.Of(
             context.Config,
             definition,
@@ -113,14 +152,17 @@ public sealed class AdvisorRunner(
 
         // What the run stored of the asking step, rendered as a continuation record renders a step and within the
         // same bounds - the question's own record, read by {question.record}.
-        call = call with { Record = call.Record ?? RecordOf(layout, context, call) };
+        call = call with { Record = call.Record ?? RecordOf(layout, context, call, directory) };
 
         var prompt = PromptOf(files, context.Layout, call);
 
+        // The advice's records and its own conversations are its directory's, named on the request, so no path is
+        // spelt of an agent the asking step does not name: the request's agent is the asking step's, or the advisor's
+        // own definition where the step names none, and names no directory either way.
         var request = new AgentStepRequest(
             call.Run,
-            working ?? "advisor",
-            AdviceInstance(call),
+            working ?? call.Advisor.Agent,
+            $"{call.Instance}/{AdviceDirectoryName}/{Path.GetFileName(directory)}",
             Attempt: 1,
             call.Advisor.Agent,
             Provider: null,
@@ -135,7 +177,12 @@ public sealed class AdvisorRunner(
             workspace,
             OutputOf(call),
             Conversation: null,
-            new AgentLimits(definition.MaxTurns, definition.MaxBudgetUsd, definition.MaxMinutes is { } minutes ? TimeSpan.FromMinutes(minutes) : null, definition.StallSeconds, place.Definition.HandoffSeconds),
+            new AgentLimits(
+                definition.MaxTurns,
+                FlowRunBudget.Bound(definition.MaxBudgetUsd, call.BudgetLeftUsd),
+                definition.MaxMinutes is { } minutes ? TimeSpan.FromMinutes(minutes) : null,
+                definition.StallSeconds,
+                place.Definition.HandoffSeconds),
             Mask: launch.Mask(context.Layout, providers))
         {
             Ground = ground,
@@ -146,55 +193,86 @@ public sealed class AdvisorRunner(
             BackoffSeconds = call.Advisor.BackoffSeconds,
             Program = program?.Program,
             ProgramVersion = program?.Version,
+            RecordDirectory = directory,
+            SessionsDirectory = Path.Combine(directory, OrchestratorLayout.SessionsDirectoryName),
         };
+
+        var spend = new AgentRunSpend(providers, resolution.Serving.Model);
+        counting(spend);
 
         try
         {
-            var result = await runner.RunAsync(request, events: null, cancellationToken).ConfigureAwait(false);
+            var result = await runner.RunAsync(request, spend, cancellationToken).ConfigureAwait(false);
 
             if (result.Problem() is { } wrong)
             {
-                return NotObtained($"the advisor answered a result that does not hold together: {wrong}", request, result);
+                return NotObtained($"the advisor answered a result that does not hold together: {wrong}", result);
             }
 
             var advice = AdviceOf(result, call);
 
             return advice is null
-                ? NotObtained(result.Error ?? "the advisor's run ended without an answer", request, result)
-                : advice with { Model = result.Model, Directory = StepDirectoryOf(layout, call), Usd = (double?)result.Usage?.Cost?.Usd, Tokens = result.Usage?.Total.OutputTokens };
+                ? NotObtained(result.Error ?? "the advisor's run ended without an answer", result)
+                : advice with { Model = result.Model, Directory = directory, Usd = Spent(spend)?.Usd, Tokens = Spent(spend)?.Tokens };
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
         catch (HarnessException refused)
         {
-            return NotObtained(refused.Message, request, result: null);
+            return NotObtained(refused.Message, result: null);
         }
         catch (Exception failed)
         {
-            return NotObtained(failed.Message, request, result: null);
+            return NotObtained(failed.Message, result: null);
         }
 
-        FlowAdvice NotObtained(string why, AgentStepRequest? asked = null, AgentRunResult? result = null)
+        FlowAdvice NotObtained(string why, AgentRunResult? result)
             => new(
                 Answer: null,
                 Why: null,
                 Text: null,
                 Model: result?.Model,
-                Directory: asked is null ? null : StepDirectoryOf(layout, call),
+                Directory: directory,
                 NotObtained: why,
-                Usd: (double?)result?.Usage?.Cost?.Usd,
-                Tokens: result?.Usage?.Total.OutputTokens);
+                Usd: Spent(spend)?.Usd,
+                Tokens: Spent(spend)?.Tokens);
+
+        static (double Usd, long Tokens)? Spent(AgentRunSpend counted)
+            => counted.Reported ? (counted.Usd, counted.Tokens) : null;
+
+        // Before the advice has a directory or a model, nothing was made and nothing spent.
+        static FlowAdvice Unasked(string why)
+            => new(Answer: null, Why: null, Text: null, NotObtained: why);
     }
 
-    /// <summary>Where the advice's records are: under the asking step's own directory, whichever agent it names.</summary>
+    /// <summary>
+    /// The directory of a new advice, made: <c>advice/&lt;n&gt;/</c> under the asking step's own directory - spelt by the
+    /// one owner of where a step instance is kept, its item's brackets as the run's store writes them - numbered one
+    /// past the highest number already there, so an advice a session before this one left, or another step's question
+    /// of the same step, is never written over.
+    /// </summary>
     /// <param name="layout">The run's own paths.</param>
     /// <param name="call">The asking.</param>
-    private static string StepDirectoryOf(OrchestratorLayout layout, FlowAdvisorCall call)
-        => call.Agent is { } agent
-            ? layout.AgentStepDirectory(agent, AdviceInstance(call))
-            : Path.Combine(layout.StepDirectory(call.Instance), "advice", call.Advice.ToString(CultureInfo.InvariantCulture));
+    private string NextAdviceDirectory(OrchestratorLayout layout, FlowAdvisorCall call)
+    {
+        var advices = Path.Combine(layout.InstanceDirectory(call.Instance, call.Agent), AdviceDirectoryName);
+
+        lock (_numbering)
+        {
+            var highest = fileSystem.DirectoryExists(advices)
+                ? fileSystem.EnumerateDirectories(advices)
+                    .Select(taken => int.TryParse(Path.GetFileName(taken), NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0)
+                    .DefaultIfEmpty(0)
+                    .Max()
+                : 0;
+            var directory = Path.Combine(advices, (highest + 1).ToString(CultureInfo.InvariantCulture));
+
+            fileSystem.CreateDirectory(directory);
+            return directory;
+        }
+    }
 
     /// <summary>
     /// What the run stored of the asking step, rendered as a continuation record renders a step and within the same
@@ -203,26 +281,21 @@ public sealed class AdvisorRunner(
     /// <param name="layout">The run's own paths.</param>
     /// <param name="context">The repository's context, whose configuration bounds the record.</param>
     /// <param name="call">The asking.</param>
-    private string? RecordOf(OrchestratorLayout layout, HarnessContext context, FlowAdvisorCall call)
+    /// <param name="directory">The advice's own directory, whose work directory holds the record's copies.</param>
+    private string? RecordOf(OrchestratorLayout layout, HarnessContext context, FlowAdvisorCall call, string directory)
     {
-        var asking = call.Agent is { } agent ? layout.AgentStepDirectory(agent, call.Instance) : layout.StepDirectory(call.Instance);
         var work = new AgentContinuationWork(
             call.Instance,
-            [new AgentContinuedStep(call.Instance, "done", asking)],
+            [new AgentContinuedStep(call.Instance, "done", layout.InstanceDirectory(call.Instance, call.Agent))],
             ChangedPaths: [],
             RedLegs: [],
             CutOff: false);
 
         return new AgentContinuation(fileSystem, harnessOutput).Render(
             work,
-            Path.Combine(StepDirectoryOf(layout, call), "work"),
+            Path.Combine(directory, "work"),
             AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation));
     }
-
-    /// <summary>The advice's step instance: the asking step's own, with the advice's directory under it.</summary>
-    /// <param name="call">The asking.</param>
-    private static string AdviceInstance(FlowAdvisorCall call)
-        => Path.Combine(call.Instance, "advice", call.Advice.ToString(CultureInfo.InvariantCulture));
 
     /// <summary>
     /// The advice the run's answer holds: its <c>answer</c> one of the question's - the schema refuses any other - with
@@ -244,28 +317,46 @@ public sealed class AdvisorRunner(
     }
 
     /// <summary>
-    /// The output the advice is held to: the engine's own schema, its <c>answer</c> the question's own answers - the
-    /// schema itself refusing any other - and a <c>text</c> where the answer takes one.
+    /// The output the advice is held to: the engine's own schema, in the subset every answer is held to - its
+    /// <c>answer</c> one of the question's own, the schema itself refusing any other, with <c>why</c> - one closed
+    /// shape for the answers that take a text, which it requires, and one for those that take none, which has no
+    /// <c>text</c> at all; <c>anyOf</c> the two where the question has both kinds, the one shape where it has one.
     /// </summary>
     /// <param name="call">The asking, whose answers name the enum and whose options say which takes a text.</param>
     private static AgentOutput OutputOf(FlowAdvisorCall call)
     {
-        var answers = string.Join(", ", call.Answers.Select(option => JsonSerializer.Serialize(option.Answer, JsonStateFile.LineOptions)));
-        var takes = string.Join(", ", call.Answers.Where(option => option.Text).Select(option => JsonSerializer.Serialize(option.Answer, JsonStateFile.LineOptions)));
-        var schema = "{\n"
-            + "  \"type\": \"object\",\n"
-            + "  \"properties\": {\n"
-            + "    \"answer\": { \"type\": \"string\", \"enum\": [" + answers + "] },\n"
-            + "    \"why\": { \"type\": \"string\" },\n"
-            + "    \"text\": " + (call.Answers.Any(option => option.Text) ? "{ \"type\": \"string\" }" : "null") + "\n"
-            + "  },\n"
-            + "  \"required\": [\"answer\", \"why\"]"
-            + (takes.Length > 0
-                ? ",\n  \"allOf\": [{ \"if\": { \"properties\": { \"answer\": { \"enum\": [" + takes + "] } } }, \"then\": { \"required\": [\"text\"] } }]"
-                : string.Empty)
-            + "\n}";
+        var shapes = call.Answers
+            .GroupBy(option => option.Text)
+            .OrderByDescending(group => group.Key)
+            .Select(group => ShapeOf([.. group.Select(option => option.Answer)], takesText: group.Key))
+            .ToList();
+        var schema = shapes.Count == 1 ? shapes[0] : new JsonObject { ["anyOf"] = new JsonArray([.. shapes]) };
 
-        return new AgentOutput(call.QuestionId, schema);
+        return new AgentOutput(call.QuestionId, schema.ToJsonString(JsonStateFile.LineOptions));
+
+        static JsonObject ShapeOf(IReadOnlyList<string> answers, bool takesText)
+        {
+            var properties = new JsonObject
+            {
+                ["answer"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray([.. answers.Select(answer => (JsonNode?)answer)]) },
+                ["why"] = new JsonObject { ["type"] = "string" },
+            };
+            var required = new JsonArray("answer", "why");
+
+            if (takesText)
+            {
+                properties["text"] = new JsonObject { ["type"] = "string" };
+                required.Add("text");
+            }
+
+            return new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = properties,
+                ["required"] = required,
+                ["additionalProperties"] = false,
+            };
+        }
     }
 
     /// <summary>
@@ -302,7 +393,7 @@ public sealed class AdvisorRunner(
     private static FlowValue QuestionOf(FlowAdvisorCall call)
         => FlowValue.Of(new JsonObject
         {
-            ["step"] = call.Step,
+            ["step"] = call.Instance,
             ["kind"] = call.Kind,
             ["problem"] = call.Problem + (call.Tried is { Length: > 0 } tried ? $"\nTried: {tried}" : string.Empty) + (call.Means is { Length: > 0 } means ? $"\nMeans: {means}" : string.Empty),
             ["answers"] = string.Join("\n", call.Answers.Select(option => $"- {option.Answer}: {option.Does}{(option.Text ? " (takes a text)" : string.Empty)}")),
