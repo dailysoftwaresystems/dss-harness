@@ -71,8 +71,11 @@ public sealed class RunReporterTests
             => Task.FromResult<string?>(null);
     }
 
-    /// <summary>A repository with one workflow declared that names a reporter, and a run of it paused on its pause step.</summary>
-    private static async Task<(HarnessFactory Harness, TempDirectory Tree, Agents Reporter, FlowService Service, string Run)> PausedAsync(bool reporter = true)
+    /// <summary>
+    /// A repository with one workflow declared that names a reporter, and a run of it paused on its pause step - where
+    /// <paramref name="claudeCode"/> is given, the slot naming it as the Claude Code to start and the service finding it.
+    /// </summary>
+    private static async Task<(HarnessFactory Harness, TempDirectory Tree, Agents Reporter, FlowService Service, string Run)> PausedAsync(bool reporter = true, string? claudeCode = null)
     {
         var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -104,7 +107,7 @@ public sealed class RunReporterTests
         temp.WriteFile($".harness-config/workflows/{Workflow}/agents/reporter.md", "---\nname: reporter\ndescription: words the run's facts\nmaxTurns: 12\nmaxMinutes: 3\ncapabilities: [read]\n---\nYou word the run's facts.\n");
         temp.WriteFile($".harness-config/workflows/{Workflow}/prompts/status.md", "The facts:\n{status.facts}\nThe records:\n{status.records}\n");
         temp.WriteFile($".harness-config/workflows/{Workflow}/prompts/ask.md", "The question:\n{status.question}\nThe facts:\n{status.facts}\nThe records:\n{status.records}\n");
-        OrchestrationKit.Write(temp.Path, Path.Combine(".harness-config", "workflows", ".env", "a.env"), "ZAI_API_KEY=sk-test-one\n");
+        OrchestrationKit.Write(temp.Path, Path.Combine(".harness-config", "workflows", ".env", "a.env"), "ZAI_API_KEY=sk-test-one\n" + (claudeCode is null ? string.Empty : $"CLAUDE_EXECUTABLE={claudeCode}\n"));
         harness.FilePermissions.ProtectSecret(Path.Combine(temp.Path, ".harness-config", "workflows", ".env", "a.env"));
 
         var reporterRunner = new Agents();
@@ -124,7 +127,17 @@ public sealed class RunReporterTests
             harness.GitClient,
             harness.AgentService,
             reporterRunner,
-            new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform));
+            new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform),
+            updates: claudeCode is null
+                ? null
+                : new DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService(
+                    harness.ProcessTable,
+                    harness.ProcessRunner,
+                    harness.FileSystem,
+                    harness.FilePermissions,
+                    harness.Platform,
+                    harness.Identity,
+                    new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform)));
 
         var started = await service.RunAsync(temp.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
         Assert.Equal(FlowExit.Paused, started.ExitCode);
@@ -283,6 +296,36 @@ public sealed class RunReporterTests
             Directory.EnumerateFiles(Path.Combine(temp.Path, ".orchestrators", run, "asks"), "*", SearchOption.AllDirectories),
             file => Assert.DoesNotContain("sk-test-one", File.ReadAllText(file), StringComparison.Ordinal));
         Assert.Contains(new ClaudeTranscripts(harness.FileSystem, harness.Platform).ConfigDirectory, reporter.Asked.Single().Ground!.ClaudeCodeDirectories);
+    }
+
+    /// <summary>
+    /// Where the reporter's order holds the client that starts a program, the program is found as a run's step finds it
+    /// - one the slot names read for what it is, nothing installed or brought up to date - and the request carries it and
+    /// the version it answered, for the client to start what was found.
+    /// </summary>
+    [Fact]
+    public async Task TheReportersClaudeCode_IsFoundAndCarriedOnItsRequest()
+    {
+        var named = await DotnetAsync(new HarnessFactory());
+        var (_, temp, reporter, service, run) = await PausedAsync(claudeCode: named);
+        using var disposed = temp;
+
+        var status = await service.AskStatusAsync(temp.Path, run, json: false, Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, status.ExitCode);
+        var asked = reporter.Asked.Single();
+        Assert.Equal(named, asked.Program);
+        Assert.NotNull(asked.ProgramVersion);
+    }
+
+    /// <summary>Where this machine's dotnet is, as the system finds it: a program that answers <c>--version</c>, standing in for Claude Code.</summary>
+    /// <param name="harness">The harness whose process runner asks.</param>
+    private static async Task<string> DotnetAsync(HarnessFactory harness)
+    {
+        var where = harness.Platform.Current == DssHarness.Core.Platform.PlatformId.Windows ? "where.exe" : "which";
+        var found = await harness.ProcessRunner.RunAsync(new DssHarness.Core.Processes.ProcessRequest { FileName = where, Arguments = ["dotnet"] }, Token);
+
+        return found.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)[0].Trim();
     }
 
     /// <summary>

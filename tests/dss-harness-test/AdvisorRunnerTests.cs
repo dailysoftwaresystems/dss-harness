@@ -81,7 +81,7 @@ public sealed class AdvisorRunnerTests
         return (kit, runner);
     }
 
-    private AdvisorRunner Runner(OrchestrationKit kit, Agents agents)
+    private AdvisorRunner Runner(OrchestrationKit kit, Agents agents, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null)
         => new(
             kit.Harness.ContextLoader,
             kit.Harness.Platform,
@@ -89,7 +89,8 @@ public sealed class AdvisorRunnerTests
             agents,
             kit.Harness.FileSystem,
             new AgentKeyStore(kit.Harness.FileSystem, kit.Harness.FilePermissions, kit.Harness.Platform),
-            kit.Harness.Output);
+            kit.Harness.Output,
+            updates);
 
     private static FlowAdvisorCall Call(OrchestrationKit kit, string? agent = "reader")
         => new(
@@ -171,6 +172,64 @@ public sealed class AdvisorRunnerTests
         Assert.Equal([work], asked.Ground!.WritableRoots);
         Assert.Contains(new ClaudeTranscripts(kit.Harness.FileSystem, kit.Harness.Platform).ConfigDirectory, asked.Ground.ClaudeCodeDirectories);
         Assert.Equal($"the key {DssHarness.Core.Runners.ActionValues.Mask}", asked.Mask!.Redact("the key sk-test-one"));
+    }
+
+    /// <summary>
+    /// Where the advisor's order holds the client that starts a program, the program is found as a run's step finds it -
+    /// one the slot names read for what it is, nothing installed or brought up to date - and the request carries it and
+    /// the version it answered, for the client to start what was found; one not there is why no advice was obtained,
+    /// and the advisor's run is never asked.
+    /// </summary>
+    [Fact]
+    public async Task TheAdvisorsClaudeCode_IsFoundAndCarriedOnItsRequest()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var named = await DotnetAsync(kit.Harness);
+        var slot = Path.Combine(kit.Main, ".harness-config", "workflows", ".env", "a.env");
+
+        File.WriteAllText(
+            Path.Combine(kit.Main, ".harness-config", "config.json"),
+            File.ReadAllText(Path.Combine(kit.Main, ".harness-config", "config.json")).Replace("\"client\": \"claude-api\"", "\"client\": \"claude-code\"", StringComparison.Ordinal));
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", ".env", "a.env"), $"ANTHROPIC_KEY=sk-test-one\nCLAUDE_EXECUTABLE={named}\n");
+        kit.Harness.FilePermissions.ProtectSecret(slot);
+        agents.Answer = _ => new AgentRunResult(AgentRunStatus.Completed, StructuredOutput: """{"answer":"more","why":"nearly done"}""");
+
+        var updates = new DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService(
+            kit.Harness.ProcessTable,
+            kit.Harness.ProcessRunner,
+            kit.Harness.FileSystem,
+            kit.Harness.FilePermissions,
+            kit.Harness.Platform,
+            kit.Harness.Identity,
+            new AgentKeyStore(kit.Harness.FileSystem, kit.Harness.FilePermissions, kit.Harness.Platform));
+
+        var advice = await Runner(kit, agents, updates).AdviseAsync(Call(kit), Token);
+
+        Assert.Equal("more", advice.Answer);
+        var asked = agents.Asked.Single();
+        Assert.Equal(named, asked.Program);
+        Assert.NotNull(asked.ProgramVersion);
+
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", ".env", "a.env"), $"ANTHROPIC_KEY=sk-test-one\nCLAUDE_EXECUTABLE={Path.Combine(kit.Main, "not-there.exe")}\n");
+        kit.Harness.FilePermissions.ProtectSecret(slot);
+
+        var missing = await Runner(kit, agents, updates).AdviseAsync(Call(kit) with { Advice = 3 }, Token);
+
+        Assert.Null(missing.Answer);
+        Assert.Contains("not-there", missing.NotObtained, StringComparison.Ordinal);
+        Assert.Single(agents.Asked);
+    }
+
+    /// <summary>Where this machine's dotnet is, as the system finds it: a program that answers <c>--version</c>, standing in for Claude Code.</summary>
+    /// <param name="harness">The harness whose process runner asks.</param>
+    private static async Task<string> DotnetAsync(HarnessFactory harness)
+    {
+        var where = harness.Platform.Current == DssHarness.Core.Platform.PlatformId.Windows ? "where.exe" : "which";
+        var found = await harness.ProcessRunner.RunAsync(new DssHarness.Core.Processes.ProcessRequest { FileName = where, Arguments = ["dotnet"] }, Token);
+
+        return found.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)[0].Trim();
     }
 
     /// <summary>
