@@ -356,7 +356,7 @@ public sealed class FlowStatusTests
 
         // Its bound, 2, a person's more and an update's iteration: 4, three of them made - one more of three instances.
         Assert.Equal(
-            "left      at least 4 step instances, at most 7 step instances (the engine's bounds); update u1 owes 'rounds#4' to its loop, and it is not made yet",
+            "left      at least 4 step instances, at most 7 step instances (the engine's bounds); update u1 added round 4 of 'rounds', and it is not made yet",
             facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
 
         // At its bound with its question open, the loop's own record is all that is left of it: no iteration is counted
