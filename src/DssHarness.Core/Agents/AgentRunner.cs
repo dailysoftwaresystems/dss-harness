@@ -838,8 +838,10 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             Withheld = step.Withheld,
             Commands = step.Commands,
             WebSearch = step.WebSearch,
-            SessionsDirectory = Layout(step).AgentSessionsDirectory(step.Agent),
+            SessionsDirectory = step.SessionsDirectory ?? Layout(step).AgentSessionsDirectory(step.Agent),
             Entries = step.Entries,
+            Chat = step.Chat,
+            Interrupt = step.Interrupt,
         };
 
     /// <summary>
@@ -895,8 +897,10 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             Withheld = step.Withheld,
             Commands = step.Commands,
             WebSearch = step.WebSearch,
-            SessionsDirectory = Layout(step).AgentSessionsDirectory(step.Agent),
+            SessionsDirectory = step.SessionsDirectory ?? Layout(step).AgentSessionsDirectory(step.Agent),
             Entries = entry.Entries,
+            Chat = step.Chat,
+            Interrupt = step.Interrupt,
         };
 
     /// <summary>The step's own directory, as the one owner of the paths spells it - or the one its request names, for a run the engine keeps elsewhere than an agent's steps (the run's reporter, under the run's <c>asks/</c>).</summary>

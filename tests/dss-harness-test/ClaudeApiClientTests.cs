@@ -10,6 +10,7 @@ using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Web;
+using DssHarness.Core.Web.Search;
 
 namespace DssHarness.Tests;
 
@@ -427,6 +428,66 @@ public sealed class ClaudeApiClientTests : IDisposable
                 return Task.CompletedTask;
             },
             () => 0);
+    }
+
+    /// <summary>
+    /// A side-task's native search is one request of the harness's own: the provider's web search server tool declared
+    /// alone, the request signed with the side-task's key, its results read from the answer's
+    /// <c>web_search_tool_result</c> blocks and its requests from the answer's usage - and no conversation of the run's
+    /// touched.
+    /// </summary>
+    [Fact]
+    public async Task ANativeSearch_AsksTheProvidersOwn_ReadingItsResultsAndItsRequests()
+    {
+        _endpoint.Then(ApiReply.Stream(
+            "event: content_block_start\n"
+            + "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"web_search_tool_result\",\"content\":"
+            + "[{\"type\":\"web_search_result\",\"title\":\"One\",\"url\":\"https://example.org/1\"},"
+            + "{\"type\":\"web_search_result\",\"title\":\"Two\",\"url\":\"https://example.org/2\"}]}}\n\n"
+            + "event: message_delta\n"
+            + "data: {\"type\":\"message_delta\",\"delta\":{},\"usage\":{\"server_tool_use\":{\"web_search\":{\"requests\":2}}}}\n\n"
+            + "event: message_stop\n"
+            + "data: {\"type\":\"message_stop\"}\n\n"));
+
+        var connection = new ApiConnection(TimeProvider.System, _endpoint);
+        _opened.Add(connection);
+        var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com", Model, new AgentKey("WORK_KEY", "sk-1"));
+
+        var (part, requests) = await search.SearchAsync("polymorphism in System.Text.Json", TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, requests);
+        Assert.Equal("native", part.Source);
+        Assert.Equal(WebSearchOutcome.Ok, part.Answer.Outcome);
+        Assert.Equal(["One", "Two"], part.Answer.Results.Select(result => result.Title));
+        Assert.All(part.Answer.Results, result => Assert.StartsWith("https://example.org/", result.Link, StringComparison.Ordinal));
+
+        var asked = _endpoint.Asked.Single();
+        var body = JsonNode.Parse(asked.Body!)!;
+
+        Assert.Equal([ClaudeApiNativeSearch.ToolType], body["tools"]!.AsArray().Select(tool => tool!["type"]!.GetValue<string>()));
+        Assert.Equal("sk-1", asked.Headers.Single(header => header.Key == "x-api-key").Value);
+    }
+
+    /// <summary>
+    /// A native search the provider fails is a part that says so and asks nothing: no results, no requests counted -
+    /// the configured sources' answers stand beside it.
+    /// </summary>
+    [Fact]
+    public async Task ANativeSearchTheProviderFails_IsAFailedPartThatAskedNothing()
+    {
+        _endpoint.Then(ApiReply.Stream(
+            "event: error\n"
+            + "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"));
+
+        var connection = new ApiConnection(TimeProvider.System, _endpoint);
+        _opened.Add(connection);
+        var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com", Model, new AgentKey("WORK_KEY", "sk-1"));
+
+        var (part, requests) = await search.SearchAsync("anything", TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, requests);
+        Assert.Equal(("native", WebSearchOutcome.Failed), (part.Source, part.Answer.Outcome));
+        Assert.Equal("Overloaded", part.Answer.Why);
     }
 
     private async Task<AgentRunResult> Ran(AgentRun run)

@@ -71,6 +71,13 @@ public sealed class ClaudeApiClient(
         var entries = run.Entries!;
         var provider = new ClaudeApiProvider(_connection, entries.Provider.Api, ClaudeApiSettings.Of(entries.Client));
 
+        // A side-task's web search asks the provider's own beside the configured sources, as its native part: a request
+        // of the harness's own, signed with the side-task's key. A step's search asks the configured sources alone.
+        if (run.Ground is { SideTask: true } && run.WebSearch is not null && run.Credential?.Keys is [_, ..] keys)
+        {
+            run = run with { NativeSearch = new ClaudeApiNativeSearch(_connection, entries.Provider.Api, run.Model ?? entries.Model.Code, keys[0]) };
+        }
+
         return _loop.RunAsync(run, events, provider, ToolLoopTerms.Of(ClientName, entries), cancellationToken);
     }
 }

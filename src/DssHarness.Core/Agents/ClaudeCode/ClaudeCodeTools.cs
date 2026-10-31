@@ -35,6 +35,13 @@ public static class ClaudeCodeTools
         (AgentCapability.Web, []),
     ];
 
+    /// <summary>
+    /// Claude Code's own web tools, kept in a side-task's <c>--tools</c> beside the engine's tool server (value 395):
+    /// its <c>WebSearch</c> is the side-task's <c>native</c> search, and its <c>WebFetch</c> another way to read a page.
+    /// A step's launch is given neither - the web reaches a step through the harness's own tools alone.
+    /// </summary>
+    public static IReadOnlyList<ClaudeCodeTool> OwnWeb { get; } = [new("WebFetch", "url"), new("WebSearch", "query")];
+
     /// <summary>The engine's tool server, as <c>--mcp-config</c> names it and as Claude Code begins the names of its tools.</summary>
     public const string Server = Runtime.AgentToolServer.Name;
 
@@ -102,11 +109,15 @@ public static class ClaudeCodeTools
 
     /// <summary>The tools a launch is given, in the table's order, each once.</summary>
     /// <param name="capabilities">What its tools are given by: the agent's own, or the reporter's (<see cref="Policy.AgentPolicyGround.Given"/>).</param>
-    public static IReadOnlyList<string> Of(IReadOnlyList<AgentCapability> capabilities)
+    /// <param name="ownWeb">Whether Claude Code's own web tools are given with them, as a side-task's launch alone is (value 395).</param>
+    public static IReadOnlyList<string> Of(IReadOnlyList<AgentCapability> capabilities, bool ownWeb = false)
     {
         ArgumentNullException.ThrowIfNull(capabilities);
 
-        return [.. Table.Where(row => capabilities.Contains(row.Capability)).SelectMany(row => row.Tools).Select(tool => tool.Name).Distinct(StringComparer.Ordinal)];
+        return [.. Table.Where(row => capabilities.Contains(row.Capability))
+            .SelectMany(row => row.Tools.Concat(row.Capability == AgentCapability.Web && ownWeb ? OwnWeb : []))
+            .Select(tool => tool.Name)
+            .Distinct(StringComparer.Ordinal)];
     }
 
     /// <summary>The table's row of <paramref name="tool"/>: its capability and what its input names; null for a tool the table does not name.</summary>
@@ -119,6 +130,11 @@ public static class ClaudeCodeTools
             {
                 return (capability, named);
             }
+        }
+
+        foreach (var named in OwnWeb.Where(named => string.Equals(named.Name, tool, StringComparison.Ordinal)))
+        {
+            return (AgentCapability.Web, named);
         }
 
         return null;

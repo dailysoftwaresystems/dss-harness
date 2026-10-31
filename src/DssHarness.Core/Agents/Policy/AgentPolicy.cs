@@ -603,18 +603,21 @@ public sealed class AgentPolicy
                     continue;
                 }
 
+                // Git's own at any depth, as Claude Code's own guard holds it: a nested repository's
+                // or a submodule's .git runs its hooks as surely as the root's. Whatever protectedPaths
+                // says, and for a step's ground under the worktree rules - which a side-task's ground
+                // holds off, keeping this one alone of them, for git's own files are written by git's
+                // verbs and this tool's.
+                if ((_ground.WorktreeRules || _ground.SideTask) && relative.Split('/').Any(segment => segment.Equals(".git", Refusals)))
+                {
+                    return new AgentPolicyAnswer.Denied(
+                        GitsOwnRule,
+                        AgentPolicySource.Builtin,
+                        $"'{form}' is git's own: written by git's verbs and this tool's, never by an agent's file tool, whatever protectedPaths says");
+                }
+
                 if (_ground.WorktreeRules)
                 {
-                    // Git's own at any depth, as Claude Code's own guard holds it: a nested repository's
-                    // or a submodule's .git runs its hooks as surely as the root's.
-                    if (relative.Split('/').Any(segment => segment.Equals(".git", Refusals)))
-                    {
-                        return new AgentPolicyAnswer.Denied(
-                            GitsOwnRule,
-                            AgentPolicySource.Builtin,
-                            $"'{form}' is git's own: written by git's verbs and this tool's, never by an agent's file tool, whatever protectedPaths says");
-                    }
-
                     foreach (var (pattern, policyText) in _worktreePolicyWrites)
                     {
                         if (pattern.Matches(relative, Refusals) && !SkillsException(relative, _platform.PathComparison))
@@ -883,26 +886,42 @@ public sealed class AgentPolicy
             }
         }
 
-        // The tool's own verbs and run-side-task are refused whatever worktreeRules says: an agent
-        // does not move its own run, nor leave its step's limits. A verb read from a response file
-        // is one this cannot see.
-        if (roots.Equals(program, ToolPackage.Command) && start + 1 < command.Count
-            && (ToolVerbs.Contains(command[start + 1], roots) || command[start + 1].StartsWith('@')))
+        // The tool's own verbs are refused whatever worktreeRules says: an agent does not move its own run. A verb read
+        // from a response file is one this cannot see, and is refused alike. A side-task's agent is the one exception on
+        // the verbs themselves: it works as the person's own session does, over the main tree, and the tool's verbs are
+        // open to it - run-side-task alone stays refused, for an agent does not start another agent.
+        if (roots.Equals(program, ToolPackage.Command) && start + 1 < command.Count && command[start + 1].StartsWith('@'))
         {
             return new AgentPolicyAnswer.Denied(
                 "the orchestrator and agent verbs",
                 AgentPolicySource.Builtin,
-                command[start + 1].StartsWith('@')
-                    ? $"'{ToolPackage.Command} {command[start + 1]}' is refused: its verb is in a file this does not read, and an agent does not move its own run"
-                    : $"'{ToolPackage.Command} {command[start + 1]}' is refused: an agent does not move its own run");
+                $"'{ToolPackage.Command} {command[start + 1]}' is refused: its verb is in a file this does not read, and an agent does not move its own run");
         }
 
-        if (roots.Equals(program, "run-side-task"))
+        if (roots.Equals(program, ToolPackage.Command) && start + 1 < command.Count
+            && roots.Equals(command[start + 1], SideTasks.SideTaskService.RunCommand))
         {
             return new AgentPolicyAnswer.Denied(
                 "run-side-task",
                 AgentPolicySource.Builtin,
-                "'run-side-task' is refused: an agent does not leave its step's limits");
+                $"'{ToolPackage.Command} {SideTasks.SideTaskService.RunCommand}' is refused: an agent does not leave its step's limits");
+        }
+
+        if (!_ground.SideTask && roots.Equals(program, ToolPackage.Command) && start + 1 < command.Count
+            && ToolVerbs.Contains(command[start + 1], roots))
+        {
+            return new AgentPolicyAnswer.Denied(
+                "the orchestrator and agent verbs",
+                AgentPolicySource.Builtin,
+                $"'{ToolPackage.Command} {command[start + 1]}' is refused: an agent does not move its own run");
+        }
+
+        if (roots.Equals(program, SideTasks.SideTaskService.RunCommand))
+        {
+            return new AgentPolicyAnswer.Denied(
+                "run-side-task",
+                AgentPolicySource.Builtin,
+                $"'{SideTasks.SideTaskService.RunCommand}' is refused: an agent does not leave its step's limits");
         }
 
         // The Run rules, against each reading of the command's own words in turn: git configured

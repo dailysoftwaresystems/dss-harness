@@ -151,7 +151,8 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 /// <param name="WorktreeRules">
 /// Whether the worktree rules are on (<c>agentPolicy.worktreeRules</c>, which the configuration
 /// holds on where nothing is said). The tool's own verbs and <c>run-side-task</c> are refused
-/// whatever this says.
+/// whatever this says - to a step's agent; a side-task's ground (<see cref="SideTask"/>) holds the
+/// verbs open to it as the person's own session's are, <c>run-side-task</c> excepted.
 /// </param>
 /// <param name="ProtectedPaths">
 /// Whether Claude Code's protected paths are refused on every client
@@ -161,6 +162,12 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 /// The tool's own state, as absolute paths under each tree this agent touches, from
 /// <c>HarnessLayout.StatePaths</c>: written by the tool's verbs alone, never by an agent's - the
 /// agent's own work directory excepted, for it is a writable root.
+/// </param>
+/// <param name="SideTask">
+/// Whether this agent is a side-task's, outside every workflow: the main checkout is its writable root, every limit of
+/// a run's is dropped but the built-in refusals, and this tool's own verbs are open to it as the person's own session's
+/// are - <c>run-side-task</c> alone stays refused, for an agent does not start another agent. False for every step of
+/// every run, whose agent does not move its own run.
 /// </param>
 public sealed record AgentPolicyGround(
     string WorkingDirectory,
@@ -175,7 +182,8 @@ public sealed record AgentPolicyGround(
     string? ReporterRoot,
     bool WorktreeRules,
     bool ProtectedPaths,
-    IReadOnlyList<string> StateDirectories)
+    IReadOnlyList<string> StateDirectories,
+    bool SideTask = false)
 {
     /// <inheritdoc cref="AgentPolicyGround" path="/param[@name='WebDomains']"/>
     public IReadOnlyList<string>? WebDomains { get; init => field = Listed(value, nameof(WebDomains)); } = Listed(WebDomains, nameof(WebDomains));

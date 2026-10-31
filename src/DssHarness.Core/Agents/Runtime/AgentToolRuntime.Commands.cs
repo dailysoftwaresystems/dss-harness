@@ -195,7 +195,8 @@ public sealed partial class AgentToolRuntime
     /// <summary>
     /// <c>web_search</c>: the query asked of the step's sources - those it names, else every one - by the harness's own
     /// search, every rule of which is <see cref="Web.Search.HarnessWebSearch"/>'s; each source's part in turn, and a
-    /// search none of whose sources answered failed, each part's cause said.
+    /// search none of whose sources answered failed, each part's cause said. A side-task's search asks one more beside
+    /// them: the provider's own, its <c>native</c> part, where the run carries one and the agent named none or named it.
     /// </summary>
     private async Task<Answer> WebSearchAsync(JsonObject input, CancellationToken cancellationToken)
     {
@@ -213,7 +214,50 @@ public sealed partial class AgentToolRuntime
                 : Answer.Failed(refusal);
         }
 
+        if (_run.NativeSearch is { } native)
+        {
+            searched = searched with { Parts = [.. searched.Parts, await NativeAsync(native, query, cancellationToken).ConfigureAwait(false)] };
+        }
+
         return searched.Answered ? Answer.Done(searched.Text) : Answer.Failed($"no source answered the search:\n\n{searched.Text}");
+    }
+
+    /// <summary>
+    /// The provider's own search, asked as one more source of the same search: its part recorded as every source's is,
+    /// its requests counted for the run's usage - and a part that failed never hides the configured sources' answers.
+    /// </summary>
+    /// <param name="native">The provider's own search, which the run carries.</param>
+    /// <param name="query">The query, as the agent wrote it.</param>
+    /// <param name="cancellationToken">Stops the search.</param>
+    private async Task<Web.Search.WebSearchPart> NativeAsync(IAgentNativeSearch native, string query, CancellationToken cancellationToken)
+    {
+        Tally.Asked();
+
+        try
+        {
+            var (part, requests) = await native.SearchAsync(query, cancellationToken).ConfigureAwait(false);
+
+            Tally.Searched(requests);
+            await _records.WebSearchedAsync(part).ConfigureAwait(false);
+
+            return part;
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException or System.Net.Http.HttpRequestException or System.Text.Json.JsonException)
+        {
+            var failed = new Web.Search.WebSearchPart(
+                native.Source,
+                native.Source,
+                Version: 1,
+                query,
+                Web.Search.WebSearchAnswer.Failed(ex is OperationCanceledException ? "the search was stopped" : ex.Message),
+                Withheld: 0,
+                Cached: false,
+                KeyMissing: null);
+
+            await _records.WebSearchedAsync(failed).ConfigureAwait(false);
+
+            return failed;
+        }
     }
 
     /// <summary>What records the step's searches: its own records, and its tally of the requests it made.</summary>

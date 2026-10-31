@@ -150,7 +150,7 @@ public sealed class ClaudeCodeClient(
         }
 
         var totals = new Totals();
-        var tools = ClaudeCodeTools.Of(ground.Given);
+        var tools = ClaudeCodeTools.Of(ground.Given, ground.SideTask);
         var policy = new AgentPolicy(_fileSystem, _platform, ground);
 
         // The runtime's tools the launch takes from the engine's tool server: the web's, on a step that has the web.
@@ -275,6 +275,15 @@ public sealed class ClaudeCodeClient(
 
         /// <summary>The stall bound of a message the launch had not taken, counted from when <paramref name="Taken"/> messages were taken.</summary>
         public sealed record Untaken(int Taken) : Arrival;
+
+        /// <summary>
+        /// The messages of a chat ended: the person left, and a launch that was held open between their messages ends
+        /// with its last text.
+        /// </summary>
+        public sealed record ChatEnded : Arrival;
+
+        /// <summary>The engine interrupted the agent's current turn alone, the launch left open for the chat's next message.</summary>
+        public sealed record TurnInterrupted : Arrival;
     }
 
     /// <summary>Where a launch stands with the handoff.</summary>
@@ -351,6 +360,8 @@ public sealed class ClaudeCodeClient(
         private bool _keyRefused;
         private string? _lastText;
         private string? _lead;
+        private string? _chatText;
+        private string? _chatInterruptId;
         private decimal _cost;
 
         public async Task<LaunchOutcome> RunAsync(CancellationToken cancellationToken)
@@ -423,6 +434,11 @@ public sealed class ClaudeCodeClient(
                 TaskScheduler.Default);
             _ = run.Handoff.WhenAsked.ContinueWith(
                 asked => _arrivals.Writer.TryWrite(new Arrival.HandoffAsked(asked.Result)),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            _ = run.Interrupt?.Asked.ContinueWith(
+                _ => _arrivals.Writer.TryWrite(new Arrival.TurnInterrupted()),
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
@@ -511,6 +527,8 @@ public sealed class ClaudeCodeClient(
                         : null,
                     Arrival.Served answered => OnServed(answered),
                     Arrival.ServeFailed failed => OnServeFailed(failed),
+                    Arrival.ChatEnded => ChatEnded(),
+                    Arrival.TurnInterrupted => await OnTurnInterruptedAsync().ConfigureAwait(false),
                     _ => null,
                 };
 
@@ -1095,6 +1113,24 @@ public sealed class ClaudeCodeClient(
                 return null;
             }
 
+            if (answered.RequestId == _chatInterruptId)
+            {
+                _chatInterruptId = null;
+
+                if (!answered.Succeeded)
+                {
+                    await Emit(new Notice($"Claude Code refused the turn's interrupt: {Masked(answered.Error ?? "no reason given")}")).ConfigureAwait(false);
+                    return null;
+                }
+
+                // The receipt names each waiting message the interrupt dropped, by the id the engine gave it: no turn
+                // takes them. The turn it cuts ends by itself, and the launch stays open for the chat's next message.
+                _pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true);
+                Watch();
+
+                return null;
+            }
+
             if (answered.RequestId == _interruptId && !answered.Succeeded)
             {
                 return HandedOff(null, $"Claude Code refused the interrupt: {Masked(answered.Error ?? "no reason given")}");
@@ -1151,6 +1187,16 @@ public sealed class ClaudeCodeClient(
             if (_keyRefused)
             {
                 return new LaunchOutcome(Failed(AgentRunStatus.Failed, $"Claude Code reported the key {key?.Name ?? "it signed in with"} invalid: {result.Text ?? "no text"}"), KeyRefused: true);
+            }
+
+            // A chat's launch stays open between the person's messages: this turn's end is not the run's. The run ends
+            // when the engine ends the messages - the chat's exit, answered with the last text - or where the launch
+            // itself fails.
+            if (run.Chat && Ending(result) is null)
+            {
+                _chatText = Masked(result.Text ?? _lastText ?? _chatText ?? string.Empty);
+                Watch();
+                return null;
             }
 
             if (Ending(result) is { } ended)
@@ -1421,13 +1467,48 @@ public sealed class ClaudeCodeClient(
                 TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
 
-        /// <summary>Hands each message the engine posts to the loop, until the launch ends.</summary>
+        /// <summary>Hands each message the engine posts to the loop, until the launch ends; the end of the messages is the end of a chat's launch.</summary>
         private async Task PostAsync(CancellationToken cancellationToken)
         {
             await foreach (var message in run.Messages.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
                 _arrivals.Writer.TryWrite(new Arrival.Posted(message));
             }
+
+            _arrivals.Writer.TryWrite(new Arrival.ChatEnded());
+        }
+
+        /// <summary>
+        /// The chat's messages ended - the person left - and the launch that was held open for them ends with its
+        /// last text; null where the run was no chat, for the end of any run's messages reaches here too.
+        /// </summary>
+        private LaunchOutcome? ChatEnded()
+            => run.Chat
+                ? new LaunchOutcome(new AgentRunResult(AgentRunStatus.Completed, FinalText: _chatText ?? _lastText ?? string.Empty))
+                : null;
+
+        /// <summary>
+        /// The engine interrupted the agent's current turn alone: the interrupt control request is sent, the launch
+        /// left open for the chat's next message - the turn it cuts ends by itself, and what it had said stands.
+        /// Between turns there is nothing to cut.
+        /// </summary>
+        private Task<LaunchOutcome?> OnTurnInterruptedAsync()
+        {
+            if (!_inTurn || _chatInterruptId is not null)
+            {
+                return Task.FromResult<LaunchOutcome?>(null);
+            }
+
+            _chatInterruptId = "chat-interrupt";
+            _ = Emit(new Notice("the turn was interrupted where it stands; the conversation keeps what was said")).ConfigureAwait(false);
+            Control(new JsonObject
+            {
+                ["type"] = "control_request",
+                ["request_id"] = _chatInterruptId,
+                ["request"] = new JsonObject { ["subtype"] = "interrupt", ["cancel_queued"] = true },
+            });
+
+            return Task.FromResult<LaunchOutcome?>(null);
         }
 
         /// <summary>

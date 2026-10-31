@@ -111,15 +111,23 @@ public sealed class ClaudeToolDeciderTests : IDisposable
         Assert.EndsWith("it was given: none", none.Reason, StringComparison.Ordinal);
     }
 
-    /// <summary>A tool the launch was given but whose calls the engine cannot read is refused all the same.</summary>
+    /// <summary>
+    /// A tool the launch was given but whose calls the engine cannot read is refused all the same. Claude Code's own
+    /// web tools are readable - their row names what a call is of, decided as a web action - for a side-task's launch
+    /// alone; a step's launch is given them never.
+    /// </summary>
     [Fact]
     public void AToolWhoseCallsTheEngineCannotRead_IsRefused()
     {
         var denied = Assert.IsType<AgentPolicyAnswer.Denied>(
-            ClaudeToolDecider.Decide(_policy, ["WebFetch"], "WebFetch", new JsonObject { ["url"] = "https://example.com" }, _worktree));
+            ClaudeToolDecider.Decide(_policy, ["Agent", "WebFetch"], "Agent", new JsonObject { ["prompt"] = "x" }, _worktree));
 
         Assert.Equal(ClaudeToolDecider.ToolsRule, denied.Rule);
-        Assert.Equal("'WebFetch' is a tool whose calls this tool cannot read, so none of them runs", denied.Reason);
+        Assert.Equal(AgentPolicySource.Builtin, denied.Source);
+        Assert.Equal("'Agent' is a tool whose calls this tool cannot read, so none of them runs", denied.Reason);
+
+        Assert.Equal(AgentPolicyAnswer.Allow, ClaudeToolDecider.Decide(_policy, ["WebFetch"], "WebFetch", new JsonObject { ["url"] = "https://example.com" }, _worktree));
+        Assert.Equal(AgentPolicyAnswer.Allow, ClaudeToolDecider.Decide(_policy, ["WebSearch"], "WebSearch", new JsonObject { ["query"] = "polymorphism" }, _worktree));
     }
 
     /// <summary>
@@ -152,8 +160,8 @@ public sealed class ClaudeToolDeciderTests : IDisposable
 
     /// <summary>
     /// What a call is of is one answer for the decision and for the denial that names it: the member its tool's row names,
-    /// the working directory for a search that names no path, nothing for a call that names none or a tool the table does
-    /// not name.
+    /// the working directory for a search that names no path, nothing for a call that names none or a tool no table names.
+    /// Claude Code's own web tools - a side-task's alone - name theirs as any tool's row does.
     /// </summary>
     [Fact]
     public void WhatACallIsOf_IsTheMemberItsToolsRowNames()
@@ -163,12 +171,16 @@ public sealed class ClaudeToolDeciderTests : IDisposable
         Assert.Equal(_worktree, ClaudeToolDecider.SubjectOf("Grep", new JsonObject { ["pattern"] = "x" }, _worktree));
         Assert.Equal("src", ClaudeToolDecider.SubjectOf("Glob", new JsonObject { ["pattern"] = "*", ["path"] = "src" }, _worktree));
         Assert.Null(ClaudeToolDecider.SubjectOf("Read", new JsonObject { ["path"] = "a" }, _worktree));
-        Assert.Null(ClaudeToolDecider.SubjectOf("WebFetch", new JsonObject { ["url"] = "https://example.com" }, _worktree));
+        Assert.Null(ClaudeToolDecider.SubjectOf("Agent", new JsonObject { ["prompt"] = "x" }, _worktree));
+        Assert.Equal("https://example.com", ClaudeToolDecider.SubjectOf("WebFetch", new JsonObject { ["url"] = "https://example.com" }, _worktree));
+        Assert.Equal("polymorphism", ClaudeToolDecider.SubjectOf("WebSearch", new JsonObject { ["query"] = "polymorphism" }, _worktree));
 
         foreach (var (_, tools) in ClaudeCodeTools.Table)
         {
             Assert.All(tools, tool => Assert.Equal(tool, ClaudeCodeTools.Find(tool.Name)?.Tool));
         }
+
+        Assert.All(ClaudeCodeTools.OwnWeb, tool => Assert.Equal((AgentCapability.Web, tool), ClaudeCodeTools.Find(tool.Name)));
     }
 
     /// <summary>
@@ -191,6 +203,7 @@ public sealed class ClaudeToolDeciderTests : IDisposable
         Assert.Equal(["Read", "Grep", "Glob", "Write", "Edit", "NotebookEdit", "Bash"], All);
         Assert.Equal(["Read", "Grep", "Glob", "Bash"], ClaudeCodeTools.Of([AgentCapability.Run, AgentCapability.Read]));
         Assert.Empty(ClaudeCodeTools.Of([AgentCapability.Web]));
+        Assert.Equal(["WebFetch", "WebSearch"], ClaudeCodeTools.Of([AgentCapability.Web], ownWeb: true));
         Assert.Equal(["Read", "Grep", "Glob"], ClaudeCodeTools.Reporter);
         Assert.Equal(ClaudeCodeTools.Reporter, ClaudeCodeTools.Table.Single(row => row.Capability == AgentCapability.Read).Tools.Select(tool => tool.Name));
     }

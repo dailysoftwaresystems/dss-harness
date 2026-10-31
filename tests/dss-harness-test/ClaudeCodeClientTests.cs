@@ -1814,6 +1814,71 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// A side-task's chat holds its launch open between the person's messages: the first turn's end is not the run's -
+    /// a message the engine posts after it is answered by the same launch - and the run ends, Completed with its last
+    /// text, only when the chat's messages end.
+    /// </summary>
+    [Fact]
+    public async Task AChatsLaunch_StaysOpenBetweenThePersonsMessages_AndEndsWithItsLastTextWhenTheyLeave()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["text"] = "first said" }, new JsonObject { ["text"] = "second said" }]);
+        var run = kit.Run() with { Chat = true };
+        var sink = new Sink(@event =>
+        {
+            if (@event is AssistantMessage { Text: "first said" })
+            {
+                run.Messages.Post("and now?");
+            }
+            else if (@event is AssistantMessage { Text: "second said" })
+            {
+                run.Messages.Complete();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token);
+
+        Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
+        Assert.Equal("second said", result.FinalText);
+        Assert.Equal(2, result.Turns);
+        Assert.Single(kit.Launches());
+    }
+
+    /// <summary>
+    /// The engine's interrupt of a chat cuts the agent's current turn alone: the interrupt control request is sent, the
+    /// turn it cuts ends, and the launch stays open for the chat's next message - which the same launch answers.
+    /// </summary>
+    [Fact]
+    public async Task TheEnginesInterrupt_CutsTheChatsCurrentTurn_TheLaunchLeftOpenForTheNextMessage()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["hang"] = true }, new JsonObject { ["text"] = "after the cut" }]);
+        var run = kit.Run() with { Chat = true, Interrupt = new AgentTurnInterrupt() };
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnStarted && run.Interrupt is { } interrupt)
+            {
+                interrupt.Interrupt();
+            }
+            else if (@event is Notice)
+            {
+                run.Messages.Post("go on");
+            }
+            else if (@event is AssistantMessage { Text: "after the cut" })
+            {
+                run.Messages.Complete();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token);
+
+        Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
+        Assert.Equal("after the cut", result.FinalText);
+        Assert.Contains(sink.Events, @event => @event is Notice { Text: var text } && text.Contains("the turn was interrupted", StringComparison.Ordinal));
+        Assert.Single(kit.Launches());
+    }
+
+    /// <summary>
     /// The stall bound starts once the launch answered the initialize: a launch slow to start is not stalled for the time
     /// it took.
     /// </summary>

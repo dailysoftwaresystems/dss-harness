@@ -69,6 +69,7 @@ public static class HelpTopics
         new("codebase-graph", ["graph", "graphify-codebase"], "A run's map of the repository: what it reads, and what it does not see", RenderCodebaseGraph),
         new("web-search", ["search", "web_search", "agentwebsearch"], "The harness's own web search: its sources, their kinds and keys", RenderWebSearch),
         new("agent-clients", ["clients", "models"], "Providers, models, tiers and keys in config.json", RenderAgentClients),
+        new("side-tasks", ["side-task"], "An agent outside every workflow: run-side-task, its chat and its records", RenderSideTasks),
         new("agent-definitions", ["agent-definition", "definition", "definitions"], "The agent files of a workflow's directory: what each may name", RenderAgentDefinitions),
         new("skills", ["skill"], "A step's prompt names one: {skill.<name>}", RenderSkills),
         new("anchors", ["anchor"], "Anchor registries and the commands that change them", RenderAnchors),
@@ -2398,6 +2399,91 @@ public static class HelpTopics
     /// slot, the tiers a step runs on and the effort forms, the agents' policy and the claude-code client - said where a
     /// person reads them, before the step runners are built (nothing here runs a step).
     /// </summary>
+    /// <summary>
+    /// The side-tasks topic: what a side-task is - an agent outside every workflow, a conversation between a person and
+    /// one agent over the repository's main tree - the two commands, what the side-task's agent may do and may not, its
+    /// model and effort, and where its records live.
+    /// </summary>
+    private static string RenderSideTasks()
+    {
+        var builder = new StringBuilder();
+        var command = ToolPackage.Command;
+
+        builder.AppendLine("SIDE-TASKS");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A side-task is an agent outside every workflow: a conversation between a person and one agent over the "
+            + "repository's main tree, asked directly, with no step, no run and no limit of a run's. Every action the agent "
+            + "asks for is still decided by the engine before it runs and recorded, as a step's is, and the user's hooks "
+            + "stay off in its launches. No host serves either verb: a chat is the person's, on the machine the person "
+            + "typed on.");
+        builder.AppendLine();
+        builder.AppendLine("Commands");
+        builder.AppendLine($"  {command} {Agents.SideTasks.SideTaskService.RunCommand} [--prompt <text> | --prompt-file <path>] [--resume <task>] [--name <task>]");
+        builder.AppendLine($"             [--model <code> | --tier <tier>] [--client <client>] [--effort <level> | --effort <code>=<level>...] [--json]");
+        builder.AppendLine($"  {command} {Agents.SideTasks.SideTaskService.ListCommand} [--json]");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"In the terminal, by default, {Agents.SideTasks.SideTaskService.RunCommand} holds a chat: the person types a message "
+            + "(a line ending in \\ goes on to the next); the agent's text streams as it comes and each action it takes is one "
+            + "line as it is decided, a denial with its rule. Ctrl+C interrupts the agent's turn and leaves the chat open; a "
+            + "second, or /exit, ends it. /model <model> and /effort <level> change what the next message is sent with; "
+            + "/records prints where this side-task's records are; /help lists these. With --prompt or --prompt-file it "
+            + "answers one message once, prints the agent's final text and exits; --json answers with one document "
+            + $"instead - and --json without a prompt is a usage error ({HarnessExit.UsageError}), for a chat is no document. "
+            + $"--resume opens a side-task again from its stored conversation - refused ({HarnessExit.Refused}) where another "
+            + "process holds it open, and where the name names no side-task - and its model is the one it last used, unless "
+            + "--model or --tier says another. list-side-tasks lists them, newest first: each by its name, when it began "
+            + "and last spoke, its model, its turns and cost, whether it is open now. The records' directory is named on "
+            + "every exit, in text and in --json. Exit codes: 0 when the chat or the turn ended as asked; "
+            + $"{HarnessExit.UsageError} usage, among them an effort a model does not take; {HarnessExit.Refused} a --resume "
+            + $"naming no side-task or one open in another process; {HarnessExit.ToolMissing} a client that cannot start - no "
+            + $"key in the slot, no claude, no npm; {HarnessExit.CommandFailed} the model failed past its retries and "
+            + $"fallback; {HarnessExit.Incomplete} interrupted in one shot. {StoppedDocument}");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Its model is resolved as a step's: --model names one outright by its code, --tier a tier of tierConfig, "
+            + "neither the configuration's defaults.agentTier; the provider, the keys and the client follow from the model, "
+            + "and --client picks among the clients that reach it. On a tier the later models of its order are followed as "
+            + "for a step, and said in the chat. --effort is a step's effort on the command line: one level for every "
+            + "model, or code=level given again for each model that is to have its own, with all=<level> for the rest - "
+            + "each checked against what the model takes. Its key is chosen as a step's is - the order of the list, or "
+            + "least spent where balanceKeyUsage is on - and what it spends is counted against that key.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "What the side-task's agent may do is the person's own session's, over the main tree: every limit of a run's is "
+            + "dropped - no restriction list (Web(...), Run(...), Write(...), Read(...)), no allow list of pages, the web "
+            + "search over every configured source with no maxPerStep, no cap on money, turns or time, all four "
+            + "capabilities, the main tree its writable root, the worktree rules and the protected paths off - so it can "
+            + "edit .harness-config/config.json to add a search source, commit, branch, and run this tool's own verbs as "
+            + "the person could. Its web_search asks one more source beside the configured ones: native, the provider's "
+            + "own search - on the two APIs a request of the harness's own whose only tool is the provider's search, on "
+            + "Claude Code its own WebSearch kept in the side-task's tools - and web_fetch takes any address. What stays, "
+            + "and why: the built-in refusals - no root action, no agent while the tool runs "
+            + "elevated, no read of a credential slot or a Claude Code directory, no command that prints a credential - "
+            + "each refused to the agent and said in the chat for the person to do by hand; git's own files "
+            + "(Write(.git/**)), written by git's verbs and this tool's, never by an agent's file tool; the tool's own "
+            + "state, written only by its verbs; each search source's own pace and rate limits; and run-side-task itself, "
+            + "refused to every agent - an agent does not start another.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Its records live in .side-tasks/<task>/ at the repository's root, written by the tool alone and kept until a "
+            + "person removes the directory: task.json (its turns, each with its client, provider, model and effort, what "
+            + "it used and cost, and what the agent ran under), the stored stream (stream.jsonl) and the transcript as a "
+            + "person reads it (transcript.md), each action decided (tools.json holds the offered table), each denial "
+            + "(denials.jsonl) and each search and fetch (web.jsonl), and the stored conversation under sessions/ where "
+            + "its client stores one. Beside the directory, <task>.owner.json names the process whose chat holds the "
+            + "side-task open; a dead one is reclaimed and said. A chat that outgrows the model's context is compacted as "
+            + "a step's conversation is, and says so.");
+
+        return builder.ToString();
+    }
+
     /// <summary>
     /// The agent-definitions topic: what a workflow's <c>agents/&lt;name&gt;.md</c> file is, the keys it takes, and how
     /// what it names stands below a step's own - the one reading of a definition, beside the clients topic that owns

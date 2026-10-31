@@ -228,6 +228,23 @@ public static class ServiceRegistration
             provider.GetRequiredService<Agents.Http.ApiConnection>()));
         services.AddSingleton<IAgentRunner, AgentRunner>();
 
+        // A side-task: an agent outside every workflow, a conversation between a person and one agent over the main tree,
+        // through the same runner every step is worked by. Its chat is the person's, on this machine, so no host serves
+        // its verbs (HostAgentProtocol.NotForwardable).
+        services.AddSingleton<Agents.SideTasks.ISideTaskService>(provider => new Agents.SideTasks.SideTaskService(
+            provider.GetRequiredService<IHarnessContextLoader>(),
+            provider.GetRequiredService<IAgentRunner>(),
+            provider.GetRequiredService<IEnumerable<IAgentClient>>(),
+            provider.GetRequiredService<IHostPlatform>(),
+            provider.GetRequiredService<IProcessIdentity>(),
+            provider.GetRequiredService<OrchestrationStore>(),
+            provider.GetRequiredService<DssHarness.Core.Secrets.AgentKeyStore>(),
+            provider.GetRequiredService<Web.Search.WebSearchKeys>(),
+            provider.GetRequiredService<DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService>(),
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<IHarnessOutput>(),
+            provider.GetRequiredService<TimeProvider>()));
+
         // The harness's own tools, built for the API clients to give their agents and served to Claude Code's through the
         // engine's tool server: the one fetch of the process, the system's own lookup of a name, and the host a runtime is
         // opened from for each run.

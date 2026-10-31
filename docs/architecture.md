@@ -16,7 +16,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `amend-orchestrator-request`, `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `amend-orchestrator-request`, `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), the side-task commands (`run-side-task`, `list-side-tasks`), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `query-codebase-graph`, `clean`, `up`,
@@ -2423,6 +2423,45 @@ failed, 21 where it could not be reached or its account is at its limit - `Agent
 the one mapping), and neither command installs Claude Code or brings one up to date. An orchestrator
 made by hand, which no flow runs, has no reporter and fewer facts: its status prints what
 `list-orchestrator` has of it and says so, and the person's question is refused (12).
+
+A side-task is an agent outside every workflow (`SideTaskService`, `run-side-task` and
+`list-side-tasks`): a conversation between a person and one agent over the repository's main
+tree, asked directly - a chat in the terminal by default (the agent's text streamed, each
+action one line as it is decided, a denial with its rule, Ctrl+C interrupting a turn and a
+second ending the chat, `/exit`, `/model`, `/effort`, `/records`, `/help`), or one message
+with `--prompt`, answered once (`--json` its one document, a usage error without a prompt).
+No second loop: each turn is an `AgentStepRequest` handed to `IAgentRunner` as the engine
+hands a step's - the model resolved as a step's (`--model`, `--tier`,
+`defaults.agentTier`, `--client`, `--effort <level>` or `--effort <code>=<level>` with
+`all=<level>` for the rest, each checked against what the model takes), the order built with
+each entry's credential, what it spends counted against its key - so the clients, the tool
+runtime, the stored stream, compaction and the fallback are the ones every step uses. What
+differs is what it is given: the ground of part 03's table (`SideTaskPolicy`) - no restriction
+list, no allow list of pages, all four capabilities, the main checkout the writable root, the
+worktree rules and the protected paths off, this tool's own verbs open to it as the person's
+own session's are - with the built-in refusals kept (root actions, credential slots, Claude
+Code directories, `Write(.git/**)`, the tool's own state, the commands that print a
+credential, and `run-side-task` itself, refused to every agent); no limits, no output
+envelope; the web search of every configured source, with one more asked beside them: `native`, the provider's own
+search - on the two API clients a request of the harness's own whose only tool is the provider's web
+search (`ClaudeApiNativeSearch`, no server tool in any conversation), on Claude Code its own `WebSearch`
+kept in a side-task's `--tools` beside the engine's server - its requests priced at the provider's
+`pricePerThousandSearches`. A chat goes on between the person's
+messages the way its client goes on with any conversation: one launch held open where the
+client renders its conversations (Claude Code), the person's later messages reaching the agent through
+the channel a message to an agent at work uses, the engine's interrupt cutting a turn alone; one
+request per message where the client stores them, each going on with the stored one - and a chat that
+outgrows the model's context is compacted as a step's conversation is, and says so. `--resume` opens one
+again, refused (13) where it names no side-task or another process holds it open (its owner
+file beside its records, a dead one reclaimed); its model is the one it last used, unless the
+person names another. Its records live in `.side-tasks/<task>/`, a root slot of the layout in
+`StatePaths` and the managed ignore block, written by the tool alone and kept until a person
+removes them: `task.json` (each turn with its client, provider, model and effort, what it
+used and cost, and what the agent ran under), the stored stream `stream.jsonl`, the
+transcript as a person reads it `transcript.md`, `denials.jsonl` and `web.jsonl` as a step's,
+the stored conversation under `sessions/` where its client stores one - named on every exit,
+in text and in `--json`. No host serves either verb: a chat is the person's, on this machine
+(`HostAgentProtocol.NotForwardable`).
 
 A session's interrupts are its own (`FlowTerminal`, `FlowInterrupts`): Ctrl+C, and off Windows
 SIGTERM and a hang-up, are taken by `PosixSignalRegistration` and never end the process, and the

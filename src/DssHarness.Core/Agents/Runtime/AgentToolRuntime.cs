@@ -68,6 +68,7 @@ public sealed class AgentToolTally
     private int _denials;
     private int _filesWritten;
     private int _webRequests;
+    private long _nativeSearches;
     private readonly ConcurrentQueue<string> _uncontained = new();
     private readonly ConcurrentDictionary<string, byte> _files = new(StringComparer.Ordinal);
 
@@ -82,6 +83,9 @@ public sealed class AgentToolTally
 
     /// <summary>How many requests of the web were asked, the refused among them.</summary>
     public int WebRequests => Volatile.Read(ref _webRequests);
+
+    /// <summary>How many searches the provider ran itself, a side-task's native part among the web search's asks.</summary>
+    public long NativeSearches => Volatile.Read(ref _nativeSearches);
 
     /// <summary>The files read and written, each once, in ordinal order.</summary>
     public IReadOnlyList<string> Files => [.. _files.Keys.Order(StringComparer.Ordinal)];
@@ -110,6 +114,10 @@ public sealed class AgentToolTally
 
     /// <summary>Counts a request of the web asked, allowed or refused.</summary>
     internal void Asked() => Interlocked.Increment(ref _webRequests);
+
+    /// <summary>Counts <paramref name="requests"/> searches the provider ran itself, a side-task's native part.</summary>
+    /// <param name="requests">How many the provider said it spent.</param>
+    internal void Searched(long requests) => Interlocked.Add(ref _nativeSearches, requests);
 
     /// <summary>Keeps what a command's container could not reach when it ended.</summary>
     /// <param name="what">The command, and what was left.</param>

@@ -1540,7 +1540,29 @@ public sealed class ToolLoop(
 
         /// <summary>The result with what the whole run used, did and left.</summary>
         private AgentRunResult Finished(AgentRunResult result)
-            => result with
+        {
+            var usage = _used.Report(_unknown is null ? new AgentCost(Counted: _cost) : new AgentCost(MissingPrice: _unknown));
+            var cost = _cost;
+
+            // The searches the provider ran itself, a side-task's native part, join the run's usage and are priced at
+            // the provider's own price for them (value 225).
+            if (Runtime.Tally.NativeSearches is > 0 and var native)
+            {
+                usage = usage with { Total = usage.Total with { Searches = usage.Total.Searches + native } };
+
+                if (AgentPrices.CostOf(Now.Terms!.Provider, Now.Terms.Model, new AgentUsage(0, 0, 0, 0, 0, native)) is { } searched)
+                {
+                    cost += (decimal)searched;
+                    usage = _unknown is null ? usage with { Cost = new AgentCost(Counted: cost) } : usage;
+                }
+                else
+                {
+                    _unknown ??= AgentPrices.UnknownOf(Now.Terms.Provider, Now.Terms.Model, new AgentUsage(0, 0, 0, 0, 0, native));
+                    usage = usage with { Cost = new AgentCost(MissingPrice: _unknown) };
+                }
+            }
+
+            return result with
             {
                 Model = run.Model,
                 Session = _session,
@@ -1550,12 +1572,13 @@ public sealed class ToolLoop(
                 FilesWritten = Runtime.Tally.FilesWritten,
                 WebRequests = Runtime.Tally.WebRequests,
                 Retries = _retries,
-                Usage = _used.Report(_unknown is null ? new AgentCost(Counted: _cost) : new AgentCost(MissingPrice: _unknown)),
+                Usage = usage,
                 Served = [.. _used.Served],
                 Files = Runtime.Tally.Files,
                 KeysRefused = [.. _keysRefused],
                 Uncontained = Runtime.Tally.Uncontained,
             };
+        }
 
         private AgentRunResult Ended(AgentRunStatus status, string error) => AgentEndings.Ended(status, error, run.Mask);
 

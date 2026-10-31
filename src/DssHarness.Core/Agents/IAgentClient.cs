@@ -390,6 +390,27 @@ public sealed class AgentMessages
 }
 
 /// <summary>
+/// The signal the engine raises to interrupt the agent's current turn alone, leaving the run - the conversation, the
+/// launch - open: what a person's Ctrl+C asks of a side-task's chat. The turn is cut where it stands; what it had said
+/// stands, and the next message goes on from there.
+/// </summary>
+/// <remarks>
+/// No bound is kept and nothing is asked of the agent: an interrupt is not a handoff, which asks what the agent leaves.
+/// Where a client cannot interrupt one turn alone, the engine's cancellation of the run is what an interrupt falls back
+/// to.
+/// </remarks>
+public sealed class AgentTurnInterrupt
+{
+    private readonly TaskCompletionSource _asked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Interrupts the agent's current turn.</summary>
+    public void Interrupt() => _asked.TrySetResult();
+
+    /// <summary>Completes once <see cref="Interrupt"/> is raised.</summary>
+    public Task Asked => _asked.Task;
+}
+
+/// <summary>
 /// A step an agent is to work, as the engine resolved it: everything a run needs, before a client is chosen. The work
 /// it goes on with is not here yet - the continuation record comes with its own slice, and joins this request then.
 /// </summary>
@@ -513,6 +534,25 @@ public sealed record AgentStepRequest(
     /// step of a run, whose records are the runner's own rule.
     /// </summary>
     public string? RecordDirectory { get; init; }
+
+    /// <summary>
+    /// Where a client handed a conversation stores it, where not under the run's agents' own sessions: a side-task keeps
+    /// its conversation under its own records. Null for every step of a run, whose sessions are the layout's own rule.
+    /// </summary>
+    public string? SessionsDirectory { get; init; }
+
+    /// <summary>
+    /// The signal that interrupts the agent's current turn alone, where the engine gave one: a side-task's chat, whose
+    /// Ctrl+C cuts the turn and leaves the conversation open. Null where nothing raises it.
+    /// </summary>
+    public AgentTurnInterrupt? Interrupt { get; init; }
+
+    /// <summary>
+    /// Whether this run is a side-task's chat, whose client holds its turn open between the person's messages: a client
+    /// that renders its conversations keeps its launch open and reads the person's later messages from its messages
+    /// channel, ending only when they end. False for every step of a run.
+    /// </summary>
+    public bool Chat { get; init; }
 }
 
 /// <summary>
@@ -604,6 +644,42 @@ public sealed record AgentRun(
     /// resolved them; null where it gave none, and a client that builds every request from them is not started.
     /// </summary>
     public AgentEntries? Entries { get; init; }
+
+    /// <summary>
+    /// Whether this run is a side-task's chat, whose client holds its turn open between the person's messages: a client
+    /// that renders its conversations keeps its launch open and reads the person's later messages from
+    /// <see cref="Messages"/>, ending only when they end; every other client ends at each turn, the conversation stored
+    /// and handed back. False for every step of a run.
+    /// </summary>
+    public bool Chat { get; init; }
+
+    /// <summary>
+    /// The signal that interrupts the agent's current turn alone, leaving the run open; null where the engine gave none.
+    /// </summary>
+    public AgentTurnInterrupt? Interrupt { get; init; }
+
+    /// <summary>
+    /// The provider's own web search, which a side-task's <c>web_search</c> asks beside the configured sources - its
+    /// <c>native</c> part, "open web search" as the user ruled it (value 395); null where this run's provider runs none,
+    /// and for every step of a run, whose web is the harness's own alone.
+    /// </summary>
+    public IAgentNativeSearch? NativeSearch { get; init; }
+}
+
+/// <summary>
+/// The provider's own web search: one query, answered as a source's part of the same search, with how many requests of
+/// the provider it took - priced at the provider's <c>pricePerThousandSearches</c>.
+/// </summary>
+public interface IAgentNativeSearch
+{
+    /// <summary>The part's source name, as the answer and the records name it: <c>native</c>.</summary>
+    string Source { get; }
+
+    /// <summary>Searches <paramref name="query"/> with the provider's own search.</summary>
+    /// <param name="query">The query, as the agent wrote it.</param>
+    /// <param name="cancellationToken">Stops the search.</param>
+    /// <returns>The part it came to, and how many requests of the provider it spent.</returns>
+    Task<(Web.Search.WebSearchPart Part, long Requests)> SearchAsync(string query, CancellationToken cancellationToken);
 }
 
 /// <summary>

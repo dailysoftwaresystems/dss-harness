@@ -183,16 +183,24 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     public const string MutationsDirectoryName = ".mutations";
 
     /// <summary>
-    /// The directory at the root of a tree where the copies of it its legs work in are kept,
-    /// <c>&lt;tree&gt;/.legs/&lt;key&gt;</c>, which go with the tree.
+    /// The directory at the root of a tree where the tree's own copies are kept,
+    /// <c>&lt;tree&gt;/.legs/&lt;key&gt;</c>, which goes with the tree.
     /// </summary>
     public const string LegsDirectoryName = ".legs";
 
     /// <summary>
+    /// The directory at the root of a tree where its side-tasks are kept, one directory each: an agent outside every
+    /// workflow, a conversation between a person and one agent over the main tree (<c>&lt;tree&gt;/.side-tasks/&lt;task&gt;</c>),
+    /// which goes with the tree.
+    /// </summary>
+    public const string SideTasksDirectoryName = ".side-tasks";
+
+    /// <summary>
     /// The directories at the root of a tree whose contents git ignores while a <see cref="GitKeepFileName"/> keeps
     /// each in git, relative to the root with forward separators: where worktrees are made, where orchestrators keep
-    /// what they hold, and where the tree's own copies are kept - its mutation workers, and the copies its legs work in.
-    /// A clone then arrives with each in place, and nothing made in them is ever committed.
+    /// what they hold, where its side-tasks keep their records, and where the tree's own copies are kept - its mutation
+    /// workers, and the copies its legs work in. A clone then arrives with each in place, and nothing made in them is
+    /// ever committed.
     /// </summary>
     /// <param name="worktreesRoot">The configured worktrees root.</param>
     public static IReadOnlyList<string> RootSlots(string worktreesRoot)
@@ -201,7 +209,7 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
 
         return
         [
-            .. new[] { PathPatterns.Normalize(worktreesRoot), OrchestratorsDirectoryName, MutationsDirectoryName, LegsDirectoryName }
+            .. new[] { PathPatterns.Normalize(worktreesRoot), OrchestratorsDirectoryName, MutationsDirectoryName, LegsDirectoryName, SideTasksDirectoryName }
                 .Distinct(StringComparer.Ordinal),
         ];
     }
@@ -342,6 +350,12 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// agents work in belong to the main checkout.
     /// </summary>
     public string OrchestratorsDirectory => Path.Combine(MainCheckoutRoot, OrchestratorsDirectoryName);
+
+    /// <summary>
+    /// Where the repository's side-tasks keep their records: in the main checkout, whichever tree asks, as a side-task
+    /// works over the main tree itself.
+    /// </summary>
+    public string SideTasksDirectory => Path.Combine(MainCheckoutRoot, SideTasksDirectoryName);
 
     /// <summary>
     /// Worktrees live under the main checkout, never under another worktree, so

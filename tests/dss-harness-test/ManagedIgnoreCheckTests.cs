@@ -213,6 +213,7 @@ public sealed class ManagedIgnoreCheckTests
                 ".orchestrators/.gitkeep",
                 ".mutations/.gitkeep",
                 ".legs/.gitkeep",
+                ".side-tasks/.gitkeep",
                 ".harness-config/sshItems/.gitkeep",
                 ".harness-config/wslDistros/.gitkeep",
                 ".harness-config/runner/.env/.gitkeep",
