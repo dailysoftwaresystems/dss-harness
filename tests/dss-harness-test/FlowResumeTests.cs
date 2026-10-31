@@ -1745,6 +1745,94 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// What a run spent is written as the one fold holds it: a turn whose cost could not be counted leaves
+    /// <c>flow.json</c> holding the dollars counted and why the rest is not known, a resume reads it back so, and the
+    /// parts its session counts add to what was counted while the dollars stay not known. A run whose every part was
+    /// counted writes no such member - the shape every record written before a part could go uncounted has - and a
+    /// record without one reads as counted whole.
+    /// </summary>
+    [Fact]
+    public async Task WhatARunSpent_IsWrittenWithWhatItCouldNotCount_AndAResumeGoesOnFromIt()
+    {
+        const string Why = "no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)";
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: gate
+                type: build
+              - name: after
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [think, gate]
+            """);
+        var runner = new Runner().On("think", run =>
+        {
+            run.Events.Used(tokens: 1_000, usd: 1.25);
+            run.Events.Used(tokens: 500, usd: null, uncounted: Why);
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        }).Hold("gate");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var watched = new Watched(records);
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched);
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("gate").WaitAsync(Bound, Token);
+            await watched.SeenAsync(snapshot => snapshot.Spent.Tokens == 1_500 && snapshot.Steps.Any(step => step.Instance == "think" && step.State == FlowInstanceState.Done)).WaitAsync(Bound, Token);
+            coordinator.RequestPause("command");
+            runner.Complete("gate");
+
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(Bound, Token)).Status);
+        }
+
+        var written = JsonNode.Parse(File.ReadAllText(layout.FlowFile))!["spent"]!;
+        Assert.Equal((1.25, 1_500L, Why), (written["usd"]!.GetValue<double>(), written["tokens"]!.GetValue<long>(), written["uncounted"]!.GetValue<string>()));
+
+        var taken = TakeUp(harness, layout, definition);
+        Assert.Equal(new FlowDollars(1.25, Why), taken.File.Spent.Dollars);
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = new Runner().On("after", run =>
+            {
+                run.Events.Used(tokens: 100, usd: 0.25);
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+            var end = await new FlowCoordinator(definition, resumed, new RunnerFacts(), resume: taken, records: again).RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+        }
+
+        Assert.Equal((new FlowDollars(1.5, Why), 1_600L), (harness.OrchestrationStore.ReadFlow(layout)!.Spent.Dollars, harness.OrchestrationStore.ReadFlow(layout)!.Spent.Tokens));
+
+        // A run whose every part was counted writes no member for what it could not count, and reads back counted whole.
+        using var counted = new TempDirectory();
+        var whole = new Runner().On("think", run =>
+        {
+            run.Events.Used(tokens: 1_000, usd: 1.25);
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var (wholeHarness, wholeLayout, wholeRecords) = Records("r1", counted.Path, definition);
+
+        using (wholeRecords)
+        {
+            Assert.Equal(FlowRunStatus.Done, (await new FlowCoordinator(definition, whole, new RunnerFacts(), records: wholeRecords).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        Assert.Equal(["usd", "tokens", "minutes"], JsonNode.Parse(File.ReadAllText(wholeLayout.FlowFile))!["spent"]!.AsObject().Select(member => member.Key));
+        Assert.Equal(new FlowDollars(1.25), wholeHarness.OrchestrationStore.ReadFlow(wholeLayout)!.Spent.Dollars);
+    }
+
+    /// <summary>
     /// The questions a run raised survive every session: a question answered, the session that answered it stopped, and
     /// a resume that asks again - the answered question is still in the run's file with who answered it and through
     /// what, and the new question takes the id after the highest any question took, never one a record already names.

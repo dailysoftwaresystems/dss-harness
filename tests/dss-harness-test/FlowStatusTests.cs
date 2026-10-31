@@ -122,6 +122,32 @@ public sealed class FlowStatusTests
     }
 
     /// <summary>
+    /// A run a part of whose cost could not be counted says its dollars as at least what was counted, and why the rest is
+    /// not known - never the counted sum as though it were the whole.
+    /// </summary>
+    [Fact]
+    public void ARunAPartOfWhoseCostWasNotCounted_SaysAtLeastWhatWas_AndWhy()
+    {
+        var definition = Definition("""
+            name: flow
+            budget: { usd: 10 }
+            steps:
+              - name: build
+                type: orient
+            """);
+        var flow = File(nameof(FlowRunStatus.Running), [Step("build", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 1))]) with
+        {
+            Spent = new FlowBudgetRecord(1.5, 900, 0, "no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)"),
+        };
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, Engine, AsOf);
+
+        Assert.Equal(
+            "done      1 step instance ended; at least 1.50 of 10.00 USD (the rest is not known: no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)), 900 tokens spent",
+            facts.Single(line => line.StartsWith("done ", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
     /// The facts of a run that waits: each open question with since when and the command that answers it, a plan update
     /// under way and one queued, an instance waiting on a claim - and the estimate leaving out, and saying it does, the
     /// time a person takes to answer and the wait for the claim.

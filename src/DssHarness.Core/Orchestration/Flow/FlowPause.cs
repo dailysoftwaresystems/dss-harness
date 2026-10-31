@@ -43,18 +43,35 @@ public sealed record FlowHandoff(string Text, string By, string? Why = null)
 
 /// <summary>
 /// What a run's reasoning has spent against its budget: what the clients reported in tokens and dollars, and the time
-/// reason steps ran - each counted for reason steps alone.
+/// reason steps ran - each counted for reason steps alone, an advice among them. Its dollars are the one fold of what
+/// the engine's agents spend (<see cref="FlowDollars"/>): a part whose cost could not be counted leaves them not known
+/// past what was, never charged as nothing.
 /// </summary>
 public sealed class FlowBudgetSpent
 {
-    /// <summary>What the reason steps cost, in United States dollars.</summary>
-    public double Usd { get; internal set; }
+    /// <summary>What the reason steps cost, as far as each part's cost could be counted, and why the rest is not known where it is not.</summary>
+    public FlowDollars Dollars { get; internal set; }
+
+    /// <summary>What the reason steps cost, in United States dollars, as far as each part's cost could be counted.</summary>
+    public double Usd => Dollars.Counted;
+
+    /// <summary>Why a part's cost could not be counted - the first such part's - so the dollars are not known past <see cref="Usd"/>; null where every part's was.</summary>
+    public string? Uncounted => Dollars.Uncounted;
 
     /// <summary>Every token the clients reported: input, cache write, cache read and output.</summary>
     public long Tokens { get; internal set; }
 
     /// <summary>The time reason steps ran, in minutes: two that reason at once count twice.</summary>
     public double Minutes { get; internal set; }
+
+    /// <summary>Charges one part of the run's reasoning - a turn of a reason step, an advice - by the one fold of its dollars.</summary>
+    /// <param name="tokens">The tokens it used.</param>
+    /// <param name="dollars">What it cost, or why that could not be counted.</param>
+    internal void Charge(long tokens, FlowDollars dollars)
+    {
+        Tokens += tokens;
+        Dollars = Dollars.Plus(dollars);
+    }
 }
 
 /// <summary>

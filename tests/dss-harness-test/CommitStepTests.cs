@@ -951,7 +951,7 @@ public sealed class CommitStepTests
         {
         }
 
-        public void Used(long tokens, double usd)
+        public void Used(long tokens, double? usd, string? uncounted = null)
         {
         }
 

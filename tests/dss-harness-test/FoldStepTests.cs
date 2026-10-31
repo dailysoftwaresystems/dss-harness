@@ -865,7 +865,7 @@ public sealed class FoldStepTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double usd) { }
+        public void Used(long tokens, double? usd, string? uncounted = null) { }
 
         public void HandoffTaken() { }
     }

@@ -49,7 +49,7 @@ public sealed record FlowRecordPath(string What, string Path);
 /// <param name="PassedOver">The instances whose failures the run passed over, in the order they ended.</param>
 /// <param name="Handoffs">The handoffs a safe pause wrote, each by its step, who wrote it and its file.</param>
 /// <param name="LeftForAPerson">What is left for a person, tied to no step's name: each pull request the run opened or found open, to merge, the paths its folds changed that git ignores, never committed, each question still open with its recommendation, and what each of the run's loops left.</param>
-/// <param name="Spent">What the run has spent of its budget: usd, tokens and minutes; null where the command did not reach a run's state.</param>
+/// <param name="Spent">What the run has spent of its budget: usd, tokens and minutes, and why the dollars are not known past usd where a part's cost could not be counted; null where the command did not reach a run's state.</param>
 /// <param name="ExitCode">The command's exit code.</param>
 /// <param name="Records">Every record the command wrote or took, by what it is and where it is.</param>
 public sealed record FlowRunResult(
@@ -189,10 +189,10 @@ public static class FlowReports
     /// <param name="answer">The reporter's answer; null where none worded them.</param>
     /// <param name="whyNot">Why no model worded them; null where one did.</param>
     /// <param name="model">The model that served the reporter, where one did.</param>
-    /// <param name="usd">What the answer cost; null where nothing is known.</param>
+    /// <param name="dollars">What the answer cost, as far as it was counted, with why the rest is not known where a turn's cost could not be; null where nothing is known.</param>
     /// <param name="tokens">The tokens its clients reported; null where nothing is known.</param>
     /// <param name="record">Where the call's own record is, under the run's <c>asks/</c>.</param>
-    public static JsonObject AskDocument(string facts, string? answer, string? whyNot, string? model, double? usd, long? tokens, string record)
+    public static JsonObject AskDocument(string facts, string? answer, string? whyNot, string? model, FlowDollars? dollars, long? tokens, string record)
     {
         ArgumentNullException.ThrowIfNull(facts);
         ArgumentNullException.ThrowIfNull(record);
@@ -203,16 +203,34 @@ public static class FlowReports
             ["worded"] = answer is not null,
             ["answer"] = answer,
             ["whyNot"] = whyNot,
-            ["cost"] = model is null && usd is null && tokens is null
+            ["cost"] = model is null && dollars is null && tokens is null
                 ? null
-                : new JsonObject
-                {
-                    ["model"] = model,
-                    ["usd"] = usd,
-                    ["tokens"] = tokens,
-                },
+                : WithUncounted(
+                    new JsonObject
+                    {
+                        ["model"] = model,
+                        ["usd"] = dollars?.Counted,
+                        ["tokens"] = tokens,
+                    },
+                    dollars?.Uncounted),
             ["record"] = record,
         };
+    }
+
+    /// <summary>
+    /// <paramref name="spent"/> with why its dollars are not known past its <c>usd</c>, where a part's cost could not be
+    /// counted - the one way every document says it, as <c>flow.json</c> does - and as it is where every part's was.
+    /// </summary>
+    /// <param name="spent">What a document says was spent.</param>
+    /// <param name="uncounted">Why a part's cost could not be counted; null where every part's was.</param>
+    private static JsonObject WithUncounted(JsonObject spent, string? uncounted)
+    {
+        if (uncounted is not null)
+        {
+            spent["uncounted"] = uncounted;
+        }
+
+        return spent;
     }
 
     /// <summary>
@@ -323,13 +341,15 @@ public static class FlowReports
             _ => "no recommendation was sought",
         };
 
-    /// <summary>What a run spent, as the documents hold it.</summary>
-    private static JsonObject SpentOf(FlowBudgetRecord spent) => new()
-    {
-        ["usd"] = spent.Usd,
-        ["tokens"] = spent.Tokens,
-        ["minutes"] = spent.Minutes,
-    };
+    /// <summary>What a run spent, as the documents hold it: its dollars as far as they were counted, and why the rest is not known where a part's cost could not be.</summary>
+    private static JsonObject SpentOf(FlowBudgetRecord spent) => WithUncounted(
+        new JsonObject
+        {
+            ["usd"] = spent.Usd,
+            ["tokens"] = spent.Tokens,
+            ["minutes"] = spent.Minutes,
+        },
+        spent.Uncounted);
 
     /// <summary>One handoff, as the documents hold it.</summary>
     private static JsonObject HandoffOf(FlowHandoffNamed handoff) => new()
@@ -569,7 +589,7 @@ public static class FlowReports
 
         text.Add(string.Empty);
         text.Add("## Spent");
-        text.Add($"- {flow.Spent.Usd.ToString("0.00", CultureInfo.InvariantCulture)} USD, {flow.Spent.Tokens.ToString(CultureInfo.InvariantCulture)} tokens, {flow.Spent.Minutes.ToString("0.0", CultureInfo.InvariantCulture)} minutes of reasoning");
+        text.Add($"- {flow.Spent.Dollars.Said()}, {flow.Spent.Tokens.ToString(CultureInfo.InvariantCulture)} tokens, {flow.Spent.Minutes.ToString("0.0", CultureInfo.InvariantCulture)} minutes of reasoning");
 
         if (left.Count > 0)
         {

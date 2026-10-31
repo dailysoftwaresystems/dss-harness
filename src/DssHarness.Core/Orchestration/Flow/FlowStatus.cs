@@ -160,8 +160,7 @@ public static class FlowStatus
             $"{Count(ended, "step instance")} ended"
                 + (handled > 0 ? $", {Count(handled, "failure")} a handler took" : string.Empty)
                 + (passedOver > 0 ? $", {Count(passedOver, "failure")} passed over" : string.Empty)
-                + $"; {flow.Spent.Usd.ToString("0.00", CultureInfo.InvariantCulture)}{(budget is { } named ? $" of {named.ToString("0.00", CultureInfo.InvariantCulture)}" : string.Empty)} USD, "
-                + $"{flow.Spent.Tokens.ToString(CultureInfo.InvariantCulture)} tokens spent",
+                + $"; {flow.Spent.Dollars.Said(budget)}, {flow.Spent.Tokens.ToString(CultureInfo.InvariantCulture)} tokens spent",
         ];
     }
 

@@ -323,20 +323,65 @@ public sealed class AgentRunSpendTests
 
         Assert.Empty(problems);
 
-        var spend = new AgentRunSpend(providers!, "claude-opus-5-5");
+        var events = new SpendingEvents();
+        var spend = new AgentRunSpend(providers!, "claude-opus-5-5", events);
         var first = new AgentUsage(InputTokens: 1_000_000, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0);
 
         await spend.EmitAsync(new UsageReported(first, first));
 
-        Assert.Equal(((double?)5.0, (string?)null, 1_000_000L), (spend.Usd, spend.Unpriced, spend.Tokens));
+        Assert.Equal((new FlowDollars(5.0), 1_000_000L), (spend.Dollars, spend.Tokens));
 
         var second = new AgentUsage(InputTokens: 10, OutputTokens: 10, CacheReadTokens: 0, CacheWriteTokens: 1000, CacheWrite1hTokens: 0, Searches: 0);
 
         await spend.EmitAsync(new FallbackStarted("claude-opus-5-5", "anthropic", "claude-api", "claude-fable-5-1", "anthropic", "claude-api", "limit", AgentFallback.NewConversation, 1, ThrewAway: false, CreditAsked: false));
         await spend.EmitAsync(new UsageReported(second, first));
 
+        const string Why = "no price for 'claude-fable-5-1' (providers 'anthropic', model 'claude-fable-5-1': priceCacheWrite)";
+
         Assert.Equal(
-            ((double?)null, "no price for 'claude-fable-5-1' (providers 'anthropic', model 'claude-fable-5-1': priceCacheWrite)", 1_001_020L, true),
-            (spend.Usd, spend.Unpriced, spend.Tokens, spend.Reported));
+            (new FlowDollars(5.0, Why), 1_001_020L, true),
+            (spend.Dollars, spend.Tokens, spend.Reported));
+        Assert.Equal(
+            "at least 5.00 USD (the rest is not known: no price for 'claude-fable-5-1' (providers 'anthropic', model 'claude-fable-5-1': priceCacheWrite))",
+            spend.Dollars.Said());
+
+        // Each turn is handed on as counted - the unpriced one with no cost and why, never as a cost of nothing.
+        Assert.Equal([(1_000_000L, (double?)5.0, (string?)null), (1_020L, null, Why)], events.Spent);
+    }
+
+    /// <summary>
+    /// Parts fold into one: the counted sums add, and the first reason a part could not be counted is kept - a later
+    /// counted part never makes the whole known again, and a part said uncounted with no reason still says one.
+    /// </summary>
+    [Fact]
+    public void PartsFoldIntoOne_TheFirstUncountedReasonKept()
+    {
+        var whole = new FlowDollars(1.25)
+            .Plus(FlowDollars.Of(null, "no price for 'a'"))
+            .Plus(FlowDollars.Of(0.75, null))
+            .Plus(FlowDollars.Of(null, "no price for 'b'"));
+
+        Assert.Equal(new FlowDollars(2.0, "no price for 'a'"), whole);
+        Assert.Equal(new FlowDollars(0, "a part came with no cost said or counted of it"), FlowDollars.Of(null, null));
+        Assert.Equal("at least 2.00 of 40.00 USD (the rest is not known: no price for 'a')", whole.Said(40));
+        Assert.Equal("2.5 of 40 USD", new FlowDollars(2.5).Said(40, "0.####"));
+    }
+
+    /// <summary>Records what each turn handed on, as a reason step's run is charged with it.</summary>
+    private sealed class SpendingEvents : IFlowRunEvents
+    {
+        public List<(long Tokens, double? Usd, string? Uncounted)> Spent { get; } = [];
+
+        public void LegPlaced(string leg, bool inACopy) { }
+
+        public void EveryLegPlaced() { }
+
+        public void LegCopyMade(string leg) { }
+
+        public void LegEnded(string leg) { }
+
+        public void Used(long tokens, double? usd, string? uncounted = null) => Spent.Add((tokens, usd, uncounted));
+
+        public void HandoffTaken() { }
     }
 }

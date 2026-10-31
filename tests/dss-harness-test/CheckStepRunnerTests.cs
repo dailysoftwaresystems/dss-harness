@@ -361,7 +361,7 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         public void LegEnded(string leg) => throw new InvalidOperationException("a check places no leg");
 
-        public void Used(long tokens, double usd) => throw new InvalidOperationException("a check spends nothing");
+        public void Used(long tokens, double? usd, string? uncounted = null) => throw new InvalidOperationException("a check spends nothing");
 
         public void HandoffTaken() => throw new InvalidOperationException("a check takes no handoff");
     }

@@ -401,8 +401,9 @@ public sealed class AdvisorRunnerTests
     }
 
     /// <summary>
-    /// On a model the configuration gives no price, what the advice spent is its tokens and a cost not known - never a
-    /// cost of nothing - as the reporter's answer says it, by the one count of what a run spent.
+    /// On a model the configuration gives no price, what the advice spent is its tokens and a cost not known past what
+    /// was counted - nothing here - with why, never a cost of nothing: as the reporter's answer says it, by the one count
+    /// of what a run spent, and as the run's budget is charged with it.
     /// </summary>
     [Fact]
     public async Task AnAdviceOnAModelWithNoPrice_SaysItsTokens_AndItsCostNotKnown()
@@ -412,12 +413,18 @@ public sealed class AdvisorRunnerTests
         await kit.CreateReadingAgentAsync("reader");
         var config = Path.Combine(kit.Main, ".harness-config", "config.json");
         File.WriteAllText(config, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(config), @",\s*""priceInputMiss""[^}]*", " "));
-        agents.Says.Add(new UsageReported(new AgentUsage(1000, 200, 0, 0, 0, 0), new AgentUsage(1000, 200, 0, 0, 0, 0)));
+        var turn = new AgentUsage(1000, 200, 0, 0, 0, 0);
+        agents.Says.Add(new UsageReported(turn, turn));
         agents.Answer = _ => new AgentRunResult(AgentRunStatus.Completed, StructuredOutput: """{"answer":"retry","why":"it went wrong"}""");
 
         var advice = await Runner(kit, agents).AdviseAsync(Call(kit), Token);
+        var served = agents.Asked.Single().Model!;
+        var priced = AgentProviders.Resolve(kit.Harness.ConfigStore.Load(config))!.Providers!.Of(served)
+            ?? throw new InvalidOperationException($"'{served}' is no model the configuration lists");
 
-        Assert.Equal<(string?, long?, double?)>(("retry", 1200L, null), (advice.Answer, advice.Tokens, advice.Usd));
+        Assert.Equal<(string?, long?, FlowDollars)>(
+            ("retry", 1200L, new FlowDollars(0, AgentPrices.UnknownOf(priced.Provider, priced.Model, turn))),
+            (advice.Answer, advice.Tokens, advice.Dollars));
     }
 
     /// <summary>

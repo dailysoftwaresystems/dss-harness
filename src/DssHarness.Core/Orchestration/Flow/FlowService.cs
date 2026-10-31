@@ -851,7 +851,7 @@ public sealed class FlowService(
         {
             var none = "the workflow names no reporter, so no model words the run's facts";
 
-            WriteAsk(layout, asks, question, model: null, usd: null, tokens: null, none);
+            WriteAsk(layout, asks, question, model: null, spent: null, none);
 
             return question is null
                 ? Answered(layout, CommandOutcome.Ok(facts[0], [.. facts.Skip(1), string.Empty, $"no model worded this: {none}"]), asks, text, null, null, null, null, json)
@@ -873,7 +873,10 @@ public sealed class FlowService(
                 new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, flow.StartCommit, definition, flow.Branch)),
             cancellationToken).ConfigureAwait(false);
 
-        WriteAsk(layout, asks, question, reported.Model, reported.Usd, reported.Tokens, reported.WhyNot);
+        // What the answer spent, where any turn of the reporter's was reported: the dollars as far as they were counted,
+        // and why the rest is not known where a turn's cost could not be.
+        (FlowDollars Dollars, long Tokens)? spent = reported.Tokens is { } used ? (reported.Dollars, used) : null;
+        WriteAsk(layout, asks, question, reported.Model, spent, reported.WhyNot);
 
         if (question is null)
         {
@@ -887,7 +890,7 @@ public sealed class FlowService(
                 reported.Answer,
                 reported.WhyNot,
                 reported.Model,
-                (reported.Usd, reported.Tokens),
+                spent,
                 json);
         }
 
@@ -900,7 +903,7 @@ public sealed class FlowService(
                 answered,
                 null,
                 reported.Model,
-                (reported.Usd, reported.Tokens),
+                spent,
                 json)
             : CommandOutcome.Failed(
                 reported.ExitCode ?? HarnessExit.CommandFailed,
@@ -922,7 +925,7 @@ public sealed class FlowService(
     /// <param name="answer">The reporter's answer; null where none worded them.</param>
     /// <param name="whyNot">Why no model worded them; null where one did.</param>
     /// <param name="model">The model that served the reporter, where one did.</param>
-    /// <param name="cost">What the answer cost and the tokens its clients reported; nulls where nothing is known.</param>
+    /// <param name="cost">What the answer spent - its dollars as far as they were counted, and why the rest is not known where a turn's cost could not be, and the tokens its clients reported; null where nothing was reported.</param>
     /// <param name="json">Whether to answer with one JSON document.</param>
     private CommandOutcome Answered(
         OrchestratorLayout layout,
@@ -932,7 +935,7 @@ public sealed class FlowService(
         string? answer,
         string? whyNot,
         string? model,
-        (double? Usd, long? Tokens)? cost,
+        (FlowDollars Dollars, long Tokens)? cost,
         bool json)
     {
         var said = outcome with
@@ -941,8 +944,8 @@ public sealed class FlowService(
             [
                 .. outcome.Details ?? [],
                 string.Empty,
-                cost is { Usd: { } usd } || model is { Length: > 0 }
-                    ? $"This answer cost {(cost is { Usd: { } named } ? $"{named.ToString("0.####", CultureInfo.InvariantCulture)} USD" : "an unknown amount")}{(model is { Length: > 0 } ? $" ({model}{(cost is { Tokens: { } tokens } ? $", {tokens.ToString(CultureInfo.InvariantCulture)} tokens" : string.Empty)})" : string.Empty)}. It is not counted in the run's budget."
+                cost is not null || model is { Length: > 0 }
+                    ? $"This answer cost {cost?.Dollars.Said(format: "0.####") ?? "an unknown amount"}{(model is { Length: > 0 } ? $" ({model}{(cost is { Tokens: var tokens } ? $", {tokens.ToString(CultureInfo.InvariantCulture)} tokens" : string.Empty)})" : string.Empty)}. It is not counted in the run's budget."
                     : "This answer cost nothing: no model worded it.",
                 $"Record: {asks}",
             ],
@@ -951,29 +954,38 @@ public sealed class FlowService(
         return json
             ? said with
             {
-                Data = [ReportJson.Stopped(said.ExitCode, said.Message, FlowReports.AskDocument(facts, answer, whyNot, model, cost?.Usd, cost?.Tokens, asks))],
+                Data = [ReportJson.Stopped(said.ExitCode, said.Message, FlowReports.AskDocument(facts, answer, whyNot, model, cost?.Dollars, cost?.Tokens, asks))],
                 Quiet = true,
             }
             : said;
     }
 
-    /// <summary>Writes the call's own record, <c>ask.json</c>: the question, the model, the tokens, the cost - or why no model ran.</summary>
-    private void WriteAsk(OrchestratorLayout layout, string asks, string? question, string? model, double? usd, long? tokens, string? whyNot)
-        => JsonStateFile.Write(
-            _fileSystem,
-            Path.Combine(asks, AskFileName),
-            new System.Text.Json.Nodes.JsonObject
-            {
-                ["schema"] = 1,
-                ["run"] = layout.Name,
-                ["command"] = question is null ? AskStatusCommand : AskCommand,
-                ["at"] = FlowTimeConverter.Written(_clock.GetUtcNow()),
-                ["question"] = question,
-                ["model"] = model,
-                ["usd"] = usd,
-                ["tokens"] = tokens,
-                ["whyNot"] = whyNot,
-            });
+    /// <summary>
+    /// Writes the call's own record, <c>ask.json</c>: the question, the model, the tokens, the cost - its dollars as far as
+    /// they were counted, and why the rest is not known where a turn's cost could not be - or why no model ran.
+    /// </summary>
+    private void WriteAsk(OrchestratorLayout layout, string asks, string? question, string? model, (FlowDollars Dollars, long Tokens)? spent, string? whyNot)
+    {
+        var record = new System.Text.Json.Nodes.JsonObject
+        {
+            ["schema"] = 1,
+            ["run"] = layout.Name,
+            ["command"] = question is null ? AskStatusCommand : AskCommand,
+            ["at"] = FlowTimeConverter.Written(_clock.GetUtcNow()),
+            ["question"] = question,
+            ["model"] = model,
+            ["usd"] = spent?.Dollars.Counted,
+            ["tokens"] = spent?.Tokens,
+            ["whyNot"] = whyNot,
+        };
+
+        if (spent?.Dollars.Uncounted is { } uncounted)
+        {
+            record["uncounted"] = uncounted;
+        }
+
+        JsonStateFile.Write(_fileSystem, Path.Combine(asks, AskFileName), record);
+    }
 
     /// <summary>
     /// What the two ask commands answer for an orchestrator that holds no run - one made by hand, which no flow runs:
@@ -1000,7 +1012,7 @@ public sealed class FlowService(
         var now = _clock.GetUtcNow();
         var asks = Path.Combine(layout.AsksDirectory, $"{now.ToUniversalTime():yyyyMMddTHHmmssZ}-{Random.Shared.Next(0x10000, 0xFFFFF).ToString("x", CultureInfo.InvariantCulture)}");
         _fileSystem.WriteAllTextAtomic(Path.Combine(asks, "facts.md"), string.Join("\n", facts) + "\n");
-        WriteAsk(layout, asks, question: null, model: null, usd: null, tokens: null, whyNot: "the orchestrator holds no run");
+        WriteAsk(layout, asks, question: null, model: null, spent: null, whyNot: "the orchestrator holds no run");
 
         var text = string.Join("\n", facts);
 

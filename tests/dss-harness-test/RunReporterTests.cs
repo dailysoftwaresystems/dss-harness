@@ -406,6 +406,49 @@ public sealed class RunReporterTests
     }
 
     /// <summary>
+    /// A reporter's turn whose cost cannot be counted - its model has no price of a kind it used - is said in the answer,
+    /// its <c>--json</c> and its record as what was counted and why the rest is not known, never a cost of nothing: the
+    /// same fold the run's own spend goes through.
+    /// </summary>
+    [Fact]
+    public async Task AReportersTurnWithoutAPrice_IsSaidAsAtLeastWhatWasCounted_AndWhy()
+    {
+        var (harness, temp, reporter, service, run) = await PausedAsync();
+        using var disposed = temp;
+        var config = HarnessFactory.ConfigPath(temp.Path);
+        var written = JsonNode.Parse(File.ReadAllText(config))!;
+
+        foreach (var model in written["providers"]!.AsArray().SelectMany(provider => provider!["models"]!.AsArray()))
+        {
+            _ = model!.AsObject().Remove("priceCacheWrite");
+        }
+
+        File.WriteAllText(config, written.ToJsonString());
+
+        var turn = new AgentUsage(1, 2, 3, 4, 5, 6);
+        reporter.Says.Add(new UsageReported(turn, turn));
+        reporter.Answer = step => new AgentRunResult(AgentRunStatus.Completed, FinalText: "All good.") { Model = step.Model, Usage = new AgentUsageReport(turn, []), };
+
+        var outcome = await service.AskStatusAsync(temp.Path, run, json: true, Token).WaitAsync(Bound, Token);
+        var said = await service.AskStatusAsync(temp.Path, run, json: false, Token).WaitAsync(Bound, Token);
+        var document = JsonNode.Parse(Assert.Single(outcome.Data))!.AsObject();
+        var served = reporter.Asked[0].Model!;
+        var priced = AgentProviders.Resolve(harness.ConfigStore.Load(config))!.Providers!.Of(served)
+            ?? throw new InvalidOperationException($"'{served}' is no model the configuration lists");
+        var why = AgentPrices.UnknownOf(priced.Provider, priced.Model, turn);
+        var record = JsonNode.Parse(File.ReadAllText(Path.Combine((string)document["record"]!, "ask.json")))!;
+
+        Assert.StartsWith("no price for ", why, StringComparison.Ordinal);
+        Assert.Equal(
+            (served, 0.0, 15L, why),
+            ((string)document["cost"]!["model"]!, (double)document["cost"]!["usd"]!, (long)document["cost"]!["tokens"]!, (string)document["cost"]!["uncounted"]!));
+        Assert.Equal((0.0, 15L, why), ((double)record["usd"]!, (long)record["tokens"]!, (string)record["uncounted"]!));
+        Assert.Equal(
+            $"This answer cost at least 0 USD (the rest is not known: {why}) ({served}, 15 tokens). It is not counted in the run's budget.",
+            said.Details!.Single(line => line.StartsWith("This answer cost", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
     /// A reporter's run that completed without a word worded nothing: the person's question is refused as a failed
     /// command - never with a code that says it passed - and the status still answers with the facts, saying why.
     /// </summary>

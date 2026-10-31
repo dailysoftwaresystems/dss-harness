@@ -457,8 +457,8 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// The grant of the budget at which an agent's launch was ended by what was left of the run's dollars before the
-    /// reserve: the reserve is reached for that grant whatever the run's own count says, for the launch was bound to
-    /// it; -1 where none was.
+    /// reserve, or a part's cost could not be counted in a run budgeted in dollars: the reserve is reached for that grant
+    /// whatever the run's own count says, for the launch was bound to it, or the dollars are not known; -1 where none was.
     /// </summary>
     private int _reserveMetAt = -1;
 
@@ -1757,20 +1757,43 @@ public sealed class FlowCoordinator
     /// <summary>
     /// What is left of the run's budget in dollars before its reserve, as an agent starts now - the bound a launch of
     /// it is held to where that is less than its own, or where it names none; null where the run budgets no dollars.
+    /// Where a part's cost could not be counted it is what is left as far as the dollars were counted, at most: such a
+    /// part reaches the reserve for the grant it came under (<see cref="Charge"/>), so an agent is held to it only once a
+    /// person, or the workflow's answers, allowed the amount once again knowing the dollars were not all counted.
     /// </summary>
     private double? BudgetLeftUsd()
         => _definition.Budget is { Usd: { } usd } budget ? Math.Max(0, ReserveOf(budget, usd) - _spent.Usd) : null;
+
+    /// <summary>
+    /// Charges the run's budget with one part of its reasoning - a turn of a reason step, an advice - by the one fold of
+    /// its dollars. A part whose cost could not be counted, in a run budgeted in dollars, reaches the reserve for the
+    /// grant that stands, as a launch its share ended does: dollars not all counted are not known to be short of it, so
+    /// the run asks, saying at least what was counted and why the rest is not known, and a grant of more lets it go on.
+    /// A run budgeted in dollars never starts a model it cannot price, so this is a part that came with no cost said of it.
+    /// </summary>
+    /// <param name="tokens">The tokens it used.</param>
+    /// <param name="dollars">What it cost, or why that could not be counted.</param>
+    private void Charge(long tokens, FlowDollars dollars)
+    {
+        _spent.Charge(tokens, dollars);
+
+        if (dollars.Uncounted is not null && _definition.Budget is { Usd: not null })
+        {
+            _reserveMetAt = _budgetGranted;
+        }
+    }
 
     /// <summary>The amount of <paramref name="budget"/> whose reserve the run has reached, with what was spent against it; null where none has.</summary>
     private (string Kind, string SpentOf)? ReachedOf(FlowBudget budget)
     {
         var times = _budgetGranted + 1;
 
-        // A launch the run's share ended reached the reserve for this grant whatever the run's own count says: the
-        // client counted it at its own reckoning, and stopped there.
+        // A launch the run's share ended, or a part whose cost could not be counted, reached the reserve for this grant
+        // whatever the run's own count says: the client counted it at its own reckoning and stopped there, or nothing
+        // counted it at all.
         if (budget.Usd is { } usd && (_spent.Usd >= ReserveOf(budget, usd) || _reserveMetAt == _budgetGranted))
         {
-            return ("usd", $"{_spent.Usd.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)} of {(usd * times).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)} USD");
+            return ("usd", _spent.Dollars.Said(usd * times));
         }
 
         if (budget.Tokens is { } tokens && _spent.Tokens >= ReserveOf(budget, tokens))
@@ -7697,8 +7720,7 @@ public sealed class FlowCoordinator
             pending.Cancel.Dispose();
         }
 
-        _spent.Usd += advice.Usd ?? 0;
-        _spent.Tokens += advice.Tokens ?? 0;
+        Charge(advice.Tokens ?? 0, advice.Dollars);
         return advice;
     }
 
@@ -8539,9 +8561,9 @@ public sealed class FlowCoordinator
         if (message.Instance is not null && message.Usage is { } usage)
         {
             // What a reason step's conversation spent as it ran, counted against the run's budget the moment it
-            // is reported - an attempt that is over among them, for what it spent was spent.
-            _spent.Usd += usage.Usd;
-            _spent.Tokens += usage.Tokens;
+            // is reported - an attempt that is over among them, for what it spent was spent - a cost that could not be
+            // counted leaving the run's dollars not known past what was.
+            Charge(usage.Tokens, usage.Dollars);
             return;
         }
 
@@ -10720,7 +10742,7 @@ public sealed class FlowCoordinator
                 OpenTheRoundAgain(ended, adding.Id);
             }
 
-            _spent.Usd = resume.File.Spent.Usd;
+            _spent.Dollars = resume.File.Spent.Dollars;
             _spent.Tokens = resume.File.Spent.Tokens;
             _spent.Minutes = resume.File.Spent.Minutes;
 
@@ -10995,7 +11017,7 @@ public sealed class FlowCoordinator
     /// spent, an answer offered from outside, a handoff taken, or a step's time limit passing - named by the timer it came
     /// from, so the timer of a run that has answered already says nothing.
     /// </summary>
-    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, (double Usd, long Tokens)? Usage = null, int Attempt = 0, Offer? Offered = null, bool HandoffTaken = false, CancellationTokenSource? TimeLimit = null);
+    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, (FlowDollars Dollars, long Tokens)? Usage = null, int Attempt = 0, Offer? Offered = null, bool HandoffTaken = false, CancellationTokenSource? TimeLimit = null);
 
     /// <summary>
     /// What is handed to a running session from outside it - an answer, a change of an answer, or an amendment of the
@@ -11160,8 +11182,9 @@ public sealed class FlowCoordinator
             => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, leg, Attempt: attempt));
 
         /// <inheritdoc/>
-        public void Used(long tokens, double usd)
-            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, null, (usd, tokens), attempt));
+        /// <remarks>A cost said uncounted with no reason is said of the step it came from.</remarks>
+        public void Used(long tokens, double? usd, string? uncounted = null)
+            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, null, (FlowDollars.Of(usd, uncounted ?? $"what '{instance.Id}' spent came with no cost said or counted of it"), tokens), attempt));
 
         /// <inheritdoc/>
         public void HandoffTaken()

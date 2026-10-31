@@ -60,16 +60,22 @@ public sealed class AdvisorRunner(
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return new FlowAdvice(
-                Answer: null,
-                Why: null,
-                Text: null,
-                Directory: directory,
-                NotObtained: "the asking was ended before the advisor answered",
-                Usd: spend?.Spent?.Usd,
-                Tokens: spend?.Spent?.Tokens);
+            return SpentBy(
+                new FlowAdvice(Answer: null, Why: null, Text: null, Directory: directory, NotObtained: "the asking was ended before the advisor answered"),
+                spend);
         }
     }
+
+    /// <summary>
+    /// <paramref name="advice"/> with what the asking spent, as its count says it: the dollars counted, why the rest is not
+    /// known where a turn's cost could not be counted, and the tokens - nothing where no turn was reported.
+    /// </summary>
+    /// <param name="advice">The advice.</param>
+    /// <param name="spend">The asking's count; null where none was made.</param>
+    private static FlowAdvice SpentBy(FlowAdvice advice, AgentRunSpend? spend)
+        => spend?.Spent is { } spent
+            ? advice with { Usd = spent.Dollars.Counted, Tokens = spent.Tokens, Uncounted = spent.Dollars.Uncounted }
+            : advice;
 
     /// <summary>The asking itself, saying the count of its spend and its directory as each is made, for an ending part way to read them.</summary>
     /// <param name="call">The asking.</param>
@@ -212,7 +218,7 @@ public sealed class AdvisorRunner(
 
             return advice is null
                 ? NotObtained(result.Error ?? "the advisor's run ended without an answer", result)
-                : advice with { Model = result.Model, Directory = directory, Usd = spend.Spent?.Usd, Tokens = spend.Spent?.Tokens };
+                : SpentBy(advice with { Model = result.Model, Directory = directory }, spend);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -228,15 +234,7 @@ public sealed class AdvisorRunner(
         }
 
         FlowAdvice NotObtained(string why, AgentRunResult? result)
-            => new(
-                Answer: null,
-                Why: null,
-                Text: null,
-                Model: result?.Model,
-                Directory: directory,
-                NotObtained: why,
-                Usd: spend.Spent?.Usd,
-                Tokens: spend.Spent?.Tokens);
+            => SpentBy(new(Answer: null, Why: null, Text: null, Model: result?.Model, Directory: directory, NotObtained: why), spend);
 
         // Before the advice has a directory or a model, nothing was made and nothing spent.
         static FlowAdvice Unasked(string why)
@@ -407,7 +405,7 @@ public sealed class AdvisorRunner(
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double usd) { }
+        public void Used(long tokens, double? usd, string? uncounted = null) { }
 
         public void HandoffTaken() { }
     }

@@ -183,7 +183,7 @@ public sealed class ReporterRunner(
             ? Wordless($"the reporter answered a result that does not hold together: {wrong}", HarnessExit.CommandFailed, result, spend)
             : (result.Status, result.FinalText) switch
             {
-                (AgentRunStatus.Completed, { Length: > 0 } worded) => new FlowReported(mask?.Redact(worded) ?? worded, Model: result.Model, Usd: spend.Spent?.Usd, Tokens: spend.Spent?.Tokens),
+                (AgentRunStatus.Completed, { Length: > 0 } worded) => SpentBy(new FlowReported(mask?.Redact(worded) ?? worded, Model: result.Model), spend),
                 (AgentRunStatus.Completed, _) => Wordless("the reporter's run completed without a word", HarnessExit.CommandFailed, result, spend),
                 _ => Wordless(result.Error is { } error ? mask?.Redact(error) ?? error : $"the reporter's run ended {result.Status}", result.ToOutcome().ExitCode, result, spend),
             };
@@ -195,7 +195,18 @@ public sealed class ReporterRunner(
     /// <param name="result">The reporter's run, where one ran.</param>
     /// <param name="spend">What the reporter's run spent, where one ran.</param>
     private static FlowReported Wordless(string why, int exitCode, AgentRunResult? result = null, AgentRunSpend? spend = null)
-        => new(Answer: null, WhyNot: why, ExitCode: exitCode, result?.Model, spend?.Spent?.Usd, spend?.Spent?.Tokens);
+        => SpentBy(new(Answer: null, WhyNot: why, ExitCode: exitCode, result?.Model), spend);
+
+    /// <summary>
+    /// <paramref name="reported"/> with what the reporter's run spent, as its count says it: the dollars counted, why the
+    /// rest is not known where a turn's cost could not be counted, and the tokens - nothing where no turn was reported.
+    /// </summary>
+    /// <param name="reported">The answer.</param>
+    /// <param name="spend">The run's count; null where no run was made.</param>
+    private static FlowReported SpentBy(FlowReported reported, AgentRunSpend? spend)
+        => spend?.Spent is { } spent
+            ? reported with { Usd = spent.Dollars.Counted, Tokens = spent.Tokens, Uncounted = spent.Dollars.Uncounted }
+            : reported;
 
     /// <summary>
     /// The reporter's prompt, filled with what it reads: the facts as text, the person's question where one was typed,
@@ -237,7 +248,7 @@ public sealed class ReporterRunner(
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double usd) { }
+        public void Used(long tokens, double? usd, string? uncounted = null) { }
 
         public void HandoffTaken() { }
     }

@@ -530,7 +530,11 @@ what is left of the run's dollars before its reserve where that is less than its
 `maxBudgetUsd`, or where it names none: a launch that bound ended has reached the run's reserve, not
 the step's own budget, so the workflow's answers may allow more and the step runs again given its
 handoff, or else the run pauses for its budget - and a launch whose share was reckoned before more was
-granted runs again given its handoff, its share reckoned anew. Where an agent
+granted runs again given its handoff, its share reckoned anew. A turn whose cost could not be counted
+leaves the run's dollars known only as at least what was counted: status, the report, `flow.json` and
+every `--json` say so, `uncounted` beside `usd` naming why; in a run budgeted in dollars such a turn
+reaches the run's reserve for the grant that stands, so the run asks, and a grant of more lets it go
+on, each launch held to what is left as far as the dollars were counted. Where an agent
 gave no handoff of its own - a limit ended its run, a crash cut the attempt off, its handoff turn
 passed its bound or failed - the engine writes one from the stored stream of the step, its first
 line saying why: the files the attempt wrote, the last commands it ran and how each ended, its last
@@ -912,7 +916,7 @@ naming the key to fill; a later one is passed over, said so, and never asked. Th
 `validate-workflow`, and every run before it starts - says the same first, for each model a step
 charged to a dollar budget may run on, of the prices the client it is reached through is billed by,
 given that client's `agentClients` entry, naming the model, the client and the missing price (the
-`reporter`'s is never charged to the run's). A turn whose cost cannot be counted is never charged as nothing. Each turn's calls run as the tool runtime above decides them; a turn whose request
+`reporter`'s is never charged to the run's). A turn whose cost cannot be counted is never charged as nothing: what was spent is said as at least what was counted, and why the rest is not known. Each turn's calls run as the tool runtime above decides them; a turn whose request
 spent the budget runs none of them. The conversation is kept in the provider's own form under the
 agent's `sessions/<id>/`, each message as it was sent and received and sent back so with every later
 request, one line for each point where the history is whole - a turn that called tools stored with

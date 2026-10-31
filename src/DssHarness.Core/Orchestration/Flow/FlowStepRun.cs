@@ -310,10 +310,15 @@ public interface IFlowRunEvents
     /// <param name="leg">The leg's name.</param>
     void LegEnded(string leg);
 
-    /// <summary>What a reason step's conversation has spent as it runs: tokens and dollars, counted against the run's budget.</summary>
+    /// <summary>
+    /// What a reason step's conversation has spent as it runs: tokens and dollars, counted against the run's budget - a
+    /// cost that could not be counted leaving the run's dollars not known past what was (<see cref="FlowDollars"/>), never
+    /// charged as nothing.
+    /// </summary>
     /// <param name="tokens">The tokens the clients report: input, cache write, cache read and output.</param>
-    /// <param name="usd">What they cost, at the prices the configuration gives each model.</param>
-    void Used(long tokens, double usd);
+    /// <param name="usd">What they cost, at the prices the configuration gives each model; null where it could not be counted.</param>
+    /// <param name="uncounted">Why it could not be counted - the price missing, the model no provider lists - where it could not; null otherwise.</param>
+    void Used(long tokens, double? usd, string? uncounted = null);
 
     /// <summary>
     /// The prompt that holds this attempt's <see cref="FlowStepRun.Handoff"/> is written: the handoff is spent, and its
@@ -604,8 +609,9 @@ public sealed record FlowAdvisorCall(
 /// <param name="Model">The model that served the advisor, where one did.</param>
 /// <param name="Directory">Where the advisor's own records are, under the asking step; null where none were kept.</param>
 /// <param name="NotObtained">Why no recommendation was obtained, where it was sought and not had; null otherwise.</param>
-/// <param name="Usd">What the advice cost at the configuration's prices, counted from its turns as they were reported - an asking ended part way among them (<see cref="AgentRunSpend.Spent"/>); null where none was, or where a turn's cost is not known.</param>
+/// <param name="Usd">What the advice's turns cost at the configuration's prices, as far as each could be counted, counted as they were reported - an asking ended part way among them (<see cref="AgentRunSpend.Spent"/>); null where none was reported.</param>
 /// <param name="Tokens">Every token its turns used, of every kind; null where none was reported.</param>
+/// <param name="Uncounted">Why a turn's cost could not be counted, so the advice's dollars are not known past <paramref name="Usd"/>; null where every turn's was.</param>
 public sealed record FlowAdvice(
     string? Answer,
     string? Why,
@@ -614,7 +620,12 @@ public sealed record FlowAdvice(
     string? Directory = null,
     string? NotObtained = null,
     double? Usd = null,
-    long? Tokens = null);
+    long? Tokens = null,
+    string? Uncounted = null)
+{
+    /// <summary>What the advice spent in dollars, as the run's budget folds it: nothing where no turn was reported.</summary>
+    public FlowDollars Dollars => new(Usd ?? 0, Uncounted);
+}
 
 /// <summary>
 /// The engine's advisor: one reason step that only reads, run for a question the engine raises before a person is left
@@ -667,15 +678,21 @@ public sealed record FlowReporterCall(
 /// command's for a run that completed without a word - never a code that says it passed.
 /// </param>
 /// <param name="Model">The model that served the reporter, where one did.</param>
-/// <param name="Usd">What the answer cost at the configuration's prices (<see cref="AgentRunSpend.Spent"/>); null where it is not known.</param>
+/// <param name="Usd">What the answer cost at the configuration's prices, as far as each turn could be counted (<see cref="AgentRunSpend.Spent"/>); null where no turn was reported.</param>
 /// <param name="Tokens">Every token of every kind the reporter's run used (<see cref="AgentRunSpend.Spent"/>); null where none was reported.</param>
+/// <param name="Uncounted">Why a turn's cost could not be counted, so the answer's dollars are not known past <paramref name="Usd"/>; null where every turn's was.</param>
 public sealed record FlowReported(
     string? Answer,
     string? WhyNot = null,
     int? ExitCode = null,
     string? Model = null,
     double? Usd = null,
-    long? Tokens = null);
+    long? Tokens = null,
+    string? Uncounted = null)
+{
+    /// <summary>What the answer spent in dollars, as the one fold holds them: nothing where no turn was reported.</summary>
+    public FlowDollars Dollars => new(Usd ?? 0, Uncounted);
+}
 
 /// <summary>
 /// The run's reporter: one reason step that only reads, worked wherever the run's records are and nowhere else, run for

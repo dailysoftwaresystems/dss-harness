@@ -413,7 +413,7 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// <param name="DefinitionDigest">The SHA-256 of the definition as it ran, frozen in <c>definition.json</c>.</param>
 /// <param name="Inputs">The values the run was started with, by input name.</param>
 /// <param name="Status">How the run stands: one of <see cref="FlowRunStatus"/>'s names, exactly.</param>
-/// <param name="Spent">What the run's reasoning has spent against its budget: usd, tokens and minutes.</param>
+/// <param name="Spent">What the run's reasoning has spent against its budget: usd, tokens and minutes, and why the dollars are not known past usd where a part's cost could not be counted.</param>
 /// <param name="BudgetGranted">How many times the budget was answered <c>more</c>.</param>
 /// <param name="Steps">Every step instance, in the order the run made them.</param>
 /// <param name="Next">The steps that would start now, in the order they would start.</param>
@@ -487,10 +487,19 @@ public sealed record FlowHoldRecord(string Update, [property: JsonConverter(type
 }
 
 /// <summary>What a run's reasoning spent, as <c>flow.json</c> holds it.</summary>
-/// <param name="Usd">What the reason steps cost, in United States dollars.</param>
+/// <param name="Usd">What the reason steps cost, in United States dollars, as far as each part's cost could be counted.</param>
 /// <param name="Tokens">Every token the clients reported.</param>
 /// <param name="Minutes">The time reason steps ran, in minutes: two that reason at once count twice.</param>
-public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes);
+/// <param name="Uncounted">
+/// Why a part's cost could not be counted - the first such part's - so the dollars are not known past <paramref name="Usd"/>;
+/// left out where every part's was, as a record written before a part could go uncounted is read.
+/// </param>
+public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes, string? Uncounted = null)
+{
+    /// <summary>The dollars as the one fold holds them: what was counted, and why the rest is not known where it is not.</summary>
+    [JsonIgnore]
+    public FlowDollars Dollars => new(Usd, Uncounted);
+}
 
 /// <summary>The safe pause a run is under or was ended by, as <c>flow.json</c> holds it.</summary>
 /// <param name="Cause">Who asked for the pause.</param>

@@ -2142,7 +2142,17 @@ before its reserve where that is less than its agent's own `maxBudgetUsd`, or wh
 step's own budget (`FlowStepResult.AtTheRunsReserve`, `PauseCause` `budget`) - of the grant its share was reckoned under
 (`FlowInstance.ShareGrant`, taken as its runner is asked): where that grant still stands the workflow's answers may allow
 more, the step running again at once given its handoff, else the run pauses for its budget; a share reckoned before more
-was granted reaches no reserve of the grant that stands, and the step runs again at once given its handoff. A step that says `ask` is paused on its agent's questions
+was granted reaches no reserve of the grant that stands, and the step runs again at once given its handoff. Dollars
+are folded by one owner (`FlowDollars`: the counted sum, and the first reason a part could not be counted) for an agent
+run's turns (`AgentRunSpend.Dollars`), an advice (`FlowAdvice.Dollars`), the reporter's answer (`FlowReported.Dollars`)
+and the run's reasoning (`FlowBudgetSpent.Charge`): a turn whose cost cannot be counted - its model has no price of a
+kind it used - is handed on with no cost and why (`IFlowRunEvents.Used`'s `uncounted`), never as nothing, and leaves the
+run's dollars known only as at least the counted sum - `flow.json`'s `spent.uncounted` (`FlowBudgetRecord.Uncounted`,
+absent where every part was counted, a record without it read as counted whole), said by status, the report and every
+`--json` (`FlowDollars.Said`, `spent.uncounted`, an ask's `cost.uncounted`). In a run budgeted in dollars such a part
+reaches the reserve for the grant that stands as a launch its share ended does (`FlowCoordinator.Charge` marking
+`_reserveMetAt`), so the run asks, and a grant of more goes on with each launch held to what is left as far as the
+dollars were counted. A step that says `ask` is paused on its agent's questions
 (`AgentRunStatus.Asked` mapped to a question of the kind `ask`, the agent's questions riding with it and the
 recommendation saying the agent recommends within each), and the answer - `answer` with a text, or `decide` - goes back
 into the same attempt (`FlowAnswerGiven` carrying its text and kind): the runner sends the person's words as the

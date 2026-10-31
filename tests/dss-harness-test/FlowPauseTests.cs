@@ -1600,6 +1600,75 @@ public sealed class FlowPauseTests
     }
 
     /// <summary>
+    /// A part whose cost could not be counted, in a run budgeted in dollars, reaches the reserve for the grant that
+    /// stands: dollars not all counted are not known to be short of it, so the run pauses and asks, saying at least what
+    /// was counted and why the rest is not known. A grant of more lets the run go on - each agent held to what is left as
+    /// far as the dollars were counted - and is not asked again until another such part comes.
+    /// </summary>
+    [Fact]
+    public async Task APartNotCounted_InARunBudgetedInDollars_AsksOnce_AndAGrantGoesOn()
+    {
+        const string Why = "no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)";
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 50
+              reservePercent: 10
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: after
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [think]
+            """);
+        var runner = new FakeRunner()
+            .On("think", run =>
+            {
+                // Only the first attempt reports this spend: the re-run goes on with the same conversation.
+                if (run.Attempt == 1)
+                {
+                    run.Events.Used(tokens: 1_000, usd: 2.0);
+                    run.Events.Used(tokens: 500, usd: null, uncounted: Why);
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
+            })
+            .On("after", run =>
+            {
+                run.Events.Used(tokens: 1_000, usd: 1.0);
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
+            });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal("budget", end.Pause!.Cause);
+        var asked = Assert.Single(coordinator.OpenQuestions);
+        Assert.Equal(
+            "run 'r7' has spent at least 2.00 of 50.00 USD (the rest is not known: no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)) (its reserve of 10% was reached)",
+            asked.Problem);
+
+        Assert.True(coordinator.TryAnswer(asked.Id, "more", out var problem), problem);
+
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["think", "think", "after"], runner.Started);
+        Assert.Single(coordinator.Questions);
+
+        lock (runner.Runs)
+        {
+            Assert.Equal(new double?[] { 45.0, 88.0, 88.0 }, runner.Runs.Select(run => run.BudgetLeftUsd));
+        }
+    }
+
+    /// <summary>
     /// The minutes a reason step runs count while it runs: a step that runs past the reserve pauses the run on a tick of
     /// the clock, before its budget is spent, rather than only when its attempt ends.
     /// </summary>

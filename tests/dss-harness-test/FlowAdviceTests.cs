@@ -341,6 +341,25 @@ public sealed class FlowAdviceTests
     }
 
     /// <summary>
+    /// An advice a turn of which could not be counted charges the run's budget with what was counted and why the rest is
+    /// not known, never a cost of nothing: the run's dollars are not known past it, through the same fold a reason step's
+    /// turns go through.
+    /// </summary>
+    [Fact]
+    public async Task AnAdviceATurnOfWhichWasNotCounted_LeavesTheRunsDollarsNotKnown()
+    {
+        const string Why = "no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)";
+        var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice("retry", "it went wrong", null, Usd: 0.25, Tokens: 4800, Uncounted: Why)));
+        var records = new Records();
+        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
+
+        var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal((new FlowDollars(0.25, Why), 4800L), (records.Last!.Spent.Dollars, records.Last.Spent.Tokens));
+    }
+
+    /// <summary>
     /// An advice is held to what is left of the run's dollars before its reserve, the run's share handed with its call;
     /// a run that budgets no dollars hands none.
     /// </summary>

@@ -30,7 +30,7 @@ public sealed class ReasonStepRunnerTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double usd) { }
+        public void Used(long tokens, double? usd, string? uncounted = null) { }
 
         public void HandoffTaken() { }
     }
@@ -1055,8 +1055,8 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(result.Passed, result.Error);
         Assert.Equal(
-            [(4700L, 0.02925), (120L, 0.002)],
-            events.Spent.Select(spent => (spent.Tokens, Math.Round(spent.Usd, 9))));
+            [(4700L, (double?)0.02925, (string?)null), (120L, 0.002, null)],
+            events.Spent.Select(spent => (spent.Tokens, spent.Usd is { } usd ? Math.Round(usd, 9) : (double?)null, spent.Uncounted)));
     }
 
     /// <summary>
@@ -1201,7 +1201,7 @@ public sealed class ReasonStepRunnerTests
     private sealed class SpendingEvents : IFlowRunEvents
     {
         /// <summary>Every turn's spend, in the order handed on.</summary>
-        public List<(long Tokens, double Usd)> Spent { get; } = [];
+        public List<(long Tokens, double? Usd, string? Uncounted)> Spent { get; } = [];
 
         public void LegPlaced(string leg, bool inACopy) { }
 
@@ -1211,7 +1211,7 @@ public sealed class ReasonStepRunnerTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double usd) => Spent.Add((tokens, usd));
+        public void Used(long tokens, double? usd, string? uncounted = null) => Spent.Add((tokens, usd, uncounted));
 
         public void HandoffTaken() { }
     }
@@ -1230,7 +1230,7 @@ public sealed class ReasonStepRunnerTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double usd) { }
+        public void Used(long tokens, double? usd, string? uncounted = null) { }
 
         public void HandoffTaken() => Taken++;
     }
