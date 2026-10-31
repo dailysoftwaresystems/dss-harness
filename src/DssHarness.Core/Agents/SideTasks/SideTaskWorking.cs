@@ -638,7 +638,7 @@ internal sealed class Working
                 // Each later turn's first message is the person's: what it carried of the conversation before it is
                 // that conversation's, which the stream holds itself, so it stands as the person's message alone.
                 case MessageSent { Which: AgentMessageKind.FirstPrompt } sent when asked:
-                    whole.Add(sent with { Text = TurnFront.PersonOf(sent.Text), Which = AgentMessageKind.ChatMessage });
+                    whole.Add(sent with { Text = AgentPromptParts.TaskOf(sent.Text), Which = AgentMessageKind.ChatMessage });
                     continue;
 
                 case MessageSent { Which: AgentMessageKind.FirstPrompt }:
@@ -865,7 +865,7 @@ internal sealed class Working
                     Seen.OneSent();
                     Write(string.Empty);
                     Write("person:");
-                    foreach (var line in Lines(PersonOf(sent.Text)))
+                    foreach (var line in Lines(AgentPromptParts.TaskOf(sent.Text)))
                     {
                         Write($"    {line}");
                     }
@@ -909,21 +909,6 @@ internal sealed class Working
             }
 
             return ValueTask.CompletedTask;
-        }
-
-        /// <summary>
-        /// The person's own message a first message holds: the task its parts end with, where it was given parts - the
-        /// conversation so far carried before it - and the whole text where it was not.
-        /// </summary>
-        public static string PersonOf(string text)
-        {
-            var open = $"<{AgentPromptParts.TaskTag}>";
-            var close = $"</{AgentPromptParts.TaskTag}>";
-            var at = text.LastIndexOf(open, StringComparison.Ordinal);
-
-            return at >= 0 && text.EndsWith(close, StringComparison.Ordinal)
-                ? text[(at + open.Length)..^close.Length].Trim()
-                : text;
         }
 
         /// <summary>Says one line of text to the person, where a chat is listening.</summary>

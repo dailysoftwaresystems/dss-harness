@@ -54,11 +54,14 @@ public static class AgentAttempt
 
     /// <summary>
     /// The items of an attempt's events in the stream's order (<see cref="Of"/>): each message of the agent's, and each
-    /// message the engine sent while it worked, with the turn of the attempt it falls in - turns numbered across the
-    /// attempt's runs, a run's own count from one going on from the last turn of the run before it. The first prompt
-    /// of the attempt is what it was asked, not an item; a later run's own first message is an item - the answer it
-    /// went on with - but for a compaction record, which stands for the items before it, all of which the attempt's
-    /// events hold themselves.
+    /// message the engine sent while it worked, with the turn of the attempt it falls in - turns numbered on across the
+    /// whole attempt, never back: a count that begins again, as each run of the attempt's does and each launch a retry or
+    /// a move to another client begins inside one run, goes on from the last turn before it. The first prompt of the
+    /// attempt is what it was asked, not an item. A later first message is an item by its task alone
+    /// (<see cref="AgentPromptParts.TaskOf"/>) - the answer it went on with - never the run context or the continuation
+    /// record it carried, which are the engine's record of what the attempt's events hold themselves; and none where it
+    /// is a compaction record, which stands for the items before it, or the attempt's own task sent again to a new
+    /// conversation, which the attempt's first prompt already is.
     /// </summary>
     /// <param name="attempt">The attempt's events.</param>
     public static AgentAttemptItems Items(IReadOnlyList<AgentEvent> attempt)
@@ -66,10 +69,12 @@ public static class AgentAttempt
         ArgumentNullException.ThrowIfNull(attempt);
 
         string? first = null;
+        string? task = null;
         var items = new List<AgentAttemptItem>();
         var answers = new Dictionary<string, ToolCallFinished>(StringComparer.Ordinal);
         var turn = 0;
         var before = 0;
+        var counted = 0;
 
         foreach (var @event in attempt)
         {
@@ -77,17 +82,36 @@ public static class AgentAttempt
             {
                 case RunStarted:
                     before = turn;
+                    counted = 0;
                     break;
 
                 case TurnStarted started:
+                    // A count at or below the last turn it gave began again: a new launch inside the run.
+                    if (started.Turn <= counted)
+                    {
+                        before = turn;
+                    }
+
+                    counted = started.Turn;
                     turn = before + started.Turn;
                     break;
 
                 case MessageSent { Which: AgentMessageKind.FirstPrompt } asked when first is null:
                     first = asked.Text;
+                    task = AgentPromptParts.TaskOf(asked.Text);
                     break;
 
                 case MessageSent { Which: AgentMessageKind.FirstPrompt } compacted when compacted.Text.StartsWith(AgentCompaction.SaysWhatItIs, StringComparison.Ordinal):
+                    break;
+
+                case MessageSent { Which: AgentMessageKind.FirstPrompt } later:
+                    var answer = AgentPromptParts.TaskOf(later.Text);
+
+                    if (!string.Equals(answer, task, StringComparison.Ordinal))
+                    {
+                        items.Add(new AgentAttemptItem(turn, Engine: later with { Text = answer }));
+                    }
+
                     break;
 
                 case MessageSent sent:

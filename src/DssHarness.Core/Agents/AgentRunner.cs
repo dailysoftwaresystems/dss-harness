@@ -68,6 +68,12 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <summary>Why a run paused while it waited its turn at the gate has no handoff: its client never began.</summary>
     public const string PausedAtTheGate = "the run was paused while it waited its turn at the gate, before its client began";
 
+    /// <summary>Why a step paused while its failed agent waited to be tried again has no handoff: no launch was running to give one.</summary>
+    public const string PausedWhileItWaited = "the run was paused while it waited to be tried again, before its next launch began";
+
+    /// <summary>Why a step paused between two launches of its walk has no handoff: no launch was running to give one.</summary>
+    public const string PausedBeforeItsNextLaunch = "the run was paused between two launches, before its next began";
+
     /// <summary>How long a failed agent's first retry waits, in seconds, where neither its step nor the workflow names one.</summary>
     public const int WorkflowBackoffSeconds = 30;
 
@@ -303,6 +309,43 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 null);
         }
 
+        if (step.Compaction is not { } compaction)
+        {
+            return await ClientsAsync(step, directory, mask, pump, cancellationToken).ConfigureAwait(false);
+        }
+
+        // A run begun from the engine's compaction says so before any client is taken, and counts it: the conversation it
+        // leaves, the one it begins, and what the record kept and reduced.
+        await pump.EmitAsync(new Compacted(
+            AgentCompaction.AnsweredCompact,
+            compaction.Left ?? string.Empty,
+            step.SessionId ?? string.Empty,
+            compaction.KeptWordForWord,
+            compaction.Reduced,
+            compaction.SizeBefore,
+            compaction.SizeAfter)).ConfigureAwait(false);
+
+        var (worked, thrown) = await ClientsAsync(step, directory, mask, pump, cancellationToken).ConfigureAwait(false);
+
+        return (worked with { Compactions = worked.Compactions + 1 }, thrown);
+    }
+
+    /// <summary>
+    /// Has the step's clients work it: its whole order walked where it has one, else the one client it names. A client
+    /// that threw has ended too, as <see cref="WorkAsync"/> says.
+    /// </summary>
+    /// <param name="step">The step.</param>
+    /// <param name="directory">The step's own directory.</param>
+    /// <param name="mask">What masks the secrets the run's text may carry.</param>
+    /// <param name="pump">The run's pump, the sink the client is handed.</param>
+    /// <param name="cancellationToken">The hard stop.</param>
+    private async Task<(AgentRunResult Result, Exception? Thrown)> ClientsAsync(
+        AgentStepRequest step,
+        string directory,
+        ILineMask mask,
+        AgentEventPump pump,
+        CancellationToken cancellationToken)
+    {
         if (step.Order is { Count: > 0 } order)
         {
             // The step's whole order is the engine's to walk: a decline, a limit and a refused key move it from entry
@@ -321,6 +364,11 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                     : _clients.Count == 0 ? "The step names no agent client, and none is registered."
                     : $"The step names no agent client, and {_clients.Count} are registered ({string.Join(", ", _clients.Select(one => $"'{one.Name}'"))}): where there is more than one, a step names the one it is worked by."),
                 null);
+        }
+
+        if (Priceless(step, client, step.Entries) is { } priceless)
+        {
+            return (AgentEndings.NotStarted(client.Name, AgentNotStartedBecause.ConfigurationWrong, priceless, step.Model, mask), null);
         }
 
         var messages = step.Messages ?? new AgentMessages();
@@ -425,9 +473,20 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 var client = ByName(entry.Client);
                 var broken = false;
 
+                // The run's pause asked between two launches - a move to another entry, or before a retry - begins no
+                // launch: the step ends handed off as its last launch left it.
+                if (totals.Launched && step.Handoff is { Asked: true })
+                {
+                    return (Paused(totals, step, PausedBeforeItsNextLaunch, mask), null);
+                }
+
                 if (client is null)
                 {
                     result = AgentEndings.NotStarted(entry.Client, AgentNotStartedBecause.ConfigurationWrong, $"No agent client named '{entry.Client}' is registered.", entry.Model, mask);
+                }
+                else if (Priceless(step, client, entry.Entries) is { } priceless)
+                {
+                    result = AgentEndings.NotStarted(entry.Client, AgentNotStartedBecause.ConfigurationWrong, priceless, entry.Model, mask);
                 }
                 else
                 {
@@ -448,7 +507,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                             messages,
                             entry,
                             CredentialFor(order, at, refused, limits, now),
-                            LaterFor(order, at, refused, limits, now),
+                            LaterFor(step, order, at, refused, limits, now),
                             step.Conversation,
                             client.Capabilities.GoesOnWith == AgentConversationHandling.Handed,
                             launchSession);
@@ -505,21 +564,29 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                     refused.Add(key);
                 }
 
+                // Where the step stands now: the entry its client said it moved to last inside its own run, else the one
+                // the walk started it on - every move and retry goes on from there, never asking an entry again.
+                var from = watching.LastServed(entry);
+                var where = Math.Max(PlaceOf(order, from, at), at);
+
                 // What moves the step, and nothing else: a decline - never one about what the prompt asks - an account
-                // at its limit, a failed run whose provider and client have no key left unrefused, and a failed agent
-                // with retries left on its model. Everything else is the step's own ending, however it ended.
+                // at its limit, a run that ended on a key the provider refused - to the next key at once where its
+                // provider and client have one left unrefused, past them where none is - and a failed agent with retries
+                // left on its model. Everything else is the step's own ending, however it ended.
                 var decline = result.Status == AgentRunStatus.Refused && !string.Equals(result.DeclinedFor, AgentFallback.ReasoningExtraction, StringComparison.Ordinal);
                 var atLimit = result.Status == AgentRunStatus.RateLimited;
+                var keyRefused = result.Status == AgentRunStatus.Failed && from.Key is { Length: > 0 } ended && refused.Contains(ended);
                 var keysGone = result.Status == AgentRunStatus.Failed && result.KeysRefused.Count > 0 && !order.Any(one =>
                     one.Usable
                     && string.Equals(one.Provider, entry.Provider, StringComparison.Ordinal)
                     && string.Equals(one.Client, entry.Client, StringComparison.Ordinal)
                     && (one.Key is not { Length: > 0 } key || !refused.Contains(key)));
                 var agentFailed = result.Status is AgentRunStatus.Failed or AgentRunStatus.InvalidOutput or AgentRunStatus.WrongModel or AgentRunStatus.Stalled or AgentRunStatus.TimedOut
+                    && !keyRefused
                     && !keysGone
                     && !result.ServiceFailed;
 
-                if (!decline && !atLimit && !keysGone && !agentFailed)
+                if (!decline && !atLimit && !keyRefused && !keysGone && !agentFailed)
                 {
                     break;
                 }
@@ -528,11 +595,6 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 {
                     limits.Add((result.Limit!, entry.Client));
                 }
-
-                // Where the step stands now: the entry its client said it moved to last inside its own run, else the one
-                // the walk started it on - every move and retry goes on from there, never asking an entry again.
-                var from = watching.LastServed(entry);
-                var where = Math.Max(PlaceOf(order, from, at), at);
 
                 // A failed agent is tried again on its model before the step moves past it: `retries` times - the
                 // step's own, the workflow's where it says none - waiting `backoffSeconds` before the first and
@@ -560,9 +622,13 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                             wait,
                             _clock.GetUtcNow() + wait)).ConfigureAwait(false);
 
-                        // The wait ends with the run's own stop: a record lost while it waits stops the run as it would
-                        // stop the client's.
-                        await Task.Delay(wait, _clock, pump.Stopping).ConfigureAwait(false);
+                        // The wait ends with the run's own stop - a record lost while it waits stops the run as it would
+                        // stop the client's - and with its pause: the step ends handed off as its last launch left it,
+                        // and no launch is begun once the pause is asked.
+                        if (!await WaitedAsync(wait, step.Handoff, pump).ConfigureAwait(false))
+                        {
+                            return (Paused(totals, step, $"{PausedWhileItWaited}: {result.Error ?? "it ended failed"}", mask), null);
+                        }
 
                         at = again;
                         continue;
@@ -644,6 +710,56 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     }
 
     /// <summary>
+    /// Waits <paramref name="wait"/> out on the run's own clock, ended by the run's stop - which throws, as it stops a
+    /// client - and by its pause: true where the wait passed, false where the pause was asked first.
+    /// </summary>
+    /// <param name="wait">How long to wait.</param>
+    /// <param name="handoff">The run's pause; null where none can be asked.</param>
+    /// <param name="pump">The run's pump, whose stop ends the wait.</param>
+    private async Task<bool> WaitedAsync(TimeSpan wait, AgentHandoffSignal? handoff, AgentEventPump pump)
+    {
+        if (handoff is null)
+        {
+            await Task.Delay(wait, _clock, pump.Stopping).ConfigureAwait(false);
+            return true;
+        }
+
+        using var paused = CancellationTokenSource.CreateLinkedTokenSource(pump.Stopping);
+        var waited = Task.Delay(wait, _clock, paused.Token);
+
+        if (await Task.WhenAny(waited, handoff.WhenAsked).ConfigureAwait(false) == waited)
+        {
+            await waited.ConfigureAwait(false);
+            return true;
+        }
+
+        await paused.CancelAsync().ConfigureAwait(false);
+
+        try
+        {
+            await waited.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!pump.Stopping.IsCancellationRequested)
+        {
+            // The wait the pause ended, as it was asked to.
+        }
+
+        pump.Stopping.ThrowIfCancellationRequested();
+        return false;
+    }
+
+    /// <summary>
+    /// The step's ending where its pause was asked between two launches: handed off, as every paused run is, with no
+    /// handoff to give and why, and everything its launches did and used.
+    /// </summary>
+    private static AgentRunResult Paused(WalkTotals totals, AgentStepRequest step, string why, ILineMask mask)
+    {
+        totals.Add(AgentEndings.HandedOff(null, why, mask));
+
+        return totals.Finished(step);
+    }
+
+    /// <summary>
     /// The place a failed agent is tried again at: the first entry from <paramref name="where"/> on of the same model,
     /// provider and client that the walk may still take (<see cref="AgentFallback.Taken"/>); null where none is left, and
     /// the step moves past the model.
@@ -706,11 +822,26 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
     /// <summary>
     /// The entries after <c>order[at]</c> as its client is handed them to go on with: each as the order holds it, and one
-    /// the walk may no longer take - its key refused, a remembered limit covering it - marked so, with the reason, so the
-    /// client passes it over as the walk would.
+    /// the walk may no longer take - its key refused, a remembered limit covering it, a model without the prices the
+    /// step's dollar budget needs - marked so, with the reason, so the client passes it over as the walk would.
     /// </summary>
-    private static IReadOnlyList<AgentRunEntry> LaterFor(IReadOnlyList<AgentRunEntry> order, int at, IReadOnlyCollection<string> refused, IReadOnlyList<(AgentAccountLimit Limit, string Client)> limits, DateTimeOffset now)
-        => [.. order.Skip(at + 1).Select(entry => entry.Usable && AgentFallback.Taken(entry, refused, limits, now) is { } why ? entry with { Usable = false, WhyNot = why } : entry)];
+    private IReadOnlyList<AgentRunEntry> LaterFor(AgentStepRequest step, IReadOnlyList<AgentRunEntry> order, int at, IReadOnlyCollection<string> refused, IReadOnlyList<(AgentAccountLimit Limit, string Client)> limits, DateTimeOffset now)
+        => [.. order.Skip(at + 1).Select(entry => entry.Usable && (AgentFallback.Taken(entry, refused, limits, now) ?? Priceless(step, ByName(entry.Client), entry.Entries)) is { } why ? entry with { Usable = false, WhyNot = why } : entry)];
+
+    /// <summary>
+    /// Why a step budgeted in dollars may not start on <paramref name="entries"/> through <paramref name="client"/>: the
+    /// one place the rule is applied for every client, before any client is taken - a budget is charged with the cost
+    /// counted at the configuration's prices, so a model without a price of each kind its client is billed by
+    /// (<see cref="IAgentClient.BilledBy"/>) could never be charged, and its cost is unknown, never zero, in the words of
+    /// <see cref="AgentPrices.BudgetRefusal"/>. Null where the step has no dollar budget, or the prices are there.
+    /// </summary>
+    /// <param name="step">The step, whose limits say its budget.</param>
+    /// <param name="client">The client that would work the entry; null where none is registered.</param>
+    /// <param name="entries">The entry's provider and model; null where it has none.</param>
+    private static string? Priceless(AgentStepRequest step, IAgentClient? client, AgentEntries? entries)
+        => step.Limits.MaxBudgetUsd is not null && client is not null && entries is not null
+            ? AgentPrices.BudgetRefusal(entries.Provider, entries.Model, client.BilledBy(entries))
+            : null;
 
     /// <summary>
     /// Works <paramref name="run"/> on <paramref name="client"/> through the gate: a client that paces its own requests is
@@ -740,13 +871,29 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             return await client.RunAsync(run, events, pump.Stopping).ConfigureAwait(false);
         }
 
-        var lane = _gates.LaneOf(provider, client.Name, run.Entries?.Client, run.Credential?.Auth == AgentAuth.Login ? null : run.Credential?.Keys.FirstOrDefault());
+        var key = run.Credential?.Auth == AgentAuth.Login ? null : run.Credential?.Keys.FirstOrDefault();
+        var lane = _gates.LaneOf(provider, client.Name, run.Entries?.Client, key);
         ClientGate.ClientSlot slot;
+
+        // A cool-down past the client's longest wait that holds this model - its own rate limit, or the key's whole - is
+        // that limit met, as the loop reads one: the launch is not begun, and the walk passes the entry over as one at its
+        // limit, to an entry the cool-down does not hold. The lane keeps the cool-down for every later step of the run.
+        var longest = Loop.ToolLoopTerms.LongestWaitOf(run.Entries?.Client);
+
+        if (lane.CoolDownOf(run.Model) is { } cooling && cooling.Left > longest)
+        {
+            return AgentEndings.AtLimit(
+                "the gate",
+                new AgentAccountLimit(BalanceSpent: false, _clock.GetUtcNow() + cooling.Left, key?.Name, cooling.Model),
+                $"its lane is held by a 429's cool-down for {cooling.Left}, past the longest wait of {longest}",
+                run.Mask);
+        }
 
         using (var paused = CancellationTokenSource.CreateLinkedTokenSource(pump.Stopping))
         {
             var entering = lane.EnterAsync(
                 0,
+                run.Model,
                 (wait, why) => events.EmitAsync(new WaitingToRetry($"the run waits for {why}", 1, 1, wait, _clock.GetUtcNow() + wait)),
                 paused.Token);
 
@@ -779,11 +926,12 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
         slot.Answered(result.Usage?.Total.OutputTokens ?? 0);
 
-        // An account at its limit holds the lane's every waiter until the provider says the limit lifts: the cool-down
-        // is set from what it said, never shortened by a sooner one.
-        if (result.Status == AgentRunStatus.RateLimited && result.Limit?.Lifts is { } lifts && lifts > _clock.GetUtcNow())
+        // An account at its limit holds the waiters it covers until the provider says the limit lifts - the lane's every
+        // request for the key's whole, its requests of the model for a model's limit: the cool-down is set from what it
+        // said, never shortened by a sooner one.
+        if (result.Status == AgentRunStatus.RateLimited && result.Limit is { Lifts: { } lifts } limit && lifts > _clock.GetUtcNow())
         {
-            lane.RateLimited(lifts - _clock.GetUtcNow());
+            lane.RateLimited(lifts - _clock.GetUtcNow(), limit.Model);
         }
 
         return result;
@@ -824,30 +972,40 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     }
 
     /// <summary>
-    /// Records what the entry's run spent, by the key's name and never its value, for the next step's choice of one:
-    /// what the client reported the run cost where it reports one (a Claude Code launch's own number), else what the
-    /// engine counted at the configuration's prices; nothing where neither is known, for a cost no price was there
+    /// Records what the entry's run spent, by each key's name and never its value, for the next step's choice of one: each
+    /// part of the run - a model on the key its requests were signed with, the parts a client moves through by itself
+    /// after a refused or limited key among them - booked to its own key, at what the client reported the part cost
+    /// where it reports one (a Claude Code launch's own number), else what the engine counted at the configuration's
+    /// prices; a part signed with no key, or whose cost is known by neither, books nothing, for a cost no price was there
     /// for is unknown and never zero. The record is for balancing alone: one that cannot be written - its section held
     /// past its wait, the disk full - is said as a notice, and never ends the step.
     /// </summary>
     /// <param name="step">The step, whose sink the run records through; null where nothing is counted.</param>
-    /// <param name="entry">The entry that served the run, its key the one that spent.</param>
-    /// <param name="result">How the run ended, with what it used and what that cost.</param>
+    /// <param name="entry">The entry the walk started the run on, whose provider every part of the run reaches.</param>
+    /// <param name="result">How the run ended, with what each part used and what that cost.</param>
     /// <param name="events">Where a record that could not be written is said.</param>
     private static async Task SpentAsync(AgentStepRequest step, AgentRunEntry entry, AgentRunResult result, IAgentEventSink events)
     {
-        if (step.Spend is not { } sink || entry.Key is not { Length: > 0 } || result.Usage?.Cost?.Usd is not { } cost)
+        if (step.Spend is not { } sink || result.Usage is not { } usage)
         {
             return;
         }
 
-        try
+        foreach (var part in usage.PerModel)
         {
-            sink.Record(entry.Provider, entry.Key, entry.Model, cost);
-        }
-        catch (Exception ex) when (ex is Results.HarnessException or IOException or UnauthorizedAccessException)
-        {
-            await events.EmitAsync(new Notice($"What {entry.Key} spent on '{entry.Model}' could not be recorded for the balancing of keys: {ex.Message}")).ConfigureAwait(false);
+            if (part.Key is not { Length: > 0 } key || part.Cost?.Usd is not { } cost)
+            {
+                continue;
+            }
+
+            try
+            {
+                sink.Record(entry.Provider, key, part.Model, cost);
+            }
+            catch (Exception ex) when (ex is Results.HarnessException or IOException or UnauthorizedAccessException)
+            {
+                await events.EmitAsync(new Notice($"What {key} spent on '{part.Model}' could not be recorded for the balancing of keys: {ex.Message}")).ConfigureAwait(false);
+            }
         }
     }
 
@@ -888,18 +1046,10 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <summary>What every entry of the walk added to the step's one run, and the one result the step ends with.</summary>
     private sealed class WalkTotals
     {
-        private readonly List<AgentModelUsage> _perModel = [];
         private readonly List<string> _keysRefused = [];
         private readonly List<string> _files = [];
         private readonly List<AgentServedModel> _served = [];
-        private AgentUsage _total = AgentUsage.None;
-        private decimal? _counted;
-        private decimal? _reported;
-        private bool _anyUsage;
-        private bool _countedLost;
-        private bool _reportedLost;
-        private bool _anyReported;
-        private string? _missingPrice;
+        private AgentUsageReport? _usage;
         private AgentRunResult? _result;
         private int _turnsSoFar;
         private int _calls;
@@ -913,6 +1063,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         /// <summary>How many turns the step took over every entry that served it.</summary>
         public int Turns => _turnsSoFar;
 
+        /// <summary>Whether any entry's run has ended yet: the walk has launched one.</summary>
+        public bool Launched => _result is not null;
+
         /// <summary>Adds what <paramref name="result"/> did and used on the entry that served it.</summary>
         public void Add(AgentRunResult result)
         {
@@ -920,24 +1073,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
             _result = result;
 
-            if (result.Usage is { } usage)
-            {
-                _anyUsage = true;
-                _total = _total.Plus(usage.Total);
-                _perModel.AddRange(usage.PerModel);
-                _missingPrice ??= usage.Cost?.MissingPrice;
-
-                // Each entry's cost joins the walk's: counted where the engine counted it, reported where the client
-                // said it - the engine's count standing in for an entry whose client says nothing, so that what the
-                // step cost is every entry's own. An entry whose cost is known by neither makes the walk's unknown,
-                // never zero: that sum is lost for good, and no later entry gives it back.
-                var cost = usage.Cost;
-                _countedLost |= cost?.Counted is null;
-                _reportedLost |= cost?.Usd is null;
-                _counted = _countedLost ? null : (_counted ?? 0) + cost!.Counted;
-                _anyReported |= cost?.Reported is not null;
-                _reported = _reportedLost ? null : (_reported ?? 0) + cost!.Usd;
-            }
+            // Each entry's usage joins the walk's by the one fold of usage over parts, so what the step cost is every
+            // entry's own, by the same rule a side-task's turns are summed.
+            _usage = AgentUsageReport.Sum(_usage, result.Usage);
 
             _keysRefused.AddRange(result.KeysRefused.Where(key => !_keysRefused.Contains(key)));
             _files.AddRange(result.Files.Where(file => !_files.Contains(file)));
@@ -955,10 +1093,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         /// <summary>
         /// The step's one result: the last ending's own shape - how it ended, what it said, what it asked, what it left -
         /// with what every entry did and used, the turns it took, the calls it ran and what the providers refused, the
-        /// keys among them, and the models that served it, each from the turn of the step it began at. What it cost is
-        /// every entry's own cost summed - <c>reported</c> where any client said one, the engine's count standing in for
-        /// an entry whose client said none, and <c>counted</c> the engine's alone - and unknown, never zero, where an
-        /// entry's cost is; a walk where no entry used anything says no usage at all.
+        /// keys among them, and the models that served it, each from the turn of the step it began at. What it used and
+        /// cost is every entry's own, folded by <see cref="AgentUsageReport.Sum"/>; a walk where no entry used anything
+        /// says no usage at all.
         /// </summary>
         /// <param name="step">The step, whose model the result names as asked for.</param>
         public AgentRunResult Finished(AgentStepRequest step)
@@ -975,7 +1112,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                     Compactions = _compactions,
                     Retries = _retries,
                     Duration = _ran,
-                    Usage = _anyUsage ? new AgentUsageReport(_total, [.. _perModel], new AgentCost(_anyReported ? _reported : null, _counted, _missingPrice)) : null,
+                    Usage = _usage,
                     Served = [.. _served],
                     Files = [.. _files],
                     KeysRefused = [.. _keysRefused],
@@ -1072,7 +1209,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             step.RunContext,
             step.PlanUpdates,
             step.Continuation,
-            step.Compaction)
+            step.Compaction?.Record)
         {
             Ground = step.Ground,
             Credential = step.Credential,
@@ -1131,7 +1268,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             step.RunContext,
             step.PlanUpdates,
             step.Continuation,
-            step.Compaction)
+            step.Compaction?.Record)
         {
             Ground = step.Ground,
             Credential = credential,

@@ -96,9 +96,10 @@ public sealed class ClientGates(TimeProvider clock, Func<TimeSpan, CancellationT
 
 /// <summary>
 /// One lane of the gate: the requests that share one provider and one key, held to the client's parallel bound, its
-/// optional buckets and a cool-down a 429 sets for every waiter. Each client enters it at its own seam - the loop the
+/// optional buckets and the cool-downs a 429 sets, each scoped as the failure was - a rate limit holding that model's
+/// requests on the key, an account's limit every request of it. Each client enters it at its own seam - the loop the
 /// API clients share before each request, the runner around each Claude Code launch - and the buckets are kept in
-/// memory, for a lane is one engine's own. Its minutes and its cool-down are counted on the clock's timestamps, so a
+/// memory, for a lane is one engine's own. Its minutes and its cool-downs are counted on the clock's timestamps, so a
 /// wall clock stepped back or forward holds no lane longer or shorter than the time that passed.
 /// </summary>
 public sealed class ClientGate
@@ -114,6 +115,7 @@ public sealed class ClientGate
     private readonly List<long> _requests = [];
     private readonly List<(long At, long Tokens)> _input = [];
     private readonly List<(long At, long Tokens)> _output = [];
+    private readonly Dictionary<string, long> _modelNotBefore = new(StringComparer.Ordinal);
     private long? _notBefore;
 
     internal ClientGate(ClientGateSettings settings, TimeProvider clock, Func<TimeSpan, CancellationToken, Task> wait)
@@ -124,15 +126,17 @@ public sealed class ClientGate
         _slots = new SemaphoreSlim(settings.MaxParallel, settings.MaxParallel);
     }
 
-    /// <summary>How long the cool-down a 429 set still holds the lane; null where none does.</summary>
-    public TimeSpan? CoolDownLeft
+    /// <summary>
+    /// How long a cool-down still holds the lane's requests of <paramref name="model"/>, and whose it is: the longer of
+    /// the key's whole - an account's limit, <see cref="ClientCoolDown.Model"/> null - and the model's own; null where
+    /// none does. Another model's rate limit is never this one's.
+    /// </summary>
+    /// <param name="model">The model the request asks; null where it names none, which only the key's whole holds.</param>
+    public ClientCoolDown? CoolDownOf(string? model)
     {
-        get
+        lock (_state)
         {
-            lock (_state)
-            {
-                return CoolingFor(_clock.GetTimestamp());
-            }
+            return CoolingFor(_clock.GetTimestamp(), model);
         }
     }
 
@@ -145,10 +149,11 @@ public sealed class ClientGate
     /// <param name="inputTokens">The tokens the request sends, as the caller counts them.</param>
     /// <param name="cancellationToken">Stops the wait.</param>
     public Task<ClientSlot> EnterAsync(long inputTokens, CancellationToken cancellationToken)
-        => EnterAsync(inputTokens, waiting: null, cancellationToken);
+        => EnterAsync(inputTokens, model: null, waiting: null, cancellationToken);
 
     /// <summary>
-    /// Takes the lane's turn as <see cref="EnterAsync(long, CancellationToken)"/> does, telling <paramref name="waiting"/>
+    /// Takes the lane's turn as <see cref="EnterAsync(long, CancellationToken)"/> does for a request of
+    /// <paramref name="model"/> - held by the key's cool-down and that model's alone - telling <paramref name="waiting"/>
     /// each wait before it is waited - how long, and why - so the caller says it rather than going silent.
     /// </summary>
     /// <remarks>
@@ -156,9 +161,10 @@ public sealed class ClientGate
     /// then let in alone: no minute could ever hold it beside another, and waiting for one that does would wait forever.
     /// </remarks>
     /// <param name="inputTokens">The tokens the request sends, as the caller counts them.</param>
+    /// <param name="model">The model the request asks; null where it names none.</param>
     /// <param name="waiting">Told each wait before it is waited, with what holds the lane; null where nothing is told.</param>
     /// <param name="cancellationToken">Stops the wait.</param>
-    public async Task<ClientSlot> EnterAsync(long inputTokens, Func<TimeSpan, string, ValueTask>? waiting, CancellationToken cancellationToken)
+    public async Task<ClientSlot> EnterAsync(long inputTokens, string? model, Func<TimeSpan, string, ValueTask>? waiting, CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(inputTokens);
 
@@ -174,9 +180,9 @@ public sealed class ClientGate
                 var now = _clock.GetTimestamp();
                 Live(now);
 
-                if (CoolingFor(now) is { } cooling)
+                if (CoolingFor(now, model) is { } cooling)
                 {
-                    (spent, why) = (cooling, CoolDown);
+                    (spent, why) = (cooling.Left, CoolDown);
                 }
                 else if (RoomFor(inputTokens, now) is { } until)
                 {
@@ -216,11 +222,13 @@ public sealed class ClientGate
     public const string OutputSpent = "the lane's minute of output tokens is spent";
 
     /// <summary>
-    /// A request the provider answered 429: every waiter of the lane waits <paramref name="wait"/> out, a later or
-    /// longer one holding past a sooner one, as the pace's pause does.
+    /// A request the provider answered 429: every waiter the failure covers waits <paramref name="wait"/> out - the
+    /// lane's requests of <paramref name="model"/> for a rate limit, which is a model's on a key, and every request of
+    /// the lane for an account's limit - a later or longer one holding past a sooner one, as the pace's pause does.
     /// </summary>
     /// <param name="wait">How long the provider asked to wait; zero or negative is nothing.</param>
-    public void RateLimited(TimeSpan wait)
+    /// <param name="model">The model the limit is of; null where it is the key's whole.</param>
+    public void RateLimited(TimeSpan wait, string? model = null)
     {
         if (wait <= TimeSpan.Zero)
         {
@@ -231,16 +239,54 @@ public sealed class ClientGate
         {
             var until = _clock.GetTimestamp() + Ticks(wait);
 
-            if (_notBefore is not { } held || until > held)
+            if (model is null)
             {
-                _notBefore = until;
+                _notBefore = _notBefore is { } held && held >= until ? held : until;
+            }
+            else
+            {
+                _modelNotBefore[model] = _modelNotBefore.TryGetValue(model, out var held) && held >= until ? held : until;
             }
         }
     }
 
-    /// <summary>How long the cool-down holds the lane at <paramref name="now"/>; null where it does not.</summary>
-    private TimeSpan? CoolingFor(long now)
-        => _notBefore is { } until && now < until ? _clock.GetElapsedTime(now, until) : null;
+    /// <summary>
+    /// A request of <paramref name="model"/> answered with <paramref name="failure"/>: where it is a 429 - a rate limit,
+    /// which holds the lane's requests of that model, or an account's limit, which holds every request of the lane - the
+    /// waiters it covers wait out what the provider named, the wait it asked or the time it said the limit lifts; any
+    /// other failure holds nothing. The one reading of a 429's cool-down every request through a lane is held to.
+    /// </summary>
+    /// <param name="failure">How the request failed.</param>
+    /// <param name="model">The model the request asked.</param>
+    public void Met(Loop.ChatFailure failure, string model)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+
+        if (failure.Kind is not (Loop.ChatFailureKind.RateLimited or Loop.ChatFailureKind.AccountLimit))
+        {
+            return;
+        }
+
+        if ((failure.RetryAfter ?? (failure.Lifts is { } lifts ? lifts - _clock.GetUtcNow() : null)) is { } wait)
+        {
+            RateLimited(wait, failure.Kind == Loop.ChatFailureKind.RateLimited ? model : null);
+        }
+    }
+
+    /// <summary>The longer of the key's cool-down and <paramref name="model"/>'s at <paramref name="now"/>, with whose it is; null where neither holds.</summary>
+    private ClientCoolDown? CoolingFor(long now, string? model)
+    {
+        var key = _notBefore is { } whole && now < whole ? whole : (long?)null;
+        var own = model is not null && _modelNotBefore.TryGetValue(model, out var until) && now < until ? until : (long?)null;
+
+        return (key, own) switch
+        {
+            (null, null) => null,
+            ({ } all, { } its) when its > all => new ClientCoolDown(_clock.GetElapsedTime(now, its), model),
+            ({ } all, _) => new ClientCoolDown(_clock.GetElapsedTime(now, all), null),
+            (null, { } its) => new ClientCoolDown(_clock.GetElapsedTime(now, its), model),
+        };
+    }
 
     /// <summary>The clock's ticks <paramref name="span"/> is.</summary>
     private long Ticks(TimeSpan span) => (long)(span.TotalSeconds * _clock.TimestampFrequency);
@@ -353,3 +399,8 @@ public sealed class ClientGate
         }
     }
 }
+
+/// <summary>A cool-down that holds a lane's requests of a model: how long it still holds them, and whose it is.</summary>
+/// <param name="Left">How long it still holds them.</param>
+/// <param name="Model">The model whose rate limit it is; null where it is the key's whole, an account's limit.</param>
+public sealed record ClientCoolDown(TimeSpan Left, string? Model);

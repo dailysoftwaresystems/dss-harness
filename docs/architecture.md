@@ -1791,12 +1791,12 @@ The loop the API clients share is `Agents\Loop\ToolLoop`, driven in its own test
 after another over an `IChatProvider` - the provider's own wire, its form of a conversation's messages and tools, what
 each of its failures is (`ChatFailure`), what a request has used so far (`ChatPart.Used`, counted where it ends
 without its turn), what is heard of an answer that is none of its parts (`ChatPart.Heard`, which keeps the stall bound
-from a stream that is alive) and what its requests are billed by (`IChatProvider.Uses`) - each turn's calls run by the run's
+from a stream that is alive) - each turn's calls run by the run's
 `AgentToolRuntime` (`AgentToolHost.Open`) through `AgentToolRuntime.RunTurnAsync`, which an `AgentTurnCut` cuts when
 the run pauses or the step runs past its time, every call it cut still answered (`AgentToolRuntime.Interrupted`,
 `AgentToolRuntime.NotRun`); a host that cannot serve the tools a run is offered says why before it starts
 (`AgentToolHost.Unserved`). The loop owns the bounds - `maxTurns` but the handoff turn's, the budget checked before every
-request against the cost `AgentPrices` counts (`AgentPrices.BudgetRefusal` refusing a start without the prices it needs),
+request against the cost `AgentPrices` counts (a start without the prices it needs refused by the runner, below),
 the duration, the stall - the run's order of entries of its provider and client (the serving model's
 keys in the credential's order - the runner hands the run its model's keys from the entry it starts on,
 `AgentRunner.CredentialFor` - then each later model of the same provider and client with each of its keys,
@@ -1804,7 +1804,8 @@ up to the first entry of another, `ToolLoop.JoinLaterEntries`; the serving entry
 (`PlannedFor`, by `AgentFallback.Next`) and taken (`TakeAsync`, the new entry asked with tries of its own)
 only where a request will follow it), a key refused never asked again of any model, each request through the
 gate's lane of its provider and key (`AgentRun.Gates`, `ClientGates.LaneOf`: its input counted as it enters, a
-429 setting the lane's cool-down, a cool-down past the longest wait the account at its limit), the retries
+429 setting the cool-down its failure covers, `ClientGate.Met`, a cool-down past the longest wait that limit met at
+once), the retries
 (`ToolLoop.Backoff`,
 `ToolLoopTerms`), the handoff turn (`AgentHandoffSignal`, whose question and answer the claude-code client reads the
 same way), a message to an
@@ -1822,7 +1823,14 @@ the run inside the one conversation (`AgentFallback` the rules - what a limit co
 cause moves to, which decline moves nowhere), and the runner (`AgentRunner.OrderedAsync`, over the
 step's `Order` of `AgentRunEntry`s) walks the rest of the order across clients, a new run for each
 entry it takes, watching the events of each client it works for where it got to (`Watching`) and
-merging what every entry did into the step's one result (`WalkTotals`). The first request asks for a quarter of the model's `maxOutputTokens` (`ToolLoop.FirstMaxTokens`), a turn
+merging what every entry did into the step's one result (`WalkTotals`, its usage folded by the one fold of usage and
+cost, `AgentUsageReport.Sum` over `AgentCost.Sum`: a count is known only where every part with usage has one, and a
+part with usage and no cost is unknown, never nothing). A step budgeted in dollars is never started on an entry
+without a price of each kind its client is billed by (`IAgentClient.BilledBy`: input, cache read and output on every
+client, the claude-api client's cache write of its cache lifetime and both of the claude-code client's), nor
+on a provider that prices in another currency: the runner refuses it, on every client, before any is taken
+(`AgentRunner.Priceless`, in the words of `AgentPrices.BudgetRefusal`) - the step's own first entry ending the step
+`NotStarted`, a later one passed over and handed to the serving client as an entry it may not take. The first request asks for a quarter of the model's `maxOutputTokens` (`ToolLoop.FirstMaxTokens`), a turn
 cut off while it called a tool, before it wrote anything, or while its request held it to a schema (`ToolLoop.WhileHeld`: the
 answer to a nudge would be a whole object of its own), doubling it. Every message the engine sends the agent - the step's
 prompt, a nudge, a repair, the handoff's question, a message to an agent at work - is masked as the system prompt is,
@@ -1837,13 +1845,17 @@ that signs in with a login one lane by its client, two keys of one provider two 
 `ClientGates.LaneOf`, made once and shared), the API clients' optional buckets pacing a lane's minute
 (`requestsPerMinute`, `inputTokensPerMinute` counted as a request enters - one larger than the bucket let in alone once
 it is empty - and `outputTokensPerMinute` charged by `ClientSlot.Answered` once the answer is had, each waited out until
-the oldest of the minute is a minute old) and a 429's cool-down holding every waiter (`RateLimited`, never shortened by
-a sooner one), all counted on the clock's timestamps so a wall clock stepped holds no lane. Each client enters the lane
-at its own seam (`AgentClientCapabilities.PacesRequests`): the loop the API clients share before each request, its
-input estimated (`EstimatedTokens`) and every rate limit or account limit it meets setting the cool-down; the runner
-around each Claude Code launch (`AgentRunner.InLaneAsync`), whose requests it cannot see one by one. A wait is said as
-`WaitingToRetry` and ended by the run's pause - a launch paused at the gate never began, and hands off nothing
-(`AgentRunner.PausedAtTheGate`) - beside the orchestrator's `maxReasoningAgents`.
+the oldest of the minute is a minute old) and a 429's cool-down holding what its failure covers - a model's rate limit
+that model's requests on the lane, an account's limit every request of it (`ClientGate.Met`, the one reader of a 429's
+wait; `RateLimited`, never shortened by a sooner one; `CoolDownOf`, the longer of the two a model is held by) - all
+counted on the clock's timestamps so a wall clock stepped holds no lane. Each client enters the lane at its own seam
+(`AgentClientCapabilities.PacesRequests`): the loop the API clients share before each request, its input estimated
+(`EstimatedTokens`), and the claude-api client's own server-side search (`ClaudeApiNativeSearch`) before each of its
+requests; the runner around each Claude Code launch (`AgentRunner.InLaneAsync`), whose requests it cannot see one by one.
+A cool-down past the client's longest wait (`ToolLoopTerms.LongestWaitOf`) is waited by neither: the loop meets it as
+the limit it is, and the runner ends the launch at that limit before it begins, the walk moving on to an entry the
+cool-down does not hold. A wait is said as `WaitingToRetry` and ended by the run's pause - a launch paused at the gate
+never began, and hands off nothing (`AgentRunner.PausedAtTheGate`) - beside the orchestrator's `maxReasoningAgents`.
 
 The `claude-api` client is `Agents\ClaudeApi\ClaudeApiClient`: the loop over `ClaudeApiProvider`, built for each run
 from the run's entries (`AgentEntries`: the provider's, the model's and the client's own where the configuration
@@ -1901,8 +1913,10 @@ does not fit) - whatever is cut named with a copy in the agent's `work/continuat
 the bounds `agentContext.continuation`'s (`AgentContinuationBounds`: recordChars, stepChars, paths, lastIterations,
 iterationChars, each default one constant the help reads). One owner says what an attempt's events are
 (`Agents\AgentAttempt.cs`): every run that names the attempt, from the first of them on - an attempt that went on with
-an answer is more than one run, each beginning at turn one - its turns numbered across them (`AgentAttempt.Items`),
-read alike by the continuation record, the compaction, the engine's handoff and the reason step's compaction
+an answer is more than one run, each beginning at turn one - its turns numbered across them, and across a launch begun
+again inside a run (`AgentAttempt.Items`), a later launch's first message read as its task alone - the inverse of
+`AgentPromptParts.FirstMessage`, `AgentPromptParts.TaskOf` - never the run context or the continuation record it
+carried, so no record holds another, read alike by the continuation record, the compaction, the engine's handoff and the reason step's compaction
 (`AgentAttempt.Of`). The compaction beside it is `Agents\AgentCompaction` (`Reduce`, over the attempt's events, which
 the caller windows): the engine's own reduction of a conversation that filled its model's context, made where the step's
 limit is answered `compact` - the run context and the task whole as they were first sent, an earlier compaction record
@@ -1913,7 +1927,10 @@ names one), every earlier result left out, and every message the engine sent sin
 `agentContext.compaction`'s (`AgentCompactionBounds`: reducedChars 200000, callInputChars 400, the oldest messages cut
 to their first 2,000 characters each where the reduced part is over), what it kept and reduced held by
 `AgentCompacted`. It begins a new conversation, on every client (`AgentRun.Compaction` - the record is the first
-message of one, the old kept whole; the loop and the claude-code client ask it before any parts). What each client is sent: `--json-schema` the
+message of one, the old kept whole; the loop and the claude-code client ask it before any parts), the step's stream
+saying it as a `Compacted` event - the session left and the one begun, what was kept and reduced, the sizes - and its
+result counting it
+(`AgentRunResult.Compactions`). What each client is sent: `--json-schema` the
 envelope as built; the loop's `ChatRequest.Schema`, which the Claude API sends as `output_config.format` in the copy
 `ClaudeApiRequest.Sent` makes - every array bound structured outputs do not take moved into its description, over
 `JsonSchemaSubset.SchemasIn` - and which, once the API refuses it as more than it compiles
@@ -2052,17 +2069,24 @@ least spent in the last seven days (a tie in the list's order, for `OrderBy` kee
 each entry that ran (the time, the provider, the key's name never its value, the model, the cost - what the client
 reported where it does, else what the engine counted), written and read under `OrchestrationStore.AcrossRuns`, its
 lines older than the week dropped when it is next written - and each entry's run recorded through the request's
-`IAgentSpendSink` (`AgentRunner.SpentAsync`: a record that cannot be written said as a notice, never ending the step).
-Each request a step sends goes through the gate of its provider and key (`ClientGate`): the API clients' loop enters
-the lane for each request and `AgentRunner.InLaneAsync` around each Claude Code launch - the key's own value is the
+`IAgentSpendSink` (`AgentRunner.SpentAsync`: each part of the run's usage under the key its requests were signed with -
+a client that moved keys while it worked reports each key's part apart, `AgentModelUsage.Key` and `Cost`, counted by
+`AgentUsageTally` - a part with no cost known or signed with a login recording nothing, and a record that cannot be
+written said as a notice, never ending the step).
+Each request an API client sends, and each Claude Code launch, goes through the gate of its provider and key
+(`ClientGate`): the API clients' loop enters
+the lane for each request and `AgentRunner.InLaneAsync` holds each Claude Code launch - the key's own value is the
 account; a login one lane by its client - the answer's tokens charged to the output bucket and every 429 the account
-met setting the lane's cool-down from when the provider said the limit lifts, beside the orchestrator's
+met setting the cool-down its failure covers from when the provider said the limit lifts, beside the orchestrator's
 `maxReasoningAgents`.
 The asking is the runner's too: a failed agent is tried again on its model - the step's `retries`, absent
 the workflow's `maxRetries`, waiting its `backoffSeconds`, absent the workflow's, twice as long before each later try
 (`AgentRunner.OrderedAsync`, `AgentStepRequest.Retries`/`BackoffSeconds`, the waits said as `WaitingToRetry`), from the
 entry that served it last and never on a key refused or limited (`AgentRunner.RetryPlace`) - and
-then moved to the next model as a decline moves, past the model's other keys; the provider's service failing past the
+then moved to the next model as a decline moves, past the model's other keys. A run that ended on a key the provider
+refused is no failed agent: it moves to the next key of its provider and client at once, waiting no backoff. The
+run's pause ends a retry's wait and begins no launch after one ended - the step ends handed off with no handoff, saying
+so (`AgentRunner.PausedWhileItWaited`, `PausedBeforeItsNextLaunch`, beside `PausedAtTheGate`). The provider's service failing past the
 client's own tries (`AgentRunResult.ServiceFailed`, set where the loop says so) is neither retried nor moved past, nor
 is a run that ended `RateLimited` with no entry left ended a failure: each is answered `FlowStepResult.SafelyPausing`,
 and the coordinator ends the step stopped and asks the run for a safe pause of the cause `limits`

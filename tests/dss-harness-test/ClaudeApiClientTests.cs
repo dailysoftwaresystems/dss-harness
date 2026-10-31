@@ -321,11 +321,13 @@ public sealed class ClaudeApiClientTests : IDisposable
             (body["cache_control"]!["ttl"]!.GetValue<string>(), body["system"]![0]!["cache_control"]!["ttl"]!.GetValue<string>(), body["metadata"]!["user_id"]!.GetValue<string>()));
         Assert.Equal("context-management-2025-06-27,b-2026-01-01", _endpoint.Asked[0].Headers["anthropic-beta"]);
 
-        var budgeted = await Client().RunAsync(Run(entry) with { Limits = new AgentLimits(null, 5m, null, null) }, _events, TestContext.Current.CancellationToken);
+        // What the client is billed by on an hour-long cache is that cache's writes: the runner's one rule asks their
+        // price of a step budgeted in dollars before any client is taken.
+        var entries = Run(entry).Entries!;
 
         Assert.Equal(
-            (AgentRunStatus.NotStarted, "client 'claude-api' was not started: no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceCacheWrite1h), and a budget is charged with the cost counted from them"),
-            (budgeted.Status, budgeted.Error));
+            "no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceCacheWrite1h), and a budget is charged with the cost counted from them",
+            AgentPrices.BudgetRefusal(entries.Provider, entries.Model, Client().BilledBy(entries)));
         Assert.Single(_endpoint.Asked);
     }
 
@@ -510,6 +512,44 @@ public sealed class ClaudeApiClientTests : IDisposable
         }
 
         Assert.Equal(replies.Select(reply => reply.Why), said);
+    }
+
+    /// <summary>
+    /// A side-task's native search is handed the gate's lane of its provider and key, and goes through it as every
+    /// request of the loop's does: a cool-down holding its model is waited out before it is sent, and a rate limit it
+    /// meets holds the lane's requests of that model - and no other model's - for the wait the provider named. A step's
+    /// run is handed no native search.
+    /// </summary>
+    [Fact]
+    public async Task ANativeSearch_GoesThroughTheLaneOfItsProviderAndKey()
+    {
+        var clock = new ManualClock(new DateTimeOffset(2026, 10, 31, 12, 0, 0, TimeSpan.Zero));
+        var waits = new List<TimeSpan>();
+        var gates = new ClientGates(clock, (wait, _) =>
+        {
+            waits.Add(wait);
+            clock.Advance(wait);
+            return Task.CompletedTask;
+        });
+        var lane = gates.LaneOf("anthropic", ClaudeApiClient.ClientName, null, new AgentKey("WORK_KEY", "sk-1"));
+        lane.RateLimited(TimeSpan.FromSeconds(20), Model);
+
+        _endpoint.Then(ApiReply.Error(429, "rate_limit_error", "slow down", TimeSpan.FromSeconds(30)));
+        var connection = new ApiConnection(TimeProvider.System, _endpoint);
+        _opened.Add(connection);
+        var step = Run() with { WebSearch = new AgentWebSearch([], 3, 4, new Dictionary<string, WebSearchKey>()), Gates = gates };
+        var sideTask = step with { Ground = step.Ground! with { SideTask = true } };
+
+        Assert.Null(ClaudeApiClient.WithNativeSearch(connection, step, step.Entries!).NativeSearch);
+
+        var search = ClaudeApiClient.WithNativeSearch(connection, sideTask, sideTask.Entries!).NativeSearch!;
+        var (part, _) = await search.SearchAsync("anything", TestContext.Current.CancellationToken);
+
+        Assert.Equal([TimeSpan.FromSeconds(20)], waits);
+        Assert.Equal(WebSearchOutcome.Failed, part.Answer.Outcome);
+        Assert.Equal(
+            (new ClientCoolDown(TimeSpan.FromSeconds(30), Model), (ClientCoolDown?)null),
+            (lane.CoolDownOf(Model), lane.CoolDownOf("claude-haiku-5-5")));
     }
 
     private async Task<AgentRunResult> Ran(AgentRun run)

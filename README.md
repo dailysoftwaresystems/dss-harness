@@ -261,7 +261,7 @@ in `config.json`.
 .orchestrators/<o>/asks/                     ignored; one directory for each call of ask-orchestrator and ask-orchestrator-status: the facts it was given, the files of its reporter's attempt, the conversations its client stores (sessions/) and ask.json; the engine never reads it
 .orchestrators/<o>/web/searches.jsonl        ignored; a run's web search: what each source found once for the run, and each query it answered, which the same query again is answered from; written by every client whose step searches
 .orchestrators/.web-index/<source>/          ignored; the harness's own index of a sitemap search source's site: its state, its pages and the pages it could not read, and its fill's record of each address it asked
-.orchestrators/key-spend.jsonl               ignored; what each key spent, by its name and never its value: a line for each entry of a step's order or of a side-task's turn that ran, its lines older than seven days dropped when it is next written, read where balanceKeyUsage chooses a key ('dssharness help agent-clients')
+.orchestrators/key-spend.jsonl               ignored; what each key spent, by its name and never its value: a line for each key and model of each entry of a step's order or of a side-task's turn that ran, its lines older than seven days dropped when it is next written, read where balanceKeyUsage chooses a key ('dssharness help agent-clients')
 .side-tasks/                                 contents ignored, .gitkeep tracked; the side-tasks' records, in the main checkout, and never sent to a host by sync ('dssharness help side-tasks')
 .side-tasks/<task>/                          ignored; one side-task: its task.json, stored stream, transcript, denials and web, and its conversation where its client stores one; <task>.owner.json beside it while a chat holds it open
 .mutations/                                  contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree, never sent to a host by sync ('dssharness help mutations')
@@ -608,12 +608,13 @@ order, whatever tier, model, step, run or side-task spent it; the key is chosen 
 and kept for it, and a limit or a rejected key moves it to the next in the same order. What a key
 spent is what the engine counts for each request served with it, at the configuration's prices - or,
 for a Claude Code launch, what the launch reports - recorded by the key's name, never its value, in
-`.orchestrators/key-spend.jsonl`, the repository's records across runs: one line for each entry of a
-step's order that ran, read for a key's week, its lines older than seven days dropped when the file
-is next written. What the same key spends elsewhere - another repository, another machine, another
-tool - is not seen. Each request a step sends goes through the gate of its provider and key (the
-client's parallel bound, its optional pacing buckets and a 429's cool-down), beside the
-orchestrator's `maxReasoningAgents`.
+`.orchestrators/key-spend.jsonl`, the repository's records across runs: one line for each key and
+model of each entry of a step's order that ran, so a run that moved keys while it worked books what
+each key spent to that key, read for a key's week, its lines older than seven days dropped when the
+file is next written. What the same key spends elsewhere - another repository, another machine,
+another tool - is not seen. Each request an API client sends, and each Claude Code launch, goes
+through the gate of its provider and key (the client's parallel bound, its optional pacing buckets
+and a 429's cool-down, below), beside the orchestrator's `maxReasoningAgents`.
 
 The Claude Code this tool uses is the one npm installs, and no other: the tool asks npm where its
 global packages are and starts the program the package names, by its full path - never a launcher,
@@ -880,11 +881,17 @@ provider each gives it - the Claude API's and Z.AI's below. A turn is one answer
 request the provider paused, or one thrown away and asked again, goes on as the same turn - counted
 against the step's `maxTurns` but a handoff turn; every request's usage - one that ended without
 its turn, failed, silent or left, by what it said it used so far - is counted at the model's
-prices, no request but the handoff turn's is
-sent once the step's `maxBudgetUsd` is spent, and a
-step held to a budget on a model missing a price of what its provider's requests are billed by -
-input, cache reads and output, and the cache writes of a provider whose requests write one, in the
-model's large-prompt set too where it has one - is never started, naming the key to fill. Each turn's calls run as the tool runtime above decides them; a turn whose request
+prices, and no request but the handoff turn's is
+sent once the step's `maxBudgetUsd` is spent. A step held to a budget in dollars - its own
+`maxBudgetUsd`, or the run's `budget.usd` it is charged to - is never started, on any client, on a
+model missing a price of what its client's requests are billed by: input, cache reads and output on
+every client, the cache write of its cache lifetime on `claude-api` and both cache writes on
+`claude-code`, in the model's large-prompt set too where it has one, nor on a provider that prices
+in another currency than the budget's dollars. The step's first such entry ends it not started,
+naming the key to fill; a later one is passed over, said so, and never asked. The workflow's check -
+`validate-workflow`, and every run before it starts - says the same first of the prices every client
+is billed by, for each model a step charged to a dollar budget may run on (the `reporter`'s is never
+charged to the run's). A turn whose cost cannot be counted is never charged as nothing. Each turn's calls run as the tool runtime above decides them; a turn whose request
 spent the budget runs none of them. The conversation is kept in the provider's own form under the
 agent's `sessions/<id>/`, each message as it was sent and received and sent back so with every later
 request, one line for each point where the history is whole - a turn that called tools stored with
@@ -923,10 +930,14 @@ machine - and the runner walks it: an entry that cannot be used here is said and
 its turn comes and never refuses a run, and a declined request, an account at its limit and a failed
 run whose provider and client have no key left unrefused move the step to its next entry by the
 cause's rule, across clients as within one, each move said by `FallbackStarted` and each entry
-passed over by `FallbackPassedOver`. A run is handed the keys of its model from the entry it starts
-on, so a refused key and an account at its limit move it to the same model's next key inside the
-client first, and an API client's own walk goes through the entries of its provider and client up to
-the first entry of another, which is the runner's. Where the step gives the next model another
+passed over by `FallbackPassedOver`. Each client is handed its run's credential its own way. An API
+client is handed the keys of its model from the entry it starts on, so a refused key and an account
+at its limit move it to the same model's next key inside the client first, and its own walk goes
+through the entries of its provider and client up to the first entry of another, which is the
+runner's. `claude-code` is handed the same keys and moves to the next only on a key refused before
+its launch did any work, with a new launch of the step's prompt; a key refused once it has worked,
+and every limit, end its run, and the runner moves the step - a refused key to the next key of its
+provider and client at once, with no wait. Where the step gives the next model another
 effort, the move goes on at that level and says both: on the Claude API the change is told in the
 conversation, a message under `mid-conversation-output-config-2026-07-01`, and the conversation is
 still sent top-level the level it began at, its cache kept; on Z.AI every request carries the level
@@ -941,7 +952,10 @@ is. A limit the run met is remembered until its end: an entry it covers is passe
 whichever client would serve it, and so is an entry a move reaches that cannot be started. Where the
 slot holds none of the keys of the step's first model the step's agent is never started and the step
 fails refused (exit 13); a later model's missing key is only said and passed over. A failed agent is
-tried again on its model from the entry that served it last, never on a key refused or limited.
+tried again on its model from the entry that served it last, never on a key refused or limited. The
+run's pause ends the wait before a retry, and no launch begins once it is asked: the step ends
+handed off with no handoff, saying it paused while it waited to be tried again or between two
+launches.
 
 A step that goes on with earlier work is given the engine's record of it: the continuation record,
 text put together from the step directories of the agent - what it is, the steps so far with each
@@ -972,8 +986,10 @@ sent since the first whole. The reduced part is at most `agentContext.compaction
 (200000); a call's input is cut at `callInputChars` (400); where the reduced part is more, the
 oldest messages of the agent are cut to their first 2000 characters each, oldest first, until it
 fits, and the record says how many were. It begins a new conversation, on every client - the
-record is the first message of one and the old is kept whole, never edited or sent again; an
-attempt compacted again is reduced whole again, its earlier records never copied into the next; a
+record is the first message of one and the old is kept whole, never edited or sent again - said in
+the step's stream as `Compacted` and counted in its result; an attempt compacted again is reduced
+whole again, its earlier records never copied into the next, and a later launch's first message is
+read as its task alone, never the record it carried; a
 `claude-code` child is started with `DISABLE_COMPACT=1`, so it never compacts by itself and a full
 context ends the step `ContextExhausted`.
 
@@ -986,9 +1002,12 @@ lane for each launch. Beside it the API clients' optional buckets pace a lane's 
 `inputTokensPerMinute` (a request more than the bucket holds goes in alone once the bucket is empty) and
 `outputTokensPerMinute` (an answer's counted once it is had), each waited out until the oldest of the minute is a
 minute old - and a 429's cool-down, set by every rate limit and account limit a request or a launch meets from when the
-provider says it lifts, holds every waiter of the lane, a later or longer one holding past a sooner one. A wait at the
-gate is said as it is waited, and the run's pause ends it; on an API client a cool-down past `maxRetryWaitSeconds` is
-the account at its limit, which moves the step as a 429 naming that wait does. Left out, the provider's answers pace
+provider says it lifts, holding what its failure covers: a model's rate limit holds that model's requests on the lane,
+an account's limit every request of it, a later or longer one holding past a sooner one. The `claude-api` client's own
+web search enters the lane too. A wait at the gate is said as it is waited, and the run's pause ends it; a cool-down
+past the client's `maxRetryWaitSeconds` is waited by no client - an API client meets it as the limit it is, which moves
+the step as a 429 naming that wait does, and a `claude-code` launch it holds is not begun, the step moved to an entry
+the cool-down does not hold. Left out, the provider's answers pace
 the client; the orchestrator's `maxReasoningAgents` bounds agents beside the gate, and both apply
 (`help agent-clients`).
 

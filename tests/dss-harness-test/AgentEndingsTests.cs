@@ -67,25 +67,37 @@ public sealed class AgentEndingsTests
             AgentEndings.AtLimit("the provider", new AgentAccountLimit(BalanceSpent: true, Key: "WORK_KEY"), "no credit", Mask).Error);
     }
 
-    /// <summary>A run's usage is counted in all and by model, each model that served named from the turn it began at.</summary>
+    /// <summary>
+    /// A run's usage is counted in all and by model and key, each model that served named from the turn it began at, and
+    /// each part's cost its requests' summed: a request that used something with no cost said or counted leaves its part's
+    /// cost unknown, never nothing.
+    /// </summary>
     [Fact]
     public void ARunsUsage_IsCountedInAllAndByModel()
     {
         var tally = new AgentUsageTally();
 
-        tally.Add("m1", new AgentUsage(1, 2, 0, 0, 0, 0), 1);
-        tally.Add("m2", new AgentUsage(10, 20, 0, 0, 0, 0), 3);
-        tally.Add("m1", new AgentUsage(100, 200, 0, 0, 0, 0), 4);
+        tally.Add("m1", new AgentUsage(1, 2, 0, 0, 0, 0), 1, "WORK_KEY", new AgentCost(Counted: 0.25m));
+        tally.Add("m2", new AgentUsage(10, 20, 0, 0, 0, 0), 3, "WORK_KEY", new AgentCost(Counted: 0.5m));
+        tally.Add("m1", new AgentUsage(100, 200, 0, 0, 0, 0), 4, "WORK_KEY");
+        tally.Add("m2", new AgentUsage(5, 5, 0, 0, 0, 0), 5, "SPARE_KEY", new AgentCost(Counted: 0.75m));
+        tally.Add("m2", AgentUsage.None, 6, "SPARE_KEY");
 
-        Assert.Equal(new AgentUsage(111, 222, 0, 0, 0, 0), tally.Total);
+        Assert.Equal(new AgentUsage(116, 227, 0, 0, 0, 0), tally.Total);
 
         // A model that comes back - a fallback and a return among them - is named from each turn it began at.
-        Assert.Equal([new AgentServedModel("m1", 1), new AgentServedModel("m2", 3), new AgentServedModel("m1", 4)], tally.Served);
+        Assert.Equal([new AgentServedModel("m1", 1), new AgentServedModel("m2", 3), new AgentServedModel("m1", 4), new AgentServedModel("m2", 5)], tally.Served);
 
         var report = tally.Report(new AgentCost(Counted: 1.5m));
 
-        Assert.Equal([new AgentModelUsage("m1", new AgentUsage(101, 202, 0, 0, 0, 0)), new AgentModelUsage("m2", new AgentUsage(10, 20, 0, 0, 0, 0))], report.PerModel);
-        Assert.Equal((new AgentUsage(111, 222, 0, 0, 0, 0), 1.5m), (report.Total, report.Cost!.Counted));
+        Assert.Equal(
+            [
+                new AgentModelUsage("m1", new AgentUsage(101, 202, 0, 0, 0, 0), "WORK_KEY", AgentCost.Unknown),
+                new AgentModelUsage("m2", new AgentUsage(10, 20, 0, 0, 0, 0), "WORK_KEY", new AgentCost(Counted: 0.5m)),
+                new AgentModelUsage("m2", new AgentUsage(5, 5, 0, 0, 0, 0), "SPARE_KEY", new AgentCost(Counted: 0.75m)),
+            ],
+            report.PerModel);
+        Assert.Equal((new AgentUsage(116, 227, 0, 0, 0, 0), 1.5m), (report.Total, report.Cost!.Counted));
     }
 
     /// <summary>A handoff, or why there is none, is masked, and told as the event that ends the handoff turn.</summary>

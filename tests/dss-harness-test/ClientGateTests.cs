@@ -1,4 +1,5 @@
 using DssHarness.Core.Agents;
+using DssHarness.Core.Agents.Loop;
 using DssHarness.Core.Configuration;
 
 namespace DssHarness.Tests;
@@ -6,7 +7,8 @@ namespace DssHarness.Tests;
 /// <summary>
 /// The gate: one lane per provider and key - a client that signs in with a login one lane by
 /// its client - holding the client's <c>maxParallel</c> (the built-in's where its entry says none), the optional
-/// buckets that pace a minute's requests, input and output tokens, and a cool-down a 429 sets for every waiter. The
+/// buckets that pace a minute's requests, input and output tokens, and a cool-down a 429 sets for what its failure
+/// covers - a model's requests on the lane, or every waiter of it. The
 /// engine's step runner holds the lane a run's requests go through; here the lane is held over a clock and a wait that
 /// move only when told.
 /// </summary>
@@ -108,7 +110,7 @@ public sealed class ClientGateTests
         Assert.Equal(At.AddSeconds(60), clock.GetUtcNow());
     }
 
-    /// <summary>A 429's cool-down holds every waiter of the lane, a later or longer one holding past a sooner one.</summary>
+    /// <summary>A 429's cool-down of the whole lane holds every waiter of it, a later or longer one holding past a sooner one.</summary>
     [Fact]
     public async Task ACoolDownA429Sets_HoldsEveryWaiter()
     {
@@ -203,11 +205,40 @@ public sealed class ClientGateTests
 
         lane.RateLimited(TimeSpan.FromSeconds(5));
 
-        using var first = await lane.EnterAsync(0, (wait, why) => { told.Add((wait, why)); return ValueTask.CompletedTask; }, TestContext.Current.CancellationToken);
-        using var second = await lane.EnterAsync(0, (wait, why) => { told.Add((wait, why)); return ValueTask.CompletedTask; }, TestContext.Current.CancellationToken);
+        using var first = await lane.EnterAsync(0, model: null, (wait, why) => { told.Add((wait, why)); return ValueTask.CompletedTask; }, TestContext.Current.CancellationToken);
+        using var second = await lane.EnterAsync(0, model: null, (wait, why) => { told.Add((wait, why)); return ValueTask.CompletedTask; }, TestContext.Current.CancellationToken);
 
         Assert.Equal([(TimeSpan.FromSeconds(5), ClientGate.CoolDown), (TimeSpan.FromSeconds(60), ClientGate.RequestsSpent)], told);
-        Assert.Null(lane.CoolDownLeft);
+        Assert.Null(lane.CoolDownOf(model: null));
+    }
+
+    /// <summary>
+    /// A cool-down is scoped as the 429 that set it: a model's rate limit holds that model's requests on the key and no
+    /// other model's, and an account's limit - the key's whole - holds every model's.
+    /// </summary>
+    [Fact]
+    public async Task ACoolDown_HoldsWhatItsFailureCovers_AndNothingElse()
+    {
+        var (gates, clock, waited) = Gates();
+        var lane = gates.Lane("anthropic", "hash-of-key", Settings);
+
+        lane.Met(new ChatFailure(ChatFailureKind.RateLimited, "slow down", RetryAfter: TimeSpan.FromMinutes(10)), "claude-opus-5-5");
+
+        Assert.Equal(new ClientCoolDown(TimeSpan.FromMinutes(10), "claude-opus-5-5"), lane.CoolDownOf("claude-opus-5-5"));
+        Assert.Null(lane.CoolDownOf("claude-sonnet-5-0"));
+
+        using (await lane.EnterAsync(0, "claude-sonnet-5-0", waiting: null, TestContext.Current.CancellationToken))
+        {
+            Assert.Empty(waited);
+        }
+
+        lane.Met(new ChatFailure(ChatFailureKind.AccountLimit, "the plan is spent", Lifts: clock.GetUtcNow() + TimeSpan.FromMinutes(20)), "claude-opus-5-5");
+
+        Assert.Equal(new ClientCoolDown(TimeSpan.FromMinutes(20), null), lane.CoolDownOf("claude-sonnet-5-0"));
+
+        using var held = await lane.EnterAsync(0, "claude-sonnet-5-0", waiting: null, TestContext.Current.CancellationToken);
+
+        Assert.Equal([TimeSpan.FromMinutes(20)], waited);
     }
 
     /// <summary>A lane's own key of the registry is a hash of the key's value: two names of one value are one lane, and a login one lane by its client.</summary>

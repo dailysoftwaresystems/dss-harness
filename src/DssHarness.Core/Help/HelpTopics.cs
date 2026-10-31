@@ -2627,8 +2627,10 @@ public static class HelpTopics
         builder.AppendLine("In the body, replaced: ${CLAUDE_SKILL_DIR} (the folder handed to the step),");
         builder.AppendLine("${CLAUDE_PROJECT_DIR} (the agent's worktree; for an agent with none, the main checkout),");
         builder.AppendLine("${CLAUDE_SESSION_ID} (the id the step's run begins its first session as, which the stream's");
-        builder.AppendLine("first sessionStarted names; a retry or a later model of the order begins one of its own with");
-        builder.AppendLine("the same prompt), ${CLAUDE_EFFORT} (the effort the step resolved to), and \\$ (a dollar).");
+        builder.AppendLine("first sessionStarted names; a later key or model an API client reaches inside its own walk");
+        builder.AppendLine("keeps that session, and only a new conversation - a retry, a move the runner makes, a");
+        builder.AppendLine("claude-code launch begun again on its next key - begins one of its own with the same prompt),");
+        builder.AppendLine("${CLAUDE_EFFORT} (the effort the step resolved to), and \\$ (a dollar).");
         builder.AppendLine("Refused, each naming its line: a read of an argument ($ARGUMENTS,");
         builder.AppendLine("$ARGUMENTS[N], $1, a $name the arguments key declares) - a placeholder gives a skill no");
         builder.AppendLine("arguments; a command run when the skill is loaded (both exclamation-mark forms) - this");
@@ -2696,10 +2698,11 @@ public static class HelpTopics
             + "step, run or side-task spent it; the key is kept for the step, its conversation staying with one account, "
             + "and a limit or a rejected key moves it to the next in the same order. What a key spent is what the engine "
             + $"counts for each request served with it, at the configuration's prices - or, for a Claude Code launch, what the launch reports - recorded by the key's name (never its value) in {HarnessLayout.OrchestratorsDirectoryName}/{DssHarness.Core.Agents.AgentKeySpend.FileName}, "
-            + "one line for each entry of a step's order that ran, read for a key's week and its lines older than seven "
+            + "one line for each key and model of each entry of a step's order that ran, so a run that moved keys while it "
+            + "worked books what each key spent to that key, read for a key's week and its lines older than seven "
             + "days dropped when it is next written; what the same key spends elsewhere - another repository, another "
-            + "machine, another tool - is not seen. Each request a step sends goes through the gate of its provider and "
-            + "key (above), beside the orchestrator's maxReasoningAgents.");
+            + "machine, another tool - is not seen. Each request an API client sends, and each Claude Code launch, goes "
+            + "through the gate of its provider and key (below), beside the orchestrator's maxReasoningAgents.");
         builder.AppendLine();
         builder.AppendLine("The slot itself is a directory of dotenv files, " + HarnessLayout.WorkflowsEnvSlotRelative + "/:");
         builder.AppendLine("every file in it is read and merged, a name declared in two of them is refused, a line whose");
@@ -2780,8 +2783,10 @@ public static class HelpTopics
             + $"({Agents.AgentCompactionBounds.DefaultCallInputChars}); where the reduced part is more, the oldest messages of "
             + $"the agent are cut to their first {Agents.AgentCompactionBounds.OldestMessageChars} characters each, oldest "
             + "first, until it fits, and the record says how many were. It begins a new conversation, on every client - the "
-            + "record is the first message of one and the old is kept whole, never edited or sent again; an attempt compacted "
-            + "again is reduced whole again, its earlier records never copied into the next; a claude-code child is started "
+            + "record is the first message of one and the old is kept whole, never edited or sent again - said in the step's "
+            + "stream as Compacted and counted in its result; an attempt compacted again is reduced whole again, its earlier "
+            + "records never copied into the next, and a later launch's first message is read as its task alone, never the "
+            + "record it carried; a claude-code child is started "
             + "with DISABLE_COMPACT=1, so it never compacts by itself and a full context ends the step ContextExhausted.");
         builder.AppendLine();
         AppendWrapped(
@@ -2795,10 +2800,13 @@ public static class HelpTopics
             + "clients' optional buckets pace a lane's minute - requestsPerMinute, inputTokensPerMinute (a request more "
             + "than the bucket holds goes in alone once the bucket is empty) and outputTokensPerMinute (an answer's counted "
             + "once it is had), each waited out until the oldest of the minute is a minute old - and a 429's cool-down, set "
-            + "by every rate limit and account limit a request or a launch meets from when the provider says it lifts, holds "
-            + "every waiter of the lane, a later or longer one holding past a sooner one. A wait at the gate is said as it is "
-            + "waited, and the run's pause ends it; on an API client a cool-down past maxRetryWaitSeconds is the account at "
-            + "its limit, which moves the step as a 429 naming that wait does. Left out, the provider's answers pace the "
+            + "by every rate limit and account limit a request or a launch meets from when the provider says it lifts, "
+            + "holding what its failure covers: a model's rate limit holds that model's requests on the lane, an account's "
+            + "limit every request of it, a later or longer one holding past a sooner one. The claude-api client's own web "
+            + "search enters the lane too. A wait at the gate is said as it is waited, and the run's pause ends it; a "
+            + "cool-down past the client's maxRetryWaitSeconds is waited by no client - an API client meets it as the limit "
+            + "it is, which moves the step as a 429 naming that wait does, and a claude-code launch it holds is not begun, "
+            + "the step moved to an entry the cool-down does not hold. Left out, the provider's answers pace the "
             + "client; the orchestrator's maxReasoningAgents bounds agents beside the gate, and both apply.");
         builder.AppendLine();
         builder.AppendLine("This build checks configurations and definitions against these sections and writes them with");
@@ -3158,10 +3166,16 @@ public static class HelpTopics
             + "thrown away and asked again, goes on as the same turn - counted against the step's maxTurns but a handoff "
             + "turn; every request's usage - one that ended without its turn, failed, silent or left, by what it said it used "
             + "so far - is counted at the model's "
-            + "prices, no request but the handoff turn's is sent "
-            + "once the step's maxBudgetUsd is spent, and a step held to a budget on a model missing a price of what its "
-            + "provider's requests are billed by - input, cache reads and output, and the cache writes of a provider whose "
-            + "requests write one, in the model's large-prompt set too where it has one - is never started, naming the key to fill. Each turn's calls run as the tool runtime above decides them; a turn whose request spent "
+            + "prices, and no request but the handoff turn's is sent "
+            + "once the step's maxBudgetUsd is spent. A step held to a budget in dollars - its own maxBudgetUsd, or the run's "
+            + "budget.usd it is charged to - is never started, on any client, on a model missing a price of what its client's "
+            + "requests are billed by: input, cache reads and output on every client, the cache write of its cache lifetime on "
+            + "claude-api and both cache writes on claude-code, in the model's large-prompt set too where it has one, nor on a "
+            + "provider that prices in another currency than the budget's dollars. The step's first such entry ends it not "
+            + "started, naming the key to fill; a later one is passed over, said so, and never asked. The workflow's check - "
+            + "validate-workflow, and every run before it starts - says the same first of the prices every client is billed "
+            + "by, for each model a step charged to a dollar budget may run on (the reporter's is never charged to the run's). "
+            + "A turn whose cost cannot be counted is never charged as nothing. Each turn's calls run as the tool runtime above decides them; a turn whose request spent "
             + "the budget runs none of them. The conversation is kept in the provider's own form under the agent's "
             + $"{OrchestratorLayout.SessionsDirectoryName}/<id>/, each message as it was sent and received and sent back so with "
             + "every later request, one line for each point where the history is whole - a turn that called tools stored with "
@@ -4589,7 +4603,9 @@ public static class HelpTopics
             + "launch rendered where it does not; and its answer, held to the schema its outputs names - one the engine reads, "
             + "refused otherwise where the workflow is checked and again before any client is asked - the step's output. A failed "
             + "agent is tried again on its model - the step's retries, absent the workflow's maxRetries, waiting its backoffSeconds, "
-            + "absent the workflow's, twice as long before each later try - and then on each model of its order; what its agents "
+            + "absent the workflow's, twice as long before each later try - and then on each model of its order; a run that ended "
+            + "on a key the provider refused moves to the next key at once, with no wait, and the run's pause ends the wait "
+            + "before a try and begins no launch after one ended, the step handed off with no handoff, saying so; what its agents "
             + "assumed without asking is kept, read as the step's own assumptions fact and named in the run's. Where the step may "
             + "ask (ask) its agent's questions pause it - askRounds times in one attempt, the answer or decide going on in the same "
             + "attempt as the agent's next message; a limit of its own (turns, budget, a truncated answer, a full context) asks, "
@@ -4889,7 +4905,7 @@ public static class HelpTopics
             "ignored; the harness's own index of a sitemap search source's site: its state, its pages and the pages it "
             + "could not read, and its fill's record of each address it asked"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/{DssHarness.Core.Agents.AgentKeySpend.FileName}",
-            "ignored; what each key spent, by its name and never its value: a line for each entry of a step's order or of "
+            "ignored; what each key spent, by its name and never its value: a line for each key and model of each entry of a step's order or of "
             + "a side-task's turn that ran, its lines older than seven days dropped when it is next written, read where "
             + $"balanceKeyUsage chooses a key ('{ToolPackage.Command} help agent-clients')"),
         ($"{HarnessLayout.SideTasksDirectoryName}/",

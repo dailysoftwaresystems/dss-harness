@@ -39,6 +39,14 @@ public sealed record ToolLoopTerms(
     /// <summary>The longest wait before a request is asked again.</summary>
     public TimeSpan LongestWait => MaxRetryWait ?? DefaultMaxRetryWait;
 
+    /// <summary>
+    /// The longest wait a client whose entry is <paramref name="client"/> waits before asking again - what the entry
+    /// says, else <see cref="DefaultMaxRetryWait"/> - past which a limit is the account's, met, and never waited.
+    /// </summary>
+    /// <param name="client">The client's entry under <c>agentClients</c>; null where the configuration declares none.</param>
+    public static TimeSpan LongestWaitOf(AgentClientConfig? client)
+        => client?.MaxRetryWaitSeconds is { } seconds ? TimeSpan.FromSeconds(seconds) : DefaultMaxRetryWait;
+
     /// <summary>The terms an API client works a run by: its entries' - the provider, the model, and the client's own tries and longest wait.</summary>
     /// <param name="client">The client's key under <c>agentClients</c>.</param>
     /// <param name="entries">The run's entries.</param>
@@ -51,7 +59,7 @@ public sealed record ToolLoopTerms(
             entries.Provider,
             entries.Model,
             entries.Client?.MaxRetries ?? DefaultMaxRetries,
-            entries.Client?.MaxRetryWaitSeconds is { } seconds ? TimeSpan.FromSeconds(seconds) : null);
+            LongestWaitOf(entries.Client));
     }
 
     /// <summary>
@@ -195,7 +203,7 @@ public sealed class ToolLoop(
 
         var began = _clock.GetTimestamp();
 
-        if (Unstartable(run, terms, provider.Uses) is { } refused)
+        if (Unstartable(run, terms) is { } refused)
         {
             return AgentEndings.NotStarted(terms.Client, refused.Because, refused.Why, run.Model, run.Mask);
         }
@@ -209,8 +217,7 @@ public sealed class ToolLoop(
     /// <summary>Why the run may not start, and the reason a run that never began gives; null where it may.</summary>
     /// <param name="run">The run.</param>
     /// <param name="terms">The client, the model's entry and the tries.</param>
-    /// <param name="uses">What every request of the run's provider is billed by.</param>
-    private (AgentNotStartedBecause Because, string Why)? Unstartable(AgentRun run, ToolLoopTerms terms, AgentUsage uses)
+    private (AgentNotStartedBecause Because, string Why)? Unstartable(AgentRun run, ToolLoopTerms terms)
         => run.Model is not { Length: > 0 } ? (AgentNotStartedBecause.ConfigurationWrong, AgentEndings.NoModel)
             : run.Ground is not { } ground ? (AgentNotStartedBecause.ConfigurationWrong, AgentEndings.NoPolicy)
             : run.SessionsDirectory is not { Length: > 0 } ? (AgentNotStartedBecause.ConfigurationWrong, "the run was given no place to keep its conversation")
@@ -221,7 +228,6 @@ public sealed class ToolLoop(
             : run.Credential is null ? (AgentNotStartedBecause.KeyMissing, "the run was given no credential, and every request is signed with a key")
             : run.Credential is { Keys.Count: 0 } credential ? (AgentNotStartedBecause.KeyMissing, AgentEndings.NoKey(credential.Auth))
             : _tools.Unserved(AgentTools.Offered(ground, run.Commands, run.WebSearch)) is { } unserved ? (AgentNotStartedBecause.ConfigurationWrong, unserved)
-            : run.Limits.MaxBudgetUsd is not null && AgentPrices.BudgetRefusal(terms.Provider, terms.Model, uses) is { } priceless ? (AgentNotStartedBecause.ConfigurationWrong, priceless)
             : null;
 
     /// <summary>
@@ -804,15 +810,20 @@ public sealed class ToolLoop(
                 AgentRunResult? other = null;
 
                 // The lane of the provider and the key the request is signed with, entered for this request alone, its
-                // input counted as it enters: a cool-down a 429 set past the client's longest wait is the account at its
-                // limit, as a 429 naming that wait is, and the request is not sent; a shorter hold is waited, said as it
-                // is waited, and ended by the run's own stops.
+                // input counted as it enters: a cool-down past the client's longest wait that holds this model - the
+                // model's own rate limit, or the key's whole - is that limit met, as a 429 naming that wait is, and the
+                // request is not sent; another model's rate limit holds nothing of this one's; a shorter hold is waited,
+                // said as it is waited, and ended by the run's own stops.
                 var lane = run.Gates?.LaneOf(terms.Provider.Name, terms.Client, run.Entries?.Client, Now.Key);
                 ClientGate.ClientSlot? slot = null;
 
-                if (lane?.CoolDownLeft is { } cooling && cooling > terms.LongestWait)
+                if (lane?.CoolDownOf(Now.Model) is { } cooling && cooling.Left > terms.LongestWait)
                 {
-                    failed = new ChatFailure(ChatFailureKind.RateLimited, $"the lane of {Now.Key!.Name} is held by a 429's cool-down until {loop._clock.GetUtcNow() + cooling:u}", RetryAfter: cooling);
+                    var until = loop._clock.GetUtcNow() + cooling.Left;
+
+                    failed = cooling.Model is null
+                        ? new ChatFailure(ChatFailureKind.AccountLimit, $"the lane of {Now.Key!.Name} is held by a 429's cool-down until {until:u}", Lifts: until)
+                        : new ChatFailure(ChatFailureKind.RateLimited, $"the lane of {Now.Key!.Name} holds '{cooling.Model}' by a 429's cool-down until {until:u}", RetryAfter: cooling.Left);
                 }
                 else if (lane is not null)
                 {
@@ -820,6 +831,7 @@ public sealed class ToolLoop(
                     {
                         slot = await lane.EnterAsync(
                             Codebase.EstimatedTokens.Of(request.System) + Codebase.EstimatedTokens.Of(request.Tools) + request.Messages.Sum(message => (long)Codebase.EstimatedTokens.Of(message)),
+                            Now.Model,
                             (wait, why) => Emit(new WaitingToRetry($"the request waits for {why}", tried, terms.MaxRetries, wait, loop._clock.GetUtcNow() + wait)),
                             left.Token).ConfigureAwait(false);
                     }
@@ -914,8 +926,8 @@ public sealed class ToolLoop(
                 }
 
                 // The request is done with its lane before any wait of the loop's: what it answered charged to the output
-                // bucket, and a 429 it met - a rate limit, an account at its limit - holding every waiter of the lane
-                // until the provider said it lifts.
+                // bucket, and a 429 it met holding the waiters it covers until the provider said it lifts - a rate limit
+                // the lane's requests of this model, an account at its limit every request of the lane.
                 if ((answered?.Usage ?? soFar) is { } charged)
                 {
                     slot?.Answered(charged.OutputTokens);
@@ -923,10 +935,9 @@ public sealed class ToolLoop(
 
                 held?.Dispose();
 
-                if (lane is not null && failed is { Kind: ChatFailureKind.RateLimited or ChatFailureKind.AccountLimit } limited
-                    && (limited.RetryAfter ?? (limited.Lifts is { } lifts ? lifts - loop._clock.GetUtcNow() : null)) is { } coolDown)
+                if (failed is not null)
                 {
-                    lane.RateLimited(coolDown);
+                    lane?.Met(failed, Now.Model);
                 }
 
                 if (other is not null)
@@ -1432,25 +1443,28 @@ public sealed class ToolLoop(
         /// </summary>
         private async Task<AgentRunResult?> CountedAsync(AgentUsage usage)
         {
-            await TalliedAsync(Now.Model, usage).ConfigureAwait(false);
-
             if (AgentPrices.CostOf(Now.Terms!.Provider, Now.Terms.Model, usage) is { } cost)
             {
+                await TalliedAsync(Now.Model, usage, new AgentCost(Counted: (decimal)cost)).ConfigureAwait(false);
                 _cost += (decimal)cost;
                 return null;
             }
 
             var unknown = AgentPrices.UnknownOf(Now.Terms.Provider, Now.Terms.Model, usage);
+            await TalliedAsync(Now.Model, usage, new AgentCost(MissingPrice: unknown)).ConfigureAwait(false);
             _unknown ??= unknown;
 
             return run.Limits.MaxBudgetUsd is null || _handing ? null : Ended(AgentRunStatus.Failed, $"the step's cost cannot be counted against its budget: {unknown}");
         }
 
-        /// <summary>Adds what a request used to the turn's, the run's and <paramref name="model"/>'s, and says it.</summary>
-        private async Task TalliedAsync(string model, AgentUsage usage)
+        /// <summary>
+        /// Adds what a request used to the turn's, the run's and <paramref name="model"/>'s part on the key it was signed
+        /// with, with what it cost - null where nothing counted it - and says it.
+        /// </summary>
+        private async Task TalliedAsync(string model, AgentUsage usage, AgentCost? cost = null)
         {
             _turnUsage = _turnUsage.Plus(usage);
-            _used.Add(model, usage, _turns);
+            _used.Add(model, usage, _turns, Now.Key?.Name, cost);
             await Emit(new UsageReported(usage, _used.Total)).ConfigureAwait(false);
         }
 
@@ -1593,23 +1607,31 @@ public sealed class ToolLoop(
             if (Runtime.Tally.NativeUsed is var native && native != AgentUsage.None)
             {
                 var code = Now.Terms!.Model.Code;
+                var key = Now.Key?.Name;
+                var searched = AgentPrices.CostOf(Now.Terms!.Provider, Now.Terms.Model, native) is { } counted
+                    ? new AgentCost(Counted: (decimal)counted)
+                    : new AgentCost(MissingPrice: AgentPrices.UnknownOf(Now.Terms.Provider, Now.Terms.Model, native));
+
+                // The search's part is the serving model's on the key it was signed with, its cost added to that part's.
+                static bool Serving(AgentModelUsage part, string code, string? key)
+                    => string.Equals(part.Model, code, StringComparison.Ordinal) && string.Equals(part.Key, key, StringComparison.Ordinal);
 
                 usage = usage with
                 {
                     Total = usage.Total.Plus(native),
-                    PerModel = usage.PerModel.Any(part => string.Equals(part.Model, code, StringComparison.Ordinal))
-                        ? [.. usage.PerModel.Select(part => string.Equals(part.Model, code, StringComparison.Ordinal) ? part with { Usage = part.Usage.Plus(native) } : part)]
-                        : [.. usage.PerModel, new AgentModelUsage(code, native)],
+                    PerModel = usage.PerModel.Any(part => Serving(part, code, key))
+                        ? [.. usage.PerModel.Select(part => Serving(part, code, key) ? part with { Usage = part.Usage.Plus(native), Cost = AgentCost.Sum(part.Cost, searched) } : part)]
+                        : [.. usage.PerModel, new AgentModelUsage(code, native, key, searched)],
                 };
 
-                if (AgentPrices.CostOf(Now.Terms!.Provider, Now.Terms.Model, native) is { } searched)
+                if (searched.Counted is { } added)
                 {
-                    cost += (decimal)searched;
+                    cost += added;
                     usage = _unknown is null ? usage with { Cost = new AgentCost(Counted: cost) } : usage;
                 }
                 else
                 {
-                    _unknown ??= AgentPrices.UnknownOf(Now.Terms.Provider, Now.Terms.Model, native);
+                    _unknown ??= searched.MissingPrice;
                     usage = usage with { Cost = new AgentCost(MissingPrice: _unknown) };
                 }
             }

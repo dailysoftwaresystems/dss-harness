@@ -249,12 +249,14 @@ public sealed class ZaiApiClientTests : IDisposable
         var unpriced = Entries() with { Model = Glm53(priceInputHit: null) };
         _endpoint.Then(ZaiApiFixtures.Reply("answer.sse"));
 
-        var refused = await Client().RunAsync(Run() with { Entries = unpriced, Limits = new AgentLimits(null, 5m, null, null) }, _events, TestContext.Current.CancellationToken);
+        // What the client is billed by is what the runner's one rule asks prices of before any client is taken.
+        IAgentClient client = Client();
         var held = await Ran(Run() with { Limits = new AgentLimits(null, 5m, null, null) });
 
+        Assert.Equal(AgentPrices.EveryRequestUses, client.BilledBy(unpriced));
         Assert.Equal(
-            (AgentRunStatus.NotStarted, "client 'glm' was not started: no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputHit), and a budget is charged with the cost counted from them"),
-            (refused.Status, refused.Error));
+            "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputHit), and a budget is charged with the cost counted from them",
+            AgentPrices.BudgetRefusal(unpriced.Provider, unpriced.Model, client.BilledBy(unpriced)));
         Assert.Equal(AgentRunStatus.Completed, held.Status);
         Assert.Single(_endpoint.Asked);
     }

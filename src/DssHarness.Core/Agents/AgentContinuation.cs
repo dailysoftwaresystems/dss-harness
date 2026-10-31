@@ -515,4 +515,37 @@ public static class AgentPromptParts
 
         return written.ToString();
     }
+
+    /// <summary>
+    /// The task a first message holds, the inverse of <see cref="FirstMessage"/>: the text of its task part where it was
+    /// given parts - the run context, the plan updates and the continuation record before it left out, for each is the
+    /// engine's own record of what the conversation already holds - and the whole text where it was given none. The task
+    /// part begins right after the first part that closes before it, so a task whose own text holds the tags is read
+    /// whole.
+    /// </summary>
+    /// <param name="firstMessage">A first user message, as sent.</param>
+    public static string TaskOf(string firstMessage)
+    {
+        ArgumentNullException.ThrowIfNull(firstMessage);
+
+        var close = $"</{TaskTag}>";
+
+        if (!PartTags.Any(tag => firstMessage.StartsWith($"<{tag}>", StringComparison.Ordinal)) || !firstMessage.EndsWith(close, StringComparison.Ordinal))
+        {
+            return firstMessage;
+        }
+
+        var begins = PartTags
+            .Select(tag => $"</{tag}>{NL}{NL}<{TaskTag}>{NL}")
+            .Select(marker => (At: firstMessage.IndexOf(marker, StringComparison.Ordinal), marker.Length))
+            .Where(found => found.At >= 0)
+            .Select(found => found.At + found.Length)
+            .DefaultIfEmpty(-1)
+            .Min();
+
+        return begins < 0 || begins > firstMessage.Length - close.Length ? firstMessage : firstMessage[begins..^close.Length].Trim();
+    }
+
+    /// <summary>The tags of the parts a first message may hold before its task, in their order.</summary>
+    private static readonly string[] PartTags = [RunContextTag, PlanUpdatesTag, ContinuationTag];
 }

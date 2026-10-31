@@ -49,17 +49,21 @@ public sealed class AgentAttemptTests
 
     /// <summary>
     /// An attempt's items: its first prompt apart, the task it was asked; a later run's own first message one of the
-    /// engine's, in its place - but an earlier compaction record, which stood for the items the attempt's events hold
-    /// themselves; every turn numbered across the runs, each run's count going on from the last turn of the one before.
+    /// engine's by its task alone - the answer it went on with, as the parts a launch is sent hold it, never the run
+    /// context or the continuation record beside it - but an earlier compaction record, which stood for the items the
+    /// attempt's events hold themselves; every turn numbered across the runs, each run's count going on from the last
+    /// turn of the one before.
     /// </summary>
     [Fact]
     public void TheItems_NumberTurnsAcrossRuns_TheTaskApart_AndAnEarlierRecordLeftOut()
     {
         var call = new ToolCallFinished("c-1", Ok: true, TimeSpan.Zero, """{"path":"a.txt"}""", "alpha");
+        var launch = AgentRuns.Of(Path.Combine(Path.GetTempPath(), "step"), Path.Combine(Path.GetTempPath(), "work")) with { RunContext = "run facts", UserPrompt = "do the work" };
+        var first = AgentPromptParts.FirstMessage(launch, newConversation: true);
         var read = AgentAttempt.Items(
         [
             new RunStarted(1),
-            new MessageSent("do the work", AgentMessageKind.FirstPrompt),
+            new MessageSent(first, AgentMessageKind.FirstPrompt),
             new TurnStarted(1),
             new AssistantMessage("one", [new AgentToolCall("c-1", AgentTools.ViewFile)]),
             call,
@@ -70,13 +74,13 @@ public sealed class AgentAttemptTests
             new TurnStarted(1),
             new AssistantMessage("three", []),
             new RunStarted(1),
-            new MessageSent("the person's answer", AgentMessageKind.FirstPrompt),
+            new MessageSent(AgentPromptParts.FirstMessage(launch with { Continuation = "the record of the work", UserPrompt = "the person's answer" }, newConversation: true), AgentMessageKind.FirstPrompt),
             new TurnStarted(1),
             new AssistantMessage("four", []),
             new MessageSent("the plan changed", AgentMessageKind.PlanUpdate),
         ]);
 
-        Assert.Equal("do the work", read.First);
+        Assert.Equal(first, read.First);
         Assert.Equal(
             [(1, "one"), (2, "two"), (3, "three"), (3, "the person's answer"), (4, "four"), (4, "the plan changed")],
             read.Items.Select(item => (item.Turn, item.Agent?.Text ?? item.Engine!.Text)));

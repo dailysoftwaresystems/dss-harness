@@ -34,31 +34,43 @@ public sealed class AgentCompactionTests : IDisposable
     {
         var compacted = AgentCompaction.Reduce(Stream(), new AgentContinuationBounds(LastIterations: 2), new AgentCompactionBounds());
 
-        Assert.StartsWith(
-            "This conversation was compacted by the engine at iteration 4. Everything up to iteration 2 is reduced to what you wrote and what you called; the last 2 iterations are word for word.",
-            compacted.Record,
-            StringComparison.Ordinal);
-        Assert.Contains($"The run context and the task, as they were sent:{Environment.NewLine}{Environment.NewLine}do the work", compacted.Record, StringComparison.Ordinal);
-
-        // The earlier iterations: the message text whole, the thinking left out, each call one line with its input
-        // cut, how it ended and the path, the result itself left out.
-        Assert.DoesNotContain("the thinking of the first", compacted.Record, StringComparison.Ordinal);
-        Assert.Contains($"iteration 1: the first message{Environment.NewLine}  call c-1 (view_file): {{\"path\":\"a.txt\"}} (ok) [path: a.txt]", compacted.Record, StringComparison.Ordinal);
-        Assert.Contains($"iteration 2: the second message{Environment.NewLine}  call c-2 (create_file): {{\"path\":\"made.txt\",\"content\":\"x\"}} (the error's first line)", compacted.Record, StringComparison.Ordinal);
-        Assert.DoesNotContain("the whole result of the call", compacted.Record, StringComparison.Ordinal);
-
-        // The engine's message since the first, whole, in its place.
-        Assert.Contains($"the engine:{Environment.NewLine}what the engine said", compacted.Record, StringComparison.Ordinal);
-
-        // The last iterations word for word, the continuation record's rule and bounds.
-        Assert.Contains("iteration 3 of 4:", compacted.Record, StringComparison.Ordinal);
-        Assert.Contains("iteration 4 of 4:", compacted.Record, StringComparison.Ordinal);
-        Assert.Contains("the third message", compacted.Record, StringComparison.Ordinal);
-        Assert.Contains("the fourth message", compacted.Record, StringComparison.Ordinal);
-
-        Assert.EndsWith($"The task again:{Environment.NewLine}{Environment.NewLine}do the work", compacted.Record.TrimEnd(), StringComparison.Ordinal);
+        // The earlier iterations: the message text whole, the thinking left out, each call one line with its input cut,
+        // how it ended and the path, the result itself left out; the engine's message since the first whole, in its
+        // place; the last iterations word for word, by the continuation record's rule and bounds; the task again.
+        Assert.Equal(
+            Lines(
+                "This conversation was compacted by the engine at iteration 4. Everything up to iteration 2 is reduced to what you wrote and what you called; the last 2 iterations are word for word.",
+                string.Empty,
+                "The run context and the task, as they were sent:",
+                string.Empty,
+                "do the work",
+                string.Empty,
+                "Reduced, everything up to the last iterations:",
+                string.Empty,
+                "iteration 1: the first message",
+                """  call c-1 (view_file): {"path":"a.txt"} (ok) [path: a.txt]""",
+                "iteration 2: the second message",
+                """  call c-2 (create_file): {"path":"made.txt","content":"x"} (the error's first line) [path: made.txt]""",
+                AgentContinuation.EngineSaid,
+                "what the engine said",
+                string.Empty,
+                "The last iterations, word for word:",
+                string.Empty,
+                "iteration 3 of 4:",
+                "the third message",
+                string.Empty,
+                "iteration 4 of 4:",
+                "the fourth message",
+                string.Empty,
+                "The task again:",
+                string.Empty,
+                "do the work"),
+            compacted.Record);
         Assert.Equal((2, 2), (compacted.KeptWordForWord, compacted.Reduced));
     }
+
+    /// <summary>Lines joined as the records join theirs.</summary>
+    private static string Lines(params string[] lines) => string.Join(Environment.NewLine, lines);
 
     /// <summary>The same stream always gives the same record: a rule of the reduction, pinned.</summary>
     [Fact]
@@ -117,22 +129,26 @@ public sealed class AgentCompactionTests : IDisposable
 
     /// <summary>
     /// An attempt whose agent asked, was answered and then filled its context is compacted from its task: the attempt is
-    /// both runs, the answer one of the engine's messages in its place, never the first message the record holds.
+    /// both launches, each first message as Claude Code is sent it - the run context, and on the later launch the
+    /// continuation record before the person's answer as its task - the answer one of the engine's messages in its
+    /// place, never the first message the record holds and never the continuation record the later launch carried.
     /// </summary>
     [Fact]
     public void AnAttemptAnsweredThenFull_IsCompactedFromItsTask_TheAnswerInItsPlace()
     {
+        var launch = AgentRuns.Of(_temp.Combine("step"), _temp.Combine("work")) with { RunContext = "run facts", UserPrompt = "do the work" };
+        var first = AgentPromptParts.FirstMessage(launch, newConversation: true);
         var stream = new AgentEvent[]
         {
             new RunStarted(1),
             new MessageSent("the earlier attempt's task", AgentMessageKind.FirstPrompt),
             new RunStarted(2),
-            new MessageSent("do the work", AgentMessageKind.FirstPrompt),
+            new MessageSent(first, AgentMessageKind.FirstPrompt),
             new TurnStarted(1),
             new AssistantMessage("which file?", []),
             new RunFinished(AgentRunStatus.Asked),
             new RunStarted(2),
-            new MessageSent("the parser", AgentMessageKind.FirstPrompt),
+            new MessageSent(AgentPromptParts.FirstMessage(launch with { Continuation = "the record of the launch before", UserPrompt = "the parser" }, newConversation: true), AgentMessageKind.FirstPrompt),
             new TurnStarted(1),
             new AssistantMessage("working on the parser", []),
             new TurnStarted(2),
@@ -142,13 +158,12 @@ public sealed class AgentCompactionTests : IDisposable
         var compacted = AgentCompaction.Reduce(AgentAttempt.Of(stream, 2), new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds());
 
         Assert.Equal(
-            string.Join(
-                Environment.NewLine,
+            Lines(
                 "This conversation was compacted by the engine at iteration 3. Everything up to iteration 2 is reduced to what you wrote and what you called; the last 1 iterations are word for word.",
                 string.Empty,
                 "The run context and the task, as they were sent:",
                 string.Empty,
-                "do the work",
+                first,
                 string.Empty,
                 "Reduced, everything up to the last iterations:",
                 string.Empty,
@@ -161,6 +176,56 @@ public sealed class AgentCompactionTests : IDisposable
                 string.Empty,
                 "iteration 3 of 3:",
                 "still working",
+                string.Empty,
+                "The task again:",
+                string.Empty,
+                first),
+            compacted.Record);
+    }
+
+    /// <summary>
+    /// A launch begun again inside one run - a retry, a move to another client - counts its turns from one again: the
+    /// attempt's iterations are numbered on across it, never back, and the task it was sent again is no message of the
+    /// engine's.
+    /// </summary>
+    [Fact]
+    public void ALaunchBegunAgainInsideItsRun_NumbersItsIterationsOn()
+    {
+        var stream = new AgentEvent[]
+        {
+            new RunStarted(1),
+            new MessageSent("do the work", AgentMessageKind.FirstPrompt),
+            new TurnStarted(1),
+            new AssistantMessage("one", []),
+            new TurnStarted(2),
+            new AssistantMessage("two", []),
+            new MessageSent("do the work", AgentMessageKind.FirstPrompt),
+            new TurnStarted(1),
+            new AssistantMessage("three", []),
+            new TurnStarted(2),
+            new AssistantMessage("four", []),
+        };
+
+        var compacted = AgentCompaction.Reduce(stream, new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds());
+
+        Assert.Equal(
+            Lines(
+                "This conversation was compacted by the engine at iteration 4. Everything up to iteration 3 is reduced to what you wrote and what you called; the last 1 iterations are word for word.",
+                string.Empty,
+                "The run context and the task, as they were sent:",
+                string.Empty,
+                "do the work",
+                string.Empty,
+                "Reduced, everything up to the last iterations:",
+                string.Empty,
+                "iteration 1: one",
+                "iteration 2: two",
+                "iteration 3: three",
+                string.Empty,
+                "The last iterations, word for word:",
+                string.Empty,
+                "iteration 4 of 4:",
+                "four",
                 string.Empty,
                 "The task again:",
                 string.Empty,
@@ -185,10 +250,39 @@ public sealed class AgentCompactionTests : IDisposable
 
         var compacted = AgentCompaction.Reduce(stream, new AgentContinuationBounds(LastIterations: 2), new AgentCompactionBounds());
 
-        Assert.Contains(
-            $"iteration 4 of 5:{Environment.NewLine}the fourth message{Environment.NewLine}{Environment.NewLine}{AgentContinuation.EngineSaid}{Environment.NewLine}the plan changed again{Environment.NewLine}{Environment.NewLine}iteration 5 of 5:{Environment.NewLine}the fifth message",
-            compacted.Record,
-            StringComparison.Ordinal);
+        Assert.Equal(
+            Lines(
+                "This conversation was compacted by the engine at iteration 5. Everything up to iteration 3 is reduced to what you wrote and what you called; the last 2 iterations are word for word.",
+                string.Empty,
+                "The run context and the task, as they were sent:",
+                string.Empty,
+                "do the work",
+                string.Empty,
+                "Reduced, everything up to the last iterations:",
+                string.Empty,
+                "iteration 1: the first message",
+                """  call c-1 (view_file): {"path":"a.txt"} (ok) [path: a.txt]""",
+                "iteration 2: the second message",
+                """  call c-2 (create_file): {"path":"made.txt","content":"x"} (the error's first line) [path: made.txt]""",
+                AgentContinuation.EngineSaid,
+                "what the engine said",
+                "iteration 3: the third message",
+                string.Empty,
+                "The last iterations, word for word:",
+                string.Empty,
+                "iteration 4 of 5:",
+                "the fourth message",
+                string.Empty,
+                AgentContinuation.EngineSaid,
+                "the plan changed again",
+                string.Empty,
+                "iteration 5 of 5:",
+                "the fifth message",
+                string.Empty,
+                "The task again:",
+                string.Empty,
+                "do the work"),
+            compacted.Record);
     }
 
     /// <summary>
@@ -212,10 +306,29 @@ public sealed class AgentCompactionTests : IDisposable
 
         var compacted = AgentCompaction.Reduce(stream, new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds());
 
-        Assert.Contains(
-            $"iteration 1: one{Environment.NewLine}  call c-1 (view_file): {{\"path\":1}} (ok){Environment.NewLine}  call c-2 (move_path): {{\"from\":\"a.txt\",\"to\":\"b.txt\"}} (ok) [paths: a.txt, b.txt]{Environment.NewLine}",
-            compacted.Record,
-            StringComparison.Ordinal);
+        Assert.Equal(
+            Lines(
+                "This conversation was compacted by the engine at iteration 2. Everything up to iteration 1 is reduced to what you wrote and what you called; the last 1 iterations are word for word.",
+                string.Empty,
+                "The run context and the task, as they were sent:",
+                string.Empty,
+                "do the work",
+                string.Empty,
+                "Reduced, everything up to the last iterations:",
+                string.Empty,
+                "iteration 1: one",
+                """  call c-1 (view_file): {"path":1} (ok)""",
+                """  call c-2 (move_path): {"from":"a.txt","to":"b.txt"} (ok) [paths: a.txt, b.txt]""",
+                string.Empty,
+                "The last iterations, word for word:",
+                string.Empty,
+                "iteration 2 of 2:",
+                "two",
+                string.Empty,
+                "The task again:",
+                string.Empty,
+                "do the work"),
+            compacted.Record);
     }
 
     /// <summary>How many times <paramref name="part"/> stands in <paramref name="text"/>.</summary>
@@ -312,6 +425,7 @@ public sealed class AgentCompactionTests : IDisposable
             RunContext = "run facts",
             Compaction = "the compaction record",
         };
+        var compaction = new AgentCompacted("the compaction record", KeptWordForWord: 2, Reduced: 3, SizeBefore: 400, SizeAfter: 21) { Left = "the-old-session" };
 
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
         var loop = new ToolLoop(
@@ -327,23 +441,33 @@ public sealed class AgentCompactionTests : IDisposable
         Assert.Equal("the compaction record", FakeChat.ContentOf(chat.Requests[0].Messages[0]));
         Assert.Single(chat.Requests);
 
-        // The runner keeps the message as sent, masked, as the step's user.md.
+        // The runner keeps the message as sent, masked, as the step's user.md, says the compaction the run begins from -
+        // the conversation it leaves, the one it begins, what the record kept and reduced - and counts it.
         var client = new Scripted();
-        await new AgentRunner([client], _harness.FileSystem, Elevation.User, TimeProvider.System).RunAsync(
+        var seen = new RecordedEvents();
+        var ran = await new AgentRunner([client], _harness.FileSystem, Elevation.User, TimeProvider.System).RunAsync(
             new AgentStepRequest(
                 "r1", "a7", "s1", 1, null, null, null, null, null, null, null, "be terse", "do the work", null,
                 new AgentWorkspace(null, _temp.Combine("work"), _temp.Path, [], _temp.Combine("work"), _temp.Path),
                 null, null, new AgentLimits(10, null, null, null), null)
             {
-                Compaction = "the compaction record",
+                Compaction = compaction,
+                SessionId = "the-new-session",
             },
-            events: null,
+            seen,
             Token);
 
         var userMd = Path.Combine(_temp.Path, ".orchestrators", "r1", "agents", "a7", "steps", "s1", "user.md");
 
         Assert.True(File.Exists(userMd));
         Assert.Equal("the compaction record", File.ReadAllText(userMd));
+        Assert.Equal(1, ran.Compactions);
+
+        var said = Assert.Single(seen.All.OfType<Compacted>());
+
+        Assert.Equal(
+            (AgentCompaction.AnsweredCompact, "the-old-session", "the-new-session", 2, 3, 400L, 21L),
+            (said.Why, said.Left, said.Began, said.KeptWordForWord, said.Reduced, said.SizeBefore, said.SizeAfter));
     }
 
     /// <summary>The stream a compacted conversation is reduced from: one attempt, a first message, two reduced iterations with calls, an engine message, and the last two.</summary>

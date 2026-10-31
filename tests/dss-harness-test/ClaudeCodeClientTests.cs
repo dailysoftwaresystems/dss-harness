@@ -786,6 +786,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var moved = Assert.Single(sink.Of<FallbackStarted>());
         Assert.Equal(("KEY_ONE", "KEY_TWO"), (moved.FromKey, moved.ToKey));
         Assert.Equal(Model, moved.ToModel);
+
+        // What each launch reported it cost is the part of the key it signed in with, and the run's the two together.
+        Assert.Equal([("KEY_ONE", (decimal?)0.01m), ("KEY_TWO", 0.01m)], result.Usage!.PerModel.Select(part => (part.Key, part.Cost?.Reported)));
+        Assert.Equal(0.02m, result.Usage.Cost!.Reported);
     }
 
     /// <summary>Where every key is refused, the step fails naming them all, each passed over.</summary>

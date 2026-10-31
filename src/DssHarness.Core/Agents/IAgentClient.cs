@@ -32,6 +32,14 @@ public interface IAgentClient
     /// </param>
     /// <returns>How the run ended, and everything it knows beyond its text.</returns>
     Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// A token of each kind a run of this client on <paramref name="entries"/> is billed by: the prices a run budgeted in
+    /// dollars needs before the client is taken (<see cref="AgentPrices.BudgetRefusal"/>). What every request of every
+    /// provider may be billed by, where the client bills by nothing more.
+    /// </summary>
+    /// <param name="entries">The entries the run would work on: its provider, its model, the client's own.</param>
+    AgentUsage BilledBy(AgentEntries entries) => AgentPrices.EveryRequestUses;
 }
 
 /// <summary>
@@ -547,8 +555,12 @@ public sealed record AgentStepRequest(
     /// <summary>The continuation record of the work the step goes on with; null where the step begins its own.</summary>
     public string? Continuation { get; init; }
 
-    /// <summary>The compaction record of the conversation the run begins, where the engine compacted one; null where it did not. A run given one begins a new conversation.</summary>
-    public string? Compaction { get; init; }
+    /// <summary>
+    /// The engine's compaction of the conversation the run begins from, where it compacted one: the record the new
+    /// conversation's first message is, and what it kept and reduced, said as the run's <see cref="Compacted"/> event and
+    /// counted in its compactions; null where it did not. A run given one begins a new conversation.
+    /// </summary>
+    public AgentCompacted? Compaction { get; init; }
 
     /// <summary>Where the run's every entry records what its key spent, for the next step's choice of one; null where nothing is counted.</summary>
     public IAgentSpendSink? Spend { get; init; }
@@ -644,8 +656,11 @@ public sealed record AgentRun(
 
     /// <summary>
     /// The credential the run signs in with, where its client signs in; null for the machine's login. Its keys are the
-    /// run's model's keys in the order they are tried - the one the run starts on first - which a client moves through
-    /// on a key the provider refuses, and an account at its limit, before the model changes.
+    /// run's model's keys in the order they are tried - the one the run starts on first - and each client moves through
+    /// them its own way before the model changes: the loop the API clients share on a key the provider refuses and at an
+    /// account's limit, sending the same request again; the claude-code client only on a key refused before its launch
+    /// did any work, with a new launch of the step's prompt - a key refused later, and every limit, end the launch, and
+    /// the runner moves the step.
     /// </summary>
     public AgentCredential? Credential { get; init; }
 

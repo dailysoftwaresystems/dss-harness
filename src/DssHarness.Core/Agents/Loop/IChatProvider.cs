@@ -15,12 +15,6 @@ namespace DssHarness.Core.Agents.Loop;
 public interface IChatProvider
 {
     /// <summary>
-    /// A token of each kind every request of this provider is billed by - its input, its output, the cache it reads and
-    /// the cache it writes - as one of each: what a step held to a budget needs a price for before it starts.
-    /// </summary>
-    AgentUsage Uses { get; }
-
-    /// <summary>
     /// Whether the provider's wire holds every answer to the schema a request sends (<see cref="ChatRequest.Schema"/>): where
     /// it does not, the loop puts the schema in words in the step's first message, and asks an answer that read as no JSON
     /// again in JSON alone (<see cref="ChatRequest.JsonAlone"/>). Where it does and refuses a schema

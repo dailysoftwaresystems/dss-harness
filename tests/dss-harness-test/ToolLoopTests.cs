@@ -429,22 +429,6 @@ public sealed class ToolLoopTests : IDisposable
         Assert.False(Assert.Single(unused.Requests).Credit);
     }
 
-    /// <summary>
-    /// A step held to a budget is refused before it starts where its model lacks the price of a kind its provider's every
-    /// request is billed by - the cache write of a provider whose requests mark what they send - naming the key to fill.
-    /// </summary>
-    [Fact]
-    public async Task ABudgetOnAModelMissingThePriceOfWhatItsProviderBillsBy_NeverStarts()
-    {
-        var writes = new FakeChat { Uses = AgentPrices.EveryRequestUses with { CacheWriteTokens = 1 } };
-
-        var result = await Ran(Run(limits: Limits(budget: 5m)), chat: writes);
-
-        Assert.Equal(AgentRunStatus.NotStarted, result.Status);
-        Assert.Equal($"client 'claude-api' was not started: no price for '{FakeChat.Model}' (providers 'anthropic', model '{FakeChat.Model}': priceCacheWrite), and a budget is charged with the cost counted from them", result.Error);
-        Assert.Empty(writes.Requests);
-    }
-
     /// <summary>A request whose answer goes silent past the step's bound on silence is asked again, and still silent past the tries ends the run stalled.</summary>
     [Fact]
     public async Task ARequestSilentPastItsBound_IsAskedAgain_ThenTheRunIsStalled()
@@ -503,17 +487,6 @@ public sealed class ToolLoopTests : IDisposable
         var answer = JsonNode.Parse(Assert.Single(stored))!.AsArray()[^1]!;
         Assert.Equal((false, AgentToolRuntime.NotRun(ToolLoop.BudgetSpent)), (answer["ok"]!.GetValue<bool>(), answer["content"]!.GetValue<string>()));
         Assert.Equal(0.00525m, result.Usage!.Cost!.Counted);
-    }
-
-    /// <summary>A step held to a budget on a model missing a price its cost needs is never started, naming the key to fill (user, 2026-10-26).</summary>
-    [Fact]
-    public async Task ABudgetOnAModelMissingAPrice_NeverStarts()
-    {
-        var result = await Ran(Run(limits: Limits(budget: 1)), Terms(priceHit: null));
-
-        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (result.Status, result.NotStartedBecause));
-        Assert.Equal("client 'claude-api' was not started: no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceInputHit), and a budget is charged with the cost counted from them", result.Error);
-        Assert.Empty(_chat.Requests);
     }
 
     /// <summary>Without a budget, a model missing a price runs: its cost is unknown and says the key to fill, never zero.</summary>
@@ -806,7 +779,7 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Equal(("anthropic", null, result.Session, FileContentHash.Of(System.Text.Encoding.UTF8.GetBytes("system"))), (began.Provider, began.Effort, began.SessionId, began.SystemPromptHash));
         Assert.Equal(FakeChat.Model, result.Model);
         Assert.True(result.Duration > TimeSpan.Zero);
-        Assert.Equal([new AgentModelUsage(FakeChat.Model, new AgentUsage(200, 20, 0, 0, 0, 0))], result.Usage!.PerModel);
+        Assert.Equal([new AgentModelUsage(FakeChat.Model, new AgentUsage(200, 20, 0, 0, 0, 0), "WORK_KEY", new AgentCost(Counted: 0.0015m))], result.Usage!.PerModel);
         Assert.Contains(AgentTools.ViewFile, began.Tools);
         Assert.Equal([1, 2], _events.All.OfType<TurnStarted>().Select(turn => turn.Turn));
         Assert.Equal([1, 2], _events.All.OfType<TurnFinished>().Select(turn => turn.Turn));
@@ -907,6 +880,31 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Equal(["WORK_KEY", "SPARE_KEY"], none.KeysRefused);
     }
 
+    /// <summary>
+    /// A run that moved keys while it worked says what it used and cost on each, apart: the part of each model served on
+    /// each key, so the runner books each key's spend to that key and never the whole to the key the run began on.
+    /// </summary>
+    [Fact]
+    public async Task ARunThatMovedKeys_SaysWhatEachKeyUsedAndCost_Apart()
+    {
+        Write("a.txt", "alpha");
+        _chat.Answer(FakeChat.Calling(View("c1", "a.txt")))
+            .Fail(new ChatFailure(ChatFailureKind.KeyRefused, "invalid x-api-key"))
+            .Answer(FakeChat.Said("done"));
+        var run = Run() with { Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", "sk-1"), new AgentKey("SPARE_KEY", "sk-2")]) };
+
+        var result = await Ran(run);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(
+            [
+                new AgentModelUsage(FakeChat.Model, new AgentUsage(100, 10, 0, 0, 0, 0), "WORK_KEY", new AgentCost(Counted: 0.00075m)),
+                new AgentModelUsage(FakeChat.Model, new AgentUsage(100, 10, 0, 0, 0, 0), "SPARE_KEY", new AgentCost(Counted: 0.00075m)),
+            ],
+            result.Usage!.PerModel);
+        Assert.Equal((new AgentUsage(200, 20, 0, 0, 0, 0), new AgentCost(Counted: 0.0015m)), (result.Usage.Total, result.Usage.Cost));
+    }
+
     /// <summary>A run the loop cannot sign, keep or serve is never started, saying why, and the provider is asked nothing.</summary>
     [Theory]
     [InlineData("noCredential", "KeyMissing", "the run was given no credential, and every request is signed with a key")]
@@ -919,7 +917,6 @@ public sealed class ToolLoopTests : IDisposable
     [InlineData("badSession", "ConfigurationWrong", "the conversation it was handed is named '../other', which is no conversation's id: letters, digits, '-' and '_', at most 64")]
     [InlineData("otherClient", "ConfigurationWrong", "the conversation it was handed is client 'claude-code''s, and a conversation is gone on with by the client that began it")]
     [InlineData("search", "ConfigurationWrong", "the run's step has sources to search, and its host was given no web search to search them with")]
-    [InlineData("currency", "ConfigurationWrong", "providers 'anthropic' prices its models in EUR, and a budget is counted in USD")]
     public async Task ARunTheLoopCannotSignKeepOrServe_NeverStarts(string kind, string because, string why)
     {
         var run = kind switch
@@ -934,10 +931,10 @@ public sealed class ToolLoopTests : IDisposable
             "longSession" => Run(conversation: new AgentSessionRef("claude-api", "anthropic", new string('a', 65))),
             "noMaxOutput" => Run(),
             "search" => Run() with { WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()) },
-            _ => Run(limits: Limits(budget: 1)),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "no such run"),
         };
 
-        var result = await Ran(run, Terms(currency: kind == "currency" ? "EUR" : "USD", maxOutput: kind == "noMaxOutput" ? 0 : 64000));
+        var result = await Ran(run, Terms(maxOutput: kind == "noMaxOutput" ? 0 : 64000));
 
         Assert.Equal((AgentRunStatus.NotStarted, Enum.Parse<AgentNotStartedBecause>(because)), (result.Status, result.NotStartedBecause));
         Assert.Equal($"client 'claude-api' was not started: {why}", result.Error);
@@ -964,7 +961,7 @@ public sealed class ToolLoopTests : IDisposable
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.Equal(new AgentUsage(1200, 70, 0, 0, 0, 1), result.Usage!.Total);
-        Assert.Equal([new AgentModelUsage(FakeChat.Model, new AgentUsage(1200, 70, 0, 0, 0, 1))], result.Usage.PerModel);
+        Assert.Equal([new AgentModelUsage(FakeChat.Model, new AgentUsage(1200, 70, 0, 0, 0, 1), "WORK_KEY", new AgentCost(Counted: 0.01775m))], result.Usage.PerModel);
 
         // Two requests of the chat at 100 in and 10 out each, and the search's 1,000 in, 50 out and one search: at 5 and
         // 25 a million tokens and 10 a thousand searches.

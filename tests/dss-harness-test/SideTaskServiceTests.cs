@@ -971,7 +971,8 @@ public sealed class SideTaskServiceTests
     /// <summary>
     /// What a side-task used in all is its turns' together, by the one fold of usage over parts
     /// (<see cref="AgentUsageReport.Sum"/>): a turn whose client reports no cost adds what was counted of it to the
-    /// reported whole, and a turn whose price was missed leaves the whole unknown - never a sum that leaves a part out.
+    /// reported whole, a turn this tool did not count leaves the counted whole unknown, and a turn whose price was missed
+    /// leaves the whole unknown - never a sum that leaves a part out.
     /// </summary>
     [Fact]
     public void WhatItUsedInAll_IsItsTurnsTogether_ByTheOneFoldOfUsage()
@@ -980,7 +981,7 @@ public sealed class SideTaskServiceTests
 
         var two = AgentUsageReport.Sum(Turn(new(Counted: 0.5m)), Turn(new(Reported: 0.25m)))!;
 
-        Assert.Equal(new AgentCost(Reported: 0.75m, Counted: 0.5m), two.Cost);
+        Assert.Equal(new AgentCost(Reported: 0.75m, Counted: null), two.Cost);
         Assert.Equal(0.75m, two.Cost!.Usd);
 
         var three = AgentUsageReport.Sum(two, Turn(new(MissingPrice: "glm-5.3")))!;

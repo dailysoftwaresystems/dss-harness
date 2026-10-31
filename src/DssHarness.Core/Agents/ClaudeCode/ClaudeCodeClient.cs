@@ -110,6 +110,13 @@ public sealed class ClaudeCodeClient(
     /// <inheritdoc/>
     public AgentClientCapabilities Capabilities => Descriptor;
 
+    /// <summary>
+    /// What a launch is billed by: input, cache read and output, and both cache writes - Claude Code reports the hour's
+    /// apart from the five minutes', and which it writes is its own to choose.
+    /// </summary>
+    /// <param name="entries">The entries the launch would work on.</param>
+    public AgentUsage BilledBy(AgentEntries entries) => AgentPrices.EveryRequestUses with { CacheWriteTokens = 1, CacheWrite1hTokens = 1 };
+
     /// <inheritdoc/>
     public async Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken)
     {
@@ -1168,15 +1175,20 @@ public sealed class ClaudeCodeClient(
             totals.Acted = true;
             var served = _held ?? model;
 
-            // The first model to serve the run serves it from its first turn: a launch's turns are all of one model.
-            totals.Used.Add(served, result.Usage, 1);
+            AgentCost? part = null;
 
             if (result.CostUsd is { } cost)
             {
-                // The launch's running total, never another launch's: what the run cost is each launch's last.
+                // The launch's running total, never another launch's: what the run cost is each launch's last, and what
+                // this result added to it is the part's of the key the launch signed in with.
+                part = new AgentCost(Reported: cost - _cost);
                 totals.Cost = (totals.Cost ?? 0) - _cost + cost;
                 _cost = cost;
             }
+
+            // The first model to serve the run serves it from its first turn: a launch's turns are all of one model, on
+            // the one key it signed in with.
+            totals.Used.Add(served, result.Usage, 1, key?.Name, part);
 
             await Emit(new TurnFinished(totals.Turns, served, result.Usage, result.StopReason)).ConfigureAwait(false);
             await Emit(new UsageReported(result.Usage, totals.Used.Total)).ConfigureAwait(false);

@@ -33,13 +33,18 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
     public bool SendsSchema => ClaudeApiRequest.HoldsToSchema;
 
     /// <summary>
-    /// What every request is billed by: input, cache read and output, and the cache write of the client's lifetime, for
-    /// every request marks what it sends to be cached.
+    /// What every request on <paramref name="settings"/> is billed by: input, cache read and output, and the cache write of
+    /// the client's lifetime, for every request marks what it sends to be cached.
     /// </summary>
-    public AgentUsage Uses
-        => _settings.CacheTtl == ClaudeApiRequest.AnHour
+    /// <param name="settings">The client's settings, whose cache lifetime says which write is billed.</param>
+    public static AgentUsage UsesOf(ClaudeApiSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        return settings.CacheTtl == ClaudeApiRequest.AnHour
             ? AgentPrices.EveryRequestUses with { CacheWrite1hTokens = 1 }
             : AgentPrices.EveryRequestUses with { CacheWriteTokens = 1 };
+    }
 
     /// <inheritdoc/>
     public string Tools(IReadOnlyList<AgentToolDefinition> tools)

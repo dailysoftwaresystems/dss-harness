@@ -182,6 +182,59 @@ public sealed class AgentContinuationTests : IDisposable
     }
 
     /// <summary>
+    /// A later launch of the attempt is sent its first message as every launch is - the run context and, on a new
+    /// conversation, the continuation record before the answer as its task - and the record reads the answer alone in
+    /// its place: the record the launch carried is never copied into the next, so records never nest.
+    /// </summary>
+    [Fact]
+    public void ALaterLaunchsFirstMessage_IsReadAsItsTask_NeverTheRecordItCarried()
+    {
+        var launch = AgentRuns.Of(_temp.Combine("step"), _temp.Combine("work")) with { RunContext = "run facts", UserPrompt = "do the work" };
+        var stream = new AgentEvent[]
+        {
+            new RunStarted(1),
+            new MessageSent(AgentPromptParts.FirstMessage(launch, newConversation: true), AgentMessageKind.FirstPrompt),
+            new TurnStarted(1),
+            new AssistantMessage("asked", []),
+            new RunStarted(1),
+            new MessageSent(AgentPromptParts.FirstMessage(launch with { Continuation = "the record of the launch before", UserPrompt = "the person's answer" }, newConversation: true), AgentMessageKind.FirstPrompt),
+            new TurnStarted(1),
+            new AssistantMessage("answered", []),
+        };
+
+        var told = AgentContinuation.Iterations(AgentAttempt.Newest(stream), new AgentContinuationBounds(), _temp.Combine("copies"));
+
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "iteration 1 of 2:",
+                "asked",
+                string.Empty,
+                AgentContinuation.EngineSaid,
+                "the person's answer",
+                string.Empty,
+                "iteration 2 of 2:",
+                "answered"),
+            told);
+    }
+
+    /// <summary>
+    /// The task of a first message is what the engine put in its task part, whichever parts came before it; a message
+    /// sent without parts is its own task, and so is one that only looks like parts.
+    /// </summary>
+    [Fact]
+    public void TheTaskOfAFirstMessage_IsItsTaskPart_ElseTheMessageWhole()
+    {
+        var bare = AgentRuns.Of(_temp.Combine("step"), _temp.Combine("work")) with { UserPrompt = "do <task>it</task>" };
+
+        Assert.Equal("do <task>it</task>", AgentPromptParts.TaskOf(AgentPromptParts.FirstMessage(bare, newConversation: true)));
+        Assert.Equal("do <task>it</task>", AgentPromptParts.TaskOf(AgentPromptParts.FirstMessage(bare with { RunContext = "run facts" }, newConversation: true)));
+        Assert.Equal("do <task>it</task>", AgentPromptParts.TaskOf(AgentPromptParts.FirstMessage(bare with { PlanUpdates = "what changed" }, newConversation: true)));
+        Assert.Equal("do <task>it</task>", AgentPromptParts.TaskOf(AgentPromptParts.FirstMessage(bare with { RunContext = "run facts", PlanUpdates = "what changed", Continuation = "the record" }, newConversation: true)));
+        Assert.Equal("<run-context>a note</run-context> with no task", AgentPromptParts.TaskOf("<run-context>a note</run-context> with no task"));
+    }
+
+    /// <summary>
     /// The earlier iterations are kept back from the last until the first that does not fit, and none past it: one kept
     /// beyond it would leave a hole the count of those left out could not name.
     /// </summary>

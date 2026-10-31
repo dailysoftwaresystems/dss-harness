@@ -2425,7 +2425,7 @@ public static class WorkflowValidator
                 if (entry.Step.Type == "reason")
                 {
                     var (root, definition) = WorksAs(entry);
-                    AgentRules(providers, root.Tier, root.Model, entry.Step.Effort, entry.Step.EffortByModel, root.Client, definition, $"workflow '{_definition.Name}' step '{entry.Path}'");
+                    AgentRules(providers, root.Tier, root.Model, entry.Step.Effort, entry.Step.EffortByModel, root.Client, definition, runBudget: true, $"workflow '{_definition.Name}' step '{entry.Path}'");
                 }
                 else if (entry.Step.Type == "create-agent" && WorkedInBy(entry) is null && DefaultTierProblem(providers) is { } problem)
                 {
@@ -2439,12 +2439,12 @@ public static class WorkflowValidator
 
             if (_definition.Advisor is { } advisor)
             {
-                AgentRules(providers, advisor.Tier, advisor.Model, advisor.Effort, advisor.EffortByModel, advisor.Client, DefinitionOf(advisor.Agent), "advisor");
+                AgentRules(providers, advisor.Tier, advisor.Model, advisor.Effort, advisor.EffortByModel, advisor.Client, DefinitionOf(advisor.Agent), runBudget: true, "advisor");
             }
 
             if (_definition.Reporter is { } reporter)
             {
-                AgentRules(providers, reporter.Tier, reporter.Model, reporter.Effort, reporter.EffortByModel, reporter.Client, DefinitionOf(reporter.Agent), "reporter");
+                AgentRules(providers, reporter.Tier, reporter.Model, reporter.Effort, reporter.EffortByModel, reporter.Client, DefinitionOf(reporter.Agent), runBudget: false, "reporter");
             }
         }
 
@@ -2722,6 +2722,7 @@ public static class WorkflowValidator
             IReadOnlyDictionary<string, string>? effortByModel,
             string? client,
             AgentDefinition? definition,
+            bool runBudget,
             string where)
         {
             // What the definition names stands below the step's, by the one pick the run resolves by: a step that names
@@ -2759,6 +2760,7 @@ public static class WorkflowValidator
                 }
 
                 EffortRules([(named.Provider, named.Model)], null, effort, effortByModel, definition, where);
+                BudgetPrices([(named.Provider, named.Model)], definition, runBudget, where);
                 return;
             }
 
@@ -2784,6 +2786,7 @@ public static class WorkflowValidator
                 }
 
                 EffortRules(defaults, providers.DefaultTier, effort, effortByModel, definition, where);
+                BudgetPrices(defaults, definition, runBudget, where);
                 return;
             }
 
@@ -2804,6 +2807,33 @@ public static class WorkflowValidator
             }
 
             EffortRules(models, tier, effort, effortByModel, definition, where);
+            BudgetPrices(models, definition, runBudget, where);
+        }
+
+        /// <summary>
+        /// Each model of an agent budgeted in dollars - by its definition's <c>maxBudgetUsd</c>, or by the run's budget where
+        /// it is charged to it - checked for the prices every request of every client is billed by, in the words of the one
+        /// owner of the rule (<see cref="DssHarness.Core.Agents.AgentPrices.BudgetRefusal"/>): a budget is charged with the
+        /// cost counted from them. The run refuses the kinds its own client adds, before any client is taken.
+        /// </summary>
+        private void BudgetPrices(
+            IReadOnlyList<(DssHarness.Core.Configuration.AgentProviderConfig Provider, DssHarness.Core.Configuration.AgentModelConfig Model)> models,
+            AgentDefinition? definition,
+            bool runBudget,
+            string where)
+        {
+            if ((!runBudget || _definition.Budget?.Usd is null) && definition?.MaxBudgetUsd is null)
+            {
+                return;
+            }
+
+            foreach (var (provider, model) in models)
+            {
+                if (DssHarness.Core.Agents.AgentPrices.BudgetRefusal(provider, model, DssHarness.Core.Agents.AgentPrices.EveryRequestUses) is { } priceless)
+                {
+                    _problems.Add($"{where} runs under a budget in dollars, and {priceless}");
+                }
+            }
         }
 
         /// <summary>Each model's effort checked against what it takes, by the one owner of the check (<see cref="DssHarness.Core.Agents.AgentEffortRules"/>).</summary>

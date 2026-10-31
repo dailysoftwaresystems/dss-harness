@@ -884,23 +884,23 @@ public sealed class ReasonStepRunnerTests
         var session = Guid.NewGuid().ToString("D");
         var directory = kit.Layout.AgentStepDirectory("reader", "think");
         Directory.CreateDirectory(directory);
-        await File.WriteAllTextAsync(
-            Path.Combine(directory, StoredStream.FileName),
-            $$"""{"kind":"sessionStarted","seq":1,"at":"2026-10-28T10:00:00Z","client":"claude-api","model":"claude-opus-5-5","systemPromptHash":"hash","tools":[],"skills":[],"handedConversation":false,"provider":"anthropic","sessionId":"{{session}}"}""" + "\n",
-            Token);
         var sessions = Path.Combine(kit.Layout.AgentDirectory("reader"), "sessions", session);
         Directory.CreateDirectory(sessions);
         await File.WriteAllTextAsync(Path.Combine(sessions, "conversation.jsonl"), "[]\n", Token);
 
-        // The attempt's two runs: the task and a question, then the person's answer and the work until the context filled.
+        // The attempt's two launches as Claude Code sends them: the run context and the task and a question, then a launch
+        // whose first message carries the run context, the continuation record and the person's answer as its task, and
+        // the work until the context filled.
+        var launch = AgentRuns.Of(directory, directory) with { RunContext = "the run context", UserPrompt = "the task" };
         var stream = StoredStream.Open(kit.Harness.FileSystem, directory, new Masking());
         await stream.EmitAsync(new RunStarted(1));
-        await stream.EmitAsync(new MessageSent("the task", AgentMessageKind.FirstPrompt));
+        await stream.EmitAsync(new MessageSent(AgentPromptParts.FirstMessage(launch, newConversation: true), AgentMessageKind.FirstPrompt));
         await stream.EmitAsync(new TurnStarted(1));
         await stream.EmitAsync(new AssistantMessage("Which file?", []));
         await stream.EmitAsync(new RunFinished(AgentRunStatus.Asked));
         await stream.EmitAsync(new RunStarted(1));
-        await stream.EmitAsync(new MessageSent("the person's answer", AgentMessageKind.FirstPrompt));
+        await stream.EmitAsync(new SessionStarted("claude-api", "claude-opus-5-5", "hash", [], [], HandedConversation: false, Provider: "anthropic", SessionId: session));
+        await stream.EmitAsync(new MessageSent(AgentPromptParts.FirstMessage(launch with { Continuation = "the record of the launch before", UserPrompt = "the person's answer" }, newConversation: true), AgentMessageKind.FirstPrompt));
         await stream.EmitAsync(new TurnStarted(1));
         await stream.EmitAsync(new AssistantMessage("Reading it now.", []));
         await stream.EmitAsync(new RunFinished(AgentRunStatus.ContextExhausted));
@@ -911,13 +911,23 @@ public sealed class ReasonStepRunnerTests
             Token);
 
         var asked = agents.Asked.Single();
+        var first = $"<run-context>{NL}the run context{NL}</run-context>{NL}{NL}<task>{NL}the task{NL}</task>";
+
+        // The record of the attempt's every launch: compacted from its task, the person's answer in its place as the
+        // engine's message, and never the record the later launch carried.
         Assert.Null(asked.Conversation);
-        Assert.NotNull(asked.Compaction);
-        Assert.StartsWith(AgentCompaction.SaysWhatItIs, asked.Compaction, StringComparison.Ordinal);
-        Assert.Contains($"The run context and the task, as they were sent:{Environment.NewLine}{Environment.NewLine}the task", asked.Compaction, StringComparison.Ordinal);
-        Assert.Contains($"{AgentContinuation.EngineSaid}{Environment.NewLine}the person's answer", asked.Compaction, StringComparison.Ordinal);
-        Assert.DoesNotContain($"as they were sent:{Environment.NewLine}{Environment.NewLine}the person's answer", asked.Compaction, StringComparison.Ordinal);
+        Assert.Equal(
+            $"{AgentCompaction.SaysWhatItIs}2. Everything up to iteration 0 is reduced to what you wrote and what you called; the last 2 iterations are word for word.{NL}{NL}"
+                + $"The run context and the task, as they were sent:{NL}{NL}{first}{NL}{NL}"
+                + $"The last iterations, word for word:{NL}{NL}"
+                + $"iteration 1 of 2:{NL}Which file?{NL}{NL}{AgentContinuation.EngineSaid}{NL}the person's answer{NL}{NL}"
+                + $"iteration 2 of 2:{NL}Reading it now.{NL}{NL}"
+                + $"The task again:{NL}{NL}{first}",
+            asked.Compaction!.Record);
+        Assert.Equal(session, asked.Compaction.Left);
     }
+
+    private static string NL => Environment.NewLine;
 
     /// <summary>
     /// The handoff the attempt is given stands at the head of its prompt, and is spent once the prompt holds it - the

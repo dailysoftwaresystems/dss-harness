@@ -822,21 +822,22 @@ public sealed class ReasonStepRunner(
 
     /// <summary>
     /// The engine's compaction of the conversation the step's own stream holds, its last iterations word for word -
-    /// what the answer <c>compact</c> goes on from, a new conversation that begins with it. The window is the
+    /// what the answer <c>compact</c> goes on from, a new conversation that begins with it - with what it kept and
+    /// reduced and the conversation it leaves, which the run says and counts. The window is the
     /// attempt's whole conversation (<see cref="AgentAttempt.Of"/>): every engine run of this attempt, from its first
     /// message - the task - to its last, for the conversation one attempt goes on with spans every answer it was given.
     /// </summary>
     /// <param name="stream">The step's own events.</param>
     /// <param name="attempt">The attempt the compaction answers.</param>
     /// <param name="context">The repository's context, whose configuration bounds the record and the reduction.</param>
-    private static string? CompactedFrom(IReadOnlyList<AgentEvent> stream, int attempt, HarnessContext context)
+    private static AgentCompacted? CompactedFrom(IReadOnlyList<AgentEvent> stream, int attempt, HarnessContext context)
     {
         var window = AgentAttempt.Of(stream, attempt);
 
         return window.Count == 0 ? null : AgentCompaction.Reduce(
             window,
             AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation),
-            AgentCompactionBounds.Of(context.Config.AgentContext?.Compaction)).Record;
+            AgentCompactionBounds.Of(context.Config.AgentContext?.Compaction));
     }
 
     /// <summary>

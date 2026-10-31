@@ -28,14 +28,19 @@ public sealed record AgentCompactionBounds(int ReducedChars = AgentCompactionBou
 
 /// <summary>
 /// What one compaction made of an attempt: the compaction record itself - the first message of the conversation it
-/// begins - and how much of the attempt it kept word for word and reduced, in iterations and in characters.
+/// begins - and how much of the attempt it kept word for word and reduced, in iterations and in characters, which the
+/// <see cref="Compacted"/> event of the run begun from it says.
 /// </summary>
 /// <param name="Record">The compaction record, whole.</param>
 /// <param name="KeptWordForWord">How many of the last iterations it kept word for word.</param>
 /// <param name="Reduced">How many iterations it reduced.</param>
 /// <param name="SizeBefore">The size of what it reduced, as the stream held it.</param>
 /// <param name="SizeAfter">The size of the record it made of it.</param>
-public sealed record AgentCompacted(string Record, int KeptWordForWord, int Reduced, long SizeBefore, long SizeAfter);
+public sealed record AgentCompacted(string Record, int KeptWordForWord, int Reduced, long SizeBefore, long SizeAfter)
+{
+    /// <summary>The conversation the compaction leaves: the last session the attempt's stream names; null where it names none.</summary>
+    public string? Left { get; init; }
+}
 
 /// <summary>
 /// The engine's compaction: a reduction the engine works out from the stored stream, the same
@@ -49,6 +54,9 @@ public static class AgentCompaction
 {
     /// <summary>The head of a compaction record, as it says what it is.</summary>
     public const string SaysWhatItIs = "This conversation was compacted by the engine at iteration ";
+
+    /// <summary>Why a step's conversation is compacted, as the <see cref="Compacted"/> event says it.</summary>
+    public const string AnsweredCompact = "the conversation filled its model's context, and its limit's question was answered compact";
 
     /// <summary>
     /// Works the compaction of an attempt out: the record, and how much of the attempt it kept and reduced. The same
@@ -133,7 +141,10 @@ public static class AgentCompaction
 
         var record = written.ToString();
 
-        return new AgentCompacted(record, kept, reducedItems.Count(item => item.Agent is not null), sizeBefore, record.Length);
+        return new AgentCompacted(record, kept, reducedItems.Count(item => item.Agent is not null), sizeBefore, record.Length)
+        {
+            Left = attempt.OfType<SessionStarted>().LastOrDefault(started => started.SessionId is { Length: > 0 })?.SessionId,
+        };
     }
 
     /// <summary>The place in <paramref name="items"/> the last <paramref name="kept"/> iterations begin at: everything before it is the reduced part.</summary>

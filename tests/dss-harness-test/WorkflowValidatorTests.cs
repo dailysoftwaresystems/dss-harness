@@ -2281,6 +2281,30 @@ public sealed class WorkflowValidatorTests
                 """), hasCommitTemplate: false, files: null, providers: Providers(agentTier: "deep")));
     }
 
+    /// <summary>
+    /// A reason step charged to a run budgeted in dollars on a model without the prices every request is billed by is
+    /// refused before the run, in the words the run itself refuses it in; a budget of tokens alone, or none, needs no
+    /// price.
+    /// </summary>
+    [Fact]
+    public void AStepUnderABudgetInDollars_NeedsItsModelsPrices_BeforeTheRun()
+    {
+        const string Steps = """
+            steps:
+              - name: think
+                type: reason
+                agent: agents/worker.md
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+            """;
+
+        Assert.Equal(
+            ["workflow 'flow' step 'think' runs under a budget in dollars, and no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss, priceInputHit, priceOutput), and a budget is charged with the cost counted from them"],
+            WorkflowValidator.Validate(Parse($"name: flow\nbudget:\n  usd: 5\n{Steps}"), hasCommitTemplate: false, files: null, providers: Providers()));
+        Assert.Empty(WorkflowValidator.Validate(Parse($"name: flow\nbudget:\n  tokens: 5000\n{Steps}"), hasCommitTemplate: false, files: null, providers: Providers()));
+        Assert.Empty(WorkflowValidator.Validate(Parse($"name: flow\n{Steps}"), hasCommitTemplate: false, files: null, providers: Providers()));
+    }
+
     /// <summary>One provider, one model, one tier, as the config-half tests spell the configuration.</summary>
     private static AgentProviders? Providers(string? agentTier = "balanced")
     {

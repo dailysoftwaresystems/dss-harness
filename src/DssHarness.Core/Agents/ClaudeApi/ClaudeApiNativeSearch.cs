@@ -13,13 +13,16 @@ namespace DssHarness.Core.Agents.ClaudeApi;
 /// <c>web_search_tool_result</c> blocks; what it used - its tokens, the search results billed as input among them, and its
 /// searches - from the answer's usage, by the one reader of it (<see cref="ClaudeApiUsage"/>), for the run to price as it
 /// prices every request. An answer that is no search's - a refusal, a request that never reached the API, a stream cut,
-/// an error, a search the tool itself says failed - is a part that failed, saying why, never one with no results.
+/// an error, a search the tool itself says failed - is a part that failed, saying why, never one with no results. The
+/// request goes through the gate's lane of its provider and key as every request of the loop's does: its input counted
+/// as it enters, its answer charged once had, and a 429 it meets setting the lane's cool-down as the failure is scoped.
 /// </summary>
 /// <param name="connection">How the request is posted and its answer read.</param>
 /// <param name="api">The provider's address.</param>
 /// <param name="model">The model the search runs on, as the side-task resolved it.</param>
 /// <param name="key">The key the request is signed with, of the side-task's entries.</param>
-public sealed class ClaudeApiNativeSearch(ApiConnection connection, string api, string model, AgentKey key) : IAgentNativeSearch
+/// <param name="lane">The gate's lane of the provider and the key; null where the run holds no gate.</param>
+public sealed class ClaudeApiNativeSearch(ApiConnection connection, string api, string model, AgentKey key, ClientGate? lane = null) : IAgentNativeSearch
 {
     /// <summary>The server tool the request declares alone, as the API names it.</summary>
     public const string ToolType = "web_search_20250305";
@@ -63,20 +66,31 @@ public sealed class ClaudeApiNativeSearch(ApiConnection connection, string api, 
 
         var results = new List<WebSearchResult>();
         var used = new ClaudeApiUsage(cacheTtl: null);
-        string? failure = null;
+        ChatFailure? failure = null;
 
-        await foreach (var happened in _connection.PostAsync(post, cancellationToken).ConfigureAwait(false))
+        using (var slot = lane is null ? null : await lane.EnterAsync(Codebase.EstimatedTokens.Of(body.ToJsonString()), _model, waiting: null, cancellationToken).ConfigureAwait(false))
         {
-            foreach (var part in ApiAnswers.Parts(happened, item => Read(item, results, used), refused => ClaudeApiFailures.Of(refused, first: true, _model)))
+            await foreach (var happened in _connection.PostAsync(post, cancellationToken).ConfigureAwait(false))
             {
-                if (part is ChatPart.Failed failed)
+                foreach (var part in ApiAnswers.Parts(happened, item => Read(item, results, used), refused => ClaudeApiFailures.Of(refused, first: true, _model)))
                 {
-                    failure ??= failed.Failure.Message;
+                    if (part is ChatPart.Failed failed)
+                    {
+                        failure ??= failed.Failure;
+                    }
                 }
             }
+
+            slot?.Answered(used.Used().OutputTokens);
         }
 
-        var answer = failure is { } why ? WebSearchAnswer.Failed(why) : WebSearchAnswer.Read(results);
+        // A 429 the search met holds the lane's waiters it covers, as one the loop's requests meet does.
+        if (failure is not null)
+        {
+            lane?.Met(failure, _model);
+        }
+
+        var answer = failure is { } why ? WebSearchAnswer.Failed(why.Message) : WebSearchAnswer.Read(results);
 
         return (new WebSearchPart(SourceName, SourceName, Version: 1, query, answer, Withheld: 0, Cached: false, KeyMissing: null), used.Used());
     }

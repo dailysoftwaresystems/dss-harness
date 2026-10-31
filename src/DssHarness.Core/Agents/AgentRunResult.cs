@@ -104,10 +104,11 @@ public sealed record AgentCost(decimal? Reported = null, decimal? Counted = null
     public decimal? Usd => Reported ?? Counted;
 
     /// <summary>
-    /// What two parts of a run cost together - two entries of a step's walk, two turns of a side-task: the counted cost
-    /// summed where neither part missed a price, else unknown with the first price missed; the reported one summed where
-    /// either part reports, a part that reports none adding what this tool counted of it, so the whole's cost is its
-    /// parts' together - unknown where a part's own is. Null where neither part says or counts anything.
+    /// What two parts of a run cost together - two entries of a step's walk, two turns of a side-task, two requests of one
+    /// key and model: the counted cost summed where both parts were counted, else unknown, for a part this tool could not
+    /// count leaves the whole uncounted - a missed price or a client that only reports alike; the reported one summed
+    /// where either part reports, a part that reports none adding what this tool counted of it, and unknown where a
+    /// part's own is known by neither; the first price missed kept. Null where neither part says or counts anything.
     /// </summary>
     /// <param name="first">The first part's cost; null where nothing said or counted it.</param>
     /// <param name="second">The second part's cost; null where nothing said or counted it.</param>
@@ -118,40 +119,50 @@ public sealed record AgentCost(decimal? Reported = null, decimal? Counted = null
             return first ?? second;
         }
 
-        var missing = first.MissingPrice ?? second.MissingPrice;
-        var counted = missing is null && (first.Counted is not null || second.Counted is not null)
-            ? (first.Counted ?? 0) + (second.Counted ?? 0)
-            : (decimal?)null;
+        var counted = first.Counted is { } one && second.Counted is { } other ? one + other : (decimal?)null;
         var reported = first.Reported is null && second.Reported is null
             ? null
-            : (first.Reported ?? first.Counted) + (second.Reported ?? second.Counted);
+            : first.Usd is { } said && second.Usd is { } more ? said + more : (decimal?)null;
 
-        return new AgentCost(reported, counted, missing);
+        return new AgentCost(reported, counted, first.MissingPrice ?? second.MissingPrice);
     }
+
+    /// <summary>The cost of a part that used something nothing said or counted: unknown by both, never zero.</summary>
+    public static AgentCost Unknown { get; } = new();
 }
 
-/// <summary>One model's part of what a run used.</summary>
+/// <summary>
+/// One part of what a run used: a model's, on the key it was signed with - the parts a run moves through inside its
+/// client, a model's next key after a refused or limited one among them - with what that part cost.
+/// </summary>
 /// <param name="Model">The model.</param>
 /// <param name="Usage">What it used.</param>
-public sealed record AgentModelUsage(string Model, AgentUsage Usage);
+/// <param name="Key">The key its requests were signed with, by its name and never its value; null for a login, or where the client names none.</param>
+/// <param name="Cost">What the part cost, and where each number is from; null where nothing said or counted it.</param>
+public sealed record AgentModelUsage(string Model, AgentUsage Usage, string? Key = null, AgentCost? Cost = null);
 
 /// <summary>What a run used: in all, and for each model that served it.</summary>
 /// <param name="Total">The whole of it.</param>
-/// <param name="PerModel">Each model's part, in the order they served.</param>
+/// <param name="PerModel">Each model's part, on its key, in the order they served.</param>
 /// <param name="Cost">What it cost, and where each number is from; null where nothing has said or counted it.</param>
 public sealed record AgentUsageReport(AgentUsage Total, IReadOnlyList<AgentModelUsage> PerModel, AgentCost? Cost = null)
 {
     /// <summary>
-    /// What two parts of a run used together: the totals added, each model's part kept in the order the parts served,
-    /// and what they cost by <see cref="AgentCost.Sum"/> - the one fold of usage over parts. Null where neither part
-    /// says anything.
+    /// What two parts of a run used together - the one fold of usage over parts, every walk of a step's entries and every
+    /// side-task's turns folded by it: the totals added, each model's part kept in the order the parts served, and what
+    /// they cost by <see cref="AgentCost.Sum"/> - a part that used something with no cost said or counted of it leaving
+    /// the whole's unknown (<see cref="AgentCost.Unknown"/>), never left out of it. Null where neither part says anything.
     /// </summary>
     /// <param name="first">What the first part used; null where nothing said it.</param>
     /// <param name="second">What the second part used; null where nothing said it.</param>
     public static AgentUsageReport? Sum(AgentUsageReport? first, AgentUsageReport? second)
         => first is null || second is null
             ? first ?? second
-            : new(first.Total.Plus(second.Total), [.. first.PerModel, .. second.PerModel], AgentCost.Sum(first.Cost, second.Cost));
+            : new(first.Total.Plus(second.Total), [.. first.PerModel, .. second.PerModel], AgentCost.Sum(CostOf(first), CostOf(second)));
+
+    /// <summary>A part's cost as the fold reads it: its own, unknown where it used something and nothing said or counted it, and nothing where it used nothing.</summary>
+    private static AgentCost? CostOf(AgentUsageReport part)
+        => part.Cost ?? (part.Total == AgentUsage.None ? null : AgentCost.Unknown);
 }
 
 /// <summary>

@@ -59,6 +59,14 @@ public sealed class ClaudeApiClient(
     public AgentClientCapabilities Capabilities => Descriptor;
 
     /// <inheritdoc/>
+    public AgentUsage BilledBy(AgentEntries entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        return ClaudeApiProvider.UsesOf(ClaudeApiSettings.Of(entries.Client));
+    }
+
+    /// <inheritdoc/>
     public Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(run);
@@ -72,13 +80,20 @@ public sealed class ClaudeApiClient(
         var entries = run.Entries!;
         var provider = new ClaudeApiProvider(_connection, entries.Provider.Api, ClaudeApiSettings.Of(entries.Client));
 
-        // A side-task's web search asks the provider's own beside the configured sources, as its native part: a request
-        // of the harness's own, signed with the side-task's key. A step's search asks the configured sources alone.
-        if (run.Ground is { SideTask: true } && run.WebSearch is not null && run.Credential?.Keys is [_, ..] keys)
-        {
-            run = run with { NativeSearch = new ClaudeApiNativeSearch(_connection, entries.Provider.Api, run.Model ?? entries.Model.Code, keys[0]) };
-        }
-
-        return _loop.RunAsync(run, events, provider, ToolLoopTerms.Of(ClientName, entries), cancellationToken);
+        return _loop.RunAsync(WithNativeSearch(_connection, run, entries), events, provider, ToolLoopTerms.Of(ClientName, entries), cancellationToken);
     }
+
+    /// <summary>
+    /// <paramref name="run"/> as the loop is given it: a side-task's web search asks the provider's own beside the
+    /// configured sources, as its native part - a request of the harness's own, signed with the side-task's key, through
+    /// the gate's lane of the provider and that key as every request of the loop's goes - and a step's search asks the
+    /// configured sources alone.
+    /// </summary>
+    /// <param name="connection">How the native search's request is posted.</param>
+    /// <param name="run">The run.</param>
+    /// <param name="entries">The run's entries: its provider, model and client.</param>
+    internal static AgentRun WithNativeSearch(ApiConnection connection, AgentRun run, AgentEntries entries)
+        => run.Ground is { SideTask: true } && run.WebSearch is not null && run.Credential?.Keys is [_, ..] keys
+            ? run with { NativeSearch = new ClaudeApiNativeSearch(connection, entries.Provider.Api, run.Model ?? entries.Model.Code, keys[0], run.Gates?.LaneOf(entries.Provider.Name, ClientName, entries.Client, keys[0])) }
+            : run;
 }

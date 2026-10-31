@@ -283,3 +283,60 @@ public sealed class AgentModelTests
         Assert.Empty(WorkflowValidator.Validate(WorkflowTemplates.ShippedDefinition(), hasCommitTemplate: false, files: null, resolved));
     }
 }
+
+/// <summary>
+/// What an engine's agent run spent, counted from its turns at the prices of the model serving each: a turn whose cost
+/// cannot be counted leaves the run's dollars unknown, naming the price missing, never a cost of nothing.
+/// </summary>
+public sealed class AgentRunSpendTests
+{
+    /// <summary>
+    /// The turns of a run are counted at the model serving each - the one it started on, then the one a fallback moved
+    /// it to - and a turn of a kind its model holds no price of makes the run's dollars unknown, the sentence naming the
+    /// key to fill, while its tokens are still counted.
+    /// </summary>
+    [Fact]
+    public async Task ATurnWithoutAPrice_LeavesTheRunsDollarsUnknown_NeverZero()
+    {
+        var (providers, problems) = AgentProviders.Resolve(new HarnessConfig
+        {
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["best"] = ["claude-opus-5-5", "claude-fable-5-1"] },
+            Providers =
+            [
+                new AgentProviderConfig
+                {
+                    Name = "anthropic",
+                    Type = "anthropic",
+                    Api = "https://api.anthropic.com",
+                    ApiKeyNames = ["ANTHROPIC_KEY"],
+                    Client = "claude-api",
+                    Currency = "USD",
+                    ReadOn = "2026-10-12",
+                    Models =
+                    [
+                        new AgentModelConfig { Code = "claude-opus-5-5", Name = "Opus", Tiers = ["best"], Efforts = ["high"], ContextTokens = 200000, MaxOutputTokens = 32000, PriceInputMiss = 5, PriceInputHit = 0.5, PriceOutput = 25 },
+                        new AgentModelConfig { Code = "claude-fable-5-1", Name = "Fable", Tiers = ["best"], Efforts = ["high"], ContextTokens = 200000, MaxOutputTokens = 32000, PriceInputMiss = 5, PriceInputHit = 0.5, PriceOutput = 25 },
+                    ],
+                },
+            ],
+        });
+
+        Assert.Empty(problems);
+
+        var spend = new AgentRunSpend(providers!, "claude-opus-5-5");
+        var first = new AgentUsage(InputTokens: 1_000_000, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0);
+
+        await spend.EmitAsync(new UsageReported(first, first));
+
+        Assert.Equal(((double?)5.0, (string?)null, 1_000_000L), (spend.Usd, spend.Unpriced, spend.Tokens));
+
+        var second = new AgentUsage(InputTokens: 10, OutputTokens: 10, CacheReadTokens: 0, CacheWriteTokens: 1000, CacheWrite1hTokens: 0, Searches: 0);
+
+        await spend.EmitAsync(new FallbackStarted("claude-opus-5-5", "anthropic", "claude-api", "claude-fable-5-1", "anthropic", "claude-api", "limit", AgentFallback.NewConversation, 1, ThrewAway: false, CreditAsked: false));
+        await spend.EmitAsync(new UsageReported(second, first));
+
+        Assert.Equal(
+            ((double?)null, "no price for 'claude-fable-5-1' (providers 'anthropic', model 'claude-fable-5-1': priceCacheWrite)", 1_001_020L, true),
+            (spend.Usd, spend.Unpriced, spend.Tokens, spend.Reported));
+    }
+}
