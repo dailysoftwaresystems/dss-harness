@@ -2717,9 +2717,6 @@ public static class WorkflowValidator
             lines.Add($"{where}{on}: {string.Join(", ", models.Select(entry => $"{entry.Model.Code} at {DssHarness.Core.Agents.AgentResolution.LevelFor(entry.Model.Code, effort, effortByModel, definition?.Effort, definition?.EffortByModel)?.Level ?? "its own default"}"))}");
         }
 
-        /// <summary>The effort ladder by capability, lowest first: the order a refusal names the nearest level a model takes.</summary>
-        private static readonly IReadOnlyList<string> CapabilityLadder = DssHarness.Core.Agents.AgentProviders.EffortLevels;
-
         private void AgentRules(
             DssHarness.Core.Agents.AgentProviders providers,
             string? tier,
@@ -2812,12 +2809,7 @@ public static class WorkflowValidator
             EffortRules(models, tier, effort, effortByModel, definition, where);
         }
 
-        /// <summary>
-        /// Each model's effort, resolved through the step's and its definition's four sources and checked against that
-        /// model's <c>efforts</c> - every model of the tier, the ones this machine cannot use included - and a code
-        /// under <c>effort</c>, the step's or its definition's, that the step does not run on, which would be dead: a
-        /// repository that changes its tier then hears which steps still name the old model.
-        /// </summary>
+        /// <summary>Each model's effort checked against what it takes, by the one owner of the check (<see cref="DssHarness.Core.Agents.AgentEffortRules"/>).</summary>
         private void EffortRules(
             IReadOnlyList<(DssHarness.Core.Configuration.AgentProviderConfig Provider, DssHarness.Core.Configuration.AgentModelConfig Model)> models,
             string? tier,
@@ -2825,77 +2817,7 @@ public static class WorkflowValidator
             IReadOnlyDictionary<string, string>? effortByModel,
             AgentDefinition? definition,
             string where)
-        {
-            foreach (var code in CodesOf(effortByModel, definition?.EffortByModel).Where(code => !string.Equals(code, "all", StringComparison.Ordinal) && models.All(entry => !string.Equals(entry.Model.Code, code, StringComparison.Ordinal))))
-            {
-                _problems.Add($"{where} gives an effort to '{code}', which it does not run on. It runs on: {string.Join(", ", models.Select(entry => entry.Model.Code))}");
-            }
-
-            foreach (var (_, entry) in models)
-            {
-                var asked = DssHarness.Core.Agents.AgentResolution.LevelFor(entry.Code, effort, effortByModel, definition?.Effort, definition?.EffortByModel);
-
-                // A model whose entry takes no efforts is refused where the configuration is loaded; nothing is left
-                // to say of it here.
-                if (asked is not { } level || entry.Efforts is [] || entry.Efforts.Contains(level.Level, StringComparer.Ordinal))
-                {
-                    continue;
-                }
-
-                var takes = string.Join(", ", entry.Efforts);
-                var attached = level.From is DssHarness.Core.Agents.LevelSource.StepEntry or DssHarness.Core.Agents.LevelSource.StepAll
-                    or DssHarness.Core.Agents.LevelSource.DefinitionEntry or DssHarness.Core.Agents.LevelSource.DefinitionAll;
-                var first = tier is null
-                    ? $"{where} runs at effort '{level.Level}', which '{entry.Code}' does not take. It takes: {takes}"
-                    : attached
-                        ? $"{where} runs '{entry.Code}' (tier '{tier}') at effort '{level.Level}', which it does not take. It takes: {takes}"
-                        : $"{where} runs at effort '{level.Level}', which '{entry.Code}' (tier '{tier}') does not take. It takes: {takes}";
-
-                // Where the level came attached to this model by its own entry - the step's or the definition's - the
-                // first sentence stands alone: it already has a level of its own, and the level is what is wrong. Where
-                // it came from a blanket, the step or its definition is shown how to give this model another.
-                var own = level.From is DssHarness.Core.Agents.LevelSource.StepEntry or DssHarness.Core.Agents.LevelSource.DefinitionEntry;
-                var fromDefinition = level.From is DssHarness.Core.Agents.LevelSource.DefinitionEntry
-                    or DssHarness.Core.Agents.LevelSource.DefinitionAll
-                    or DssHarness.Core.Agents.LevelSource.DefinitionOne;
-
-                _problems.Add(own
-                    ? first
-                    : $"{first}. Give it a level of its own under effort{(fromDefinition ? ", in the agent's definition" : string.Empty)}: {entry.Code}: {Nearest(entry, level.Level)}");
-            }
-        }
-
-        /// <summary>The levels of no map, as <see cref="EffortRules"/> reads none.</summary>
-        private static readonly IReadOnlyDictionary<string, string> EmptyEfforts = new Dictionary<string, string>(StringComparer.Ordinal);
-
-        /// <summary>Every code an effort map names, the step's and its definition's, each once.</summary>
-        private static IEnumerable<string> CodesOf(IReadOnlyDictionary<string, string>? effortByModel, IReadOnlyDictionary<string, string>? definitionByModel)
-        {
-            foreach (var code in (effortByModel ?? EmptyEfforts).Keys.Concat((definitionByModel ?? EmptyEfforts).Keys).Distinct(StringComparer.Ordinal))
-            {
-                yield return code;
-            }
-        }
-
-        /// <summary>
-        /// The nearest level the model takes at or above <paramref name="asked"/>, in the capability ladder, else its
-        /// highest - the highest it takes by the ladder, whatever order its entry lists them in: what a refusal suggests
-        /// giving the model under the step's effort.
-        /// </summary>
-        private static string Nearest(DssHarness.Core.Configuration.AgentModelConfig model, string asked)
-        {
-            var at = CapabilityLadder.ToList().IndexOf(asked);
-
-            foreach (var level in CapabilityLadder.Skip(at < 0 ? CapabilityLadder.Count : at))
-            {
-                if (model.Efforts.Contains(level, StringComparer.Ordinal))
-                {
-                    return level;
-                }
-            }
-
-            return CapabilityLadder.Where(level => model.Efforts.Contains(level, StringComparer.Ordinal)).Last();
-        }
+            => _problems.AddRange(DssHarness.Core.Agents.AgentEffortRules.Problems(models, tier, effort, effortByModel, definition, where));
 
         /// <summary>Whether <paramref name="client"/> is one the tool builds in and reaches <paramref name="provider"/>'s type.</summary>
         private static bool ClientReaches(string client, DssHarness.Core.Configuration.AgentProviderConfig provider)

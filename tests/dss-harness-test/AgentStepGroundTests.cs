@@ -21,8 +21,7 @@ public sealed class AgentStepGroundTests
             Step(),
             new AgentWorkspace("C:/trees/w1", "C:/runs/r1/agents/a1/work", "C:/source/repo", [], "C:/trees/w1", "C:/source/repo/.orchestrators/r1"),
             webSearchGiven: false,
-            claudeDirectories: [],
-            slotDirectory: "C:/source/repo/.harness-config/workflows/.env");
+            claudeDirectories: []);
 
         Assert.Equal("C:/trees/w1", ground.WorkingDirectory);
         Assert.Equal(["C:/trees/w1", "C:/runs/r1/agents/a1/work"], ground.ReadRoots);
@@ -38,8 +37,7 @@ public sealed class AgentStepGroundTests
             Step(),
             new AgentWorkspace(null, "C:/runs/r1/agents/a1/work", "C:/source/repo", [], "C:/runs/r1/agents/a1/work", "C:/source/repo/.orchestrators/r1"),
             webSearchGiven: false,
-            claudeDirectories: [],
-            slotDirectory: "C:/source/repo/.harness-config/workflows/.env");
+            claudeDirectories: []);
 
         Assert.Equal(["C:/runs/r1/agents/a1/work", "C:/source/repo"], ground.ReadRoots);
         Assert.Equal(["C:/runs/r1/agents/a1/work"], ground.WritableRoots);
@@ -54,8 +52,7 @@ public sealed class AgentStepGroundTests
             Step(restrictions: ["Read(secrets/**)"]),
             Workspace(),
             webSearchGiven: false,
-            claudeDirectories: [],
-            slotDirectory: "slot");
+            claudeDirectories: []);
 
         Assert.Equal(
             [
@@ -69,8 +66,8 @@ public sealed class AgentStepGroundTests
     [Fact]
     public void TheWebCapabilityIsKeptOnlyWhereTheRunIsGivenASearch()
     {
-        var without = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], slotDirectory: "slot");
-        var with = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: true, claudeDirectories: [], slotDirectory: "slot");
+        var without = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: []);
+        var with = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: true, claudeDirectories: []);
 
         Assert.Equal([AgentCapability.Read, AgentCapability.Write, AgentCapability.Run], without.Capabilities);
         Assert.Equal([AgentCapability.Read, AgentCapability.Write, AgentCapability.Run, AgentCapability.Web], with.Capabilities);
@@ -85,12 +82,11 @@ public sealed class AgentStepGroundTests
             Step(writes: new FlowList(["src/**"], Expression: null)),
             Workspace(),
             webSearchGiven: false,
-            claudeDirectories: [],
-            slotDirectory: "slot");
+            claudeDirectories: []);
 
         Assert.Equal(["src/**"], narrowed.Writes);
 
-        var open = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], slotDirectory: "slot");
+        var open = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: []);
 
         Assert.Null(open.Writes);
     }
@@ -104,8 +100,8 @@ public sealed class AgentStepGroundTests
     public void ADefinitionThatWritesNothing_AndARunThatOnlyReads_LeaveTheWorktreeUnwritten()
     {
         var readOnly = new AgentDefinition("planner", "what it is for", "the system prompt", Writes: false);
-        var byDefinition = AgentStepGround.Of(new HarnessConfig(), readOnly, Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], slotDirectory: "slot");
-        var byRun = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], slotDirectory: "slot", readsOnly: true);
+        var byDefinition = AgentStepGround.Of(new HarnessConfig(), readOnly, Step(), Workspace(), webSearchGiven: false, claudeDirectories: []);
+        var byRun = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], readsOnly: true);
 
         foreach (var ground in new[] { byDefinition, byRun })
         {
@@ -113,6 +109,44 @@ public sealed class AgentStepGroundTests
             Assert.Equal("C:/trees/w1", ground.WorkingDirectory);
             Assert.Contains("C:/trees/w1", ground.ReadRoots);
         }
+    }
+
+    /// <summary>
+    /// Every credential slot of the main checkout is guarded on a step's ground - each of the layout's slots, under the
+    /// main checkout, never one alone - and on a side-task's, by the same list.
+    /// </summary>
+    [Fact]
+    public void EveryCredentialSlotOfTheMainCheckout_IsGuarded_OnAStepsGroundAndASideTasks()
+    {
+        var ground = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: []);
+        var side = DssHarness.Core.Agents.SideTasks.SideTaskPolicy.Ground(new DssHarness.Core.Repository.HarnessLayout("C:/source/repo", "C:/source/repo"), new HarnessConfig(), []);
+
+        string[] every =
+        [
+            Path.Combine("C:/source/repo", ".harness-config", "sshItems"),
+            Path.Combine("C:/source/repo", ".harness-config", "wslDistros"),
+            Path.Combine("C:/source/repo", ".harness-config", "runner", ".env"),
+            Path.Combine("C:/source/repo", ".harness-config", "runner", ".secrets"),
+            Path.Combine("C:/source/repo", ".harness-config", "workflows", ".env"),
+        ];
+
+        Assert.Equal(every, ground.SlotDirectories);
+        Assert.Equal(every, side.SlotDirectories);
+    }
+
+    /// <summary>
+    /// The tool's own state a step's ground guards is each state path under the tree it works in - the configured
+    /// worktrees root among them - never that tree itself, which its agent writes.
+    /// </summary>
+    [Fact]
+    public void TheStateGuarded_IsEachStatePathUnderTheTree_NeverTheTreeItself()
+    {
+        var ground = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: []);
+
+        Assert.Equal(
+            [.. DssHarness.Core.Repository.HarnessLayout.StatePaths(WorktreeSettings.DefaultRoot).Select(path => Path.Combine("C:/trees/w1", path))],
+            ground.StateDirectories);
+        Assert.DoesNotContain("C:/trees/w1", ground.StateDirectories);
     }
 
     /// <summary>A workspace over a worktree, the shape most of the tests use.</summary>

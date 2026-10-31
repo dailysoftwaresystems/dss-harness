@@ -224,7 +224,8 @@ public sealed partial class AgentToolRuntime
 
     /// <summary>
     /// The provider's own search, asked as one more source of the same search: its part recorded as every source's is,
-    /// its requests counted for the run's usage - and a part that failed never hides the configured sources' answers.
+    /// what its request used added to the run's usage - and a part that failed never hides the configured sources'
+    /// answers. The run stopped is no failed part: the stop goes on as every stop of the run does.
     /// </summary>
     /// <param name="native">The provider's own search, which the run carries.</param>
     /// <param name="query">The query, as the agent wrote it.</param>
@@ -235,21 +236,22 @@ public sealed partial class AgentToolRuntime
 
         try
         {
-            var (part, requests) = await native.SearchAsync(query, cancellationToken).ConfigureAwait(false);
+            var (part, used) = await native.SearchAsync(query, cancellationToken).ConfigureAwait(false);
 
-            Tally.Searched(requests);
+            Tally.NativeSearched(used);
             await _records.WebSearchedAsync(part).ConfigureAwait(false);
 
             return part;
         }
-        catch (Exception ex) when (ex is OperationCanceledException or IOException or System.Net.Http.HttpRequestException or System.Text.Json.JsonException)
+        catch (Exception ex) when (ex is IOException or System.Net.Http.HttpRequestException or System.Text.Json.JsonException
+            || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
             var failed = new Web.Search.WebSearchPart(
                 native.Source,
                 native.Source,
                 Version: 1,
                 query,
-                Web.Search.WebSearchAnswer.Failed(ex is OperationCanceledException ? "the search was stopped" : ex.Message),
+                Web.Search.WebSearchAnswer.Failed(ex is OperationCanceledException ? "the provider did not answer the search in time" : ex.Message),
                 Withheld: 0,
                 Cached: false,
                 KeyMissing: null);

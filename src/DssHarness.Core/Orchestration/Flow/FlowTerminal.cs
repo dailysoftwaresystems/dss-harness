@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Runtime.InteropServices;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
@@ -322,33 +321,8 @@ public sealed class FlowTerminal
         }
     }
 
-    /// <summary>Takes the process's interrupts for this session until disposed: Ctrl+C everywhere, and off Windows SIGTERM and a hang-up.</summary>
-    private Registrations Signals()
-    {
-        var registrations = new List<PosixSignalRegistration> { PosixSignalRegistration.Create(PosixSignal.SIGINT, Taken) };
-
-        if (!OperatingSystem.IsWindows())
-        {
-            registrations.Add(PosixSignalRegistration.Create(PosixSignal.SIGTERM, Taken));
-            registrations.Add(PosixSignalRegistration.Create(PosixSignal.SIGHUP, TakenHangUp));
-        }
-
-        return new Registrations(registrations);
-    }
-
-    /// <summary>A signal taken as an interrupt: the process is not ended by it.</summary>
-    private void Taken(PosixSignalContext signal)
-    {
-        signal.Cancel = true;
-        Interrupted();
-    }
-
-    /// <summary>A hang-up taken as an interrupt: the process is not ended by it, and the terminal it lost says nothing more.</summary>
-    private void TakenHangUp(PosixSignalContext signal)
-    {
-        signal.Cancel = true;
-        HungUp();
-    }
+    /// <summary>Takes the process's interrupts for this session until disposed, through the one registration of them (<see cref="TerminalSignals"/>).</summary>
+    private TerminalSignals Signals() => TerminalSignals.Take(Interrupted, HungUp);
 
     /// <summary>
     /// What a command cut off <paramref name="drain"/> after its second interrupt says: the one line, naming
@@ -359,16 +333,4 @@ public sealed class FlowTerminal
             + $"what is left is what a crash leaves, and {FlowService.ResumeCommand}{(run is null ? string.Empty : $" {run}")} reclaims the run and goes on from its records";
 
     private static string Seconds(TimeSpan span) => span.TotalSeconds.ToString("0", CultureInfo.InvariantCulture);
-
-    /// <summary>The signal registrations of one session, let go together.</summary>
-    private sealed class Registrations(IReadOnlyList<PosixSignalRegistration> registrations) : IDisposable
-    {
-        public void Dispose()
-        {
-            foreach (var registration in registrations)
-            {
-                registration.Dispose();
-            }
-        }
-    }
 }

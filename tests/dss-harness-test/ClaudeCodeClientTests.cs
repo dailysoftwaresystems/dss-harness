@@ -1895,6 +1895,82 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// The turn a chat's interrupt cuts ends on an error of its own - <c>error_during_execution</c> - and with no message
+    /// of the person's waiting that ending is still no failure of the launch's: it stays open, and the person's next
+    /// message, posted only once the cut turn's result was read, is answered by the same launch and said as the chat's,
+    /// never as a plan update.
+    /// </summary>
+    [Fact]
+    public async Task TheTurnAChatsInterruptCuts_LeavesTheLaunchOpen_WithNoMessageWaiting()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["hang"] = true }, new JsonObject { ["text"] = "after the cut" }]);
+        var run = kit.Run() with { Chat = true, Interrupt = new AgentTurnInterrupt() };
+        var finished = 0;
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnStarted && run.Interrupt is { } interrupt)
+            {
+                interrupt.Interrupt();
+            }
+            else if (@event is TurnFinished && ++finished == 1)
+            {
+                run.Messages.Post("go on");
+            }
+            else if (@event is AssistantMessage { Text: "after the cut" })
+            {
+                run.Messages.Complete();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token);
+
+        Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
+        Assert.Equal("after the cut", result.FinalText);
+        Assert.Single(kit.Launches());
+        Assert.Equal(
+            [(AgentMessageKind.FirstPrompt, run.UserPrompt), (AgentMessageKind.ChatMessage, "go on")],
+            sink.Events.OfType<MessageSent>().Select(sent => (sent.Which, sent.Text)));
+    }
+
+    /// <summary>
+    /// A message the person typed ahead, which a chat's interrupt drops before any turn took it, is said to have been
+    /// dropped - never lost unsaid.
+    /// </summary>
+    [Fact]
+    public async Task AMessageAChatsInterruptDrops_IsSaidToHaveBeenDropped()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["hang"] = true }, new JsonObject { ["text"] = "after the cut" }]);
+        var run = kit.Run() with { Chat = true, Interrupt = new AgentTurnInterrupt() };
+        var finished = 0;
+        var sink = new Sink(@event =>
+        {
+            if (@event is MessageSent { Text: "typed ahead" } && run.Interrupt is { } interrupt)
+            {
+                interrupt.Interrupt();
+            }
+            else if (@event is TurnStarted && finished == 0)
+            {
+                run.Messages.Post("typed ahead");
+            }
+            else if (@event is TurnFinished && ++finished == 1)
+            {
+                run.Messages.Post("go on");
+            }
+            else if (@event is AssistantMessage { Text: "after the cut" })
+            {
+                run.Messages.Complete();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token);
+
+        Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
+        Assert.Contains("the interrupt dropped 1 message(s) the agent had not taken yet; send again what still stands", sink.Events.OfType<Notice>().Select(notice => notice.Text));
+    }
+
+    /// <summary>
     /// The stall bound starts once the launch answered the initialize: a launch slow to start is not stalled for the time
     /// it took.
     /// </summary>

@@ -473,8 +473,8 @@ accepted now: a directory holding a tracked file never reads as ignored itself, 
 check-ignore <root>` answers *not ignored* while every worktree inside it is ignored, and the root
 can no longer be kept on another disk through a link, which git would list as an untracked entry
 and keep nothing behind; `init` names such a link and writes nothing through it. Sync does not
-depend on either answer: it withholds the configured root, `.orchestrators`, `.mutations` and
-`.legs` by name, whatever git says, and never deletes them in a copy, and its guard against a
+depend on either answer: it withholds the configured root, `.orchestrators`, `.mutations`, `.legs`
+and `.side-tasks` by name, whatever git says, and never deletes them in a copy, and its guard against a
 withheld path that stopped being ignored takes each placeholder, untracked until it is committed,
 as the harness's own - any other untracked file there still refuses, named as the worktrees root,
 or the slot whose ignore rule init writes, it is. The root may not be `.git`, `.orchestrators`,
@@ -882,7 +882,7 @@ delete-orchestrator refuses that orchestrator and changes nothing. As across the
 ### Seeding and folding
 
 The seed is the main tree's uncommitted state handed to the agent when it is made - every path git status lists,
-less `TreeFloor`: `.git`, `.orchestrators`, `.mutations`, `.legs` and the worktrees root, asserted where the copying
+less `TreeFloor`: `.git`, `.orchestrators`, `.mutations`, `.legs`, `.side-tasks` and the worktrees root, asserted where the copying
 happens rather than left
 to ignore rules a repository can edit away - each changed file copied into its worktree, with the copy's SHA-256 and,
 where the platform has one, its execute bit, and each deletion made there too and recorded as absent. `seed.json` is
@@ -2536,40 +2536,66 @@ A side-task is an agent outside every workflow (`SideTaskService`, `run-side-tas
 `list-side-tasks`): a conversation between a person and one agent over the repository's main
 tree, asked directly - a chat in the terminal by default (the agent's text streamed, each
 action one line as it is decided, a denial with its rule, Ctrl+C interrupting a turn and a
-second ending the chat, `/exit`, `/model`, `/effort`, `/records`, `/help`), or one message
+second ending the chat, a line ending in a backslash going on to the next, `/exit`, `/model`,
+`/effort` with a level, `<code>=<level>` or `default`, `/records`, `/help`), or one message
 with `--prompt`, answered once (`--json` its one document, a usage error without a prompt).
 No second loop: each turn is an `AgentStepRequest` handed to `IAgentRunner` as the engine
 hands a step's - the model resolved as a step's (`--model`, `--tier`,
 `defaults.agentTier`, `--client`, `--effort <level>` or `--effort <code>=<level>` with
-`all=<level>` for the rest, each checked against what the model takes), the order built with
-each entry's credential, what it spends counted against its key - so the clients, the tool
-runtime, the stored stream, compaction and the fallback are the ones every step uses. What
-differs is what it is given: the ground of part 03's table (`SideTaskPolicy`) - no restriction
-list, no allow list of pages, all four capabilities, the main checkout the writable root, the
-worktree rules and the protected paths off, this tool's own verbs open to it as the person's
-own session's are - with the built-in refusals kept (root actions, credential slots, Claude
-Code directories, `Write(.git/**)`, the tool's own state, the commands that print a
-credential, and `run-side-task` itself, refused to every agent); no limits, no output
-envelope; the web search of every configured source, with one more asked beside them: `native`, the provider's own
-search - on the two API clients a request of the harness's own whose only tool is the provider's web
-search (`ClaudeApiNativeSearch`, no server tool in any conversation), on Claude Code its own `WebSearch`
-kept in a side-task's `--tools` beside the engine's server - its requests priced at the provider's
-`pricePerThousandSearches`. A chat goes on between the person's
+`all=<level>` for the rest, each checked against what the model takes by the one check of a
+step's, `AgentEffortRules`), the order built with each entry's credential, what it spends counted
+against its key - so the clients, the tool runtime, the stored stream, compaction and the fallback
+are the ones every step uses; one builder sets all of it up (`SideTaskService.SetUpAsync`), at the
+start and again for the chat's `/model` and `/effort`. What differs is what it is given: its
+ground (`SideTaskPolicy`) - no restriction list, no allow list of pages, all four capabilities, the
+main checkout the writable root, the worktree rules and the protected paths off, this tool's own
+verbs open to it as the person's own session's are - with the built-in refusals kept (root
+actions, every credential slot of the main checkout and every Claude Code directory its clients
+use, to its file tools and its commands alike, `Write(.git/**)` and a command's redirection into
+`.git`, the tool's own state - each state path under the main tree, `HarnessLayout.StatePathsUnder`,
+never the tree itself - the commands that print a credential, and `run-side-task` itself, refused
+to every agent by any name of the program and refusing itself where the agent's mark,
+`AgentChildEnvironment.AgentMarker`, is in its environment); no limits, no output envelope; the web
+search of every configured source turned on, with one more asked beside them: `native`, the
+provider's own search - on the Claude API a request of the harness's own whose only tool is the
+provider's web search (`ClaudeApiNativeSearch`, no server tool in any conversation), its usage
+folded into the turn's and priced at the provider's `pricePerThousandSearches`, a failure of it one
+failed part of the search saying why; on Claude Code its own `WebSearch`, kept in a side-task's
+`--tools` beside the engine's server; on Z.AI none. A chat goes on between the person's
 messages the way its client goes on with any conversation: one launch held open where the
 client renders its conversations (Claude Code), the person's later messages reaching the agent through
-the channel a message to an agent at work uses, the engine's interrupt cutting a turn alone; one
-request per message where the client stores them, each going on with the stored one - and a chat that
-outgrows the model's context is compacted as a step's conversation is, and says so. `--resume` opens one
-again, refused (13) where it names no side-task or another process holds it open (its owner
-file beside its records, a dead one reclaimed); its model is the one it last used, unless the
-person names another. Its records live in `.side-tasks/<task>/`, a root slot of the layout in
-`StatePaths` and the managed ignore block, written by the tool alone and kept until a person
-removes them: `task.json` (each turn with its client, provider, model and effort, what it
-used and cost, and what the agent ran under), the stored stream `stream.jsonl`, the
-transcript as a person reads it `transcript.md`, `denials.jsonl` and `web.jsonl` as a step's,
+the channel a message to an agent at work uses, recorded as the person's (`ChatMessage`), the first
+interrupt cutting the turn alone and leaving the launch open, a message the interrupt dropped said to
+have been dropped, and a launch that ends by itself recorded and the lines it never took sent again
+to a new one; one request per message where the client stores them, each going on with the stored
+one. A chat that outgrows the model's context is compacted as a step's conversation is - the whole
+conversation since the last compaction, every launch of it read as one, the person's later messages
+as they said them - and says so. The side-task's name is the person's (`--name`) or the date and
+time it began with the first words of its first message, a suffix freeing it where another began in
+the same second; its owner (`SideTaskOwner`, the owner file beside its records) is claimed before
+anything is written, under one machine-wide lock for the side-tasks' directory, with `task.json`
+written inside the claim, so two commands never take one name - a name another holds refused (13),
+a dead owner reclaimed and said. `--resume` opens one again, refused (13) where it names no
+side-task or another process holds it open, and `--name` beside it a usage error (10); it goes on
+with its stored conversation, or, where the model it now runs on is reached by a client that is
+handed none, from the conversation so far (`AgentContinuation`), on what the person last set it
+to run on (`SideTaskRunsOn` in its record: the tier with the tier's later models, or the model
+named outright) unless the command line names a model or a tier; an effort or a client the
+command line names stands over the record's. Its records live in `.side-tasks/<task>/`, a root slot
+of the layout in `StatePaths`, the tree's floor and the managed ignore block - refused (13) before
+anything is written where git does not ignore it (`SlotIgnored`) - written by the tool alone and
+kept until a person removes them: `task.json` (each turn with its client, provider, model and
+effort, what it used and cost, and what the agent ran under), the stored stream `stream.jsonl`,
+the transcript as a person reads it `transcript.md`, `denials.jsonl` and `web.jsonl` as a step's,
 the stored conversation under `sessions/` where its client stores one - named on every exit,
-in text and in `--json`. No host serves either verb: a chat is the person's, on this machine
-(`HostAgentProtocol.NotForwardable`).
+in text and in `--json`, or said to be none where the command stopped before any were written.
+Its exits are its turn's (`AgentRunResult.ToOutcome`, the one mapping) in one shot - 20 failed, 21
+cut short, 130 interrupted, 13 or 14 where it could not start - and a chat's are 0 however the
+person leaves it, 130 where the command itself was stopped. Its interrupts are its own
+(`SideTaskTerminal` over `TerminalSignals`, the one registration of Ctrl+C, SIGTERM and a hang-up,
+with `PointOfNoReturn.ChatsWithAPerson` turning the command line's own handling off for it): the
+first cuts the agent's turn, the second ends the chat. No host serves either verb: a chat is the
+person's, on this machine (`HostAgentProtocol.NotForwardable`).
 
 A session's interrupts are its own (`FlowTerminal`, `FlowInterrupts`): Ctrl+C, and off Windows
 SIGTERM and a hang-up, are taken by `PosixSignalRegistration` and never end the process, and the
@@ -4314,7 +4340,7 @@ ordered.
 The watch goes only as deep as the inputs: each directory holding one is watched for its
 own files only, and each directory above one - the root among them - for the names of the
 directories in it alone. A directory tracked for a placeholder, as init keeps the
-worktrees root, `.orchestrators`, `.mutations` and `.legs`, costs one shallow watch, and
+worktrees root, `.orchestrators`, `.mutations`, `.legs` and `.side-tasks`, costs one shallow watch, and
 other trees building below it - an agent's worktree, a sweep's worker, a leg's copy - are
 never heard. Measured: watched all the way down, an agent's build below the
 worktrees root overflowed the operating system's buffer, and a run in the main tree that
@@ -5039,7 +5065,7 @@ directory here cannot drift apart.
   same directory, and only one of them deleted somebody's files; the marker is the only thing left
   that can say so.
 - **What survives an adoption is narrower than it looks.** Its `.git` and so every commit, branch
-  and tag in it, its `.orchestrators`, `.mutations` and `.legs`, the rest of `.harness-config` save
+  and tag in it, its `.orchestrators`, `.mutations`, `.legs` and `.side-tasks`, the rest of `.harness-config` save
   the runner's actions, the worktrees root and whatever `sync.neverTransfer` names are protected
   from the deletion — though `config.json` and the actions there are replaced with this tree's,
   and its git HEAD is moved, detached, to this tree's commit where it names another, both of which the refusal says. The ignore list is *not* read from that host: it is this tree's, listed by asking
@@ -6506,6 +6532,11 @@ a safe pause or a stop. `ask-orchestrator-status` exits `0` wherever it read the
 by a model or not - where none worded them it says why and the facts are still the answer - while
 `ask-orchestrator`, whose answer is the model's words, is refused with the code of why none worded
 them (12, 13, 14, 20 or 21, and 70 where the tool itself failed).
+a safe pause or a stop. `run-side-task` in one shot exits as its turn ended, by the one mapping of an
+agent's ending (`AgentRunResult.ToOutcome`): `0` answered, `20` the model failed past its retries and
+fallback, `21` cut short by the account's limit, a stall or the clock, `130` interrupted, `13` or `14`
+where it could not start; a chat exits `0` however the person leaves it, and `130` where the command
+itself was stopped.
 `dssharness help exit-codes` prints the shared table from the code itself; this copy, and the
 per-command codes above, are maintained by hand.
 

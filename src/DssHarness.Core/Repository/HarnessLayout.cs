@@ -244,6 +244,19 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
         [.. ConnectionDataSlots.Concat(ValueSlots).Select(slot => DirectoryName + "/" + slot)];
 
     /// <summary>
+    /// Every credential slot (<see cref="SecretSlots"/>) as an absolute directory of <paramref name="mainCheckout"/>, where
+    /// what each holds is read from whichever tree asks: the places no action of any agent reaches. The one list an
+    /// agent's ground is given, so a slot the layout gains is guarded the day it is added.
+    /// </summary>
+    /// <param name="mainCheckout">The main checkout's root.</param>
+    public static IReadOnlyList<string> SecretSlotDirectoriesUnder(string mainCheckout)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(mainCheckout);
+
+        return [.. SecretSlots.Select(slot => Path.Combine(mainCheckout, slot.Replace('/', Path.DirectorySeparatorChar)))];
+    }
+
+    /// <summary>
     /// Where the tool's own state is, relative to a tree's root with forward separators: the root
     /// slots (<see cref="RootSlots"/>) and what it keeps under the harness directory - its runs,
     /// its hosts' copies record, its mutation record, a worker's dependency sources, the run lock
@@ -252,6 +265,7 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// the layout gains joins this the day it is added.
     /// </summary>
     /// <param name="worktreesRoot">The configured worktrees root.</param>
+    /// <seealso cref="StatePathsUnder"/>
     public static IReadOnlyList<string> StatePaths(string worktreesRoot)
     {
         ArgumentNullException.ThrowIfNull(worktreesRoot);
@@ -266,6 +280,20 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
             DirectoryName + "/" + LockFileName,
             DirectoryName + "/" + SyncedCopyMarkerName,
         ];
+    }
+
+    /// <summary>
+    /// The tool's own state (<see cref="StatePaths"/>) under one tree an agent works over: each place joined to
+    /// <paramref name="tree"/> - a worktrees root configured outside it standing as configured - each once. The one list a
+    /// step's ground and a side-task's guard, so neither reads the tree itself as state.
+    /// </summary>
+    /// <param name="tree">The tree's root.</param>
+    /// <param name="worktreesRoot">The configured worktrees root.</param>
+    public static IReadOnlyList<string> StatePathsUnder(string tree, string worktreesRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+
+        return [.. StatePaths(worktreesRoot).Select(path => Path.Combine(tree, path)).Distinct(StringComparer.OrdinalIgnoreCase)];
     }
 
     /// <summary>

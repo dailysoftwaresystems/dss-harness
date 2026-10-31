@@ -2395,11 +2395,6 @@ public static class HelpTopics
     }
 
     /// <summary>
-    /// The agent sections of config.json: the companies whose models the tool reaches, their keys in the git-ignored
-    /// slot, the tiers a step runs on and the effort forms, the agents' policy and the claude-code client - said where a
-    /// person reads them.
-    /// </summary>
-    /// <summary>
     /// The side-tasks topic: what a side-task is - an agent outside every workflow, a conversation between a person and
     /// one agent over the repository's main tree - the two commands, what the side-task's agent may do and may not, its
     /// model and effort, and where its records live.
@@ -2428,20 +2423,33 @@ public static class HelpTopics
             builder,
             $"In the terminal, by default, {Agents.SideTasks.SideTaskService.RunCommand} holds a chat: the person types a message "
             + "(a line ending in \\ goes on to the next); the agent's text streams as it comes and each action it takes is one "
-            + "line as it is decided, a denial with its rule. Ctrl+C interrupts the agent's turn and leaves the chat open; a "
-            + "second, or /exit, ends it. /model <model> and /effort <level> change what the next message is sent with; "
-            + "/records prints where this side-task's records are; /help lists these. With --prompt or --prompt-file it "
-            + "answers one message once, prints the agent's final text and exits; --json answers with one document "
-            + $"instead - and --json without a prompt is a usage error ({HarnessExit.UsageError}), for a chat is no document. "
-            + $"--resume opens a side-task again from its stored conversation - refused ({HarnessExit.Refused}) where another "
-            + "process holds it open, and where the name names no side-task - and its model is the one it last used, unless "
-            + "--model or --tier says another. list-side-tasks lists them, newest first: each by its name, when it began "
-            + "and last spoke, its model, its turns and cost, whether it is open now. The records' directory is named on "
-            + "every exit, in text and in --json. Exit codes: 0 when the chat or the turn ended as asked; "
-            + $"{HarnessExit.UsageError} usage, among them an effort a model does not take; {HarnessExit.Refused} a --resume "
-            + $"naming no side-task or one open in another process; {HarnessExit.ToolMissing} a client that cannot start - no "
-            + $"key in the slot, no claude, no npm; {HarnessExit.CommandFailed} the model failed past its retries and "
-            + $"fallback; {HarnessExit.Incomplete} interrupted in one shot. {StoppedDocument}");
+            + "line as it is decided, a denial with its rule. Ctrl+C interrupts the agent's turn and leaves the chat open, "
+            + "what was said kept; a second, /exit or the end of input ends it. /model <model> and /effort <level> - or "
+            + "<code>=<level> for each model, or default for the model's own - change what the next message is sent with, "
+            + "each checked as the command line's are; /records prints where this side-task's records are; /help lists "
+            + "these. With --prompt or --prompt-file it answers one message once, prints the agent's final text and exits; "
+            + "--json answers with one document instead - and --json without a prompt is a usage error "
+            + $"({HarnessExit.UsageError}), for a chat is no document. A side-task the person does not name is named by the "
+            + "date and time it began and the first words of its first message; --name gives it one, refused "
+            + $"({HarnessExit.Refused}) where another side-task holds that name. --resume opens a side-task again, going on "
+            + "with its stored conversation - or, where the model it now runs on is reached by a client that is handed none, "
+            + "from the conversation so far - on what the person last set it to run on: its tier with the tier's later "
+            + "models, or the model named outright, unless --model or --tier names another; an --effort or a --client given "
+            + $"stands over what it last ran with. --resume is refused ({HarnessExit.Refused}) where the name names no "
+            + "side-task and where another process holds it open, and --name beside it is a usage error, for a side-task "
+            + "opened again keeps its name. list-side-tasks lists them, newest first: each by its name, when it began and "
+            + "last spoke, its model, its turns and cost, whether it is open now. The records' directory is named on every "
+            + "exit, in text and in --json - or said to be none where the command stopped before any were written. Exit "
+            + "codes: 0 ended as asked, and a chat 0 however the person leaves it; "
+            + $"{HarnessExit.Cancelled} where the command itself was stopped; {HarnessExit.UsageError} usage, among them an "
+            + $"effort a model does not take; {HarnessExit.ConfigInvalid} the configuration - a model no provider serves, "
+            + $"no model to run on, a web search that does not resolve; {HarnessExit.Refused} refused - a name taken or no "
+            + "name a directory takes, a --resume naming no side-task or one open in another process, a .side-tasks "
+            + "git does not ignore, a side-task started under an agent, and in one shot a key missing or the tool running "
+            + $"elevated; {HarnessExit.ToolMissing} a client that cannot start - no claude, no npm; and in one shot "
+            + $"besides, {HarnessExit.CommandFailed} the model failed past its retries and fallback, "
+            + $"{HarnessExit.Incomplete} cut short by the account's limit, a stall or the clock, {HarnessExit.Cancelled} "
+            + $"interrupted. {StoppedDocument}");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2457,18 +2465,20 @@ public static class HelpTopics
             builder,
             "What the side-task's agent may do is the person's own session's, over the main tree: every limit of a run's is "
             + "dropped - no restriction list (Web(...), Run(...), Write(...), Read(...)), no allow list of pages, the web "
-            + "search over every configured source with no maxPerStep, no cap on money, turns or time, all four "
+            + "search over every configured source turned on with no maxPerStep, no cap on money, turns or time, all four "
             + "capabilities, the main tree its writable root, the worktree rules and the protected paths off - so it can "
             + "edit .harness-config/config.json to add a search source, commit, branch, and run this tool's own verbs as "
             + "the person could. Its web_search asks one more source beside the configured ones: native, the provider's "
-            + "own search - on the two APIs a request of the harness's own whose only tool is the provider's search, on "
-            + "Claude Code its own WebSearch kept in the side-task's tools - and web_fetch takes any address. What stays, "
-            + "and why: the built-in refusals - no root action, no agent while the tool runs "
-            + "elevated, no read of a credential slot or a Claude Code directory, no command that prints a credential - "
-            + "each refused to the agent and said in the chat for the person to do by hand; git's own files "
-            + "(Write(.git/**)), written by git's verbs and this tool's, never by an agent's file tool; the tool's own "
-            + "state, written only by its verbs; each search source's own pace and rate limits; and run-side-task itself, "
-            + "refused to every agent - an agent does not start another.");
+            + "own search - on the Claude API a request of the harness's own whose only tool is the provider's search, "
+            + "what it costs counted in the turn's, a failure of it one failed part of the search saying why; on Claude "
+            + "Code its own WebSearch kept in the side-task's tools; on Z.AI none - and web_fetch takes any address. What "
+            + "stays, and why: the built-in refusals - no root action, no agent while the tool runs elevated, no read or "
+            + "write of any credential slot or a Claude Code directory by a file tool or a command, no command that prints "
+            + "a credential - each refused to the agent and said in the chat for the person to do by hand; git's own files "
+            + "(Write(.git/**)), written by git's verbs and this tool's, never by an agent's file tool or a command's "
+            + "redirection; the tool's own state, written only by its verbs; each search source's own pace and rate "
+            + "limits; and run-side-task itself, refused to every agent by any name of the program, and refusing itself "
+            + "where it is started under one - a side-task is a person's own conversation, and no agent starts another.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2477,9 +2487,12 @@ public static class HelpTopics
             + "it used and cost, and what the agent ran under), the stored stream (stream.jsonl) and the transcript as a "
             + "person reads it (transcript.md), each action decided (tools.json holds the offered table), each denial "
             + "(denials.jsonl) and each search and fetch (web.jsonl), and the stored conversation under sessions/ where "
-            + "its client stores one. Beside the directory, <task>.owner.json names the process whose chat holds the "
-            + "side-task open; a dead one is reclaimed and said. A chat that outgrows the model's context is compacted as "
-            + "a step's conversation is, and says so.");
+            + "its client stores one. Beside the directory, <task>.owner.json names the process that holds the side-task "
+            + "open, claimed before anything is written and task.json written inside the claim, so two commands never "
+            + "take one name; a dead one is reclaimed and said. A chat that outgrows the model's context is compacted as "
+            + "a step's conversation is - the whole conversation since the last compaction, the person's messages as "
+            + "they were said - and says so. The directory is on the tree's floor: sync never carries it to a host's copy "
+            + "and no agent's worktree is seeded with it.");
 
         return builder.ToString();
     }
@@ -2643,6 +2656,11 @@ public static class HelpTopics
         return builder.ToString();
     }
 
+    /// <summary>
+    /// The agent sections of config.json: the companies whose models the tool reaches, their keys in the git-ignored
+    /// slot, the tiers a step runs on and the effort forms, the agents' policy and the claude-code client - said where a
+    /// person reads them.
+    /// </summary>
     private static string RenderAgentClients()
     {
         var builder = new StringBuilder();
@@ -3753,7 +3771,7 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             "Seeding. create-agent hands the agent the main tree's uncommitted state - every path git status lists, off the "
-            + "worktrees root, .git, .orchestrators, .mutations and .legs: each changed file copied into its worktree, each deletion made there - and "
+            + "worktrees root, .git, .orchestrators, .mutations, .legs and .side-tasks: each changed file copied into its worktree, each deletion made there - and "
             + "records what it was handed, each file with its digest. An untracked directory git will not look into, a repository "
             + "of its own, is named and not handed; --empty hands it nothing. A symbolic link among it is refused before the "
             + "worktree is made, so nothing is left behind. seed-agent does it again, refused over changes of the agent's own - a "
@@ -4853,8 +4871,8 @@ public static class HelpTopics
             + "a side-task's turn that ran, its lines older than seven days dropped when it is next written, read where "
             + $"balanceKeyUsage chooses a key ('{ToolPackage.Command} help agent-clients')"),
         ($"{HarnessLayout.SideTasksDirectoryName}/",
-            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the side-tasks' records, in the main checkout "
-            + $"('{ToolPackage.Command} help side-tasks')"),
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the side-tasks' records, in the main checkout, "
+            + $"and never sent to a host by sync ('{ToolPackage.Command} help side-tasks')"),
         ($"{HarnessLayout.SideTasksDirectoryName}/<task>/",
             "ignored; one side-task: its task.json, stored stream, transcript, denials and web, and its conversation where "
             + "its client stores one; <task>.owner.json beside it while a chat holds it open"),
@@ -4919,8 +4937,8 @@ public static class HelpTopics
         builder.AppendLine("below it. A path git will not answer about - one beyond a symbolic link - is named");
         builder.AppendLine("with git's reason, and the rest are still asked. runs is ignored by name, with no");
         builder.AppendLine("trailing slash, so one kept on another disk through a link is ignored as the link");
-        builder.AppendLine($"it is. The worktrees root, the orchestrators directory, {HarnessLayout.MutationsDirectoryName} and {HarnessLayout.LegsDirectoryName} are");
-        builder.AppendLine("kept in git by their placeholders, so each reads as not ignored itself while");
+        builder.AppendLine($"it is. The worktrees root, the orchestrators directory, {HarnessLayout.MutationsDirectoryName}, {HarnessLayout.LegsDirectoryName}");
+        builder.AppendLine($"and {HarnessLayout.SideTasksDirectoryName} are kept in git by their placeholders, so each reads as not ignored itself while");
         builder.AppendLine("everything made in it is, and none can be a link: init names one it finds, and");
         builder.AppendLine("writes nothing through it. Sync withholds each by name. Each copy in them is a");
         builder.AppendLine("whole copy of the tree, so a program of the repository's own that walks the tree");

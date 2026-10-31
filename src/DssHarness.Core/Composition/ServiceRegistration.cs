@@ -243,6 +243,7 @@ public static class ServiceRegistration
             provider.GetRequiredService<DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService>(),
             provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IHarnessOutput>(),
+            provider.GetRequiredService<Git.IGitClient>(),
             provider.GetRequiredService<TimeProvider>()));
 
         // The harness's own tools, built for the API clients to give their agents and served to Claude Code's through the

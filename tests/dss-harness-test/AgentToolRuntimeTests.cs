@@ -1312,6 +1312,46 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal(["alpha", "alpha", "beta"], lines.Where(line => line["line"]!.GetValue<string>() == "decided").Select(line => line["by"]!.GetValue<string>()).Order(StringComparer.Ordinal));
     }
 
+    /// <summary>
+    /// The provider's own search that does not answer in time is a failed part of the search, saying so, beside the
+    /// configured sources' answers; the run stopped while it searches is no failed part - the stop goes on as every stop
+    /// of the run does.
+    /// </summary>
+    [Fact]
+    public async Task WebSearch_ANativeSearchThatTimesOut_IsAFailedPart_TheRunStoppedIsAStop()
+    {
+        var endpoint = new WebEndpoint(_ => SearchAnswer("""{ "items": [ { "title": "One", "link": "https://one.example.test/" } ] }"""));
+        var late = Open(capabilities: [AgentCapability.Read, AgentCapability.Web], endpoint: endpoint, webSearch: TwoSources(), native: new StoppedNativeSearch(stop: null));
+
+        var answered = await Call(late, AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" }));
+
+        Assert.True(answered.Ok);
+        Assert.EndsWith(DssHarness.Core.Web.WebBlocks.Search("group by", "native", "native: the provider did not answer the search in time"), answered.Text, StringComparison.Ordinal);
+        late.Dispose();
+
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var stopped = Open(capabilities: [AgentCapability.Read, AgentCapability.Web], endpoint: endpoint, webSearch: TwoSources(), native: new StoppedNativeSearch(stop));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stopped.RunAsync(Request("call_1", AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" })), stop.Token));
+    }
+
+    /// <summary>A provider's own search that never answers: its request ends cancelled - by the run's stop where it is given one, else by its own clock.</summary>
+    private sealed class StoppedNativeSearch(CancellationTokenSource? stop) : IAgentNativeSearch
+    {
+        public string Source => "native";
+
+        public async Task<(DssHarness.Core.Web.Search.WebSearchPart Part, AgentUsage Used)> SearchAsync(string query, CancellationToken cancellationToken)
+        {
+            if (stop is not null)
+            {
+                await stop.CancelAsync();
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            throw new TaskCanceledException("the request's own clock ran out");
+        }
+    }
+
     /// <summary>A query holding the run's secret is denied by the mask, nothing asked; a search no source answered fails, saying what each came to.</summary>
     [Fact]
     public async Task WebSearch_ASecretIsDenied_AndASearchNoneAnsweredFails()
@@ -1518,7 +1558,8 @@ public sealed class AgentToolRuntimeTests : IDisposable
         AgentLimits? limits = null,
         IProcessRunner? processes = null,
         TimeProvider? clock = null,
-        AgentWebSearch? webSearch = null)
+        AgentWebSearch? webSearch = null,
+        IAgentNativeSearch? native = null)
     {
         var ground = PolicyGrounds.Of(
             _worktree,
@@ -1536,7 +1577,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var files = fileSystem ?? _harness.FileSystem;
         var search = webSearch is null ? null : Search(fetch, clock ?? TimeProvider.System);
         var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), clock ?? TimeProvider.System, search: search);
-        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch), _events);
+        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch) with { NativeSearch = native }, _events);
 
         _opened.Add(fetch);
         _opened.Add(runtime);

@@ -102,6 +102,8 @@ public sealed class SyncPlanTests
     [InlineData(".mutations/.gitkeep")]
     [InlineData(".legs/357e24c/src/a.c")]
     [InlineData(".legs/.gitkeep")]
+    [InlineData(".side-tasks/2026-10-31-120000-fix-it/task.json")]
+    [InlineData(".side-tasks/fix-it.owner.json")]
     public void TheNeverTransferFloor_IsAlsoANeverDeleteFloor(string path)
     {
         // A path the harness will not write is one it cannot know the source lacks. Deleting it

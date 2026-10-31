@@ -6,8 +6,8 @@ using DssHarness.Core.Output;
 namespace DssHarness.Cli.Commands;
 
 /// <summary>
-/// Wires the two side-task verbs: <c>run-side-task</c> and <c>list-side-tasks</c>. A chat counts the terminal's
-/// interrupts: the first cuts the agent's turn, a second ends the chat (<see cref="SideTaskInterrupts"/>).
+/// Wires the two side-task verbs: <c>run-side-task</c> and <c>list-side-tasks</c>. A side-task counts the terminal's
+/// interrupts: the first cuts the agent's turn, a second ends a chat (<see cref="SideTaskInterrupts"/>).
 /// </summary>
 internal static class SideTaskCommands
 {
@@ -89,26 +89,38 @@ internal static class RunSideTaskCommand
 
         CommandRunner.Wire(
             command,
-            (context, cancellationToken) =>
+            async (context, cancellationToken) =>
             {
                 var prompt = context.ParseResult.GetValue(PromptOption);
                 var promptFile = context.ParseResult.GetValue(PromptFileOption);
-                var chat = prompt is null && promptFile is null ? Terminal(context.Get<IHarnessOutput>()) : null;
+                var output = context.Get<IHarnessOutput>();
+                var oneShot = prompt is not null || promptFile is not null;
 
-                return context.Get<ISideTaskService>().RunAsync(
-                    new SideTaskCall(
-                        context.Directory,
-                        prompt,
-                        promptFile,
-                        context.ParseResult.GetValue(ResumeOption),
-                        context.ParseResult.GetValue(NameOption),
-                        context.ParseResult.GetValue(ModelOption),
-                        context.ParseResult.GetValue(TierOption),
-                        context.ParseResult.GetValue(ClientOption),
-                        context.ParseResult.GetValue(EffortOption),
-                        context.Json,
-                        chat),
-                    cancellationToken);
+                // The command counts its own interrupts (PointOfNoReturn.ChatsWithAPerson): the terminal's are taken
+                // through the one registration of the process's signals, for as long as the side-task runs, and none
+                // ends the process.
+                var terminal = new SideTaskTerminal(output, chat: !oneShot);
+
+                using (terminal.TakeSignals())
+                {
+                    return await context.Get<ISideTaskService>().RunAsync(
+                        new SideTaskCall(
+                            context.Directory,
+                            prompt,
+                            promptFile,
+                            context.ParseResult.GetValue(ResumeOption),
+                            context.ParseResult.GetValue(NameOption),
+                            context.ParseResult.GetValue(ModelOption),
+                            context.ParseResult.GetValue(TierOption),
+                            context.ParseResult.GetValue(ClientOption),
+                            context.ParseResult.GetValue(EffortOption),
+                            context.Json,
+                            oneShot ? null : Console(output))
+                        {
+                            Interrupts = terminal.Interrupts,
+                        },
+                        cancellationToken).ConfigureAwait(false);
+                }
             },
             SideTaskCommands.Answer);
 
@@ -116,16 +128,15 @@ internal static class RunSideTaskCommand
     }
 
     /// <summary>
-    /// The terminal's own chat front end: the person's lines read from the console - the reader left behind where a
-    /// second interrupt ends the chat, for nothing ends the process but its command - the chat's own lines said
-    /// unprefixed, and Ctrl+C counted: the first cuts the agent's turn, a second ends the chat.
+    /// The terminal's own chat front end: the person's lines read from the console on a reader of their own - left
+    /// behind where the chat ends first, for the command's end ends the process - and the chat's own lines said
+    /// unprefixed. The interrupts are the side-task's own (<see cref="SideTaskTerminal"/>), which end a chat whatever its
+    /// reading is doing.
     /// </summary>
     /// <param name="output">Where the chat's own lines are said, unprefixed.</param>
-    private static SideTaskChat Terminal(IHarnessOutput output)
+    private static SideTaskChat Console(IHarnessOutput output)
     {
         var lines = System.Threading.Channels.Channel.CreateUnbounded<string?>();
-        var leaving = new TaskCompletionSource(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
-        var chat = new SideTaskChat(ReadAsync, line => output.Raw(line));
 
         _ = System.Threading.Tasks.Task.Run(() =>
         {
@@ -135,7 +146,7 @@ internal static class RunSideTaskCommand
 
                 try
                 {
-                    read = Console.ReadLine();
+                    read = System.Console.ReadLine();
                 }
                 catch (Exception ex) when (ex is IOException or InvalidOperationException)
                 {
@@ -149,46 +160,7 @@ internal static class RunSideTaskCommand
             }
         });
 
-        Console.CancelKeyPress += Interrupted;
-
-        return chat;
-
-        async Task<string?> ReadAsync(CancellationToken cancellationToken)
-        {
-            var read = lines.Reader.ReadAsync(cancellationToken).AsTask();
-            var ended = leaving.Task.WaitAsync(cancellationToken);
-            var done = await System.Threading.Tasks.Task.WhenAny(read, ended).ConfigureAwait(false);
-
-            return done == read ? await read.ConfigureAwait(false) : null;
-        }
-
-        void Interrupted(object? sender, ConsoleCancelEventArgs pressed)
-        {
-            pressed.Cancel = true;
-            var count = chat.Interrupts.Pressed();
-
-            if (count == 1)
-            {
-                Say("interrupted: the agent's turn is cut where it stands; a second interrupt ends the chat");
-            }
-            else
-            {
-                Say("interrupted again: the chat ends");
-                leaving.TrySetResult();
-                lines.Writer.TryComplete();
-            }
-
-        void Say(string line)
-        {
-            // A terminal that hung up has nobody to tell; the records hold what happened.
-            try
-            {
-                output.Warn(Name, line);
-            }
-            catch (IOException)
-            {
-            }
-        }        }
+        return new SideTaskChat(cancellationToken => lines.Reader.ReadAsync(cancellationToken).AsTask(), line => output.Raw(line));
     }
 }
 

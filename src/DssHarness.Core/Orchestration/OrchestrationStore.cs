@@ -382,7 +382,21 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     public RunOwner? ReadOwner(OrchestratorLayout orchestrator)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
-        return Read<RunOwner>(orchestrator.OwnerFile, OwnerKind, owner => owner.Problem());
+        return ReadOwner(orchestrator.OwnerFile, OwnerKind);
+    }
+
+    /// <summary>
+    /// The owner one owner file records - a run's engine, a side-task's chat - or null where none is recorded: strictly,
+    /// a file that cannot be read, holds null or does not hold together refused, never read as no owner.
+    /// </summary>
+    /// <param name="ownerFile">The owner file.</param>
+    /// <param name="what">What the file is, as a refusal names it: <see cref="OwnerKind"/> for a run's.</param>
+    /// <exception cref="HarnessException">The owner cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public RunOwner? ReadOwner(string ownerFile, string what)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerFile);
+        ArgumentException.ThrowIfNullOrWhiteSpace(what);
+        return Read<RunOwner>(ownerFile, what, owner => owner.Problem());
     }
 
     /// <summary>Writes the run's owner.</summary>
@@ -391,8 +405,19 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     public void WriteOwner(OrchestratorLayout orchestrator, RunOwner owner)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
+        WriteOwner(orchestrator.OwnerFile, OwnerKind, owner);
+    }
+
+    /// <summary>Writes the owner of one owner file.</summary>
+    /// <param name="ownerFile">The owner file.</param>
+    /// <param name="what">What the file is, as the front end is told it was written: <see cref="OwnerKind"/> for a run's.</param>
+    /// <param name="owner">The owner, which must be one.</param>
+    public void WriteOwner(string ownerFile, string what, RunOwner owner)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerFile);
+        ArgumentException.ThrowIfNullOrWhiteSpace(what);
         ArgumentNullException.ThrowIfNull(owner);
-        Write(orchestrator.OwnerFile, OwnerKind, owner, owner.Problem());
+        Write(ownerFile, what, owner, owner.Problem());
     }
 
     /// <summary>Removes the run's owner, where the run holds one.</summary>
@@ -400,10 +425,18 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     public void RemoveOwner(OrchestratorLayout orchestrator)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
+        RemoveOwner(orchestrator.OwnerFile);
+    }
 
-        if (_fileSystem.KindOf(orchestrator.OwnerFile) == PathKind.File)
+    /// <summary>Removes the owner one owner file records, where it records one.</summary>
+    /// <param name="ownerFile">The owner file.</param>
+    public void RemoveOwner(string ownerFile)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerFile);
+
+        if (_fileSystem.KindOf(ownerFile) == PathKind.File)
         {
-            _fileSystem.DeleteFile(orchestrator.OwnerFile);
+            _fileSystem.DeleteFile(ownerFile);
         }
     }
 

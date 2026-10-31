@@ -433,19 +433,21 @@ public sealed class ClaudeApiClientTests : IDisposable
     /// <summary>
     /// A side-task's native search is one request of the harness's own: the provider's web search server tool declared
     /// alone, the request signed with the side-task's key, its results read from the answer's
-    /// <c>web_search_tool_result</c> blocks and its requests from the answer's usage - and no conversation of the run's
-    /// touched.
+    /// <c>web_search_tool_result</c> blocks and all it used - its tokens, the results billed as input among them, and its
+    /// searches - from the answer's usage, for the run to price - and no conversation of the run's touched.
     /// </summary>
     [Fact]
-    public async Task ANativeSearch_AsksTheProvidersOwn_ReadingItsResultsAndItsRequests()
+    public async Task ANativeSearch_AsksTheProvidersOwn_ReadingItsResultsAndAllItUsed()
     {
         _endpoint.Then(ApiReply.Stream(
-            "event: content_block_start\n"
+            "event: message_start\n"
+            + "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1200,\"output_tokens\":1}}}\n\n"
+            + "event: content_block_start\n"
             + "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"web_search_tool_result\",\"content\":"
             + "[{\"type\":\"web_search_result\",\"title\":\"One\",\"url\":\"https://example.org/1\"},"
             + "{\"type\":\"web_search_result\",\"title\":\"Two\",\"url\":\"https://example.org/2\"}]}}\n\n"
             + "event: message_delta\n"
-            + "data: {\"type\":\"message_delta\",\"delta\":{},\"usage\":{\"server_tool_use\":{\"web_search\":{\"requests\":2}}}}\n\n"
+            + "data: {\"type\":\"message_delta\",\"delta\":{},\"usage\":{\"input_tokens\":3400,\"output_tokens\":30,\"server_tool_use\":{\"web_search_requests\":2}}}\n\n"
             + "event: message_stop\n"
             + "data: {\"type\":\"message_stop\"}\n\n"));
 
@@ -453,9 +455,9 @@ public sealed class ClaudeApiClientTests : IDisposable
         _opened.Add(connection);
         var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com", Model, new AgentKey("WORK_KEY", "sk-1"));
 
-        var (part, requests) = await search.SearchAsync("polymorphism in System.Text.Json", TestContext.Current.CancellationToken);
+        var (part, used) = await search.SearchAsync("polymorphism in System.Text.Json", TestContext.Current.CancellationToken);
 
-        Assert.Equal(2, requests);
+        Assert.Equal(new AgentUsage(3400, 30, 0, 0, 0, 2), used);
         Assert.Equal("native", part.Source);
         Assert.Equal(WebSearchOutcome.Ok, part.Answer.Outcome);
         Assert.Equal(["One", "Two"], part.Answer.Results.Select(result => result.Title));
@@ -469,25 +471,45 @@ public sealed class ClaudeApiClientTests : IDisposable
     }
 
     /// <summary>
-    /// A native search the provider fails is a part that says so and asks nothing: no results, no requests counted -
-    /// the configured sources' answers stand beside it.
+    /// A native search the provider fails is a part that says so, never one with no results: an error the stream sends,
+    /// a request the API refuses, one that never reaches it, a stream cut short, and a search the tool itself says
+    /// failed - each a failed part saying why, the configured sources' answers standing beside it.
     /// </summary>
     [Fact]
-    public async Task ANativeSearchTheProviderFails_IsAFailedPartThatAskedNothing()
+    public async Task ANativeSearchTheProviderFails_IsAFailedPartSayingWhy_NeverOneWithNoResults()
     {
-        _endpoint.Then(ApiReply.Stream(
-            "event: error\n"
-            + "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"));
+        var replies = new (ApiReply Reply, string Why)[]
+        {
+            (ApiReply.Stream("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"), "the API's stream failed: overloaded_error: Overloaded"),
+            (
+                ApiReply.Error(400, "invalid_request_error", "web search is not enabled for this organization"),
+                $"the API answered 400 invalid_request_error: web search is not enabled for this organization (request req_000000000000000000000009); if the request itself is not at fault, the organization this key belongs to is not given '{Model}' - a model that needs 30-day data retention is refused this way where the organization keeps less - and another model can be put first under its tier in tierConfig, or named on the step"),
+            (ApiReply.Unreachable("no route to host"), "the API could not be reached: no route to host"),
+            (ApiReply.Cut("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n"), "the answer's stream was cut: the connection was reset"),
+            (ApiReply.Stream(
+                "event: content_block_start\n"
+                + "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"web_search_tool_result\",\"content\":{\"type\":\"web_search_tool_result_error\",\"error_code\":\"max_uses_exceeded\"}}}\n\n"
+                + "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"), "the provider's own search failed: max_uses_exceeded"),
+        };
 
-        var connection = new ApiConnection(TimeProvider.System, _endpoint);
-        _opened.Add(connection);
-        var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com", Model, new AgentKey("WORK_KEY", "sk-1"));
+        var said = new List<string?>();
 
-        var (part, requests) = await search.SearchAsync("anything", TestContext.Current.CancellationToken);
+        foreach (var (reply, _) in replies)
+        {
+            var endpoint = new ApiEndpoint();
+            endpoint.Then(reply);
+            var connection = new ApiConnection(TimeProvider.System, endpoint);
+            _opened.Add(connection);
+            var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com", Model, new AgentKey("WORK_KEY", "sk-1"));
 
-        Assert.Equal(0, requests);
-        Assert.Equal(("native", WebSearchOutcome.Failed), (part.Source, part.Answer.Outcome));
-        Assert.Equal("Overloaded", part.Answer.Why);
+            var (part, _) = await search.SearchAsync("anything", TestContext.Current.CancellationToken);
+
+            Assert.Equal(("native", WebSearchOutcome.Failed), (part.Source, part.Answer.Outcome));
+            Assert.Empty(part.Answer.Results);
+            said.Add(part.Answer.Why);
+        }
+
+        Assert.Equal(replies.Select(reply => reply.Why), said);
     }
 
     private async Task<AgentRunResult> Ran(AgentRun run)

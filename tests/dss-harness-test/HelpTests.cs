@@ -2794,7 +2794,9 @@ public sealed partial class HelpTests
                 + "sync ('dssharness help mutations')",
             ".legs/ contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree, never sent to a "
                 + "host by sync",
-            "The worktrees root, the orchestrators directory, .mutations and .legs are kept in git by their placeholders, so each "
+            ".side-tasks/ contents ignored, .gitkeep tracked; each side-task's records under its name, in the main checkout, never "
+                + "sent to a host by sync ('dssharness help side-tasks')",
+            "The worktrees root, the orchestrators directory, .mutations, .legs and .side-tasks are kept in git by their placeholders, so each "
                 + "reads as not ignored itself while everything made in it is, and none can be a link: init names one it finds, and "
                 + "writes nothing through it. Sync withholds each by name. Each copy in them is a whole copy of the tree, so a "
                 + "program of the repository's own that walks the tree from its root - a census, a guard over every file - must "

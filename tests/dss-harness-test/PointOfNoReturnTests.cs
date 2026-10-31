@@ -74,6 +74,7 @@ public sealed class PointOfNoReturnTests
     [InlineData(new[] { FlowService.AnswerCommand, "r1", "more" }, 120_000)]
     [InlineData(new[] { FlowService.PauseCommand, "r1" }, null)]
     [InlineData(new[] { FlowService.StopCommand, "r1" }, null)]
+    [InlineData(new[] { DssHarness.Core.Agents.SideTasks.SideTaskService.RunCommand }, null)]
     [InlineData(new[] { "build" }, null)]
     [InlineData(new[] { WorktreeService.ListCommand }, null)]
     [InlineData(new string[0], null)]
@@ -93,9 +94,10 @@ public sealed class PointOfNoReturnTests
         => Assert.Equal(pauses, PointOfNoReturn.PausesSafely.Contains(command));
 
     /// <summary>
-    /// The run verbs that pause safely count their own interrupts, so the command line's own handling of termination -
-    /// which cancels at the first interrupt and ends the process when its clock runs out - is turned off for them alone:
-    /// a deletion keeps its grace, and every other command its short wait.
+    /// The run verbs that pause safely count their own interrupts, and so does a side-task - its first cutting the agent's
+    /// turn, a second ending its chat - so the command line's own handling of termination, which cancels at the first
+    /// interrupt and ends the process when its clock runs out, is turned off for them alone: a deletion keeps its grace,
+    /// the listing of side-tasks and every other command its short wait.
     /// </summary>
     [Theory]
     [InlineData(new[] { FlowService.RunCommand, "implementation" }, true)]
@@ -103,15 +105,18 @@ public sealed class PointOfNoReturnTests
     [InlineData(new[] { FlowService.AnswerCommand, "r1", "more" }, true)]
     [InlineData(new[] { FlowService.PauseCommand, "r1" }, false)]
     [InlineData(new[] { FlowService.StopCommand, "r1" }, false)]
+    [InlineData(new[] { DssHarness.Core.Agents.SideTasks.SideTaskService.RunCommand }, true)]
+    [InlineData(new[] { DssHarness.Core.Agents.SideTasks.SideTaskService.RunCommand, "--prompt", "x" }, true)]
+    [InlineData(new[] { DssHarness.Core.Agents.SideTasks.SideTaskService.ListCommand }, false)]
     [InlineData(new[] { WorktreeService.DeleteCommand, "w" }, false)]
     [InlineData(new[] { "build" }, false)]
     [InlineData(new string[0], false)]
-    public void OnlyTheRunVerbsThatPauseSafely_CountTheirOwnInterrupts(string[] commandLine, bool counted)
+    public void TheRunVerbsThatPauseSafely_AndASideTask_CountTheirOwnInterrupts(string[] commandLine, bool counted)
         => Assert.Equal(counted, PointOfNoReturn.CountsItsOwnInterrupts(commandLine));
 
     /// <summary>
     /// The termination timeout the command line runs a command with is chosen in one place, which the command line
-    /// calls: none for the run verbs that count their own interrupts - so its handling, which cancels at the first
+    /// calls: none for the run verbs and the side-task that count their own interrupts - so its handling, which cancels at the first
     /// Ctrl+C and ends the process when its clock runs out, is off - the grace for a command past its point of no
     /// return, and the command line's own, as it is, for every other.
     /// </summary>
@@ -119,6 +124,8 @@ public sealed class PointOfNoReturnTests
     [InlineData(new[] { FlowService.RunCommand, "implementation" }, null)]
     [InlineData(new[] { FlowService.ResumeCommand, "r1" }, null)]
     [InlineData(new[] { FlowService.AnswerCommand, "r1", "more" }, null)]
+    [InlineData(new[] { DssHarness.Core.Agents.SideTasks.SideTaskService.RunCommand }, null)]
+    [InlineData(new[] { DssHarness.Core.Agents.SideTasks.SideTaskService.ListCommand }, 2_000)]
     [InlineData(new[] { WorktreeService.DeleteCommand, "w" }, 120_000)]
     [InlineData(new[] { "test", "--set-up" }, 120_000)]
     [InlineData(new[] { FlowService.PauseCommand, "r1" }, 2_000)]

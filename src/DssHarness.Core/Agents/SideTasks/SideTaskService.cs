@@ -1,8 +1,9 @@
 using System.Globalization;
 using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Policy;
-using DssHarness.Core.Ci;
+using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
@@ -31,8 +32,8 @@ public interface ISideTaskService : Application.IUseCase
 }
 
 /// <summary>
-/// One side-task asked of the tool: what the command line said and how its chat is driven. A chat is driven by a front
-/// end that reads the person's lines and counts the terminal's interrupts; a one-shot names none.
+/// One side-task asked of the tool: what the command line said, how its chat is driven, and the count of its interrupts.
+/// A chat is driven by a front end that reads the person's lines; a one-shot names none.
 /// </summary>
 /// <param name="StartDirectory">The directory the command was typed in.</param>
 /// <param name="Prompt">The one message of a one-shot side-task; null for a chat.</param>
@@ -56,27 +57,55 @@ public sealed record SideTaskCall(
     string? Client = null,
     IReadOnlyList<string>? Efforts = null,
     bool Json = false,
-    SideTaskChat? Chat = null);
+    SideTaskChat? Chat = null)
+{
+    /// <summary>
+    /// The side-task's interrupts, whoever sends them: the terminal's (<see cref="SideTaskTerminal"/>), or a front end's
+    /// own. The first cuts the agent's turn, a second ends a chat.
+    /// </summary>
+    public SideTaskInterrupts Interrupts { get; init; } = new();
+}
 
 /// <summary>
-/// Runs and lists the side-tasks of a repository (part 03, "Side-tasks"): an agent outside every workflow, a
-/// conversation between a person and one agent over the main tree, with no step and no limit of a run's - every action
-/// still decided by the engine before it runs and recorded, the built-in refusals kept. No second loop: each turn is an
-/// <see cref="AgentStepRequest"/> handed to <see cref="IAgentRunner"/> as the engine hands it one, so the clients, the
-/// tool runtime, the stored stream, compaction and the fallback are the ones every step uses.
+/// What a side-task runs on, as the service set it up from what the person asked: the model resolved, the running order
+/// and the key it starts on, the Claude Code made ready where the order holds it, and the ground its agent works under.
+/// Set up at the start, and again by the chat's <c>/model</c> and <c>/effort</c>.
+/// </summary>
+/// <param name="Resolution">The model resolved, as a step's is.</param>
+/// <param name="Order">The running order the turns walk, as a step's.</param>
+/// <param name="Program">The Claude Code made ready, where the order holds that client.</param>
+/// <param name="ProgramVersion">Its version, where it was made ready.</param>
+/// <param name="Ground">What the agent works under.</param>
+/// <param name="RunsOn">What the person asked, which a <c>--resume</c> goes on with.</param>
+internal sealed record SideTaskSetUp(
+    AgentResolution Resolution,
+    IReadOnlyList<AgentRunEntry> Order,
+    string? Program,
+    string? ProgramVersion,
+    AgentPolicyGround Ground,
+    SideTaskRunsOn RunsOn);
+
+/// <summary>
+/// Runs and lists the side-tasks of a repository: an agent outside every workflow, a conversation between a person and one
+/// agent over the main tree, with no step and no limit of a run's - every action still decided by the engine before it
+/// runs and recorded, the built-in refusals kept. No second loop: each turn is an <see cref="AgentStepRequest"/> handed to
+/// <see cref="IAgentRunner"/> as the engine hands it one, so the clients, the tool runtime, the stored stream, compaction
+/// and the fallback are the ones every step uses.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="runner">Works each turn, whatever the client is.</param>
 /// <param name="clients">The clients registered, whose kind tells the chat how it goes on between messages.</param>
 /// <param name="platform">This machine.</param>
 /// <param name="identity">This process, and how another's liveness is told.</param>
-/// <param name="store">Guards the repository's key-spend record across runs.</param>
+/// <param name="store">Reads and writes the side-tasks' owners, strictly, and guards the repository's key-spend record.</param>
 /// <param name="keys">The slot the entry's keys are read from.</param>
 /// <param name="webKeys">Each web-search source's key, read as a step's is.</param>
 /// <param name="updates">Makes the Claude Code a side-task needs ready, where its order holds the client that starts one.</param>
 /// <param name="fileSystem">The file system the side-task's records are kept on.</param>
 /// <param name="output">Says what each side-task's turns and refusals say.</param>
+/// <param name="git">Asks git whether the side-tasks' directory is ignored before anything is written there.</param>
 /// <param name="clock">Tells when each turn began and what the balancing of keys reads.</param>
+/// <param name="environment">Reads this process's environment, where the mark of an agent's child is looked for.</param>
 public sealed class SideTaskService(
     IHarnessContextLoader contextLoader,
     IAgentRunner runner,
@@ -89,7 +118,9 @@ public sealed class SideTaskService(
     ClaudeCodeUpdateService? updates,
     IFileSystem fileSystem,
     Output.IHarnessOutput output,
-    TimeProvider? clock = null) : ISideTaskService
+    IGitClient git,
+    TimeProvider? clock = null,
+    Func<string, string?>? environment = null) : ISideTaskService
 {
     /// <summary>The command that begins a side-task.</summary>
     public const string RunCommand = "run-side-task";
@@ -97,11 +128,20 @@ public sealed class SideTaskService(
     /// <summary>The command that lists them.</summary>
     public const string ListCommand = "list-side-tasks";
 
+    /// <summary>
+    /// Why no agent starts a side-task, as every refusal of it says: the agent's policy, and the command itself where it
+    /// is started under an agent (<see cref="AgentChildEnvironment.AgentMarker"/>).
+    /// </summary>
+    public const string NoAgentStartsOne = "a side-task is a person's own conversation in the person's terminal, with no limit of a run's, and no agent starts one";
+
     /// <summary>How many words of the first message name a side-task the person did not name.</summary>
     public const int NameWords = 5;
 
     /// <summary>The longest a derived name's words take.</summary>
     public const int MostNameCharacters = 40;
+
+    /// <summary>The longest a side-task's name is.</summary>
+    public const int MostNameLength = 80;
 
     /// <summary>What a failed agent is asked again before the side-task gives the turn up, as a workflow's own default.</summary>
     public const int DefaultRetries = 3;
@@ -122,6 +162,9 @@ public sealed class SideTaskService(
     /// <summary>The rule a side-task's name follows, as a refusal says it.</summary>
     public const string NameRule = "letters, digits, '-' and '_' only, at most 80 characters, beginning with a letter or a digit";
 
+    /// <summary>The line every exit before the side-task was claimed says of its records: none were written.</summary>
+    public const string NoRecords = "Records: none were written";
+
     private readonly IHarnessContextLoader _contextLoader = contextLoader ?? throw new ArgumentNullException(nameof(contextLoader));
     private readonly IAgentRunner _runner = runner ?? throw new ArgumentNullException(nameof(runner));
     private readonly IReadOnlyList<IAgentClient> _clients = [.. (clients ?? throw new ArgumentNullException(nameof(clients)))];
@@ -133,35 +176,49 @@ public sealed class SideTaskService(
     private readonly ClaudeCodeUpdateService? _updates = updates;
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     private readonly Output.IHarnessOutput _output = output ?? throw new ArgumentNullException(nameof(output));
+    private readonly IGitClient _git = git ?? throw new ArgumentNullException(nameof(git));
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+    private readonly Func<string, string?> _environment = environment ?? Environment.GetEnvironmentVariable;
 
     /// <inheritdoc/>
     public async Task<CommandOutcome> RunAsync(SideTaskCall call, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(call);
 
-        var prompt = await ReadPromptAsync(call, cancellationToken).ConfigureAwait(false);
+        // The first line of the rule every agent's policy holds as well: a side-task started under an agent - by this
+        // verb or by any other name of the program - refuses itself.
+        if (_environment(AgentChildEnvironment.AgentMarker) is { Length: > 0 })
+        {
+            return Unwritten(CommandOutcome.Refused($"'{RunCommand}' is refused: {NoAgentStartsOne}. Nothing was started."));
+        }
+
+        if (call.Resume is not null && call.Name is not null)
+        {
+            return Unwritten(CommandOutcome.Usage("--name with --resume is a usage error: a side-task opened again keeps the name it has. Give --resume alone to open it, or --name alone to begin a new one."));
+        }
+
+        var prompt = ReadPrompt(call);
 
         if (prompt is { Problem: { } problem })
         {
-            return CommandOutcome.Usage(problem);
+            return Unwritten(CommandOutcome.Usage(problem));
         }
 
         if (call.Json && prompt is null)
         {
-            return CommandOutcome.Usage("--json without a prompt is a usage error: a chat is no document. Give --prompt or --prompt-file for one message.");
+            return Unwritten(CommandOutcome.Usage("--json without a prompt is a usage error: a chat is no document. Give --prompt or --prompt-file for one message."));
         }
 
         if (prompt is null && call.Chat is null)
         {
-            return CommandOutcome.Usage("a side-task is a chat in the terminal or one message with --prompt; neither was given.");
+            return Unwritten(CommandOutcome.Usage("a side-task is a chat in the terminal or one message with --prompt; neither was given."));
         }
 
         var (effort, effortByModel, effortProblem) = SideTaskEffort.Parse(call.Efforts ?? []);
 
         if (effortProblem is { } refused)
         {
-            return CommandOutcome.Usage(refused);
+            return Unwritten(CommandOutcome.Usage(refused));
         }
 
         HarnessContext context;
@@ -172,61 +229,60 @@ public sealed class SideTaskService(
         }
         catch (HarnessException ex)
         {
-            return new CommandOutcome(ex.ExitCode, ex.Message);
+            return Unwritten(new CommandOutcome(ex.ExitCode, ex.Message));
         }
 
         if (AgentProviders.Resolve(context.Config) is not { Providers: { } providers })
         {
-            return CommandOutcome.Failed(HarnessExit.ConfigInvalid, "the configuration's agent providers do not resolve; list-agent-providers --template prints what init writes into a new config");
+            return Unwritten(CommandOutcome.Failed(HarnessExit.ConfigInvalid, "the configuration's agent providers do not resolve; list-agent-providers --template prints what init writes into a new config"));
         }
 
-        // The side-task's name: the person's, the one opened again, or the date and time it began with the first words
-        // of its first message - settled once, for the checks and the records alike.
+        // The side-task's name: the one opened again, the person's, or the date and time it began with the first words
+        // of its first message - a suffix freeing it inside the claim where another began in the same second.
         var name = call.Resume ?? call.Name ?? Named(prompt?.Text, _clock.GetUtcNow().LocalDateTime);
 
         if (!IsName(name))
         {
-            return CommandOutcome.Refused($"the side-task's name '{name}' is no name a side-task's directory takes: {NameRule}");
+            return Unwritten(CommandOutcome.Refused($"the side-task's name '{name}' is no name a side-task's directory takes: {NameRule}. Nothing was started."));
         }
-
-        var task = SideTaskLayout.Of(context.Layout, name);
-        var records = new SideTaskStore(_fileSystem);
-
-        if (call.Resume is { Length: > 0 })
-        {
-            if (records.Read(task) is null)
-            {
-                return CommandOutcome.Refused($"side-task '{call.Resume}' names no side-task of this repository: list-side-tasks lists them. Nothing was changed.", [$"Records: {context.Layout.SideTasksDirectory}"]);
-            }
-        }
-        else if (records.Read(task) is not null || _fileSystem.KindOf(task.Directory) == PathKind.Directory)
-        {
-            return CommandOutcome.Refused($"side-task '{name}' is taken: --resume {name} opens it again. Nothing was changed.", [$"Records: {task.Directory}"]);
-        }
-
-        var record = records.Read(task) ?? new SideTaskRecord(name, _clock.GetUtcNow());
-
-        var owner = new SideTaskOwner(_fileSystem, _identity, _clock);
 
         try
         {
-            var reclaimed = owner.Claim(task);
-
-            if (reclaimed is { Length: > 0 })
+            // Everything a side-task keeps is machine-local: a record, a stream, a transcript committed by `git add -A`
+            // would travel to every clone. init keeps the directory in git and everything made in it out.
+            if (await SlotIgnored.RefusalAsync(_git, context.Layout.MainCheckoutRoot, $"{HarnessLayout.SideTasksDirectoryName}/{name}/{SideTaskLayout.TaskFileName}", $"what side-task '{name}' keeps", cancellationToken).ConfigureAwait(false) is { } unignored)
             {
-                _output.Warn(RunCommand, reclaimed);
+                return Unwritten(CommandOutcome.Refused($"{unignored} Nothing was started."));
             }
-
-            return await WorkAsync(call, context, providers, task, record, prompt?.Text, effort, effortByModel, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
-            return new CommandOutcome(ex.ExitCode, ex.Message, [$"Records: {task.Directory}"]);
+            return Unwritten(new CommandOutcome(ex.ExitCode, ex.Message));
         }
-        finally
+
+        // What the side-task keeps going on its web search: every source turned on, each key read as a step's is, the
+        // mask holding every form of each, and the names the configuration appoints withheld from the agent's children.
+        var sources = WebSearchSources.Of(context.Config, WebSearchKinds.OfThisBuild);
+
+        if (sources.Problems is [var wrong, ..])
         {
-            owner.Release(task);
+            return Unwritten(CommandOutcome.Failed(HarnessExit.ConfigInvalid, $"the configuration's web search does not resolve: {wrong}"));
         }
+
+        var appointed = providers.Appointed();
+        var read = await _webKeys.ReadAsync(context.Layout, appointed, [.. sources.On], cancellationToken).ConfigureAwait(false);
+        var common = new SideTaskCommon(
+            context,
+            providers,
+            sources.On is [_, ..] ? SideTaskPolicy.WebSearch(sources, read) : null,
+            WebSearchKeys.Mask(sources.On, read),
+            [.. appointed.Select(one => one.Name)]);
+        var owner = new SideTaskOwner(_fileSystem, _store, _identity, _clock);
+        var asked = new SideTaskRunsOn(call.Tier, call.Model, effort, effortByModel, call.Client);
+
+        return call.Resume is { } again
+            ? await AgainAsync(call, common, owner, SideTaskLayout.Of(context.Layout, again), asked, prompt?.Text, cancellationToken).ConfigureAwait(false)
+            : await NewAsync(call, common, owner, name, derived: call.Name is null, asked, prompt?.Text, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -243,140 +299,275 @@ public sealed class SideTaskService(
             return new CommandOutcome(ex.ExitCode, ex.Message);
         }
 
-        var owner = new SideTaskOwner(_fileSystem, _identity, _clock);
-        var tasks = new SideTaskStore(_fileSystem).List(context.Layout.SideTasksDirectory)
-            .Select(listed => (listed.Layout, listed.Record, Open: owner.Open(listed.Layout)))
-            .ToList();
+        var root = context.Layout.SideTasksDirectory;
+        var owner = new SideTaskOwner(_fileSystem, _store, _identity, _clock);
 
-        return SideTaskReports.List(context.Layout.SideTasksDirectory, tasks, json);
+        try
+        {
+            var tasks = new SideTaskStore(_fileSystem).List(root)
+                .Select(listed => (listed.Layout, listed.Record, Open: owner.Open(listed.Layout)))
+                .ToList();
+
+            return SideTaskReports.List(root, tasks, json);
+        }
+        catch (HarnessException ex)
+        {
+            return new CommandOutcome(ex.ExitCode, ex.Message, [$"Records: {root}"]);
+        }
     }
 
-    /// <summary>One side-task's work: its resolution, its turns and its records, however it ends.</summary>
-    private async Task<CommandOutcome> WorkAsync(
-        SideTaskCall call,
-        HarnessContext context,
-        AgentProviders providers,
-        SideTaskLayout layout,
-        SideTaskRecord record,
-        string? prompt,
-        string? effort,
-        IReadOnlyDictionary<string, string>? effortByModel,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// A new side-task: set up from what the person asked, then claimed with its first record written inside the claim,
+    /// and worked; released however it ends.
+    /// </summary>
+    private async Task<CommandOutcome> NewAsync(SideTaskCall call, SideTaskCommon common, SideTaskOwner owner, string name, bool derived, SideTaskRunsOn asked, string? prompt, CancellationToken cancellationToken)
     {
-        // A side-task opened again runs on the model it last used, unless the person names another; a model named
-        // outright has only its own other keys after it, as a step's has.
-        var last = record.Turns is [_, ..] turns ? turns[^1] : null;
-        var model = call.Model ?? (call.Tier is null ? last?.Model : null);
-        var level = effort ?? (call.Model is null && call.Tier is null && call.Efforts is null or { Count: 0 } ? last?.Effort : null);
+        var (setUp, refused) = await SetUpAsync(common, asked, name, "--effort", cancellationToken).ConfigureAwait(false);
 
-        var resolution = AgentResolution.Of(providers, call.Tier, model, level, effortByModel, call.Client, definition: null);
-
-        if (resolution is null)
+        if (setUp is null)
         {
-            return CommandOutcome.Failed(HarnessExit.ConfigInvalid, "the side-task has no model to run on: name a tier or a model on it, or a tier under defaults.agentTier");
+            return Unwritten(refused!);
         }
 
-        // Each model the turn may run on must take the level it is given, as a step's is checked (V38): a level a model
-        // does not take is a usage error naming what it takes.
-        IReadOnlyList<AgentModelEntry> every = [resolution.Serving, .. resolution.After];
+        SideTaskLayout layout;
+        SideTaskRecord record;
 
-        foreach (var entry in every)
+        try
         {
-            if (entry.Effort is { } given && providers.Of(entry.Model) is { Model.Efforts: { Count: > 0 } takes } named && !takes.Contains(given, StringComparer.Ordinal))
-            {
-                return CommandOutcome.Usage($"the side-task runs '{entry.Model}' at effort '{given}', which it does not take. It takes: {string.Join(", ", takes)}");
-            }
+            string? reclaimed;
+            (layout, record, reclaimed) = owner.ClaimNew(common.Context.Layout.SideTasksDirectory, name, derived, taken => new SideTaskRecord(taken, _clock.GetUtcNow(), RunsOn: asked));
+            Said(reclaimed);
+        }
+        catch (HarnessException ex)
+        {
+            return Told(new CommandOutcome(ex.ExitCode, ex.Message), call.Json, SideTaskLayout.Of(common.Context.Layout, name));
+        }
+
+        return await WorkAsync(call, common, owner, layout, record, setUp, prompt, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A side-task opened again: claimed with its record read inside the claim, then set up from what it ran on as the
+    /// person last set it - where the command line names no model and no tier - and worked; released however it ends.
+    /// </summary>
+    private async Task<CommandOutcome> AgainAsync(SideTaskCall call, SideTaskCommon common, SideTaskOwner owner, SideTaskLayout layout, SideTaskRunsOn asked, string? prompt, CancellationToken cancellationToken)
+    {
+        SideTaskRecord record;
+
+        try
+        {
+            string? reclaimed;
+            (record, reclaimed) = owner.ClaimAgain(layout);
+            Said(reclaimed);
+        }
+        catch (HarnessException ex)
+        {
+            return Told(new CommandOutcome(ex.ExitCode, ex.Message), call.Json, layout);
+        }
+
+        (SideTaskSetUp? SetUp, CommandOutcome? Refused) setting;
+
+        try
+        {
+            setting = await SetUpAsync(common, GoesOnWith(record.RunsOn, asked, call), layout.Name, "--effort", cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            owner.Release(layout);
+            throw;
+        }
+
+        if (setting.SetUp is not { } setUp)
+        {
+            owner.Release(layout);
+            return Told(setting.Refused!, call.Json, layout);
+        }
+
+        return await WorkAsync(call, common, owner, layout, record, setUp, prompt, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// What a side-task opened again runs on: what the command line names where it names a model or a tier - the tier's
+    /// later models its order, as a step's - and what the side-task ran on as the person last set it where it names
+    /// neither, the tier the record holds keeping its later models. An effort or a client the command line names stands
+    /// over the record's; the record's is kept only with the record's own model or tier.
+    /// </summary>
+    private static SideTaskRunsOn GoesOnWith(SideTaskRunsOn? last, SideTaskRunsOn asked, SideTaskCall call)
+    {
+        if (last is null || call.Model is not null || call.Tier is not null)
+        {
+            return asked;
+        }
+
+        var effortAsked = call.Efforts is { Count: > 0 };
+
+        return last with
+        {
+            Effort = effortAsked ? asked.Effort : last.Effort,
+            EffortByModel = effortAsked ? asked.EffortByModel : last.EffortByModel,
+            Client = asked.Client ?? last.Client,
+        };
+    }
+
+    /// <summary>One side-task's work, its owner released however it ends.</summary>
+    private async Task<CommandOutcome> WorkAsync(SideTaskCall call, SideTaskCommon common, SideTaskOwner owner, SideTaskLayout layout, SideTaskRecord record, SideTaskSetUp setUp, string? prompt, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var spend = new AgentKeySpend(_fileSystem, _store, _clock);
+            var working = new Working(
+                _runner,
+                _clients,
+                _fileSystem,
+                _output,
+                _clock,
+                call,
+                common,
+                layout,
+                owner,
+                record,
+                setUp,
+                (runsOn, form, token) => SetUpAsync(common, runsOn, layout.Name, form, token),
+                spend.RecordingIn(common.Context.Layout));
+
+            return prompt is null
+                ? await working.ChatAsync(cancellationToken).ConfigureAwait(false)
+                : await working.OneShotAsync(prompt, call.Json, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException ex)
+        {
+            return Told(new CommandOutcome(ex.ExitCode, ex.Message), call.Json, layout);
+        }
+        finally
+        {
+            owner.Release(layout);
+        }
+    }
+
+    /// <summary>
+    /// Sets a side-task up to run on what <paramref name="runsOn"/> asks: the model resolved as a step's, each model's
+    /// effort checked by the one check of it (<see cref="AgentEffortRules"/>), the running order and the key it starts on,
+    /// the Claude Code made ready where the order holds it, and the ground with every Claude Code directory the order uses.
+    /// The one builder of all of it, at the start and for the chat's <c>/model</c> and <c>/effort</c>.
+    /// </summary>
+    /// <param name="common">What every set-up of the side-task shares.</param>
+    /// <param name="runsOn">What the person asked.</param>
+    /// <param name="task">The side-task's name, as Claude Code's readiness names what needs it.</param>
+    /// <param name="form">How the person gives a level of a model's own, as a refusal's remedy says it: <c>--effort</c>, or the chat's <c>/effort</c>.</param>
+    /// <param name="cancellationToken">Stops the setting up.</param>
+    /// <returns>The set-up, or why there is none: a usage error (10), the configuration (12), the program (14).</returns>
+    private async Task<(SideTaskSetUp? SetUp, CommandOutcome? Refused)> SetUpAsync(SideTaskCommon common, SideTaskRunsOn runsOn, string task, string form, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await SetUpOrThrowAsync(common, runsOn, task, form, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException ex)
+        {
+            return (null, new CommandOutcome(ex.ExitCode, ex.Message));
+        }
+    }
+
+    /// <inheritdoc cref="SetUpAsync"/>
+    private async Task<(SideTaskSetUp? SetUp, CommandOutcome? Refused)> SetUpOrThrowAsync(SideTaskCommon common, SideTaskRunsOn runsOn, string task, string form, CancellationToken cancellationToken)
+    {
+        var providers = common.Providers;
+        var layout = common.Context.Layout;
+
+        if (runsOn.Model is { } named && providers.Of(named) is null)
+        {
+            return (null, CommandOutcome.Failed(HarnessExit.ConfigInvalid, $"the side-task names model '{named}', which no provider of the configuration serves; list-agent-providers lists them"));
+        }
+
+        if (AgentResolution.Of(providers, runsOn.Tier, runsOn.Model, runsOn.Effort, runsOn.EffortByModel, runsOn.Client, definition: null) is not { } resolution)
+        {
+            return (null, CommandOutcome.Failed(HarnessExit.ConfigInvalid, "the side-task has no model to run on: name a tier or a model on it, or a tier under defaults.agentTier"));
+        }
+
+        // Each model the side-task may run on must take the level it is given, and every model an effort names must be
+        // one it runs on, as a step's are checked.
+        var tier = runsOn.Model is null ? runsOn.Tier ?? providers.DefaultTier : null;
+        IReadOnlyList<(AgentProviderConfig Provider, AgentModelConfig Model)> models = runsOn.Model is { } model
+            ? [providers.Of(model)!.Value]
+            : tier is not null ? providers.ModelsOf(tier) : [];
+
+        if (AgentEffortRules.Problems(
+                models,
+                tier,
+                runsOn.Effort,
+                runsOn.EffortByModel,
+                definition: null,
+                "the side-task",
+                (code, nearest, _) => $"Give it a level of its own: {form} {code}={nearest}, with all=<level> for the rest") is [_, ..] problems)
+        {
+            return (null, CommandOutcome.Usage(string.Join("; ", problems)));
         }
 
         // The running order and the key it starts on, as a step's is; what it spends is counted against that key.
-        var spend = new AgentKeySpend(_fileSystem, _store, _clock);
-        var spent = context.Config.BalanceKeyUsage == true ? spend.Spent(context.Layout) : null;
-        var order = AgentStepOrder.Of(providers, resolution, context.Layout, _keys, new ClaudeTranscripts(_fileSystem, _platform).ConfigDirectory, spent);
+        var spent = common.Context.Config.BalanceKeyUsage == true ? new AgentKeySpend(_fileSystem, _store, _clock).Spent(layout) : null;
+        var configDirectory = new ClaudeTranscripts(_fileSystem, _platform).ConfigDirectory;
+        var order = AgentStepOrder.Of(providers, resolution, layout, _keys, configDirectory, spent);
 
         string? program = null;
         string? programVersion = null;
 
         if (_updates is not null && order.Any(entry => string.Equals(entry.Client, ClaudeCodeClient.ClientName, StringComparison.Ordinal)))
         {
-            var ready = await _updates.ReadyAsync(context.Layout, providers.Appointed(), providers.ClientOf(ClaudeCodeClient.ClientName), steps: $"side-task '{layout.Name}'", cancellationToken).ConfigureAwait(false);
+            var ready = await _updates.ReadyAsync(layout, providers.Appointed(), providers.ClientOf(ClaudeCodeClient.ClientName), steps: $"side-task '{task}'", cancellationToken).ConfigureAwait(false);
 
             if (!ready.Ready)
             {
-                return CommandOutcome.Failed(ready.ExitCode == HarnessExit.ConfigInvalid ? HarnessExit.ConfigInvalid : HarnessExit.ToolMissing, ready.Message, [$"Records: {layout.Directory}"]);
+                return (null, CommandOutcome.Failed(ready.ExitCode == HarnessExit.ConfigInvalid ? HarnessExit.ConfigInvalid : HarnessExit.ToolMissing, ready.Message));
             }
 
             program = ready.Program;
             programVersion = ready.Version;
         }
 
-        // What the side-task runs under: the ground of part 03's table, and the web search of every configured source.
-        var sources = WebSearchSources.Of(context.Config, WebSearchKinds.OfThisBuild);
-
-        if (sources.Problems is [var wrong, ..])
-        {
-            return CommandOutcome.Failed(HarnessExit.ConfigInvalid, $"the configuration's web search does not resolve: {wrong}");
-        }
-
-        var read = await _webKeys.ReadAsync(context.Layout, providers.Appointed(), [.. sources.All], cancellationToken).ConfigureAwait(false);
-        var search = sources.All is [_, ..] ? SideTaskPolicy.WebSearch(sources, read) : null;
-        var forms = sources.All
-            .Where(source => read.TryGetValue(source.Name, out var key) && key.Value is { Length: > 0 })
-            .SelectMany(source => source.Credential?.Forms(read[source.Name].Value!) ?? [read[source.Name].Value!])
-            .Where(form => form is { Length: > 0 })
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-        var mask = forms is [_, ..] ? new Runners.ActionValues(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), forms.ToDictionary(form => form, form => form, StringComparer.OrdinalIgnoreCase)) : null;
-
         var ground = SideTaskPolicy.Ground(
-            context.Layout,
-            context.Config,
-            [.. order.Select(entry => entry.Credential?.ConfigDirectory).OfType<string>().Append(new ClaudeTranscripts(_fileSystem, _platform).ConfigDirectory).Distinct(StringComparer.Ordinal)],
-            context.Layout.WorkflowsEnvSlot);
-        var workspace = new AgentWorkspace(
-            Worktree: null,
-            context.Layout.MainCheckoutRoot,
-            context.Layout.MainCheckoutRoot,
-            [],
-            context.Layout.MainCheckoutRoot,
-            layout.Directory);
-
-        var working = new Working(
-            _runner,
-            _clients,
-            _fileSystem,
-            _output,
-            _clock,
-            call,
-            context,
             layout,
-            record,
-            resolution,
-            call.Tier,
-            effort,
-            effortByModel,
-            order,
-            program,
-            programVersion,
-            ground,
-            workspace,
-            search,
-            mask,
-            spend.RecordingIn(context.Layout));
+            common.Context.Config,
+            [.. order.Select(entry => entry.Credential?.ConfigDirectory).OfType<string>().Append(configDirectory).Distinct(StringComparer.Ordinal)]);
 
-        return prompt is null
-            ? await working.ChatAsync(cancellationToken).ConfigureAwait(false)
-            : await working.OneShotAsync(prompt, call.Json, cancellationToken).ConfigureAwait(false);
+        return (new SideTaskSetUp(resolution, order, program, programVersion, ground, runsOn), null);
     }
 
-    /// <summary>The prompt file read, where one was named.</summary>
-    private sealed record ReadPrompt(string? Text, string? Problem);
+    /// <summary>Says what a claim said of a dead owner's record reclaimed, where it said anything.</summary>
+    private void Said(string? reclaimed)
+    {
+        if (reclaimed is { Length: > 0 })
+        {
+            _output.Warn(RunCommand, reclaimed);
+        }
+    }
+
+    /// <summary>An exit before the side-task was claimed: nothing was written, which it says.</summary>
+    private static CommandOutcome Unwritten(CommandOutcome outcome)
+        => outcome with { Details = [.. outcome.Details ?? [], NoRecords] };
+
+    /// <summary>
+    /// An exit once the side-task is known: its records named where its directory holds them - in text, and in its
+    /// document where <c>--json</c> asked for one - and said to be none where it holds none.
+    /// </summary>
+    private CommandOutcome Told(CommandOutcome outcome, bool json, SideTaskLayout layout)
+    {
+        var written = _fileSystem.KindOf(layout.Directory) == PathKind.Directory;
+        var told = outcome with { Details = [.. outcome.Details ?? [], written ? $"Records: {layout.Directory}" : NoRecords] };
+
+        return json && written
+            ? told with { Data = [SideTaskReports.Stopped(outcome.ExitCode, outcome.Message, layout.Name, layout.Directory)] }
+            : told;
+    }
+
+    /// <summary>The one message read, or why it could not be.</summary>
+    private sealed record PromptRead(string? Text, string? Problem);
 
     /// <summary>Reads the one message of a one-shot side-task, where its command line names one.</summary>
-    private async Task<ReadPrompt?> ReadPromptAsync(SideTaskCall call, CancellationToken cancellationToken)
+    private PromptRead? ReadPrompt(SideTaskCall call)
     {
         if (call.Prompt is { Length: > 0 } prompt)
         {
-            return new ReadPrompt(prompt, null);
+            return new PromptRead(prompt, null);
         }
 
         if (call.PromptFile is not { Length: > 0 } file)
@@ -387,26 +578,28 @@ public sealed class SideTaskService(
         try
         {
             var text = _fileSystem.ReadAllText(Path.GetFullPath(file, Path.GetFullPath(call.StartDirectory)));
-            return new ReadPrompt(text.Length == 0 ? string.Empty : text, text.Length == 0 ? "--prompt-file is empty: one message is asked" : null);
+            return new PromptRead(text, text.Length == 0 ? "--prompt-file is empty: one message is asked" : null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            return new ReadPrompt(null, $"--prompt-file '{file}' could not be read: {ex.Message}");
+            return new PromptRead(null, $"--prompt-file '{file}' could not be read: {ex.Message}");
         }
     }
 
-    /// <summary>Whether <paramref name="name"/> is a name a side-task's directory may take.</summary>
+    /// <summary>Whether <paramref name="name"/> is a name a side-task's directory may take (<see cref="NameRule"/>).</summary>
     /// <param name="name">The name.</param>
     public static bool IsName(string name)
-        => name.Length > 0 && name.Length <= 80 && !name.StartsWith('.') && name.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+        => name is { Length: > 0 and <= MostNameLength }
+            && char.IsAsciiLetterOrDigit(name[0])
+            && name.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
     /// <summary>
-    /// The name a side-task takes where the person gave none: the date and time it began with the first words of its
-    /// first message, kebabed.
+    /// The name a side-task takes where the person gave none: the date and time it began, to the second, with the first
+    /// words of its first message, kebabed.
     /// </summary>
     /// <param name="message">The first message, where one was given.</param>
     /// <param name="began">When the side-task began, locally.</param>
-    private static string Named(string? message, DateTime began)
+    public static string Named(string? message, DateTime began)
     {
         var words = (message ?? string.Empty)
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -422,6 +615,22 @@ public sealed class SideTaskService(
             stem = stem[..MostNameCharacters].TrimEnd('-');
         }
 
-        return began.ToString("yyyy-MM-dd-HHmm", CultureInfo.InvariantCulture) + (stem.Length == 0 ? string.Empty : "-" + stem);
+        return began.ToString("yyyy-MM-dd-HHmmss", CultureInfo.InvariantCulture) + (stem.Length == 0 ? string.Empty : "-" + stem);
     }
 }
+
+/// <summary>
+/// What every set-up of one side-task shares: the repository and its providers, the web search and the mask that holds
+/// its keys, and the names the configuration appoints, withheld from the agent's children.
+/// </summary>
+/// <param name="Context">The repository and its configuration.</param>
+/// <param name="Providers">The configuration's providers, resolved.</param>
+/// <param name="Search">The web search of every source turned on; null where none is.</param>
+/// <param name="Mask">The mask holding every form of each source's key; null where no source has one.</param>
+/// <param name="Withheld">Every name the configuration appoints a value of the slot for.</param>
+internal sealed record SideTaskCommon(
+    HarnessContext Context,
+    AgentProviders Providers,
+    AgentWebSearch? Search,
+    ILineMask? Mask,
+    IReadOnlyList<string> Withheld);

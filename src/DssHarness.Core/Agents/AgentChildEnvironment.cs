@@ -54,6 +54,12 @@ public static partial class AgentChildEnvironment
     public const string NameShape = "[A-Za-z_][A-Za-z0-9_]*";
 
     /// <summary>
+    /// The name every child of an agent is given, set: what tells a command of this tool that it runs under an agent -
+    /// started by one, however named - whatever its program is called. <c>run-side-task</c> refuses itself where it is set.
+    /// </summary>
+    public const string AgentMarker = "DSSHARNESS_UNDER_AGENT";
+
+    /// <summary>
     /// The tool's own environment, every name it holds with its value: what a child of an agent would inherit, before
     /// <see cref="Of"/> says what it loses. The one read of it for an agent's children, its names found as the system finds
     /// them: in any case on Windows, exactly elsewhere.
@@ -92,7 +98,8 @@ public static partial class AgentChildEnvironment
     /// <summary>
     /// The overrides a child of an agent is started with, each name taken away given as null: every appointed name, and
     /// every secret-shaped name <paramref name="own"/> holds that <paramref name="kept"/> does not give back - a name told
-    /// in any case, as the runner takes a name away in every spelling.
+    /// in any case, as the runner takes a name away in every spelling - and <see cref="AgentMarker"/> set, which every
+    /// child passes on to what it starts.
     /// </summary>
     /// <param name="own">The names the tool's own environment holds, which the child would otherwise inherit.</param>
     /// <param name="withheld">Every name the configuration appoints: never given, whatever <paramref name="kept"/> says.</param>
@@ -114,6 +121,8 @@ public static partial class AgentChildEnvironment
         {
             environment[name] = null;
         }
+
+        environment[AgentMarker] = "1";
 
         return environment;
     }

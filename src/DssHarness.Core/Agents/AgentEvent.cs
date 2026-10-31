@@ -100,6 +100,9 @@ public enum AgentMessageKind
 
     /// <summary>An effort change told in the conversation: the step goes on at another level.</summary>
     Effort,
+
+    /// <summary>A person's later message in a chat whose launch is held open for it: a side-task's next line.</summary>
+    ChatMessage,
 }
 
 /// <summary>Who ran a tool call, as the call's events name it.</summary>

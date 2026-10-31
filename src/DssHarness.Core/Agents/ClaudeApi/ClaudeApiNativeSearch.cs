@@ -1,19 +1,19 @@
-using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Http;
-using DssHarness.Core.Execution;
+using DssHarness.Core.Agents.Loop;
 using DssHarness.Core.Web.Search;
 
 namespace DssHarness.Core.Agents.ClaudeApi;
 
 /// <summary>
-/// The Claude API's own web search, which a side-task's <c>web_search</c> asks as its <c>native</c> part ("open web
-/// search" as the user ruled it, value 395): one request of the harness's own to the API, signed with the side-task's
-/// key, whose only tool is Anthropic's web search (the design value 365 had) - no server tool declared in any
-/// conversation, for this request is no part of one. Its results are read from the answer's
-/// <c>web_search_tool_result</c> blocks and its requests from the answer's usage, priced at the provider's
-/// <c>pricePerThousandSearches</c>.
+/// The Claude API's own web search, which a side-task's <c>web_search</c> asks as its <c>native</c> part: one request of
+/// the harness's own to the API, signed with the side-task's key, whose only tool is Anthropic's web search - no server
+/// tool declared in any conversation, for this request is no part of one. Its results are read from the answer's
+/// <c>web_search_tool_result</c> blocks; what it used - its tokens, the search results billed as input among them, and its
+/// searches - from the answer's usage, by the one reader of it (<see cref="ClaudeApiUsage"/>), for the run to price as it
+/// prices every request. An answer that is no search's - a refusal, a request that never reached the API, a stream cut,
+/// an error, a search the tool itself says failed - is a part that failed, saying why, never one with no results.
 /// </summary>
 /// <param name="connection">How the request is posted and its answer read.</param>
 /// <param name="api">The provider's address.</param>
@@ -36,7 +36,7 @@ public sealed class ClaudeApiNativeSearch(ApiConnection connection, string api, 
     string IAgentNativeSearch.Source => SourceName;
 
     /// <inheritdoc/>
-    public async Task<(WebSearchPart Part, long Requests)> SearchAsync(string query, CancellationToken cancellationToken)
+    public async Task<(WebSearchPart Part, AgentUsage Used)> SearchAsync(string query, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
 
@@ -62,61 +62,84 @@ public sealed class ClaudeApiNativeSearch(ApiConnection connection, string api, 
             JsonSerializer.SerializeToUtf8Bytes(body, ApiBody.Json));
 
         var results = new List<WebSearchResult>();
+        var used = new ClaudeApiUsage(cacheTtl: null);
         string? failure = null;
-        long requests = 0;
 
-        await foreach (var @event in _connection.PostAsync(post, cancellationToken).ConfigureAwait(false))
+        await foreach (var happened in _connection.PostAsync(post, cancellationToken).ConfigureAwait(false))
         {
-            if (@event is not ApiEvent.Item { Type: "content_block_start" or "message_delta" or "error" } item)
+            foreach (var part in ApiAnswers.Parts(happened, item => Read(item, results, used), refused => ClaudeApiFailures.Of(refused, first: true, _model)))
             {
-                continue;
-            }
-
-            JsonObject? read = null;
-
-            try
-            {
-                read = JsonNode.Parse(item.Data) as JsonObject;
-            }
-            catch (JsonException)
-            {
-                // An event this reader does not read: the answer's own events name what it holds.
-            }
-
-            if (read is null)
-            {
-                continue;
-            }
-
-            if (item.Type == "content_block_start"
-                && read["content_block"]?["type"]?.GetValue<string>() == "web_search_tool_result"
-                && read["content_block"]?["content"] is JsonArray found)
-            {
-                foreach (var one in found.OfType<JsonObject>())
+                if (part is ChatPart.Failed failed)
                 {
-                    var title = one["title"] is JsonValue named ? named.GetValue<string>() : null;
-                    var url = one["url"] is JsonValue address ? address.GetValue<string>() : null;
-                    var text = one["text"] is JsonValue said ? said.GetValue<string>() : null;
-
-                    if (WebSearchResult.Of(title, url, text, relativeTo: null) is { } result)
-                    {
-                        results.Add(result);
-                    }
+                    failure ??= failed.Failure.Message;
                 }
-            }
-            else if (item.Type == "message_delta"
-                && read["usage"]?["server_tool_use"]?["web_search"]?["requests"] is JsonValue counted)
-            {
-                requests = counted.GetValue<long>();
-            }
-            else if (item.Type == "error")
-            {
-                failure = read["error"]?["message"] is JsonValue said ? said.GetValue<string>() : "the provider's own search failed";
             }
         }
 
-        return failure is { } why
-            ? (new WebSearchPart(SourceName, SourceName, Version: 1, query, WebSearchAnswer.Failed(why), Withheld: 0, Cached: false, KeyMissing: null), requests)
-            : (new WebSearchPart(SourceName, SourceName, Version: 1, query, WebSearchAnswer.Read(results), Withheld: 0, Cached: false, KeyMissing: null), requests);
+        var answer = failure is { } why ? WebSearchAnswer.Failed(why) : WebSearchAnswer.Read(results);
+
+        return (new WebSearchPart(SourceName, SourceName, Version: 1, query, answer, Withheld: 0, Cached: false, KeyMissing: null), used.Used());
+    }
+
+    /// <summary>
+    /// One event of the answer, read for what the search needs: each result of a <c>web_search_tool_result</c> block - or
+    /// the failure its content holds where the tool failed - and each usage the answer carries. An error the stream sends
+    /// is the part's failure, read as every error of the API's is.
+    /// </summary>
+    private IEnumerable<ChatPart> Read(ApiEvent.Item item, List<WebSearchResult> results, ClaudeApiUsage used)
+    {
+        if (item.Type is not ("message_start" or "content_block_start" or "message_delta" or "error"))
+        {
+            return [];
+        }
+
+        if (item.Type == "error")
+        {
+            return [new ChatPart.Failed(ClaudeApiFailures.OfStream(item.Data, first: true, _model))];
+        }
+
+        JsonElement data;
+
+        try
+        {
+            using var document = JsonDocument.Parse(item.Data);
+            data = document.RootElement.Clone();
+        }
+        catch (JsonException ex)
+        {
+            return [ApiAnswers.Failed(ChatFailureKind.Transient, $"the answer's stream sent a '{item.Type}' event that is no JSON: {ex.Message}")];
+        }
+
+        switch (item.Type)
+        {
+            case "message_start" when data.TryGetProperty("message", out var message) && message.TryGetProperty("usage", out var began):
+                used.Take(began);
+                break;
+
+            case "message_delta" when data.TryGetProperty("usage", out var usage):
+                used.Take(usage);
+                break;
+
+            case "content_block_start" when ApiAnswers.Member(data, "content_block") is { } block && ApiAnswers.Text(block, "type") == "web_search_tool_result":
+                if (block.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var one in content.EnumerateArray().Where(one => one.ValueKind == JsonValueKind.Object))
+                    {
+                        if (WebSearchResult.Of(ApiAnswers.Text(one, "title"), ApiAnswers.Text(one, "url"), ApiAnswers.Text(one, "text"), relativeTo: null) is { } result)
+                        {
+                            results.Add(result);
+                        }
+                    }
+                }
+                else if (ApiAnswers.Member(block, "content") is { } error)
+                {
+                    // The tool's own failure: the search ran and could not answer, its error code said.
+                    return [ApiAnswers.Failed(ChatFailureKind.Fatal, $"the provider's own search failed: {ApiAnswers.Text(error, "error_code") ?? ApiAnswers.Text(error, "type") ?? "it gave no reason"}")];
+                }
+
+                break;
+        }
+
+        return [];
     }
 }

@@ -712,8 +712,8 @@ public sealed record AgentRun(
 
     /// <summary>
     /// The provider's own web search, which a side-task's <c>web_search</c> asks beside the configured sources - its
-    /// <c>native</c> part, "open web search" as the user ruled it (value 395); null where this run's provider runs none,
-    /// and for every step of a run, whose web is the harness's own alone.
+    /// <c>native</c> part; null where this run's provider runs none - every client but the Claude API's - and for every
+    /// step of a run, whose web is the harness's own alone.
     /// </summary>
     public IAgentNativeSearch? NativeSearch { get; init; }
 
@@ -727,8 +727,9 @@ public sealed record AgentRun(
 }
 
 /// <summary>
-/// The provider's own web search: one query, answered as a source's part of the same search, with how many requests of
-/// the provider it took - priced at the provider's <c>pricePerThousandSearches</c>.
+/// The provider's own web search: one query, answered as a source's part of the same search, with what the request of
+/// the provider used - its tokens, the results billed as input among them, and its searches - which the run folds into
+/// its usage and prices as it prices every request of the provider's.
 /// </summary>
 public interface IAgentNativeSearch
 {
@@ -738,8 +739,8 @@ public interface IAgentNativeSearch
     /// <summary>Searches <paramref name="query"/> with the provider's own search.</summary>
     /// <param name="query">The query, as the agent wrote it.</param>
     /// <param name="cancellationToken">Stops the search.</param>
-    /// <returns>The part it came to, and how many requests of the provider it spent.</returns>
-    Task<(Web.Search.WebSearchPart Part, long Requests)> SearchAsync(string query, CancellationToken cancellationToken);
+    /// <returns>The part it came to - failed, saying why, where the provider did not answer with a search - and what its request used.</returns>
+    Task<(Web.Search.WebSearchPart Part, AgentUsage Used)> SearchAsync(string query, CancellationToken cancellationToken);
 }
 
 /// <summary>

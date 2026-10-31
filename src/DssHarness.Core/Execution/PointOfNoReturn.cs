@@ -42,6 +42,17 @@ public static class PointOfNoReturn
     };
 
     /// <summary>
+    /// The commands that hold a conversation with a person and count its interrupts themselves: a side-task, whose first
+    /// interrupt cuts the agent's turn and leaves its chat open, and whose second ends the chat - so the command line's own
+    /// handling, which cancels at the first and ends the process when its clock runs out, is turned off for it too. No
+    /// hard stop is bounded for one: a chat ends when its person leaves it.
+    /// </summary>
+    public static IReadOnlySet<string> ChatsWithAPerson { get; } = new HashSet<string>(StringComparer.Ordinal)
+    {
+        Agents.SideTasks.SideTaskService.RunCommand,
+    };
+
+    /// <summary>
     /// The engine's drain of a hard stop: the longest it waits, from applying the stop, for a stopped step's runner to
     /// end - 90 s - before recording the step stopped all the same, saying so.
     /// </summary>
@@ -95,32 +106,34 @@ public static class PointOfNoReturn
         => grace - TimeSpan.FromTicks(Math.Min(TimeSpan.FromSeconds(10).Ticks, grace.Ticks / 4));
 
     /// <summary>
-    /// Whether the command <paramref name="commandLine"/> types counts its own interrupts - one of <see cref="PausesSafely"/>:
-    /// the command line's own handling of termination is turned off for it, since that handling cancels the command at
-    /// the first interrupt and starts a clock that ends the process, and a safe pause has no such longest. Its session
-    /// takes Ctrl+C - and off Windows SIGTERM and a hang-up - itself (<see cref="Orchestration.Flow.FlowTerminal"/>).
+    /// Whether the command <paramref name="commandLine"/> types counts its own interrupts - one of <see cref="PausesSafely"/>
+    /// or of <see cref="ChatsWithAPerson"/>: the command line's own handling of termination is turned off for it, since that
+    /// handling cancels the command at the first interrupt and starts a clock that ends the process, and neither a safe
+    /// pause nor a chat has such a longest. It takes Ctrl+C - and off Windows SIGTERM and a hang-up - itself, through the
+    /// one registration of them (<see cref="TerminalSignals"/>): a run's session by its terminal
+    /// (<see cref="Orchestration.Flow.FlowTerminal"/>), a side-task by its own (<see cref="Agents.SideTasks.SideTaskTerminal"/>).
     /// </summary>
     /// <param name="commandLine">The command's name, then its arguments as typed.</param>
     public static bool CountsItsOwnInterrupts(IReadOnlyList<string> commandLine)
     {
         ArgumentNullException.ThrowIfNull(commandLine);
-        return commandLine.Count > 0 && PausesSafely.Contains(commandLine[0]);
+        return commandLine.Count > 0 && (PausesSafely.Contains(commandLine[0]) || ChatsWithAPerson.Contains(commandLine[0]));
     }
 
     /// <summary>
     /// How long the command line waits for the command <paramref name="commandLine"/> types once interrupted: as long
     /// as a deletion expects where it passes a point of no return, as long as a hard stop of a run can take
     /// (<see cref="HardStopBound"/>) - from its second interrupt, the session itself timing it - where it pauses safely,
-    /// and this tool's own answer of none
-    /// where it does neither - <see langword="null"/>, which leaves the command line's own short wait as it is. A front
-    /// end that holds a window open while a command runs holds it by this, for as long as the command asks.
+    /// and this tool's own answer of none where it does neither - a chat with a person among them, which bounds no hard
+    /// stop - <see langword="null"/>, which leaves the command line's own short wait as it is. A front end that holds a
+    /// window open while a command runs holds it by this, for as long as the command asks.
     /// </summary>
     /// <param name="commandLine">The command's name, then its arguments as typed.</param>
     public static TimeSpan? GraceFor(IReadOnlyList<string> commandLine)
     {
         ArgumentNullException.ThrowIfNull(commandLine);
 
-        if (CountsItsOwnInterrupts(commandLine))
+        if (commandLine.Count > 0 && PausesSafely.Contains(commandLine[0]))
         {
             return HardStopBound;
         }
@@ -132,8 +145,8 @@ public static class PointOfNoReturn
     /// The process termination timeout the command line runs the command <paramref name="commandLine"/> types with - the
     /// one choice of it, which the command line makes by this: <see langword="null"/> for a command that counts its own
     /// interrupts (<see cref="CountsItsOwnInterrupts"/>), which turns the command line's own handling of termination off
-    /// - it cancels at the first interrupt and ends the process when its clock runs out, and a safe pause has no such
-    /// longest; the grace for one that holds one (<see cref="GraceFor"/>); and the command line's own,
+    /// - it cancels at the first interrupt and ends the process when its clock runs out, and neither a safe pause nor a
+    /// chat has such a longest; the grace for one that holds one (<see cref="GraceFor"/>); and the command line's own,
     /// <paramref name="commandLines"/>, as it is, for every other.
     /// </summary>
     /// <param name="commandLine">The command's name, then its arguments as typed.</param>

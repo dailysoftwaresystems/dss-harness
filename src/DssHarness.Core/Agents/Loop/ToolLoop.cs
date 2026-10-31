@@ -1588,20 +1588,28 @@ public sealed class ToolLoop(
             var usage = _used.Report(_unknown is null ? new AgentCost(Counted: _cost) : new AgentCost(MissingPrice: _unknown));
             var cost = _cost;
 
-            // The searches the provider ran itself, a side-task's native part, join the run's usage and are priced at
-            // the provider's own price for them (value 225).
-            if (Runtime.Tally.NativeSearches is > 0 and var native)
+            // What the provider's own search used, a side-task's native part - its tokens, the results billed as input
+            // among them, and its searches - joins the run's usage and is priced as every request of the provider's is.
+            if (Runtime.Tally.NativeUsed is var native && native != AgentUsage.None)
             {
-                usage = usage with { Total = usage.Total with { Searches = usage.Total.Searches + native } };
+                var code = Now.Terms!.Model.Code;
 
-                if (AgentPrices.CostOf(Now.Terms!.Provider, Now.Terms.Model, new AgentUsage(0, 0, 0, 0, 0, native)) is { } searched)
+                usage = usage with
+                {
+                    Total = usage.Total.Plus(native),
+                    PerModel = usage.PerModel.Any(part => string.Equals(part.Model, code, StringComparison.Ordinal))
+                        ? [.. usage.PerModel.Select(part => string.Equals(part.Model, code, StringComparison.Ordinal) ? part with { Usage = part.Usage.Plus(native) } : part)]
+                        : [.. usage.PerModel, new AgentModelUsage(code, native)],
+                };
+
+                if (AgentPrices.CostOf(Now.Terms!.Provider, Now.Terms.Model, native) is { } searched)
                 {
                     cost += (decimal)searched;
                     usage = _unknown is null ? usage with { Cost = new AgentCost(Counted: cost) } : usage;
                 }
                 else
                 {
-                    _unknown ??= AgentPrices.UnknownOf(Now.Terms.Provider, Now.Terms.Model, new AgentUsage(0, 0, 0, 0, 0, native));
+                    _unknown ??= AgentPrices.UnknownOf(Now.Terms.Provider, Now.Terms.Model, native);
                     usage = usage with { Cost = new AgentCost(MissingPrice: _unknown) };
                 }
             }

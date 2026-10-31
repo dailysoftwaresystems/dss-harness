@@ -17,7 +17,8 @@ public static class AgentStepGround
     /// The ground of a reason step working in <paramref name="workspace"/>: its agent's worktree where it has one -
     /// which it writes below, unless its definition says <c>writes: false</c> or the run only reads, its work directory
     /// always - or, for an agent with none, the main checkout, which it only reads. The tool's own state under each tree
-    /// it touches, and the slot its keys are read from, no action of the agent's reaches.
+    /// it touches, and every credential slot of the main checkout (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>),
+    /// no action of the agent's reaches.
     /// </summary>
     /// <param name="config">The configuration, whose <c>agentPolicy</c> restricts and whose state paths are guarded.</param>
     /// <param name="definition">The agent definition the step works by, where there is one; null where it names none.</param>
@@ -25,7 +26,6 @@ public static class AgentStepGround
     /// <param name="workspace">Where the run works, as the step's agent answers it.</param>
     /// <param name="webSearchGiven">Whether the run is given a web search, which without it the agent has not.</param>
     /// <param name="claudeDirectories">Every Claude Code directory a client of this run uses, and the tool's own.</param>
-    /// <param name="slotDirectory">The directory the agents' key slot reads.</param>
     /// <param name="readsOnly">
     /// Whether the run only reads whatever its definition gives it - the run's advisor, which works where the asking step
     /// works and writes nothing there, and its reporter: its own work directory is all it writes.
@@ -37,14 +37,12 @@ public static class AgentStepGround
         AgentWorkspace workspace,
         bool webSearchGiven,
         IReadOnlyList<string> claudeDirectories,
-        string slotDirectory,
         bool readsOnly = false)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(step);
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(claudeDirectories);
-        ArgumentException.ThrowIfNullOrWhiteSpace(slotDirectory);
 
         var policy = config.AgentPolicy ?? new AgentPolicyConfig();
         var trees = new List<string>();
@@ -98,7 +96,7 @@ public static class AgentStepGround
             workspace.WorkingDirectory,
             Distinct(reads),
             writable,
-            [slotDirectory],
+            HarnessLayout.SecretSlotDirectoriesUnder(workspace.MainCheckout),
             Distinct([.. claudeDirectories]),
             restrictions,
             capabilities,
@@ -107,7 +105,7 @@ public static class AgentStepGround
             ReporterRoot: null,
             WorktreeRules: policy.WorktreeRules ?? true,
             ProtectedPaths: policy.ProtectedPaths ?? true,
-            [.. trees.SelectMany(HarnessLayout.StatePaths).Distinct(StringComparer.OrdinalIgnoreCase)])
+            [.. trees.SelectMany(tree => HarnessLayout.StatePathsUnder(tree, config.Worktrees?.Root ?? WorktreeSettings.DefaultRoot)).Distinct(StringComparer.OrdinalIgnoreCase)])
         {
             // The main checkout is read by an agent that has no worktree; written by none of them.
         };

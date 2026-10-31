@@ -159,8 +159,7 @@ public sealed class ReasonStepRunner(
             step,
             workspace,
             webSearch is not null,
-            launch.ClaudeDirectories(order),
-            context.Layout.WorkflowsEnvSlot);
+            launch.ClaudeDirectories(order));
 
         // The prompt with each skill it names handed over: the folder copied into the agent's own work directory, the
         // block put in the prompt's place, and what cannot be handed refused here - the step-start half of the skill's
@@ -601,19 +600,7 @@ public sealed class ReasonStepRunner(
 
         var read = await new Web.Search.WebSearchKeys(keys, gh).ReadAsync(context.Layout, providers.Appointed(), chosen, cancellationToken).ConfigureAwait(false);
 
-        // The step's mask holds every form each key it was given is sent in, so no record of the step's - its stream,
-        // its result, its notes - writes one: the search itself refuses a mask that does not, and this builds the mask
-        // that does.
-        var forms = chosen
-            .Where(source => read.TryGetValue(source.Name, out var key) && key.Value is { Length: > 0 })
-            .SelectMany(source => source.Credential?.Forms(read[source.Name].Value!) ?? [read[source.Name].Value!])
-            .Where(form => form is { Length: > 0 })
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-
-        return (AgentWebSearch.Of(sources, step.Search, read), forms is [_, ..]
-            ? new Runners.ActionValues(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), forms.ToDictionary(form => form, form => form, StringComparer.OrdinalIgnoreCase))
-            : null);
+        return (AgentWebSearch.Of(sources, step.Search, read), Web.Search.WebSearchKeys.Mask(chosen, read));
     }
 
     /// <summary>

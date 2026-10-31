@@ -7,20 +7,22 @@ using DssHarness.Core.Execution;
 namespace DssHarness.Core.Agents.SideTasks;
 
 /// <summary>
-/// One turn of a side-task: one message of the person's and the agent's answer to it, as its own record holds it - the
-/// client, provider, model and effort it ran under, the models that served it, what it used and cost, how many turns of
-/// the agent's it took, how it ended, and whether a run was working over the tree while it ran.
+/// One turn of a side-task: one message of the person's and the agent's answer to it, as its own record holds it - when
+/// it began, the client, provider, model and effort it ran under, the models that served it, what it used and cost,
+/// how many turns of the agent's it took, and how it ended.
 /// </summary>
-/// <param name="At">When the turn began.</param>
+/// <param name="At">When the turn began: when the person's message was sent.</param>
 /// <param name="Client">The client that served it.</param>
 /// <param name="Provider">The provider of the model that served it.</param>
-/// <param name="Model">The model it ran on, as the person named it for this turn.</param>
+/// <param name="Model">The model it ran on, as the side-task resolved it for this turn.</param>
 /// <param name="Effort">The effort it ran at, where one was named.</param>
 /// <param name="Served">The models that served it, in order.</param>
-/// <param name="Usage">What it used and cost; null where nothing has said or counted it.</param>
+/// <param name="Usage">
+/// What it used and cost; null where nothing has said or counted it. A turn of a launch held open for a whole chat holds
+/// what its own turns were seen to use, and the launch's cost is the side-task's in all.
+/// </param>
 /// <param name="Turns">How many turns of the agent's it took.</param>
-/// <param name="Status">How it ended; null where it never began.</param>
-/// <param name="RunWorking">Whether a run was working over the tree while it ran.</param>
+/// <param name="Status">How it ended; null where it ended inside a launch held open for the chat, whose end is the launch's.</param>
 /// <param name="Policy">What the agent ran under, as the policy was resolved for it.</param>
 public sealed record SideTaskTurn(
     DateTimeOffset At,
@@ -32,7 +34,6 @@ public sealed record SideTaskTurn(
     AgentUsageReport? Usage = null,
     int Turns = 0,
     AgentRunStatus? Status = null,
-    bool RunWorking = false,
     string? Policy = null)
 {
     /// <inheritdoc cref="SideTaskTurn" path="/param[@name='Served']"/>
@@ -44,19 +45,49 @@ public sealed record SideTaskTurn(
         : string.IsNullOrWhiteSpace(Provider) ? "provider says nothing"
         : string.IsNullOrWhiteSpace(Model) ? "model says nothing"
         : Turns < 0 ? "turns is below naught"
+        : Status is { } status && !Enum.IsDefined(status) ? $"status {(int)status} is no ending a run has"
         : string.IsNullOrWhiteSpace(Policy) ? "policy says nothing"
         : null;
 }
 
+/// <summary>How a side-task stands, as its record says it.</summary>
+public enum SideTaskStatus
+{
+    /// <summary>A chat holds it, or its one shot runs.</summary>
+    Open,
+
+    /// <summary>It has ended: a person ended its chat, or its one shot is done.</summary>
+    Ended,
+}
+
 /// <summary>
-/// A side-task's own record (<c>task.json</c>): its name, when it began and last spoke, how it stands, the conversation
-/// it goes on with where one is stored, what it has used and cost in all, and each of its turns as its own record. The
-/// one record of a side-task, read by <c>list-side-tasks</c> and by a <c>--resume</c>.
+/// What a side-task runs on, as the person last set it - on its command line, or with <c>/model</c> and <c>/effort</c> in
+/// its chat - and what a <c>--resume</c> that names none goes on with: the tier its model comes from, so the tier's later
+/// models are its order still, or the model named outright, which has none; the effort asked; and the client.
+/// </summary>
+/// <param name="Tier">The tier asked; null where none was.</param>
+/// <param name="Model">The model named outright; null where none was.</param>
+/// <param name="Effort">The one level asked for every model; null where none was.</param>
+/// <param name="EffortByModel">The levels asked by model, with <c>all</c> for the rest; null where none were.</param>
+/// <param name="Client">The client asked; null where none was.</param>
+public sealed record SideTaskRunsOn(
+    string? Tier = null,
+    string? Model = null,
+    string? Effort = null,
+    IReadOnlyDictionary<string, string>? EffortByModel = null,
+    string? Client = null);
+
+/// <summary>
+/// A side-task's own record (<c>task.json</c>): its name, when it began and last spoke, how it stands, what it runs on as
+/// the person set it, the conversation it goes on with where one is stored, what it has used and cost in all, and each of
+/// its turns as its own record. Written as the side-task is claimed, before its first turn, and after each - the one
+/// record of a side-task, read by <c>list-side-tasks</c> and by a <c>--resume</c>.
 /// </summary>
 /// <param name="Name">Its name, which names its directory.</param>
 /// <param name="Began">When it began.</param>
 /// <param name="LastSpoke">When its last turn ended; null until one has.</param>
-/// <param name="Status">How it stands: <see cref="Open"/> while a chat holds it, <see cref="Ended"/> once it has ended.</param>
+/// <param name="Status">How it stands: <see cref="SideTaskStatus.Open"/> while a chat holds it, <see cref="SideTaskStatus.Ended"/> once it has ended.</param>
+/// <param name="RunsOn">What it runs on, as the person last set it.</param>
 /// <param name="Conversation">The stored conversation it goes on with, where its client stores one; null where none is stored.</param>
 /// <param name="InAll">What every turn of it has used and cost; null until one has.</param>
 /// <param name="Turns">Each of its turns, oldest first.</param>
@@ -64,17 +95,12 @@ public sealed record SideTaskRecord(
     string Name,
     DateTimeOffset Began,
     DateTimeOffset? LastSpoke = null,
-    string Status = SideTaskRecord.Open,
+    SideTaskStatus Status = SideTaskStatus.Open,
+    SideTaskRunsOn? RunsOn = null,
     AgentSessionRef? Conversation = null,
     AgentUsageReport? InAll = null,
     IReadOnlyList<SideTaskTurn>? Turns = null)
 {
-    /// <summary>The status of a side-task a chat holds open.</summary>
-    public const string Open = "open";
-
-    /// <summary>The status of a side-task that has ended: a person ended its chat, or its one shot is done.</summary>
-    public const string Ended = "ended";
-
     /// <inheritdoc cref="SideTaskRecord" path="/param[@name='Turns']"/>
     public IReadOnlyList<SideTaskTurn> Turns { get; init => field = Listed(value); } = Listed(Turns);
 
@@ -89,9 +115,9 @@ public sealed record SideTaskRecord(
             problems.Add("name says nothing");
         }
 
-        if (Status is not (Open or Ended))
+        if (!Enum.IsDefined(Status))
         {
-            problems.Add($"status is '{Status}', which is neither '{Open}' nor '{Ended}'");
+            problems.Add($"status {(int)Status} is neither '{SideTaskStatus.Open}' nor '{SideTaskStatus.Ended}'");
         }
 
         problems.AddRange((Turns ?? []).Select(turn => turn.Problem()).OfType<string>().Select(problem => $"turns: {problem}"));

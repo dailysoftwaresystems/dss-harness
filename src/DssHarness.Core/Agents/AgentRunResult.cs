@@ -102,6 +102,32 @@ public sealed record AgentCost(decimal? Reported = null, decimal? Counted = null
     /// </summary>
     [JsonIgnore]
     public decimal? Usd => Reported ?? Counted;
+
+    /// <summary>
+    /// What two parts of a run cost together - two entries of a step's walk, two turns of a side-task: the counted cost
+    /// summed where neither part missed a price, else unknown with the first price missed; the reported one summed where
+    /// either part reports, a part that reports none adding what this tool counted of it, so the whole's cost is its
+    /// parts' together - unknown where a part's own is. Null where neither part says or counts anything.
+    /// </summary>
+    /// <param name="first">The first part's cost; null where nothing said or counted it.</param>
+    /// <param name="second">The second part's cost; null where nothing said or counted it.</param>
+    public static AgentCost? Sum(AgentCost? first, AgentCost? second)
+    {
+        if (first is null || second is null)
+        {
+            return first ?? second;
+        }
+
+        var missing = first.MissingPrice ?? second.MissingPrice;
+        var counted = missing is null && (first.Counted is not null || second.Counted is not null)
+            ? (first.Counted ?? 0) + (second.Counted ?? 0)
+            : (decimal?)null;
+        var reported = first.Reported is null && second.Reported is null
+            ? null
+            : (first.Reported ?? first.Counted) + (second.Reported ?? second.Counted);
+
+        return new AgentCost(reported, counted, missing);
+    }
 }
 
 /// <summary>One model's part of what a run used.</summary>
@@ -113,7 +139,20 @@ public sealed record AgentModelUsage(string Model, AgentUsage Usage);
 /// <param name="Total">The whole of it.</param>
 /// <param name="PerModel">Each model's part, in the order they served.</param>
 /// <param name="Cost">What it cost, and where each number is from; null where nothing has said or counted it.</param>
-public sealed record AgentUsageReport(AgentUsage Total, IReadOnlyList<AgentModelUsage> PerModel, AgentCost? Cost = null);
+public sealed record AgentUsageReport(AgentUsage Total, IReadOnlyList<AgentModelUsage> PerModel, AgentCost? Cost = null)
+{
+    /// <summary>
+    /// What two parts of a run used together: the totals added, each model's part kept in the order the parts served,
+    /// and what they cost by <see cref="AgentCost.Sum"/> - the one fold of usage over parts. Null where neither part
+    /// says anything.
+    /// </summary>
+    /// <param name="first">What the first part used; null where nothing said it.</param>
+    /// <param name="second">What the second part used; null where nothing said it.</param>
+    public static AgentUsageReport? Sum(AgentUsageReport? first, AgentUsageReport? second)
+        => first is null || second is null
+            ? first ?? second
+            : new(first.Total.Plus(second.Total), [.. first.PerModel, .. second.PerModel], AgentCost.Sum(first.Cost, second.Cost));
+}
 
 /// <summary>
 /// An account at its limit: what a request is billed to - a provider's key, or a client's login - has no more to give

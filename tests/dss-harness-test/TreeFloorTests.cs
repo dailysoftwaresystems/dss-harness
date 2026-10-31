@@ -44,6 +44,18 @@ public sealed class TreeFloorTests
         }
     }
 
+    /// <summary>
+    /// The tree's own floor holds git's own directory, every root slot the tool keeps a machine's own records in -
+    /// what orchestrators and side-tasks keep, the mutation workers, the legs' copies - and the worktrees root: none is
+    /// left to an ignore rule a repository can edit away.
+    /// </summary>
+    [Fact]
+    public void TheTreesOwnFloor_HoldsGitsDirectory_EveryRootSlot_AndTheWorktreesRoot()
+    {
+        Assert.Equal([".git", ".orchestrators", ".mutations", ".legs", ".side-tasks", "wt"], TreeFloor.Of("wt"));
+        Assert.True(TreeFloor.Covers(TreeFloor.OfAgentMoves("wt"), ".side-tasks/2026-10-31-120000-fix-it/transcript.md"));
+    }
+
     /// <summary>The five credential slots are spelled from the layout's own names, rooted under the harness directory.</summary>
     [Fact]
     public void TheCredentialSlots_AreTheFiveTheLayoutNames()

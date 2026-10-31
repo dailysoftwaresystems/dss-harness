@@ -362,6 +362,10 @@ public sealed class ClaudeCodeClient(
         private string? _lead;
         private string? _chatText;
         private string? _chatInterruptId;
+
+        // Whether a chat's interrupt was sent and the result it cuts has not come yet: that result is the cut turn's end,
+        // never the launch's - an interrupted turn ends on an error of its own, and the chat goes on.
+        private bool _chatCut;
         private decimal _cost;
 
         public async Task<LaunchOutcome> RunAsync(CancellationToken cancellationToken)
@@ -1119,13 +1123,21 @@ public sealed class ClaudeCodeClient(
 
                 if (!answered.Succeeded)
                 {
+                    _chatCut = false;
                     await Emit(new Notice($"Claude Code refused the turn's interrupt: {Masked(answered.Error ?? "no reason given")}")).ConfigureAwait(false);
                     return null;
                 }
 
                 // The receipt names each waiting message the interrupt dropped, by the id the engine gave it: no turn
-                // takes them. The turn it cuts ends by itself, and the launch stays open for the chat's next message.
-                _pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true);
+                // takes them, and the person is told, for each was theirs. The turn it cuts ends by itself, and the
+                // launch stays open for the chat's next message.
+                var dropped = _pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true);
+
+                if (dropped > 0)
+                {
+                    await Emit(new Notice($"the interrupt dropped {DssHarness.Core.Output.ReportText.Counted(dropped, "message")} the agent had not taken yet; send again what still stands")).ConfigureAwait(false);
+                }
+
                 Watch();
 
                 return null;
@@ -1177,6 +1189,11 @@ public sealed class ClaudeCodeClient(
                     return await HandoffAnsweredAsync(result).ConfigureAwait(false);
             }
 
+            // The first result after a chat's interrupt is the turn it cut - or one that ended before the interrupt
+            // reached it - however it ended.
+            var cut = _chatCut;
+            _chatCut = false;
+
             // A message the launch has not taken yet begins a turn of its own: this result is not the step's answer.
             if (_pending.Count > 0)
             {
@@ -1191,8 +1208,9 @@ public sealed class ClaudeCodeClient(
 
             // A chat's launch stays open between the person's messages: this turn's end is not the run's. The run ends
             // when the engine ends the messages - the chat's exit, answered with the last text - or where the launch
-            // itself fails.
-            if (run.Chat && Ending(result) is null)
+            // itself fails. A turn the chat's interrupt cut ends on an error of its own, and is no failure of the
+            // launch's: it stays open, unless the account met its limit or the model declined on the way.
+            if (run.Chat && (Ending(result) is null || (cut && _limit is null && _declined is null)))
             {
                 _chatText = Masked(result.Text ?? _lastText ?? _chatText ?? string.Empty);
                 Watch();
@@ -1335,7 +1353,8 @@ public sealed class ClaudeCodeClient(
                 return null;
             }
 
-            await SayAsync(text, AgentMessageKind.PlanUpdate).ConfigureAwait(false);
+            // A chat's posted message is the person's next line; any other run's is what a plan update changes for it.
+            await SayAsync(text, run.Chat ? AgentMessageKind.ChatMessage : AgentMessageKind.PlanUpdate).ConfigureAwait(false);
 
             return null;
         }
@@ -1500,6 +1519,7 @@ public sealed class ClaudeCodeClient(
             }
 
             _chatInterruptId = "chat-interrupt";
+            _chatCut = true;
             _ = Emit(new Notice("the turn was interrupted where it stands; the conversation keeps what was said")).ConfigureAwait(false);
             Control(new JsonObject
             {

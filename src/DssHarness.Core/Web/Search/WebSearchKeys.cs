@@ -60,6 +60,37 @@ public sealed class WebSearchKeys(AgentKeyStore slot, GhProcess gh)
         return keys;
     }
 
+    /// <summary>
+    /// The mask a step - or a side-task - given <paramref name="sources"/>' keys runs under: every form each key read is sent
+    /// in (<see cref="WebSearchCredential.Forms"/>), each held as a secret of its own, so no record of the run - its
+    /// stream, its result, its notes - writes one. The search itself refuses a mask that does not hold them, and this is
+    /// the one builder of the mask that does. Null where no source was given a key.
+    /// </summary>
+    /// <remarks>
+    /// Each form is held under a name of its own, never under its own value: the mask matches values exactly, and two
+    /// forms that differ only by case are two secrets, neither of which may be dropped for the other.
+    /// </remarks>
+    /// <param name="sources">The sources the run was given.</param>
+    /// <param name="read">Each source's key, as <see cref="ReadAsync"/> read it.</param>
+    public static Runners.ActionValues? Mask(IReadOnlyList<WebSearchSource> sources, IReadOnlyDictionary<string, WebSearchKey> read)
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+        ArgumentNullException.ThrowIfNull(read);
+
+        var forms = sources
+            .Where(source => read.TryGetValue(source.Name, out var key) && key.Value is { Length: > 0 })
+            .SelectMany(source => source.Credential?.Forms(read[source.Name].Value!) ?? [read[source.Name].Value!])
+            .Where(form => form is { Length: > 0 })
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        return forms is [_, ..]
+            ? new Runners.ActionValues(
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                forms.Select((form, at) => (Name: $"web-search-key-{(at + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}", Form: form)).ToDictionary(pair => pair.Name, pair => pair.Form, StringComparer.OrdinalIgnoreCase))
+            : null;
+    }
+
     private async Task<WebSearchKey> LoginAsync(HarnessLayout layout, string host, CancellationToken cancellationToken)
     {
         try

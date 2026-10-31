@@ -147,7 +147,6 @@ public sealed class AdvisorRunner(
             workspace,
             webSearchGiven: false,
             launch.ClaudeDirectories(order),
-            context.Layout.WorkflowsEnvSlot,
             readsOnly: true);
 
         // What the run stored of the asking step, rendered as a continuation record renders a step and within the

@@ -59,6 +59,12 @@ public sealed class WebSearchSources
     /// <summary>Every source, the built-in ones first in the template's order, then the repository's own in theirs.</summary>
     public IReadOnlyList<WebSearchSource> All { get; }
 
+    /// <summary>
+    /// Every source turned on, in <see cref="All"/>'s order: what a search that names none of them and keeps to no
+    /// defaults asks - a side-task's. A source turned off (<c>enabled: false</c>) is asked by nothing.
+    /// </summary>
+    public IReadOnlyList<WebSearchSource> On => [.. All.Where(source => source.Enabled)];
+
     /// <summary>The names of sources or tags a step that names none searches: the configuration's, else the built-in ones.</summary>
     public IReadOnlyList<string> Defaults { get; }
 

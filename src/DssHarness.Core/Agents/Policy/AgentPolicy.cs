@@ -591,13 +591,16 @@ public sealed class AgentPolicy
     }
 
     /// <summary>
-    /// The built-in write refusals: git's own files and the tool's policy under the worktree rules,
-    /// the protected paths under their own switch, and the tool's own state in any root whatever the
-    /// switches say - a place of the agent's own within it excepted, a writable root that stands
-    /// inside the state, as its work directory does inside the run's.
+    /// The built-in write refusals: git's own files and the tool's own state (<see cref="KeptWriteRefusal"/>), then the
+    /// tool's policy under the worktree rules and the protected paths under their own switch.
     /// </summary>
     private AgentPolicyAnswer.Denied? BuiltinWriteRefusal(string asked, string resolved)
     {
+        if (KeptWriteRefusal(asked, resolved) is { } kept)
+        {
+            return kept;
+        }
+
         foreach (var root in _allRoots)
         {
             foreach (var form in new[] { asked, resolved })
@@ -605,19 +608,6 @@ public sealed class AgentPolicy
                 if (Beneath(root, form, Refusals) is not { } relative)
                 {
                     continue;
-                }
-
-                // Git's own at any depth, as Claude Code's own guard holds it: a nested repository's
-                // or a submodule's .git runs its hooks as surely as the root's. Whatever protectedPaths
-                // says, and for a step's ground under the worktree rules - which a side-task's ground
-                // holds off, keeping this one alone of them, for git's own files are written by git's
-                // verbs and this tool's.
-                if ((_ground.WorktreeRules || _ground.SideTask) && relative.Split('/').Any(segment => segment.Equals(".git", Refusals)))
-                {
-                    return new AgentPolicyAnswer.Denied(
-                        GitsOwnRule,
-                        AgentPolicySource.Builtin,
-                        $"'{form}' is git's own: written by git's verbs and this tool's, never by an agent's file tool, whatever protectedPaths says");
                 }
 
                 if (_ground.WorktreeRules)
@@ -640,6 +630,38 @@ public sealed class AgentPolicy
                         $"Write({text})",
                         AgentPolicySource.Builtin,
                         $"'{form}' is denied by Write({text}), a protected path of this tool: the writes Claude Code guards, refused on every client, so a role is not stopped on one where it passes on another");
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The write refusals every ground keeps, a file tool's write and a command's alike (<see cref="CommandWriteRefusal"/>):
+    /// git's own files - for a step's ground under the worktree rules, and for a side-task's, which holds them off - and
+    /// the tool's own state in any root whatever the switches say, a place of the agent's own within it excepted, a
+    /// writable root that stands inside the state, as its work directory does inside the run's.
+    /// </summary>
+    private AgentPolicyAnswer.Denied? KeptWriteRefusal(string asked, string resolved)
+    {
+        if (_ground.WorktreeRules || _ground.SideTask)
+        {
+            foreach (var root in _allRoots)
+            {
+                foreach (var form in new[] { asked, resolved })
+                {
+                    // Git's own at any depth, as Claude Code's own guard holds it: a nested repository's or a
+                    // submodule's .git runs its hooks as surely as the root's. Whatever protectedPaths says, and for a
+                    // step's ground under the worktree rules - which a side-task's ground holds off, keeping this one
+                    // alone of them, for git's own files are written by git's verbs and this tool's.
+                    if (Beneath(root, form, Refusals) is { } relative && relative.Split('/').Any(segment => segment.Equals(".git", Refusals)))
+                    {
+                        return new AgentPolicyAnswer.Denied(
+                            GitsOwnRule,
+                            AgentPolicySource.Builtin,
+                            $"'{form}' is git's own: written by git's verbs and this tool's, never by an agent's file tool, whatever protectedPaths says");
+                    }
                 }
             }
         }
@@ -667,6 +689,66 @@ public sealed class AgentPolicy
                 "the tool's own state",
                 AgentPolicySource.Builtin,
                 $"'{resolved}' is the tool's own state: written by its verbs alone, never by an agent's - its own place within it alone excepted");
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The refusals every ground keeps on a write (<see cref="KeptWriteRefusal"/>), held to what a command writes
+    /// (<see cref="CommandAnalysis.WriteTargets"/>): each place its output redirects name and each a file-writing program's
+    /// words name, spelled against every place the command may stand in - a pattern the shell expands refused where it may
+    /// reach git's own files or the tool's state. A command that writes no file this reads meets the fold, as before.
+    /// </summary>
+    /// <param name="targets">What the command writes, as it spells each.</param>
+    /// <param name="places">Every directory a path of the command may be read against.</param>
+    /// <param name="whole">The command whole, as the denial names it.</param>
+    private AgentPolicyAnswer.Denied? CommandWriteRefusal(IReadOnlyList<string> targets, IReadOnlyList<string> places, string whole)
+    {
+        foreach (var (target, place) in targets
+            .Where(target => target.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .SelectMany(target => places.Distinct(StringComparer.Ordinal).Select(place => (target, place))))
+        {
+            IReadOnlyList<string> readings;
+
+            try
+            {
+                readings = Spelled(target, place);
+            }
+            catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
+            {
+                // A word that is no path names no place a refusal holds.
+                continue;
+            }
+
+            foreach (var asked in readings)
+            {
+                AgentPolicyAnswer.Denied? refused;
+
+                if (asked.IndexOfAny(['*', '?', '[']) >= 0)
+                {
+                    refused = (_ground.WorktreeRules || _ground.SideTask) && asked.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries).Any(segment => SegmentPattern(segment).IsMatch(".git"))
+                        ? new AgentPolicyAnswer.Denied(GitsOwnRule, AgentPolicySource.Builtin, string.Empty)
+                        : _state.Any(state => GlobReaches(asked, state))
+                            ? new AgentPolicyAnswer.Denied("the tool's own state", AgentPolicySource.Builtin, string.Empty)
+                            : null;
+                }
+                else
+                {
+                    refused = KeptWriteRefusal(asked, Resolved(asked));
+                }
+
+                if (refused is { } denied)
+                {
+                    return denied with
+                    {
+                        Reason = denied.Rule == GitsOwnRule
+                            ? $"'{whole}' writes '{target}', git's own: written by git's verbs and this tool's, never by an agent's command"
+                            : $"'{whole}' writes '{target}', the tool's own state: written by its verbs alone, never by an agent's",
+                    };
+                }
+            }
         }
 
         return null;
@@ -827,6 +909,13 @@ public sealed class AgentPolicy
 
             for (var start = environment; start < starts; start++)
             {
+                // What the program there writes - its output redirects, and the files a writer's words name - meets the
+                // refusals every ground keeps on a write, as a file tool's write does: a side-task has no fold after it.
+                if (CommandWriteRefusal(CommandAnalysis.WriteTargets(analyzed, start), places, string.Join(' ', analyzed.Whole)) is { } written)
+                {
+                    return written;
+                }
+
                 IReadOnlyList<string> words = [.. command.Take(environment), .. command.Skip(start)];
 
                 if (Decided(analyzed, start, words, comparison).Refusal() is { } denied)
@@ -837,6 +926,29 @@ public sealed class AgentPolicy
         }
 
         return AgentPolicyAnswer.Allow;
+    }
+
+    /// <summary>
+    /// Why <c>run-side-task</c> is refused, where the program at <paramref name="start"/> starts it - by its own name, or
+    /// as this tool's verb, the tool started by its name, its path or its assembly under <c>dotnet</c>, as the command's
+    /// reading names every program - to every agent alike, a side-task's own included: a side-task is a person's own
+    /// conversation in the person's terminal, with no limit of a run's, and no agent starts one. The first line of the
+    /// rule: the command refuses itself as well where it is started under an agent
+    /// (<see cref="AgentChildEnvironment.AgentMarker"/>), so a copy of the program under another name starts none either.
+    /// Null where the command starts none.
+    /// </summary>
+    private static AgentPolicyAnswer.Denied? SideTaskRefusal(string program, IReadOnlyList<string> command, int start)
+    {
+        var roots = StringComparer.OrdinalIgnoreCase;
+        var named = roots.Equals(program, SideTasks.SideTaskService.RunCommand)
+            || (roots.Equals(program, ToolPackage.Command) && start + 1 < command.Count && roots.Equals(command[start + 1], SideTasks.SideTaskService.RunCommand));
+
+        return named
+            ? new AgentPolicyAnswer.Denied(
+                SideTasks.SideTaskService.RunCommand,
+                AgentPolicySource.Builtin,
+                $"'{SideTasks.SideTaskService.RunCommand}' is refused: {SideTasks.SideTaskService.NoAgentStartsOne}")
+            : null;
     }
 
     /// <summary>
@@ -893,7 +1005,7 @@ public sealed class AgentPolicy
         // The tool's own verbs are refused whatever worktreeRules says: an agent does not move its own run. A verb read
         // from a response file is one this cannot see, and is refused alike. A side-task's agent is the one exception on
         // the verbs themselves: it works as the person's own session does, over the main tree, and the tool's verbs are
-        // open to it - run-side-task alone stays refused, for an agent does not start another agent.
+        // open to it - run-side-task alone stays refused (SideTaskRefusal).
         if (roots.Equals(program, ToolPackage.Command) && start + 1 < command.Count && command[start + 1].StartsWith('@'))
         {
             return new AgentPolicyAnswer.Denied(
@@ -902,13 +1014,9 @@ public sealed class AgentPolicy
                 $"'{ToolPackage.Command} {command[start + 1]}' is refused: its verb is in a file this does not read, and an agent does not move its own run");
         }
 
-        if (roots.Equals(program, ToolPackage.Command) && start + 1 < command.Count
-            && roots.Equals(command[start + 1], SideTasks.SideTaskService.RunCommand))
+        if (SideTaskRefusal(program, command, start) is { } sideTask)
         {
-            return new AgentPolicyAnswer.Denied(
-                "run-side-task",
-                AgentPolicySource.Builtin,
-                $"'{ToolPackage.Command} {SideTasks.SideTaskService.RunCommand}' is refused: an agent does not leave its step's limits");
+            return sideTask;
         }
 
         if (!_ground.SideTask && roots.Equals(program, ToolPackage.Command) && start + 1 < command.Count
@@ -918,14 +1026,6 @@ public sealed class AgentPolicy
                 "the orchestrator and agent verbs",
                 AgentPolicySource.Builtin,
                 $"'{ToolPackage.Command} {command[start + 1]}' is refused: an agent does not move its own run");
-        }
-
-        if (roots.Equals(program, SideTasks.SideTaskService.RunCommand))
-        {
-            return new AgentPolicyAnswer.Denied(
-                "run-side-task",
-                AgentPolicySource.Builtin,
-                $"'{SideTasks.SideTaskService.RunCommand}' is refused: an agent does not leave its step's limits");
         }
 
         // The Run rules, against each reading of the command's own words in turn: git configured

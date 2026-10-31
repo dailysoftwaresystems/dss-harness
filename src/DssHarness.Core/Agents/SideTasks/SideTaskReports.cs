@@ -9,8 +9,9 @@ namespace DssHarness.Core.Agents.SideTasks;
 
 /// <summary>
 /// What the two side-task commands answer: the listing of <c>list-side-tasks</c>, the one document of a one-shot
-/// <c>run-side-task --json</c>, and the stopped form each answers where it stops before its turn. The records' directory
-/// is named on every exit, in text and in the document.
+/// <c>run-side-task --json</c>, and the stopped form each answers where it stops before its turn. The records are named on
+/// every exit, in text and in the document - the side-task's own directory once it was claimed, and where it was not, a
+/// line saying none were written.
 /// </summary>
 public static class SideTaskReports
 {
@@ -69,71 +70,67 @@ public static class SideTaskReports
     }
 
     /// <summary>
-    /// The one document of a one-shot side-task: the task and its records, how the turn stood, what served it, what it
-    /// used and cost, its turns and calls, its denials, its final text and its exit code.
+    /// The one document of a one-shot side-task: the exit code and the line the command ends on, then the task and its
+    /// records, how the turn stood, what served it, what it used and cost, its turns and calls, its denials and its final
+    /// text - the members of <see cref="Empty"/>, filled.
     /// </summary>
+    /// <param name="exitCode">The exit code the command answers.</param>
+    /// <param name="summary">The line the command ends on.</param>
     /// <param name="task">The side-task's name.</param>
     /// <param name="records">The side-task's records.</param>
     /// <param name="result">How the turn ended.</param>
     /// <param name="denials">The turn's denials, as they were said; empty where none were.</param>
-    /// <param name="turns">The side-task's turns, this one's included.</param>
-    /// <param name="exitCode">The exit code the command answers.</param>
-    public static string One(string task, string records, AgentRunResult result, IReadOnlyList<string> denials, IReadOnlyList<SideTaskTurn> turns, int exitCode)
+    /// <param name="turn">The turn's own record, which names its client and provider.</param>
+    public static string One(int exitCode, string summary, string task, string records, AgentRunResult result, IReadOnlyList<string> denials, SideTaskTurn turn)
     {
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(denials);
-        ArgumentNullException.ThrowIfNull(turns);
+        ArgumentNullException.ThrowIfNull(turn);
 
-        var last = turns is [_, ..] whole ? whole[^1] : null;
-
-        return new JsonObject
-        {
-            ["task"] = task,
-            ["records"] = records,
-            ["status"] = result.Status.ToString(),
-            ["client"] = last?.Client,
-            ["provider"] = last?.Provider,
-            ["model"] = result.Served is [_, ..] served ? served[0].Model : result.Model,
-            ["served"] = new JsonArray([.. result.Served.Select(one => (JsonNode?)one.Model)]),
-            ["usage"] = result.Usage is null ? null : Usage(result.Usage.Total),
-            ["cost"] = result.Usage?.Cost?.Usd is { } cost ? Math.Round(cost, 4) : null,
-            ["turns"] = result.Turns,
-            ["toolCalls"] = result.ToolCalls,
-            ["filesWritten"] = new JsonArray([.. result.Files.Select(file => (JsonNode?)file)]),
-            ["webRequests"] = result.WebRequests,
-            ["denials"] = new JsonArray([.. denials.Select(denial => (JsonNode?)denial)]),
-            ["finalText"] = result.FinalText,
-            ["exitCode"] = exitCode,
-        }.ToJsonString(ReportJson.Options);
+        return ReportJson.Stopped(exitCode, summary, Members(task, records, result, denials, turn));
     }
 
     /// <summary>
-    /// The stopped form of the side-task commands' documents, where they stop before a turn: the same members, empty,
-    /// the exit code first.
+    /// The stopped form of <c>run-side-task</c>'s document, where it stops before its turn has a result: the exit code and
+    /// the line first, then the members of <see cref="Empty"/> - the task and its records named where the side-task was
+    /// claimed and they were written, null where none were.
     /// </summary>
     /// <param name="exitCode">The exit code the command stops with.</param>
     /// <param name="summary">The line the command stops on.</param>
-    public static string Stopped(int exitCode, string summary)
-        => new JsonObject
+    /// <param name="task">The side-task's name, where it was claimed; null where it was not.</param>
+    /// <param name="records">The side-task's records, where they were written; null where none were.</param>
+    public static string Stopped(int exitCode, string summary, string? task = null, string? records = null)
+        => ReportJson.Stopped(exitCode, summary, Empty(task, records));
+
+    /// <summary>
+    /// The members of <c>run-side-task</c>'s document holding nothing but the task and its records: the one shape its one
+    /// document fills and its stopped form leaves empty.
+    /// </summary>
+    /// <param name="task">The side-task's name; null where none was claimed.</param>
+    /// <param name="records">The side-task's records; null where none were written.</param>
+    public static JsonObject Empty(string? task = null, string? records = null)
+        => Members(task, records, result: null, denials: [], turn: null);
+
+    /// <summary>The members of <c>run-side-task</c>'s document, in their order, from what the side-task holds.</summary>
+    private static JsonObject Members(string? task, string? records, AgentRunResult? result, IReadOnlyList<string> denials, SideTaskTurn? turn)
+        => new()
         {
-            ["exitCode"] = exitCode,
-            ["summary"] = summary,
-            ["task"] = null,
-            ["records"] = null,
-            ["status"] = null,
-            ["client"] = null,
-            ["provider"] = null,
-            ["model"] = null,
-            ["served"] = new JsonArray(),
-            ["usage"] = null,
-            ["cost"] = null,
-            ["turns"] = 0,
-            ["toolCalls"] = 0,
-            ["filesWritten"] = new JsonArray(),
-            ["webRequests"] = 0,
-            ["denials"] = new JsonArray(),
-            ["finalText"] = null,
-        }.ToJsonString(ReportJson.Options);
+            ["task"] = task,
+            ["records"] = records,
+            ["status"] = result?.Status.ToString(),
+            ["client"] = turn?.Client,
+            ["provider"] = turn?.Provider,
+            ["model"] = result is null ? null : result.Served is [_, ..] served ? served[0].Model : result.Model,
+            ["served"] = new JsonArray([.. (result?.Served ?? []).Select(one => (JsonNode?)one.Model)]),
+            ["usage"] = result?.Usage is { } usage ? Usage(usage.Total) : null,
+            ["cost"] = result?.Usage?.Cost?.Usd is { } cost ? Math.Round(cost, 4) : null,
+            ["turns"] = result?.Turns ?? 0,
+            ["toolCalls"] = result?.ToolCalls ?? 0,
+            ["filesWritten"] = new JsonArray([.. (result?.Files ?? []).Select(file => (JsonNode?)file)]),
+            ["webRequests"] = result?.WebRequests ?? 0,
+            ["denials"] = new JsonArray([.. denials.Select(denial => (JsonNode?)denial)]),
+            ["finalText"] = result?.FinalText,
+        };
 
     /// <summary>
     /// The stopped form of the listing's document, where it stops before it listed anything: the same members, the

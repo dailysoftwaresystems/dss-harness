@@ -945,6 +945,65 @@ public sealed class ToolLoopTests : IDisposable
         Assert.False(Directory.Exists(_sessions));
     }
 
+    /// <summary>
+    /// What the provider's own search used - a side-task's native part: its tokens, the results billed as input among
+    /// them, and its searches - joins the run's usage, as the serving model's, and is priced as every request of the
+    /// provider's is: its tokens at the model's prices, its searches at the provider's.
+    /// </summary>
+    [Fact]
+    public async Task WhatTheProvidersOwnSearchUsed_JoinsTheRunsUsage_AndIsPriced()
+    {
+        var run = Run(capabilities: [AgentCapability.Read, AgentCapability.Web]) with
+        {
+            WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()),
+            NativeSearch = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1)),
+        };
+        _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by")))).Answer(FakeChat.Said("done"));
+
+        var result = await Ran(run, Terms(perThousandSearches: 10), loop: Loop(search: true));
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(new AgentUsage(1200, 70, 0, 0, 0, 1), result.Usage!.Total);
+        Assert.Equal([new AgentModelUsage(FakeChat.Model, new AgentUsage(1200, 70, 0, 0, 0, 1))], result.Usage.PerModel);
+
+        // Two requests of the chat at 100 in and 10 out each, and the search's 1,000 in, 50 out and one search: at 5 and
+        // 25 a million tokens and 10 a thousand searches.
+        Assert.Equal(new AgentCost(Counted: 0.01775m), result.Usage.Cost);
+    }
+
+    /// <summary>The provider's own search, answering one result and saying what its request used.</summary>
+    private sealed class UsingNativeSearch(AgentUsage used) : IAgentNativeSearch
+    {
+        public string Source => "native";
+
+        public Task<(DssHarness.Core.Web.Search.WebSearchPart Part, AgentUsage Used)> SearchAsync(string query, CancellationToken cancellationToken)
+            => Task.FromResult((
+                new DssHarness.Core.Web.Search.WebSearchPart(
+                    Source,
+                    Source,
+                    1,
+                    query,
+                    DssHarness.Core.Web.Search.WebSearchAnswer.Read([new DssHarness.Core.Web.Search.WebSearchResult("One", "https://one.example.test/", "the one")]),
+                    Withheld: 0,
+                    Cached: false,
+                    KeyMissing: null),
+                used));
+    }
+
+    /// <summary>The harness's own search for a loop's host, over <paramref name="fetch"/>, its pace and indexes beside the step.</summary>
+    private DssHarness.Core.Web.Search.HarnessWebSearch Search(HarnessFetch fetch)
+    {
+        var files = new PhysicalFileSystem(DssHarness.Core.Platform.FilePermissionsFactory.Create());
+        var indexes = new DssHarness.Core.Web.Index.WebIndexes(files, new DssHarness.Core.Web.Index.SitemapFill(files, fetch, TimeProvider.System, (_, _) => Task.CompletedTask), TimeProvider.System);
+        var pace = new DssHarness.Core.Web.Search.WebSearchPace(files, () => Path.Combine(_step, "..", "pace.json"), TimeProvider.System, (_, _) => Task.CompletedTask);
+        var search = new DssHarness.Core.Web.Search.HarnessWebSearch(DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild, fetch, indexes, pace, files, TimeProvider.System);
+
+        _opened.Add(search);
+        _opened.Add(indexes);
+
+        return search;
+    }
+
     /// <summary>No request is sent once the step's budget is spent: an answer that spent it and needs a repair ends the run there.</summary>
     [Fact]
     public async Task NoRequestIsSent_OnceTheBudgetIsSpent()
@@ -2003,10 +2062,10 @@ public sealed class ToolLoopTests : IDisposable
     private static AgentLimits Limits(int? maxTurns = null, decimal? budget = null, TimeSpan? maxDuration = null, int? stallSeconds = null)
         => new(maxTurns, budget, maxDuration, stallSeconds);
 
-    private static ToolLoopTerms Terms(double? priceHit = 1, int maxRetries = 3, TimeSpan? maxRetryWait = null, string currency = "USD", long maxOutput = 64000)
+    private static ToolLoopTerms Terms(double? priceHit = 1, int maxRetries = 3, TimeSpan? maxRetryWait = null, string currency = "USD", long maxOutput = 64000, double? perThousandSearches = null)
         => new(
             "claude-api",
-            new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Currency = currency },
+            new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Currency = currency, PricePerThousandSearches = perThousandSearches },
             new AgentModelConfig { Code = FakeChat.Model, MaxOutputTokens = maxOutput, ContextTokens = 200000, PriceInputMiss = 5, PriceInputHit = priceHit, PriceOutput = 25 },
             maxRetries,
             maxRetryWait);
@@ -2076,11 +2135,11 @@ public sealed class ToolLoopTests : IDisposable
             Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", "sk-1")]),
         };
 
-    private ToolLoop Loop(IFileSystem? fileSystem = null, IProcessRunner? processes = null, Func<TimeSpan, CancellationToken, Task>? wait = null, Func<double>? jitter = null, TimeProvider? clock = null)
+    private ToolLoop Loop(IFileSystem? fileSystem = null, IProcessRunner? processes = null, Func<TimeSpan, CancellationToken, Task>? wait = null, Func<double>? jitter = null, TimeProvider? clock = null, bool search = false)
     {
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
         var files = fileSystem ?? _harness.FileSystem;
-        var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), TimeProvider.System);
+        var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), TimeProvider.System, search: search ? Search(fetch) : null);
         _opened.Add(fetch);
 
         return new ToolLoop(
