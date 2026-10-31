@@ -140,7 +140,7 @@ internal static class AnswerOrchestratorCommand
 
     private static readonly Option<bool> AgainOption = new("--again")
     {
-        Description = "Change the last answer a person gave the run - the one set the command shows - within the minutes its workflow names and once; where the run has begun to plan, this build records the change as refused, for it plans no update yet.",
+        Description = "Change the last answer a person gave the run - the one set the command shows - within the minutes its workflow names and once; where the run has begun the scope its plan updates are planned in, the change raises the workflow's planning step and the run is held while it plans (or is queued behind an update under way).",
     };
 
     private static readonly Option<string?> TextOption = new("--text")

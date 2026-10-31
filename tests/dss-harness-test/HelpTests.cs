@@ -142,7 +142,7 @@ public sealed partial class HelpTests
         var prose = Prose.Words(result.StandardOutput);
 
         Assert.Contains(
-            ".harness-config/workflows/.env/ contents ignored; the agent clients' keys, NAME=value files, every file merged, "
+            ".harness-config/workflows/.env/ contents ignored, .gitkeep tracked; the agent clients' keys, NAME=value files, every file merged, "
                 + "no key read from anywhere else; no workflow may be named .env",
             prose,
             StringComparison.Ordinal);
@@ -153,6 +153,32 @@ public sealed partial class HelpTests
         Assert.Contains("# .harness-config/workflows/.env/keys.env", clients, StringComparison.Ordinal);
         Assert.Contains("ANTHROPIC_API_KEY= # the Anthropic API key", clients, StringComparison.Ordinal);
         Assert.Contains("ZAI_API_KEY= # the Z.AI API key", clients, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The layout topic and the README's Layout block are one list: the topic says every place of it with what it holds,
+    /// and the block is that list a line to a place, in the same order and the same words - the side-tasks' records, the
+    /// skills, the key-spend record and a run's asks among them - so neither names a place the other leaves out.
+    /// </summary>
+    [Fact]
+    public void TheLayoutTopic_AndTheReadmesLayoutBlock_AreOneList()
+    {
+        var layout = Prose.Words(HelpText.Of("layout").StandardOutput);
+
+        foreach (var (path, text) in HelpTopics.LayoutEntries)
+        {
+            Assert.Contains($"{path} {text}", layout, StringComparison.Ordinal);
+        }
+
+        const string Opening = "## Layout\n\n```\n";
+        var readme = File.ReadAllText(Path.Combine(Prose.RepositoryRoot(), "README.md")).Replace("\r\n", "\n", StringComparison.Ordinal);
+        var body = readme[(readme.IndexOf(Opening, StringComparison.Ordinal) + Opening.Length)..];
+        var block = body[..body.IndexOf("\n```", StringComparison.Ordinal)].Split('\n');
+
+        Assert.Equal(HelpTopics.LayoutEntries.Select(entry => $"{entry.Path,-44} {entry.Text}"), block);
+        Assert.Contains(
+            (HarnessLayout.SideTasksDirectoryName + "/", "contents ignored, .gitkeep tracked; the side-tasks' records, in the main checkout ('dssharness help side-tasks')"),
+            HelpTopics.LayoutEntries);
     }
 
     /// <summary>
@@ -541,7 +567,7 @@ public sealed partial class HelpTests
         Assert.Contains("writes outside an agent's writable roots, every read and write of a", prose, StringComparison.Ordinal);
         Assert.Contains("this tool's own verbs and run-side-task, run by any program or from a response file, whatever any switch says: an agent", prose, StringComparison.Ordinal);
         Assert.Contains(
-            $"nor leave its step's limits - nor do the gh commands that hand its work to another agent or install what the next launch loads ({string.Join(", ", AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too - nor does any command print a credential, whatever the worktree rules say ({string.Join(", ", AgentPolicy.CredentialPrintingCommands)}): a credential leaves its slot only by the key store that holds it, never through an agent's words.",
+            $"nor leave its step's limits - nor do the gh commands that hand its work to another agent or install what the next launch loads ({string.Join(", ", AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too - nor does any command print a credential, whatever the worktree rules say ({string.Join(", ", AgentPolicy.CredentialPrintingCommands)}; a * any helper's name, and the words after a command met anywhere after it, options before or between them): a credential leaves its slot only by the key store that holds it, never through an agent's words.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("every read and write of a credential slot or a Claude Code directory of the run's and every search over one", prose, StringComparison.Ordinal);
@@ -686,7 +712,7 @@ public sealed partial class HelpTests
         Assert.Contains("A key Claude Code reports invalid is passed over, and while the step has done no work the next key is given a new launch", prose, StringComparison.Ordinal);
         Assert.Contains(
             "the claude-code client below asks it of every call, the tool runtime below decides by it each call it runs - the web's of the claude-code client, served through "
-                + "the engine's tool server, and every call of the API clients, the claude-api and glm clients below - and no command of this build runs an agent yet.",
+                + "the engine's tool server, and every call of the API clients, the claude-api and glm clients below - for every agent a command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a side-task.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("a second layer, for the engine is asked about every other call and answers from this policy in its own process, and a call those rules refuse first is counted and recorded as Claude Code's own denial.", prose, StringComparison.Ordinal);
@@ -800,7 +826,12 @@ public sealed partial class HelpTests
 
         // The credential-printing refusal and the quote-aware reading of expansions, in every document that says them.
         Assert.Contains(
-            "and so is any command that prints a credential (`gh auth token`, `git credential fill`, `git credential-manager get`,",
+            "and so is any command that prints a credential (`gh auth token`, `gh auth status --show-token` or `-t`, "
+                + "`gh auth git-credential get`, `gh config get oauth_token`, `git credential fill`, and any helper's "
+                + "`git credential-* get` - `credential-store`, `credential-manager`, `credential-osxkeychain` and the rest - each "
+                + "met by its words anywhere after its command, options before or between them; an alias given one - `git config "
+                + "alias.cf 'credential fill'`, `git -c alias...`, `gh alias set` - is read as the command it names where it is "
+                + "given, and `gh alias import` is refused)",
             Prose.Document("README.md"),
             StringComparison.Ordinal);
         Assert.Contains("(`AgentPolicy.CredentialPrintingCommands`, pinned by a test and printed by `help agent-clients`", architecture, StringComparison.Ordinal);
@@ -836,7 +867,7 @@ public sealed partial class HelpTests
         Assert.Contains("a call those rules refuse before the engine is asked is counted and recorded as Claude Code's own denial.", readme, StringComparison.Ordinal);
         Assert.Contains(
             "the tool runtime below decides by it each call it runs - the web's of the `claude-code` client, served through the engine's tool "
-                + "server, and every call of the API clients, the `claude-api` and `glm` clients below - and no command of this build runs an agent yet.",
+                + "server, and every call of the API clients, the `claude-api` and `glm` clients below - for every agent a command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a side-task.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1978,9 +2009,16 @@ public sealed partial class HelpTests
                 + "the leg's log, each file's tree as it stood under the build directory, within keepOnFailureCapBytes kept "
                 + $"in all ({DiskSpace.Size(DssHarness.Core.Testing.KeptOnFailure.DefaultCapBytes)} where it is left out). A pass keeps "
                 + "nothing, and a later step reads nothing from it: it is evidence beside the verdict, never an output, and "
-                + "a failed step still keeps nothing of what one reads. The leg's line names the directory, how many files "
-                + "were kept and their size, and how many were refused over the cap, could not be read, or named nothing - "
-                + "a path naming nothing is said, not refused, for the failure may have been before it was written. On a "
+                + "a failed step still keeps nothing of what one reads. Only a file of its own is copied: a link is never "
+                + "kept through - what it leads to is kept where an entry names that - and a pipe or a device is no file to "
+                + "read. Each is measured by what it holds as it is read, and no more of it is copied than the cap has "
+                + "left, so a file that grows past the cap as it is read is refused over it. A directory beneath an entry "
+                + "that cannot be read is passed by and named, the files beside it kept, and a stop while the evidence "
+                + "crosses keeps what is already kept and names what it left. The leg's line names the directory, how many "
+                + "files were kept and their size, and how many were refused over the cap, could not be read, were left as "
+                + "links, named nothing or were left uncopied by a stop - a path naming nothing is said, not refused, for "
+                + "the failure may have been before it was written. A keepOnFailureCapBytes given where no keepOnFailure it "
+                + "applies to names a path caps nothing, and is refused. On a "
                 + "leg a WSL or ssh host runs, the copy is kept beside that host's own log and crosses back over the host's "
                 + "transport: 'sync --pull' takes the kept-on-failure directory within that host's run.",
             said,
@@ -3745,7 +3783,8 @@ public sealed partial class HelpTests
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
-            $"{record} ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
+            $"{HarnessLayout.OrchestratorsDirectoryName}/<o>/.../<instance>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension} "
+            + "ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
             + "runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a "
             + "leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by "
             + "stop-orchestrator --now - once its starter has gone",
@@ -4173,8 +4212,8 @@ public sealed partial class HelpTests
         // What push and pull-request do, held to the codes they end with, the file one writes and the closed list of
         // commands the publishing steps run, each with its own limit.
         Assert.Contains(
-            "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (no step "
-                + "records an assumption yet) and the issues it found there before - say 'none' alike where they name nothing.",
+            "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (each "
+                + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing.",
             workflows,
             StringComparison.Ordinal);
         Assert.Equal(WorkflowExpressions.RunTexts.Order(StringComparer.Ordinal), ["assumptions", "leftover", "notRun", "preExisting", "ran", "red"]);

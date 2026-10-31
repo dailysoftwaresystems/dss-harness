@@ -21,8 +21,15 @@ namespace DssHarness.Core.Testing;
 /// </param>
 /// <param name="Bytes">How much the kept files hold.</param>
 /// <param name="Kept">Each file kept, relative to the build directory with forward slashes, in the order kept.</param>
-/// <param name="RefusedOverCap">Each file left out because the cap was spent, named as <see cref="Kept"/> names one.</param>
-/// <param name="Unreadable">Each file that could not be read, and each entry naming a directory that could not be.</param>
+/// <param name="RefusedOverCap">
+/// Each file left out because what it holds - as it is read, never as its entry in the directory says - would pass the
+/// cap, named as <see cref="Kept"/> names one.
+/// </param>
+/// <param name="Unreadable">
+/// Each file that could not be read - a pipe, a socket or a device among them, which is no file to read - each entry
+/// naming a directory that could not be, and each directory beneath one that a walk passed by because it could not be
+/// read, named as <see cref="Kept"/> names one.
+/// </param>
 /// <param name="NamedNothing">
 /// Each declared entry that names nothing: said, not refused, because the failure may have been before it was written.
 /// </param>
@@ -34,6 +41,18 @@ public sealed record KeptOnFailure(
     IReadOnlyList<string> Unreadable,
     IReadOnlyList<string> NamedNothing)
 {
+    /// <summary>
+    /// Each file an entry named that is a link, left as it is: nothing is kept through a link - what it leads to may be
+    /// outside the build directory, or of any size - and the file it leads to is kept where an entry names that.
+    /// </summary>
+    public IReadOnlyList<string> Links { get; init; } = [];
+
+    /// <summary>
+    /// Each file a stop left uncopied: the keep ends between one file and the next, and mid-file, when its run is stopped,
+    /// keeping what it already kept, and what it had still to copy is named here rather than nowhere.
+    /// </summary>
+    public IReadOnlyList<string> LeftAtStop { get; init; } = [];
+
     /// <summary>What the leg's run directory calls the evidence: <c>kept-on-failure</c>, below the leg's own directory.</summary>
     public const string DirectoryName = "kept-on-failure";
 
@@ -53,12 +72,14 @@ public sealed record KeptOnFailure(
     /// <param name="paths">The leg's directories, which fill the names an entry may use.</param>
     /// <param name="buildDirectory">The leg's build directory, the root every entry is relative to.</param>
     /// <param name="destination">Where the evidence is kept; the leg's own <see cref="DirectoryName"/> directory below it.</param>
-    /// <param name="cancellationToken">Stops between files, keeping what is already kept.</param>
+    /// <param name="cancellationToken">Stops between files and within one, keeping what is already kept whole and naming what was left.</param>
     /// <returns>What was kept and what was not, or <see langword="null"/> where nothing was asked for.</returns>
     /// <remarks>
     /// Never throws, and never changes a verdict: the evidence is beside it, and a keep that failed would trade a leg
-    /// that had reached its verdict for one that reached none. What cannot be read, and what names nothing, is named in
-    /// the answer instead.
+    /// that had reached its verdict for one that reached none. What cannot be read, what is a link, what names nothing
+    /// and what a stop left are named in the answer instead. Only a file of its own is copied, and no more of it than the
+    /// cap has left: its size is what it holds as it is read, for a directory entry's says nothing true of a link and
+    /// nothing at all of a file still growing.
     /// </remarks>
     public static async Task<KeptOnFailure?> KeepAsync(
         IFileSystem fileSystem,
@@ -82,8 +103,22 @@ public sealed record KeptOnFailure(
         var kept = new List<string>();
         var overCap = new List<string>();
         var unreadable = new List<string>();
+        var links = new List<string>();
+        var leftAtStop = new List<string>();
         var namedNothing = new List<string>();
         long bytes = 0;
+
+        // A directory beneath what a walk lists that cannot be read is passed by, and named, once: what it holds is
+        // evidence asked for and not kept, and the files beside it are kept all the same.
+        void Unread(string directory, Exception _)
+        {
+            var relative = PathPatterns.Normalize(Path.GetRelativePath(buildDirectory, directory));
+
+            if (!unreadable.Contains(relative, StringComparer.Ordinal))
+            {
+                unreadable.Add(relative);
+            }
+        }
 
         // Every file the entries name, relative to the build directory with forward slashes, each once: the order the
         // cap spends itself in, so the same configuration keeps the same files on every machine.
@@ -100,12 +135,10 @@ public sealed record KeptOnFailure(
                 return listed;
             }
 
-            // A directory beneath the build directory that cannot be read is passed by, as a walk of a tree's own
-            // files passes one by: a pattern that names only what it holds names nothing, which is said.
             listed =
             [
                 .. fileSystem
-                    .EnumerateReachableFiles(buildDirectory, (_, _) => { })
+                    .EnumerateReachableFiles(buildDirectory, Unread)
                     .Select(file => (Relative: PathPatterns.Normalize(Path.GetRelativePath(buildDirectory, file)), File: file))
                     .Where(entry => GlobPattern.Reads(entry.Relative)),
             ];
@@ -163,12 +196,9 @@ public sealed record KeptOnFailure(
                     }
                     else if (fileSystem.DirectoryExists(full))
                     {
-                        var beneath = fileSystem
-                            .EnumerateFiles(full, recursive: true)
-                            .Select(file => PathPatterns.Normalize(Path.GetRelativePath(buildDirectory, file)))
-                            .ToList();
-
-                        foreach (var file in beneath)
+                        // Walked as the patterns' listing is: one subdirectory that cannot be read is passed by and
+                        // named, never the whole entry lost with it.
+                        foreach (var file in fileSystem.EnumerateReachableFiles(full, Unread).Select(file => PathPatterns.Normalize(Path.GetRelativePath(buildDirectory, file))))
                         {
                             matched[file] = file;
                         }
@@ -185,43 +215,61 @@ public sealed record KeptOnFailure(
             }
         }
 
-        foreach (var relative in matched.Values)
+        var waiting = matched.Values.ToList();
+
+        for (var next = 0; next < waiting.Count; next++)
         {
+            var relative = waiting[next];
+
+            // A stop asked for while the evidence crossed keeps what already did and names what did not: the verdict is
+            // decided, and throwing here would trade it for a leg that reached none.
+            if (cancellationToken.IsCancellationRequested)
+            {
+                leftAtStop.AddRange(waiting.Skip(next));
+                break;
+            }
+
+            var full = Path.Combine(buildDirectory, relative);
+
             try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var full = Path.Combine(buildDirectory, relative);
-
-                if (fileSystem.StandingOf(full)?.Length is not { } size)
+                // Never through a link: what it leads to may lie outside the build directory, and is of any size.
+                if (fileSystem.KindOf(full) is PathKind.Link)
                 {
-                    unreadable.Add(relative);
+                    links.Add(relative);
                     continue;
                 }
 
-                if (bytes + size > capBytes)
-                {
-                    overCap.Add(relative);
-                    continue;
-                }
+                // Streamed, never held whole: a core dump is evidence this exists to keep, and a cap raised to hold one
+                // is not a promise that it fits in memory. Its size is what the opened file holds, and no more is copied
+                // than the cap has left, so a file that grows as it is read is refused, never kept past the cap.
+                var room = capBytes - bytes;
+                long copied = 0;
 
-                // Streamed, never held whole: a core dump is evidence this exists to keep, and a cap raised to hold
-                // one is not a promise that it fits in memory.
                 await using (var read = fileSystem.OpenRead(full))
                 {
+                    if (read.CanSeek && read.Length > room)
+                    {
+                        overCap.Add(relative);
+                        continue;
+                    }
+
                     fileSystem.WriteAtomic(
                         Path.Combine(destination, relative),
-                        write => read.CopyTo(write));
+                        write => copied = CopyAtMost(read, write, room, cancellationToken));
                 }
 
                 kept.Add(relative);
-                bytes += size;
+                bytes += copied;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                // A stop asked for while the evidence crossed keeps what already did: the verdict is decided, and
-                // throwing here would trade it for a leg that reached none.
+                leftAtStop.AddRange(waiting.Skip(next));
                 break;
+            }
+            catch (PastTheCapException)
+            {
+                overCap.Add(relative);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -229,7 +277,43 @@ public sealed record KeptOnFailure(
             }
         }
 
-        return new KeptOnFailure(destination, bytes, kept, overCap, unreadable, namedNothing);
+        return new KeptOnFailure(destination, bytes, kept, overCap, unreadable, namedNothing) { Links = links, LeftAtStop = leftAtStop };
+    }
+
+    /// <summary>
+    /// Copies <paramref name="read"/> into <paramref name="write"/> a block at a time, asking <paramref name="cancellationToken"/>
+    /// between blocks, and refuses past <paramref name="room"/> bytes: a file that grows as it is read is not kept past the
+    /// cap, however its directory entry measured it.
+    /// </summary>
+    /// <returns>How many bytes were copied.</returns>
+    /// <exception cref="PastTheCapException">The file held more than <paramref name="room"/> bytes.</exception>
+    /// <exception cref="OperationCanceledException">The run was stopped mid-file.</exception>
+    private static long CopyAtMost(Stream read, Stream write, long room, CancellationToken cancellationToken)
+    {
+        var buffer = new byte[81920];
+        long copied = 0;
+        int got;
+
+        while ((got = read.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            copied += got;
+
+            if (copied > room)
+            {
+                throw new PastTheCapException();
+            }
+
+            write.Write(buffer, 0, got);
+        }
+
+        return copied;
+    }
+
+    /// <summary>A file that held more, as it was read, than the cap had left: refused over the cap, its part-copy gone.</summary>
+    private sealed class PastTheCapException : Exception
+    {
     }
 
     /// <summary>

@@ -2397,7 +2397,7 @@ public static class HelpTopics
     /// <summary>
     /// The agent sections of config.json: the companies whose models the tool reaches, their keys in the git-ignored
     /// slot, the tiers a step runs on and the effort forms, the agents' policy and the claude-code client - said where a
-    /// person reads them, before the step runners are built (nothing here runs a step).
+    /// person reads them.
     /// </summary>
     /// <summary>
     /// The side-tasks topic: what a side-task is - an agent outside every workflow, a conversation between a person and
@@ -2803,9 +2803,9 @@ public static class HelpTopics
         builder.AppendLine("After a change, whether it ran or failed, what npm holds since is said. A client's update");
         builder.AppendLine("key (agentClients.<client>.update, true where nothing is said) and DISABLE_UPDATES in the");
         builder.AppendLine("tool's own environment (a setting of the person's, never a key) turn installing and");
-        builder.AppendLine("updating off, and a run that then needs one that is missing or too old will be refused with");
-        builder.AppendLine("the command to run by hand. The step runner that readies Claude Code before a run's first");
-        builder.AppendLine("step is what it builds next, and nothing here runs a step.");
+        builder.AppendLine("updating off, and a run that then needs one that is missing or too old is refused with the");
+        builder.AppendLine("command to run by hand. A run readies Claude Code so before a reasoning step that reaches it");
+        builder.AppendLine("starts its agent, and run-side-task before its chat.");
         builder.AppendLine();
         builder.AppendLine("What an agent may do is one policy, the same on every client: everything is allowed except");
         builder.AppendLine("the root actions, the places no agent reaches, and the restrictions - which only ever");
@@ -2840,7 +2840,8 @@ public static class HelpTopics
         builder.AppendLine("nor do the gh commands that hand its work to another agent or install what the next launch");
         builder.AppendLine($"loads ({string.Join(", ", Agents.Policy.AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too -");
         builder.AppendLine("nor does any command print a credential, whatever the worktree rules say");
-        builder.AppendLine($"({string.Join(", ", Agents.Policy.AgentPolicy.CredentialPrintingCommands)}):");
+        builder.AppendLine($"({string.Join(", ", Agents.Policy.AgentPolicy.CredentialPrintingCommands)}; a * any helper's name, and");
+        builder.AppendLine("the words after a command met anywhere after it, options before or between them):");
         builder.AppendLine("a credential leaves its slot only by the key store that holds it, never through an");
         builder.AppendLine("agent's words.");
         builder.AppendLine("No agent starts while this tool itself runs elevated: its step is recorded never started,");
@@ -2887,8 +2888,9 @@ public static class HelpTopics
         builder.AppendLine("silent or gone. The policy is built and holds every action behind it; the claude-code");
         builder.AppendLine("client below asks it of every call, the tool runtime below decides by it each call it");
         builder.AppendLine("runs - the web's of the claude-code client, served through the engine's tool server, and");
-        builder.AppendLine("every call of the API clients, the claude-api and glm clients below -");
-        builder.AppendLine("and no command of this build runs an agent yet.");
+        builder.AppendLine("every call of the API clients, the claude-api and glm clients below - for every agent a");
+        builder.AppendLine("command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a");
+        builder.AppendLine("side-task.");
         builder.AppendLine();
         AppendWrapped(builder, ClaudeCodeClientProse());
         builder.AppendLine();
@@ -2943,9 +2945,17 @@ public static class HelpTopics
             + "Run(git push *)) - and the expansion is read only where the shell would make it: the reader keeps, for "
             + "each word, which of its parts were quoted, so git 'p*sh' is a word no rule meets and "
             + "gh api 'repos/o/r/pulls?state=open' an endpoint that names no merge, while a double-quoted $x is a "
-            + "variable still and an unquoted * a glob; an argument list crosses no shell, so no word of one is an "
-            + "expansion however it is spelled, and what cmd reads again - a batch argument's percent among it - it "
-            + "expands wherever it stands; a pattern or a brace that may name a credential slot or a Claude Code directory is "
+            + "variable still and an unquoted * a glob - each word's quoting taken by where it stands, never lent it by "
+            + "another word spelled alike, and a PowerShell bareword's wildcards open, as pwsh on Linux and macOS "
+            + "expands them; an argument list crosses no shell, so a variable in one is the text it spells - but on "
+            + "Windows, where a program splits its own command line and a Cygwin or MSYS program expands a pattern or a "
+            + "brace in it, those are read as the expansions they may be - and what cmd reads again - a batch "
+            + "argument's percent among it - it expands wherever it stands; a program is never named by a pattern, "
+            + "however its characters are quoted, for PowerShell's call operator finds & 'C:\\Git\\cmd\\gi?.exe' by its "
+            + "wildcards; an alias given a command line - git config's setting of a key git runs, -c's, gh alias set's "
+            + "expansion - is read as that command where it is given, gh alias import's file refused; the rule a refusal "
+            + "names is the one that decided, a rule the command is before one it may be, and of those the person's "
+            + "own first; a pattern or a brace that may name a credential slot or a Claude Code directory is "
             + "refused as naming it, and a file:// address is read as the path it names. What it cannot read whole it "
             + "denies, said here, not guessed at: a script nested past four levels, a shell that reads its script from "
             + "its input (curl ... | sh), from a process substitution or from another open descriptor (/dev/fd/3, <&3), "
@@ -4501,8 +4511,12 @@ public static class HelpTopics
             + "the wrong shape; no path owned by two items, and none an item owns that it must not touch; the path budget of the "
             + "worktree each would get, with the copies and workers its legs keep inside it and the deepest file it owns; every "
             + "path it reuses or replaces there in the main tree, something under one of the three, and a why and a search for "
-            + "each thing it creates. A step given the pieces of a plan update (a scope that yields a list not empty) fails, saying "
-            + "this build does not check them yet; one whose items yield no list, or whose scope yields neither a list nor nothing, "
+            + "each thing it creates. A step given the pieces of a plan update (a scope that yields a list not empty) checks them "
+            + "with the items, each problem among the rest: each piece of one of the four kinds (added, changed, removed, told) "
+            + "and its texts; an added or a changed piece's item an item of the list, a removed piece's of a work item's shape; "
+            + "no two pieces naming one work item; a changed or a removed piece naming a work item the plan had before the "
+            + "update; and the items the update places checked with those of the round it joins, as one list - among themselves "
+            + "where the run has no round. One whose items yield no list, or whose scope yields neither a list nor nothing, "
             + "fails, as a definition that does not hold does. create-agent makes the agent the engine named for it - a<N>, one past the "
             + "highest the run's agent directories and step records hold, never given twice - for the model of the first reason "
             + "step that works in it, or the default tier's first model where none does, both written to the step's record before "
@@ -4665,8 +4679,8 @@ public static class HelpTopics
             + "marked independent, whatever each is named. A commit's message and variables read {carried.ran}, "
             + "{carried.notRun} and {carried.red} besides: the same three of the checks upstream of it that ended since the "
             + "newest commit upstream of it was done, a check whose failure was passed over among those that did not check. "
-            + "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (no "
-            + "step records an assumption yet) and the issues it found there before - say 'none' alike where they name nothing.");
+            + "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (each "
+            + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -4736,78 +4750,119 @@ public static class HelpTopics
         static string Under(string root, IReadOnlyList<string> texts) => string.Join(", ", texts.Select(text => $"{root}.{text}"));
     }
 
+    /// <summary>The column the layout topic writes what each place holds at.</summary>
+    private const int LayoutColumn = 37;
+
+    /// <summary>
+    /// Every place init creates or the tool keeps in a tree, each with what it holds, in the order the layout topic lists
+    /// them: the one list of them, which the README's Layout block is held to word for word.
+    /// </summary>
+    internal static IReadOnlyList<(string Path, string Text)> LayoutEntries { get; } =
+    [
+        (HarnessLayout.ConfigFileRelative, "tracked; the whole contract"),
+        ($"{HarnessLayout.WorkflowsDirectoryRelative}/<name>/<name>{HarnessLayout.WorkflowFileExtension}",
+            "tracked; one directory per workflow, holding its definition and every file that definition names - its agents, "
+            + $"prompts and schemas ('{ToolPackage.Command} help workflows'); each missing file written by init where "
+            + "config.json declares the implementation one"),
+        ($"{HarnessLayout.WorkflowsEnvSlotRelative}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the agent clients' keys, NAME=value files, every "
+            + $"file merged, no key read from anywhere else; no workflow may be named {HarnessLayout.WorkflowsEnvSlotName}"),
+        ($"{AgentSkills.HarnessPlace}/<name>/",
+            "tracked; the tool's own place a step's prompt names a skill from; init creates nothing there "
+            + $"('{ToolPackage.Command} help skills')"),
+        ($"{HarnessLayout.RunnerActionsDirectoryRelative}/<name>/<name>.yml",
+            "tracked; one directory per action, holding its steps and whatever those steps run"),
+        ($"{HarnessLayout.RunnerDirectoryRelative}/{HarnessLayout.RunnerEnvDirectoryName}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; values actions read"),
+        ($"{HarnessLayout.RunnerDirectoryRelative}/{HarnessLayout.RunnerSecretsDirectoryName}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; secret values actions read"),
+        ($"{HarnessLayout.DirectoryName}/{HarnessLayout.SshItemsDirectoryName}/<name>/",
+            $"ignored, and written by you, not init: {HarnessLayout.ItemEnvFileName} (address, user, port), "
+            + $"{HarnessLayout.ItemKeyFileName}, {HarnessLayout.ItemKnownHostsFileName}"),
+        ($"{HarnessLayout.DirectoryName}/{HarnessLayout.WslDistrosDirectoryName}/<name>/",
+            $"ignored; {HarnessLayout.ItemEnvFileName} (distribution, credential)"),
+        ($"{WorktreeSettings.SeededRoot}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the worktrees, at worktrees.root, which init writes as this"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; what each orchestrator and its agents keep, in the "
+            + $"main checkout, and never sent to a host by sync ('{ToolPackage.Command} help orchestrators')"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.RecordFileName}", "ignored; the orchestrator's record"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.LogsDirectoryName}/<name>{OrchestratorLayout.LogExtension}",
+            "ignored; a line for each run that reached it or one of its agents, refusals included; a dry run writes none"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.PlansDirectoryName}/<name>/",
+            "ignored; its plans, and each agent's"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.WorkDirectoryName}/<agent>/",
+            "ignored; an agent's scratch and task files"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/",
+            "ignored; an agent's record, seed, the bytes it shares, rows, the rows applied, kept evidence"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.StepsDirectoryName}/<instance>/",
+            "ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its "
+            + $"{OrchestratorLayout.HandoffFileName} where one stopped it"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/",
+            "ignored; API clients only: one conversation with the provider, in the provider's own form"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.StepsDirectoryName}/<instance>/",
+            "ignored; one step of a run that no agent owns, the create-agent that makes an agent included"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/.../<instance>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}",
+            "ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
+            + "runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what "
+            + "carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and "
+            + "by stop-orchestrator --now - once its starter has gone"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AsksDirectoryName}/",
+            "ignored; one directory for each call of ask-orchestrator and ask-orchestrator-status: the facts it was given, "
+            + "the files of its reporter's attempt and ask.json; the engine never reads it"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}",
+            "ignored; a run's web search: what each source found once for the run, and each query it answered, which the "
+            + "same query again is answered from; written by every client whose step searches"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/{OrchestratorLayout.WebIndexesDirectoryName}/<source>/",
+            "ignored; the harness's own index of a sitemap search source's site: its state, its pages and the pages it "
+            + "could not read, and its fill's record of each address it asked"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/{DssHarness.Core.Agents.AgentKeySpend.FileName}",
+            "ignored; what each key spent, by its name and never its value: a line for each entry of a step's order or of "
+            + "a side-task's turn that ran, its lines older than seven days dropped when it is next written, read where "
+            + $"balanceKeyUsage chooses a key ('{ToolPackage.Command} help agent-clients')"),
+        ($"{HarnessLayout.SideTasksDirectoryName}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the side-tasks' records, in the main checkout "
+            + $"('{ToolPackage.Command} help side-tasks')"),
+        ($"{HarnessLayout.SideTasksDirectoryName}/<task>/",
+            "ignored; one side-task: its task.json, stored stream, transcript, denials and web, and its conversation where "
+            + "its client stores one; <task>.owner.json beside it while a chat holds it open"),
+        ($"{HarnessLayout.MutationsDirectoryName}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the tree's mutation workers, in every tree, never "
+            + $"sent to a host by sync ('{ToolPackage.Command} help mutations')"),
+        ($"{HarnessLayout.MutationsDirectoryName}/<key><mark>-<n>/",
+            "ignored; a worker, a repository of its own, and its claim beside it"),
+        ($"{HarnessLayout.LegsDirectoryName}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the copies of the tree its legs work in, in every "
+            + "tree, never sent to a host by sync"),
+        ($"{HarnessLayout.RunsDirectoryRelative}/", "ignored; one directory of records per run, in the tree that ran it"),
+        ($"{HarnessLayout.DirectoryName}/{HarnessLayout.LockFileName}", "ignored; records in-progress runs"),
+        ($"{HarnessLayout.HostCopiesDirectoryRelative}/",
+            "ignores itself; which hosts hold a copy of which worktree, in the main checkout"),
+        ($"{HarnessLayout.MutationRecordDirectoryRelative}/",
+            "ignores itself; each leg's verdicts of its mutation arms, with what each was judged on, in the main checkout "
+            + "('help mutations')"),
+        (AnchorSettings.DefaultPendingAnchorsPath, "tracked; live anchors (anchors.pendingAnchorsPath)"),
+        (AnchorSettings.DefaultDoneAnchorsPath, "tracked; closed anchors (anchors.doneAnchorsPath)"),
+    ];
+
     private static string RenderLayout()
     {
         var builder = new StringBuilder();
 
         builder.AppendLine("Layout created by init");
         builder.AppendLine();
-        builder.AppendLine("  .harness-config/config.json        tracked by git; the whole contract");
-        builder.AppendLine($"  {HarnessLayout.WorkflowsDirectoryRelative}/<name>/<name>{HarnessLayout.WorkflowFileExtension}");
-        builder.AppendLine("                                     tracked; one directory per workflow, holding its");
-        builder.AppendLine("                                     definition and every file that definition names -");
-        builder.AppendLine($"                                     its agents, prompts and schemas ('{ToolPackage.Command} help workflows');");
-        builder.AppendLine("                                     each missing file written by init where");
-        builder.AppendLine("                                     config.json declares the implementation one");
-        builder.AppendLine($"  {HarnessLayout.WorkflowsEnvSlotRelative}/    contents ignored; the agent clients' keys, NAME=value");
-        builder.AppendLine("                                     files, every file merged, no key read from");
-        builder.AppendLine("                                     anywhere else; no workflow may be named .env");
-        builder.AppendLine($"  {AgentSkills.HarnessPlace}/<name>/          tracked; the tool's own place a step's prompt");
-        builder.AppendLine("                                     names a skill from; init creates nothing there");
-        builder.AppendLine($"                                     ('{ToolPackage.Command} help skills')");
-        builder.AppendLine($"  {HarnessLayout.RunnerActionsDirectoryRelative}/<name>/<name>.yml");
-        builder.AppendLine("                                     tracked; one directory per action, holding its");
-        builder.AppendLine("                                     steps and whatever those steps run");
-        builder.AppendLine("  .harness-config/runner/.env/       contents ignored; values actions read");
-        builder.AppendLine("  .harness-config/runner/.secrets/   contents ignored; secret values actions read");
-        builder.AppendLine("  .harness-config/sshItems/<name>/   ignored, and written by you, not init:");
-        builder.AppendLine("                                     .env (address, user, port), .key, known_hosts");
-        builder.AppendLine("  .harness-config/wslDistros/<name>/ ignored; .env (distribution, credential)");
-        builder.AppendLine($"  {WorktreeSettings.SeededRoot}/                        contents ignored, .gitkeep tracked; the worktrees,");
-        builder.AppendLine("                                     at worktrees.root, which init writes as this");
-        builder.AppendLine($"  {HarnessLayout.OrchestratorsDirectoryName}/                    contents ignored, .gitkeep tracked; what each");
-        builder.AppendLine("                                     orchestrator and its agents keep, in the main");
-        builder.AppendLine("                                     checkout, and never sent to a host by sync");
-        builder.AppendLine($"                                     ('{ToolPackage.Command} help orchestrators')");
-        var agentDirectory = $"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>";
-        builder.AppendLine($"  {HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.StepsDirectoryName}/<instance>/");
-        builder.AppendLine("                                     ignored; one step of a run that no agent owns,");
-        builder.AppendLine("                                     the create-agent that makes an agent included");
-        builder.AppendLine($"  {agentDirectory}/{OrchestratorLayout.StepsDirectoryName}/<instance>/");
-        builder.AppendLine("                                     ignored; one step the agent runs, or that");
-        builder.AppendLine("                                     runs in or for its worktree: everything of the");
-        builder.AppendLine($"                                     step, its {OrchestratorLayout.HandoffFileName} where one stopped it");
-        builder.AppendLine($"  {agentDirectory}/{OrchestratorLayout.SessionsDirectoryName}/<id>/");
-        builder.AppendLine("                                     ignored; API clients only: one conversation with");
-        builder.AppendLine("                                     the provider, in the provider's own form");
-        builder.AppendLine($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}");
-        builder.AppendLine("                                     ignored; in either kind of step, on Linux and");
-        builder.AppendLine("                                     macOS: a session a contained child of the step");
-        builder.AppendLine("                                     leads while it runs, or the process group a phase");
-        builder.AppendLine("                                     of its legs - a set-up's up line apart - its");
-        builder.AppendLine("                                     keepAwake command or what carries a leg to a host");
-        builder.AppendLine("                                     leads while anything is in it, ended by the next");
-        builder.AppendLine("                                     command over the orchestrator - and by");
-        builder.AppendLine("                                     stop-orchestrator --now - once its starter has");
-        builder.AppendLine("                                     gone");
-        builder.AppendLine($"  {HarnessLayout.MutationsDirectoryName}/                        contents ignored, .gitkeep tracked; the tree's");
-        builder.AppendLine("                                     mutation workers, in every tree, never sent to");
-        builder.AppendLine($"                                     a host by sync ('{ToolPackage.Command} help mutations')");
-        builder.AppendLine($"  {HarnessLayout.LegsDirectoryName}/                             contents ignored, .gitkeep tracked; the copies");
-        builder.AppendLine("                                     of the tree its legs work in, in every tree,");
-        builder.AppendLine("                                     never sent to a host by sync");
-        builder.AppendLine($"  {HarnessLayout.RunsDirectoryRelative}/              ignored; one directory of records per run, in");
-        builder.AppendLine("                                     the tree that ran it");
-        builder.AppendLine("  .harness-config/lock.json          ignored; records in-progress runs");
-        builder.AppendLine($"  {HarnessLayout.HostCopiesDirectoryRelative}/       ignores itself; which hosts hold a copy of");
-        builder.AppendLine("                                     which worktree, in the main checkout");
-        builder.AppendLine($"  {HarnessLayout.MutationRecordDirectoryRelative}/   ignores itself; each leg's verdicts of its");
-        builder.AppendLine("                                     mutation arms, with what each was judged on,");
-        builder.AppendLine("                                     in the main checkout ('help mutations')");
-        builder.AppendLine($"  {AnchorSettings.DefaultPendingAnchorsPath}");
-        builder.AppendLine("                                     tracked; live anchors (anchors.pendingAnchorsPath)");
-        builder.AppendLine($"  {AnchorSettings.DefaultDoneAnchorsPath}");
-        builder.AppendLine("                                     tracked; closed anchors (anchors.doneAnchorsPath)");
+        foreach (var (path, text) in LayoutEntries)
+        {
+            if (path.Length < LayoutColumn - 2)
+            {
+                AppendWrapped(builder, text, $"  {path}".PadRight(LayoutColumn));
+            }
+            else
+            {
+                builder.AppendLine($"  {path}");
+                AppendWrapped(builder, text, new string(' ', LayoutColumn));
+            }
+        }
         builder.AppendLine();
         builder.AppendLine("init creates each anchor registry that is missing, from a skeleton holding an");
         builder.AppendLine("introduction and an empty table, and never touches one that exists. A registry");
@@ -5129,9 +5184,16 @@ public static class HelpTopics
             + "the leg's log, each file's tree as it stood under the build directory, within keepOnFailureCapBytes kept "
             + $"in all ({DiskSpace.Size(Testing.KeptOnFailure.DefaultCapBytes)} where it is left out). A pass keeps "
             + "nothing, and a later step reads nothing from it: it is evidence beside the verdict, never an output, and "
-            + "a failed step still keeps nothing of what one reads. The leg's line names the directory, how many files "
-            + "were kept and their size, and how many were refused over the cap, could not be read, or named nothing - "
-            + "a path naming nothing is said, not refused, for the failure may have been before it was written. On a "
+            + "a failed step still keeps nothing of what one reads. Only a file of its own is copied: a link is never "
+            + "kept through - what it leads to is kept where an entry names that - and a pipe or a device is no file to "
+            + "read. Each is measured by what it holds as it is read, and no more of it is copied than the cap has "
+            + "left, so a file that grows past the cap as it is read is refused over it. A directory beneath an entry "
+            + "that cannot be read is passed by and named, the files beside it kept, and a stop while the evidence "
+            + "crosses keeps what is already kept and names what it left. The leg's line names the directory, how many "
+            + "files were kept and their size, and how many were refused over the cap, could not be read, were left as "
+            + "links, named nothing or were left uncopied by a stop - a path naming nothing is said, not refused, for "
+            + "the failure may have been before it was written. A keepOnFailureCapBytes given where no keepOnFailure it "
+            + "applies to names a path caps nothing, and is refused. On a "
             + "leg a WSL or ssh host runs, the copy is kept beside that host's own log and crosses back over the host's "
             + "transport: 'sync --pull' takes the kept-on-failure directory within that host's run.");
         builder.AppendLine();

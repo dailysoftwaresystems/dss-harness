@@ -248,7 +248,8 @@ public static class WorkflowValidator
     /// <summary>
     /// The keys a definition's steps would read that the slot does not hold, one need for each provider - for a
     /// definition that holds, said by <c>validate-workflow</c>, which passes: a machine that only checks a
-    /// configuration needs no key, and no command of this build refuses one. A step would read a provider's keys where
+    /// configuration needs no key, and a run refuses a step whose first model's keys the slot holds none of, never starting
+    /// its agent (<see cref="DssHarness.Core.Agents.AgentNotStartedBecause.KeyMissing"/>). A step would read a provider's keys where
     /// one of its models is the provider's and the client that reaches it signs each request with the provider's key
     /// (<see cref="DssHarness.Core.Agents.AgentProviders.KeysRead"/>, the one place that says it); the advisor and the
     /// reporter are asked the same. Every name the slot lacks is said, one beside a name it holds among them.

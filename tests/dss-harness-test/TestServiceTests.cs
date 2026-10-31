@@ -361,6 +361,218 @@ public sealed class TestServiceTests
     }
 
     /// <summary>
+    /// A link is never kept through: a build tree holds them (libfoo.so leading to libfoo.so.1.2.3), and what one leads
+    /// to may lie outside the build directory or be of any size. It is named as a link, and the file it leads to is kept
+    /// where an entry names that.
+    /// </summary>
+    [Fact]
+    public async Task ALinkAnEntryNames_IsNamedAsALink_AndNeverCopiedThrough()
+    {
+        using var temp = new TempDirectory();
+        var build = temp.Combine("build");
+        var outside = temp.WriteFile("outside/huge.bin", "far outside the build directory");
+        temp.WriteFile("build/lib/libfoo.so.1", "elf");
+
+        TestLinks.OrSkip(() =>
+        {
+            File.CreateSymbolicLink(Path.Combine(build, "lib", "libfoo.so"), "libfoo.so.1");
+            File.CreateSymbolicLink(Path.Combine(build, "lib", "far.bin"), outside);
+        });
+
+        var kept = await Keep(new HarnessFactory().FileSystem, temp, ["lib/*"], capBytes: 1024);
+
+        Assert.Equal(["lib/libfoo.so.1"], kept.Kept);
+        Assert.Equal(["lib/far.bin", "lib/libfoo.so"], kept.Links);
+        Assert.Equal(3, kept.Bytes);
+        Assert.Empty(kept.RefusedOverCap);
+        Assert.Empty(kept.Unreadable);
+        Assert.Equal(["libfoo.so.1"], Directory.EnumerateFileSystemEntries(Path.Combine(temp.Combine("kept"), "lib")).Select(Path.GetFileName));
+    }
+
+    /// <summary>
+    /// The cap is measured on what a file holds as it is read, never on what its directory entry says: an entry that
+    /// says less than the file holds - a link's own size, a file still growing - would let more than the cap through.
+    /// </summary>
+    [Fact]
+    public async Task AFileHoldingMoreThanItsEntrySays_IsRefusedOverTheCap()
+    {
+        using var temp = new TempDirectory();
+        var file = temp.WriteFile("build/core.dump", "0123456789");
+
+        var kept = await Keep(new UnderstatedEntry(new HarnessFactory().FileSystem, file), temp, ["core.dump"], capBytes: 5);
+
+        Assert.Empty(kept.Kept);
+        Assert.Equal(["core.dump"], kept.RefusedOverCap);
+        Assert.Equal(0, kept.Bytes);
+        Assert.False(Directory.Exists(temp.Combine("kept")));
+    }
+
+    /// <summary>
+    /// A file that grows as it is read is copied no further than the cap has left: past it, the part copied is gone and
+    /// the file named over the cap, for evidence cut short is not the evidence.
+    /// </summary>
+    [Fact]
+    public async Task AFileThatGrowsAsItIsRead_IsCopiedNoFurtherThanTheCap()
+    {
+        using var temp = new TempDirectory();
+        var growing = temp.WriteFile("build/growing.log", "abc");
+        temp.WriteFile("build/small.log", "ab");
+
+        var kept = await Keep(new GrowingRead(new HarnessFactory().FileSystem, growing, 10_000), temp, ["*.log"], capBytes: 100);
+
+        Assert.Equal(["small.log"], kept.Kept);
+        Assert.Equal(["growing.log"], kept.RefusedOverCap);
+        Assert.Equal(2, kept.Bytes);
+        Assert.Equal(["small.log"], Directory.EnumerateFiles(temp.Combine("kept")).Select(Path.GetFileName));
+    }
+
+    /// <summary>
+    /// A directory beneath what an entry names that cannot be read is passed by and named, and every file beside it kept:
+    /// a directory entry is not lost whole for one subdirectory, and a pattern's walk says what it passed by rather than
+    /// that its entry named nothing.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryThatCannotBeRead_IsNamed_AndEverythingBesideItKept()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("build/out/a.txt", "a");
+        temp.WriteFile("build/out/locked/b.txt", "b");
+        temp.WriteFile("build/logs/c.log", "c");
+        temp.WriteFile("build/logs/locked/d.log", "d");
+        var fileSystem = new PassedBy(new HarnessFactory().FileSystem, [temp.Combine("build", "out", "locked"), temp.Combine("build", "logs", "locked")]);
+
+        var kept = await Keep(fileSystem, temp, ["out", "logs/**/*.log", "nothing/**/*.json"], capBytes: 1024);
+
+        Assert.Equal(["logs/c.log", "out/a.txt"], kept.Kept);
+        Assert.Equal(["out/locked", "logs/locked"], kept.Unreadable);
+        Assert.Equal(["nothing/**/*.json"], kept.NamedNothing);
+    }
+
+    /// <summary>
+    /// A stop that comes while the evidence crosses keeps what is already kept whole, ends the file it stopped in, and
+    /// names every file it left - that one among them - rather than dropping them from every list.
+    /// </summary>
+    [Fact]
+    public async Task AStopMidKeep_NamesWhatItLeft()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("build/a.txt", "a");
+        var stopping = temp.WriteFile("build/b.txt", new string('b', 200_000));
+        temp.WriteFile("build/c.txt", "c");
+        using var stop = new CancellationTokenSource();
+
+        var kept = await Keep(new StopsOnOpen(new HarnessFactory().FileSystem, stopping, stop), temp, ["*.txt"], capBytes: 1_000_000, stop.Token);
+
+        Assert.Equal(["a.txt"], kept.Kept);
+        Assert.Equal(["b.txt", "c.txt"], kept.LeftAtStop);
+        Assert.Equal(["a.txt"], Directory.EnumerateFiles(temp.Combine("kept")).Select(Path.GetFileName));
+    }
+
+    /// <summary>Keeps what <paramref name="declared"/> names under the temporary directory's <c>build</c>, into its <c>kept</c>.</summary>
+    private static async Task<KeptOnFailure> Keep(IFileSystem fileSystem, TempDirectory temp, List<string> declared, long capBytes, CancellationToken? cancellationToken = null)
+    {
+        var kept = await KeptOnFailure.KeepAsync(
+            fileSystem,
+            declared,
+            capBytes,
+            new LegPaths(temp.Path, temp.Combine("build")),
+            temp.Combine("build"),
+            temp.Combine("kept"),
+            cancellationToken ?? TestContext.Current.CancellationToken);
+
+        Assert.NotNull(kept);
+        return kept;
+    }
+
+    /// <summary>A file system whose entry for one file says it holds one byte, whatever it holds: as a link's own entry, or a file still growing, says.</summary>
+    private sealed class UnderstatedEntry(IFileSystem inner, string understated) : PassThroughFileSystem(inner)
+    {
+        public override FileStanding? StandingOf(string path)
+            => Path.GetFullPath(path) == Path.GetFullPath(understated) && base.StandingOf(path) is { } standing ? standing with { Length = 1 } : base.StandingOf(path);
+    }
+
+    /// <summary>A file system whose read of one file gives more than its entry says, and cannot say its length ahead: a log still written as it is read.</summary>
+    private sealed class GrowingRead(IFileSystem inner, string growing, int bytes) : PassThroughFileSystem(inner)
+    {
+        public override Stream OpenRead(string path)
+            => Path.GetFullPath(path) == Path.GetFullPath(growing) ? new Unmeasured(new MemoryStream(new byte[bytes])) : base.OpenRead(path);
+
+        /// <summary>A stream read forward alone, which cannot say its length.</summary>
+        private sealed class Unmeasured(Stream inner) : Stream
+        {
+            public override bool CanRead => true;
+
+            public override bool CanSeek => false;
+
+            public override bool CanWrite => false;
+
+            public override long Length => throw new NotSupportedException("a stream still written has no length yet");
+
+            public override long Position { get => inner.Position; set => throw new NotSupportedException(); }
+
+            public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+
+            public override void Flush()
+            {
+            }
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+            public override void SetLength(long value) => throw new NotSupportedException();
+
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing)
+                {
+                    inner.Dispose();
+                }
+
+                base.Dispose(disposing);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A file system that cannot read some directories, as a walk meets a directory this user may not read: a whole
+    /// recursive listing over one fails at it, and a walk that passes such a directory by passes it and says so.
+    /// </summary>
+    private sealed class PassedBy(IFileSystem inner, IReadOnlyList<string> unreadable) : PassThroughFileSystem(inner)
+    {
+        public override IEnumerable<string> EnumerateFiles(string path, bool recursive)
+            => recursive && unreadable.Any(directory => directory.StartsWith(path, StringComparison.OrdinalIgnoreCase))
+                ? throw new UnauthorizedAccessException($"Access to the path '{unreadable[0]}' is denied.")
+                : base.EnumerateFiles(path, recursive);
+
+        public override IEnumerable<string> EnumerateReachableFiles(string path, Action<string, Exception> unread)
+        {
+            foreach (var directory in unreadable.Where(directory => directory.StartsWith(path, StringComparison.OrdinalIgnoreCase)))
+            {
+                unread(directory, new UnauthorizedAccessException($"Access to the path '{directory}' is denied."));
+            }
+
+            return base.EnumerateReachableFiles(path, unread)
+                .Where(file => !unreadable.Any(directory => file.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+        }
+    }
+
+    /// <summary>A file system that stops the run as one file is opened: a stop that comes while the evidence crosses.</summary>
+    private sealed class StopsOnOpen(IFileSystem inner, string stopping, CancellationTokenSource stop) : PassThroughFileSystem(inner)
+    {
+        public override Stream OpenRead(string path)
+        {
+            if (Path.GetFullPath(path) == Path.GetFullPath(stopping))
+            {
+                stop.Cancel();
+            }
+
+            return base.OpenRead(path);
+        }
+    }
+
+    /// <summary>
     /// A file system that refuses one file's read, keeping everything else as it is: the smallest double that makes
     /// a keep name a file it could not read.
     /// </summary>

@@ -400,8 +400,8 @@ public sealed class LedgerReportTests
 
     /// <summary>
     /// What a leg's test invocation kept as failure evidence is its own line below the table - the directory, how
-    /// many files were kept and their size, and how many were refused over the cap, could not be read, or named
-    /// nothing - and the same facts as data, each file named.
+    /// many files were kept and their size, and how many were refused over the cap, could not be read, were left as
+    /// links, named nothing or were left uncopied by a stop - and the same facts as data, each file named.
     /// </summary>
     [Fact]
     public void TheReport_NamesWhatALegKeptOnFailure_TextAndData()
@@ -412,7 +412,11 @@ public sealed class LedgerReportTests
             Kept: ["corpus-out/report-N2-r0.json", "corpus-out/stdout.txt"],
             RefusedOverCap: ["corpus-out/huge.bin"],
             Unreadable: ["corpus-out/held.dat"],
-            NamedNothing: ["absent"]);
+            NamedNothing: ["absent"])
+        {
+            Links = ["lib/libfoo.so", "lib/far.bin"],
+            LeftAtStop = ["corpus-out/zz.json"],
+        };
         var report = LedgerReport.From(
         [
             Entry("win", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty),
@@ -425,7 +429,8 @@ public sealed class LedgerReportTests
 
         Assert.Contains(
             "lin: kept 2 file(s) (5 MiB) as failure evidence in '/home/dev/repo/.harness-config/runs/r/lin/kept-on-failure', "
-            + "1 file(s) refused over the cap, 1 file(s) could not be read, 1 path(s) named nothing",
+            + "1 file(s) refused over the cap, 1 file(s) could not be read, 2 link(s) left as links, 1 path(s) named nothing, "
+            + "1 file(s) left uncopied by the stop",
             table,
             StringComparison.Ordinal);
 
@@ -446,6 +451,24 @@ public sealed class LedgerReportTests
         Assert.Equal(["corpus-out/huge.bin"], evidence.GetProperty("refusedOverCap").EnumerateArray().Select(file => file.GetString()));
         Assert.Equal(["corpus-out/held.dat"], evidence.GetProperty("unreadable").EnumerateArray().Select(file => file.GetString()));
         Assert.Equal(["absent"], evidence.GetProperty("namedNothing").EnumerateArray().Select(path => path.GetString()));
+        Assert.Equal(["lib/libfoo.so", "lib/far.bin"], evidence.GetProperty("links").EnumerateArray().Select(file => file.GetString()));
+        Assert.Equal(["corpus-out/zz.json"], evidence.GetProperty("leftAtStop").EnumerateArray().Select(file => file.GetString()));
+    }
+
+    /// <summary>
+    /// A ledger written before a keep named its links and what a stop left is read with both empty, never as nothing at
+    /// all: the record's lists are read on every line, an old one's included.
+    /// </summary>
+    [Fact]
+    public void KeptEvidenceWrittenWithoutItsNewerLists_IsReadWithThemEmpty()
+    {
+        var read = JsonSerializer.Deserialize<DssHarness.Core.Testing.KeptOnFailure>(
+            """{"Directory":"/d","Bytes":1,"Kept":["a"],"RefusedOverCap":[],"Unreadable":[],"NamedNothing":[]}""");
+
+        Assert.NotNull(read);
+        Assert.Equal(["a"], read.Kept);
+        Assert.Empty(read.Links);
+        Assert.Empty(read.LeftAtStop);
     }
 
     /// <summary>

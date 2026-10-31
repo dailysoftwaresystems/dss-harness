@@ -2056,6 +2056,23 @@ public static partial class HarnessConfigValidator
             .Select(entry => (entry.Platform, Invocation: TestInvocationResolver.InvocationFor(test, entry.Platform)))
             .ToList();
 
+        // A cap on what keepOnFailure keeps is read only where an invocation it applies to keeps something - 'all's on each
+        // system whose own section gives no cap of its own - and a key that loads is a key that is read: given where none
+        // does, it caps nothing, which is said rather than passed.
+        foreach (var (section, _) in sections.Where(entry => entry.Invocation?.KeepOnFailureCapBytes is not null))
+        {
+            var capped = section == "all"
+                ? merged.Where(entry => platforms.First(platform => platform.Platform == entry.Platform).Specific?.KeepOnFailureCapBytes is null)
+                : merged.Where(entry => entry.Platform == section);
+
+            if (!capped.Any(entry => entry.Invocation.KeepOnFailure is { Count: > 0 }))
+            {
+                problems.Add(
+                    $"{owner} test.{section}.keepOnFailureCapBytes caps what keepOnFailure keeps, and no keepOnFailure it applies to names "
+                    + "a path; name what a failed run keeps in keepOnFailure, or leave the cap out");
+            }
+        }
+
         // How --filter, --label and --exclude reach ctest, each problem said once with the systems it
         // holds for: read otherwise, they run the opposite of what was asked, and say nothing.
         var misread = merged

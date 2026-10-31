@@ -285,7 +285,9 @@ public sealed class TestInvocation
 
     /// <summary>
     /// The most to keep in all, in bytes, when <see cref="KeepOnFailure"/> names paths; 64 MiB where
-    /// it is left out. Files past the cap are not copied and are named on the leg's line.
+    /// it is left out. Files past the cap are not copied and are named on the leg's line. Given where
+    /// no <see cref="KeepOnFailure"/> it applies to names a path - this section's, or for
+    /// <c>all</c>'s cap each system's that gives no cap of its own - it caps nothing, and is refused.
     /// </summary>
     public long? KeepOnFailureCapBytes { get; init; }
 }

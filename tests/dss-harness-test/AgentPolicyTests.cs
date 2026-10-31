@@ -890,15 +890,33 @@ public sealed class AgentPolicyTests
         using var ground = Ground();
         var policy = ground.Policy([new("Run(git push *)", AgentPolicySource.Config)], worktreeRules: false);
 
-        // The rules refused always are asked first, so a word that may be anything may-be theirs before the
-        // configuration's: the answer still names a rule the command may be, which is all a may-be says.
+        // A may-be names the person's own rule where it may be the command, never one of the tool's own a word that may
+        // be anything may be too: the rule they wrote is the one that decided.
         foreach (var command in new[] { "git $VERB", "git ${VERB}", "git \"$(echo push)\"", "echo push | xargs git", "git p{u,a}sh" })
         {
             var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
 
-            Assert.Equal("Run(git credential fill *)", denied.Rule);
-            Assert.Contains("may be what Run(git credential fill *) denies: a word the rule reads is one the shell expands", denied.Reason, StringComparison.Ordinal);
+            Assert.Equal("Run(git push *)", denied.Rule);
+            Assert.Equal(AgentPolicySource.Config, denied.Source);
         }
+
+        Assert.Equal(
+            "'git $VERB' may be what Run(git push *) denies: a word the rule reads is one the shell expands, which this does not read",
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git $VERB")).Reason);
+
+        // Where no rule of the person's may be the command, a credential's may: said as that.
+        Assert.Equal(
+            new AgentPolicyAnswer.Denied("Run(git credential fill)", AgentPolicySource.Builtin, "'git $VERB' may be what Run(git credential fill) denies: a word the rule reads is one the shell expands, which this does not read"),
+            ground.Policy(worktreeRules: false).Run("git $VERB"));
+
+        // A rule the command certainly meets is named before any it may meet: the person's, where a credential's only may
+        // be the command, and a credential's, where the person's only may.
+        var storeRestricted = ground.Policy([new("Run(git credential-store *)", AgentPolicySource.Config), new("Run(git credential approve *)", AgentPolicySource.Config)], worktreeRules: false);
+
+        Assert.Equal(
+            new AgentPolicyAnswer.Denied("Run(git credential-store *)", AgentPolicySource.Config, "'git credential-store $X' is denied by Run(git credential-store *), a restriction of agentPolicy.restrictions"),
+            storeRestricted.Run("git credential-store $X"));
+        Assert.Equal("Run(git credential fill)", Assert.IsType<AgentPolicyAnswer.Denied>(storeRestricted.Run("git credential $X fill")).Rule);
 
         // A command whose words past the rule's are decided as what they are: an expansion there leaves it so.
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git commit -m \"$(cat msg.txt)\""));
@@ -2128,8 +2146,37 @@ public sealed class AgentPolicyTests
     public void TheCommandsThatPrintACredential_AreRefusedWhateverTheWorktreeRulesSay()
     {
         Assert.Equal(
-            ["gh auth token", "git credential fill", "git credential-manager get", "git credential-manager-core get", "git credential-cache get", "git credential-store get"],
+            ["gh auth token", "gh auth status --show-token", "gh auth status -t", "gh auth git-credential get", "gh config get oauth_token", "git credential fill", "git credential-* get"],
             AgentPolicy.CredentialPrintingCommands);
+
+        // Each spelling the entry beside it is met by: its words in their own order, options before them or between, a
+        // helper by any name, a short option in a cluster, an argument list and a shell string alike.
+        (string Spelled, string Entry)[] printing =
+        [
+            ("gh auth token", "gh auth token"),
+            ("gh auth token --hostname ghe.example", "gh auth token"),
+            ("gh auth --hostname ghe.example token", "gh auth token"),
+            ("gh auth status --show-token", "gh auth status --show-token"),
+            ("gh auth status --hostname github.com --show-token=true", "gh auth status --show-token"),
+            ("gh auth status -t", "gh auth status -t"),
+            ("gh auth status -at", "gh auth status -t"),
+            ("gh auth -t status", "gh auth status -t"),
+            ("gh auth git-credential get", "gh auth git-credential get"),
+            ("gh config get -h github.com oauth_token", "gh config get oauth_token"),
+            ("git credential fill", "git credential fill"),
+            ("git -C . credential fill", "git credential fill"),
+            ("git credential-manager get", "git credential-* get"),
+            ("git credential-manager-core get", "git credential-* get"),
+            ("git credential-cache get", "git credential-* get"),
+            ("git credential-store get", "git credential-* get"),
+            ("git credential-osxkeychain get", "git credential-* get"),
+            ("git credential-libsecret get", "git credential-* get"),
+            ("git credential-wincred get", "git credential-* get"),
+            ("git credential-store --file ~/.git-credentials get", "git credential-* get"),
+            ("git credential-cache --socket s get", "git credential-* get"),
+            ("git-credential-store get", "git credential-* get"),
+            ("/usr/lib/git-core/git-credential-libsecret get", "git credential-* get"),
+        ];
 
         foreach (var platform in new[] { PlatformId.Linux, PlatformId.Windows })
         {
@@ -2138,34 +2185,90 @@ public sealed class AgentPolicyTests
             // Worktree rules off: the refusal stands on its own, as run-side-task's does.
             var policy = ground.Policy(worktreeRules: false);
 
-            foreach (var command in AgentPolicy.CredentialPrintingCommands)
+            foreach (var (spelled, entry) in printing)
             {
-                foreach (var spelled in new[] { command, $"{command} --user someone" })
-                {
-                    var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(spelled));
+                var expected = new AgentPolicyAnswer.Denied(
+                    $"Run({entry})",
+                    AgentPolicySource.Builtin,
+                    $"'{spelled}' is denied by Run({entry}), a rule of this tool: it prints a credential, which an agent of this tool is never handed");
 
-                    Assert.Equal($"Run({command} *)", denied.Rule);
-                    Assert.Equal(
-                        $"'{spelled}' is denied by Run({command} *), a rule of this tool: it prints a credential, which an agent of this tool is never handed",
-                        denied.Reason);
-                }
+                Assert.Equal(expected, policy.Run(spelled));
+                Assert.Equal(expected, policy.Run((IReadOnlyList<string>)spelled.Split(' ')));
             }
 
-            // git's own options read before its subcommand change nothing, and neither does a wrapper.
-            Assert.Equal("Run(git credential fill *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git -C . credential fill")).Rule);
-            Assert.Equal("Run(git credential fill *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("nohup git credential fill")).Rule);
+            // A wrapper stripped leaves the command it runs, which the refusal names.
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied("Run(git credential fill)", AgentPolicySource.Builtin, "'git credential fill' is denied by Run(git credential fill), a rule of this tool: it prints a credential, which an agent of this tool is never handed"),
+                policy.Run("nohup git credential fill"));
 
-            // What reads or stores a credential without printing it is refused only as the worktree rules refuse it.
-            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("gh auth status"));
-            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git credential approve https://example.com"));
+            // What reads or stores a credential without printing it - a helper's store or erase, gh's status without its
+            // token, a login that reads one - is refused only as the worktree rules refuse it.
+            foreach (var command in new[]
+            {
+                "gh auth status", "gh auth status --hostname github.com", "gh auth login --with-token", "gh config get editor",
+                "git credential approve https://example.com", "git credential-store store", "git credential-cache exit", "git credentials",
+            })
+            {
+                Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+            }
         }
+    }
+
+    /// <summary>
+    /// A name a command gives a command line - git's alias, by git config or by -c, gh's alias - is read where it is
+    /// given, as the command it names: a later command calls it by a name no rule reads, so the commands that print a
+    /// credential are refused there, on a ground with no worktree rules to refuse git config and gh alias set. A file of
+    /// aliases, or one read from the input, is one this does not read, and refused.
+    /// </summary>
+    [Fact]
+    public void AnAliasThatPrintsACredential_IsRefusedWhereItIsGiven()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy(worktreeRules: false);
+
+        // Each alias, the command it is read as, and the entry that refuses it - the refusal naming the command read.
+        foreach (var (command, read, entry) in new[]
+        {
+            ("git config alias.cf 'credential fill'", "git credential fill", "git credential fill"),
+            ("git config --global alias.cf 'credential fill'", "git credential fill", "git credential fill"),
+            ("git config set --global alias.cf 'credential fill'", "git credential fill", "git credential fill"),
+            ("git config --file ~/.gitconfig --add alias.cf 'credential-store get'", "git credential-store get", "git credential-* get"),
+            ("git config alias.cf '!git credential fill'", "git credential fill", "git credential fill"),
+            ("git -c alias.cf='credential fill' cf", "git credential fill", "git credential fill"),
+            ("git config core.pager 'gh auth token'", "gh auth token", "gh auth token"),
+            ("gh alias set tk 'auth token'", "gh auth token", "gh auth token"),
+            ("gh alias set --clobber tk 'auth status -t'", "gh auth status -t", "gh auth status -t"),
+            ("gh alias set tk --shell 'gh auth token'", "gh auth token", "gh auth token"),
+            ("gh alias set tk '!gh auth token | cat'", "gh auth token", "gh auth token"),
+        })
+        {
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied($"Run({entry})", AgentPolicySource.Builtin, $"'{read}' is denied by Run({entry}), a rule of this tool: it prints a credential, which an agent of this tool is never handed"),
+                policy.Run(command));
+        }
+
+        // An alias of anything else stays the person's to give; a setting read, unset or listed gives none.
+        foreach (var command in new[]
+        {
+            "git config alias.lg 'log --oneline'", "git config --get alias.cf", "git config --unset alias.cf", "git config user.name 'A B'",
+            "gh alias set prs 'pr list'", "gh alias list",
+        })
+        {
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+        }
+
+        Assert.Equal(
+            new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, "this tool could not decide 'gh alias import aliases.yml' ('gh alias import aliases.yml' gives names commands from a file this does not read): it denies what it cannot decide"),
+            policy.Run("gh alias import aliases.yml"));
+        Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("gh alias set tk -")).Rule);
     }
 
     /// <summary>
     /// A quoted word is the word it spells, never an expansion: an endpoint named in single quotes is that endpoint,
     /// a GraphQL query quoted whole and one whose variables are quoted are queries this reads, and a rule a quoted
-    /// word may not spell is not one the command may be. An argument list crosses no shell at all, so no word of one
-    /// is an expansion however it is spelled.
+    /// word may not spell is not one the command may be. An argument list crosses no shell at all, and on Linux, where a
+    /// program is handed its words as they are, no word of one is an expansion however it is spelled - its other side
+    /// is <see cref="AnArgumentListsPatternOnWindows_IsReadAsThePatternItsProgramExpands"/>.
     /// </summary>
     [Fact]
     public void AQuotedWordIsTheWordItSpells_NeverAnExpansion()
@@ -2200,37 +2303,150 @@ public sealed class AgentPolicyTests
         Assert.Equal(AgentPolicyAnswer.Allow, restricted.Run("git a\\*b"));
         Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(restricted.Run("git 'pu'sh")).Rule);
         Assert.Equal(AgentPolicyAnswer.Allow, restricted.Run("git commit -m 'a*b'"));
-        Assert.Contains(
-            "may be what Run(git credential fill *) denies: a word the rule reads is one the shell expands",
-            Assert.IsType<AgentPolicyAnswer.Denied>(restricted.Run("git \"%PUSH%\"")).Reason,
-            StringComparison.Ordinal);
+        Assert.Equal(
+            "'git %PUSH%' may be what Run(git push *) denies: a word the rule reads is one the shell expands, which this does not read",
+            Assert.IsType<AgentPolicyAnswer.Denied>(restricted.Run("git \"%PUSH%\"")).Reason);
         Assert.Contains("an endpoint named by a variable ('%EP%')", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("gh api \"%EP%\"")).Reason, StringComparison.Ordinal);
 
-        // An argument list crosses no shell: its words are literal, a brace among them a brace, a dollar a dollar.
+        // An argument list crosses no shell: its words are literal where a program is handed them as they are, a brace
+        // among them a brace, a dollar a dollar.
         Assert.Equal(AgentPolicyAnswer.Allow, restricted.Run((IReadOnlyList<string>)["git", "p{u,a}sh"]));
+        Assert.Equal(AgentPolicyAnswer.Allow, restricted.Run((IReadOnlyList<string>)["git", "p*sh"]));
         Assert.Equal(AgentPolicyAnswer.Allow, restricted.Run((IReadOnlyList<string>)["git", "$VERB"]));
     }
 
     /// <summary>
-    /// A file a shell is handed in quotes is a file of that name, not one a variable gave, and a name a command
-    /// declares in quotes is a name.
+    /// On Windows a program splits the command line it is handed itself, and a Cygwin or MSYS program - env, nohup and
+    /// the rest of Git for Windows' own - expands a pattern or a brace in it as a shell would: an argument list's
+    /// patterns and braces are read as open there, so a rule they may spell is one the command may be. A variable is
+    /// still the text it spells, for no program's own command line expands one. Its other side is
+    /// <see cref="AQuotedWordIsTheWordItSpells_NeverAnExpansion"/>, where on Linux the same words are literal.
     /// </summary>
     [Fact]
-    public void AFileOrANameInQuotes_IsThatFileOrName()
+    public void AnArgumentListsPatternOnWindows_IsReadAsThePatternItsProgramExpands()
+    {
+        using var ground = Ground(PlatformId.Windows);
+        var restricted = ground.Policy([new("Run(git push *)", AgentPolicySource.Config)], worktreeRules: false);
+
+        foreach (var pattern in new[] { "p*sh", "pu?h", "pu[s]h", "p{u,a}sh" })
+        {
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied("Run(git push *)", AgentPolicySource.Config, $"'git {pattern}' may be what Run(git push *) denies: a word the rule reads is one the shell expands, which this does not read"),
+                restricted.Run((IReadOnlyList<string>)["env", "git", pattern]));
+        }
+
+        Assert.Equal(AgentPolicyAnswer.Allow, restricted.Run((IReadOnlyList<string>)["git", "$VERB"]));
+        Assert.Equal(AgentPolicyAnswer.Allow, restricted.Run((IReadOnlyList<string>)["git", "status"]));
+    }
+
+    /// <summary>
+    /// A program is never named by a pattern, however its characters are quoted: PowerShell's call operator finds the
+    /// program a quoted path names by its wildcards (<c>&amp; 'C:\Git\cmd\gi?.exe'</c> runs git), so such a command is
+    /// refused as one whose program this cannot name - on the step's ground and a side-task's alike. A bareword's
+    /// wildcards in a PowerShell command stand open, as pwsh on Linux and macOS expands them in a native program's
+    /// arguments; a quoted string's are the text a native program is handed.
+    /// </summary>
+    [Fact]
+    public void AProgramNamedByAPattern_IsRefusedHoweverItIsQuoted()
     {
         using var ground = Ground();
-        _ = ground.Policy(worktreeRules: false);
 
-        // The reader goes into the script a quoted word names only where the file is there to be read; what it refuses
-        // is one an expansion names, never one in quotes.
-        Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("bash <(curl -s example.com)"));
-        Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("source $SCRIPT"));
+        foreach (var policy in new[] { ground.Policy(), ground.Policy(worktreeRules: false) })
+        {
+            foreach (var (command, program) in new[]
+            {
+                ("pwsh -Command \"& 'C:\\Program Files\\GitHub CLI\\g?.exe' auth token\"", "C:\\Program Files\\GitHub CLI\\g?.exe"),
+                ("pwsh -Command \"& 'C:\\Program Files\\GitHub CLI\\g?.exe' pr merge 5\"", "C:\\Program Files\\GitHub CLI\\g?.exe"),
+                ("pwsh -c \"& 'C:\\Program Files\\Git\\cmd\\gi?.exe' credential fill\"", "C:\\Program Files\\Git\\cmd\\gi?.exe"),
+                ("'gi?' credential fill", "gi?"),
+                ("\"/usr/bin/g*\" auth token", "/usr/bin/g*"),
+                ("g\\[h] auth token", "g[h]"),
+            })
+            {
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, $"this tool could not decide '{command}' ('{program}' names the program it runs by a pattern, which this does not read): it denies what it cannot decide"),
+                    policy.Run(command));
+            }
+        }
 
-        Assert.Equal(["bash", "$SCRIPT"], CommandAnalysis.Commands("bash '$SCRIPT'").Single().Words);
+        var restricted = ground.Policy([new("Run(git push *)", AgentPolicySource.Config)], worktreeRules: false);
 
-        // A name an export declares in quotes is a name; one a variable gives is refused as ever.
-        Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("export \"$NAME=1\""));
-        Assert.Equal(["export", "X=a*b"], CommandAnalysis.Commands("export X='a*b'").Single().Words);
+        Assert.Equal(
+            "'git p*sh' may be what Run(git push *) denies: a word the rule reads is one the shell expands, which this does not read",
+            Assert.IsType<AgentPolicyAnswer.Denied>(restricted.Run("pwsh -c \"git p*sh\"")).Reason);
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(restricted.Run("pwsh -c 'git pu`?h'")).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, restricted.Run("pwsh -c \"git 'p*sh'\""));
+        Assert.Equal(AgentPolicyAnswer.Allow, restricted.Run("pwsh -c \"Get-ChildItem *.cs | Select-Object -First 3\""));
+    }
+
+    /// <summary>
+    /// How a word stands to the shell is taken by where it stands, never looked up by its text: an option's value that
+    /// spells the endpoint or the field quoted lends its quotes to neither, so the endpoint and the query a variable
+    /// gives are read as the expansions they are.
+    /// </summary>
+    [Fact]
+    public void ADecoyOptionValue_LendsItsQuotesToNoOtherWord()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy();
+
+        Assert.Equal(
+            "'gh api -X PUT --template repos/o/r/$X repos/o/r/$X' is denied by a worktree rule of this tool: it reaches an endpoint named by a variable ('repos/o/r/$X'), which this does not read, and never merges, never starts CI binds the agents too",
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("X=pulls/1/merge; gh api -X PUT --template 'repos/o/r/$X' repos/o/r/$X")).Reason);
+        Assert.Equal(
+            "'gh api graphql --template query=$Q -f query=$Q' is denied by a worktree rule of this tool: it reaches a GraphQL query the shell expands ('query=$Q'), which this does not read, and never merges, never starts CI binds the agents too",
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("Q='mutation{mergePullRequest(input:{pullRequestId:\"x\"}){clientMutationId}}'; gh api graphql --template 'query=$Q' -f \"query=$Q\"")).Reason);
+
+        // The same endpoint and field, in quotes where they stand, are the text they spell.
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("gh api --template 'x' 'repos/o/r/$X'"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("gh api graphql --template \"$T\" -f 'query=$Q'"));
+
+        // A host is read where its address stands: a decoy spelling it quoted lends it nothing.
+        Assert.Equal(
+            "this tool could not decide 'curl -H 'https://$HOST/x' https://$HOST/x' ('https://$HOST/x' names the host it reaches by a variable, which this does not read): it denies what it cannot decide",
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("curl -H 'https://$HOST/x' https://$HOST/x")).Reason);
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("curl -H 'https://$HOST/x' https://example.com/x"));
+    }
+
+    /// <summary>
+    /// A request's path ends at its query or its fragment, whichever comes first: gh's client sends no fragment, so a
+    /// merge endpoint spelled with one is the merge.
+    /// </summary>
+    [Fact]
+    public void AMergeEndpointWithAFragment_IsTheMerge()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy();
+
+        foreach (var endpoint in new[] { "repos/o/r/pulls/1/merge#x", "repos/o/r/pulls/1/merge?a=b#x", "repos/o/r/pulls/1/merge#x?a=b" })
+        {
+            Assert.Equal(
+                $"'gh api -X PUT {endpoint}' is denied by a worktree rule of this tool: it reaches the endpoint '{endpoint}', and never merges, never starts CI binds the agents too",
+                Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"gh api -X PUT '{endpoint}'")).Reason);
+        }
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("gh api 'repos/o/r/pulls/1#merge'"));
+    }
+
+    /// <summary>
+    /// The name set, setx and setenv declare is taken from the word that is that name, its own quoting with it: an
+    /// option before it lends it nothing, so a name a variable gives is refused as one this cannot see.
+    /// </summary>
+    [Fact]
+    public void ANameSetxDeclaresByAVariable_IsRefusedWhateverOptionStandsBeforeIt()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy();
+
+        foreach (var command in new[] { "setx '/M' $N /tmp/evil", "setx /M $N /tmp/evil", "set -x $N /tmp/evil" })
+        {
+            Assert.Equal(
+                $"this tool could not decide '{command}' ('$N' declares a name a variable gives, which this does not read): it denies what it cannot decide",
+                Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command)).Reason);
+        }
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("setx '/M' '$N' /tmp/x"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("setx /M NAME /tmp/x"));
     }
 
     /// <summary>

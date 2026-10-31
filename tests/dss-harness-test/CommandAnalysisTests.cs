@@ -1013,6 +1013,115 @@ public sealed class CommandAnalysisTests
         Assert.Contains(["id"], Commands("git clone --config core.pager=id ./repo"));
     }
 
+    /// <summary>
+    /// A file a shell is handed in quotes is a file of that name, not one a variable gave, and a name a command
+    /// declares in quotes is a name.
+    /// </summary>
+    [Fact]
+    public void AFileOrANameInQuotes_IsThatFileOrName()
+    {
+        // The reader goes into the script a quoted word names only where the file is there to be read; what it refuses
+        // is one an expansion names, never one in quotes.
+        Assert.Equal(
+            "'<(curl -s example.com)' names the script it runs by a substitution, which this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("bash <(curl -s example.com)")).Message);
+        Assert.Equal(
+            "'$SCRIPT' names the script it runs by a variable, which this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("source $SCRIPT")).Message);
+
+        Assert.Equal(["bash", "$SCRIPT"], CommandAnalysis.Commands("bash '$SCRIPT'").Single().Words);
+
+        // A name an export declares in quotes is a name; one a variable gives is refused as ever.
+        Assert.Equal(
+            "'$NAME=1' declares a name a variable gives, which this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("export \"$NAME=1\"")).Message);
+        Assert.Equal(["export", "X=a*b"], CommandAnalysis.Commands("export X='a*b'").Single().Words);
+    }
+
+    /// <summary>
+    /// An argument list's words are literal where its program is handed them as they are, and on a system where the
+    /// program splits its own command line their patterns and braces stand open - and nothing else of them.
+    /// </summary>
+    [Fact]
+    public void AnArgumentList_IsLiteral_ButForWhatItsProgramExpands()
+    {
+        IReadOnlyList<string> argv = ["git", "p*sh", "$X{a,b}"];
+
+        Assert.Equal(["lll", "llll", "lllllll"], CommandAnalysis.Commands(argv).Single().Quoted);
+        Assert.Equal(["lll", "l ll", "ll l l "], CommandAnalysis.Commands(argv, splitByItsProgram: true).Single().Quoted);
+    }
+
+    /// <summary>
+    /// A PowerShell bareword's wildcards stand open, as pwsh on Linux and macOS expands them in a native program's
+    /// arguments; a quoted string's are the text it spells; and a program a quoted path names by a wildcard is refused,
+    /// for the call operator finds its program by the wildcards whatever the quotes.
+    /// </summary>
+    [Fact]
+    public void APowerShellBarewordsWildcards_StandOpen_AndAQuotedProgramsAreAPattern()
+    {
+        var bare = CommandAnalysis.Commands((IReadOnlyList<string>)["pwsh", "-c", "git p*sh 'a*b' \"c?d\" e`?f [x]"]).Single();
+
+        Assert.Equal(["git", "p*sh", "a*b", "c?d", "e?f", "[x]"], bare.Words);
+        Assert.Equal(["lll", "l ll", "lll", "lll", "l l", " l "], bare.Quoted);
+
+        // The signs PowerShell's own aliases are, read as the cmdlets they name, and Invoke-Expression's one string read
+        // as its script with its wildcards.
+        Assert.Contains(["Where-Object", "Kill"], Commands((IReadOnlyList<string>)["pwsh", "-c", "Get-Process | ? Kill"]));
+        Assert.Contains(["Get-ChildItem", "*.cs"], Commands((IReadOnlyList<string>)["pwsh", "-c", "iex 'Get-ChildItem *.cs'"]));
+
+        Assert.Equal(
+            "'C:\\Git\\cmd\\gi?.exe' names the program it runs by a pattern, which this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands((IReadOnlyList<string>)["pwsh", "-c", "& 'C:\\Git\\cmd\\gi?.exe' push"])).Message);
+        Assert.Equal(
+            "'gi*' names the program it runs by a pattern, which this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("'gi*' push")).Message);
+    }
+
+    /// <summary>
+    /// A name a command gives a command line is read where it is given: git config's setting of a key git runs as a
+    /// command - an alias's value as the git command it names, or with '!' the command line it runs - and gh alias set's
+    /// expansion as the gh command it is, or with '!' or --shell the script gh runs; a reading, an unset and a list give
+    /// none, and a file of aliases, or one read from the input, is refused.
+    /// </summary>
+    [Fact]
+    public void AnAliasGiven_IsReadAsTheCommandItNames()
+    {
+        Assert.Equal([["git", "config", "alias.cf", "credential fill"], ["git", "credential", "fill"]], Commands("git config alias.cf 'credential fill'"));
+        Assert.Equal([["git", "config", "set", "--global", "alias.x", "!id"], ["id"]], Commands("git config set --global alias.x '!id'"));
+        Assert.Equal([["git", "-C", "r", "config", "-f", "f", "--add", "core.pager", "less -R"], ["less", "-R"]], Commands("git -C r config -f f --add core.pager 'less -R'"));
+        Assert.Equal([["git", "config", "$K", "credential fill"], ["git", "credential", "fill"], ["credential", "fill"]], Commands("git config $K 'credential fill'"));
+        Assert.Equal([["gh", "alias", "set", "tk", "auth token"], ["gh", "auth", "token"]], Commands("gh alias set tk 'auth token'"));
+        Assert.Equal([["gh", "alias", "set", "-s", "tk", "gh auth token"], ["gh", "auth", "token"]], Commands("gh alias set -s tk 'gh auth token'"));
+
+        Assert.Equal([["git", "config", "--get", "alias.cf", "x"]], Commands("git config --get alias.cf x"));
+        Assert.Equal([["git", "config", "unset", "alias.cf"]], Commands("git config unset alias.cf"));
+        Assert.Equal([["git", "config", "user.name", "A B"]], Commands("git config user.name 'A B'"));
+        Assert.Equal([["gh", "alias", "list"]], Commands("gh alias list"));
+
+        Assert.Equal(
+            "'gh alias import aliases.yml' gives names commands from a file this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("gh alias import aliases.yml")).Message);
+        Assert.Equal(
+            "'gh alias set tk -' gives a name a command read from its input, which this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("gh alias set tk -")).Message);
+    }
+
+    /// <summary>
+    /// gh api's endpoint and fields are each read with their own quoting, by where they stand: an option's value spelled
+    /// alike, quoted, lends its quotes to neither.
+    /// </summary>
+    [Fact]
+    public void GhApisEndpointAndFields_AreReadWithTheirOwnQuoting()
+    {
+        var command = CommandAnalysis.Commands("gh api --template 'repos/$X' -F 'a=$Y' -f\"query=$Q\" repos/$X").Single();
+        var arguments = command.Words.Skip(1).ToList();
+        var quoted = CommandAnalysis.QuotedOf(command, 0).Skip(1).ToList();
+
+        Assert.Equal<(string, string?)?>(("repos/$X", "        "), CommandAnalysis.GhApiEndpoint(arguments, quoted));
+        Assert.Equal<(string, string?)>([("a=$Y", "llll"), ("query=$Q", "dddddddd")], CommandAnalysis.GhApiFields(arguments, quoted));
+        Assert.Equal<(string, string?)?>(("repos/$X", null), CommandAnalysis.GhApiEndpoint(arguments, []));
+    }
+
     /// <summary>The commands a shell string runs, each whole: its words, then its redirects as they are spelled.</summary>
     private static IReadOnlyList<IReadOnlyList<string>> Commands(string shell)
         => [.. CommandAnalysis.Commands(shell).Select(command => command.Whole)];

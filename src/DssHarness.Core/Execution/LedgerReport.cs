@@ -477,8 +477,9 @@ public sealed class LedgerReport
 
     /// <summary>
     /// What each leg's test invocation kept as failure evidence, as a block below the table: one line a leg, naming the
-    /// directory, how many files were kept and their size, and how many were refused over the cap, could not be read, or
-    /// named nothing - the counts a reader needs before opening anything, beside the verdict they belong to.
+    /// directory, how many files were kept and their size, and how many were refused over the cap, could not be read, were
+    /// left as links, named nothing or were left uncopied by a stop - the counts a reader needs before opening anything,
+    /// beside the verdict they belong to.
     /// </summary>
     private IReadOnlyList<string> RenderKeptOnFailure()
     {
@@ -500,9 +501,19 @@ public sealed class LedgerReport
                 said += $", {ReportText.Counted(kept.Unreadable.Count, "file")} could not be read";
             }
 
+            if (kept.Links.Count > 0)
+            {
+                said += $", {ReportText.Counted(kept.Links.Count, "link")} left as links";
+            }
+
             if (kept.NamedNothing.Count > 0)
             {
                 said += $", {ReportText.Counted(kept.NamedNothing.Count, "path")} named nothing";
+            }
+
+            if (kept.LeftAtStop.Count > 0)
+            {
+                said += $", {ReportText.Counted(kept.LeftAtStop.Count, "file")} left uncopied by the stop";
             }
 
             rows.Add(string.Empty);
@@ -818,8 +829,9 @@ public sealed class LedgerReport
                 KeptOutputs = line.KeptOutputs.Count > 0 ? line.KeptOutputs : null,
 
                 // Only where the leg's test invocation did not pass and named paths to keep: where the evidence is, how
-                // much was kept, and each file by name - kept, refused over the cap, unreadable, or a path that named
-                // nothing. A host's directory is spelled as that host spells it, as its records are.
+                // much was kept, and each file by name - kept, refused over the cap, unreadable, a link left as one, a
+                // path that named nothing, or a file a stop left uncopied. A host's directory is spelled as that host
+                // spells it, as its records are.
                 KeptOnFailure = line.KeptOnFailure is { } keptEvidence ? new
                 {
                     Directory = show(keptEvidence.Directory),
@@ -828,7 +840,9 @@ public sealed class LedgerReport
                     keptEvidence.Kept,
                     keptEvidence.RefusedOverCap,
                     keptEvidence.Unreadable,
+                    keptEvidence.Links,
                     keptEvidence.NamedNothing,
+                    keptEvidence.LeftAtStop,
                 } : null,
 
                 // Where the leg worked: its path alone for a leg in its tree, and for a copy the tree it is a copy of and the

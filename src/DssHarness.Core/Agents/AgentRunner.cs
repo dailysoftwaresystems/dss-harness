@@ -338,7 +338,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     }
 
     /// <summary>
-    /// Works the step through its whole order, the engine's fallback (part 03): the entry that serves is taken first -
+    /// Works the step through its whole order, the engine's fallback: the entry that serves is taken first -
     /// each entry the machine cannot use said and passed over - and a declined request, an account at its limit and a
     /// key the provider refuses move the step to its next entry by the cause's rule, a move within the same provider and
     /// client already taken inside the client's own run. Where no entry is left the ending stands; a move to another

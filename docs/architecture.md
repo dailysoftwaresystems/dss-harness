@@ -1470,16 +1470,17 @@ provider's keys under `apiKey`; under `oauthToken` or `authToken` the one token 
 entry's `token` (`AgentProviders.TokenOf`), appointed by the client beside every provider's keys
 and refused where a provider's key is appointed under the same name. Each line is the one sentence a missing key is said in (`AgentKeyStore.Missing`), ending
 with the names the slot holds that nothing appoints. It is a report and not a problem: a machine
-that only checks a configuration needs no key, and no command of this build refuses one - the run
-that will is the engine's, which this build does not yet run. The slot itself
+that only checks a configuration needs no key; a run refuses a step whose first model's keys the slot holds none of,
+never starting its agent (`AgentNotStartedBecause.KeyMissing`), and a later model's missing key is only said and
+passed over. The slot itself
 (`Secrets\AgentKeyStore`, beside the host items' own store) reads the git-ignored
 `.harness-config/workflows/.env/` by the runner's one rule for a directory of dotenv files - every
 file merged, a name declared twice refused in its own words, a file in the directory's place refused
 rather than read as none, and (the slot's own shape) each name held to a variable's name, a line
 whose name is not one said by its number and never by its text, which may be part of a key - and
 from nowhere else, so a stray variable of the tool's own environment neither chooses whose key a run
-bills nor redirects one. Where a value is read (`AgentKeyStore.Value`, which no command of this
-build calls yet), who may reach the file each name came from is asked by the one rule
+bills nor redirects one. Where a value is read (`AgentKeyStore.Value`: a step's keys as its agent starts, a
+search source's, a setting such as the program a client starts), who may reach the file each name came from is asked by the one rule
 the host items' files are held to (`ItemEnvironment.Unprotected`): never a file others can change,
 and never one others can read while it holds a secret - a name the configuration appoints as a key,
 not a setting such as the program a client starts. `list-agent-providers` says the same configuration without saying one
@@ -1630,7 +1631,17 @@ reader keeps, per word, which of its parts were quoted (`WordQuoting`: single qu
 literal, a double quote's `$`, backtick and cmd percents still live, its globs not), so `git 'p*sh'`
 is a word no rule meets, `gh api 'repos/o/r/pulls?state=open'` an endpoint that names no merge and
 a double-quoted `$x` a variable still (`CommandAnalysis.Expansion`, asked by every reader of one);
-an argument list (`Commands(IReadOnlyList<string>)`) crosses no shell, so its words are literal;
+a word's quoting is taken by where the word stands, never looked up by its text - `gh api`'s endpoint
+and fields (`CommandAnalysis.GhApiWords`) and a fetcher's addresses each carry their own word's, so an
+option's value spelled alike in quotes lends its quotes to none; PowerShell's reader keeps a quoted
+string's text literal, as pwsh hands it a native program, and a bareword's wildcards open, as pwsh on
+Linux and macOS expands them; a program is never named by a pattern, however its characters are
+quoted (`CommandAnalysis.ProgramPatterns`), for PowerShell's call operator finds
+`& 'C:\Git\cmd\gi?.exe'` by its wildcards; an argument list
+(`Commands(IReadOnlyList<string>, bool)`) crosses no shell, so a variable in it is the text it spells -
+but on Windows a program splits its own command line, and a Cygwin or MSYS program or one a C
+runtime's wildcard expansion is linked into expands the patterns and braces in it, so the policy
+there reads those characters as open (`CommandAnalysis.ExpandedByItsProgram`);
 a word another program fills in as it runs (`CommandAnalysis.InputWord`) stands as an expansion
 whatever quotes a reader put around it, and what cmd reads again - a batch argument's `%` among it -
 it expands wherever it stands; git's own options, valued ones with their values, are dropped
@@ -1660,7 +1671,8 @@ and the merges
 and CI starts of `gh` - each endpoint and GraphQL mutation that merges or starts CI with the `gh`
 commands that reach it, one list (`AgentPolicy.GhCiReaches`) that `AgentPolicy.NeverCiCommands`
 (`gh pr merge`, `gh pr update-branch`, `gh repo sync`, `gh workflow run`, `gh run rerun`, `gh pr create`,
-`gh release create`, `gh release edit`), `AgentPolicy.GhApiEndpoints`, `AgentPolicy.GhApiWriteEndpoints` (a ref, a
+`gh release create`, `gh release edit`), `AgentPolicy.GhApiEndpoints` (each word's path read to its first `?` or `#`,
+for gh's client sends no fragment), `AgentPolicy.GhApiWriteEndpoints` (a ref, a
 file, a pull request or a release written: refused where `CommandAnalysis.GhApiWrites` says the request writes) and
 `AgentPolicy.GhApiMutations` are read from, `gh alias set`, `gh extension exec`, and a `gh` command
 named by none of gh's own (`AgentPolicy.GhCommands`: an alias, `co` among them, or an extension), where `gh` runs -
@@ -1675,8 +1687,18 @@ and `run-side-task` are refused, run by any program or from a response file, wha
 says, and so are the `gh` commands that hand the work to another agent or install what the next launch loads
 (`AgentPolicy.GhOutOfStepCommands`) and the commands that print a credential
 (`AgentPolicy.CredentialPrintingCommands`, pinned by a test and printed by `help agent-clients`:
-`gh auth token` and git's credential helpers' `get` and `fill` - a credential leaves its slot only
-by the key store that holds it, never through an agent's words). The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
+gh's token by itself, by `gh auth status --show-token`, by gh as git's credential helper and by
+gh's configuration, and git's credential helpers' `get` and `fill`, any helper's by `credential-*` -
+each its program and its command, then the words that make it print met anywhere after its command
+(`AgentPolicy.PrintsCredential`), options before or between them, a short option by any cluster
+holding its letter - a credential leaves its slot only by the key store that holds it, never through
+an agent's words). An alias given a command line is read as that command where it is given -
+`git config`'s setting of a key git runs (`CommandAnalysis.ConfigSetting` beside `-c`'s), and
+`gh alias set`'s expansion - for the command that later calls it does so by a name no rule reads,
+and `gh alias import`, whose aliases are in a file, is undecided; an alias another program writes
+into a file is the inside of that program, unseen as help says. The rule a refusal names is the one
+that decided: a rule the command certainly is before one it may be, and of the may-bes the
+person's own restrictions first, then the worktree rules, then the tool's own refusals. The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
 as rules (`AgentPolicy.ProtectedPathRules`), pinned by a test and printed by `help agent-clients`,
 refused on every client; a step's `writes` is the one source that narrows, and the reporter's reads
 are narrowed to the run's directory alone (`AgentPolicyGround.ReporterRoot`: no command, no write,
@@ -4077,15 +4099,25 @@ tool replaces, where a green result had quietly stopped meaning anything.
   under the build directory, within `keepOnFailureCapBytes` kept in all (64 MiB where it is
   left out; files past the cap are not copied and are named). A pass keeps nothing; a later
   step reads nothing from it, for it is evidence beside the verdict and never an output, and
-  a failed step still keeps nothing of what one reads. A path naming nothing is said on the
-  leg's line, not refused, for the failure may have been before it was written; the line
-  (text and `--json`) names the directory, how many files were kept and their size, and how
-  many were refused over the cap, could not be read, or named nothing. On a leg a WSL or ssh
+  a failed step still keeps nothing of what one reads. Only a file of its own is copied: a
+  link is never kept through, for what it leads to may lie outside the build directory or be
+  of any size (the file it leads to is kept where an entry names that), and a pipe or a device
+  is no file to read. A file is measured by what it holds as it is read - never by its
+  directory entry, which says a link's own size and nothing of a file still growing - and no
+  more of it is copied than the cap has left, so one that grows past the cap is refused over
+  it. A directory beneath an entry that cannot be read is passed by and named among the
+  unreadable, every file beside it kept, and a stop while the evidence crosses ends the file
+  it stopped in, keeps what is already kept and names what it left. A path naming nothing is
+  said on the leg's line, not refused, for the failure may have been before it was written;
+  the line (text and `--json`) names the directory, how many files were kept and their size,
+  and how many were refused over the cap, could not be read, were left as links, named
+  nothing or were left uncopied by a stop. On a leg a WSL or ssh
   host runs, the copy is kept beside that host's own log and crosses back over the host's
   transport: `sync --pull` takes the kept-on-failure directory within that host's run. Entries
   that are absolute, climb out of the build directory, name the build directory itself or a
   directory besides it, spell a path or pattern no reader reads, or are given empty are
-  refused when the file is read, naming the key.
+  refused when the file is read, naming the key - and so is a `keepOnFailureCapBytes` where
+  no `keepOnFailure` it applies to names a path, for a key that loads is a key that is read.
 - A build passes only if every file in the project's `buildOutputs` exists afterwards,
   so a build that exited 0 cannot hand its tests a binary left over from an earlier one.
   An entry is a path, or a mapping of platform to path where the platforms disagree about what the

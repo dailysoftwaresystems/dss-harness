@@ -25,8 +25,7 @@ public sealed class AgentStepGroundTests
             slotDirectory: "C:/source/repo/.harness-config/workflows/.env");
 
         Assert.Equal("C:/trees/w1", ground.WorkingDirectory);
-        Assert.Contains("C:/trees/w1", ground.ReadRoots);
-        Assert.DoesNotContain("C:/source/repo", ground.ReadRoots);
+        Assert.Equal(["C:/trees/w1", "C:/runs/r1/agents/a1/work"], ground.ReadRoots);
         Assert.Equal(["C:/trees/w1", "C:/runs/r1/agents/a1/work"], ground.WritableRoots);
     }
 
@@ -42,7 +41,7 @@ public sealed class AgentStepGroundTests
             claudeDirectories: [],
             slotDirectory: "C:/source/repo/.harness-config/workflows/.env");
 
-        Assert.Contains("C:/source/repo", ground.ReadRoots);
+        Assert.Equal(["C:/runs/r1/agents/a1/work", "C:/source/repo"], ground.ReadRoots);
         Assert.Equal(["C:/runs/r1/agents/a1/work"], ground.WritableRoots);
     }
 
@@ -73,8 +72,8 @@ public sealed class AgentStepGroundTests
         var without = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], slotDirectory: "slot");
         var with = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: true, claudeDirectories: [], slotDirectory: "slot");
 
-        Assert.DoesNotContain(AgentCapability.Web, without.Capabilities);
-        Assert.Contains(AgentCapability.Web, with.Capabilities);
+        Assert.Equal([AgentCapability.Read, AgentCapability.Write, AgentCapability.Run], without.Capabilities);
+        Assert.Equal([AgentCapability.Read, AgentCapability.Write, AgentCapability.Run, AgentCapability.Web], with.Capabilities);
     }
 
     [Fact]

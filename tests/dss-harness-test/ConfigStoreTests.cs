@@ -804,7 +804,6 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["{buildDir}"] } } } ] }""", "test.all.keepOnFailure names '{buildDir}', which is the build directory itself")]
     [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["{buildDir}/."] } } } ] }""", "test.all.keepOnFailure names '{buildDir}/.', which is the build directory itself")]
     [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "windows": { "keepOnFailure": ["{treeDir}/out"] } } } ] }""", "test.windows.keepOnFailure names '{treeDir}', which is not under the build directory")]
-    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["{nowhere}/out"] } } } ] }""", "test.all.keepOnFailure")]
     [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["out//report.json"] } } } ] }""", "test.all.keepOnFailure names 'out//report.json', which holds a '.' segment or a doubled separator")]
     [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["out/**x"] } } } ] }""", "which holds '**' inside a segment")]
     [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["out"], "keepOnFailureCapBytes": 0 } } } ] }""", "test.all.keepOnFailureCapBytes must be at least 1 byte, found 0")]
@@ -836,6 +835,76 @@ public sealed class ConfigStoreTests
 
         Assert.Equal(["{buildDir}/corpus-out"], invocation.KeepOnFailure);
         Assert.Equal(1048576, invocation.KeepOnFailureCapBytes);
+    }
+
+    /// <summary>
+    /// A cap on what keepOnFailure keeps is read only where an invocation it applies to keeps something: given where none
+    /// does - no list anywhere, a system's own cap where only another system keeps, or 'all's where every system that
+    /// keeps gives a cap of its own - it is refused, naming what it needs, for a key that loads is a key that is read.
+    /// A cap where a list stands beside it, or 'all's list a system's cap applies to, loads.
+    /// </summary>
+    [Fact]
+    public void AKeepOnFailureCap_WhereNoListItAppliesTo_IsRefused()
+    {
+        static IReadOnlyList<string> Problems(TestConfig test)
+            => HarnessConfigValidator.Validate(new HarnessConfig { Projects = [new ProjectConfig { Name = "main", Type = "cmake", Test = test }] });
+
+        static string Refused(string section)
+            => $"project 'main' test.{section}.keepOnFailureCapBytes caps what keepOnFailure keeps, and no keepOnFailure it applies to names a path; "
+                + "name what a failed run keeps in keepOnFailure, or leave the cap out";
+
+        TestInvocation Ran(List<string>? keep = null, long? cap = null)
+            => new() { Runner = "ctest", SuccessPattern = "x", KeepOnFailure = keep, KeepOnFailureCapBytes = cap };
+
+        Assert.Equal([Refused("all")], Problems(new TestConfig { All = Ran(cap: 1024) }));
+        Assert.Equal([Refused("windows")], Problems(new TestConfig { All = Ran(), Windows = new TestInvocation { KeepOnFailureCapBytes = 10 }, Linux = new TestInvocation { KeepOnFailure = ["out"] } }));
+        Assert.Equal(
+            [Refused("all")],
+            Problems(new TestConfig
+            {
+                All = Ran(cap: 1024),
+                Windows = new TestInvocation { KeepOnFailure = ["out"], KeepOnFailureCapBytes = 10 },
+                Linux = new TestInvocation { KeepOnFailure = ["out"], KeepOnFailureCapBytes = 10 },
+                Macos = new TestInvocation { KeepOnFailure = ["out"], KeepOnFailureCapBytes = 10 },
+            }));
+
+        Assert.Empty(Problems(new TestConfig { All = Ran(["out"], 1024) }));
+        Assert.Empty(Problems(new TestConfig { All = Ran(["out"]), Windows = new TestInvocation { KeepOnFailureCapBytes = 10 } }));
+        Assert.Empty(Problems(new TestConfig { All = Ran(cap: 1024), Linux = new TestInvocation { KeepOnFailure = ["out"] } }));
+    }
+
+    /// <summary>
+    /// An entry naming a directory nothing fills in is refused with the one sentence every setting's unknown name is
+    /// refused with, naming the key - and nothing else is said of it.
+    /// </summary>
+    [Fact]
+    public void AKeepOnFailureEntryNamingNothingAPlaceholderFills_IsRefusedNamingTheKey()
+    {
+        var problems = HarnessConfigValidator.Validate(new HarnessConfig
+        {
+            Projects = [new ProjectConfig { Name = "main", Type = "cmake", Test = new TestConfig { All = new TestInvocation { Runner = "ctest", SuccessPattern = "x", KeepOnFailure = ["{nowhere}/out"] } } }],
+        });
+
+        var unknown = Assert.Throws<DssHarness.Core.Results.HarnessException>(() => DssHarness.Core.Execution.LegPathNames.RefuseUnknown("{nowhere}/out", "project 'main' test.all.keepOnFailure"));
+
+        Assert.StartsWith("project 'main' test.all.keepOnFailure names '{nowhere}'", unknown.Message, StringComparison.Ordinal);
+        Assert.Equal([unknown.Message], problems);
+    }
+
+    /// <summary>
+    /// An entry that names a drive - <c>C:x.log</c>, which Windows reads against that drive's current directory - is
+    /// rooted, refused as every keepOnFailure entry outside the build directory is, on every system: the configuration
+    /// is shared.
+    /// </summary>
+    [Fact]
+    public void ADriveRelativeKeepOnFailureEntry_IsRefusedAsRooted()
+    {
+        var problems = HarnessConfigValidator.Validate(new HarnessConfig
+        {
+            Projects = [new ProjectConfig { Name = "main", Type = "cmake", Test = new TestConfig { All = new TestInvocation { Runner = "ctest", SuccessPattern = "x", KeepOnFailure = ["C:x.log"] } } }],
+        });
+
+        Assert.Equal(["project 'main' test.all.keepOnFailure entry 'C:x.log' must be a relative path inside the build directory, without '..'"], problems);
     }
 
     [Fact]
