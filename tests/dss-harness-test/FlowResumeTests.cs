@@ -328,6 +328,63 @@ public sealed class FlowResumeTests
         Assert.Null(file.Pause);
     }
 
+    /// <summary>
+    /// The skills a reason step's agent was given are the step's own record's - each once, with the place it was found,
+    /// its file, both digests and where its folder was put, in <c>step.json</c> and <c>flow.json</c> alike - and a resume
+    /// takes them up with the record, so what the next session writes still names them.
+    /// </summary>
+    [Fact]
+    public async Task TheSkillsAStepWasGiven_AreItsRecords_AndAResumeKeepsThem()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: after
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [think]
+            """);
+        var review = new DssHarness.Core.Agents.AgentSkill("review", ".harness-config/skills", "/repo/.harness-config/skills/review/SKILL.md", "digest one", "folder one", "/work/a1/skills/review");
+        var plan = new DssHarness.Core.Agents.AgentSkill("plan", ".claude/skills", "/repo/.claude/skills/plan/SKILL.md", "digest two", "folder two", "/work/a1/skills/plan");
+        var runner = new Runner()
+            .On("think", _ => FlowStepResult.Ended(passed: true, 0) with { Skills = [review, plan, review] })
+            .Hold("after");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("after").WaitAsync(Bound, Token);
+            coordinator.RequestPause("command");
+
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(Bound, Token)).Status);
+        }
+
+        Assert.Equal([review, plan], harness.OrchestrationStore.ReadStepRecord(layout.AgentStepRecordFile("a1", "think"))!.Skills!);
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps;
+
+        Assert.Equal([review, plan], steps.Single(step => step.Instance == "think").Skills!);
+        Assert.Null(steps.Single(step => step.Instance == "after").Skills);
+        Assert.Equal([review, plan], harness.OrchestrationStore.ReadStepRecord(layout.AgentStepRecordFile("a1", "think"))!.Skills!);
+    }
+
     /// <summary>What a crash cut off is taken up: it runs again as a new attempt, and the engine writes the handoff its agent never gave - for the next attempt is told what the cut-off one had done.</summary>
     [Fact]
     public async Task WhatACrashCutOff_RunsAgainWithAHandoffTheEngineWrites()

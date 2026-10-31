@@ -627,7 +627,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.Told,
             step.EndedFor,
             step.PieceOf,
-            step.AgainOf);
+            step.AgainOf,
+            step.Skills);
     }
 
     /// <summary>

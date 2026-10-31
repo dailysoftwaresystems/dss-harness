@@ -493,6 +493,13 @@ public sealed record FlowStepResult
     public IReadOnlyList<Agents.AgentAssumption> Assumptions { get; init; } = [];
 
     /// <summary>
+    /// Every skill the attempt's agent was given - its name, the place it was found, its <c>SKILL.md</c>, the SHA-256 of
+    /// the file and of the folder, and where the folder was handed over - kept for the step's record whatever the attempt
+    /// ended by; empty where its prompt named none, or its agent never started.
+    /// </summary>
+    public IReadOnlyList<Agents.AgentSkill> Skills { get; init; } = [];
+
+    /// <summary>
     /// Whether a stored conversation of this attempt can be handed to a client - which is where the answer
     /// <c>more</c> is offered, for more of the same conversation could not help elsewhere.
     /// </summary>

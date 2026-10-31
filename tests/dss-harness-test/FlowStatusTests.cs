@@ -226,12 +226,14 @@ public sealed class FlowStatusTests
         var flow = File(
             nameof(FlowRunStatus.Running),
             [
+                Step("rounds", nameof(FlowInstanceState.Running), group: true, started: At(10, 0)),
                 Step("rounds#1", nameof(FlowInstanceState.Done), group: true, started: At(10, 0), finished: At(10, 0, 30), iteration: 1),
                 Step("rounds#1.build", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 0, 10)),
                 Step("rounds#1.verify", nameof(FlowInstanceState.Done), "orient", started: At(10, 0, 10), finished: At(10, 0, 30)),
                 Step("rounds#2", nameof(FlowInstanceState.Running), group: true, started: At(10, 1), iteration: 2),
                 Step("rounds#2.build", nameof(FlowInstanceState.NotStarted), "orient", iteration: 2),
                 Step("rounds#2.verify", nameof(FlowInstanceState.NotStarted), "orient", iteration: 2),
+                Step("sweep", nameof(FlowInstanceState.Running), group: true),
                 Step("sweep#1", nameof(FlowInstanceState.NotStarted), group: true),
                 Step("sweep#1.clean", nameof(FlowInstanceState.NotStarted), "orient"),
             ]);
@@ -244,7 +246,7 @@ public sealed class FlowStatusTests
             running   nothing is running
             waits     nothing
             done      3 step instances ended; 0.00 USD, 0 tokens spent
-            left      at least 5 step instances, at most 4997 step instances (the loops' bounds and the run's own bound of at most 5000 instances)
+            left      at least 7 step instances, at most 4997 step instances (the loops' bounds and the run's own bound of at most 5000 instances)
             estimate  between 30s and 1m00s more, from the 3 step instances that ended Done in this run; a loop still open has no numeric bound of its own, and the time it may yet take is not in the estimate; 1 step of what is left has not run to an end in this run and is not in the estimate: sweep.clean
             """,
             string.Join("\n", facts));
@@ -275,6 +277,7 @@ public sealed class FlowStatusTests
         var flow = File(
             nameof(FlowRunStatus.Running),
             [
+                Step("rounds", nameof(FlowInstanceState.Running), group: true, started: At(10, 0)),
                 Step("rounds#1", nameof(FlowInstanceState.Done), group: true, started: At(10, 0), finished: At(10, 0, 30), iteration: 1),
                 Step("rounds#1.build", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 0, 10)),
                 Step("rounds#1.verify", nameof(FlowInstanceState.Done), "orient", started: At(10, 0, 10), finished: At(10, 0, 30)),
@@ -286,11 +289,157 @@ public sealed class FlowStatusTests
         var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, Engine, AsOf);
 
         Assert.Equal(
-            "left      at least 3 step instances, at most 6 step instances (the loops' bounds)",
+            "left      at least 4 step instances, at most 7 step instances (the loops' bounds)",
             facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
         Assert.Equal(
             "estimate  between 30s and 1m00s more, from the 3 step instances that ended Done in this run",
             facts.First(fact => fact.StartsWith("estimate", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A loop's bound is widened by what was granted past it - each <c>more</c> a person answered its bound with, in
+    /// <c>questions.json</c>, and each iteration a plan update added to it - and counted past the iterations the loop has
+    /// made, its own record standing for it whatever iteration is under way: the most is the bound the engine holds it
+    /// to.
+    /// </summary>
+    [Fact]
+    public void ALoopsBound_IsWidenedByWhatItsAnswersAndUpdatesGranted()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: rounds
+                repeat:
+                  until: 'rounds.done'
+                  maxIterations: 2
+                steps:
+                  - name: build
+                    type: orient
+                  - name: verify
+                    type: orient
+                    dependsOn: [build]
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Running),
+            [
+                Step("rounds", nameof(FlowInstanceState.Running), group: true, started: At(10, 0)),
+                Step("rounds#1", nameof(FlowInstanceState.Done), group: true, started: At(10, 0), finished: At(10, 0, 30), iteration: 1),
+                Step("rounds#1.build", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 0, 10)),
+                Step("rounds#1.verify", nameof(FlowInstanceState.Done), "orient", started: At(10, 0, 10), finished: At(10, 0, 30)),
+                Step("rounds#2", nameof(FlowInstanceState.Done), group: true, started: At(10, 1), finished: At(10, 1, 30), iteration: 2),
+                Step("rounds#3", nameof(FlowInstanceState.Running), group: true, started: At(10, 2), iteration: 3),
+                Step("rounds#3.build", nameof(FlowInstanceState.NotStarted), "orient", iteration: 3),
+                Step("rounds#3.verify", nameof(FlowInstanceState.NotStarted), "orient", iteration: 3),
+            ]);
+        var questions = new FlowQuestionsFile(
+            1,
+            "r1",
+            AsOf,
+            [
+                new FlowQuestionEntry(
+                    "q1",
+                    "answered",
+                    "loopBound",
+                    At(10, 1, 30),
+                    [],
+                    [new FlowQuestionOption("more", "one more iteration"), new FlowQuestionOption("accept", "the loop ends")],
+                    [new FlowAnswerRecord("more", At(10, 2))],
+                    RaisedBy: new FlowQuestionRaisedBy("engine", "rounds")),
+            ]);
+        var updates = new FlowUpdatesFile(
+            1,
+            "r1",
+            AsOf,
+            [new FlowUpdateEntry("u1", FlowUpdateCauses.Amendment, FlowUpdateStates.Done, At(10, 3), Amendment: "one more round", AddedIteration: "rounds#4")]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions, updates, Engine, AsOf);
+
+        // Its bound, 2, a person's more and an update's iteration: 4, three of them made - one more of three instances.
+        Assert.Equal(
+            "left      at least 4 step instances, at most 7 step instances (the loops' bounds); update u1 owes 'rounds#4' to its loop, and it is not made yet",
+            facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
+
+        // At its bound with its question open, the loop's own record is all that is left of it: no iteration is counted
+        // past the ones it made, and the question is said to be what can grant more.
+        var asking = File(
+            nameof(FlowRunStatus.Paused),
+            [
+                Step("rounds", nameof(FlowInstanceState.Paused), group: true, started: At(10, 0)) with { Question = "q2" },
+                Step("rounds#1", nameof(FlowInstanceState.Done), group: true, started: At(10, 0), finished: At(10, 0, 30), iteration: 1),
+                Step("rounds#2", nameof(FlowInstanceState.Done), group: true, started: At(10, 1), finished: At(10, 1, 30), iteration: 2),
+            ]);
+        var open = new FlowQuestionsFile(
+            1,
+            "r1",
+            AsOf,
+            [
+                new FlowQuestionEntry(
+                    "q2",
+                    "open",
+                    "loopBound",
+                    At(10, 1, 30),
+                    [],
+                    [new FlowQuestionOption("more", "one more iteration"), new FlowQuestionOption("accept", "the loop ends")],
+                    [],
+                    RaisedBy: new FlowQuestionRaisedBy("engine", "rounds")),
+            ]);
+
+        Assert.Equal(
+            "left      at least 1 step instance, at most 1 step instance (the loops' bounds); question q2 (loopBound) can be answered with more past its bound",
+            FlowStatus.Facts(definition, asking, open, updates: null, NoEngine, AsOf).First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A handler granted one more visit by an answer the run has not carried out yet - the source's record still waits
+    /// on the question, its ending stands - is counted in the scope it was granted in, though its source is under way no
+    /// longer: the visit is the engine's to raise when the run goes on.
+    /// </summary>
+    [Fact]
+    public void AHandlerGrantedAVisitNotCarriedOutYet_IsCountedInTheScopeItWasGranted()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on:
+                  step: build
+                  outcome: failure
+                maxVisits: 1
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Paused),
+            [
+                Step("build", nameof(FlowInstanceState.Failed), "orient", started: At(10, 0), finished: At(10, 1), handledBy: "fix"),
+                Step("fix", nameof(FlowInstanceState.Done), "orient", started: At(10, 1), finished: At(10, 3), raisedBy: "build"),
+                Step("build+2", nameof(FlowInstanceState.Failed), "orient", started: At(10, 3), finished: At(10, 4), visit: 2) with { Question = "q1" },
+                Step("after", nameof(FlowInstanceState.NotStarted), "orient"),
+            ]);
+        var questions = new FlowQuestionsFile(
+            1,
+            "r1",
+            AsOf,
+            [
+                new FlowQuestionEntry(
+                    "q1",
+                    "answered",
+                    "visitBound",
+                    At(10, 4),
+                    [],
+                    [new FlowQuestionOption("more", "one more visit"), new FlowQuestionOption("accept", "the ending stands")],
+                    [new FlowAnswerRecord("more", At(10, 5))],
+                    RaisedBy: new FlowQuestionRaisedBy("engine", "build+2"),
+                    Handler: "fix"),
+            ]);
+
+        Assert.Equal(
+            "left      at least 1 step instance, at most 2 step instances (the loops' bounds)",
+            FlowStatus.Facts(definition, flow, questions, updates: null, NoEngine, AsOf).First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
     }
 
     /// <summary>

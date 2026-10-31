@@ -563,8 +563,9 @@ public sealed record AgentStepRequest(
 
     /// <summary>
     /// Where a client handed a conversation stores it, where not under the request's agent's own sessions: a side-task
-    /// keeps its conversation under its own records, and an advice under its own directory, whatever agent - if any - the
-    /// step it was asked for names. Null where the agent's own sessions hold it.
+    /// keeps its conversation under its own records, an advice under its own directory, whatever agent - if any - the
+    /// step it was asked for names, and the run's reporter under its own <c>asks/&lt;stamp&gt;/</c>. Null where the
+    /// agent's own sessions hold it.
     /// </summary>
     public string? SessionsDirectory { get; init; }
 

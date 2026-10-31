@@ -258,7 +258,7 @@ in `config.json`.
 .orchestrators/<o>/agents/<agent>/sessions/<id>/ ignored; API clients only: one conversation with the provider, in the provider's own form
 .orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included
 .orchestrators/<o>/.../<instance>/children/<session>.json ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by stop-orchestrator --now - once its starter has gone
-.orchestrators/<o>/asks/                     ignored; one directory for each call of ask-orchestrator and ask-orchestrator-status: the facts it was given, the files of its reporter's attempt and ask.json; the engine never reads it
+.orchestrators/<o>/asks/                     ignored; one directory for each call of ask-orchestrator and ask-orchestrator-status: the facts it was given, the files of its reporter's attempt, the conversations its client stores (sessions/) and ask.json; the engine never reads it
 .orchestrators/<o>/web/searches.jsonl        ignored; a run's web search: what each source found once for the run, and each query it answered, which the same query again is answered from; written by every client whose step searches
 .orchestrators/.web-index/<source>/          ignored; the harness's own index of a sitemap search source's site: its state, its pages and the pages it could not read, and its fill's record of each address it asked
 .orchestrators/key-spend.jsonl               ignored; what each key spent, by its name and never its value: a line for each entry of a step's order or of a side-task's turn that ran, its lines older than seven days dropped when it is next written, read where balanceKeyUsage chooses a key ('dssharness help agent-clients')
@@ -1004,9 +1004,9 @@ body, not the frontmatter, inside one block that names the skill, its place and 
 to the step; the folder is copied whole into the agent's work directory,
 `work/<agent>/skills/<name>/`, in place of any earlier copy, and that path is what
 `${CLAUDE_SKILL_DIR}` becomes. A folder that holds a link, more than 500 files or more than 16 MB
-is refused. The step's stream records every skill it was given: its `sessionStarted` event names
-each one's place, its `SKILL.md`, the folder handed over, and the SHA-256 of the file and of the
-folder. The frontmatter's keys are each honoured, recorded or refused: `allowed-tools` is
+is refused. The step's record names every skill it was given, each once over its attempts - its
+`step.json` `skills[]`, and its stream's `sessionStarted` event - with each one's place, its
+`SKILL.md`, the folder handed over, and the SHA-256 of the file and of the folder. The frontmatter's keys are each honoured, recorded or refused: `allowed-tools` is
 honoured as what the skill needs, each tool it names held to the one table of Claude Code's tools
 for each capability and the step's agent's - and it grants nothing; `model`, `effort`, `context`,
 `agent`, `background`, `hooks` and `disallowed-tools` are refused, for text put into a prompt runs

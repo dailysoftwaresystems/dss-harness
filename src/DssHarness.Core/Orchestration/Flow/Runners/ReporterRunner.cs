@@ -120,8 +120,9 @@ public sealed class ReporterRunner(
             return Wordless(program.Message, program.ExitCode);
         }
 
-        // The reporter works over the run's records alone: its work directory under the call's own asks/ directory,
-        // which is inside the run's, and its reads narrowed to the run's directory by the policy's one rule for it.
+        // The reporter works over the run's records alone: its work directory, its records and the conversations a client
+        // stores under the call's own asks/ directory, which is inside the run's and which the engine never reads - never
+        // under an agent's of the run - and its reads narrowed to the run's directory by the policy's one rule for it.
         var asks = Path.Combine(layout.AsksDirectory, call.Stamp);
         var workspace = ReasonLaunch.Workspace(record: null, context.Layout, Path.Combine(asks, "work"), layout.Directory);
         var ground = AgentStepGround.Of(
@@ -165,6 +166,7 @@ public sealed class ReporterRunner(
             Retries = call.Reporter.Retries,
             BackoffSeconds = call.Reporter.BackoffSeconds,
             RecordDirectory = asks,
+            SessionsDirectory = Path.Combine(asks, OrchestratorLayout.SessionsDirectoryName),
             Program = program?.Program,
             ProgramVersion = program?.Version,
         };

@@ -266,6 +266,17 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal(
             new AgentSkill("planning", ".harness-config/skills", Path.Combine(kit.Main, ".harness-config", "skills", "planning", "SKILL.md"), found.Digest!, found.FolderDigest!, copied),
             skill);
+
+        // The step's result carries what its agent was given, for the step's own record to name it - and an agent that
+        // never started was given nothing.
+        Assert.Equal([skill], handed.Skills);
+
+        agents.Answer = _ => new AgentRunResult(AgentRunStatus.NotStarted, AgentNotStartedBecause.KeyMissing, Error: "no key");
+
+        var notStarted = await Runner(kit, agents).RunAsync(Run(kit, prompt: "Plan with {skill.planning}.", made: new FlowMadeAgent("a9", "claude-opus-5-5")) with { Attempt = 2 }, Token);
+
+        Assert.Equal((false, HarnessExit.Refused), (notStarted.Passed, notStarted.Exit));
+        Assert.Empty(notStarted.Skills);
     }
 
     /// <summary>

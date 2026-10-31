@@ -200,6 +200,11 @@ public sealed record FlowEvent(
 /// other record.
 /// </param>
 /// <param name="AgainOf">An instance of the work-item group's own record: the instance it visits again in its place and with its agent, by its id; null where it visits none.</param>
+/// <param name="Skills">
+/// Every skill the step's agent was given, each once, of every attempt of the visit: its name, the place it was found, its
+/// <c>SKILL.md</c>, the SHA-256 of the file and of the folder as handed over, and where the folder was put; null where it
+/// was given none.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -244,7 +249,8 @@ public sealed record FlowStepRecord(
     IReadOnlyList<FlowStepTold>? Told = null,
     string? EndedFor = null,
     string? PieceOf = null,
-    string? AgainOf = null)
+    string? AgainOf = null,
+    IReadOnlyList<Agents.AgentSkill>? Skills = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -294,6 +300,8 @@ public sealed record FlowStepRecord(
             : Handoff?.Problem() is { } handoff ? $"its handoff: {handoff}"
             : Targets?.FirstOrDefault(target => target.Problem() is not null) is { } target ? $"its target '{target.Agent}': {target.Problem()}"
             : Targets?.GroupBy(target => target.Agent, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice ? $"it names target '{twice.Key}' twice"
+            : Skills?.Any(skill => skill is null || new[] { skill.Name, skill.Place, skill.File, skill.Digest, skill.FolderDigest, skill.Folder }.Any(string.IsNullOrWhiteSpace)) == true
+                ? "a skill it was given names no name, place, file, digest or folder"
             : null;
 }
 
@@ -853,6 +861,7 @@ public sealed record FlowSnapshot(
 /// <param name="EndedFor">The plan update a piece of which ended this visit in order (<see cref="FlowStepRecord.EndedFor"/>); null for every other instance.</param>
 /// <param name="PieceOf">An instance of the work-item group's: the plan update whose piece it carries or withdrew (<see cref="FlowStepRecord.PieceOf"/>); null otherwise.</param>
 /// <param name="AgainOf">An instance of the work-item group's: the instance it visits again (<see cref="FlowStepRecord.AgainOf"/>); null where it visits none.</param>
+/// <param name="Skills">Every skill the step's agent was given (<see cref="FlowStepRecord.Skills"/>); null where it was given none.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -897,4 +906,5 @@ public sealed record FlowSnapshotStep(
     IReadOnlyList<FlowStepTold>? Told = null,
     string? EndedFor = null,
     string? PieceOf = null,
-    string? AgainOf = null);
+    string? AgainOf = null,
+    IReadOnlyList<Agents.AgentSkill>? Skills = null);

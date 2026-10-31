@@ -186,6 +186,7 @@ public sealed class RunReporterTests
         // The reporter reads the run's directory and nowhere else: no command, no write and no web, whatever its file says.
         Assert.Equal(runDirectory, asked.Ground!.ReporterRoot);
         Assert.Equal(asks, asked.RecordDirectory);
+        Assert.Equal(Path.Combine(asks, OrchestratorLayout.SessionsDirectoryName), asked.SessionsDirectory);
         Assert.Equal(runDirectory, asked.Workspace.RunDirectory);
         Assert.Null(asked.Output);
         Assert.Equal("reporter", asked.Agent);

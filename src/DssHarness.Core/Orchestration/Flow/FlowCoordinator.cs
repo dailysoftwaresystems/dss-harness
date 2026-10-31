@@ -247,6 +247,12 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// </summary>
     public IReadOnlyList<Agents.AgentAssumption> Assumptions { get; internal set; } = [];
 
+    /// <summary>
+    /// Every skill the step's agent was given, each once, in the order first given - kept for the step's record whatever
+    /// the attempt ended by, each attempt of the visit adding what it was given anew; empty where it was given none.
+    /// </summary>
+    public IReadOnlyList<Agents.AgentSkill> Skills { get; internal set; } = [];
+
     /// <summary>The red legs alone, in the order they ran; the step's failure names the worst of them.</summary>
     public IReadOnlyList<FlowLeg> RedLegs { get; internal set; } = [];
 
@@ -2680,6 +2686,10 @@ public sealed class FlowCoordinator
             return;
         }
 
+        // What the answer grants past a bound is granted first, by the one owner of what each answer grants: what the
+        // answer then does - iterate, raise, take the recovery - goes by the bound it widened.
+        Grant(instance, asked, answer);
+
         switch (asked.Kind)
         {
             case "failure":
@@ -2707,6 +2717,32 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
+    /// Grants what <paramref name="answer"/> to <paramref name="asked"/> grants past a bound, as <see cref="FlowGrants.Of"/>
+    /// says each answer grants: one more iteration of the repeat it is about, one more visit of the handler it names in
+    /// the scope its source ended in, or one more visit of the recovery for the step it is about. Every answer is granted
+    /// here - as it is carried out, and counted back from <c>questions.json</c> at a resume - and nowhere else.
+    /// </summary>
+    /// <param name="about">The instance the question is about.</param>
+    /// <param name="asked">The question.</param>
+    /// <param name="answer">The answer.</param>
+    private void Grant(FlowInstance about, FlowQuestion asked, string answer)
+    {
+        switch (FlowGrants.Of(asked.Kind, answer))
+        {
+            case FlowGrant.Iteration:
+                about.ExtraIterations++;
+                break;
+            case FlowGrant.Visit when about.DeclaredScope is { } scope && asked.Handler is { Length: > 0 } handler:
+                scope.ExtraVisits[handler] = scope.ExtraVisits.GetValueOrDefault(handler) + 1;
+                break;
+            case FlowGrant.Recovery:
+                var key = RecoveryOf(about).Key;
+                _recoveryExtra[key] = _recoveryExtra.GetValueOrDefault(key) + 1;
+                break;
+        }
+    }
+
+    /// <summary>
     /// Answers the question a handler at its bound asks of its source's ending, which stands as it ended - done or
     /// failed - while the question is open. <c>more</c> raises the handler once more (and the same question is asked
     /// again if it comes to that). <c>accept</c> takes the ending as it stands without the handler: the other handlers
@@ -2722,14 +2758,8 @@ public sealed class FlowCoordinator
         switch (answer)
         {
             case "more":
-                // The answer grants the handler the question named one more visit in its scope, and the same question
-                // comes again where it comes to that.
-                if (handler is { Length: > 0 })
-                {
-                    var extra = instance.DeclaredScope!.ExtraVisits;
-                    extra[handler] = extra.GetValueOrDefault(handler) + 1;
-                }
-
+                // The handler the question named was granted one more visit in its scope (Grant), and the same
+                // question comes again where it comes to that.
                 _ = RaiseFor(instance);
                 break;
             case "accept":
@@ -2767,10 +2797,8 @@ public sealed class FlowCoordinator
     {
         if (answer is "more" or "direct")
         {
-            var key = RecoveryOf(instance).Key;
-            _recoveryExtra[key] = _recoveryExtra.GetValueOrDefault(key) + 1;
-
-            // A direct answer's text is the fix the next visit is given, and that visit's alone.
+            // The recovery was granted one more visit for this step (Grant). A direct answer's text is the fix the next
+            // visit is given, and that visit's alone.
             TakeRecoveryOf(instance, answer == "direct" ? text ?? string.Empty : null);
             return;
         }
@@ -3121,7 +3149,7 @@ public sealed class FlowCoordinator
         switch (answer)
         {
             case "more":
-                instance.ExtraIterations++;
+                // The loop was granted one more iteration (Grant): it goes on to make it.
                 instance.State = FlowInstanceState.Running;
                 break;
             case "accept":
@@ -4820,12 +4848,6 @@ public sealed class FlowCoordinator
     private int AddedIterationsGiven()
         => _updates.Updates.Count(update => update.AddedIteration is not null);
 
-    /// <summary>Whether <paramref name="update"/> added an iteration to <paramref name="loop"/>: its <c>addedIteration</c> is one of the loop's own.</summary>
-    private static bool AddedTo(FlowUpdateEntry update, FlowInstance loop)
-        => update.AddedIteration is { } added
-            && added.LastIndexOf('#') is > 0 and var at
-            && string.Equals(added[..at], loop.Id, StringComparison.Ordinal);
-
     /// <summary>
     /// Adds the iteration plan updates owe work of <paramref name="loop"/>, where the loop is at its own bound: one for
     /// the update that owes it, however many pieces it owes - and that one iteration carries every update's owed work,
@@ -5511,6 +5533,12 @@ public sealed class FlowCoordinator
         if (result.Assumptions is [_, ..] assumed)
         {
             instance.Assumptions = [.. instance.Assumptions, .. assumed];
+        }
+
+        // The skills the attempt's agent was given, however it ended: the step's record names every one, once.
+        if (result.Skills is [_, ..] given)
+        {
+            instance.Skills = [.. instance.Skills.Concat(given).Distinct()];
         }
 
         if (result.Asked is { } asking)
@@ -9757,7 +9785,8 @@ public sealed class FlowCoordinator
             instance.ToldEntries.Count == 0 ? null : [.. instance.ToldEntries],
             instance.EndedFor,
             instance.ScopeOf?.PieceOf,
-            instance.ScopeOf?.AgainOf?.GroupInstance?.Id);
+            instance.ScopeOf?.AgainOf?.GroupInstance?.Id,
+            instance.Skills is [_, ..] skills ? [.. skills] : null);
 
     /// <summary>
     /// The agent this step works in: the one stored on it (<see cref="FlowInstance.WorksIn"/>), or - before it was stored -
@@ -10280,7 +10309,7 @@ public sealed class FlowCoordinator
             {
                 // Each iteration an update added to a loop at its bound, its entry's: the loop's bound counts it again,
                 // as a person's more is counted again from the answers.
-                loop.ExtraIterations += _updates.Updates.Count(update => AddedTo(update, loop));
+                loop.ExtraIterations += _updates.Updates.Count(update => FlowGrants.AddedTo(update, loop.Id));
             }
 
 
@@ -10489,6 +10518,7 @@ public sealed class FlowCoordinator
             instance._handlers.AddRange(record.Handlers ?? []);
             instance._answers.AddRange(record.Answers);
             instance.Assumptions = record.Assumptions ?? [];
+            instance.Skills = record.Skills ?? [];
 
             // Whether a failure is settled is read from where it left the run: passed over, ended the run, taken by its
             // group or by a handler. One still owed, or waiting on what raised for it, is not.
@@ -10513,7 +10543,8 @@ public sealed class FlowCoordinator
     /// answer a configuration gave, where it is counted, so its <c>times</c> are spent across sessions as within one;
     /// each <c>more</c> a repeat's bound was answered, one more iteration of that repeat; each <c>more</c> a handler's
     /// bound was answered, one more visit of that handler in its scope; and each <c>more</c> or <c>direct</c> the
-    /// recovery's bound was answered, one more visit of it. The answers are the one record of these grants.
+    /// recovery's bound was answered, one more visit of it - each granted by <see cref="Grant"/>, as it was when the answer
+    /// was carried out. The answers are the one record of these grants.
     /// </summary>
     private void CountTheAnswers()
     {
@@ -10544,26 +10575,9 @@ public sealed class FlowCoordinator
                     continue;
                 }
 
-                switch (asked.Kind, given.Answer)
+                if (about is not null)
                 {
-                    case ("loopBound", "more") when about is not null:
-                    {
-                        about.ExtraIterations++;
-                        break;
-                    }
-
-                    case ("visitBound", "more") when about?.DeclaredScope is { } scope && asked.Handler is { } handler:
-                    {
-                        scope.ExtraVisits[handler] = scope.ExtraVisits.GetValueOrDefault(handler) + 1;
-                        break;
-                    }
-
-                    case ("recoveryBound", "more" or "direct") when about is not null:
-                    {
-                        var key = RecoveryOf(about).Key;
-                        _recoveryExtra[key] = _recoveryExtra.GetValueOrDefault(key) + 1;
-                        break;
-                    }
+                    Grant(about, asked, given.Answer);
                 }
             }
         }

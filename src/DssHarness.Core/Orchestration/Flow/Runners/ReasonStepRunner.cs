@@ -300,7 +300,11 @@ public sealed class ReasonStepRunner(
                 run.Events.HandoffTaken();
             }
 
-            return Ended(result, run.Instance, stored, FlowRunBudget.RunsShareBinds(definition?.MaxBudgetUsd, run.BudgetLeftUsd));
+            // The skills the attempt's agent was given are the step's record's, however the attempt ended - but for an
+            // agent that never started, which was given nothing.
+            var ended = Ended(result, run.Instance, stored, FlowRunBudget.RunsShareBinds(definition?.MaxBudgetUsd, run.BudgetLeftUsd));
+
+            return result.Status == AgentRunStatus.NotStarted ? ended : ended with { Skills = skills };
         }
         catch (HarnessException refused)
         {

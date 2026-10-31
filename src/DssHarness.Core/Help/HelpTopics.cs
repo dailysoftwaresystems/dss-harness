@@ -2599,9 +2599,9 @@ public static class HelpTopics
         builder.AppendLine("place of any earlier copy; that path is the directory the text states and what");
         builder.AppendLine("${CLAUDE_SKILL_DIR} becomes. The work directory is a root every agent already reads and runs");
         builder.AppendLine($"commands in, on every client. A folder that holds a link, more than {AgentSkills.FileLimit} files or more than 16 MB is");
-        builder.AppendLine("refused. The step's stream records every skill it was given: its sessionStarted event names");
-        builder.AppendLine("each one's place, its SKILL.md, the folder handed to the step, and the SHA-256 of SKILL.md");
-        builder.AppendLine("and of the folder.");
+        builder.AppendLine("refused. The step's record names every skill it was given, each once over its attempts - its");
+        builder.AppendLine("step.json skills[], and its stream's sessionStarted event - with each one's place, its");
+        builder.AppendLine("SKILL.md, the folder handed to the step, and the SHA-256 of SKILL.md and of the folder.");
         builder.AppendLine();
         builder.AppendLine("The frontmatter's keys, each honoured, recorded or refused:");
         builder.AppendLine();
@@ -3718,8 +3718,10 @@ public static class HelpTopics
             + "the resume or on room - a claim, the run to be quiet, a counter of its limits - a ci-wait reading the checks of the "
             + "commit the run last pushed; what is done, the failures a handler took and what was spent of the budget; what is left "
             + "at least and at most - a stopped instance among it, for it runs again at the resume - with the bound that gave the "
-            + "most, by the engine's own bounds: a loop's iterations to its bound, a handler's visits to its maxVisits in each "
-            + "scope its source is under way in, a forEach not yet expanded and a piece of a plan update not carried out named - "
+            + "most, by the engine's own bounds: a loop's iterations to its bound past the ones it made, a handler's visits to its "
+            + "maxVisits in each scope its source is under way in, each widened by every more its bound was answered and every "
+            + "iteration a plan update added, a forEach not yet expanded, a question open at a bound - whose more can grant past "
+            + "it - and a piece of a plan update not carried out named - "
             + "and when it may finish, as a range that rests on this run alone: of each step of the definition that works, the "
             + "shortest and the longest time an instance of it took to end Done - a group's own span is its members' time, never "
             + "counted beside it - the lower end laying what is left along what depends on what, as the engine orders it, so work "
@@ -3731,7 +3733,7 @@ public static class HelpTopics
             + "the workflow's reporter names an agent, its words follow the facts - it is the run's own reporter, offered the tools "
             + "that read and no other, reading the run's directory and nowhere else, its answer masked and what it costs the "
             + "person's, never the run's; each call keeps its own record under the run's asks/, the facts as given, the files of its "
-            + "reporter's attempt and ask.json, a directory the engine never reads. Both commands only read: no state file, no "
+            + "reporter's attempt, the conversations its client stores (sessions/) and ask.json, a directory the engine never reads. Both commands only read: no state file, no "
             + "step, no agent, no budget, no lock an engine needs - they take no lock at all - and they work while a run goes on, is "
             + "paused, waits, or has ended. Where no model words them the status still prints the facts, says no model worded this "
             + "and why, and exits 0: the facts are the answer, and the words were a service; the person's question is refused - 12 "
@@ -4861,7 +4863,8 @@ public static class HelpTopics
             + "by stop-orchestrator --now - once its starter has gone"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AsksDirectoryName}/",
             "ignored; one directory for each call of ask-orchestrator and ask-orchestrator-status: the facts it was given, "
-            + "the files of its reporter's attempt and ask.json; the engine never reads it"),
+            + $"the files of its reporter's attempt, the conversations its client stores ({OrchestratorLayout.SessionsDirectoryName}/) and ask.json; "
+            + "the engine never reads it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}",
             "ignored; a run's web search: what each source found once for the run, and each query it answered, which the "
             + "same query again is answered from; written by every client whose step searches"),

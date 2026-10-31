@@ -2015,8 +2015,9 @@ among the directories, every secret the slot answers in the mask), the policy's 
 read-only agent reading the main tree and writing its work directory alone), each skill its prompt names looked up
 again where the step starts (`AgentSkills.Find`, its name by `AgentSkills.NameIn`'s one rule), the folder copied
 whole into `work/<agent>/skills/<name>/` and the block put where the placeholder stood, its `${CLAUDE_SESSION_ID}` the
-id the run's first session begins as (`AgentStepRequest.SessionId`), each skill handed recorded on the request and in
-the stream's `sessionStarted` - the engine having filled every other name into the prompt once and handed it as
+id the run's first session begins as (`AgentStepRequest.SessionId`), each skill handed recorded on the request, in
+the stream's `sessionStarted` and on the step's record (`FlowStepResult.Skills`, kept once each over the visit's
+attempts as `FlowStepRecord.Skills`, `step.json`'s `skills[]`, and taken up again by a resume) - the engine having filled every other name into the prompt once and handed it as
 pieces (`FlowStepRun.Prompts`, `FlowTemplate.FillAroundSkills`), so what was filled is never read as a template again
 and a value's braces stand - a skill that cannot be handed refusing the step (12), the work it goes on with rendered
 as its continuation record (`AgentContinuation.Render` over its `FlowStepRun.WorkedFrom`), and the run answered
@@ -2516,16 +2517,22 @@ person takes to answer and a wait for room - a claim, the run to be quiet, a cou
 each a word the admission writes from `FlowWaits` and the facts class by it - left out and said to
 be, and no estimate at all where nothing has ended or the run has ended (done or failed: a stopped
 run goes on at its resume, and its stopped instances are among what is left), the facts saying
-which. What is left counts by the engine's own bounds - `FlowRepeat.Bound` for a loop,
-`WorkflowStep.VisitsAllowed` for a handler, in each scope its source is under way in, as the engine
-counts its visits - so the most is a bound. Where the
+which. What is left counts by the engine's own bounds - `FlowRepeat.Bound` for each repeat instance
+not ended, past the iterations it made, `WorkflowStep.VisitsAllowed` for a handler, in each scope its
+source is under way in, as the engine counts its visits - each widened by what was granted past it
+(`FlowGrants`, the one owner the engine applies an answer by and counts the answers back by at a
+resume: each `more` a repeat's or a handler's bound was answered in `questions.json`, and each
+iteration a plan update added to a loop), a handler's granted visit the run has not carried out yet
+counted in the scope it was granted in - so the most is a bound, and a question open at a bound is
+named as what can grant more past it. Where the
 workflow's `reporter` names an agent, its words follow the facts, run by the reason step's own
 runner as the advisor is (`ReporterRunner`), its reads narrowed to the run's directory alone
 (`AgentPolicyGround.ReporterRoot`: no command, no write, no web - the three tools that read and no
 other), its answer masked, its cost the person's and never the run's. Both commands only read: no
 state file, no step, no agent, no budget, no lock an engine needs, not even the sweep every other
 command over an orchestrator makes first - what a call leaves behind is its own record under the
-run's `asks/<stamp>/` (the facts as given, the files of its reporter's attempt, `ask.json`), a
+run's `asks/<stamp>/` (the facts as given, the files of its reporter's attempt, the conversations
+its client stores under `sessions/` - never under an agent's of the run - and `ask.json`), a
 directory the engine never reads. Where no model words them the status still prints the facts, says
 `no model worded this` and why, and exits 0 - the facts are the answer, and the words were a
 service; the person's question is refused, naming why (12 where the workflow names no reporter or
