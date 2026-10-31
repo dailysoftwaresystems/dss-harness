@@ -466,13 +466,6 @@ public sealed class FlowCoordinator
     /// <summary>Every read-only agent whose deletion this run has begun: asked once, however many endings find its work over.</summary>
     private readonly HashSet<string> _deletedAgents = new(StringComparer.Ordinal);
 
-    /// <summary>
-    /// The grant of the budget at which an agent's launch was ended by what was left of the run's dollars before the
-    /// reserve, or a part's cost could not be counted in a run budgeted in dollars: the reserve is reached for that grant
-    /// whatever the run's own count says, for the launch was bound to it, or the dollars are not known; -1 where none was.
-    /// </summary>
-    private int _reserveMetAt = -1;
-
     /// <summary>Held while a pause is asked for, so two asks at once merge into one request and neither is lost.</summary>
     private readonly Lock _pauseAsks = new();
 
@@ -1783,6 +1776,8 @@ public sealed class FlowCoordinator
     /// grant that stands, as a launch its share ended does: dollars not all counted are not known to be short of it, so
     /// the run asks, saying at least what was counted and why the rest is not known, and a grant of more lets it go on.
     /// A run budgeted in dollars never starts a model it cannot price, so this is a part that came with no cost said of it.
+    /// The mark is kept with what was spent (<see cref="FlowBudgetSpent.ReserveMetAt"/>), so whatever write first holds
+    /// the part holds the mark too, and a resume after a crash before the budget's check asks as this session would have.
     /// </summary>
     /// <param name="tokens">The tokens it used.</param>
     /// <param name="dollars">What it cost, or why that could not be counted.</param>
@@ -1792,7 +1787,7 @@ public sealed class FlowCoordinator
 
         if (dollars.Uncounted is not null && _definition.Budget is { Usd: not null })
         {
-            _reserveMetAt = _budgetGranted;
+            _spent.ReserveMetAt = _budgetGranted;
         }
     }
 
@@ -1803,8 +1798,8 @@ public sealed class FlowCoordinator
 
         // A launch the run's share ended, or a part whose cost could not be counted, reached the reserve for this grant
         // whatever the run's own count says: the client counted it at its own reckoning and stopped there, or nothing
-        // counted it at all.
-        if (budget.Usd is { } usd && (_spent.Usd >= ReserveOf(budget, usd) || _reserveMetAt == _budgetGranted))
+        // counted it at all. The mark is read from what was spent, as flow.json holds it, so a resume reads it too.
+        if (budget.Usd is { } usd && (_spent.Usd >= ReserveOf(budget, usd) || _spent.ReserveMetAt == _budgetGranted))
         {
             return ("usd", _spent.Dollars.Said(usd * times));
         }
@@ -6017,25 +6012,33 @@ public sealed class FlowCoordinator
             // again at the resume.
             Release(instance);
             instance.Handoff ??= EngineHandoffOf(instance, pausing);
+
+            // What was left of the run's dollars before its reserve ended the launch: the reserve is reached for the grant
+            // its share was reckoned under, where that grant still stands - marked with what was spent before the handoff
+            // is written, so the write that records the launch's end holds the mark, and a resume after a crash asks as
+            // this session does, never resting on the step being run again past the reserve to meet it a second time. A
+            // share reckoned before more was granted says nothing of the grant that stands now.
+            var stale = instance.ShareGrant != _budgetGranted;
+
+            if (result.PauseCause == "budget" && !stale)
+            {
+                _spent.ReserveMetAt = _budgetGranted;
+            }
+
             Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
 
             if (result.PauseCause == "budget")
             {
-                // What was left of the run's dollars before its reserve ended the launch: the reserve is reached for the
-                // grant its share was reckoned under, and where that grant still stands the budget's own path decides -
-                // the workflow's answers may allow each amount once again, and the step then runs again at once, given
-                // its handoff; else the run pauses for its budget. A share reckoned before more was granted says
-                // nothing of the grant that stands now: the step runs again at once, given its handoff, its share
-                // reckoned anew.
-                var stale = instance.ShareGrant != _budgetGranted;
-
+                // Where the grant the share was reckoned under still stands the budget's own path decides - the
+                // workflow's answers may allow each amount once again, and the step then runs again at once, given its
+                // handoff; else the run pauses for its budget. A stale share's step runs again at once, given its
+                // handoff, its share reckoned anew.
                 if (!stale)
                 {
-                    _reserveMetAt = _budgetGranted;
                     CheckBudget();
                 }
 
-                if (_reserveMetAt != _budgetGranted)
+                if (_spent.ReserveMetAt != _budgetGranted)
                 {
                     _wakes.Add(new Wake(instance, _clock.GetUtcNow(), Task.CompletedTask));
                     Record(FlowChangeKind.Step, instance, detail: stale
@@ -10831,6 +10834,7 @@ public sealed class FlowCoordinator
             _spent.Dollars = resume.File.Spent.Dollars;
             _spent.Tokens = resume.File.Spent.Tokens;
             _spent.Minutes = resume.File.Spent.Minutes;
+            _spent.ReserveMetAt = resume.File.Spent.ReserveMetAt;
 
             // The issues the run listed are its file's, restored whole; what became of each the tally rebuilds from
             // the triage instances' own records, for the file holds only the listed ones.

@@ -3167,6 +3167,22 @@ public sealed class FlowResumeTests
         }
     }
 
+    /// <summary>
+    /// The grant a run's reserve was met under is read strictly: one below the first grant, or past the grants the run
+    /// was given, is no record; none at all is a run whose reserve nothing met past its count, as every record written
+    /// before the mark was kept is read.
+    /// </summary>
+    [Fact]
+    public void AReserveMetAtAGrantTheRunWasNeverGiven_IsNoRecord()
+    {
+        static FlowFile Holding(int? met, int granted)
+            => new(1, "r1", "flow", "digest", new Dictionary<string, string>(), "Paused", new FlowBudgetRecord(2, 0, 0, ReserveMetAt: met), granted, [], [], DateTimeOffset.UnixEpoch);
+
+        Assert.Equal<string?>(
+            [null, null, "its budget's reserve was met at a negative grant", "its budget's reserve was met at grant 2, past the 1 it was granted"],
+            new[] { Holding(null, 0), Holding(1, 1), Holding(-1, 0), Holding(2, 1) }.Select(file => file.Problem()));
+    }
+
     /// <summary>A record's state is read by the engine's one strict reader of its names: one it does not have is refused, never taken for a step that runs again.</summary>
     [Fact]
     public void AStateTheEngineDoesNotHave_IsRefused_NeverTakenForOneThatRunsAgain()
@@ -3314,17 +3330,161 @@ public sealed class FlowResumeTests
         }
     }
 
+    /// <summary>
+    /// The reserve a run budgeted in dollars met whatever its count says - by a part whose cost could not be counted, or
+    /// by a launch the run's share ended - is kept in <c>flow.json</c> with what was spent, never in the engine's memory
+    /// alone: a crash at any write from the first that holds it - the part on disk, or the launch's end - with the
+    /// budget's check not yet made, or made and its question not yet written, is gone on from by a resume that asks once,
+    /// as the run uncut asked, before anything starts again - never by running the step past the reserve to meet it a
+    /// second time; and once a grant of more is recorded the run goes on to its end and asks nothing more.
+    /// </summary>
+    /// <param name="by">What meets the reserve: <c>uncounted</c>, a part whose cost could not be counted; <c>share</c>, a launch the run's share ended.</param>
+    [Theory]
+    [InlineData("uncounted")]
+    [InlineData("share")]
+    public async Task AReserveMetWhateverTheCountSays_IsAskedOnceAtTheResumeAfterACrash_AndAGrantGoesOn(string by)
+    {
+        const string Why = "no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)";
+        const string Asked = "Paused | started none | q1 runBudget open ";
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 50
+              reservePercent: 10
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: after
+                type: orient
+                dependsOn: [think]
+            """);
+
+        // The conversation reports what it spent once, and its launch meets the reserve once, in the run's first session:
+        // every later attempt - a resume's among them, for what the first spent is on disk - goes on in it, reports nothing
+        // more and ends.
+        Runner Scripted(bool first = false)
+            => new Runner().On("think", run =>
+            {
+                if (!first)
+                {
+                    return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+                }
+
+                first = false;
+
+                if (by == "share")
+                {
+                    run.Events.Used(tokens: 1_000, usd: 44.0);
+                    return FlowStepResult.AtTheRunsReserve("'think' spent what was left of the run's budget before its reserve");
+                }
+
+                run.Events.Used(tokens: 1_000, usd: 2.0);
+                run.Events.Used(tokens: 500, usd: null, uncounted: Why);
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+
+        // Where the write the reserve is first met in is: the part on disk, or the write that records the launch's end.
+        bool Meets(FlowChangeKind kind, FlowSnapshot snapshot)
+            => by == "share" ? kind == FlowChangeKind.Handoff : snapshot.Spent.Uncounted is not null;
+
+        static string Standing(FlowSessionEnd end, IReadOnlyList<string> started, IReadOnlyList<FlowQuestionEntry> questions)
+            => $"{end.Status} | started {(started.Count == 0 ? "none" : string.Join(", ", started))} | "
+                + string.Join(", ", questions.Select(question => $"{question.Id} {question.Kind} {question.State} {string.Join("/", question.Answers.Select(answer => answer.Answer))}"));
+
+        async Task<(string Standing, int Writes, int Met)> RunCutAsync(TempDirectory temp, int writes)
+        {
+            var (harness, layout, records) = Records("r1", temp.Path, definition);
+            var cut = new Cut(records, writes, Meets);
+            FlowSessionEnd end;
+
+            using (records)
+            {
+                end = await new FlowCoordinator(definition, Scripted(first: true), new RunnerFacts(), records: cut).RunAsync(Token).WaitAsync(Bound, Token);
+            }
+
+            // The run uncut says what its one session started as none, for only a resume's starts are looked at.
+            IReadOnlyList<string> started = [];
+
+            if (writes != int.MaxValue)
+            {
+                var (_, _, again) = Records("r1", temp.Path, definition);
+                var resumed = Scripted();
+
+                using (again)
+                {
+                    end = await new FlowCoordinator(definition, resumed, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token);
+                }
+
+                started = resumed.Started;
+            }
+
+            return (Standing(end, started, harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions), cut.Made, cut.Marked ?? 0);
+        }
+
+        using var whole = new TempDirectory();
+        var uncut = await RunCutAsync(whole, int.MaxValue);
+
+        Assert.Equal(Asked, uncut.Standing);
+        Assert.InRange(uncut.Met, 1, uncut.Writes - 1);
+
+        for (var writes = uncut.Met; writes < uncut.Writes; writes++)
+        {
+            using var temp = new TempDirectory();
+            var (actual, _, _) = await RunCutAsync(temp, writes);
+
+            if (actual != Asked)
+            {
+                Assert.Fail($"a crash after write {writes} of {uncut.Writes}, the reserve met from write {uncut.Met}, was gone on from otherwise than asking once:\n{actual}");
+            }
+        }
+
+        // The reserve met on disk and nothing after it, the resume asking; then more answered and recorded: the run goes on
+        // to its end and asks nothing more.
+        using var crashed = new TempDirectory();
+
+        Assert.Equal(Asked, (await RunCutAsync(crashed, uncut.Met)).Standing);
+
+        var (harness, layout, records) = Records("r1", crashed.Path, definition);
+        var granted = Scripted();
+        FlowSessionEnd end;
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, granted, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: records);
+
+            Assert.True(coordinator.TryAnswer("q1", "more", null, out var problem, FlowService.AnswerCommand), problem);
+            end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+        }
+
+        Assert.Equal("Done | started think, after | q1 runBudget answered more", Standing(end, granted.Started, harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions));
+    }
+
     /// <summary>The run's records, cut: the writes up to the cut reach the disk, and none after it - a process ended there.</summary>
-    private sealed class Cut(IFlowRecords inner, int writes) : IFlowRecords
+    /// <param name="inner">The records the writes up to the cut reach.</param>
+    /// <param name="writes">How many writes reach them.</param>
+    /// <param name="marks">What a change and its snapshot hold whose write's number <see cref="Marked"/> says, the first such; null where none is looked for.</param>
+    private sealed class Cut(IFlowRecords inner, int writes, Func<FlowChangeKind, FlowSnapshot, bool>? marks = null) : IFlowRecords
     {
         private int _made;
 
         /// <summary>How many writes the run handed its records, cut or not.</summary>
         public int Made => _made;
 
+        /// <summary>The number of the first write whose change and snapshot hold what <c>marks</c> looks for; null where none did.</summary>
+        public int? Marked { get; private set; }
+
         public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
         {
-            if (Interlocked.Increment(ref _made) <= writes)
+            var made = Interlocked.Increment(ref _made);
+
+            if (Marked is null && marks?.Invoke(kind, snapshot) == true)
+            {
+                Marked = made;
+            }
+
+            if (made <= writes)
             {
                 inner.Write(kind, snapshot, instance, from, to, attempt, detail);
             }

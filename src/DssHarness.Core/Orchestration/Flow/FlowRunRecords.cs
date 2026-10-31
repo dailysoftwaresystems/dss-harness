@@ -563,7 +563,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             _context.DefinitionDigest,
             _context.Inputs,
             snapshot.Status.ToString(),
-            new FlowBudgetRecord(snapshot.Spent.Usd, snapshot.Spent.Tokens, snapshot.Spent.Minutes, snapshot.Spent.Uncounted),
+            new FlowBudgetRecord(snapshot.Spent.Usd, snapshot.Spent.Tokens, snapshot.Spent.Minutes, snapshot.Spent.Uncounted, snapshot.Spent.ReserveMetAt),
             snapshot.BudgetGranted,
             [.. snapshot.Steps.Select(StepRecordOf)],
             [.. snapshot.Next],

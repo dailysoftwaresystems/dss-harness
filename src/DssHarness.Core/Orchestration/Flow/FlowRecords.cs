@@ -463,6 +463,8 @@ public sealed record FlowFile(
             : string.IsNullOrWhiteSpace(DefinitionDigest) ? "it names no digest of its definition"
             : !FlowRecordNames.Is<FlowRunStatus>(Status) ? $"'{Status}' is not a run status"
             : BudgetGranted < 0 ? "the budget was granted more a negative number of times"
+            : Spent.ReserveMetAt is < 0 ? "its budget's reserve was met at a negative grant"
+            : Spent.ReserveMetAt is { } met && met > BudgetGranted ? $"its budget's reserve was met at grant {met.ToString(CultureInfo.InvariantCulture)}, past the {BudgetGranted.ToString(CultureInfo.InvariantCulture)} it was granted"
             : Steps.Any(step => step.Problem() is { } problem) ? $"its steps hold one that is not a record: {Steps.First(step => step.Problem() is not null).Problem()}"
             : Steps.GroupBy(step => step.Instance, StringComparer.Ordinal).Any(group => group.Count() > 1) ? "it holds an instance twice"
             : Next.Any(id => Steps.All(step => !string.Equals(step.Instance, id, StringComparison.Ordinal))) ? "next names an instance the file does not hold"
@@ -494,7 +496,13 @@ public sealed record FlowHoldRecord(string Update, [property: JsonConverter(type
 /// Why a part's cost could not be counted - the first such part's - so the dollars are not known past <paramref name="Usd"/>;
 /// left out where every part's was, as a record written before a part could go uncounted is read.
 /// </param>
-public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes, string? Uncounted = null)
+/// <param name="ReserveMetAt">
+/// The grant of the budget under which the run's dollars reached its reserve whatever their count says - a launch the
+/// run's share ended, or a part whose cost could not be counted in a run budgeted in dollars - written with the change
+/// that met it, so a resume after a crash asks as the session would have, and a grant of more recorded since goes on;
+/// left out where none did, as a record written before the mark was kept is read.
+/// </param>
+public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes, string? Uncounted = null, int? ReserveMetAt = null)
 {
     /// <summary>The dollars as the one fold holds them: what was counted, and why the rest is not known where it is not.</summary>
     [JsonIgnore]

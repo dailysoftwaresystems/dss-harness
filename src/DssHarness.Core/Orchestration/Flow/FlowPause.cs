@@ -64,6 +64,13 @@ public sealed class FlowBudgetSpent
     /// <summary>The time reason steps ran, in minutes: two that reason at once count twice.</summary>
     public double Minutes { get; internal set; }
 
+    /// <summary>
+    /// The grant of the budget under which the run's dollars reached its reserve whatever their count says - a launch the
+    /// run's share ended, or a part whose cost could not be counted in a run budgeted in dollars - kept with what was spent
+    /// so the change that met it writes it, and a resume reads it back; null where none did.
+    /// </summary>
+    public int? ReserveMetAt { get; internal set; }
+
     /// <summary>Charges one part of the run's reasoning - a turn of a reason step, an advice - by the one fold of its dollars.</summary>
     /// <param name="tokens">The tokens it used.</param>
     /// <param name="dollars">What it cost, or why that could not be counted.</param>

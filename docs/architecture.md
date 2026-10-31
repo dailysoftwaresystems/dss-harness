@@ -2159,9 +2159,13 @@ kind it used - is handed on with no cost and why (`IFlowRunEvents.Used`'s `uncou
 run's dollars known only as at least the counted sum - `flow.json`'s `spent.uncounted` (`FlowBudgetRecord.Uncounted`,
 absent where every part was counted, a record without it read as counted whole), said by status, the report and every
 `--json` (`FlowDollars.Said`, `spent.uncounted`, an ask's `cost.uncounted`). In a run budgeted in dollars such a part
-reaches the reserve for the grant that stands as a launch its share ended does (`FlowCoordinator.Charge` marking
-`_reserveMetAt`), so the run asks, and a grant of more goes on with each launch held to what is left as far as the
-dollars were counted. A step that says `ask` is paused on its agent's questions
+reaches the reserve for the grant that stands as a launch its share ended does (`FlowCoordinator.Charge`), so the run
+asks, and a grant of more goes on with each launch held to what is left as far as the dollars were counted. Either mark
+is kept with what was spent, never in the engine's memory alone (`FlowBudgetSpent.ReserveMetAt`, `flow.json`'s
+`spent.reserveMetAt`, absent where nothing met the reserve past its count and refused at a grant the run was never
+given): the uncounted part's with its charge, the share's set before the write that records the launch's end, so a
+resume after a crash at any write from there asks once, before anything starts again - never by running the step past
+the reserve to meet it a second time - and a grant of more recorded since goes on. A step that says `ask` is paused on its agent's questions
 (`AgentRunStatus.Asked` mapped to a question of the kind `ask`, the agent's questions riding with it and the
 recommendation saying the agent recommends within each), and the answer - `answer` with a text, or `decide` - goes back
 into the same attempt (`FlowAnswerGiven` carrying its text and kind): the runner sends the person's words as the
