@@ -18,8 +18,12 @@ public sealed class RunReporterTests
 {
     private const string Workflow = "flow";
 
-    /// <summary>Every bound a test of these waits for.</summary>
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// Every bound a test of these waits for: the same start path FlowServiceTests waits on (git spawns, the run's
+    /// records) under the whole suite's load, and the same role as a deadlocked engine's end - 120 s, the suite's own
+    /// "long running" threshold, for a spawn under the suite's storm has been measured taking over 30 s.
+    /// </summary>
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(120);
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 

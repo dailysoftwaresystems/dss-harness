@@ -25,7 +25,16 @@ public sealed class FlowServiceTests
     private const string Workflow = "flow";
 
     /// <summary>Every bound a test of a session waits for: a session that hangs fails the test rather than the run's minutes.</summary>
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// How long a test here waits for the engine - a step started, an answer taken, a session ended. Two roles in one
+    /// bound: it must outlast the machine under the whole suite's load - the start path spawns git a dozen times and
+    /// writes some fifty records, and a process spawn under the suite's own storm has been measured taking over 30 s
+    /// (the stack shows the wait inside a native CreateProcess; the same stall meets the pre-change build), so a healthy
+    /// engine can pass 30 s - and it must still end a deadlocked one, for the suite has no hang watchdog of its own
+    /// (<c>--long-running</c> only reports). 120 s: the suite's own "long running" threshold, so a test that reaches the
+    /// bound was already flagged twice as slow before it failed.
+    /// </summary>
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(120);
 
     /// <summary>The engine's own looks, made quick: a poll and a look every 10 ms; the stop waited for as the tool waits.</summary>
     private static readonly FlowTimings Quick = new(TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30));
