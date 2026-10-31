@@ -4002,12 +4002,17 @@ public sealed class FlowCoordinator
 
                 DisarmTimeLimit(member);
                 CountMinutes(member);
+                member.State = FlowInstanceState.Stopped;
+                member.EndedFor = update;
+                member.Error = why;
+
+                var account = await HandoffTurnAsync(member, _definition.HandoffSeconds ?? 180, HandoffAsked(member)).ConfigureAwait(false);
 
                 if (member.Runner is { IsCompleted: false })
                 {
-                    // Its runner has not answered yet - cancelled, or past the handoff turn's bound - and may still
-                    // write: what it claimed stays held until it answers, so the instance visited again in its place,
-                    // which works in the same agent's tree, is not admitted beside it.
+                    // Its runner has not answered yet - cancelled past the handoff turn's bound - and may still write:
+                    // what it claimed stays held until it answers, so the instance visited again in its place, which
+                    // works in the same agent's tree, is not admitted beside it.
                     Linger(member);
                 }
                 else
@@ -4015,11 +4020,6 @@ public sealed class FlowCoordinator
                     Release(member);
                 }
 
-                member.State = FlowInstanceState.Stopped;
-                member.EndedFor = update;
-                member.Error = why;
-
-                var account = await HandoffTurnAsync(member, _definition.HandoffSeconds ?? 180, HandoffAsked(member)).ConfigureAwait(false);
                 _spent.Minutes += account.Minutes.TotalMinutes;
                 member.Handoff = account.Text is { Length: > 0 } written ? new FlowHandoff(written, "agent") : EngineHandoffOf(member, why);
 
