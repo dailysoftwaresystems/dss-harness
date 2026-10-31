@@ -35,6 +35,7 @@ public sealed class AgentKeySpendTests
     public void WhatAKeySpent_IsRecordedByName_NeverByValue_AndReadAsItsWeek()
     {
         var (spend, temp, clock) = Record();
+        using var owned = temp;
         var layout = new HarnessLayout(temp.Path, temp.Path);
         var sink = spend.RecordingIn(layout);
 
@@ -61,6 +62,7 @@ public sealed class AgentKeySpendTests
     public void LinesOlderThanTheWeek_AreDroppedWhenTheRecordIsNextWritten()
     {
         var (spend, temp, clock) = Record();
+        using var owned = temp;
         var layout = new HarnessLayout(temp.Path, temp.Path);
         Directory.CreateDirectory(layout.OrchestratorsDirectory);
         File.WriteAllText(
@@ -87,6 +89,7 @@ public sealed class AgentKeySpendTests
     public void TheKeysOfOneModel_RunInOrderOfLeastSpent_ATieInTheListsOrder_TheModelsUntouched()
     {
         var (providers, layout, keys, temp) = Order.Ready(["ANTHROPIC_KEY=sk-first", "ANTHROPIC_SPARE=sk-second", "ANTHROPIC_THIRD=sk-third", "CLAUDE_API_KEY=sk-api"]);
+        using var owned = temp;
         var spent = new Dictionary<(string Provider, string Key), decimal>
         {
             [("anthropic", "ANTHROPIC_SPARE")] = 3,

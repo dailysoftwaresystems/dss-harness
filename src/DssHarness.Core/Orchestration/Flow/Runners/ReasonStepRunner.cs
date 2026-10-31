@@ -851,40 +851,20 @@ public sealed class ReasonStepRunner(
     /// <summary>
     /// The engine's compaction of the conversation the step's own stream holds, its last iterations word for word -
     /// what the answer <c>compact</c> goes on from, a new conversation that begins with it. The window is the
-    /// attempt's whole conversation: every engine run of this attempt, from its first message - the task - to its
-    /// last, for the conversation one attempt goes on with spans every answer it was given.
+    /// attempt's whole conversation (<see cref="AgentAttempt.Of"/>): every engine run of this attempt, from its first
+    /// message - the task - to its last, for the conversation one attempt goes on with spans every answer it was given.
     /// </summary>
     /// <param name="stream">The step's own events.</param>
     /// <param name="attempt">The attempt the compaction answers.</param>
     /// <param name="context">The repository's context, whose configuration bounds the record and the reduction.</param>
     private static string? CompactedFrom(IReadOnlyList<AgentEvent> stream, int attempt, HarnessContext context)
     {
-        var window = AttemptOf(stream, attempt);
+        var window = AgentAttempt.Of(stream, attempt);
 
         return window.Count == 0 ? null : AgentCompaction.Reduce(
             window,
             AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation),
             AgentCompactionBounds.Of(context.Config.AgentContext?.Compaction)).Record;
-    }
-
-    /// <summary>The events of <paramref name="attempt"/> alone: everything after the last run an earlier attempt began; every event where none did.</summary>
-    /// <param name="stream">The step's own events.</param>
-    /// <param name="attempt">The attempt whose events are asked for, from 1.</param>
-    private static IReadOnlyList<AgentEvent> AttemptOf(IReadOnlyList<AgentEvent> stream, int attempt)
-    {
-        // The newest run of an earlier attempt ends the window; every event after it is this attempt's, whatever run
-        // of this attempt began it.
-        var lastEarlier = -1;
-
-        for (var index = 0; index < stream.Count; index++)
-        {
-            if (stream[index] is RunStarted begun && begun.Attempt != attempt)
-            {
-                lastEarlier = index;
-            }
-        }
-
-        return lastEarlier < 0 ? stream : [.. stream.Skip(lastEarlier + 1)];
     }
 
     /// <summary>

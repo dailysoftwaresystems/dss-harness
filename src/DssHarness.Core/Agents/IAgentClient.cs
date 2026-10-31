@@ -78,6 +78,11 @@ public interface IAgentRunner : Application.IUseCase
 /// <param name="EffortLevels">The effort levels it takes.</param>
 /// <param name="ProviderType">The type of provider whose models it reaches.</param>
 /// <param name="ToldModelBy">How it is told which model to run.</param>
+/// <param name="PacesRequests">
+/// Whether it goes through the gate's lane for each request it sends itself (<see cref="AgentRun.Gates"/>), as the loop
+/// the API clients share does; the runner holds the lane around each run of a client that does not, whose requests it
+/// cannot see one by one.
+/// </param>
 public sealed record AgentClientCapabilities(
     bool Streaming,
     bool Thinking,
@@ -89,7 +94,8 @@ public sealed record AgentClientCapabilities(
     bool ReportsCost,
     IReadOnlyList<string> EffortLevels,
     string ProviderType,
-    string ToldModelBy);
+    string ToldModelBy,
+    bool PacesRequests = false);
 
 /// <summary>How a client goes on with the conversation the engine stored.</summary>
 public enum AgentConversationHandling
@@ -187,8 +193,6 @@ public sealed record AgentLimits(int? MaxTurns, decimal? MaxBudgetUsd, TimeSpan?
     /// <summary>How long the agent has to answer a handoff, where nothing names it: three minutes.</summary>
     public static readonly TimeSpan DefaultHandoffBound = TimeSpan.FromSeconds(180);
 }
-
-/// <summary>One entry of a step's order as the engine runs it, and the one shape the engine's fallback walks: see <see cref="AgentRunEntry"/>.</summary>
 
 /// <summary>One skill the step's prompt named, as the run was given it.</summary>
 /// <param name="Name">The skill's name.</param>
@@ -411,8 +415,9 @@ public sealed class AgentTurnInterrupt
 }
 
 /// <summary>
-/// A step an agent is to work, as the engine resolved it: everything a run needs, before a client is chosen. The work
-/// it goes on with is not here yet - the continuation record comes with its own slice, and joins this request then.
+/// A step an agent is to work, as the engine resolved it: everything a run needs, before a client is chosen - the work it
+/// goes on with among it, as its continuation record (<see cref="Continuation"/>) and the compaction it begins from
+/// (<see cref="Compaction"/>).
 /// </summary>
 /// <param name="Run">The orchestrator run's name.</param>
 /// <param name="Agent">The agent the step works as.</param>
@@ -614,7 +619,11 @@ public sealed record AgentRun(
     /// </summary>
     public Policy.AgentPolicyGround? Ground { get; init; }
 
-    /// <summary>The credential the run signs in with, where its client signs in; null for the machine's login.</summary>
+    /// <summary>
+    /// The credential the run signs in with, where its client signs in; null for the machine's login. Its keys are the
+    /// run's model's keys in the order they are tried - the one the run starts on first - which a client moves through
+    /// on a key the provider refuses, and an account at its limit, before the model changes.
+    /// </summary>
     public AgentCredential? Credential { get; init; }
 
     /// <summary>The program a client that starts one starts, as the engine found it ready; null for a client that starts none.</summary>
@@ -664,6 +673,14 @@ public sealed record AgentRun(
     /// and for every step of a run, whose web is the harness's own alone.
     /// </summary>
     public IAgentNativeSearch? NativeSearch { get; init; }
+
+    /// <summary>
+    /// The gate's lanes, which a client that paces its own requests (<see cref="AgentClientCapabilities.PacesRequests"/>)
+    /// enters for each request it sends - the lane of the run's provider and the key the request is signed with - and
+    /// sets the cool-down of on every 429; null where the runner holds no gate, or holds the lane around the whole run
+    /// itself.
+    /// </summary>
+    public ClientGates? Gates { get; init; }
 }
 
 /// <summary>

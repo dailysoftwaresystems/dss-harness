@@ -54,7 +54,7 @@ public sealed class AgentRunnerSpendTests
         }
     }
 
-    /// <summary>One entry of the order, priced, so the engine can count what it used.</summary>
+    /// <summary>One entry of the order, priced, so the engine can count what it used, signing in with its key's value <c>sk-</c> and the key's name.</summary>
     private static AgentRunEntry Entry(string model = "claude-opus-5-5", string key = "WORK_KEY", string client = "claude-api")
         => new(model, "anthropic", client, key, null, Usable: true)
         {
@@ -62,7 +62,15 @@ public sealed class AgentRunnerSpendTests
                 new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Currency = "USD" },
                 new AgentModelConfig { Code = model, ContextTokens = 200000, MaxOutputTokens = 32000, PriceInputMiss = 5, PriceInputHit = 1, PriceOutput = 25 },
                 null),
+            Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey(key, $"sk-{key}")]),
         };
+
+    /// <summary>
+    /// The lane the key named <paramref name="key"/> signs a request into, found as the account is - by a hash of the
+    /// key's value, never its name - so a test that holds it holds the lane the runner enters.
+    /// </summary>
+    private static ClientGate LaneOfTheKey(ClientGates gates, string key)
+        => gates.Lane("anthropic", DssHarness.Core.FileSystem.FileContentHash.Of(System.Text.Encoding.UTF8.GetBytes($"sk-{key}")), new ClientGateSettings(MaxParallel: 1));
 
     /// <summary>A step whose order and spend sink a test names, over a temporary directory.</summary>
     private static AgentStepRequest Step(IReadOnlyList<AgentRunEntry> order, Spent spent, TempDirectory temp)
@@ -156,7 +164,7 @@ public sealed class AgentRunnerSpendTests
 
         // The lane of the run's provider and key, bound to one at a time: made before the run, so the run's own ask
         // of it finds the bound the test wants rather than the client's built-in.
-        var lane = gates.Lane("anthropic", DssHarness.Core.FileSystem.FileContentHash.Of(System.Text.Encoding.UTF8.GetBytes("WORK_KEY")), new ClientGateSettings(MaxParallel: 1));
+        var lane = LaneOfTheKey(gates, "WORK_KEY");
         var working = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new Scripted("claude-api")
@@ -172,9 +180,9 @@ public sealed class AgentRunnerSpendTests
         var spent = new Spent();
         var run = runner.RunAsync(Step([Entry()], spent, temp), events: null, Token);
 
-        // The lane is held while the client works - the run's own request inside it - so a second request of the same
-        // provider and key waits for the run to be done. The lane is the key's own: the entry's credential holds the
-        // value, and the runner hashes it, so the test asks by the same name the walk sent.
+        // The lane is held while the client works - a client that does not pace its own requests is held in it for the
+        // whole run - so a second request of the same provider and key waits for the run to be done. The lane is the
+        // key's own: the entry's credential holds the value, and the runner hashes the value, never the name.
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5), Token);
         var second = lane.EnterAsync(inputTokens: 0, Token);
 
@@ -204,7 +212,7 @@ public sealed class AgentRunnerSpendTests
             await Task.Delay(wait, clock, cancellationToken);
         });
 
-        var lane = gates.Lane("anthropic", DssHarness.Core.FileSystem.FileContentHash.Of(System.Text.Encoding.UTF8.GetBytes("WORK_KEY")), new ClientGateSettings(MaxParallel: 1));
+        var lane = LaneOfTheKey(gates, "WORK_KEY");
         var lifts = clock.GetUtcNow() + TimeSpan.FromMinutes(2);
         var client = new Scripted("claude-api")
         {
@@ -223,7 +231,142 @@ public sealed class AgentRunnerSpendTests
 
         var later = lane.EnterAsync(inputTokens: 0, Token);
 
+        // Two minutes from the run's end, one of them passed: the minute left is what the later request waits.
         await Assert.ThrowsAsync<TimeoutException>(() => later.WaitAsync(TimeSpan.FromMilliseconds(200), Token));
-        Assert.Contains(waits, wait => wait > TimeSpan.Zero);
+        Assert.Equal([TimeSpan.FromMinutes(1)], waits);
+    }
+
+    /// <summary>
+    /// What the walk cost is every entry's own cost summed: a client's reported number - a Claude Code launch's - kept, an
+    /// entry its client reports nothing of counted in at the engine's count, never dropped and never read as zero.
+    /// </summary>
+    [Fact]
+    public async Task TheWalksCost_IsEveryEntrysOwn_TheReportedKept()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var reported = new Scripted("one")
+        {
+            Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Refused, Usage: Used(100, 50) with { Cost = new AgentCost(Reported: 1.80m) }) { DeclinedFor = "the request" }),
+        };
+        var counted = new Scripted("two") { Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Completed, FinalText: "done", Usage: Used(100, 50))) };
+        var runner = new AgentRunner([reported, counted], harness.FileSystem, Elevation.User, TimeProvider.System);
+
+        var result = await runner.RunAsync(Step([Entry(client: "one"), Entry(model: "claude-fable-5-1", key: "SPARE_KEY", client: "two")], new Spent(), temp), events: null, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(new AgentCost(Reported: 1.82m, Counted: null), result.Usage!.Cost);
+        Assert.Equal(1.82m, result.Usage.Cost!.Usd);
+
+        // The one entry's own: what the client said, as it said it.
+        var alone = await new AgentRunner([reported], harness.FileSystem, Elevation.User, TimeProvider.System)
+            .RunAsync(Step([Entry(client: "one")], new Spent(), temp), events: null, Token);
+
+        Assert.Equal(new AgentCost(Reported: 1.80m), alone.Usage!.Cost);
+    }
+
+    /// <summary>
+    /// A walk where one entry's cost is known by neither the client nor the engine has an unknown cost, never zero, the
+    /// price that was missing named.
+    /// </summary>
+    [Fact]
+    public async Task AWalkWithAnEntryOfUnknownCost_HasAnUnknownCost()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var unpriced = new Scripted("one")
+        {
+            Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Refused, Usage: Used(100, 50) with { Cost = new AgentCost(MissingPrice: "claude-opus-5-5's priceOutput") }) { DeclinedFor = "the request" }),
+        };
+        var counted = new Scripted("two") { Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Completed, FinalText: "done", Usage: Used(100, 50))) };
+        var runner = new AgentRunner([unpriced, counted], harness.FileSystem, Elevation.User, TimeProvider.System);
+
+        var result = await runner.RunAsync(Step([Entry(client: "one"), Entry(model: "claude-fable-5-1", key: "SPARE_KEY", client: "two")], new Spent(), temp), events: null, Token);
+
+        Assert.Equal(new AgentCost(Reported: null, Counted: null, MissingPrice: "claude-opus-5-5's priceOutput"), result.Usage!.Cost);
+        Assert.Null(result.Usage.Cost!.Usd);
+    }
+
+    /// <summary>
+    /// What a run spent that cannot be recorded for the balancing of keys - its section held past its wait, the disk full -
+    /// is said as a notice, and the step ends as it ended: the record is for choosing a key, never part of the work.
+    /// </summary>
+    [Fact]
+    public async Task ASpendThatCannotBeRecorded_IsSaid_AndNeverEndsTheStep()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var done = new Scripted("one") { Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Completed, FinalText: "done", Usage: Used(100, 50))) };
+        var runner = new AgentRunner([done], harness.FileSystem, Elevation.User, TimeProvider.System);
+        var seen = new List<AgentEvent>();
+
+        var result = await runner.RunAsync(Step([Entry(client: "one")], new Spent(), temp) with { Spend = new Unwritable() }, new Collecting(seen), Token);
+
+        Assert.Equal((AgentRunStatus.Completed, "done"), (result.Status, result.FinalText));
+        Assert.Equal(
+            $"What WORK_KEY spent on 'claude-opus-5-5' could not be recorded for the balancing of keys: {Unwritable.Why}",
+            Assert.Single(seen.OfType<Notice>()).Text);
+    }
+
+    /// <summary>
+    /// A launch waiting its turn at the gate says so - the wait and when it ends - and the run's pause ends the wait: the
+    /// launch never began, so the run hands off nothing, saying why, and its client is never asked.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchWaitingAtTheGate_IsSaid_AndThePauseEndsIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var clock = new ManualClock();
+        var gates = new ClientGates(clock, (wait, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
+        LaneOfTheKey(gates, "WORK_KEY").RateLimited(TimeSpan.FromHours(2));
+
+        var asked = 0;
+        var client = new Scripted("claude-api") { Script = (_, _, _) => { asked++; return Task.FromResult(new AgentRunResult(AgentRunStatus.Completed, FinalText: "done")); } };
+        var runner = new AgentRunner([client], harness.FileSystem, Elevation.User, clock, gates);
+        var handoff = new AgentHandoffSignal(TimeSpan.FromSeconds(30));
+        var waiting = new TaskCompletionSource<WaitingToRetry>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var seen = new List<AgentEvent>();
+
+        var run = runner.RunAsync(Step([Entry()], new Spent(), temp) with { Handoff = handoff }, new Collecting(seen, waiting), Token);
+        var wait = await waiting.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+        Assert.Equal(
+            ($"the run waits for {ClientGate.CoolDown}", TimeSpan.FromHours(2), clock.GetUtcNow() + TimeSpan.FromHours(2)),
+            (wait.Cause, wait.Delay, wait.Until));
+
+        handoff.Ask();
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+        Assert.Equal((AgentRunStatus.HandedOff, AgentRunner.PausedAtTheGate), (result.Status, result.Handoff!.WhyNone));
+        Assert.Equal(0, asked);
+    }
+
+    /// <summary>A recorder whose every line fails as a section held past its wait does.</summary>
+    private sealed class Unwritable : IAgentSpendSink
+    {
+        public const string Why = "the section across runs is held past its wait";
+
+        public void Record(string provider, string? key, string model, decimal cost)
+            => throw new DssHarness.Core.Results.HarnessException(DssHarness.Core.Results.HarnessExit.CommandFailed, Why);
+    }
+
+    /// <summary>A sink that collects what it is given, telling the first wait it sees.</summary>
+    private sealed class Collecting(List<AgentEvent> seen, TaskCompletionSource<WaitingToRetry>? waiting = null) : IAgentEventSink
+    {
+        public ValueTask EmitAsync(AgentEvent @event)
+        {
+            lock (seen)
+            {
+                seen.Add(@event);
+            }
+
+            if (@event is WaitingToRetry wait)
+            {
+                waiting?.TrySetResult(wait);
+            }
+
+            return ValueTask.CompletedTask;
+        }
     }
 }

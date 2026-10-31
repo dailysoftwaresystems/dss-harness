@@ -508,8 +508,9 @@ public sealed record Notice(string Text) : AgentEvent;
 /// </summary>
 /// <remarks>
 /// Every attempt of a step appends to the step's one stored stream, and its numbering begins again at one, so this is
-/// where an attempt's own events begin: the newest attempt's stream, which a continuation and a handoff are written
-/// from, is what follows the last of these, whether the attempt before it ended or was killed.
+/// where a run's own events begin: an attempt's events, which a continuation, a compaction and a handoff are written
+/// from, are those of every run that names it (<see cref="AgentAttempt.Of"/>) - more than one where the attempt went on
+/// with an answer - whether the attempt before it ended or was killed.
 /// </remarks>
 /// <param name="Attempt">Which attempt of the step the run is, from one.</param>
 public sealed record RunStarted(int Attempt) : AgentEvent;

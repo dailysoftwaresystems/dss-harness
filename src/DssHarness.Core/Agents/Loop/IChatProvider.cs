@@ -96,9 +96,11 @@ public interface IChatProvider
 /// token, the same request is sent again without it.
 /// </param>
 /// <param name="FirstEffort">
-/// The effort the conversation began at, where it began at one and a fallback move has since changed the level: what a
-/// provider that caches the conversation is sent top-level still - changing it there would drop the cached
-/// conversation - the change told in the conversation instead. Null where the level never changed.
+/// The level a provider that caches the conversation is sent top-level, where a fallback move has changed the level
+/// since the conversation began: the level it began at - empty where it began at none - while each change is told in
+/// the conversation, for changing it there would drop the cached conversation; and the new level - empty for the
+/// model's own default - once a move to a level no message names has the requests carry it themselves. Either way a
+/// conversation that holds a level told in it is sent as one. Null where the level never changed.
 /// </param>
 public sealed record ChatRequest(
     string Model,

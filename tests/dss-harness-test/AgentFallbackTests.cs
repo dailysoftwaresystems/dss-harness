@@ -160,10 +160,11 @@ public sealed class AgentFallbackTests : IDisposable
         Assert.Equal(["sk-1", "sk-2", "sk-2"], _chat.Requests.Select(request => request.Key!.Value));
         Assert.Equal(["claude-opus-5-5", "claude-opus-5-5", "claude-opus-4-8"], _chat.Requests.Select(request => request.Model));
 
-        // The balance spent on WORK_KEY covers the later model's entry on it too: said, and passed over.
+        // The balance spent on WORK_KEY covers the later model's entry on it too: said, and passed over, in the words of
+        // the fallback's one rule, which the loop and the runner both walk by.
         var passed = _events.All.OfType<FallbackPassedOver>().Single();
 
-        Assert.Equal(("claude-opus-4-8", "a limit the run remembers covers it"), (passed.Model, passed.Why));
+        Assert.Equal(("claude-opus-4-8", "the limit covers it"), (passed.Model, passed.Why));
     }
 
     /// <summary>
@@ -522,7 +523,7 @@ public sealed class AgentFallbackTests : IDisposable
         => new(AgentAuth.ApiKey, [.. names.Select((name, at) => new AgentKey(name, $"sk-{at + 1}"))]);
 
     /// <summary>One entry of the run's order, of the loop's provider and client, for a fallback a test names.</summary>
-    private static AgentRunEntry Entry(string model, string provider = "anthropic", string client = "claude-api", string? key = "WORK_KEY", string? effort = null, bool usable = true)
+    private static AgentRunEntry Entry(string model, string provider = "anthropic", string client = "claude-api", string? key = "WORK_KEY", string? effort = null, bool usable = true, AgentCredential? credential = null)
         => new(
             model,
             provider,
@@ -532,6 +533,7 @@ public sealed class AgentFallbackTests : IDisposable
             usable,
             usable ? null : $"no file under '.harness-config/workflows/.env/' declares '{key}'")
         {
+            Credential = credential,
             Entries = usable
                 ? new AgentEntries(
                     new AgentProviderConfig { Name = provider, Type = "anthropic", Currency = "USD" },
@@ -697,7 +699,10 @@ public sealed class AgentFallbackTests : IDisposable
             },
         };
         var next = new Scripted("glm") { Script = (run, events, _) => Completed(run, events, "glm-5.3", turns: 1) };
-        var runner = new AgentRunner([failing, next], _harness.FileSystem, Elevation.User, TimeProvider.System);
+
+        // Every wait passes at once on the clock, which moves by what was waited: the backoff is the clock's, not the test's.
+        var clock = new JumpingClock();
+        var runner = new AgentRunner([failing, next], _harness.FileSystem, Elevation.User, clock);
         var seen = new Collecting();
 
         var result = await runner.RunAsync(
@@ -707,13 +712,10 @@ public sealed class AgentFallbackTests : IDisposable
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.Equal(3, asked);
-
-        var waits = seen.Seen.OfType<WaitingToRetry>().ToList();
-
-        Assert.Equal(2, waits.Count);
-        Assert.Equal(TimeSpan.FromSeconds(1), waits[0].Delay);
-        Assert.Equal(TimeSpan.FromSeconds(2), waits[1].Delay);
-        Assert.Contains("the agent failed", waits[0].Cause, StringComparison.Ordinal);
+        Assert.Equal([TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2)], clock.Waits);
+        Assert.Equal(
+            [("the agent failed: it broke", 1, 2, TimeSpan.FromSeconds(1)), ("the agent failed: it broke", 2, 2, TimeSpan.FromSeconds(2))],
+            seen.Seen.OfType<WaitingToRetry>().Select(wait => (wait.Cause, wait.Attempt, wait.Of, wait.Delay)));
 
         var moved = seen.Seen.OfType<FallbackStarted>().Single();
 
@@ -797,6 +799,386 @@ public sealed class AgentFallbackTests : IDisposable
 
         Assert.Same(handed, stores.Given!.Conversation);
         Assert.Null(renders.Given);
+    }
+
+    /// <summary>
+    /// The order the slot gives - one model, two keys of its provider, each an entry of its own - is walked inside the
+    /// client: a key the provider refuses moves the run to the same model's next key in the one conversation, the request
+    /// sent again - never the refused key asked again, and never a move past the model.
+    /// </summary>
+    [Fact]
+    public async Task AKeyRefused_MovesToTheSameModelsNextKey_InTheOrderTheSlotGives()
+    {
+        _chat.Fail(new ChatFailure(ChatFailureKind.KeyRefused, "invalid x-api-key")).Answer(FakeChat.Said("done"));
+
+        var (result, seen) = await WalkedAsync();
+
+        Assert.Equal((AgentRunStatus.Completed, "done"), (result.Status, result.FinalText));
+        Assert.Equal(["sk-first", "sk-second"], _chat.Requests.Select(request => request.Key!.Value));
+        Assert.Equal(["ANTHROPIC_KEY"], result.KeysRefused);
+
+        var moved = Assert.Single(seen.OfType<FallbackStarted>());
+
+        Assert.Equal(
+            (FakeChat.Model, FakeChat.Model, "ANTHROPIC_KEY", "ANTHROPIC_SECOND", AgentFallback.SentAgain),
+            (moved.FromModel, moved.ToModel, moved.FromKey, moved.ToKey, moved.How));
+        Assert.Empty(seen.OfType<WaitingToRetry>());
+    }
+
+    /// <summary>
+    /// An account at its limit on the slot's first key moves the run to the same model's next key inside the client first,
+    /// in the one conversation, the request sent again - as the limit's rule says, never past it to another model, and
+    /// never a launch of its own.
+    /// </summary>
+    [Fact]
+    public async Task AnAccountAtItsLimit_MovesToTheSameModelsNextKey_InTheOrderTheSlotGives()
+    {
+        _chat.Fail(new ChatFailure(ChatFailureKind.AccountLimit, "credit balance too low", BalanceSpent: true)).Answer(FakeChat.Said("done"));
+
+        var (result, seen) = await WalkedAsync();
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(["sk-first", "sk-second"], _chat.Requests.Select(request => request.Key!.Value));
+
+        var moved = Assert.Single(seen.OfType<FallbackStarted>());
+
+        Assert.Equal(("ANTHROPIC_KEY", "ANTHROPIC_SECOND", AgentFallback.SentAgain), (moved.FromKey, moved.ToKey, moved.How));
+    }
+
+    /// <summary>
+    /// The entry a move reaches is asked with tries of its own: the tries the entry it left spent are that entry's, so a
+    /// passing failure of the next one is waited and asked again, not taken for the account at its limit.
+    /// </summary>
+    [Fact]
+    public async Task TheEntryAMoveReaches_IsAskedWithTriesOfItsOwn()
+    {
+        for (var each = 0; each <= 2; each++)
+        {
+            _chat.Fail(new ChatFailure(ChatFailureKind.RateLimited, "slow down"));
+        }
+
+        _chat.Fail(new ChatFailure(ChatFailureKind.RateLimited, "slow down")).Answer(FakeChat.Said("done"));
+
+        var result = await Ran(Run() with { Credential = Keys("WORK_KEY", "SPARE_KEY") }, Terms(maxRetries: 2));
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(["sk-1", "sk-1", "sk-1", "sk-2", "sk-2"], _chat.Requests.Select(request => request.Key!.Value));
+    }
+
+    /// <summary>
+    /// The loop's own walk ends at the first entry of another provider or client: the step's order is walked in its order,
+    /// so an entry of the same provider and client after one of another is the runner's to reach, never the loop's.
+    /// </summary>
+    [Fact]
+    public async Task TheLoopsWalk_EndsAtTheFirstEntryOfAnotherProviderOrClient()
+    {
+        _chat.Answer(FakeChat.Said("no", stop: ChatStop.Declined)).Answer(FakeChat.Said("done", model: "claude-opus-4-8"));
+
+        var result = await Ran(Run() with { Fallback = [Entry("glm-5.3", "zai", "glm"), Entry("claude-opus-4-8", "anthropic")] });
+
+        Assert.Equal(AgentRunStatus.Refused, result.Status);
+        Assert.Equal([FakeChat.Model], _chat.Requests.Select(request => request.Model));
+        Assert.Empty(_events.All.OfType<FallbackStarted>());
+    }
+
+    /// <summary>
+    /// A move to a model the step gives no level goes on at the model's own default: its requests name no level from then
+    /// on - neither the level the conversation began at nor the last model's - and a notice says so, never a message the
+    /// conversation was not sent.
+    /// </summary>
+    [Fact]
+    public async Task AMoveToAModelOfItsOwnDefaultEffort_SendsNoLevel_AndSaysSo()
+    {
+        _chat.Answer(FakeChat.Said("no", stop: ChatStop.Declined)).Answer(FakeChat.Said("done", model: "claude-opus-4-8"));
+
+        var result = await Ran(Run() with { Effort = "low", Fallback = [Entry("claude-opus-4-8", "anthropic", effort: null)] });
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(("low", null, null), (_chat.Requests[0].Effort, _chat.Requests[1].Effort, _chat.Requests[1].FirstEffort));
+        Assert.Equal(_chat.Requests[0].Messages, _chat.Requests[1].Messages);
+        Assert.DoesNotContain(_events.All.OfType<MessageSent>(), sent => sent.Which == AgentMessageKind.Effort);
+        Assert.Contains(_events.All.OfType<Notice>(), notice => notice.Text == "The step goes on at its model's own default effort: its requests name no level from now on.");
+
+        // The Claude API's body names no level at all: the model's own default is what no level asks for.
+        var body = System.Text.Json.Nodes.JsonNode.Parse(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.Body(_chat.Requests[1], DssHarness.Core.Agents.ClaudeApi.ClaudeApiSettings.Of(null)))!;
+
+        Assert.Null(body["output_config"]);
+    }
+
+    /// <summary>
+    /// A move to a model's own default after a level was told in the conversation sends the level no more: the requests
+    /// that follow carry none top-level - never the level the conversation began at - and the change is said, for no
+    /// message of the conversation tells it.
+    /// </summary>
+    [Fact]
+    public async Task AMoveToTheDefaultAfterALevelWasTold_SendsNoLevelFromThen()
+    {
+        _chat
+            .Answer(FakeChat.Said("no", stop: ChatStop.Declined))
+            .Answer(FakeChat.Said("no", stop: ChatStop.Declined, model: "claude-opus-4-8"))
+            .Answer(FakeChat.Said("done", model: "claude-fable-5-1"));
+
+        var result = await Ran(Run() with
+        {
+            Effort = "low",
+            Fallback = [Entry("claude-opus-4-8", "anthropic", effort: "high"), Entry("claude-fable-5-1", "anthropic", effort: null)],
+        });
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(("high", "low"), (_chat.Requests[1].Effort, _chat.Requests[1].FirstEffort));
+        Assert.Equal((null, string.Empty), (_chat.Requests[2].Effort, _chat.Requests[2].FirstEffort));
+        Assert.Equal(["The step goes on at effort 'high'."], _events.All.OfType<MessageSent>().Where(sent => sent.Which == AgentMessageKind.Effort).Select(sent => sent.Text));
+        Assert.Contains(_events.All.OfType<Notice>(), notice => notice.Text == "The step goes on at its model's own default effort: its requests name no level from now on.");
+
+        var body = System.Text.Json.Nodes.JsonNode.Parse(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.Body(_chat.Requests[2], DssHarness.Core.Agents.ClaudeApi.ClaudeApiSettings.Of(null)))!;
+
+        Assert.Null(body["output_config"]);
+    }
+
+    /// <summary>
+    /// After a move inside the client, a failed agent is tried again where the step stood - the entry its client moved
+    /// to - never the entry it began on, whose key the move left behind.
+    /// </summary>
+    [Fact]
+    public async Task AFailedAgentAfterAMoveInsideItsClient_IsTriedAgainWhereItStood()
+    {
+        var given = new List<AgentRun>();
+        var client = new Scripted("one")
+        {
+            Script = async (run, events, _) =>
+            {
+                given.Add(run);
+
+                if (given.Count == 1)
+                {
+                    await events.EmitAsync(new FallbackStarted(run.Model!, "anthropic", "one", run.Model!, "anthropic", "one", "limit", AgentFallback.SentAgain, 1, false, false, "WORK_KEY", "SPARE_KEY"));
+                    return new AgentRunResult(AgentRunStatus.Failed, Model: run.Model, Error: "it broke");
+                }
+
+                return new AgentRunResult(AgentRunStatus.Completed, FinalText: "done", Model: run.Model);
+            },
+        };
+        var runner = new AgentRunner([client], _harness.FileSystem, Elevation.User, new JumpingClock());
+
+        var result = await runner.RunAsync(
+            Step([Entry("claude-fable-5-1", "anthropic", "one", credential: Keys("WORK_KEY")), Entry("claude-fable-5-1", "anthropic", "one", key: "SPARE_KEY", credential: Keys("SPARE_KEY"))]) with { Retries = 1, BackoffSeconds = 1 },
+            events: null,
+            Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal([["WORK_KEY", "SPARE_KEY"], ["SPARE_KEY"]], given.Select(run => run.Credential!.Keys.Select(key => key.Name).ToArray()));
+    }
+
+    /// <summary>
+    /// An entry a move reaches that cannot be started is passed over, said so, as one the machine cannot use is: the step
+    /// has done work by then, so it goes on to the entry after it, and the move that brought it there is said again to
+    /// the one that takes over.
+    /// </summary>
+    [Fact]
+    public async Task AnEntryAMoveReachesThatCannotStart_IsPassedOver()
+    {
+        var first = new Scripted("one") { Script = (run, events, _) => Refused(run, events, "cyber", turns: 2) };
+        var unserved = new Scripted("two") { Script = (run, _, _) => Task.FromResult(AgentEndings.NotStarted("two", AgentNotStartedBecause.ConfigurationWrong, "the account is not served 'claude-opus-5-5'", run.Model, run.Mask)) };
+        var third = new Scripted("glm") { Script = (run, events, _) => Completed(run, events, "glm-5.3", turns: 1) };
+        var runner = new AgentRunner([first, unserved, third], _harness.FileSystem, Elevation.User, TimeProvider.System);
+        var seen = new Collecting();
+
+        var result = await runner.RunAsync(
+            Step([Entry("claude-fable-5-1", "anthropic", "one", key: null), Entry("claude-opus-5-5", "anthropic", "two", key: null), Entry("glm-5.3", "zai", "glm", key: null)]),
+            seen,
+            Token);
+
+        Assert.Equal((AgentRunStatus.Completed, 3), (result.Status, result.Turns));
+        Assert.Equal(
+            ("claude-opus-5-5", "client 'two' was not started: the account is not served 'claude-opus-5-5'"),
+            (Assert.Single(seen.Seen.OfType<FallbackPassedOver>()).Model, seen.Seen.OfType<FallbackPassedOver>().Single().Why));
+        Assert.Equal(
+            [("claude-fable-5-1", "claude-opus-5-5", "declined (cyber)"), ("claude-fable-5-1", "glm-5.3", "declined (cyber)")],
+            seen.Seen.OfType<FallbackStarted>().Select(moved => (moved.FromModel, moved.ToModel, moved.Why)));
+    }
+
+    /// <summary>
+    /// Each request of the loop goes through the lane of its provider and key, its input counted as it enters: a lane
+    /// whose minute of requests is spent holds the next request until the minute passes, said as the request waits.
+    /// </summary>
+    [Fact]
+    public async Task EachRequest_GoesThroughItsLane_SaidWhereItWaits()
+    {
+        var (gates, waits) = Gates();
+        _chat.Fail(new ChatFailure(ChatFailureKind.Transient, "overloaded")).Answer(FakeChat.Said("done"));
+
+        var result = await Ran(Run() with { Gates = gates, Entries = LaneEntries(new AgentClientConfig { RequestsPerMinute = 1 }) });
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal([TimeSpan.FromMinutes(1)], waits);
+        Assert.Contains(_events.All.OfType<WaitingToRetry>(), wait => wait.Cause == $"the request waits for {ClientGate.RequestsSpent}" && wait.Delay == TimeSpan.FromMinutes(1));
+    }
+
+    /// <summary>
+    /// The runner hands its gate to a client that paces its own requests and holds it in no lane of its own: the loop's
+    /// request enters the lane of its provider and key, the lane's cool-down said as the request's wait - never the run's.
+    /// </summary>
+    [Fact]
+    public async Task TheRunnersGate_IsHandedToTheLoop_WhichEntersItForEachRequest()
+    {
+        var (gates, waits) = Gates();
+        gates.LaneOf("anthropic", DssHarness.Core.Agents.ClaudeApi.ClaudeApiClient.ClientName, null, new AgentKey("ANTHROPIC_KEY", "sk-first")).RateLimited(TimeSpan.FromSeconds(5));
+        _chat.Answer(FakeChat.Said("done"));
+
+        var (result, seen) = await WalkedAsync(gates);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal([TimeSpan.FromSeconds(5)], waits);
+        Assert.Equal([$"the request waits for {ClientGate.CoolDown}"], seen.OfType<WaitingToRetry>().Select(wait => wait.Cause));
+    }
+
+    /// <summary>
+    /// A 429 a request meets sets its lane's cool-down from the wait the provider named, holding every request of the lane
+    /// until it lifts - the loop's own next request among them.
+    /// </summary>
+    [Fact]
+    public async Task A429_SetsItsLanesCoolDown()
+    {
+        var (gates, waits) = Gates();
+        _chat.Fail(new ChatFailure(ChatFailureKind.RateLimited, "slow down", RetryAfter: TimeSpan.FromSeconds(5))).Answer(FakeChat.Said("done"));
+
+        var result = await Ran(Run() with { Gates = gates, Entries = LaneEntries(null) });
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal([TimeSpan.FromSeconds(5)], waits);
+    }
+
+    /// <summary>
+    /// A lane held by a cool-down longer than the client's longest wait is the account at its limit, as a 429 naming that
+    /// wait is: the run moves to the same model's next key, whose lane is free, and never sends the held one's request.
+    /// </summary>
+    [Fact]
+    public async Task ALaneHeldPastTheLongestWait_IsTheAccountAtItsLimit()
+    {
+        var (gates, waits) = Gates();
+        gates.LaneOf("anthropic", "claude-api", null, new AgentKey("WORK_KEY", "sk-1")).RateLimited(TimeSpan.FromHours(1));
+        _chat.Answer(FakeChat.Said("done"));
+
+        var result = await Ran(Run() with { Gates = gates, Entries = LaneEntries(null), Credential = Keys("WORK_KEY", "SPARE_KEY") });
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(["sk-2"], _chat.Requests.Select(request => request.Key!.Value));
+        Assert.Empty(waits);
+        Assert.Equal(("WORK_KEY", "SPARE_KEY"), (Assert.Single(_events.All.OfType<FallbackStarted>()).FromKey, _events.All.OfType<FallbackStarted>().Single().ToKey));
+    }
+
+    /// <summary>
+    /// A record lost while a failed agent waits to be tried again stops the wait as it stops a client: the run is not one
+    /// to go on with, so it ends at once, failed and naming the record, and the agent is never asked again.
+    /// </summary>
+    [Fact]
+    public async Task ARecordLostWhileARetryWaits_EndsTheWait()
+    {
+        var asked = 0;
+        var failing = new Scripted("one")
+        {
+            Script = (run, _, _) =>
+            {
+                asked++;
+                return Task.FromResult(new AgentRunResult(AgentRunStatus.Failed, Model: run.Model, Error: "it broke"));
+            },
+        };
+
+        // The record takes the run's first line and refuses the second: the wait's own.
+        var runner = new AgentRunner([failing], new AppendsFailFrom(_harness.FileSystem, 2), Elevation.User, TimeProvider.System);
+
+        var result = await runner.RunAsync(Step([Entry("claude-fable-5-1", "anthropic", "one")]) with { Retries = 1, BackoffSeconds = 900 }, events: null, Token)
+            .WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.StartsWith("The step's stored stream '", result.Error, StringComparison.Ordinal);
+        Assert.EndsWith($"' could not be written, so the run was stopped: {AppendsFailFrom.Why}", result.Error, StringComparison.Ordinal);
+        Assert.Equal(1, asked);
+    }
+
+    /// <summary>The real file system, whose appends to a file opened for appending fail from the one numbered <paramref name="failing"/> on.</summary>
+    private sealed class AppendsFailFrom(IFileSystem inner, int failing) : PassThroughFileSystem(inner)
+    {
+        /// <summary>What the disk says once it fails.</summary>
+        public const string Why = "the disk went away";
+
+        public override IAppendFile OpenForAppend(string path) => new Appending(base.OpenForAppend(path), failing);
+
+        private sealed class Appending(IAppendFile file, int failing) : IAppendFile
+        {
+            private int _appended;
+
+            public long Length => file.Length;
+
+            public void ReadExactlyAt(long position, Span<byte> buffer) => file.ReadExactlyAt(position, buffer);
+
+            public void TruncateTo(long length) => file.TruncateTo(length);
+
+            public void AppendFlushed(ReadOnlySpan<byte> bytes)
+            {
+                if (++_appended >= failing)
+                {
+                    throw new IOException(Why);
+                }
+
+                file.AppendFlushed(bytes);
+            }
+
+            public void Dispose() => file.Dispose();
+        }
+    }
+
+    /// <summary>The gates the loop's requests go through, each wait recorded and passing at once on its own clock.</summary>
+    private static (ClientGates Gates, List<TimeSpan> Waits) Gates()
+    {
+        var clock = new ManualClock();
+        var waits = new List<TimeSpan>();
+
+        return (new ClientGates(clock, (wait, _) =>
+        {
+            waits.Add(wait);
+            clock.Advance(wait);
+            return Task.CompletedTask;
+        }), waits);
+    }
+
+    /// <summary>The loop's provider's entries with the client's entry <paramref name="client"/>, whose buckets pace the lane.</summary>
+    private static AgentEntries LaneEntries(AgentClientConfig? client)
+        => new(
+            new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Currency = "USD" },
+            new AgentModelConfig { Code = FakeChat.Model, MaxOutputTokens = 64000, ContextTokens = 200000, PriceInputMiss = 5, PriceInputHit = 1, PriceOutput = 25 },
+            client);
+
+    /// <summary>
+    /// Works a step whose order <see cref="AgentStepOrder.Of"/> built from a slot holding two keys of one provider -
+    /// its one model's two entries - through the runner, on a client that is the loop over the fake provider.
+    /// </summary>
+    private async Task<(AgentRunResult Result, IReadOnlyList<AgentEvent> Seen)> WalkedAsync(ClientGates? gates = null)
+    {
+        var (providers, layout, keys, temp) = AgentStepOrderTests.Ready(["ANTHROPIC_KEY=sk-first", "ANTHROPIC_SECOND=sk-second"]);
+        using var owned = temp;
+        var order = AgentStepOrder.Of(providers, AgentResolution.Of(providers, "best", null, null, null, null, null)!, layout, keys, toolConfigDirectory: null);
+
+        Assert.Equal([("ANTHROPIC_KEY", true), ("ANTHROPIC_SECOND", true)], order.Select(entry => (entry.Key!, entry.Usable)));
+
+        var work = WorkDirectory(_temp);
+        Directory.CreateDirectory(work);
+        var runner = new AgentRunner([new LoopClient(Loop(), _chat)], _harness.FileSystem, Elevation.User, TimeProvider.System, gates);
+        var seen = new Collecting();
+        var result = await runner.RunAsync(Step(order) with { Ground = PolicyGrounds.Of(work, [work], [work], [], [], [], null) }, seen, Token);
+
+        return (result, seen.Seen);
+    }
+
+    /// <summary>The claude-api client as the loop over the fake provider: what the runner hands it is what the loop runs.</summary>
+    private sealed class LoopClient(ToolLoop loop, FakeChat chat) : IAgentClient
+    {
+        public string Name => DssHarness.Core.Agents.ClaudeApi.ClaudeApiClient.ClientName;
+
+        public AgentClientCapabilities Capabilities => DssHarness.Core.Agents.ClaudeApi.ClaudeApiClient.Descriptor;
+
+        public Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken)
+            => loop.RunAsync(run, events, chat, ToolLoopTerms.Of(Name, run.Entries!), cancellationToken);
     }
 
     /// <summary>A sink that collects what it is given.</summary>

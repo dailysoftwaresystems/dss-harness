@@ -129,6 +129,98 @@ public sealed class ClientGateTests
         Assert.Single(waited);
     }
 
+    /// <summary>
+    /// A request whose own input is more than the input bucket holds in a minute waits for the bucket to be empty and
+    /// then goes in alone: no minute could ever hold it beside another, and waiting for one that does would wait forever.
+    /// </summary>
+    [Fact]
+    public async Task ARequestLargerThanTheInputBucket_GoesInAloneOnceTheBucketIsEmpty()
+    {
+        // Each wait yields and is bounded, so a request that would wait forever fails the test and stops waiting.
+        var clock = new ManualClock(At);
+        var waited = new List<TimeSpan>();
+        var gates = new ClientGates(clock, async (wait, cancellation) =>
+        {
+            waited.Add(wait);
+            clock.Advance(wait);
+            await Task.Yield();
+            cancellation.ThrowIfCancellationRequested();
+        });
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        bounded.CancelAfter(TimeSpan.FromSeconds(30));
+        var lane = gates.Lane("anthropic", "hash-of-key", new ClientGateSettings(4, InputTokensPerMinute: 100));
+
+        using var first = await lane.EnterAsync(60, bounded.Token);
+        clock.Advance(TimeSpan.FromSeconds(10));
+        using var large = await lane.EnterAsync(500, bounded.Token);
+
+        Assert.Equal([TimeSpan.FromSeconds(50)], waited);
+
+        // The large one is the minute's whole: the next waits for it to age out.
+        using var next = await lane.EnterAsync(10, bounded.Token);
+
+        Assert.Equal([TimeSpan.FromSeconds(50), TimeSpan.FromSeconds(60)], waited);
+    }
+
+    /// <summary>
+    /// The lane's minutes and its cool-down are counted on the clock's timestamps: a wall clock stepped back holds no
+    /// lane longer than the time the provider asked for, and one stepped forward lets none in sooner.
+    /// </summary>
+    [Fact]
+    public async Task AWallClockStepped_HoldsTheLaneNoLongerAndNoShorter()
+    {
+        var clock = new SteppedWallClock(At);
+        var waited = new List<TimeSpan>();
+        var gates = new ClientGates(clock, (wait, _) =>
+        {
+            waited.Add(wait);
+            clock.Advance(wait);
+            return Task.CompletedTask;
+        });
+        var lane = gates.Lane("anthropic", "hash-of-key", new ClientGateSettings(2, RequestsPerMinute: 1));
+
+        lane.RateLimited(TimeSpan.FromSeconds(30));
+        clock.StepWall(TimeSpan.FromHours(-1));
+
+        using var first = await lane.EnterAsync(0, TestContext.Current.CancellationToken);
+
+        Assert.Equal([TimeSpan.FromSeconds(30)], waited);
+
+        clock.StepWall(TimeSpan.FromHours(2));
+
+        using var second = await lane.EnterAsync(0, TestContext.Current.CancellationToken);
+
+        Assert.Equal([TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60)], waited);
+    }
+
+    /// <summary>Each wait of the lane is told before it is waited - how long, and what holds the lane - so the caller says it rather than going silent.</summary>
+    [Fact]
+    public async Task EachWait_IsToldBeforeItIsWaited()
+    {
+        var (gates, _, _) = Gates();
+        var lane = gates.Lane("anthropic", "hash-of-key", new ClientGateSettings(2, RequestsPerMinute: 1));
+        var told = new List<(TimeSpan Wait, string Why)>();
+
+        lane.RateLimited(TimeSpan.FromSeconds(5));
+
+        using var first = await lane.EnterAsync(0, (wait, why) => { told.Add((wait, why)); return ValueTask.CompletedTask; }, TestContext.Current.CancellationToken);
+        using var second = await lane.EnterAsync(0, (wait, why) => { told.Add((wait, why)); return ValueTask.CompletedTask; }, TestContext.Current.CancellationToken);
+
+        Assert.Equal([(TimeSpan.FromSeconds(5), ClientGate.CoolDown), (TimeSpan.FromSeconds(60), ClientGate.RequestsSpent)], told);
+        Assert.Null(lane.CoolDownLeft);
+    }
+
+    /// <summary>A lane's own key of the registry is a hash of the key's value: two names of one value are one lane, and a login one lane by its client.</summary>
+    [Fact]
+    public void ALanesKey_IsTheKeysValue_OrTheClientsLogin()
+    {
+        var (gates, _, _) = Gates();
+
+        Assert.Same(gates.LaneOf("anthropic", "claude-api", null, new AgentKey("WORK_KEY", "sk-1")), gates.LaneOf("anthropic", "claude-api", null, new AgentKey("SPARE_KEY", "sk-1")));
+        Assert.NotSame(gates.LaneOf("anthropic", "claude-api", null, new AgentKey("WORK_KEY", "sk-1")), gates.LaneOf("anthropic", "claude-api", null, new AgentKey("WORK_KEY", "sk-2")));
+        Assert.Same(gates.Lane("anthropic", ClaudeCodeClientName(), Settings), gates.LaneOf("anthropic", ClaudeCodeClientName(), null, key: null));
+    }
+
     /// <summary>One registry, one lane per provider and key: the same two again answer the same lane, another key its own.</summary>
     [Fact]
     public void TheRegistryLanesByProviderAndKey()
@@ -178,6 +270,16 @@ public sealed class ClientGateTests
     }
 
     private static ClientGateSettings Settings => new(2);
+
+    /// <summary>A clock whose wall time a test steps alone, its timestamps going on with the time that passed.</summary>
+    private sealed class SteppedWallClock(DateTimeOffset start) : ManualClock(start)
+    {
+        private TimeSpan _stepped;
+
+        public void StepWall(TimeSpan by) => _stepped += by;
+
+        public override DateTimeOffset GetUtcNow() => base.GetUtcNow() + _stepped;
+    }
 
     private static string ClaudeCodeClientName() => DssHarness.Core.Agents.ClaudeCode.ClaudeCodeClient.ClientName;
 

@@ -17,21 +17,36 @@ namespace DssHarness.Core.Agents;
 /// <param name="LastIterations">How many of the last iterations are kept whole, whatever their size.</param>
 /// <param name="IterationChars">The most characters of the earlier iterations kept, none cut in the middle of one.</param>
 public sealed record AgentContinuationBounds(
-    int RecordChars = 60_000,
-    int StepChars = 16_000,
-    int Paths = 300,
-    int LastIterations = 3,
-    int IterationChars = 120_000)
+    int RecordChars = AgentContinuationBounds.DefaultRecordChars,
+    int StepChars = AgentContinuationBounds.DefaultStepChars,
+    int Paths = AgentContinuationBounds.DefaultPaths,
+    int LastIterations = AgentContinuationBounds.DefaultLastIterations,
+    int IterationChars = AgentContinuationBounds.DefaultIterationChars)
 {
+    /// <summary>The most characters of the record's own parts where <c>recordChars</c> says none.</summary>
+    public const int DefaultRecordChars = 60_000;
+
+    /// <summary>The most characters of one step's notes and of its output where <c>stepChars</c> says none.</summary>
+    public const int DefaultStepChars = 16_000;
+
+    /// <summary>The most changed paths listed where <c>paths</c> says none.</summary>
+    public const int DefaultPaths = 300;
+
+    /// <summary>How many of the last iterations are kept whole where <c>lastIterations</c> says none.</summary>
+    public const int DefaultLastIterations = 3;
+
+    /// <summary>The most characters of the earlier iterations kept where <c>iterationChars</c> says none.</summary>
+    public const int DefaultIterationChars = 120_000;
+
     /// <summary>The bounds the configuration gives, each at its default where it says none.</summary>
     /// <param name="config">The <c>agentContext.continuation</c> entry; null where the configuration declares none.</param>
     public static AgentContinuationBounds Of(Configuration.AgentContinuationConfig? config)
         => new(
-            config?.RecordChars ?? 60_000,
-            config?.StepChars ?? 16_000,
-            config?.Paths ?? 300,
-            config?.LastIterations ?? 3,
-            config?.IterationChars ?? 120_000);
+            config?.RecordChars ?? DefaultRecordChars,
+            config?.StepChars ?? DefaultStepChars,
+            config?.Paths ?? DefaultPaths,
+            config?.LastIterations ?? DefaultLastIterations,
+            config?.IterationChars ?? DefaultIterationChars);
 }
 
 /// <summary>One step of the chain a continuation record holds: what it was, how it ended, and where its records are.</summary>
@@ -82,6 +97,9 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
 
     /// <summary>The handoff's heading, as the record gives it its own.</summary>
     public const string HandoffHeading = "The handoff";
+
+    /// <summary>What heads a message the engine sent the agent, where an iteration or a reduced part holds it.</summary>
+    public const string EngineSaid = "the engine:";
 
     /// <summary>What the record says after an attempt that was cut off.</summary>
     public const string CutOffMessage =
@@ -162,7 +180,7 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
 
         // Part 5: the last iterations, word for word, last of all.
         return written.ToString().TrimEnd() + Environment.NewLine + Environment.NewLine
-            + Iterations(Stream(work), bounds, copies);
+            + Iterations(AgentAttempt.Newest(Stream(work)), bounds, copies);
     }
 
     /// <summary>The steps so far as the record holds them, oldest first: the newest whole whatever it costs, older steps while there is room, the oldest dropped to their copies' names.</summary>
@@ -303,94 +321,83 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
     private static string NL => Environment.NewLine;
 
     /// <summary>
-    /// The last iterations of a stored stream, word for word: the last <see cref="AgentContinuationBounds.LastIterations"/>
+    /// The last iterations of an attempt, word for word: the last <see cref="AgentContinuationBounds.LastIterations"/>
     /// whole whatever their size, then as many earlier ones as fit in <see cref="AgentContinuationBounds.IterationChars"/>,
-    /// counted backwards and never cut in the middle of one - each the agent's message as it wrote it, its thinking as
-    /// far as the provider showed it, and each call it made with the tool, its input and its result as the stream holds
-    /// them, oldest first, each marked with its place, and the copy of the stream named where earlier ones were left out.
+    /// counted backwards and never cut in the middle of one - the first that does not fit ends them, so what is kept is
+    /// one run with nothing missing from it - each the agent's message as it wrote it, its thinking as far as the
+    /// provider showed it, each call it made with the tool, its input and its result as the stream holds them, and every
+    /// message the engine sent the agent after it, in place, oldest first, each marked with its turn of the attempt, and
+    /// the copy of the stream named where earlier ones were left out.
     /// </summary>
-    /// <param name="stream">The stored stream, every attempt's events in order.</param>
+    /// <param name="attempt">The attempt's events (<see cref="AgentAttempt.Of"/>): every run of it, its turns numbered across them.</param>
     /// <param name="bounds">The record's bounds.</param>
     /// <param name="copies">The directory the copy the left-out iterations are named by.</param>
-    public static string Iterations(IReadOnlyList<AgentEvent> stream, AgentContinuationBounds bounds, string copies)
+    public static string Iterations(IReadOnlyList<AgentEvent> attempt, AgentContinuationBounds bounds, string copies)
     {
-        ArgumentNullException.ThrowIfNull(stream);
-        ArgumentNullException.ThrowIfNull(bounds);
         ArgumentException.ThrowIfNullOrWhiteSpace(copies);
 
-        // The newest attempt's events only: the stream holds every attempt's, each beginning with its RunStarted.
-        var began = 0;
+        return WordForWord(attempt, bounds, copies);
+    }
 
-        for (var at = 0; at < stream.Count; at++)
+    /// <summary>
+    /// The last iterations of an attempt word for word, as <see cref="Iterations(IReadOnlyList{AgentEvent}, AgentContinuationBounds, string)"/>
+    /// gives them - with the line naming the copy of the left-out ones only where <paramref name="copies"/> names one: a
+    /// compaction holds them reduced above, and says so in its own words.
+    /// </summary>
+    /// <param name="attempt">The attempt's events.</param>
+    /// <param name="bounds">The record's bounds.</param>
+    /// <param name="copies">The directory the copy the left-out iterations are named by; null where none is named.</param>
+    internal static string WordForWord(IReadOnlyList<AgentEvent> attempt, AgentContinuationBounds bounds, string? copies)
+    {
+        ArgumentNullException.ThrowIfNull(attempt);
+        ArgumentNullException.ThrowIfNull(bounds);
+
+        // One iteration per message of the agent's: its text, its thinking, each call it made answered by the stream,
+        // and what the engine said after it - the agent read that before its next message, so it belongs where it sits.
+        var read = AgentAttempt.Items(attempt);
+        var iterations = new List<(int Turn, StringBuilder Text)>();
+
+        foreach (var item in read.Items)
         {
-            if (stream[at] is RunStarted)
+            if (item.Engine is { } engine)
             {
-                began = at;
-            }
-        }
-
-        // One iteration per assistant message: its text, its thinking, and each call it made answered by the stream -
-        // a call's answer arrives after the message that made it, so the answers are collected first and joined to it.
-        var answers = new Dictionary<string, (bool Ok, string Input, string Result, string? File)>(StringComparer.Ordinal);
-        var turn = 0;
-
-        for (var at = began; at < stream.Count; at++)
-        {
-            switch (stream[at])
-            {
-                case TurnStarted started:
-                    turn = started.Turn;
-                    break;
-
-                case ToolCallFinished finished:
-                    answers[finished.Id] = (finished.Ok, finished.Input, finished.Result, finished.ResultFile);
-                    break;
-            }
-        }
-
-        var iterations = new List<(int Turn, string Text)>();
-        turn = 0;
-
-        for (var at = began; at < stream.Count; at++)
-        {
-            switch (stream[at])
-            {
-                case TurnStarted started:
-                    turn = started.Turn;
-                    break;
-
-                case AssistantMessage message:
+                // A message the engine sent before the agent wrote anything is part of no iteration.
+                if (iterations.Count > 0)
                 {
-                    var one = new StringBuilder();
+                    iterations[^1].Text.Append(NL).Append(NL).Append(EngineSaid).Append(NL).Append(engine.Text.TrimEnd());
+                }
 
-                    if (message.Thinking is { Length: > 0 } thinking)
-                    {
-                        one.Append("[thinking]").Append(NL).Append(thinking.TrimEnd()).Append(NL).Append("[/thinking]").Append(NL);
-                    }
+                continue;
+            }
 
-                    one.Append(message.Text.TrimEnd());
+            var message = item.Agent!;
+            var one = new StringBuilder();
 
-                    foreach (var call in message.Calls)
-                    {
-                        one.Append(NL).Append(NL).Append("call ").Append(call.Id).Append(" (").Append(call.Name).Append("):");
+            if (message.Thinking is { Length: > 0 } thinking)
+            {
+                one.Append("[thinking]").Append(NL).Append(thinking.TrimEnd()).Append(NL).Append("[/thinking]").Append(NL);
+            }
 
-                        if (answers.TryGetValue(call.Id, out var answered))
-                        {
-                            one.Append(answered.Ok ? string.Empty : " failed")
-                                .Append(NL).Append("  input: ").Append(answered.Input)
-                                .Append(NL).Append("  result: ").Append(answered.Result)
-                                .Append(answered.File is { } file ? $"{NL}  [the whole result is '{file}']" : string.Empty);
-                        }
-                        else
-                        {
-                            one.Append(NL).Append("  no result is recorded");
-                        }
-                    }
+            one.Append(message.Text.TrimEnd());
 
-                    iterations.Add((turn, one.ToString()));
-                    break;
+            foreach (var call in message.Calls)
+            {
+                one.Append(NL).Append(NL).Append("call ").Append(call.Id).Append(" (").Append(call.Name).Append("):");
+
+                if (read.Answers.TryGetValue(call.Id, out var answered))
+                {
+                    one.Append(answered.Ok ? string.Empty : " failed")
+                        .Append(NL).Append("  input: ").Append(answered.Input)
+                        .Append(NL).Append("  result: ").Append(answered.Result)
+                        .Append(answered.ResultFile is { } file ? $"{NL}  [the whole result is '{file}']" : string.Empty);
+                }
+                else
+                {
+                    one.Append(NL).Append("  no result is recorded");
                 }
             }
+
+            iterations.Add((item.Turn, one));
         }
 
         if (iterations.Count == 0)
@@ -398,30 +405,34 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
             return "The last iterations: the attempt wrote none.";
         }
 
-        // The last ones whole, then as many earlier ones as fit, counted backwards, never cut in the middle of one.
+        // The last ones whole, then as many earlier ones as fit, counted backwards, never cut in the middle of one: the
+        // first that does not fit ends them, for one kept past it would leave a hole the count below could not name.
         var whole = Math.Min(bounds.LastIterations, iterations.Count);
         var included = new List<(int Turn, string Text)>();
         var budget = bounds.IterationChars;
 
         for (var from = iterations.Count - 1; from >= 0; from--)
         {
+            var text = iterations[from].Text.ToString();
             var lastOne = iterations.Count - from <= whole;
 
-            if (lastOne || iterations[from].Text.Length <= budget)
+            if (!lastOne && (budget == 0 || text.Length > budget))
             {
-                included.Insert(0, iterations[from]);
+                break;
+            }
 
-                if (!lastOne)
-                {
-                    budget -= iterations[from].Text.Length;
-                }
+            included.Insert(0, (iterations[from].Turn, text));
+
+            if (!lastOne)
+            {
+                budget -= text.Length;
             }
         }
 
         var told = new StringBuilder();
         var leftOut = iterations.Count - included.Count;
 
-        if (leftOut > 0)
+        if (leftOut > 0 && copies is not null)
         {
             told.Append(Invariant($"[{leftOut} earlier iteration{(leftOut == 1 ? string.Empty : "s")} left out: the stream of the attempt is in '{Path.Combine(copies, StoredStream.FileName)}']")).Append(NL).Append(NL);
         }

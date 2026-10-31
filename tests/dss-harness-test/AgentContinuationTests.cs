@@ -142,9 +142,13 @@ public sealed class AgentContinuationTests : IDisposable
         Assert.DoesNotContain("second", told, StringComparison.Ordinal);
     }
 
-    /// <summary>Only the newest attempt's iterations are read: the stream holds every attempt's, each beginning with its RunStarted.</summary>
+    /// <summary>
+    /// The newest attempt's iterations are every run of it, numbered as one: an attempt that went on with an answer is
+    /// two runs, each counting its turns from one, and the record reads them as the one conversation they are - never
+    /// the attempt before it.
+    /// </summary>
     [Fact]
-    public void OnlyTheNewestAttemptsIterations_AreRead()
+    public void TheIterationsOfAnAttemptOfTwoRuns_AreNumberedAcrossThem()
     {
         var stream = new AgentEvent[]
         {
@@ -152,14 +156,105 @@ public sealed class AgentContinuationTests : IDisposable
             new TurnStarted(1),
             new AssistantMessage("the first attempt", []),
             new RunStarted(2),
+            new MessageSent("do the work", AgentMessageKind.FirstPrompt),
             new TurnStarted(1),
-            new AssistantMessage("the second attempt", []),
+            new AssistantMessage("asked", []),
+            new RunStarted(2),
+            new MessageSent("the person's answer", AgentMessageKind.FirstPrompt),
+            new TurnStarted(1),
+            new AssistantMessage("answered", []),
+        };
+
+        var told = AgentContinuation.Iterations(AgentAttempt.Newest(stream), new AgentContinuationBounds(), _temp.Combine("copies"));
+
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "iteration 1 of 2:",
+                "asked",
+                string.Empty,
+                AgentContinuation.EngineSaid,
+                "the person's answer",
+                string.Empty,
+                "iteration 2 of 2:",
+                "answered"),
+            told);
+    }
+
+    /// <summary>
+    /// The earlier iterations are kept back from the last until the first that does not fit, and none past it: one kept
+    /// beyond it would leave a hole the count of those left out could not name.
+    /// </summary>
+    [Fact]
+    public void TheEarlierIterations_EndAtTheFirstThatDoesNotFit()
+    {
+        var stream = new AgentEvent[]
+        {
+            new RunStarted(1),
+            new TurnStarted(1),
+            new AssistantMessage("a", []),
+            new TurnStarted(2),
+            new AssistantMessage(new string('b', 100), []),
+            new TurnStarted(3),
+            new AssistantMessage("c", []),
+            new TurnStarted(4),
+            new AssistantMessage("d", []),
+        };
+
+        var copies = _temp.Combine("copies");
+        var told = AgentContinuation.Iterations(stream, new AgentContinuationBounds(LastIterations: 1, IterationChars: 10), copies);
+
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                $"[2 earlier iterations left out: the stream of the attempt is in '{Path.Combine(copies, StoredStream.FileName)}']",
+                string.Empty,
+                "iteration 3 of 4:",
+                "c",
+                string.Empty,
+                "iteration 4 of 4:",
+                "d"),
+            told);
+    }
+
+    /// <summary>
+    /// What the engine sent the agent while it worked - a plan update told, a repair - stands in its place, after the
+    /// message it followed and before the next: the agent read it there, and the record is word for word.
+    /// </summary>
+    [Fact]
+    public void TheEnginesMessages_StandInTheirPlace()
+    {
+        var stream = new AgentEvent[]
+        {
+            new RunStarted(1),
+            new MessageSent("do the work", AgentMessageKind.FirstPrompt),
+            new MessageSent("before anything", AgentMessageKind.EnvelopeInWords),
+            new TurnStarted(1),
+            new AssistantMessage("working", []),
+            new MessageSent("the plan changed", AgentMessageKind.PlanUpdate),
+            new TurnStarted(2),
+            new AssistantMessage("done", []),
+            new MessageSent("fix the output", AgentMessageKind.Repair),
         };
 
         var told = AgentContinuation.Iterations(stream, new AgentContinuationBounds(), _temp.Combine("copies"));
 
-        Assert.Contains("the second attempt", told, StringComparison.Ordinal);
-        Assert.DoesNotContain("the first attempt", told, StringComparison.Ordinal);
+        // The first prompt is the task, and what the engine said before the agent wrote anything is no iteration's.
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "iteration 1 of 2:",
+                "working",
+                string.Empty,
+                AgentContinuation.EngineSaid,
+                "the plan changed",
+                string.Empty,
+                "iteration 2 of 2:",
+                "done",
+                string.Empty,
+                AgentContinuation.EngineSaid,
+                "fix the output"),
+            told);
     }
 
     /// <summary>An iteration is the agent's message as it wrote it, its thinking as far as the provider showed it, and each call it made with the tool, its input and its result as the stream holds them.</summary>

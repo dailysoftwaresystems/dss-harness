@@ -2711,9 +2711,11 @@ public static class HelpTopics
         builder.AppendLine("and never refuses a run, a declined request, an account at its limit and a key the provider");
         builder.AppendLine("refused move the step to its next entry by the cause's rule - inside the one conversation");
         builder.AppendLine("where the provider and client are the same (the loop's own walk, below), a new conversation");
-        builder.AppendLine("with the step's prompt everywhere else - a limit the run met is remembered until its end, and");
-        builder.AppendLine("where the slot holds none of the keys of the step's first model the run is refused before it");
-        builder.AppendLine("starts; a later model's missing key is only said and passed over. A step's effort is its own - one");
+        builder.AppendLine("with the step's prompt everywhere else - a limit the run met is remembered until its end, an");
+        builder.AppendLine("entry a move reaches that cannot be started is said and passed over as one the machine cannot");
+        builder.AppendLine("use is, and where the slot holds none of the keys of the step's first model the step's agent");
+        builder.AppendLine($"is never started and the step fails refused (exit {HarnessExit.Refused}); a later model's missing key is");
+        builder.AppendLine("only said and passed over. A step's effort is its own - one");
         builder.AppendLine("level for every model of its tier, or a map giving each its own: all for the rest, a");
         builder.AppendLine("model's code for one - and where the step gives a model none, its agent definition's map");
         builder.AppendLine("or level is read the same way, and a model neither names runs at its own default. Each");
@@ -2724,46 +2726,58 @@ public static class HelpTopics
         builder.AppendLine("each key a step's model would read that the slot lacks, with the steps that would read");
         builder.AppendLine("it.");
         builder.AppendLine();
-        builder.AppendLine("A step that goes on with earlier work is given the engine's record of it: the continuation");
-        builder.AppendLine("record, text put together from the step directories of the agent - what it is, the steps");
-        builder.AppendLine("so far with each one's notes and output, the files changed, the last red build or test, the");
-        builder.AppendLine("handoff, and the last iterations of the newest attempt word for word from its stored");
-        builder.AppendLine("stream - nothing in it written or shortened by a model, and whatever is cut named with a");
-        builder.AppendLine($"copy in the agent's work/{Agents.AgentContinuation.CopiesFolder}/. Its bounds are");
-        builder.AppendLine("agentContext.continuation's - recordChars (60000), stepChars (16000), paths (300),");
-        builder.AppendLine("lastIterations (3) and iterationChars (120000), each at its default where the key says");
-        builder.AppendLine("none, each a positive number - and the first user message holds the parts in their order:");
-        builder.AppendLine("the run context, the plan updates, the continuation record and the step's prompt as the");
-        builder.AppendLine("task. The record is sent only where the conversation is a new one - every launch on");
-        builder.AppendLine("claude-code, and on the API clients a conversation that cannot be gone on with - for a");
-        builder.AppendLine($"handed conversation goes on with one more user message alone; the message as sent is kept in the step's {OrchestratorLayout.StepUserFileName}, masked.");
-        builder.AppendLine();
-        builder.AppendLine("A conversation that has filled its model's context is compacted by the engine, and no");
-        builder.AppendLine("model: a reduction worked out from the stored stream, the same input always the same");
-        builder.AppendLine("record - the run context and the task whole as they were sent, the last iterations word for");
-        builder.AppendLine("word by the continuation record's rule, every earlier message of the agent its text whole");
-        builder.AppendLine("with its thinking left out, every earlier call one line (the tool, its input cut at");
-        builder.AppendLine("callInputChars, how it ended, the path where its input names one), every earlier result left");
-        builder.AppendLine("out, and every message the engine sent since the first whole. The reduced part is at most");
-        builder.AppendLine("agentContext.compaction.reducedChars (200000); a call's input is cut at callInputChars");
-        builder.AppendLine("(400); where the reduced part is more, the oldest messages of the agent are cut to their");
-        builder.AppendLine("first 2000 characters each, oldest first, until it fits, and the record says how many were.");
-        builder.AppendLine("It begins a new conversation, on every client - the record is the first message of one and");
-        builder.AppendLine("the old is kept whole, never edited or sent again; a claude-code child is started with");
-        builder.AppendLine("DISABLE_COMPACT=1, so it never compacts by itself and a full context ends the step");
+        AppendWrapped(
+            builder,
+            "A step that goes on with earlier work is given the engine's record of it: the continuation record, text put "
+            + "together from the step directories of the agent - what it is, the steps so far with each one's notes and "
+            + "output, the files changed, the last red build or test, the handoff, and the last iterations of the newest "
+            + "attempt word for word from its stored stream, every run of the attempt numbered as one, each message the "
+            + "engine sent the agent in its place - nothing in it written or shortened by a model, and whatever is cut "
+            + $"named with a copy in the agent's work/{Agents.AgentContinuation.CopiesFolder}/. Its bounds are "
+            + $"agentContext.continuation's - recordChars ({Agents.AgentContinuationBounds.DefaultRecordChars}), "
+            + $"stepChars ({Agents.AgentContinuationBounds.DefaultStepChars}), paths ({Agents.AgentContinuationBounds.DefaultPaths}), "
+            + $"lastIterations ({Agents.AgentContinuationBounds.DefaultLastIterations}) and iterationChars "
+            + $"({Agents.AgentContinuationBounds.DefaultIterationChars}), each at its default where the key says none, each a "
+            + "positive number, the earlier iterations kept back from the last until the first that does not fit - and the "
+            + "first user message holds the parts in their order: the run context, the plan updates, the continuation record "
+            + "and the step's prompt as the task. The record is sent only where the conversation is a new one - every launch "
+            + "on claude-code, and on the API clients a conversation that cannot be gone on with - for a handed conversation "
+            + $"goes on with one more user message alone; the message as sent is kept in the step's {OrchestratorLayout.StepUserFileName}, masked.");
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "The runs of one provider and one key go through one lane of the gate: at most "
+            "A step whose conversation has filled its model's context ends ContextExhausted, and where its limit's question "
+            + "is answered compact the engine compacts the conversation - a side-task's chat compacts its own by itself - "
+            + "and no model does: a reduction worked out from the stored stream of the attempt, every run of it, the same "
+            + "input always the same record - the run context and the task whole as they were first sent, the last "
+            + "iterations word for word by the continuation record's rule, every earlier message of the agent its text whole "
+            + "with its thinking left out, every earlier call one line (the tool, its input cut at callInputChars, how it "
+            + "ended, the path where its input names one), every earlier result left out, and every message the engine sent "
+            + "since the first whole. The reduced part is at most agentContext.compaction.reducedChars "
+            + $"({Agents.AgentCompactionBounds.DefaultReducedChars}); a call's input is cut at callInputChars "
+            + $"({Agents.AgentCompactionBounds.DefaultCallInputChars}); where the reduced part is more, the oldest messages of "
+            + $"the agent are cut to their first {Agents.AgentCompactionBounds.OldestMessageChars} characters each, oldest "
+            + "first, until it fits, and the record says how many were. It begins a new conversation, on every client - the "
+            + "record is the first message of one and the old is kept whole, never edited or sent again; an attempt compacted "
+            + "again is reduced whole again, its earlier records never copied into the next; a claude-code child is started "
+            + "with DISABLE_COMPACT=1, so it never compacts by itself and a full context ends the step ContextExhausted.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "The requests of one provider and one key go through one lane of the gate: at most "
             + $"agentClients.<client>.maxParallel of them under way at once ({string.Join(", ", Agents.ClientGateSettings.BuiltIn.Select(bound => $"{bound.Key} {bound.Value}"))} "
             + "where the entry says none; a client that signs in with a login is one lane by its client, and two keys of one "
-            + "provider two lanes, keyed by a hash of the key). Beside it the API clients' optional buckets pace a lane's "
-            + "minute - requestsPerMinute, inputTokensPerMinute (a request's own counted as it enters; the engine's runner "
-            + "holds the lane at its step today and counts no input there, so the bucket waits for the client's own requests) and "
-            + "outputTokensPerMinute (an answer's counted once it is had), each waited out until the oldest of the minute is "
-            + "a minute old - and a 429's cool-down holds every waiter of the lane, a later or longer one holding past a "
-            + "sooner one. Left out, the provider's answers pace the client; the orchestrator's maxReasoningAgents bounds "
-            + "agents beside the gate, and both apply. The engine's step runner holds the lane a run's requests go through.");
+            + "provider two lanes, keyed by a hash of the key). The API clients enter the lane for each request they send, "
+            + $"its input counted as it enters (estimated, its bytes over {Codebase.EstimatedTokens.BytesPerToken}); claude-code, "
+            + "whose requests the engine cannot see one by one, is held in the lane for each launch. Beside it the API "
+            + "clients' optional buckets pace a lane's minute - requestsPerMinute, inputTokensPerMinute (a request more "
+            + "than the bucket holds goes in alone once the bucket is empty) and outputTokensPerMinute (an answer's counted "
+            + "once it is had), each waited out until the oldest of the minute is a minute old - and a 429's cool-down, set "
+            + "by every rate limit and account limit a request or a launch meets from when the provider says it lifts, holds "
+            + "every waiter of the lane, a later or longer one holding past a sooner one. A wait at the gate is said as it is "
+            + "waited, and the run's pause ends it; on an API client a cool-down past maxRetryWaitSeconds is the account at "
+            + "its limit, which moves the step as a 429 naming that wait does. Left out, the provider's answers pace the "
+            + "client; the orchestrator's maxReasoningAgents bounds agents beside the gate, and both apply.");
         builder.AppendLine();
         builder.AppendLine("This build checks configurations and definitions against these sections and writes them with");
         builder.AppendLine($"init (and '{ToolPackage.Command} init' writes the prices it holds, as read on their date).");
@@ -3038,7 +3052,8 @@ public static class HelpTopics
             + "when the launch answered its initialize request, and from the turn's end for one written while a turn ran - ends "
             + $"it {nameof(Agents.AgentRunStatus.Stalled)}. A request the model declines and an account at its limit - a rate limit event "
             + "that says rejected, or a turn Claude Code ends on rate_limit or billing_error after its own tries - each move "
-            + $"the step to its next entry, a new launch on another model, ending it {nameof(Agents.AgentRunStatus.Refused)} and "
+            + "the step to its next entry, a new launch - an account at its limit to the same model's next key first, a "
+            + $"declined request past the model's other keys to the next model - ending it {nameof(Agents.AgentRunStatus.Refused)} and "
             + $"{nameof(Agents.AgentRunStatus.RateLimited)} where none is left, with what the declined request was of where the "
             + "provider names it and when the limit lifts where it says; an overloaded service is no limit of the account's.";
     }
@@ -4934,7 +4949,8 @@ public static class HelpTopics
         builder.AppendLine("                 alone, how long its requests are cached and the betas sent beside");
         builder.AppendLine("                 the tool's own; preserveThinking, glm's alone, whether Z.AI keeps");
         builder.AppendLine("                 the model's reasoning across turns; maxParallel, every client's,");
-        builder.AppendLine($"                 the runs of one provider and key under way at once ({string.Join(", ", Agents.ClientGateSettings.BuiltIn.Select(bound => $"{bound.Key} {bound.Value}"))}");
+        builder.AppendLine("                 the requests of one provider and key under way at once - a");
+        builder.AppendLine($"                 claude-code launch counting as one ({string.Join(", ", Agents.ClientGateSettings.BuiltIn.Select(bound => $"{bound.Key} {bound.Value}"))}");
         builder.AppendLine("                 where nothing is said) - the gate of 'help agent-clients';");
         builder.AppendLine("                 a client holds no model, size or price - contextTokens and");
         builder.AppendLine("                 maxOutputTokens are a model's ('help agent-clients')");
@@ -4960,6 +4976,15 @@ public static class HelpTopics
             + "tags a step that names none searches, those turned on; "
             + $"maxPerStep ({Web.Search.WebSearchSources.DefaultMaxPerStep}) and resultsPerSource ({Web.Search.WebSearchSources.DefaultResultsPerSource}) ('help web-search')",
             "  agentWebSearch ");
+        AppendWrapped(
+            builder,
+            "what an agent is given of the work it goes on with, each bound a positive number at its default where it is "
+            + $"left out: continuation, the continuation record's - recordChars ({Agents.AgentContinuationBounds.DefaultRecordChars}), "
+            + $"stepChars ({Agents.AgentContinuationBounds.DefaultStepChars}), paths ({Agents.AgentContinuationBounds.DefaultPaths}), "
+            + $"lastIterations ({Agents.AgentContinuationBounds.DefaultLastIterations}) and iterationChars ({Agents.AgentContinuationBounds.DefaultIterationChars}); "
+            + $"compaction, the engine's compaction's - reducedChars ({Agents.AgentCompactionBounds.DefaultReducedChars}) and "
+            + $"callInputChars ({Agents.AgentCompactionBounds.DefaultCallInputChars}) ('help agent-clients')",
+            "  agentContext   ");
         builder.AppendLine();
         builder.AppendLine("A list whose absence means every one of what it names, or a set the tool chooses, is");
         builder.AppendLine("refused given empty, as --legs given no name is: a runner's legs and steps; a tool's");

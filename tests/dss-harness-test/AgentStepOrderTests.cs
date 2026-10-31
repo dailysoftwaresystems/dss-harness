@@ -18,6 +18,7 @@ public sealed class AgentStepOrderTests
     public void EachEntryOfTheResolutionBecomesOneRunningEntry_InOrder_WithItsCredential()
     {
         var (providers, layout, keys, temp) = Ready(["ANTHROPIC_KEY=sk-first", "ANTHROPIC_SECOND=sk-second"]);
+        using var owned = temp;
         var order = AgentStepOrder.Of(
             providers,
             new AgentResolution(
@@ -45,6 +46,7 @@ public sealed class AgentStepOrderTests
     public void AKeyTheSlotDoesNotHoldIsAnEntryThatCannotRun_ItsRefusalSayingWhy()
     {
         var (providers, layout, keys, temp) = Ready(["ANTHROPIC_KEY=sk-first"]);
+        using var owned = temp;
 
         var order = AgentStepOrder.Of(
             providers,
@@ -69,6 +71,7 @@ public sealed class AgentStepOrderTests
         {
             ["claude-code"] = new() { Auth = "login" },
         });
+        using var owned = temp;
 
         var order = AgentStepOrder.Of(
             providers,
@@ -89,19 +92,21 @@ public sealed class AgentStepOrderTests
             ["ANTHROPIC_KEY=sk-first", "CLAUDE_CONFIG_DIR=C:/user/claude"],
             clients: new Dictionary<string, AgentClientConfig>(StringComparer.Ordinal) { ["claude-code"] = new() { Auth = "apiKey" } });
 
+        using var owned = temp;
         var resolution = new AgentResolution(new AgentModelEntry("claude-opus-5-5", "anthropic", "claude-code", "ANTHROPIC_KEY", null), [], Tier: null);
 
         Assert.Equal("C:/user/claude", AgentStepOrder.Of(withSlot, resolution, layout, keys, toolConfigDirectory: "C:/tool/claude")[0].Credential!.ConfigDirectory);
 
-        var (without, layoutAgain, keysAgain, _) = Ready(
+        var (without, layoutAgain, keysAgain, again) = Ready(
             ["ANTHROPIC_KEY=sk-first"],
             clients: new Dictionary<string, AgentClientConfig>(StringComparer.Ordinal) { ["claude-code"] = new() { Auth = "apiKey" } });
 
+        using var ownedAgain = again;
         Assert.Equal("C:/tool/claude", AgentStepOrder.Of(without, resolution, layoutAgain, keysAgain, toolConfigDirectory: "C:/tool/claude")[0].Credential!.ConfigDirectory);
     }
 
-    /// <summary>The configuration and slot the orders above are built over.</summary>
-    private static (AgentProviders Providers, HarnessLayout Layout, AgentKeyStore Keys, TempDirectory Temp) Ready(
+    /// <summary>The configuration and slot the orders above are built over, in a directory the caller disposes.</summary>
+    internal static (AgentProviders Providers, HarnessLayout Layout, AgentKeyStore Keys, TempDirectory Temp) Ready(
         string[] slot,
         Dictionary<string, AgentClientConfig>? clients = null)
     {

@@ -160,7 +160,8 @@ public static class ClaudeApiRequest
         body["thinking"] = new JsonObject { ["type"] = "adaptive", ["display"] = "summarized" };
 
         // The conversation's own effort is what the request is sent with: changing it there would drop the cached
-        // conversation, so a level a fallback move changed is told in the conversation and the top-level one stays.
+        // conversation, so a level a fallback move changed is told in the conversation and the top-level one stays - but
+        // a move to the model's own default, which no message names, is sent top-level as no level at all.
         if ((request.FirstEffort ?? request.Effort) is { Length: > 0 } effort)
         {
             body["output_config"] = new JsonObject { ["effort"] = effort };

@@ -303,8 +303,9 @@ public sealed class ToolLoop(
         private readonly string _session = run.Conversation?.Id ?? Guid.NewGuid().ToString("D");
 
         // The run's order on this provider and client: the serving model's keys in the credential's order, then each
-        // later model of the same provider and client with each of its keys, each model's keys before the next model -
-        // the loop's own walk, inside the one conversation. Entries of another provider or client are the runner's.
+        // later model of the same provider and client with each of its keys, each model's keys before the next model, up
+        // to the first entry of another provider or client - the loop's own walk, inside the one conversation. That entry
+        // and every one after it are the runner's.
         private readonly List<Serving> _order = [.. (run.Credential?.Keys ?? []).Select(key => new Serving(run.Model!, run.Effort, key, terms, null))];
 
         // The limits the run remembers, each with the client whose entry met it: an entry a limit covers is passed
@@ -346,8 +347,9 @@ public sealed class ToolLoop(
         // in words in a message of the conversation - never in its system prompt, which every stored turn was made under.
         private bool _schemaRefused;
 
-        // The effort the conversation began at, where it began at one and a move has since changed the level: a provider
-        // that caches the conversation is sent it top-level still, the change told in the conversation.
+        // The level a provider that caches the conversation is sent top-level once a move has changed it
+        // (ChatRequest.FirstEffort): the one it began at while changes are told in the conversation, the new one once a
+        // change no message names is sent top-level instead.
         private string? _firstEffort;
 
         private StoredConversation Conversation => _conversation!;
@@ -801,83 +803,130 @@ public sealed class ToolLoop(
                 ChatFailure? failed = null;
                 AgentRunResult? other = null;
 
-                try
+                // The lane of the provider and the key the request is signed with, entered for this request alone, its
+                // input counted as it enters: a cool-down a 429 set past the client's longest wait is the account at its
+                // limit, as a 429 naming that wait is, and the request is not sent; a shorter hold is waited, said as it
+                // is waited, and ended by the run's own stops.
+                var lane = run.Gates?.LaneOf(terms.Provider.Name, terms.Client, run.Entries?.Client, Now.Key);
+                ClientGate.ClientSlot? slot = null;
+
+                if (lane?.CoolDownLeft is { } cooling && cooling > terms.LongestWait)
                 {
-                    var enumerator = provider.SendAsync(request, asking.Token).GetAsyncEnumerator(asking.Token);
-
-                    await using (enumerator.ConfigureAwait(false))
+                    failed = new ChatFailure(ChatFailureKind.RateLimited, $"the lane of {Now.Key!.Name} is held by a 429's cool-down until {loop._clock.GetUtcNow() + cooling:u}", RetryAfter: cooling);
+                }
+                else if (lane is not null)
+                {
+                    try
                     {
-                        while (answered is null && failed is null && other is null)
+                        slot = await lane.EnterAsync(
+                            Codebase.EstimatedTokens.Of(request.System) + Codebase.EstimatedTokens.Of(request.Tools) + request.Messages.Sum(message => (long)Codebase.EstimatedTokens.Of(message)),
+                            (wait, why) => Emit(new WaitingToRetry($"the request waits for {why}", tried, terms.MaxRetries, wait, loop._clock.GetUtcNow() + wait)),
+                            left.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!stop.IsCancellationRequested && left.IsCancellationRequested)
+                    {
+                        return await LeftAsync(0, null).ConfigureAwait(false);
+                    }
+                }
+
+                using var held = slot;
+
+                if (failed is null)
+                {
+                    try
+                    {
+                        var enumerator = provider.SendAsync(request, asking.Token).GetAsyncEnumerator(asking.Token);
+
+                        await using (enumerator.ConfigureAwait(false))
                         {
-                            if (run.Limits.StallSeconds is > 0 and var seconds)
+                            while (answered is null && failed is null && other is null)
                             {
-                                stall.CancelAfter(TimeSpan.FromSeconds(seconds));
-                            }
+                                if (run.Limits.StallSeconds is > 0 and var seconds)
+                                {
+                                    stall.CancelAfter(TimeSpan.FromSeconds(seconds));
+                                }
 
-                            if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
-                            {
-                                failed = new ChatFailure(ChatFailureKind.Transient, "the answer ended before its turn did");
-                                break;
-                            }
+                                if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                                {
+                                    failed = new ChatFailure(ChatFailureKind.Transient, "the answer ended before its turn did");
+                                    break;
+                                }
 
-                            // What the answer wrote counts: a turn that failed after it wrote anything is thrown away.
-                            switch (enumerator.Current)
-                            {
-                                case ChatPart.Heard:
-                                    break;
-                                case ChatPart.Used said:
-                                    soFar = said.SoFar;
-                                    break;
-                                case ChatPart.Began began:
-                                    wrote = began.Model;
-                                    other = AgentModelIds.Same(Now.Model, began.Model) ? null : WrongModel(began.Model);
-                                    break;
-                                case ChatPart.Notice notice:
-                                    await Emit(new Notice(Masked(notice.Message))).ConfigureAwait(false);
-                                    break;
-                                case ChatPart.Shortened shortened:
-                                    // The first point holds: a provider that says another later is sending what it began with.
-                                    if (Conversation.Shorten(shortened.Before))
-                                    {
-                                        await Emit(new Notice($"The conversation {_session} is sent shortened before message {shortened.Before.ToString(CultureInfo.InvariantCulture)} from now on, to keep it within the context of '{Now.Terms!.Model.Code}'; what is stored stays whole.")).ConfigureAwait(false);
-                                    }
+                                // What the answer wrote counts: a turn that failed after it wrote anything is thrown away.
+                                switch (enumerator.Current)
+                                {
+                                    case ChatPart.Heard:
+                                        break;
+                                    case ChatPart.Used said:
+                                        soFar = said.SoFar;
+                                        break;
+                                    case ChatPart.Began began:
+                                        wrote = began.Model;
+                                        other = AgentModelIds.Same(Now.Model, began.Model) ? null : WrongModel(began.Model);
+                                        break;
+                                    case ChatPart.Notice notice:
+                                        await Emit(new Notice(Masked(notice.Message))).ConfigureAwait(false);
+                                        break;
+                                    case ChatPart.Shortened shortened:
+                                        // The first point holds: a provider that says another later is sending what it began with.
+                                        if (Conversation.Shorten(shortened.Before))
+                                        {
+                                            await Emit(new Notice($"The conversation {_session} is sent shortened before message {shortened.Before.ToString(CultureInfo.InvariantCulture)} from now on, to keep it within the context of '{Now.Terms!.Model.Code}'; what is stored stays whole.")).ConfigureAwait(false);
+                                        }
 
-                                    break;
-                                case ChatPart.Answered done:
-                                    answered = done.Turn;
-                                    break;
-                                case ChatPart.Failed ended:
-                                    failed = ended.Failure;
-                                    break;
-                                case ChatPart.Text text:
-                                    parts++;
-                                    await Emit(new TextDelta(Masked(text.Fragment))).ConfigureAwait(false);
-                                    break;
-                                case ChatPart.Thinking thinking:
-                                    parts++;
-                                    await Emit(new ThinkingDelta(Masked(thinking.Fragment))).ConfigureAwait(false);
-                                    break;
-                                case ChatPart.CallBegan call:
-                                    parts++;
-                                    await Emit(new ToolCallStarted(call.Id, call.Name, AgentToolRunner.Harness)).ConfigureAwait(false);
-                                    break;
-                                case ChatPart.CallInput input:
-                                    parts++;
-                                    await Emit(new ToolCallInputDelta(input.Id, Masked(input.Fragment))).ConfigureAwait(false);
-                                    break;
-                                case var unknown:
-                                    throw new InvalidOperationException($"'{unknown?.GetType().Name ?? "null"}' is no part a provider streams.");
+                                        break;
+                                    case ChatPart.Answered done:
+                                        answered = done.Turn;
+                                        break;
+                                    case ChatPart.Failed ended:
+                                        failed = ended.Failure;
+                                        break;
+                                    case ChatPart.Text text:
+                                        parts++;
+                                        await Emit(new TextDelta(Masked(text.Fragment))).ConfigureAwait(false);
+                                        break;
+                                    case ChatPart.Thinking thinking:
+                                        parts++;
+                                        await Emit(new ThinkingDelta(Masked(thinking.Fragment))).ConfigureAwait(false);
+                                        break;
+                                    case ChatPart.CallBegan call:
+                                        parts++;
+                                        await Emit(new ToolCallStarted(call.Id, call.Name, AgentToolRunner.Harness)).ConfigureAwait(false);
+                                        break;
+                                    case ChatPart.CallInput input:
+                                        parts++;
+                                        await Emit(new ToolCallInputDelta(input.Id, Masked(input.Fragment))).ConfigureAwait(false);
+                                        break;
+                                    case var unknown:
+                                        throw new InvalidOperationException($"'{unknown?.GetType().Name ?? "null"}' is no part a provider streams.");
+                                }
                             }
                         }
                     }
+                    catch (OperationCanceledException) when (!stop.IsCancellationRequested && left.IsCancellationRequested)
+                    {
+                        return await LeftAsync(parts, soFar).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!stop.IsCancellationRequested && stall.IsCancellationRequested)
+                    {
+                        failed = new ChatFailure(ChatFailureKind.Transient, $"nothing of the answer came for {run.Limits.StallSeconds} s");
+                    }
                 }
-                catch (OperationCanceledException) when (!stop.IsCancellationRequested && left.IsCancellationRequested)
+
+                // The request is done with its lane before any wait of the loop's: what it answered charged to the output
+                // bucket, and a 429 it met - a rate limit, an account at its limit - holding every waiter of the lane
+                // until the provider said it lifts.
+                if ((answered?.Usage ?? soFar) is { } charged)
                 {
-                    return await LeftAsync(parts, soFar).ConfigureAwait(false);
+                    slot?.Answered(charged.OutputTokens);
                 }
-                catch (OperationCanceledException) when (!stop.IsCancellationRequested && stall.IsCancellationRequested)
+
+                held?.Dispose();
+
+                if (lane is not null && failed is { Kind: ChatFailureKind.RateLimited or ChatFailureKind.AccountLimit } limited
+                    && (limited.RetryAfter ?? (limited.Lifts is { } lifts ? lifts - loop._clock.GetUtcNow() : null)) is { } coolDown)
                 {
-                    failed = new ChatFailure(ChatFailureKind.Transient, $"nothing of the answer came for {run.Limits.StallSeconds} s");
+                    lane.RateLimited(coolDown);
                 }
 
                 if (other is not null)
@@ -962,7 +1011,9 @@ public sealed class ToolLoop(
 
                 if (move is { } take)
                 {
+                    // The entry moved to is asked with tries of its own: the ones spent were the entry it left's.
                     await TakeAsync(take).ConfigureAwait(false);
+                    tried = 1;
                     continue;
                 }
 
@@ -1022,7 +1073,8 @@ public sealed class ToolLoop(
         /// <summary>
         /// The run's later entries of this provider and client, joined to the serving model's keys as the loop's order -
         /// each model's keys before the next model, an entry the machine cannot use held with its reason, said and
-        /// passed over when its turn comes. Entries of another provider or client are the runner's, never the loop's.
+        /// passed over when its turn comes - up to the first entry of another provider or client: that one, and every
+        /// entry after it, is the runner's, for the step's order is walked in its order and never past an entry between.
         /// </summary>
         private void JoinLaterEntries()
         {
@@ -1031,7 +1083,7 @@ public sealed class ToolLoop(
                 if (!string.Equals(entry.Provider, terms.Provider.Name, StringComparison.Ordinal)
                     || !string.Equals(entry.Client, terms.Client, StringComparison.Ordinal))
                 {
-                    continue;
+                    break;
                 }
 
                 // The serving model's keys are the order already, every key of the credential: an entry of the same
@@ -1047,16 +1099,18 @@ public sealed class ToolLoop(
                     continue;
                 }
 
-                var held = entry.Key is null ? null : run.Credential?.Keys.FirstOrDefault(key => string.Equals(key.Name, entry.Key, StringComparison.Ordinal));
+                // The key's value is the entry's own credential's, else the run's.
+                var held = entry.Key is not { Length: > 0 } name ? null : (entry.Credential?.Keys ?? []).Concat(run.Credential?.Keys ?? []).FirstOrDefault(key => string.Equals(key.Name, name, StringComparison.Ordinal));
 
                 _order.Add(held is null
-                    ? new Serving(entry.Model, entry.Effort, null, null, $"its key {entry.Key} is not held by the run's credential")
+                    ? new Serving(entry.Model, entry.Effort, null, null, $"its key {entry.Key} is held by neither its own credential nor the run's")
                     : new Serving(entry.Model, entry.Effort, held, ToolLoopTerms.Of(terms.Client, entry.Entries), null));
             }
         }
 
-        /// <summary>An entry of the loop's order as the shared rules of the fallback read one.</summary>
-        private AgentRunEntry EntryOf(Serving entry) => new(entry.Model, terms.Provider.Name, terms.Client, entry.Key?.Name, entry.Effort, entry.Usable);
+        /// <summary>The loop's order as the shared rules of the fallback read one: each entry of this provider and client, usable or with why not.</summary>
+        private IReadOnlyList<AgentRunEntry> Entries()
+            => [.. _order.Select(entry => new AgentRunEntry(entry.Model, terms.Provider.Name, terms.Client, entry.Key?.Name, entry.Effort, entry.Usable, entry.Unusable))];
 
         /// <summary>A move of the engine's fallback the loop has planned and not yet taken: where it goes, why, and what it throws away.</summary>
         private sealed record Planned(int At, string Why, bool ThrewAway, AgentFallbackCredit? Credit, IReadOnlyList<(string Model, string Why)> PassedOver);
@@ -1145,45 +1199,19 @@ public sealed class ToolLoop(
             => Masked($"limit{(limit.Lifts is { } lifts ? $", until {lifts:u}" : string.Empty)}: {failure.Message}");
 
         /// <summary>
-        /// The move planned for <paramref name="why"/>: the next entry of this provider and client, with the entries
-        /// passed over to reach it - the model's other keys on a decline, an entry the machine cannot use, a key the run
-        /// has seen refused, and one a remembered limit covers until it lifts. Null where none is left.
+        /// The move planned for <paramref name="why"/>: the next entry of this provider and client by the fallback's one
+        /// rule (<see cref="AgentFallback.Next"/>), with the entries passed over to reach it - the model's other keys on a
+        /// decline, an entry the machine cannot use, a key the run has seen refused, and one a remembered limit covers
+        /// until it lifts. Null where none is left.
         /// </summary>
         /// <param name="why">Why the run moves, as the record says it.</param>
         /// <param name="decline">Whether the cause is a decline, which passes the model's other keys.</param>
         /// <param name="credit">The credit a declined request left, where it left one.</param>
         /// <param name="threwAway">Whether a part of an answer was thrown away with the turn.</param>
         private Planned? Plan(string why, bool decline, AgentFallbackCredit? credit, bool threwAway)
-        {
-            var passed = new List<(string Model, string Why)>();
-
-            for (var at = _at + 1; at < _order.Count; at++)
-            {
-                var entry = _order[at];
-
-                if (decline && string.Equals(entry.Model, Now.Model, StringComparison.Ordinal))
-                {
-                    passed.Add((entry.Model, "a decline passes over the model's other keys"));
-                    continue;
-                }
-
-                var whyNot = !entry.Usable ? entry.Unusable
-                    : entry.Key is { } key && _keysRefused.Contains(key.Name) ? $"its key {key.Name} was refused"
-                    : _limits.FirstOrDefault(limit => AgentFallback.Covers(limit.Limit, limit.Client, EntryOf(entry)) && (limit.Limit.Lifts is null || limit.Limit.Lifts > loop._clock.GetUtcNow())) is { Limit: { } covers }
-                        ? $"a limit the run remembers covers it{(covers.Lifts is { } lifts ? $" until {lifts:u}" : string.Empty)}"
-                        : null;
-
-                if (whyNot is not null)
-                {
-                    passed.Add((entry.Model, whyNot));
-                    continue;
-                }
-
-                return new Planned(at, why, threwAway, credit, passed);
-            }
-
-            return null;
-        }
+            => AgentFallback.Next(Entries(), _at, decline, _keysRefused, _limits, loop._clock.GetUtcNow()) is { } next
+                ? new Planned(next.At, why, threwAway, credit, next.PassedOver)
+                : null;
 
         /// <summary>
         /// Takes <paramref name="move"/>: the entries passed over and the move itself said and recorded, the answer so
@@ -1227,29 +1255,45 @@ public sealed class ToolLoop(
                 from.Effort,
                 to.Effort)).ConfigureAwait(false);
 
-            if (to.Effort is { } level && changed)
+            if (!changed)
+            {
+                return;
+            }
+
+            if (to.Effort is { } level && provider.EffortMessage(level) is { } message)
             {
                 // The level the conversation began at is what a provider that caches it is sent top-level still; the
                 // change is told in the conversation, where the provider takes a message of its own for it.
                 _firstEffort ??= from.Effort ?? string.Empty;
 
-                await Emit(new MessageSent(Masked($"The step goes on at effort '{level}'."), AgentMessageKind.Effort)).ConfigureAwait(false);
-
-                if (provider.EffortMessage(level) is { } message)
-                {
-                    _pending.Add(message);
-                }
+                await Emit(new MessageSent(Masked(EffortTold(level)), AgentMessageKind.Effort)).ConfigureAwait(false);
+                _pending.Add(message);
+                return;
             }
-            else if (changed && from.Effort is not null)
+
+            // No message of the conversation tells the change - the provider is told the level with each request, or the
+            // entry goes on at its model's own default, which no message names - so the requests carry the new level
+            // themselves, none for the default: a provider that caches the conversation has it sent top-level from now
+            // on, its cache spent once, for a level kept there would be the last model's. Where the conversation already
+            // holds a level told in it, the requests still say that it may.
+            if (_firstEffort is not null)
             {
-                // The entry goes on at its model's own default, and no level is named to tell: the conversation's
-                // top-level stays what it began at - changing it would drop its cache - and the change is said as an
-                // event alone.
-                _firstEffort ??= from.Effort;
-
-                await Emit(new MessageSent(Masked("The step goes on at its model's own default effort."), AgentMessageKind.Effort)).ConfigureAwait(false);
+                _firstEffort = to.Effort ?? string.Empty;
             }
+
+            await Emit(new Notice(EffortSent(to.Effort))).ConfigureAwait(false);
         }
+
+        /// <summary>What a move to a level the provider is told in the conversation says, as the message that tells it.</summary>
+        /// <param name="level">The level.</param>
+        internal static string EffortTold(string level) => $"The step goes on at effort '{level}'.";
+
+        /// <summary>What a move to a level no message of the conversation tells says: the level each request carries from now on, or none.</summary>
+        /// <param name="level">The level; null for the model's own default.</param>
+        internal static string EffortSent(string? level)
+            => level is null
+                ? "The step goes on at its model's own default effort: its requests name no level from now on."
+                : $"The step goes on at effort '{level}': its requests name that level from now on.";
 
         /// <summary>
         /// The provider refused the step's envelope as a schema: the run's requests send none from now on, and the envelope

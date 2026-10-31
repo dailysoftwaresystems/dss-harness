@@ -70,32 +70,165 @@ public sealed class AgentCompactionTests : IDisposable
         Assert.Equal(AgentCompaction.Reduce(stream, new AgentContinuationBounds(), bounds).Record, AgentCompaction.Reduce(stream, new AgentContinuationBounds(), bounds).Record);
     }
 
-    /// <summary>Only the newest attempt is compacted, and a stream that wrote nothing says so.</summary>
+    /// <summary>An attempt that wrote nothing says so: compacted at iteration naught, none kept word for word.</summary>
     [Fact]
-    public void OnlyTheNewestAttempt_IsCompacted()
+    public void AnAttemptThatWroteNothing_SaysSo()
     {
-        var stream = new AgentEvent[]
-        {
-            new RunStarted(1),
-            new MessageSent("the first attempt's task", AgentMessageKind.FirstPrompt),
-            new TurnStarted(1),
-            new AssistantMessage("the first attempt", []),
-            new RunStarted(2),
-            new MessageSent("do the work", AgentMessageKind.FirstPrompt),
-            new TurnStarted(1),
-            new AssistantMessage("the second attempt", []),
-        };
-
-        var compacted = AgentCompaction.Reduce(stream, new AgentContinuationBounds(), new AgentCompactionBounds());
-
-        Assert.Contains("the second attempt", compacted.Record, StringComparison.Ordinal);
-        Assert.DoesNotContain("the first attempt's", compacted.Record, StringComparison.Ordinal);
-        Assert.DoesNotContain("the first attempt ", compacted.Record, StringComparison.Ordinal);
-
         var empty = AgentCompaction.Reduce([new RunStarted(1)], new AgentContinuationBounds(), new AgentCompactionBounds());
 
         Assert.Contains("at iteration 0.", empty.Record, StringComparison.Ordinal);
         Assert.Contains("the last 0 iterations are word for word", empty.Record, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An attempt compacted a second time is reduced whole again - its first prompt the task as it was first sent, the
+    /// earlier record never copied in, for the events it stood for are the attempt's own - and its iterations numbered
+    /// across its runs: each record is the task and the work once, never a record of a record.
+    /// </summary>
+    [Fact]
+    public void AnAttemptCompactedAgain_IsReducedWhole_NeverCopyingTheRecordBefore()
+    {
+        var first = AgentCompaction.Reduce(Stream(), new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds());
+        AgentEvent[] again =
+        [
+            .. Stream(),
+            new RunStarted(1),
+            new MessageSent(first.Record, AgentMessageKind.FirstPrompt),
+            new TurnStarted(1),
+            new AssistantMessage("the fifth message", []),
+            new TurnStarted(2),
+            new AssistantMessage("the sixth message", []),
+        ];
+
+        var second = AgentCompaction.Reduce(AgentAttempt.Of(again, 1), new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds());
+
+        Assert.StartsWith(
+            "This conversation was compacted by the engine at iteration 6. Everything up to iteration 5 is reduced to what you wrote and what you called; the last 1 iterations are word for word.",
+            second.Record,
+            StringComparison.Ordinal);
+
+        // The head once, the task twice - where it was sent and again at the end - and the earlier record nowhere.
+        Assert.Equal(1, Count(second.Record, AgentCompaction.SaysWhatItIs));
+        Assert.Equal(2, Count(second.Record, "do the work"));
+        Assert.Contains($"iteration 5: the fifth message{Environment.NewLine}", second.Record, StringComparison.Ordinal);
+        Assert.Contains($"iteration 6 of 6:{Environment.NewLine}the sixth message", second.Record, StringComparison.Ordinal);
+        Assert.Equal((1, 5), (second.KeptWordForWord, second.Reduced));
+    }
+
+    /// <summary>
+    /// An attempt whose agent asked, was answered and then filled its context is compacted from its task: the attempt is
+    /// both runs, the answer one of the engine's messages in its place, never the first message the record holds.
+    /// </summary>
+    [Fact]
+    public void AnAttemptAnsweredThenFull_IsCompactedFromItsTask_TheAnswerInItsPlace()
+    {
+        var stream = new AgentEvent[]
+        {
+            new RunStarted(1),
+            new MessageSent("the earlier attempt's task", AgentMessageKind.FirstPrompt),
+            new RunStarted(2),
+            new MessageSent("do the work", AgentMessageKind.FirstPrompt),
+            new TurnStarted(1),
+            new AssistantMessage("which file?", []),
+            new RunFinished(AgentRunStatus.Asked),
+            new RunStarted(2),
+            new MessageSent("the parser", AgentMessageKind.FirstPrompt),
+            new TurnStarted(1),
+            new AssistantMessage("working on the parser", []),
+            new TurnStarted(2),
+            new AssistantMessage("still working", []),
+        };
+
+        var compacted = AgentCompaction.Reduce(AgentAttempt.Of(stream, 2), new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds());
+
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "This conversation was compacted by the engine at iteration 3. Everything up to iteration 2 is reduced to what you wrote and what you called; the last 1 iterations are word for word.",
+                string.Empty,
+                "The run context and the task, as they were sent:",
+                string.Empty,
+                "do the work",
+                string.Empty,
+                "Reduced, everything up to the last iterations:",
+                string.Empty,
+                "iteration 1: which file?",
+                AgentContinuation.EngineSaid,
+                "the parser",
+                "iteration 2: working on the parser",
+                string.Empty,
+                "The last iterations, word for word:",
+                string.Empty,
+                "iteration 3 of 3:",
+                "still working",
+                string.Empty,
+                "The task again:",
+                string.Empty,
+                "do the work"),
+            compacted.Record);
+    }
+
+    /// <summary>
+    /// What the engine sent among the last iterations is kept word for word in its place, as the continuation record's
+    /// rule keeps it: a plan update told after the first kept message is never lost.
+    /// </summary>
+    [Fact]
+    public void TheEnginesMessagesAmongTheLastIterations_AreKeptWordForWord()
+    {
+        AgentEvent[] stream =
+        [
+            .. Stream(),
+            new MessageSent("the plan changed again", AgentMessageKind.PlanUpdate),
+            new TurnStarted(5),
+            new AssistantMessage("the fifth message", []),
+        ];
+
+        var compacted = AgentCompaction.Reduce(stream, new AgentContinuationBounds(LastIterations: 2), new AgentCompactionBounds());
+
+        Assert.Contains(
+            $"iteration 4 of 5:{Environment.NewLine}the fourth message{Environment.NewLine}{Environment.NewLine}{AgentContinuation.EngineSaid}{Environment.NewLine}the plan changed again{Environment.NewLine}{Environment.NewLine}iteration 5 of 5:{Environment.NewLine}the fifth message",
+            compacted.Record,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A call whose input names a path that is no string is reduced without one, never ending the compaction: the input
+    /// is the model's, and read as the engine's account reads it; a move names both its ends.
+    /// </summary>
+    [Fact]
+    public void ACallsPaths_AreReadAsTheAccountReadsThem()
+    {
+        var stream = new AgentEvent[]
+        {
+            new RunStarted(1),
+            new MessageSent("do the work", AgentMessageKind.FirstPrompt),
+            new TurnStarted(1),
+            new AssistantMessage("one", [new AgentToolCall("c-1", AgentTools.ViewFile), new AgentToolCall("c-2", AgentTools.MovePath)]),
+            new ToolCallFinished("c-1", Ok: true, TimeSpan.Zero, """{"path":1}""", "ok"),
+            new ToolCallFinished("c-2", Ok: true, TimeSpan.Zero, """{"from":"a.txt","to":"b.txt"}""", "ok"),
+            new TurnStarted(2),
+            new AssistantMessage("two", []),
+        };
+
+        var compacted = AgentCompaction.Reduce(stream, new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds());
+
+        Assert.Contains(
+            $"iteration 1: one{Environment.NewLine}  call c-1 (view_file): {{\"path\":1}} (ok){Environment.NewLine}  call c-2 (move_path): {{\"from\":\"a.txt\",\"to\":\"b.txt\"}} (ok) [paths: a.txt, b.txt]{Environment.NewLine}",
+            compacted.Record,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>How many times <paramref name="part"/> stands in <paramref name="text"/>.</summary>
+    private static int Count(string text, string part)
+    {
+        var count = 0;
+
+        for (var at = text.IndexOf(part, StringComparison.Ordinal); at >= 0; at = text.IndexOf(part, at + part.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
     }
 
     /// <summary>A call's input is cut at its bound of characters in a reduced line.</summary>

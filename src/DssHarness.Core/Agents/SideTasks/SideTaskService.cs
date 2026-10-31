@@ -264,7 +264,7 @@ public sealed class SideTaskService(
         CancellationToken cancellationToken)
     {
         // A side-task opened again runs on the model it last used, unless the person names another; a model named
-        // outright has no order after it, as a step's has not.
+        // outright has only its own other keys after it, as a step's has.
         var last = record.Turns is [_, ..] turns ? turns[^1] : null;
         var model = call.Model ?? (call.Tier is null ? last?.Model : null);
         var level = effort ?? (call.Model is null && call.Tier is null && call.Efforts is null or { Count: 0 } ? last?.Effort : null);

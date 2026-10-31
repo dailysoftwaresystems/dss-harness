@@ -23,7 +23,7 @@ public sealed class AgentKeySpend(IFileSystem fileSystem, OrchestrationStore sto
     /// <summary>The record's name, in the repository's orchestrators directory.</summary>
     public const string FileName = "key-spend.jsonl";
 
-    /// <summary>How far back a key's spend is counted: the user's "this week (it's weekly)".</summary>
+    /// <summary>How far back a key's spend is counted: seven days, for a provider's allowances are weekly.</summary>
     public static readonly TimeSpan Week = TimeSpan.FromDays(7);
 
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));

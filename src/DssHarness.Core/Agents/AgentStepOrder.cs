@@ -165,7 +165,7 @@ public static class AgentStepOrder
     /// <param name="asked">Reads one more name of the slot, cached by the caller.</param>
     /// <param name="toolConfigDirectory">Claude Code's own directory on this machine, which a launch reads where the slot holds no other for it.</param>
     private static string? ConfigDirectoryOf(AgentProviders providers, string client, Func<string, AgentKeyAnswer> asked, string? toolConfigDirectory)
-        => string.Equals(client, "claude-code", StringComparison.Ordinal)
+        => string.Equals(client, ClaudeCode.ClaudeCodeClient.ClientName, StringComparison.Ordinal)
             ? providers.SettingOf(client, AgentClientSetting.ConfigDirKey) is { Length: > 0 } named
                 ? asked(named).Value is { Length: > 0 } fromSlot ? fromSlot : toolConfigDirectory
                 : toolConfigDirectory

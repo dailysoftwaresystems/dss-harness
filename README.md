@@ -793,8 +793,9 @@ by itself that the engine refuses too - by its own deny rules, a file tool's tol
 alone - is a denial of Claude Code's, counted and recorded once; a call it ran that the engine was
 never asked about, or refused, fails the step by the tool's name; each is ended at once. A message
 no turn takes within the stall bound stalls the step; a declined request and an account at its
-limit move the step to its next entry, a new launch on another model, `Refused` and `RateLimited`
-(where none is left) with when the limit lifts where Claude Code says. Every move on this client is
+limit move the step to its next entry, a new launch - an account at its limit to the same model's
+next key first, a declined request past the model's other keys to the next model - `Refused` and
+`RateLimited` (where none is left) with when the limit lifts where Claude Code says. Every move on this client is
 a new launch, and a move within the step's work goes on from what the engine stored.
 `help agent-clients` says it whole.
 
@@ -886,37 +887,48 @@ machine - and the runner walks it: an entry that cannot be used here is said and
 its turn comes and never refuses a run, and a declined request, an account at its limit and a failed
 run whose provider and client have no key left unrefused move the step to its next entry by the
 cause's rule, across clients as within one, each move said by `FallbackStarted` and each entry
-passed over by `FallbackPassedOver`. Where the step gives the next model another effort, the move
-goes on at that level and says both: the request carries it, a provider that caches the conversation
-is still sent top-level the level it began at, and the change is told in the conversation - the
-Claude API a message under `mid-conversation-output-config-2026-07-01`, Z.AI the request's
-`reasoning_effort` - with no credit token, for it is not the same request. Where the next entry is
+passed over by `FallbackPassedOver`. A run is handed the keys of its model from the entry it starts
+on, so a refused key and an account at its limit move it to the same model's next key inside the
+client first, and an API client's own walk goes through the entries of its provider and client up to
+the first entry of another, which is the runner's. Where the step gives the next model another
+effort, the move goes on at that level and says both: on the Claude API the change is told in the
+conversation, a message under `mid-conversation-output-config-2026-07-01`, and the conversation is
+still sent top-level the level it began at, its cache kept; on Z.AI every request carries the level
+as its `reasoning_effort`, said by a notice; and a move to a model the step gives no level goes on at
+the model's own default, its requests naming none from then on (the Claude API's cache spent once for
+it), said by a notice - with no credit token, for it is not the same request. Where the next entry is
 of another provider or client -
 and for every move on `claude-code` - the step begins a new conversation with its prompt on that
 client's model, and what every entry did and used is the step's one result, each model that served
-it named from the turn it began at. A limit the run met is remembered until its end: an entry it
-covers is passed over, said so, whichever client would serve it. Where the slot holds none of the
-keys of the step's first model the run is refused before it starts; a later model's missing key is
-only said and passed over.
+it named from the turn it began at, its cost every entry's own summed and unknown where any entry's
+is. A limit the run met is remembered until its end: an entry it covers is passed over, said so,
+whichever client would serve it, and so is an entry a move reaches that cannot be started. Where the
+slot holds none of the keys of the step's first model the step's agent is never started and the step
+fails refused (exit 13); a later model's missing key is only said and passed over. A failed agent is
+tried again on its model from the entry that served it last, never on a key refused or limited.
 
 A step that goes on with earlier work is given the engine's record of it: the continuation record,
 text put together from the step directories of the agent - what it is, the steps so far with each
 one's notes and output, the files changed, the last red build or test, the handoff, and the last
-iterations of the newest attempt word for word from its stored stream (each the agent's message as
-it wrote it, its thinking as far as the provider showed it, and each call it made with the tool,
-its input and its result as the stream holds them) - nothing in it written or shortened by a model,
-and whatever is cut named with a copy in the agent's `work/continuation/`. Its bounds are
-`agentContext.continuation`'s - `recordChars` (60000), `stepChars` (16000), `paths` (300),
+iterations of the newest attempt word for word from its stored stream, every run of the attempt
+numbered as one (each the agent's message as it wrote it, its thinking as far as the provider
+showed it, each call it made with the tool, its input and its result as the stream holds them, and
+each message the engine sent the agent after it, in its place) - nothing in it written or shortened
+by a model, and whatever is cut named with a copy in the agent's `work/continuation/`. Its bounds
+are `agentContext.continuation`'s - `recordChars` (60000), `stepChars` (16000), `paths` (300),
 `lastIterations` (3) and `iterationChars` (120000), each at its default where the key says none,
-each a positive number - and the first user message holds the parts in their order: the run
+each a positive number, the earlier iterations kept back from the last until the first that does
+not fit - and the first user message holds the parts in their order: the run
 context, the plan updates, the continuation record and the step's prompt as the task. The record is
 sent only where the conversation is a new one - every launch on `claude-code`, and on the API
 clients a conversation that cannot be gone on with - for a handed conversation goes on with one
 more user message alone; the message as sent is kept in the step's `user.md`, masked.
 
-A conversation that has filled its model's context is compacted by the engine, and no model: a
-reduction worked out from the stored stream, the same input always the same record - the run
-context and the task whole as they were sent, the last iterations word for word by the
+A step whose conversation has filled its model's context ends `ContextExhausted`, and where its
+limit's question is answered `compact` the engine compacts the conversation - a side-task's chat
+compacts its own by itself - and no model does: a reduction worked out from the stored stream of
+the attempt, every run of it, the same input always the same record - the run context and the task
+whole as they were first sent, the last iterations word for word by the
 continuation record's rule, every earlier message of the agent its text whole with its thinking
 left out, every earlier call one line (the tool, its input cut at `callInputChars`, how it ended,
 the path where its input names one), every earlier result left out, and every message the engine
@@ -924,20 +936,25 @@ sent since the first whole. The reduced part is at most `agentContext.compaction
 (200000); a call's input is cut at `callInputChars` (400); where the reduced part is more, the
 oldest messages of the agent are cut to their first 2000 characters each, oldest first, until it
 fits, and the record says how many were. It begins a new conversation, on every client - the
-record is the first message of one and the old is kept whole, never edited or sent again; a
+record is the first message of one and the old is kept whole, never edited or sent again; an
+attempt compacted again is reduced whole again, its earlier records never copied into the next; a
 `claude-code` child is started with `DISABLE_COMPACT=1`, so it never compacts by itself and a full
-context ends the step `ContextExhausted`, which the engine's compaction is what follows.
+context ends the step `ContextExhausted`.
 
-The runs of one provider and one key go through one lane of the gate: at most
+The requests of one provider and one key go through one lane of the gate: at most
 `agentClients.<client>.maxParallel` of them under way at once (3 for claude-code, 4 for claude-api and 2 for glm where
 the entry says none; a client that signs in with a login is one lane by its client, and two keys of one provider two
-lanes, keyed by a hash of the key). Beside it the API clients' optional buckets pace a lane's minute -
-`requestsPerMinute`, `inputTokensPerMinute` (a request's own counted as it enters) and `outputTokensPerMinute` (an
-answer's counted once it is had), each waited out until the oldest of the minute is a minute old - and a 429's
-cool-down holds every waiter of the lane, a later or longer one holding past a sooner one. Left out, the provider's
-answers pace the client; the orchestrator's `maxReasoningAgents` bounds agents beside the gate, and both apply. No
-command of this build runs a step yet, so no gate opens one; the engine's step runner holds the lane a run's requests
-go through (`help agent-clients`).
+lanes, keyed by a hash of the key). The API clients enter the lane for each request they send, its input counted as
+it enters (estimated, its bytes over 4); `claude-code`, whose requests the engine cannot see one by one, is held in the
+lane for each launch. Beside it the API clients' optional buckets pace a lane's minute - `requestsPerMinute`,
+`inputTokensPerMinute` (a request more than the bucket holds goes in alone once the bucket is empty) and
+`outputTokensPerMinute` (an answer's counted once it is had), each waited out until the oldest of the minute is a
+minute old - and a 429's cool-down, set by every rate limit and account limit a request or a launch meets from when the
+provider says it lifts, holds every waiter of the lane, a later or longer one holding past a sooner one. A wait at the
+gate is said as it is waited, and the run's pause ends it; on an API client a cool-down past `maxRetryWaitSeconds` is
+the account at its limit, which moves the step as a 429 naming that wait does. Left out, the provider's answers pace
+the client; the orchestrator's `maxReasoningAgents` bounds agents beside the gate, and both apply
+(`help agent-clients`).
 
 A reason step's prompt says `{skill.<name>}` where a skill's text goes, and the engine puts the
 text there before the prompt is sent, on every client alike (`help skills`): the two API clients

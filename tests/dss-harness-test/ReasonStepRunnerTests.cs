@@ -666,7 +666,9 @@ public sealed class ReasonStepRunnerTests
     /// <summary>
     /// A full context answered <c>compact</c> begins a NEW conversation from the engine's reduction of the attempt's
     /// own - the exhausted conversation is handed to no client, however plainly it is there, and stays whole on the
-    /// disk.
+    /// disk. The reduction is of the attempt's every run: an attempt that asked, was answered and then filled its
+    /// context is compacted from its task, the person's answer in its place as the engine's message - never from the
+    /// answer as though it were the task.
     /// </summary>
     [Fact]
     public async Task AFullContextAnsweredCompact_BeginsANewConversation()
@@ -687,11 +689,31 @@ public sealed class ReasonStepRunnerTests
         Directory.CreateDirectory(sessions);
         await File.WriteAllTextAsync(Path.Combine(sessions, "conversation.jsonl"), "[]\n", Token);
 
+        // The attempt's two runs: the task and a question, then the person's answer and the work until the context filled.
+        var stream = StoredStream.Open(kit.Harness.FileSystem, directory, new Masking());
+        await stream.EmitAsync(new RunStarted(1));
+        await stream.EmitAsync(new MessageSent("the task", AgentMessageKind.FirstPrompt));
+        await stream.EmitAsync(new TurnStarted(1));
+        await stream.EmitAsync(new AssistantMessage("Which file?", []));
+        await stream.EmitAsync(new RunFinished(AgentRunStatus.Asked));
+        await stream.EmitAsync(new RunStarted(1));
+        await stream.EmitAsync(new MessageSent("the person's answer", AgentMessageKind.FirstPrompt));
+        await stream.EmitAsync(new TurnStarted(1));
+        await stream.EmitAsync(new AssistantMessage("Reading it now.", []));
+        await stream.EmitAsync(new RunFinished(AgentRunStatus.ContextExhausted));
+        stream.Dispose();
+
         await Runner(kit, agents).RunAsync(
             Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "compact", null, "contextLimit", Attempt: 1)]),
             Token);
 
-        Assert.Null(agents.Asked.Single().Conversation);
+        var asked = agents.Asked.Single();
+        Assert.Null(asked.Conversation);
+        Assert.NotNull(asked.Compaction);
+        Assert.StartsWith(AgentCompaction.SaysWhatItIs, asked.Compaction, StringComparison.Ordinal);
+        Assert.Contains($"The run context and the task, as they were sent:{Environment.NewLine}{Environment.NewLine}the task", asked.Compaction, StringComparison.Ordinal);
+        Assert.Contains($"{AgentContinuation.EngineSaid}{Environment.NewLine}the person's answer", asked.Compaction, StringComparison.Ordinal);
+        Assert.DoesNotContain($"as they were sent:{Environment.NewLine}{Environment.NewLine}the person's answer", asked.Compaction, StringComparison.Ordinal);
     }
 
     /// <summary>

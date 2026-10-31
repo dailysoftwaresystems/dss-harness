@@ -7,14 +7,18 @@ namespace DssHarness.Core.Agents;
 
 /// <summary>
 /// The engine's account of a stored stream, written where an agent could not answer for itself: the handoff a safe
-/// pause, a limit or a cut-off leaves holds what the stream shows and no more - the files the newest attempt wrote,
-/// the last commands it ran and how each ended, and its last messages word for word, as many as the continuation
-/// record keeps - beside the steps before it that left notes, named by step and never by path (part 03, "The handoff
-/// turn"). Nothing in it is written or shortened by a model, and nothing the engine wrote is given out as the model's
-/// own account: the first line says the engine wrote it.
+/// pause, a limit or a cut-off leaves holds what the stream shows and no more - the files the newest attempt wrote
+/// over every run of it, the last <see cref="LastCommands"/> commands it ran and how each ended (the earlier ones
+/// counted), and its last messages word for word, as many as the continuation record keeps - beside the steps before
+/// it that left notes, named by step and never by path (part 03, "The handoff turn"). Nothing in it is written or
+/// shortened by a model, and nothing the engine wrote is given out as the model's own account: the first line says
+/// the engine wrote it.
 /// </summary>
 public static class AgentStreamAccount
 {
+    /// <summary>How many of the attempt's last commands the account lists, the count of the earlier ones said.</summary>
+    public const int LastCommands = 20;
+
     /// <summary>The tools whose call wrote a file or a directory, as the one table names them.</summary>
     private static readonly IReadOnlySet<string> WritingTools = new HashSet<string>(
         Runtime.AgentTools.All(new AgentCommandSettings([], 120, 600))
@@ -36,18 +40,8 @@ public static class AgentStreamAccount
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(before);
 
-        // The newest attempt's events only, as the continuation record reads them.
-        var began = 0;
-
-        for (var at = 0; at < stream.Count; at++)
-        {
-            if (stream[at] is RunStarted)
-            {
-                began = at;
-            }
-        }
-
-        var window = began == 0 ? stream : [.. stream.Skip(began)];
+        // The newest attempt's events, every run of it, as the continuation record reads them.
+        var window = AgentAttempt.Newest(stream);
 
         if (window.Count == 0)
         {
@@ -96,7 +90,9 @@ public static class AgentStreamAccount
             : $"The files the attempt wrote:{Environment.NewLine}{string.Join(Environment.NewLine, written.Select(path => $"- {path}"))}");
         told.AppendLine(commands.Count == 0
             ? "The last commands it ran: none."
-            : $"The last commands it ran and how each ended:{Environment.NewLine}{string.Join(Environment.NewLine, commands.Select(command => $"- {command.Said} ({(command.Ok ? "ended ok" : "failed")})"))}");
+            : $"The last commands it ran and how each ended:{Environment.NewLine}"
+                + (commands.Count > LastCommands ? $"- ({commands.Count - LastCommands} earlier left out){Environment.NewLine}" : string.Empty)
+                + string.Join(Environment.NewLine, commands.TakeLast(LastCommands).Select(command => $"- {command.Said} ({(command.Ok ? "ended ok" : "failed")})")));
         told.AppendLine(messages.Count == 0
             ? "The agent's last messages: the attempt wrote none."
             : $"The agent's last messages, word for word:{Environment.NewLine}{string.Join($"{Environment.NewLine}{Environment.NewLine}", messages)}");
@@ -132,7 +128,7 @@ public static class AgentStreamAccount
 
     /// <summary>The paths a write's call names: its <c>path</c>, or both ends of a move; none where the input reads no path.</summary>
     /// <param name="input">The call's input, as the stream holds it masked.</param>
-    private static IReadOnlyList<string> Paths(string input)
+    internal static IReadOnlyList<string> Paths(string input)
     {
         try
         {

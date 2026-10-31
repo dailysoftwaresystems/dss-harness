@@ -17,11 +17,12 @@ public sealed record AgentModelEntry(string Model, string Provider, string Clien
 
 /// <summary>
 /// A step's model resolved as part 03 rules ("Selecting a model is enough"): the entry that serves, and the order the
-/// step goes on by - the later models of the tier the model came from, each with each of its provider's keys, in
-/// <c>tierConfig</c>'s order (a model named outright, by the step or by its definition, has no order after it).
+/// step goes on by - the serving model's other keys, then the later models of the tier the model came from, each with
+/// each of its provider's keys, in <c>tierConfig</c>'s order (a model named outright, by the step or by its definition,
+/// has its own other keys after it and no other model).
 /// </summary>
 /// <param name="Serving">The entry the step starts on.</param>
-/// <param name="After">The entries the step may go on with, in the order they are tried; empty where the model was named outright.</param>
+/// <param name="After">The entries the step may go on with, in the order they are tried; the model's other keys alone where it was named outright.</param>
 /// <param name="Tier">The tier the model came from, which its order is; null where a model was named outright.</param>
 public sealed record AgentResolution(AgentModelEntry Serving, IReadOnlyList<AgentModelEntry> After, string? Tier)
 {
@@ -53,7 +54,7 @@ public sealed record AgentResolution(AgentModelEntry Serving, IReadOnlyList<Agen
 
         // The model, most specific first: the step's own, the first of its tier, the definition's own, the first of the
         // definition's tier, the first of the default tier's - and the tier the model came from, which its order is: a
-        // model named outright, by the step or by the definition, has no tier and no order after it.
+        // model named outright, by the step or by the definition, has no tier and no other model after it.
         string? fromTier = null;
 
         if (model is null && tier is not null)
