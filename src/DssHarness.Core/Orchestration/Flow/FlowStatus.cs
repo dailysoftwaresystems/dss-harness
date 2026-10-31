@@ -129,7 +129,7 @@ public static class FlowStatus
             }
         }
 
-        foreach (var step in flow.Steps.Where(step => LeftStates.Contains(step.State) && step.WaitsOn is { Count: > 0 }))
+        foreach (var step in flow.Steps.Where(step => IsLeft(step) && step.WaitsOn is { Count: > 0 }))
         {
             waits.Add($"{step.Instance} waits for {string.Join(", ", step.WaitsOn)}");
         }
@@ -150,7 +150,7 @@ public static class FlowStatus
     /// <summary>What is done: the instances that ended, the failures a handler took, the failures passed over, and what was spent of the budget.</summary>
     private static IReadOnlyList<string> Done(WorkflowDefinition definition, FlowFile flow)
     {
-        var ended = flow.Steps.Count(step => EndedStates.Contains(step.State));
+        var ended = flow.Steps.Count(IsEnded);
         var handled = flow.Steps.Count(step => step.HandledBy is not null);
         var passedOver = flow.Steps.Count(step => step.Failure == "passedOver");
         var budget = definition.Budget?.Usd;
@@ -172,7 +172,7 @@ public static class FlowStatus
     /// </summary>
     private static IReadOnlyList<string> Left(WorkflowDefinition definition, FlowFile flow, FlowQuestionsFile? questions, FlowUpdatesFile? updates)
     {
-        var left = flow.Steps.Where(step => LeftStates.Contains(step.State)).ToList();
+        var left = flow.Steps.Where(IsLeft).ToList();
         var coming = new FlowComing(definition, flow, left, questions, updates);
         var numeric = coming.Count;
         var unbounded = coming.Unbounded.Count > 0;
@@ -231,7 +231,7 @@ public static class FlowStatus
             return ["none: the run has ended"];
         }
 
-        var left = flow.Steps.Where(step => LeftStates.Contains(step.State)).ToList();
+        var left = flow.Steps.Where(IsLeft).ToList();
 
         if (left.Count == 0)
         {
@@ -283,7 +283,7 @@ public static class FlowStatus
 
         // A wait for room - a claim, the run to be quiet, a counter of the run's limits - as the admission that wrote it
         // classes its own words (FlowWaits): only the run's pace ends it, and no step's time says how long it lasts.
-        if (flow.Steps.Any(step => LeftStates.Contains(step.State) && step.WaitsOn?.Any(FlowWaits.ForRoom) == true))
+        if (flow.Steps.Any(step => IsLeft(step) && step.WaitsOn?.Any(FlowWaits.ForRoom) == true))
         {
             line += "; not counting a wait for a claim, for the run to be quiet or for room under its limits";
         }
@@ -449,6 +449,22 @@ public static class FlowStatus
     /// <summary>The states an instance has ended in.</summary>
     private static readonly IReadOnlyList<string> EndedStates =
         [nameof(FlowInstanceState.Done), nameof(FlowInstanceState.Failed), nameof(FlowInstanceState.Skipped), nameof(FlowInstanceState.NotRun)];
+
+    /// <summary>
+    /// Whether <paramref name="step"/> has not ended: one in a state an instance has not ended in, save a visit a plan
+    /// update ended - stopped for the update, its work done again or taken back in the instance visited in its place -
+    /// which no session runs again, and which has ended. The one rule what is left, what waits and what is done read.
+    /// </summary>
+    private static bool IsLeft(FlowStepRecord step)
+        => LeftStates.Contains(step.State) && !EndedForAnUpdate(step);
+
+    /// <summary>Whether <paramref name="step"/> has ended: in a state an instance has ended in, or a visit a plan update ended.</summary>
+    private static bool IsEnded(FlowStepRecord step)
+        => EndedStates.Contains(step.State) || EndedForAnUpdate(step);
+
+    /// <summary>Whether <paramref name="step"/> is a visit a plan update ended: stopped for the update, never run again.</summary>
+    private static bool EndedForAnUpdate(FlowStepRecord step)
+        => step.State == nameof(FlowInstanceState.Stopped) && step.EndedFor is not null;
 
     /// <summary>The rows under the header: each label once, its lines under it, the rest indented to the label's width.</summary>
     private static IReadOnlyList<string> Rows(IReadOnlyList<(string Label, IReadOnlyList<string> Lines)> rows)

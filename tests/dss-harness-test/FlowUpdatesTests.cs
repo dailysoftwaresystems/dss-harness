@@ -158,6 +158,44 @@ public sealed class FlowUpdatesTests
         Assert.Equal("no answer of run 'r1' was given by a person, so there is no set to change", FlowAnswerRules.NoSetToChange("r1"));
     }
 
+    /// <summary>How the run took an update is said by the state its entry stands in: queued, being planned, or done at once.</summary>
+    [Fact]
+    public void HowAnUpdateWasTaken_IsSaidByItsState()
+    {
+        var entry = new FlowUpdateEntry("u2", FlowUpdateCauses.Amendment, FlowUpdateStates.Queued, At(0), Amendment: "more");
+
+        Assert.Equal("it is recorded as update u2, queued behind the update under way, and planned when that one is done", entry.HowTaken());
+        Assert.Equal("it is update u2, being planned: the run is held while 'planning.planupdate' plans it", (entry with { State = FlowUpdateStates.UnderWay, Step = "planning.planupdate" }).HowTaken());
+        Assert.Equal("it is update u2, done at once, for no plan held it yet: every step that starts reads the request with its amendments", (entry with { State = FlowUpdateStates.Done }).HowTaken());
+    }
+
+    /// <summary>
+    /// A set is changed one time, the run's updates the authority: an update that changes the set's answer - any but a
+    /// refused one - holds its one change though the set's own record does not hold it yet, one being taken up again is
+    /// not counted against itself, and a set whose record holds a replaced answer says when it was changed.
+    /// </summary>
+    [Fact]
+    public void ASetIsChangedOneTime_ByTheRunsUpdates()
+    {
+        static FlowUpdateEntry Change(string id, string state, string question = "q1")
+            => new(id, FlowUpdateCauses.ChangedAnswer, state, At(2), Question: question, FromAnswer: "go", ToAnswer: "stay");
+
+        Assert.Null(FlowAnswerRules.ChangedAlready("r1", "q1", replacedAt: null, []));
+        Assert.Null(FlowAnswerRules.ChangedAlready("r1", "q1", replacedAt: null, [Change("u1", FlowUpdateStates.Refused), Change("u2", FlowUpdateStates.Done, question: "q2")]));
+        Assert.Null(FlowAnswerRules.ChangedAlready("r1", "q1", replacedAt: null, [Change("u1", FlowUpdateStates.Queued)], taking: "u1"));
+
+        foreach (var state in new[] { FlowUpdateStates.Queued, FlowUpdateStates.UnderWay, FlowUpdateStates.Done, FlowUpdateStates.Failed })
+        {
+            Assert.Equal(
+                "question 'q1' of run 'r1' has its answer changed already - update u1 holds the change, taken at 2026-10-29 14:02:00; a set is changed one time",
+                FlowAnswerRules.ChangedAlready("r1", "q1", replacedAt: null, [Change("u1", state)]));
+        }
+
+        Assert.Equal(
+            "question 'q1' of run 'r1' had its answer changed already, at 2026-10-29 14:03:00; a set is changed one time",
+            FlowAnswerRules.ChangedAlready("r1", "q1", replacedAt: At(3), [Change("u1", FlowUpdateStates.Done)]));
+    }
+
     /// <summary>The number of iterations updates may add to a loop at its bound is one property of the amend block: what it names, else one.</summary>
     [Fact]
     public void TheIterationsUpdatesMayAdd_AreWhatTheAmendBlockNames_ElseOne()
@@ -235,21 +273,21 @@ public sealed class FlowUpdatesTests
         // Done: nothing to go back to.
         Assert.Equal(
             "run 'r1' is done; there is nothing left to go back to",
-            FlowUpdateGates.Refused(definition with { Amend = open }, Flow("Done", round: 2), FlowUpdateCauses.Amendment));
+            FlowUpdateGates.Refused(definition with { Amend = open }, Flow("Done", round: 2), null, FlowUpdateCauses.Amendment));
 
         // Past the step before names.
         Assert.Equal(
             "run 'r1' has started 'notes': what it built is being written down, and its plan is no longer changed. Start a run for the answer once this one has ended",
-            FlowUpdateGates.Refused(definition with { Amend = gates }, Flow("Paused", round: 1), FlowUpdateCauses.ChangedAnswer));
+            FlowUpdateGates.Refused(definition with { Amend = gates }, Flow("Paused", round: 1), null, FlowUpdateCauses.ChangedAnswer));
 
         // Past the work items of the last round: 2 by its own bound, 0 that updates may add.
         Assert.Equal(
             "run 'r1' is past the work items of round 2 of 'rounds', the last it can run (2 by its own bound, and the 0 that amend.maxAddedIterations lets updates add): nothing would carry the change out. Start a run for the request once this one has ended",
-            FlowUpdateGates.Refused(definition with { Amend = addsNothing }, Flow("Paused", round: 2), FlowUpdateCauses.Amendment));
+            FlowUpdateGates.Refused(definition with { Amend = addsNothing }, Flow("Paused", round: 2), null, FlowUpdateCauses.Amendment));
 
         // The round before the last still carries work, and one still open carries its own.
-        Assert.Null(FlowUpdateGates.Refused(definition with { Amend = addsNothing }, Flow("Paused", round: 1), FlowUpdateCauses.Amendment));
-        Assert.Null(FlowUpdateGates.Refused(definition with { Amend = addsNothing }, Flow("Paused", round: 2, groupRunning: true), FlowUpdateCauses.Amendment));
+        Assert.Null(FlowUpdateGates.Refused(definition with { Amend = addsNothing }, Flow("Paused", round: 1), null, FlowUpdateCauses.Amendment));
+        Assert.Null(FlowUpdateGates.Refused(definition with { Amend = addsNothing }, Flow("Paused", round: 2, groupRunning: true), null, FlowUpdateCauses.Amendment));
 
         // A loop the definition leaves open - no maxIterations - is never past its work items by these gates.
         var unbounded = Definition("""
@@ -266,17 +304,18 @@ public sealed class FlowUpdatesTests
                         type: orient
             """);
 
-        Assert.Null(FlowUpdateGates.Refused(unbounded with { Amend = open }, Flow("Paused", round: 9), FlowUpdateCauses.Amendment));
+        Assert.Null(FlowUpdateGates.Refused(unbounded with { Amend = open }, Flow("Paused", round: 9), null, FlowUpdateCauses.Amendment));
 
         // Where the amend block names no before, and the run is not done and not past its work items, it takes one.
-        Assert.Null(FlowUpdateGates.Refused(definition with { Amend = open }, Flow("Paused", round: 0), FlowUpdateCauses.Amendment));
+        Assert.Null(FlowUpdateGates.Refused(definition with { Amend = open }, Flow("Paused", round: 0), null, FlowUpdateCauses.Amendment));
     }
 
     /// <summary>
     /// A work-item group with no loop around it runs its own round and each round <c>amend.maxAddedIterations</c> lets
     /// updates add - a visit of the group run again: the gates take a change while a round may still be added or the
-    /// last one is under way, and refuse it, saying why, once the last round it may run has ended. The instances of its
-    /// work items are never counted as rounds.
+    /// newest is under way, and refuse it, saying why, once the newest has ended and no round more is run - the rounds
+    /// counted by the updates' entries, never by the group's visits, a redirect's among them, nor by the instances of
+    /// its work items - or once a group around it ended otherwise than done, for nothing draws a round of it again.
     /// </summary>
     [Fact]
     public void AGroupWithNoLoopAroundIt_IsPastItsWorkItems_OnceTheLastRoundItMayRunHasEnded()
@@ -300,27 +339,39 @@ public sealed class FlowUpdatesTests
         var one = definition with { Amend = new FlowAmend(Input: "request", ChangedAnswerMinutes: 5, Before: null, Step: "planner.replan", Then: null, Scope: "x", WhenAddScope: "rounds.items.build", WhenChangeScope: "rounds.items.build", WhenRemoveScope: "rounds.items.build", MaxAddedIterations: null) };
         var none = one with { Amend = one.Amend! with { MaxAddedIterations = 0 } };
 
-        // Its own round ended, with one round still to be added; the added round under way; its own under way.
-        Assert.Null(FlowUpdateGates.Refused(one, Rounds("Done"), FlowUpdateCauses.Amendment));
-        Assert.Null(FlowUpdateGates.Refused(one, Rounds("Done", "Running"), FlowUpdateCauses.Amendment));
-        Assert.Null(FlowUpdateGates.Refused(none, Rounds("Running"), FlowUpdateCauses.Amendment));
+        // Its own round ended, with one round still to be added; the added round under way; its own under way; and a
+        // second visit a redirect drew, which no update added.
+        Assert.Null(FlowUpdateGates.Refused(one, Rounds("Running", "Done"), Added(0), FlowUpdateCauses.Amendment));
+        Assert.Null(FlowUpdateGates.Refused(one, Rounds("Running", "Done", "Running"), Added(1), FlowUpdateCauses.Amendment));
+        Assert.Null(FlowUpdateGates.Refused(none, Rounds("Running", "Running"), Added(0), FlowUpdateCauses.Amendment));
+        Assert.Null(FlowUpdateGates.Refused(one, Rounds("Running", "Done", "Done"), Added(0), FlowUpdateCauses.Amendment));
 
-        // The last round it may run has ended - the added one, or its own where none may be added.
+        // The newest round has ended and no round more is run - the one added, or its own where none may be added.
         Assert.Equal(
-            "run 'r1' is past the work items of 'rounds.items', which has run 2 round(s), the last it can run (1 of its own, and the 1 that amend.maxAddedIterations lets updates add), with no loop around it: nothing would carry the change out. Start a run for the request once this one has ended",
-            FlowUpdateGates.Refused(one, Rounds("Done", "Failed"), FlowUpdateCauses.Amendment));
+            "run 'r1' is past the work items of 'rounds.items', with no loop around it: its last round has ended, and updates have added the 1 round(s) amend.maxAddedIterations allows - nothing would carry the change out. Start a run for the request once this one has ended",
+            FlowUpdateGates.Refused(one, Rounds("Running", "Done", "Failed"), Added(1), FlowUpdateCauses.Amendment));
         Assert.Equal(
-            "run 'r1' is past the work items of 'rounds.items', which has run 1 round(s), the last it can run (1 of its own, and the 0 that amend.maxAddedIterations lets updates add), with no loop around it: nothing would carry the change out. Start a run for the answer once this one has ended",
-            FlowUpdateGates.Refused(none, Rounds("Done"), FlowUpdateCauses.ChangedAnswer));
+            "run 'r1' is past the work items of 'rounds.items', with no loop around it: its last round has ended, and updates have added the 0 round(s) amend.maxAddedIterations allows - nothing would carry the change out. Start a run for the answer once this one has ended",
+            FlowUpdateGates.Refused(none, Rounds("Running", "Done"), Added(0), FlowUpdateCauses.ChangedAnswer));
+
+        // A group around it that ended failed draws no round of it again, whatever may still be added.
+        Assert.Equal(
+            "run 'r1' is past the work items of 'rounds.items', with no loop around it: its last round has ended, and 'rounds', the group around it, ended failed and draws nothing more - nothing would carry the change out. Start a run for the request once this one has ended",
+            FlowUpdateGates.Refused(one, Rounds("Failed", "Failed"), Added(0), FlowUpdateCauses.Amendment));
     }
 
+    /// <summary>The run's plan updates: <paramref name="rounds"/> of them done, each having added a round of the work-item group.</summary>
+    private static FlowUpdatesFile Added(int rounds)
+        => new(1, "r1", At(0), [.. Enumerable.Range(1, rounds).Select(at => new FlowUpdateEntry(FlowUpdateIds.Of(at), FlowUpdateCauses.Amendment, FlowUpdateStates.Done, At(at), Amendment: "more", AddedIteration: $"rounds.items+{(at + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}"))]);
+
     /// <summary>
-    /// The run's state in one file: paused, the work-item group with no loop around it visited once for each of
-    /// <paramref name="rounds"/> - each visit as it stands - every visit with a work item of its own, ended.
+    /// The run's state in one file: paused, the group around the work-item group as <paramref name="around"/> says, and
+    /// the work-item group, with no loop around it, visited once for each of <paramref name="rounds"/> - each visit as
+    /// it stands - every visit with a work item of its own, ended.
     /// </summary>
-    private static FlowFile Rounds(params string[] rounds)
+    private static FlowFile Rounds(string around, params string[] rounds)
     {
-        List<FlowStepRecord> steps = [new FlowStepRecord("rounds", "rounds", true, "Running", 1, 1, [], [])];
+        List<FlowStepRecord> steps = [new FlowStepRecord("rounds", "rounds", true, around, 1, 1, [], [])];
 
         for (var at = 0; at < rounds.Length; at++)
         {

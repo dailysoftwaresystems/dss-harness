@@ -262,7 +262,7 @@ public sealed record FlowReporter(
 /// <param name="WhenAddScope">The step that builds scope an update adds, by its path from the flow's root.</param>
 /// <param name="WhenChangeScope">The step that does again an item an update changes, by its path from the flow's root.</param>
 /// <param name="WhenRemoveScope">The step that takes back an item an update withdraws, by its path from the flow's root.</param>
-/// <param name="MaxAddedIterations">How many iterations a run at the end of its loop is given to carry an update, as the file says it; null where it says none.</param>
+/// <param name="MaxAddedIterations">How many iterations, or rounds of a work-item group with no loop around it, a run is given to carry updates past its own, as the file says it; null where it says none.</param>
 public sealed record FlowAmend(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Input,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? ChangedAnswerMinutes,
@@ -275,13 +275,14 @@ public sealed record FlowAmend(
     string WhenRemoveScope,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? MaxAddedIterations)
 {
-    /// <summary>What <see cref="MaxAddedIterations"/> is where the file says nothing: one iteration over the run.</summary>
+    /// <summary>What <see cref="MaxAddedIterations"/> is where the file says nothing: one iteration or round over the run.</summary>
     public const int DefaultMaxAddedIterations = 1;
 
     /// <summary>
-    /// How many iterations plan updates may add, over the whole run, to a loop at its bound that an update owes work: the
-    /// file's <c>maxAddedIterations</c>, or <see cref="DefaultMaxAddedIterations"/> where it says none - the one owner of
-    /// the default the gates and the engine both read.
+    /// How many iterations or rounds plan updates may add, over the whole run, for work an update owes: an iteration of a
+    /// loop at its bound, or a round of a work-item group with no loop around it whose round has ended. The file's
+    /// <c>maxAddedIterations</c>, or <see cref="DefaultMaxAddedIterations"/> where it says none - the one owner of the
+    /// default the gates and the engine both read.
     /// </summary>
     [JsonIgnore]
     public int AddedIterationsAllowed => MaxAddedIterations ?? DefaultMaxAddedIterations;

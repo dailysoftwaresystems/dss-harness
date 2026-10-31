@@ -498,9 +498,11 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     }
 
     /// <summary>
-    /// Takes one plan update into the run's record, whole: read and written inside the run's own section, so an
-    /// update taken while the run runs and one given between two sessions are both kept, and the id - <c>u&lt;n&gt;</c>,
-    /// over every update the file holds - is given under the same lock, so two can never take one id.
+    /// Takes one plan update into the run's record, whole: read and written inside the run's own section, so two writers
+    /// of the file never lose an entry each other wrote, and the id - <c>u&lt;n&gt;</c>, over every update the file holds -
+    /// is given under the same lock, so two can never take one id. Whether a change is handed to a live engine or
+    /// recorded here queued is decided by its caller in the repository's one section every session claims its run in,
+    /// never by this lock.
     /// </summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <param name="run">The run's name, as the file holds it.</param>

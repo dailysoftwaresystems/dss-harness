@@ -638,6 +638,61 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
+    /// An amendment handed to an engine that ended before it took it is taken by the next session, which says how the
+    /// run took it - here done at once, for no plan held it yet - and names it an amendment, never an answer.
+    /// </summary>
+    [Fact]
+    public async Task AnAmendmentTakenFromTheInbox_IsSaidAsTheRunTookIt()
+    {
+        var (repository, service, runner) = await AmendedAsync();
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["request=build the thing"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var run = RunOf(repository);
+        repository.Harness.OrchestrationStore.AddAmendmentToInbox(run, new FlowInboxAmendment(FlowInboxAmendment.NewId(), "in fact, only the parser", DateTimeOffset.UtcNow, FlowService.AmendCommand));
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Contains(
+            "the amendment handed over was taken from the inbox: it is update u1, done at once, for no plan held it yet: every step that starts reads the request with its amendments",
+            resumed.Details ?? []);
+        Assert.Equal(FlowUpdateStates.Done, Assert.Single(repository.Harness.OrchestrationStore.ReadFlowUpdates(run)!.Updates).State);
+    }
+
+    /// <summary>
+    /// A set is changed one time by the run's updates, whatever the set's own record holds: a change whose update was
+    /// recorded done before the process ended - and before the set's record held it - is the set's one change, so a
+    /// second change given then is refused, naming the update that holds the first, and nothing more is recorded.
+    /// </summary>
+    [Fact]
+    public async Task AChangeWhoseUpdateIsRecorded_ButNotYetTheSets_IsTheSetsOneChange()
+    {
+        var (repository, service, runner) = await AmendedAsync();
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["request=build the thing"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+
+        _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var unchanged = store.ReadFlowQuestions(run)!;
+        _ = await service.AnswerAsync(repository.Path, "r1", "stay", question: null, text: null, textFile: null, again: true, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        // The process ended once the update was recorded done and before the set's record held the change.
+        store.WriteFlowQuestions(run, unchanged);
+        var first = Assert.Single(store.ReadFlowUpdates(run)!.Updates);
+
+        var second = await service.AnswerAsync(repository.Path, "r1", "stay", question: null, text: null, textFile: null, again: true, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(
+            (HarnessExit.Refused, $"question 'q1' of run 'r1' has its answer changed already - update u1 holds the change, taken at {FlowTimeConverter.Written(first.TakenAt)}; a set is changed one time"),
+            (second.ExitCode, second.Message));
+        Assert.Equal(["u1"], store.ReadFlowUpdates(run)!.Updates.Select(update => update.Id));
+    }
+
+    /// <summary>
     /// A changed answer past its window is refused - naming the answer, when it was given, until when it could be
     /// changed and what time it is - and the answer stands; where the run's plan has begun, the change is taken: the
     /// update is under way, the step the <c>amend</c> block names is raised and plans it with both answers, and the

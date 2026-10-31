@@ -1241,23 +1241,22 @@ public sealed class FlowCoordinator
     private void GoOnWhereTheRunStood()
     {
         // An instance a plan update was bringing to rest when the session before ended goes on being brought to rest:
-        // what was in flight in it ended with that session, stopped for the update - its visit is over, never run
-        // again - and what had not started in it is skipped, so it comes to rest and is visited again in its place.
+        // what was in flight in it ended with that session, and what a pause or a stop stopped in it, each stopped for
+        // the update - its visit is over, never given a new attempt - and what had not started in it is skipped, so it
+        // comes to rest and is visited again in its place.
         foreach (var item in _scopes.Where(scope => scope.EndingFor is not null).ToList())
         {
             var (update, piece) = item.EndingFor!.Value;
 
-            foreach (var cut in item.Members.Values.Where(member => !member.Step.IsGroup && member is { State: FlowInstanceState.Running, FromResume: true }).ToList())
+            foreach (var cut in item.Members.Values.Where(member => !member.Step.IsGroup
+                    && (member is { State: FlowInstanceState.Running, FromResume: true } || member is { State: FlowInstanceState.Stopped, EndedFor: null })).ToList())
             {
-                Release(cut);
-                cut.FromResume = false;
-                cut.EndedFor = update;
-                cut.Error = EndedForWhy(update, piece);
-                End(cut, FlowInstanceState.Stopped, null, cut.Error);
+                var was = cut.State;
+                StopForTheUpdate(cut, update, piece);
 
                 if (cut.Step.Type == "reason" && cut.Handoff is null)
                 {
-                    cut.Handoff = EngineHandoffOf(cut, "the engine's process ended");
+                    cut.Handoff = EngineHandoffOf(cut, was is FlowInstanceState.Running ? "the engine's process ended" : "the run was stopped");
                     Record(FlowChangeKind.Handoff, cut, detail: cut.Handoff.Why);
                 }
             }
@@ -1268,9 +1267,10 @@ public sealed class FlowCoordinator
         // What a pause or a stop stopped, runs again: a new attempt of its visit, as a retry is, its handoff
         // spent. What the pause left owed - the policies of failures recorded while it recorded what it left
         // running - is made now, at the resume, before anything else runs. A visit a plan update stopped is over,
-        // and is never run again.
+        // and is never run again, and nothing in an instance a plan update is bringing to rest, or brought to rest, is.
         foreach (var stopped in _created.Where(instance => !instance.Step.IsGroup
                 && !instance.StoppedForAnUpdate
+                && !EndedForAnUpdateAround(instance)
                 && (instance.State is FlowInstanceState.Stopped || instance.State is FlowInstanceState.Running && instance.FromResume)).ToList())
         {
             var was = stopped.State;
@@ -1373,6 +1373,17 @@ public sealed class FlowCoordinator
         // An issue a triage answered fix for whose recovery was never raised - it waited behind a visit at work, or
         // a crash came between the triage's end and the raise - is given to the recovery now, one at a time.
         DrainPendingFixes();
+
+        // What an update done owes the loop around the round, or the work-item group with no loop around it, is carried
+        // from its entry, as the update's end carries it: a crash between the update's done entry and its carry leaves
+        // it to this session - a loop that ended runs again, and the group is given its round - and what was carried
+        // already is left as it stands.
+        CarryWhatTheLoopsOwe();
+
+        foreach (var done in _updates.Updates.Where(update => update is { State: FlowUpdateStates.Done, AddedIteration: null } && update.ThePieces.Any(piece => piece.IsOwed)).ToList())
+        {
+            AddARoundOwed(done);
+        }
     }
 
     /// <summary>
@@ -1907,6 +1918,11 @@ public sealed class FlowCoordinator
         return FlowHandedOver.Refused;
     }
 
+    /// <summary>How the run took the change handed over under the inbox entry <paramref name="inbox"/>, as its update's entry says it; null where the run holds no update for it.</summary>
+    /// <param name="inbox">The inbox entry's id.</param>
+    public string? TakenAs(string inbox)
+        => _updates.Updates.FirstOrDefault(update => string.Equals(update.Inbox, inbox, StringComparison.Ordinal))?.HowTaken();
+
     /// <summary>Whether the run's records hold what it did with the inbox entry <paramref name="inbox"/>: an answer taken under it, or its refusal.</summary>
     private bool Recorded(string inbox)
         => _refused.Any(refused => string.Equals(refused.Inbox, inbox, StringComparison.Ordinal))
@@ -2170,14 +2186,12 @@ public sealed class FlowCoordinator
             return null;
         }
 
-        var snapshot = Snapshot();
-        return FlowUpdateGates.Refused(
-            _definition,
-            _runName ?? string.Empty,
-            snapshot.Status.ToString(),
-            [.. snapshot.Steps.Select(step => new FlowStepAt(step.Step, step.State.ToString(), step.Group, step.Iteration, step.Index, step.Visit))],
-            cause);
+        return FlowUpdateGates.Refused(_definition, _runName ?? string.Empty, Status.ToString(), StepsAt(), _updates.Updates, cause);
     }
+
+    /// <summary>Every step instance the run holds, as the gates read one: what the gates and the rule of whether a work-item group runs a round more read of this engine's own state.</summary>
+    private IReadOnlyList<FlowStepAt> StepsAt()
+        => [.. _created.Select(instance => new FlowStepAt(instance.Path, instance.State.ToString(), instance.Step.IsGroup, instance.Iteration, instance.Index, instance.Visit))];
 
     /// <summary>
     /// Takes an amendment of the run's request - a person's, handed over through the inbox to this engine or read with
@@ -2358,9 +2372,8 @@ public sealed class FlowCoordinator
             ? $"question '{held.Question}', which update {held.Id} changes the answer of, is not one this run asked"
             : LastAnsweredByAPerson() is { } last && last.Id != set.Id
                 ? $"question '{held.Question}' is not the last a person answered any more: '{last.Id}' is"
-                : set.Given.Any(given => given.ReplacedAt is not null)
-                    ? $"question '{set.Id}' of run '{_runName}' had its answer changed already; a set is changed one time"
-                    : GatesRefused(FlowUpdateCauses.ChangedAnswer);
+                : FlowAnswerRules.ChangedAlready(_runName, set.Id, set.Given.FirstOrDefault(given => given.ReplacedAt is not null)?.ReplacedAt, _updates.Updates, taking: held.Id)
+                    ?? GatesRefused(FlowUpdateCauses.ChangedAnswer);
 
         if (set is null || problem is not null)
         {
@@ -2443,22 +2456,11 @@ public sealed class FlowCoordinator
 
         text = FlowAnswerRules.TextOf(text);
 
-        if (set.Given.Any(given => given.ReplacedAt is { } changed))
+        // A set is changed one time: an update that holds a change of it - queued behind one under way, or done with a
+        // change the set's own record does not hold yet - is its one change, asked for already.
+        if (FlowAnswerRules.ChangedAlready(_runName, set.Id, set.Given.FirstOrDefault(given => given.ReplacedAt is not null)?.ReplacedAt, _updates.Updates) is { } once)
         {
-            problem = $"question '{set.Id}' of run '{_runName}' had its answer changed already, at {FlowTimeConverter.Written(set.Given.First(given => given.ReplacedAt is not null).ReplacedAt!.Value)}; a set is changed one time";
-            return false;
-        }
-
-        if (_updates.Updates.Any(update => update.Cause == FlowUpdateCauses.ChangedAnswer
-                && update.Question == set.Id
-                && update.State is FlowUpdateStates.Queued or FlowUpdateStates.UnderWay))
-        {
-            // A change queued behind an update under way is the set's one change, asked for already: a second waits
-            // with it, and nothing of either is applied until its turn.
-            var asked = _updates.Updates.First(update => update.Cause == FlowUpdateCauses.ChangedAnswer
-                && update.Question == set.Id
-                && update.State is FlowUpdateStates.Queued or FlowUpdateStates.UnderWay);
-            problem = $"question '{set.Id}' of run '{_runName}' has its answer changed already - update {asked.Id} holds the change, taken at {FlowTimeConverter.Written(asked.TakenAt)}; a set is changed one time";
+            problem = once;
             return false;
         }
 
@@ -3693,14 +3695,15 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The piece as it was placed, where the run's records already name the instance it was placed in as this update's
     /// - a session placed it and ended before the update was done - read back from that instance: where it was placed,
-    /// and how it ended where withdrawing it ended it. Null where no instance holds it, and it is placed now.
+    /// and how it ended where withdrawing it ended it. Null where no instance holds it, and it is placed now. An instance
+    /// an earlier update visited again is found as any other: the piece of this update placed against it names this
+    /// update in its record, and the instances an update visits again in its own place are made only once it is done.
     /// </summary>
     /// <param name="update">The update whose plan stands.</param>
     /// <param name="piece">One of its pieces that carries a work item out.</param>
     private FlowUpdatePiece? PlacedAlready(FlowUpdateEntry update, FlowUpdatePiece piece)
     {
         if (_scopes.FirstOrDefault(scope => scope.PieceOf == update.Id
-                && scope.AgainOf is null
                 && scope.GroupInstance is not null
                 && string.Equals(ItemNameOf(scope), piece.ItemName(), StringComparison.Ordinal)) is not { } item)
         {
@@ -4013,12 +4016,19 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// What the instance being brought to rest for an update owed is dropped: a raise whose ending is inside it and a
-    /// redirect whose handler is - they were owed to work that is now done again or taken back.
+    /// What the instance being brought to rest for an update owed is dropped: a raise whose ending is inside it, a
+    /// redirect whose handler is, and the retry a step of it waits for - they were owed to work that is now done again
+    /// or taken back. A step whose retry is dropped ends stopped for the update, never given its next attempt.
     /// </summary>
     /// <param name="item">The item scope of the work-item group being ended for an update.</param>
     private void DropWhatItOwes(Scope item)
     {
+        foreach (var retry in _wakes.Where(wake => !wake.Drain && Inside(wake.Instance, item)).ToList())
+        {
+            _ = _wakes.Remove(retry);
+            StopForTheUpdate(retry.Instance, item.EndingFor!.Value.Update, item.EndingFor!.Value.Piece);
+        }
+
         foreach (var pending in _pendingEndings.Values.Where(pending => Inside(pending.Source, item)).ToList())
         {
             _ = _pendingEndings.Remove(pending.Source.Id);
@@ -4070,6 +4080,54 @@ public sealed class FlowCoordinator
     /// <param name="piece">The piece.</param>
     private static string EndedForWhy(string update, FlowUpdatePiece piece)
         => $"ended for update {update}: its work item '{piece.ItemName()}' is {(piece.Kind == FlowUpdatePieceKinds.Changed ? "done again" : "taken back")}, and another goes on from where it leaves the work";
+
+    /// <summary>The instance of the work-item group a plan update is bringing to rest that <paramref name="instance"/> is a step of, at any depth; null where none is.</summary>
+    private static Scope? BeingEndedAround(FlowInstance instance)
+    {
+        for (var scope = instance.DeclaredScope; scope is not null; scope = scope.Parent)
+        {
+            if (scope.EndingFor is not null)
+            {
+                return scope;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="instance"/> is a step, at any depth, of an instance of the work-item group a plan update is
+    /// bringing to rest or has brought to rest: nothing of such an instance is given a new attempt.
+    /// </summary>
+    private static bool EndedForAnUpdateAround(FlowInstance instance)
+    {
+        for (var scope = instance.DeclaredScope; scope is not null; scope = scope.Parent)
+        {
+            if (scope.EndingFor is not null || scope.GroupInstance is { StoppedForAnUpdate: true })
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Ends <paramref name="member"/>, a step of an instance a plan update is bringing to rest, stopped for the update -
+    /// the one way a step there ends otherwise than done: its visit is over, and it is never given a new attempt, a
+    /// retry, a question or a failure's policy, for its work is done again or taken back in the instance visited in its
+    /// place. The ending owns that rule: the resume, a retry's wake and the step's own answer all end a step there by it.
+    /// </summary>
+    /// <param name="member">The step, in flight, waiting on a retry, or stopped by a pause or a stop.</param>
+    /// <param name="update">The update whose piece ends its instance.</param>
+    /// <param name="piece">The piece.</param>
+    private void StopForTheUpdate(FlowInstance member, string update, FlowUpdatePiece piece)
+    {
+        member.FromResume = false;
+        member.EndedFor = update;
+        member.Error = EndedForWhy(update, piece);
+        End(member, FlowInstanceState.Stopped, null, member.Error);
+    }
 
     /// <summary>
     /// Settles the instances the run is bringing to rest for an update, as the session goes on: each reason step in
@@ -4149,8 +4207,39 @@ public sealed class FlowCoordinator
             var (update, piece) = item.EndingFor!.Value;
             var round = item.LoopOf!;
 
-            // Nothing more of the instance will ever run: each of its declarations not drawn ends skipped, saying why,
-            // and its own group instance ends stopped, ended for the update.
+            // The instance visited again in its place is made and recorded first, and the piece's entry names it, before
+            // the instance brought to rest ends: a crash anywhere between leaves the old instance still being brought to
+            // rest - the session that takes the run up goes on with it - and the visit made again found by what it
+            // visits again, never made twice.
+            var again = _scopes.FirstOrDefault(scope => ReferenceEquals(scope.AgainOf, item));
+
+            if (again is null)
+            {
+                again = NewScope($"{round.Id}[{round.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)}]", round.Path, round.DeclaredScope!, round.Step, FlowValue.Of(piece.Item!.DeepClone()), round.Children.Count, null, round);
+                again.WorkItemKind = piece.Kind;
+                again.Piece = piece;
+                again.PieceOf = update;
+                again.AgainOf = item;
+                round.Children.Add(again);
+                _ = Create(again, round.Step, FlowInstanceState.Running, again.Id);
+                Record(
+                    FlowChangeKind.Step,
+                    again.GroupInstance!,
+                    detail: $"visited again in its place for update {update}: '{piece.ItemName()}', of kind '{piece.Kind}', in '{again.Id}'");
+            }
+
+            // The piece's entry names both: the instance it brought to rest, and the one visited again in its place,
+            // which carries its work out - the step drawn there names itself as what carries it, once drawn.
+            PutUpdatePiece(update, piece.ItemName()!, placed => placed with { Placed = item.GroupInstance!.Id, Again = again.GroupInstance!.Id });
+
+            // Nothing more of the instance will ever run: a step of it a pause or a stop stopped is stopped for the update,
+            // never given a new attempt at a resume; each of its declarations not drawn ends skipped, saying why; and its
+            // own group instance ends stopped, ended for the update.
+            foreach (var stopped in item.Members.Values.Where(member => member is { State: FlowInstanceState.Stopped, EndedFor: null } && !member.Step.IsGroup).ToList())
+            {
+                StopForTheUpdate(stopped, update, piece);
+            }
+
             foreach (var declaration in DeclarationsOf(item).Where(declaration => !item.Instantiated.Contains(declaration.Name)).ToList())
             {
                 _ = Create(item, declaration, FlowInstanceState.Skipped, made: skipped => skipped.SkippedBecause = $"ended for update {update}");
@@ -4159,22 +4248,6 @@ public sealed class FlowCoordinator
             item.GroupInstance!.Error = $"ended for update {update}";
             End(item.GroupInstance, FlowInstanceState.Stopped, null, item.GroupInstance.Error);
             item.EndingFor = null;
-
-            var again = NewScope($"{round.Id}[{round.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)}]", round.Path, round.DeclaredScope!, round.Step, FlowValue.Of(piece.Item!.DeepClone()), round.Children.Count, null, round);
-            again.WorkItemKind = piece.Kind;
-            again.Piece = piece;
-            again.PieceOf = update;
-            again.AgainOf = item;
-            round.Children.Add(again);
-            _ = Create(again, round.Step, FlowInstanceState.Running, again.Id);
-
-            // The piece's entry names both: the instance it brought to rest, and the one visited again in its place,
-            // which carries its work out - the step drawn there names itself as what carries it, once drawn.
-            PutUpdatePiece(update, piece.ItemName()!, placed => placed with { Placed = item.GroupInstance.Id, Again = again.GroupInstance!.Id });
-            Record(
-                FlowChangeKind.Step,
-                again.GroupInstance!,
-                detail: $"visited again in its place for update {update}: '{piece.ItemName()}', of kind '{piece.Kind}', in '{again.Id}'");
             changed = true;
         }
 
@@ -4904,20 +4977,26 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// The round an update added to a work-item group with no loop around it that has not opened yet, by the id of the
-    /// group's visit it will be; null where none waits. An added loop iteration ends in its iteration (<c>#n</c>); a
-    /// round added to a group is a visit of the group (<c>+n</c>).
+    /// group's visit it will be; null where none waits - and none waits where a group around the work-item group draws
+    /// nothing more, for that round never opens (<see cref="FlowUpdateGates.AroundEnded"/>). An added loop iteration ends
+    /// in its iteration (<c>#n</c>); a round added to a group is a visit of the group (<c>+n</c>).
     /// </summary>
     private string? PendingAddedRound()
         => _updates.Updates
             .Select(update => update.AddedIteration)
-            .FirstOrDefault(added => added is not null && !added[(added.LastIndexOf('.') + 1)..].Contains('#', StringComparison.Ordinal) && !_instances.ContainsKey(added));
+            .FirstOrDefault(added => added is not null
+                && !added[(added.LastIndexOf('.') + 1)..].Contains('#', StringComparison.Ordinal)
+                && !_instances.ContainsKey(added)
+                && CurrentRound() is { } round
+                && FlowUpdateGates.AroundEnded(round.Path, StepsAt()) is null);
 
     /// <summary>
     /// Why the plan of <paramref name="update"/> cannot be carried out where it now stands, or null where it can: its work
     /// would be owed to a work-item group whose round has ended with no loop around it - so the group would have to run
-    /// once more for it - and the run has been given every round <c>amend.maxAddedIterations</c> allows. Read once the plan
-    /// stands and before anything is placed, so an update nothing would carry out is given up whole, as one past a loop's
-    /// last round is refused before it is taken; a round another update added and that has not opened yet carries it.
+    /// once more for it - and the group runs no round more (<see cref="FlowUpdateGates.NoRoundMore"/>, the rule the gates
+    /// read too). Read once the plan stands and before anything is placed, so an update nothing would carry out is given
+    /// up whole, as one past a loop's last round is refused before it is taken; a round another update added and that has
+    /// not opened yet carries it.
     /// </summary>
     /// <param name="update">The update whose plan stands, its decided pieces in its entry.</param>
     private string? NoRoundForTheWork(FlowUpdateEntry update)
@@ -4933,15 +5012,13 @@ public sealed class FlowCoordinator
             return null;
         }
 
-        var allowed = _definition.Amend!.AddedIterationsAllowed;
-
-        if (AddedIterationsGiven() < allowed)
+        if (FlowUpdateGates.NoRoundMore(_definition, round.Path, StepsAt(), _updates.Updates) is not { } why)
         {
             return null;
         }
 
         var what = update.Cause == FlowUpdateCauses.ChangedAnswer ? "answer" : "request";
-        return $"its work is owed to '{round.Path}', whose round has ended with no loop around it, and the run has been given the {allowed.ToString(System.Globalization.CultureInfo.InvariantCulture)} round(s) amend.maxAddedIterations allows: nothing would carry it out, the {what} is recorded and no plan holds it";
+        return $"its work is owed to '{round.Path}', whose round has ended with no loop around it, and {why}: nothing would carry it out, the {what} is recorded and no plan holds it";
     }
 
     /// <summary>
@@ -4965,15 +5042,14 @@ public sealed class FlowCoordinator
             return;
         }
 
-        var allowed = _definition.Amend!.AddedIterationsAllowed;
-        var given = AddedIterationsGiven();
-
-        if (given >= allowed)
+        if (FlowUpdateGates.NoRoundMore(_definition, round.Path, StepsAt(), _updates.Updates) is not null)
         {
             // Read before anything was placed (NoRoundForTheWork): an update is never done owing a round it cannot have.
             return;
         }
 
+        var allowed = _definition.Amend!.AddedIterationsAllowed;
+        var given = AddedIterationsGiven();
         var scope = round.DeclaredScope!;
         var visit = scope.Visits.GetValueOrDefault(round.Step.Name) + 1;
         var added = $"{MemberId(scope, round.Step.Name)}+{visit.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
@@ -4988,10 +5064,12 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Lets the schedule draw the work-item group <paramref name="round"/> is a visit of once more, with the check that
-    /// opens its rounds where that check was drawn before the round ended - each drawn again as it was first, so what
-    /// depends on either waits for the new visit - and every group around it that had ended done in progress again until
-    /// it ends again. Made once, however often it is called: a session that takes the run up again after a crash
-    /// between the update's entry and the drawing calls it from the entry.
+    /// opens its rounds and every step between that check and the group - each one the group depends on that depends on
+    /// the check, such as a pause that asks about the check's problems - where each was drawn before the round ended:
+    /// each drawn again as it was first, so the group opens on the new visit of the check, never on the visit before -
+    /// and every group around it that had ended done in progress again until it ends again. Made once, however often it
+    /// is called: a session that takes the run up again after a crash between the update's entry and the drawing calls
+    /// it from the entry.
     /// </summary>
     /// <param name="round">The newest visit of the work-item group, ended.</param>
     /// <param name="update">The update the round is added for.</param>
@@ -4999,12 +5077,13 @@ public sealed class FlowCoordinator
     {
         var scope = round.DeclaredScope!;
 
-        if (OpeningCheckOf(scope, round.Step) is { } check
-            && scope.Members.GetValueOrDefault(check.Name) is { } checkVisit
-            && _created.IndexOf(checkVisit) < _created.IndexOf(round))
+        foreach (var between in OpeningCheckOf(scope, round.Step) is { } check ? PathFrom(scope, check, round.Step) : [])
         {
-            _ = scope.Members.Remove(check.Name);
-            _ = scope.Instantiated.Remove(check.Name);
+            if (scope.Members.GetValueOrDefault(between.Name) is { } visit && _created.IndexOf(visit) < _created.IndexOf(round))
+            {
+                _ = scope.Members.Remove(between.Name);
+                _ = scope.Instantiated.Remove(between.Name);
+            }
         }
 
         if (ReferenceEquals(scope.Members.GetValueOrDefault(round.Step.Name), round))
@@ -5021,6 +5100,43 @@ public sealed class FlowCoordinator
                 around.FinishedAt = null;
                 Record(FlowChangeKind.Step, around, from: FlowInstanceState.Done, to: FlowInstanceState.Running, detail: $"in progress again: update {update} added a round of '{round.Step.Name}'");
             }
+        }
+    }
+
+    /// <summary>
+    /// The declarations of <paramref name="scope"/> on the dependency path from <paramref name="from"/> to
+    /// <paramref name="to"/>: <paramref name="from"/> itself and every step <paramref name="to"/> depends on, through the
+    /// steps it depends on, that itself depends on <paramref name="from"/> the same way.
+    /// </summary>
+    private IReadOnlyList<WorkflowStep> PathFrom(Scope scope, WorkflowStep from, WorkflowStep to)
+    {
+        var declared = DeclarationsOf(scope).ToDictionary(declaration => declaration.Name, StringComparer.Ordinal);
+
+        return [.. declared.Values.Where(declaration => ReferenceEquals(declaration, from)
+            || DependsThrough(declared, to, declaration.Name) && DependsThrough(declared, declaration, from.Name))];
+
+        static bool DependsThrough(IReadOnlyDictionary<string, WorkflowStep> declared, WorkflowStep step, string on)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var waiting = new Stack<string>(step.DependsOn);
+
+            while (waiting.TryPop(out var name))
+            {
+                if (string.Equals(name, on, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                if (seen.Add(name) && declared.TryGetValue(name, out var next))
+                {
+                    foreach (var further in next.DependsOn)
+                    {
+                        waiting.Push(further);
+                    }
+                }
+            }
+
+            return false;
         }
     }
 
@@ -5773,6 +5889,16 @@ public sealed class FlowCoordinator
         if (result.Skills is [_, ..] given)
         {
             instance.Skills = [.. instance.Skills.Concat(given).Distinct()];
+        }
+
+        if (BeingEndedAround(instance) is { EndingFor: { } ending }
+            && (result.Asked is not null || result.Pauses is not null || result.DryRun is not null || result.Limit is not null || result.Checks is not null || !Ends(instance.Step, result).Passed))
+        {
+            // A step of an instance a plan update is bringing to rest that ends otherwise than done - failed with a retry
+            // left or none, asking, or pausing the run - is given no new attempt, no question and no failure's policy:
+            // the instance is over, and its work is done again or taken back in the one visited in its place.
+            StopForTheUpdate(instance, ending.Update, ending.Piece);
+            return;
         }
 
         if (result.Asked is { } asking)
@@ -10345,11 +10471,12 @@ public sealed class FlowCoordinator
                 .Select(declared => scope.Members.GetValueOrDefault(declared.Name))
                 .OfType<FlowInstance>());
 
-    /// <summary>What one instance waits on, where it waits: the question it asked, the resume, or what admission says keeps it - a dependency, the quiet an alone step waits for, a claim, a counter, a redirect, the resume.</summary>
+    /// <summary>What one instance waits on, where it waits: the question it asked, the resume, or what admission says keeps it - a dependency, the quiet an alone step waits for, a claim, a counter, a redirect, the resume. A visit a plan update ended waits on nothing: it never runs again.</summary>
     private static IReadOnlyList<string> WaitsOnOf(FlowInstance instance, IReadOnlyDictionary<FlowInstance, Admission> walk)
         => instance.State switch
         {
             FlowInstanceState.Paused when instance.WaitingQuestion is { } waiting => [waiting],
+            FlowInstanceState.Stopped when instance.StoppedForAnUpdate => [],
             FlowInstanceState.Stopped => [FlowWaits.Resume],
             FlowInstanceState.NotStarted when walk.TryGetValue(instance, out var admission) => admission.WaitsOn,
             _ => [],
@@ -10568,7 +10695,8 @@ public sealed class FlowCoordinator
             {
                 // What updates owe the loop around the round the run reached, read back from the run's own record of
                 // it: each update done that holds a piece owed still, so a loop standing at its iterate point between
-                // two sessions - or ended - runs the iteration the work is owed to.
+                // two sessions runs the iteration the work is owed to, and one that ended runs again for it, carried at
+                // the session's start (GoOnWhereTheRunStood).
                 foreach (var update in _updates.Updates.Where(done => done.State == FlowUpdateStates.Done && done.ThePieces.Any(piece => piece.IsOwed)))
                 {
                     _ = owing.OwedIterationBy.Add(update.Id);

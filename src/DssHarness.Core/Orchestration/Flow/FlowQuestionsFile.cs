@@ -270,6 +270,36 @@ public static class FlowAnswerRules
     public static string? TextOf(string? text) => string.IsNullOrWhiteSpace(text) ? null : text;
 
     /// <summary>
+    /// Why the set <paramref name="set"/> can have its answer changed no more; null where it can. A set is changed one
+    /// time, and the run's plan updates are the authority on it: an update that changes the set's answer - queued, under
+    /// way, done or failed, every one but a refused one, which changed nothing - holds its one change, whether or not the
+    /// set's own record holds the change yet, for a crash may come between the update's entry and the set's record; and a
+    /// set whose own record holds a replaced answer was changed, said with when. The command, and the engine where it
+    /// takes a change and where it takes a queued one up again, hold a change to this one rule.
+    /// </summary>
+    /// <param name="run">The run's name, for the words.</param>
+    /// <param name="set">The set's question id.</param>
+    /// <param name="replacedAt">When the set's own record says its first answer was replaced; null where it says none was.</param>
+    /// <param name="updates">Every plan update the run has taken.</param>
+    /// <param name="taking">The update being taken up again, which is not counted against itself; null for a change being given.</param>
+    public static string? ChangedAlready(string? run, string set, DateTimeOffset? replacedAt, IEnumerable<FlowUpdateEntry> updates, string? taking = null)
+    {
+        ArgumentNullException.ThrowIfNull(updates);
+
+        if (replacedAt is { } changed)
+        {
+            return $"question '{set}' of run '{run}' had its answer changed already, at {FlowTimeConverter.Written(changed)}; a set is changed one time";
+        }
+
+        return updates.FirstOrDefault(update => update.Cause == FlowUpdateCauses.ChangedAnswer
+                && string.Equals(update.Question, set, StringComparison.Ordinal)
+                && update.State != FlowUpdateStates.Refused
+                && !string.Equals(update.Id, taking, StringComparison.Ordinal)) is { } holds
+            ? $"question '{set}' of run '{run}' has its answer changed already - update {holds.Id} holds the change, taken at {FlowTimeConverter.Written(holds.TakenAt)}; a set is changed one time"
+            : null;
+    }
+
+    /// <summary>
     /// The last set a person answered: the question whose newest answer by a person is the newest of all the run's,
     /// answered and standing - the one set a changed answer may change. An answer the configuration or the run's input
     /// gave is no set, and is never counted. Null where no person has answered the run.

@@ -236,7 +236,11 @@ public sealed record FlowNotDelivered(string For, string Why);
 /// <param name="Told">Who was told what, and how: each reason step a piece of the update told, with the way it reached it.</param>
 /// <param name="NotConcerned">Each reason step that was in flight when the pieces were placed and that no piece named: sent nothing.</param>
 /// <param name="NotDelivered">Each told piece that could not be delivered, with why: the work it named had ended, or it is no id of the run.</param>
-/// <param name="AddedIteration">The iteration an update added at a loop's bound, where it added one: the iteration's own id; null where it added none.</param>
+/// <param name="AddedIteration">
+/// What the update added for its work, where it added one: the iteration it added at a loop's bound (<c>rounds#3</c>), or
+/// the round it added to a work-item group with no loop around it - the group's visit that runs it (<c>build.items+2</c>);
+/// null where it added none.
+/// </param>
 public sealed record FlowUpdateEntry(
     string Id,
     string Cause,
@@ -284,6 +288,19 @@ public sealed record FlowUpdateEntry(
     /// <summary>The piece of this update that names the work item <paramref name="name"/>, where one does; null where none does.</summary>
     public FlowUpdatePiece? PieceOf(string name)
         => ThePieces.FirstOrDefault(piece => string.Equals(piece.ItemName(), name, StringComparison.Ordinal));
+
+    /// <summary>
+    /// How the run took this update, as the person who handed it over reads it: queued behind the update under way,
+    /// being planned while the run is held, or done at once where no plan held it yet.
+    /// </summary>
+    public string HowTaken()
+        => State switch
+        {
+            FlowUpdateStates.Queued => $"it is recorded as update {Id}, queued behind the update under way, and planned when that one is done",
+            FlowUpdateStates.UnderWay => $"it is update {Id}, being planned: the run is held while '{Step ?? "the step the amend block names"}' plans it",
+            FlowUpdateStates.Done => $"it is update {Id}, done at once, for no plan held it yet: every step that starts reads the request with its amendments",
+            _ => $"it is update {Id}, {State}",
+        };
 }
 
 /// <summary>The states a plan update stands in.</summary>
@@ -393,13 +410,15 @@ public static class FlowUpdateGates
     /// </summary>
     /// <param name="definition">The definition as the run began with it, whose <c>amend</c> block says what a change passes.</param>
     /// <param name="flow">The run's state in one file, as it stands.</param>
+    /// <param name="updates">The run's plan updates, as they stand; null where it holds none.</param>
     /// <param name="cause">What raises the update: one of <see cref="FlowUpdateCauses"/>'s names, for the words that name it.</param>
-    public static string? Refused(WorkflowDefinition definition, FlowFile flow, string cause)
+    public static string? Refused(WorkflowDefinition definition, FlowFile flow, FlowUpdatesFile? updates, string cause)
         => Refused(
             definition,
             flow.Run,
             flow.Status,
             [.. flow.Steps.Select(step => new FlowStepAt(step.Step, step.State, step.Group, step.Iteration, step.Index, step.Visit))],
+            updates?.Updates ?? [],
             cause);
 
     /// <summary>
@@ -410,8 +429,9 @@ public static class FlowUpdateGates
     /// <param name="run">The run's name.</param>
     /// <param name="status">How the run stands: one of <see cref="FlowRunStatus"/>'s names.</param>
     /// <param name="steps">Every step instance the run holds, as its records read them.</param>
+    /// <param name="updates">Every plan update the run has taken, in the order taken.</param>
     /// <param name="cause">What raises the update: one of <see cref="FlowUpdateCauses"/>'s names, for the words that name it.</param>
-    public static string? Refused(WorkflowDefinition definition, string run, string status, IReadOnlyList<FlowStepAt> steps, string cause)
+    public static string? Refused(WorkflowDefinition definition, string run, string status, IReadOnlyList<FlowStepAt> steps, IReadOnlyList<FlowUpdateEntry> updates, string cause)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
@@ -428,18 +448,17 @@ public static class FlowUpdateGates
             return $"run '{run}' has started '{before}': what it built is being written down, and its plan is no longer changed. Start a run for the {what} once this one has ended";
         }
 
-        return PastItsWorkItems(definition, run, steps, what);
+        return PastItsWorkItems(definition, run, steps, updates, what);
     }
 
     /// <summary>
     /// Why nothing the run could run would carry a change out - the work items of its last round past - where that
     /// is settled by the definition's own bounds; null where it is not. A loop the definition leaves open - an
     /// <c>until</c> with no <c>maxIterations</c> - is never past its work items by this reckoning: what it carries is
-    /// decided where an update is taken. A work-item group with no loop around it runs one round of its own and at
-    /// most the rounds <c>amend.maxAddedIterations</c> lets updates add, each a visit of the group run again for an
-    /// update's work; once the last it may run has ended, it is past its work items as a loop at its bound is.
+    /// decided where an update is taken. A work-item group with no loop around it is past its work items once its newest
+    /// round has ended and it runs no round more (<see cref="NoRoundMore"/>), as a loop at its bound is.
     /// </summary>
-    private static string? PastItsWorkItems(WorkflowDefinition definition, string run, IReadOnlyList<FlowStepAt> steps, string what)
+    private static string? PastItsWorkItems(WorkflowDefinition definition, string run, IReadOnlyList<FlowStepAt> steps, IReadOnlyList<FlowUpdateEntry> updates, string what)
     {
         if (definition.Amend is not { } amend || StepOf(definition, amend.WhenAddScope) is null)
         {
@@ -451,17 +470,15 @@ public static class FlowUpdateGates
 
         if (loopPath is null && group is not null)
         {
-            // The group's own visits, never the instances of its work items: the round it ran, and each run again.
-            var visits = steps.Where(step => step.Group && step.Step == group && step.Index is null).ToList();
-            var runs = 1 + amend.AddedIterationsAllowed;
-
-            if (visits.Count < runs
-                || visits.MaxBy(step => step.Visit) is not { State: nameof(FlowInstanceState.Done) or nameof(FlowInstanceState.Failed) or nameof(FlowInstanceState.Skipped) })
+            // The group's newest visit - never an instance of its work items - is the round a change would join: where
+            // it is still open, the change joins it.
+            if (NewestOf(steps, group) is not { State: nameof(FlowInstanceState.Done) or nameof(FlowInstanceState.Failed) or nameof(FlowInstanceState.Skipped) }
+                || NoRoundMore(definition, group, steps, updates) is not { } why)
             {
                 return null;
             }
 
-            return $"run '{run}' is past the work items of '{group}', which has run {visits.Count.ToString(CultureInfo.InvariantCulture)} round(s), the last it can run (1 of its own, and the {amend.AddedIterationsAllowed.ToString(CultureInfo.InvariantCulture)} that amend.maxAddedIterations lets updates add), with no loop around it: nothing would carry the change out. Start a run for the {what} once this one has ended";
+            return $"run '{run}' is past the work items of '{group}', with no loop around it: its last round has ended, and {why} - nothing would carry the change out. Start a run for the {what} once this one has ended";
         }
 
         if (loopPath is null || StepOf(definition, loopPath) is not { Repeat: { MaxIterations: { } bound } } loop)
@@ -480,6 +497,72 @@ public static class FlowUpdateGates
 
         return $"run '{run}' is past the work items of round {last.ToString(CultureInfo.InvariantCulture)} of '{loop.Name}', the last it can run ({bound.ToString(CultureInfo.InvariantCulture)} by its own bound, and the {amend.AddedIterationsAllowed.ToString(CultureInfo.InvariantCulture)} that amend.maxAddedIterations lets updates add): nothing would carry the change out. Start a run for the {what} once this one has ended";
     }
+
+    /// <summary>
+    /// Why the work-item group at <paramref name="group"/>, which has no loop around it, runs no round more for the work
+    /// of a plan update once its newest round has ended; null where it runs one more. The one owner of that rule: the
+    /// gates read it where a change is given, and the engine where an update's plan stands, where it adds the round and
+    /// where it reads whether a round added waits to open. Such a group runs one round of its own and at most the rounds
+    /// <c>amend.maxAddedIterations</c> lets updates add - counted by the rounds the updates' entries name, never by the
+    /// group's visits, which a redirect adds to as well - and only where every group around it draws again: one still
+    /// open, or one that ended done, which is in progress again for the round. One that ended failed, skipped or never
+    /// run draws nothing more (<see cref="AroundEnded"/>).
+    /// </summary>
+    /// <param name="definition">The definition as the run began with it, whose <c>amend</c> block bounds the rounds.</param>
+    /// <param name="group">The path of the work-item group.</param>
+    /// <param name="steps">Every step instance the run holds.</param>
+    /// <param name="updates">Every plan update the run has taken.</param>
+    public static string? NoRoundMore(WorkflowDefinition definition, string group, IReadOnlyList<FlowStepAt> steps, IReadOnlyList<FlowUpdateEntry> updates)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(updates);
+
+        if (AroundEnded(group, steps) is { } ended)
+        {
+            return ended;
+        }
+
+        var allowed = definition.Amend?.AddedIterationsAllowed ?? 0;
+
+        return updates.Count(update => update.AddedIteration is not null) >= allowed
+            ? $"updates have added the {allowed.ToString(CultureInfo.InvariantCulture)} round(s) amend.maxAddedIterations allows"
+            : null;
+    }
+
+    /// <summary>
+    /// Why a group around the group at <paramref name="group"/> draws nothing more - its newest visit ended failed,
+    /// skipped or never run - so no visit of the group is drawn again in it; null where every one still draws, open or
+    /// ended done.
+    /// </summary>
+    /// <param name="group">The path of the group.</param>
+    /// <param name="steps">Every step instance the run holds.</param>
+    public static string? AroundEnded(string group, IReadOnlyList<FlowStepAt> steps)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        ArgumentNullException.ThrowIfNull(steps);
+
+        for (var around = ParentOf(group); around is not null; around = ParentOf(around))
+        {
+            var said = NewestOf(steps, around)?.State switch
+            {
+                nameof(FlowInstanceState.Failed) => "failed",
+                nameof(FlowInstanceState.Skipped) => "skipped",
+                nameof(FlowInstanceState.NotRun) => "never run",
+                _ => null,
+            };
+
+            if (said is not null)
+            {
+                return $"'{around}', the group around it, ended {said} and draws nothing more";
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The newest visit of the group at <paramref name="group"/> - its own record, never an instance of its work items; null where the run has drawn none.</summary>
+    private static FlowStepAt? NewestOf(IReadOnlyList<FlowStepAt> steps, string group)
+        => steps.Where(step => step.Group && step.Step == group && step.Index is null).Select(step => (FlowStepAt?)step).MaxBy(step => step!.Value.Visit);
 
     /// <summary>
     /// The path of the nearest <c>repeat</c> around the group at <paramref name="groupPath"/>: the loop whose next

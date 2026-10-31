@@ -411,10 +411,11 @@ public sealed class FlowService(
 
             var changes = FlowAnswerRules.TextOf(text);
 
-            // A set is changed one time, and the command says so as it says every other refusal of the run's own.
-            if (set.Answers.Any(answer => answer.ReplacedAt is { } changed))
+            // A set is changed one time - the run's updates the authority, by the one rule the engine holds it to - and
+            // the command says so as it says every other refusal of the run's own.
+            if (FlowAnswerRules.ChangedAlready(run, set.Id, set.Answers.FirstOrDefault(answer => answer.ReplacedAt is not null)?.ReplacedAt, _store.ReadFlowUpdates(layout)?.Updates ?? []) is { } once)
             {
-                return Refuse(layout, AnswerCommand, $"question '{set.Id}' of run '{run}' had its answer changed already, at {FlowTimeConverter.Written(set.Answers.First(answer => answer.ReplacedAt is not null).ReplacedAt!.Value)}; a set is changed one time", json);
+                return Refuse(layout, AnswerCommand, once, json);
             }
 
             // The definition the run began with says whether it takes a changed answer at all; where it does not, the
@@ -617,7 +618,7 @@ public sealed class FlowService(
             ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.FlowFile}' is not there, so run '{layout.Name}' holds no state to weigh an amendment against");
 
         // The gates every change passes, read of the run as it stands; nothing is recorded for one they refuse.
-        if (FlowUpdateGates.Refused(definition, flow, FlowUpdateCauses.Amendment) is { } gate)
+        if (FlowUpdateGates.Refused(definition, flow, _store.ReadFlowUpdates(layout), FlowUpdateCauses.Amendment) is { } gate)
         {
             return Refuse(layout, AmendCommand, gate, json);
         }
@@ -1123,7 +1124,7 @@ public sealed class FlowService(
     {
         var said = new List<string>();
         var inbox = false;
-        var offered = new Dictionary<string, Task<FlowHandedOver>>(StringComparer.Ordinal);
+        var offered = new Offered();
 
         // What the session says before anything else: a dead owner it reclaimed, or what a start could not hold its
         // checkout to.
@@ -1253,12 +1254,12 @@ public sealed class FlowService(
             // or refused and recorded - that the inbox would not let go is said apart, for it was weighed: the run's records
             // hold it under its entry's id, so the next session only empties it from the inbox.
             inbox |= SayUnsettled(layout, offered, said);
-            var settled = offered.Count(pair => pair.Value.IsCompletedSuccessfully);
+            var settled = offered.Where(pair => pair.Value.IsCompletedSuccessfully).Select(pair => pair.Key).ToList();
 
-            if (unemptied is not null && settled > 0)
+            if (unemptied is not null && settled.Count > 0)
             {
                 inbox = true;
-                said.Add($"{ReportText.Counted(settled, "answer")} this session settled could not be emptied from '{layout.InboxFile}': {unemptied}; {(settled == 1 ? "it stays there, and the next session of the run only empties it" : "they stay there, and the next session of the run only empties them")}");
+                said.Add($"{offered.Counted(settled)} this session settled could not be emptied from '{layout.InboxFile}': {unemptied}; {(settled.Count == 1 ? "it stays there, and the next session of the run only empties it" : "they stay there, and the next session of the run only empties them")}");
             }
 
             var flow = _store.ReadFlow(layout)
@@ -1330,7 +1331,7 @@ public sealed class FlowService(
         string command,
         FlowCoordinator coordinator,
         FlowInterrupts? interrupts,
-        Dictionary<string, Task<FlowHandedOver>> offered,
+        Offered offered,
         CancellationToken cancellationToken)
     {
         using var poll = new CancellationTokenSource();
@@ -1359,7 +1360,7 @@ public sealed class FlowService(
     /// at the next; anything else is said, and the run is asked to pause rather than be left with nobody reading what
     /// is asked of it.
     /// </summary>
-    private async Task PollAsync(OrchestratorLayout layout, string command, FlowCoordinator coordinator, Dictionary<string, Task<FlowHandedOver>> offered, CancellationToken cancellationToken)
+    private async Task PollAsync(OrchestratorLayout layout, string command, FlowCoordinator coordinator, Offered offered, CancellationToken cancellationToken)
     {
         var said = new HashSet<string>(StringComparer.Ordinal);
 
@@ -1399,7 +1400,7 @@ public sealed class FlowService(
     /// of an answer and amendment not yet offered offered under its entry's id - which the loop weighs once, never again
     /// where the run's records already hold it.
     /// </summary>
-    private void Tick(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<FlowHandedOver>> offered)
+    private void Tick(OrchestratorLayout layout, FlowCoordinator coordinator, Offered offered)
     {
         switch (_store.TakeStopFile(layout))
         {
@@ -1434,6 +1435,7 @@ public sealed class FlowService(
             if (!offered.ContainsKey(entry.Id))
             {
                 offered[entry.Id] = coordinator.OfferAmendmentAsync(entry.Text, entry.Through ?? AmendCommand, entry.Id, entry.At);
+                _ = offered.Amendments.Add(entry.Id);
             }
         }
     }
@@ -1446,7 +1448,7 @@ public sealed class FlowService(
     /// unsays an answer taken.
     /// </summary>
     /// <returns>How many answers were taken, and how many were read.</returns>
-    private (int Taken, int Seen) LastPoll(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<FlowHandedOver>> offered, List<string> said)
+    private (int Taken, int Seen) LastPoll(OrchestratorLayout layout, FlowCoordinator coordinator, Offered offered, List<string> said)
         => Guarded("asked of the engine as its session ended", said, () =>
         {
             if (_store.TakeStopFile(layout) is { } late)
@@ -1463,7 +1465,7 @@ public sealed class FlowService(
     /// again - and its removal is tried again by the next drive's poller, where the session goes on.
     /// </summary>
     /// <returns>Why the inbox could not be emptied of what the session settled; null where it was.</returns>
-    private string? Empty(OrchestratorLayout layout, Dictionary<string, Task<FlowHandedOver>> offered)
+    private string? Empty(OrchestratorLayout layout, Offered offered)
     {
         try
         {
@@ -1481,17 +1483,45 @@ public sealed class FlowService(
     /// refused start hands back what it weighed - each of which stays in the inbox for the next session of the run.
     /// </summary>
     /// <returns>Whether there was one, so the inbox is named among the session's records.</returns>
-    private static bool SayUnsettled(OrchestratorLayout layout, Dictionary<string, Task<FlowHandedOver>> offered, List<string> said)
+    private static bool SayUnsettled(OrchestratorLayout layout, Offered offered, List<string> said)
     {
-        var handed = offered.Count(pair => !pair.Value.IsCompletedSuccessfully);
+        var handed = offered.Where(pair => !pair.Value.IsCompletedSuccessfully).Select(pair => pair.Key).ToList();
 
-        if (handed == 0)
+        if (handed.Count == 0)
         {
             return false;
         }
 
-        said.Add($"{ReportText.Counted(handed, "answer")} handed to this engine {(handed == 1 ? "was" : "were")} not taken before its session ended; {(handed == 1 ? "it stays" : "they stay")} in '{layout.InboxFile}', and the next session of the run takes {(handed == 1 ? "it" : "them")}");
+        said.Add($"{offered.Counted(handed)} handed to this engine {(handed.Count == 1 ? "was" : "were")} not taken before its session ended; {(handed.Count == 1 ? "it stays" : "they stay")} in '{layout.InboxFile}', and the next session of the run takes {(handed.Count == 1 ? "it" : "them")}");
         return true;
+    }
+
+    /// <summary>
+    /// What a session holds of what was handed to its engine through the inbox, by each entry's id: the answer or the
+    /// amendment offered to the loop, or taken between two drives, with how it was settled - and which of them were
+    /// amendments, so what is said of them names each by what it is.
+    /// </summary>
+    private sealed class Offered : Dictionary<string, Task<FlowHandedOver>>
+    {
+        /// <summary>A session's entries, by their ids, none yet.</summary>
+        public Offered()
+            : base(StringComparer.Ordinal)
+        {
+        }
+
+        /// <summary>The ids of the entries that are amendments of the request; every other is an answer.</summary>
+        public HashSet<string> Amendments { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The entries <paramref name="ids"/> counted by what each is: answers and amendments, each kind named once where any is.</summary>
+        public string Counted(IReadOnlyCollection<string> ids)
+        {
+            var amendments = ids.Count(Amendments.Contains);
+
+            return ReportText.Listed([
+                .. ids.Count - amendments > 0 ? [ReportText.Counted(ids.Count - amendments, "answer")] : Array.Empty<string>(),
+                .. amendments > 0 ? [ReportText.Counted(amendments, "amendment")] : Array.Empty<string>(),
+            ]);
+        }
     }
 
     /// <summary>
@@ -1522,7 +1552,7 @@ public sealed class FlowService(
     /// inbox still holds as the session ends is settled by the run's records, under its entry's id, so the next session
     /// only empties it.
     /// </summary>
-    private void Settle(OrchestratorLayout layout, Dictionary<string, Task<FlowHandedOver>> offered)
+    private void Settle(OrchestratorLayout layout, Offered offered)
     {
         foreach (var (id, offer) in offered.Where(pair => pair.Value.IsCompleted).ToList())
         {
@@ -1532,6 +1562,7 @@ public sealed class FlowService(
             }
 
             _ = offered.Remove(id);
+            _ = offered.Amendments.Remove(id);
         }
     }
 
@@ -1553,7 +1584,7 @@ public sealed class FlowService(
     /// offers it a second time.
     /// </summary>
     /// <returns>How many were taken, and how many were read.</returns>
-    private (int Taken, int Seen) TakeInbox(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<FlowHandedOver>> offered, List<string> said)
+    private (int Taken, int Seen) TakeInbox(OrchestratorLayout layout, FlowCoordinator coordinator, Offered offered, List<string> said)
     {
         var taken = 0;
         var seen = 0;
@@ -1603,7 +1634,7 @@ public sealed class FlowService(
             {
                 case FlowHandedOver.Taken:
                     taken++;
-                    said.Add($"{about} was taken from the inbox: every step that starts reads the request with its amendments");
+                    said.Add($"{about} was taken from the inbox{(coordinator.TakenAs(entry.Id) is { } how ? $": {how}" : string.Empty)}");
                     break;
                 case FlowHandedOver.Refused:
                     said.Add($"{about} was not taken: {problem}");
@@ -1614,6 +1645,7 @@ public sealed class FlowService(
             }
 
             offered[entry.Id] = Task.FromResult(handed);
+            _ = offered.Amendments.Add(entry.Id);
         }
 
         return (taken, seen);

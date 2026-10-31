@@ -723,7 +723,306 @@ public sealed class FlowPlanPiecesTests
                 ],
                 new[] { "rounds.items[0]", "rounds.items[0].build", "rounds.items[0].probe", "rounds.items[0].drop" }.Select(id => (id, steps[id].State, steps[id].EndedFor)));
             Assert.Equal(nameof(FlowInstanceState.Done), steps["rounds.items[1].drop"].State);
+
+            // A visit the update ended waits on nothing - not the resume, for none runs it again - and the run's status
+            // counts it among what ended, never among what is left.
+            Assert.Equal([("rounds.items[0]", 0), ("rounds.items[0].build", 0)], new[] { "rounds.items[0]", "rounds.items[0].build" }.Select(id => (id, steps[id].WaitsOn?.Count ?? 0)));
+            var facts = FlowStatus.Facts(definition, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), UpdatesOf(harness, layout), new FlowEngineState(FlowEngineState.None, null, []), DateTimeOffset.UtcNow);
+            Assert.Equal(StaysEndedLeft, facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
+            Assert.Equal(StaysEndedDone, facts.First(fact => fact.StartsWith("done", StringComparison.Ordinal)));
         }
+    }
+
+    /// <summary>What the status of the run <see cref="AnInstanceEndedForAnUpdate_StaysEnded_AtEverySessionAfter"/> drives says is left: nothing, the visits the update ended among what ended.</summary>
+    private const string StaysEndedLeft = "left      at least 0 step instances, at most 0 step instances (nothing more can come)";
+
+    /// <summary>What the status of that run says is done: every instance, the two the update ended among them.</summary>
+    private const string StaysEndedDone = "done      22 step instances ended; 0.00 USD, 0 tokens spent";
+
+    /// <summary>The flow of <see cref="Flow"/> whose work item is linted beside its build, by a machine step that runs to its own end.</summary>
+    private static string WithLint()
+        => Flow.Replace(
+            "          - name: probe\n",
+            "          - name: lint\n            type: orient\n            dependsOn: [make]\n          - name: probe\n",
+            StringComparison.Ordinal);
+
+    /// <summary>The flow of <see cref="WithLint"/> whose build waits for the lint, so a lint whose retry waits holds the item's work.</summary>
+    private static string LintedFirst()
+        => WithLint().Replace(
+            "            dependsOn: [make]\n            prompt: build.md\n",
+            "            dependsOn: [make, lint]\n            prompt: build.md\n",
+            StringComparison.Ordinal);
+
+    /// <summary>
+    /// A step of an instance a plan update brings to rest that waits on its retry when the piece is placed is never given
+    /// that retry: it ends stopped for the update as the piece is placed, and the instance comes to rest and is visited
+    /// again in its place.
+    /// </summary>
+    [Fact]
+    public async Task AStepWaitingOnItsRetry_InAnInstanceBroughtToRest_IsStoppedForTheUpdate()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(LintedFirst());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var again = Item("one");
+        again["title"] = "The one item, done differently";
+
+        // The first item's lint meets inputs that moved, which the retry table runs again after a wait - on a clock that
+        // never moves, so its retry waits for as long as the test runs; the planning of the update is held until then.
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
+            .On("item-check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = run.Read!["items"]!.ToNode()!.DeepClone(),
+            }))
+            .On("lint", run => run.Instance == "rounds.items[0].lint"
+                ? FlowStepResult.Ended(passed: false, DssHarness.Core.Execution.LegExit.InputsMoved, error: "the inputs moved")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var planned = runner.Hold("planupdate");
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[0].lint").WaitAsync(Bound, Token);
+
+            // The lint's ending reaches the loop before the amendment, which is handed over behind it.
+            await Task.Delay(200, Token);
+            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            await runner.StartedAsync("planning.planupdate").WaitAsync(Bound, Token);
+            planned.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                new JsonArray(Piece("changed", again.DeepClone(), "the one item is done differently")),
+                again)));
+
+            _ = await session.WaitAsync(Bound, Token);
+
+            Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal((nameof(FlowInstanceState.Stopped), "u1", 1), (steps["rounds.items[0].lint"].State, steps["rounds.items[0].lint"].EndedFor, steps["rounds.items[0].lint"].Attempt));
+            Assert.Single(runner.Started, started => started == "rounds.items[0].lint");
+        }
+    }
+
+    /// <summary>
+    /// A step of an instance a plan update is bringing to rest is never given a new attempt: a machine step there that
+    /// fails with a retry left ends stopped for the update rather than waiting on its retry, and the instance comes to
+    /// rest and is visited again in its place.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatFailsInAnInstanceBroughtToRest_IsNeverRetried_AndTheInstanceComesToRest()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(WithLint());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = ChangingOne();
+        var lint = runner.HoldPastItsStop("lint");
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The amendment reaches the session while the item's lint is in flight: the item is brought to rest, and
+            // the lint runs to its own end there - which is a failure the retry table would run again.
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[0].lint").WaitAsync(Bound, Token);
+            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0].probe" && step.State == nameof(FlowInstanceState.Skipped)));
+
+            lint.TrySetResult(FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, error: "the linter was cut off"));
+            _ = await session.WaitAsync(Bound, Token);
+
+            // The lint ended stopped for the update at its first attempt, and the instance visited again asks.
+            Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal((nameof(FlowInstanceState.Stopped), "u1", 1), (steps["rounds.items[0].lint"].State, steps["rounds.items[0].lint"].EndedFor, steps["rounds.items[0].lint"].Attempt));
+            Assert.Single(runner.Started, started => started == "rounds.items[0].lint");
+
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+        }
+    }
+
+    /// <summary>
+    /// A step a stop stopped in an instance a plan update is bringing to rest is not run again at the resume: it ends
+    /// stopped for the update, the instance comes to rest, and the session visits it again in its place.
+    /// </summary>
+    [Fact]
+    public async Task AStepAStopStoppedInAnInstanceBroughtToRest_IsNotRunAgainAtTheResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(WithLint());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = ChangingOne();
+        _ = runner.Hold("lint");
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The item is being brought to rest, its lint in flight, when the run is stopped.
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[0].lint").WaitAsync(Bound, Token);
+            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0].probe" && step.State == nameof(FlowInstanceState.Skipped)));
+
+            coordinator.RequestStop();
+            var stopped = await session.WaitAsync(Bound, Token);
+            Assert.True(FlowRunStatus.Stopped == stopped.Status, stopped.Summary);        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var resumedRunner = ChangingOne();
+
+        using (again)
+        {
+            var resumed = CoordinatorOf(definition, resumedRunner, again, harness, layout, ResumeOf(harness, layout, definition));
+            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal("rounds.items[1].probe", resumed.OpenQuestions.Single().Instance);
+            Assert.DoesNotContain("rounds.items[0].lint", resumedRunner.Started);
+
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal((nameof(FlowInstanceState.Stopped), "u1"), (steps["rounds.items[0].lint"].State, steps["rounds.items[0].lint"].EndedFor));
+            Assert.Equal((nameof(FlowInstanceState.Stopped), "u1"), (steps["rounds.items[0]"].State, steps["rounds.items[0]"].EndedFor));
+        }
+    }
+
+    /// <summary>
+    /// A crash after the instance visited again in the place of one brought to rest is made, before its entry names it,
+    /// loses nothing: the instance brought to rest is still being brought to rest at the resume, the visit made again is
+    /// found by what it visits again - never made twice - and the piece's entry names it.
+    /// </summary>
+    [Fact]
+    public async Task ACrashOnceTheVisitMadeAgainIsMade_BeforeTheOldInstanceEnds_LosesNothing()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse();
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = ChangingOne();
+        _ = runner.Hold("build");
+        var crashing = new CrashingRecords(records, updates => updates.Updates.Any(update => update.ThePieces.Any(piece => piece.Again is not null)), lands: false);
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, crashing, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[0].build");
+            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            _ = await session.WaitAsync(Bound, Token);
+            Assert.True(crashing.Ended);
+        }
+
+        // On disk: the old instance still being brought to rest, and its piece's entry naming no visit made again.
+        Assert.Null(UpdatesOf(harness, layout).Updates.Single().ThePieces.Single().Again);
+        var before = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "rounds.items[0]");
+        Assert.Equal((nameof(FlowInstanceState.Running), "u1"), (before.State, before.EndedFor));
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = CoordinatorOf(definition, ChangingOne(), again, harness, layout, ResumeOf(harness, layout, definition));
+            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal("rounds.items[1].probe", resumed.OpenQuestions.Single().Instance);
+            Assert.True(resumed.TryAnswer(resumed.OpenQuestions.Single().Id, "go", null, out _));
+            var end = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            var piece = UpdatesOf(harness, layout).Updates.Single().ThePieces.Single();
+            Assert.Equal(("rounds.items[0]", "rounds.items[1]", "rounds.items[1].build", "done"), (piece.Placed, piece.Again, piece.CarriedBy, piece.Ended));
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps;
+            Assert.Equal((nameof(FlowInstanceState.Stopped), "u1"), steps.Where(step => step.Instance == "rounds.items[0]").Select(step => (step.State, step.EndedFor)).Single());
+            Assert.DoesNotContain(steps, step => step.Instance == "rounds.items[2]");
+        }
+    }
+
+    /// <summary>
+    /// Placing the pieces of a second update is made once from its entry, however often it is called, against an
+    /// instance an earlier update visited again too: a crash after the second update brought that instance to rest, and
+    /// before it was done, leaves the instance its own - the resume neither withdraws it as never begun nor makes another
+    /// work item for the piece - and it comes to rest and is visited again for the second update's piece.
+    /// </summary>
+    [Fact]
+    public async Task ASecondUpdateAgainstAnInstanceVisitedAgain_IsPlacedOnce_AcrossACrash()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse();
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var crashing = new CrashingRecords(records, updates => updates.Updates.Any(update => update.Id == "u2" && update.State == FlowUpdateStates.Done), lands: false);
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, ChangingThenRemovingOne(), crashing, harness, layout);
+
+            // To the first item's probe; the first update changes it, and it is visited again.
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("the one item is different", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            _ = await coordinator.RunAsync(Token);
+            Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
+
+            // The second update takes the item back while the visit made again is begun, and the process ends before
+            // the update is done.
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("leave the one item out", "amend-orchestrator-request", out problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.True(crashing.Ended);
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = CoordinatorOf(definition, ChangingThenRemovingOne(), again, harness, layout, ResumeOf(harness, layout, definition));
+            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+
+            // The instance the second update brought to rest is visited again for its piece, which takes the work back.
+            var asked = resumed.OpenQuestions.Single();
+            Assert.Equal(("rounds.items[2].probe", "removed|the one item is taken back"), (asked.Instance, string.Join('|', asked.Problem.Split('|')[..2])));
+            Assert.True(resumed.TryAnswer(asked.Id, "go", null, out _));
+            var end = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            var piece = UpdatesOf(harness, layout).Updates.Single(update => update.Id == "u2").ThePieces.Single();
+            Assert.Equal(("removed", "rounds.items[1]", "rounds.items[2]", "rounds.items[2].build", "done"), (piece.Kind, piece.Placed, piece.Again, piece.CarriedBy, piece.Ended));
+
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal((nameof(FlowInstanceState.Stopped), "u2"), (steps["rounds.items[1]"].State, steps["rounds.items[1]"].EndedFor));
+            Assert.Equal("rounds.items.withdraw", steps["rounds.items[2].build"].Step);
+            Assert.DoesNotContain("rounds.items[3]", steps.Keys, StringComparer.Ordinal);
+        }
+    }
+
+    /// <summary>The runner of <see cref="Flow"/> whose planner concludes "one", whose first update changes it and whose second takes it back.</summary>
+    private static FakeRunner ChangingThenRemovingOne()
+    {
+        var again = Item("one");
+        again["title"] = "The one item, done differently";
+        var updates = 0;
+
+        return ChangingOne()
+            .On("planupdate", _ => Interlocked.Increment(ref updates) == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(new JsonArray(Piece("changed", again.DeepClone(), "the one item is done differently")), again.DeepClone()))
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(new JsonArray(Piece("removed", again.DeepClone(), "the one item is taken back")))));
     }
 
     /// <summary>

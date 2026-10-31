@@ -152,6 +152,27 @@ public sealed class FlowPlanToldTests
             StringComparison.Ordinal);
 
     /// <summary>
+    /// The flow of <see cref="Ended"/> whose round of work items hands a failure to the group around it, and that group
+    /// passes it over, so a round whose work item failed fails the group around it too and the run goes on.
+    /// </summary>
+    private static string AroundPassesOver()
+        => Ended().Replace(
+            "  - name: rounds\n    dependsOn: [planning]\n    steps:",
+            "  - name: rounds\n    dependsOn: [planning]\n    onFailure: continue\n    steps:",
+            StringComparison.Ordinal);
+
+    /// <summary>
+    /// The flow of <see cref="Ended"/> whose round opens through the three steps the shipped implementation workflow
+    /// opens one through: the check, a pause asked only where the check found problems, and the work-item group, which
+    /// depends on that pause.
+    /// </summary>
+    private static string ThroughAPause()
+        => Ended().Replace(
+            "      - name: items\n        dependsOn: [item-check]\n",
+            "      - name: item-problems\n        type: pause\n        dependsOn: [item-check]\n        when: '!item-check.ok'\n        question: problems?\n        options: [continue]\n      - name: items\n        dependsOn: [item-problems]\n",
+            StringComparison.Ordinal);
+
+    /// <summary>
     /// The flow of <see cref="Flow"/> whose round of work items sits in a repeat that runs three iterations, each
     /// ending at a review after its work items, where a plan update finds the round of the iteration ended and the loop
     /// still running, below its bound.
@@ -937,8 +958,7 @@ public sealed class FlowPlanToldTests
             _ = FlowReports.Write(harness.FileSystem, layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), end.Summary, 0, DateTimeOffset.UtcNow, harness.OrchestrationStore.ReadFlowUpdates(layout));
             var report = File.ReadAllText(layout.ReportFile);
 
-            Assert.Contains("- added 'three': carried out by 'rounds#2.items[1].build', done", report, StringComparison.Ordinal);
-            Assert.Contains("- round 2 of 'rounds' was added for update u1", report, StringComparison.Ordinal);
+            Assert.Equal(LoopReport, UpdatesSectionOf(report));
 
             var listed = OrchestrationReports.List(
                 [new OrchestratorInventory(
@@ -953,8 +973,7 @@ public sealed class FlowPlanToldTests
                 json: false);
 
             // The listing says the iteration added, and the piece - ended - is not among what it holds open.
-            Assert.Contains(listed.Details ?? [], line => line.Contains("round 2 of 'rounds' was added for update u1", StringComparison.Ordinal));
-            Assert.DoesNotContain(listed.Details ?? [], line => line.Contains("piece added 'three'", StringComparison.Ordinal));
+            Assert.Equal(["  plan update u1 (amendment): done", "    round 2 of 'rounds' was added for update u1"], UpdateLinesOf(listed));
         }
     }
 
@@ -1265,8 +1284,7 @@ public sealed class FlowPlanToldTests
             _ = FlowReports.Write(harness.FileSystem, layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), end.Summary, 0, DateTimeOffset.UtcNow, harness.OrchestrationStore.ReadFlowUpdates(layout));
             var report = File.ReadAllText(layout.ReportFile);
 
-            Assert.Contains("- added 'three': carried out by 'rounds.items+2[0].build', done", report, StringComparison.Ordinal);
-            Assert.Contains("- round 2 of 'rounds.items' was added for update u1\n", report.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+            Assert.Equal(GroupReport, UpdatesSectionOf(report));
 
             var listed = OrchestrationReports.List(
                 [new OrchestratorInventory(
@@ -1280,24 +1298,28 @@ public sealed class FlowPlanToldTests
                 questions: false,
                 json: false);
 
-            Assert.Contains("    round 2 of 'rounds.items' was added for update u1", listed.Details ?? []);
+            Assert.Equal(["  plan update u1 (amendment): done", "    round 2 of 'rounds.items' was added for update u1"], UpdateLinesOf(listed));
         }
     }
 
     /// <summary>
     /// A round of a work-item group with no loop around it that failed under an update - its failure passed over, so the
     /// run goes on - has ended as a round that ended done has: the work the update owes it is carried by a round added
-    /// where <c>amend.maxAddedIterations</c> allows one, and where the run has none left to add the update is given up
-    /// with why, every piece it decided saying it was never carried out, and nothing of it placed.
+    /// where <c>amend.maxAddedIterations</c> allows one. Where the run has none left to add, or the round's failure failed
+    /// the group around it too - which draws nothing more, so no round of the group is drawn again - the update is given
+    /// up with why, every piece it decided saying it was never carried out, and nothing of it placed or added.
     /// </summary>
+    /// <param name="aroundFails">Whether the round's failure is passed over by the group around it, which it fails, rather than by the work-item group itself.</param>
     /// <param name="allowed">The rounds <c>amend.maxAddedIterations</c> lets updates add.</param>
+    /// <param name="why">Why the update is given up; null where a round is added for it.</param>
     [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    public async Task WorkOwedToAGroupWhoseRoundFailedUnderTheUpdate_IsCarriedByARoundAdded_OrGivenUpWhereNoneIsLeft(int allowed)
+    [InlineData(false, 0, "its work is owed to 'rounds.items', whose round has ended with no loop around it, and updates have added the 0 round(s) amend.maxAddedIterations allows: nothing would carry it out, the request is recorded and no plan holds it")]
+    [InlineData(false, 1, null)]
+    [InlineData(true, 1, "its work is owed to 'rounds.items', whose round has ended with no loop around it, and 'rounds', the group around it, ended failed and draws nothing more: nothing would carry it out, the request is recorded and no plan holds it")]
+    public async Task WorkOwedToAGroupWhoseRoundFailedUnderTheUpdate_IsCarriedByARoundAdded_OrGivenUpWhereNoneIsLeft(bool aroundFails, int allowed, string? why)
     {
         using var temp = new TempDirectory();
-        var parsed = Parse(PassedOver());
+        var parsed = Parse(aroundFails ? AroundPassesOver() : PassedOver());
         var definition = parsed with { Amend = parsed.Amend! with { MaxAddedIterations = allowed } };
         var (harness, layout, records) = Records("r1", temp.Path, definition);
         var built = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1328,7 +1350,7 @@ public sealed class FlowPlanToldTests
             built.TrySetResult(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed));
 
             await runner.StartedAsync("planning.planupdate").WaitAsync(Bound, Token);
-            await RoundEndedAsync(harness, layout, nameof(FlowInstanceState.Failed));
+            await EndedAsync(harness, layout, aroundFails ? "rounds" : "rounds.items", nameof(FlowInstanceState.Failed));
 
             // The plan stands once the round has ended.
             planned.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
@@ -1344,13 +1366,11 @@ public sealed class FlowPlanToldTests
             var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
             var events = FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Where(written => written.Kind == "iterationAdded").Select(written => written.Detail);
 
-            if (allowed == 0)
+            if (why is not null)
             {
                 // Nothing would carry the work out: the update is given up with why, its piece never carried out, and
                 // no round added.
-                Assert.Equal(
-                    (FlowUpdateStates.Failed, "its work is owed to 'rounds.items', whose round has ended with no loop around it, and the run has been given the 0 round(s) amend.maxAddedIterations allows: nothing would carry it out, the request is recorded and no plan holds it", (string?)null),
-                    (update.State, update.Why, update.AddedIteration));
+                Assert.Equal((FlowUpdateStates.Failed, why, (string?)null), (update.State, update.Why, update.AddedIteration));
                 Assert.Equal(
                     [("added", "three", (string?)null, (string?)null, "never carried out: its update was given up")],
                     update.ThePieces.Select(piece => (piece.Kind, piece.ItemName()!, piece.OwedTo, piece.Placed, piece.Ended)));
@@ -1427,6 +1447,177 @@ public sealed class FlowPlanToldTests
     }
 
     /// <summary>
+    /// A round added to a work-item group with no loop around it opens through the real plan check: the check is handed
+    /// the owed work beside the round's own items and answers them as one list, and the round built from that list
+    /// carries the owed work alone - the items the round before built are not built again.
+    /// </summary>
+    [Fact]
+    public async Task ARoundAdded_OpensThroughTheRealPlanCheck_OnTheOwedWorkAlone()
+    {
+        var harness = new HarnessFactory();
+        using var repository = new TempDirectory();
+        repository.WriteFile("file.txt", "content\n");
+        await harness.InitializeHarnessAsync(repository.Path, Token);
+        await harness.CommitAllAsync(repository.Path, "initial", Token);
+
+        var definition = Parse(Ended());
+        var layout = OrchestratorLayout.Of(new HarnessLayout(repository.Path, repository.Path), "r1");
+        var check = new PlanCheckRunner(harness.ContextLoader, harness.Platform, new PlanValidator(harness.FileSystem, harness.PathBudget, harness.Platform));
+        var checks = new List<(string Instance, string Owed)>();
+
+        // The check that opens the round is the real one, run where the run's repository is.
+        var runner = AddingThree([])
+            .OnAsync("item-check", async (run, cancellationToken) =>
+            {
+                var owed = run.Read!.TryGetValue("owed", out var owing) && !owing!.IsMissing ? (owing.ToNode() as JsonArray)! : new JsonArray();
+
+                lock (checks)
+                {
+                    checks.Add((run.Instance, string.Join(",", owed.Select(FlowWorkItems.NameOf))));
+                }
+
+                return await check.RunAsync(run with { Place = new FlowRunPlace(repository.Path, "r1", null, definition) }, cancellationToken).ConfigureAwait(false);
+            });
+
+        using var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+        _ = await coordinator.RunAsync(Token);
+        Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+        var audit = await UntilAskedAsync(coordinator, "anything else?");
+
+        Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+        Assert.True(coordinator.TryAnswer(audit.Id, "go", null, out _));
+
+        var end = await DriveAsync(coordinator);
+        Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+        Assert.Equal([("rounds.item-check", string.Empty), ("rounds.item-check+2", "three")], checks);
+        var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+        Assert.Equal(["one", "two", "three"], ((steps["rounds.item-check+2"].Output?["items"] as JsonArray) ?? []).Select(FlowWorkItems.NameOf));
+        Assert.Equal(
+            [("rounds.items+2[0].build", "three"), ("rounds.items[0].build", "one"), ("rounds.items[1].build", "two")],
+            steps.Values
+                .Where(step => step.Step == "rounds.items.build" && step.State == nameof(FlowInstanceState.Done))
+                .Select(step => (step.Instance, FlowWorkItems.NameOf(step.Item)))
+                .OrderBy(built => built.Instance, StringComparer.Ordinal));
+        Assert.Equal(("rounds.items+2[0]", "done"), (UpdatesOf(harness, layout).Updates.Single().ThePieces.Single().Placed, UpdatesOf(harness, layout).Updates.Single().ThePieces.Single().Ended));
+    }
+
+    /// <summary>
+    /// A round added to a work-item group that opens through a step between its check and the group - the pause the
+    /// shipped implementation workflow asks only where the check found problems - opens on the check's new visit: the
+    /// check and every step between are drawn again, so the group waits for the new check, never expanding from the
+    /// visit before or from one that has not run.
+    /// </summary>
+    [Fact]
+    public async Task ARoundAddedThroughAStepBetweenTheCheckAndTheGroup_OpensOnTheChecksNewVisit()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(ThroughAPause());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var checks = new List<(string Instance, string Owed)>();
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, AddingThree(checks), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var audit = await UntilAskedAsync(coordinator, "anything else?");
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(audit.Id, "go", null, out _));
+
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            var piece = UpdatesOf(harness, layout).Updates.Single().ThePieces.Single();
+            Assert.Equal(("rounds.items+2[0]", "rounds.items+2[0].build", "done"), (piece.Placed, piece.CarriedBy, piece.Ended));
+            Assert.Equal([("rounds.item-check", string.Empty), ("rounds.item-check+2", "three")], checks);
+
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal(
+                [("rounds.item-problems", nameof(FlowInstanceState.Skipped)), ("rounds.item-problems+2", nameof(FlowInstanceState.Skipped)), ("rounds.items+2", nameof(FlowInstanceState.Done))],
+                new[] { "rounds.item-problems", "rounds.item-problems+2", "rounds.items+2" }.Select(id => (id, steps[id].State)));
+        }
+    }
+
+    /// <summary>
+    /// A crash once an update is done and before what it owes is carried loses nothing: the session that takes the run
+    /// up carries it from the update's entry - a loop around the round that ended runs again for it, and a work-item
+    /// group with no loop around it is given its round - and the owed work is built.
+    /// </summary>
+    /// <param name="looped">Whether the round sits in a loop that ended done, rather than in no loop at all.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACrashOnceTheUpdateIsDone_BeforeWhatItOwesIsCarried_IsCarriedByTheResume(bool looped)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(looped ? EndedLoop() : Ended());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var crashing = new CrashingRecords(records, updates => updates.Updates.Any(update => update.State == FlowUpdateStates.Done));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, AddingThree([]), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var audit = await UntilAskedAsync(coordinator, "anything else?");
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(audit.Id, "go", null, out _));
+            _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.True(crashing.Ended);
+        }
+
+        // On disk: the update done, its piece owed, and nothing carried.
+        var done = UpdatesOf(harness, layout).Updates.Single();
+        Assert.Equal((FlowUpdateStates.Done, (string?)null, true), (done.State, done.AddedIteration, done.ThePieces.Single().IsOwed));
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = new FlowCoordinator(definition, AddingThree([]), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            var end = await DriveAsync(resumed);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            var piece = UpdatesOf(harness, layout).Updates.Single().ThePieces.Single();
+            Assert.Equal((looped ? "rounds#2.items[2]" : "rounds.items+2[0]", "done"), (piece.Placed, piece.Ended));
+        }
+    }
+
+    /// <summary>The report's plan-update section, line by line: every line under its heading, to the blank line that ends it.</summary>
+    private static List<string> UpdatesSectionOf(string report)
+        => [.. report.ReplaceLineEndings("\n").Split('\n').SkipWhile(line => line != "## Plan updates").Skip(1).TakeWhile(line => line.Length > 0)];
+
+    /// <summary>The listing's lines of the run's plan updates: from the first update's line to the last line the run's entry holds.</summary>
+    private static List<string> UpdateLinesOf(CommandOutcome listed)
+        => [.. (listed.Details ?? []).SkipWhile(line => !line.StartsWith("  plan update ", StringComparison.Ordinal))];
+
+    /// <summary>What the report says of the update that added an iteration to the loop at its bound.</summary>
+    private static readonly List<string> LoopReport =
+    [
+        "- u1 (amendment), taken at 2026-09-30 16:32:14: done",
+        "  > add the registry too",
+        "  - added 'three': carried out by 'rounds#2.items[1].build', done",
+        "  - round 2 of 'rounds' was added for update u1",
+    ];
+
+    /// <summary>What the report says of the update that added a round to the group with no loop around it.</summary>
+    private static readonly List<string> GroupReport =
+    [
+        "- u1 (amendment), taken at 2026-09-30 16:32:14: done",
+        "  > add the registry too",
+        "  - added 'three': carried out by 'rounds.items+2[0].build', done",
+        "  - round 2 of 'rounds.items' was added for update u1",
+    ];
+
+    /// <summary>
     /// The runner of <see cref="Ended"/> whose planner concludes <paramref name="plan"/> - "one" and "two" where it says
     /// none - and whose update adds "three"; every check answers the one list it is handed, and the check that opens the
     /// round notes in <paramref name="checks"/> the names of the owed work it was handed.
@@ -1462,19 +1653,19 @@ public sealed class FlowPlanToldTests
                 });
             });
 
-    /// <summary>Waits, bounded as a session is, until the round of the work-item group stands ended in <paramref name="state"/> in the run's records.</summary>
-    private static async Task RoundEndedAsync(HarnessFactory harness, OrchestratorLayout layout, string state)
+    /// <summary>Waits, bounded as a session is, until the instance <paramref name="instance"/> stands ended in <paramref name="state"/> in the run's records.</summary>
+    private static async Task EndedAsync(HarnessFactory harness, OrchestratorLayout layout, string instance, string state)
     {
         for (var at = 0; ; at++)
         {
-            if (harness.OrchestrationStore.ReadFlow(layout)?.Steps.FirstOrDefault(step => step.Instance == "rounds.items") is { State: var held } && held == state)
+            if (harness.OrchestrationStore.ReadFlow(layout)?.Steps.FirstOrDefault(step => step.Instance == instance) is { State: var held } && held == state)
             {
                 return;
             }
 
             if (at > 3000)
             {
-                throw new TimeoutException($"the round never ended {state}");
+                throw new TimeoutException($"'{instance}' never ended {state}");
             }
 
             await Task.Delay(10, Token);
