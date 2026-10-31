@@ -1426,7 +1426,7 @@ refused in any other where the file is read; a pull request's `base` reads nothi
 inputs and `run.name`, one base for every pull request; and a prompt's own placeholders - a reason
 step's `prompt` and `resumePrompt`, a pull request's `body` - are read as the step reads, each said at
 its line, the iteration before only in a `resumePrompt`. A skill a prompt names is looked for by
-the skills' own lookup (`AgentSkills`, part 03's "Skills in a prompt"): the first of the three
+the skills' own lookup (`AgentSkills`): the first of the three
 places that has the folder decides, a `SKILL.md` that is there and cannot be used is refused
 without falling to the next, its `allowed-tools` held to the one table of Claude Code's tools and
 the step's agent's capabilities - the capabilities of the definition the step works by, its own or
@@ -2038,7 +2038,7 @@ The coordinator deletes the read-only agent once no step can go on with its work
 over the declarations that resume its maker and the instances drawn of them, each agent once - `_deletedAgents` - through
 the `deleteAgent` the service wires to `IAgentService.DeleteAsync`, which writes a refusal and a throw alike in the
 agent's log and takes an agent with no record as deleted already).
-The key a step starts on is chosen with the order (`balanceKeyUsage`, value 425): the resolution's entries built by
+The key a step starts on is chosen with the order (`balanceKeyUsage`): the resolution's entries built by
 `AgentStepOrder.Of` keep the list's order, or - where the configuration balances the keys - each model's keys run by
 least spent in the last seven days (a tie in the list's order, for `OrderBy` keeps it), the week read by
 `Agents\AgentKeySpend.cs` from `.orchestrators/key-spend.jsonl` - the repository's records across runs, one line for
@@ -2082,7 +2082,7 @@ the attempt can be handed, `FlowStepResult.StoredConversation`) grants the bound
 `compact` begins a new one from the engine's reduction of the stream so far (`AgentCompaction.Reduce`), and `retry`
 begins a new attempt given the engine's one-line handoff (`FlowHandoff.ByEngine`, written before the question is
 raised).
-The asking the engine does itself (slice 31b2): the repository's bar for a recommendation is read by
+The asking the engine does itself: the repository's bar for a recommendation is read by
 `{recommendations}` - `FlowCoordinator.BarOf`, the orchestrator's `recommendations` file or its folder's own
 `recommendations.md` through the run's workflow-file seam, read live each time it is given so a change holds from the
 next question on, and a sentence naming the orchestrator where the folder has no bar. A `pause` step's `questions`
@@ -2093,7 +2093,7 @@ answer answers them together. What the person gave the run answers first (`Answe
 `preAnswer` entry whose `when` holds answers at once by the one answer path with `by: input` and the values its when
 read, and an entry that quotes words holds only where they are not empty and stand in the input they are said to be of
 (`StandsIn`, every run of white space compared as one space) - reported words the input does not hold answer nothing,
-the event log says so, and the person is asked. The advisor is built too (slice 31b3): before a person is left with a
+the event log says so, and the person is asked. The advisor: before a person is left with a
 question the engine raises itself, `FlowCoordinator.SeekAdvice` runs the orchestrator's `advisor` block through
 `IFlowAdvisorRunner` (`Runners\AdvisorRunner.cs`) - one reason step that only reads, wherever the asking step works,
 its model resolved and its order built as a step's is, its records and its own conversations under `advice/<n>/` of
@@ -2122,7 +2122,7 @@ while the run was pausing or stopping - is sought once the session is known to g
 `MakeTheHold`), never by a resume refused. No advisor named, the question says so plainly; a kind only a person or an
 agent answers (`runBudget`, `ask`), a `pause` step's own shown questions, one its `preAnswer` answers (weighed before
 the advisor is sought), and a kind the advisor's `kinds` leaves out, are never advised.
-The handoff, the checks and the stream's account (slice 31c): where an agent gave no handoff of its own - the pause's
+The handoff, the checks and the stream's account: where an agent gave no handoff of its own - the pause's
 turn gave none, a limit ended its run, or a resume found the attempt cut off by a crash or a stop - the engine writes
 one from the stored stream of the step (`FlowCoordinator.EngineHandoffOf` over `IFlowStreamAccount`, routed by
 `FlowStepRunners` to the reason step runner): its first line says why (`FlowHandoff.ByEngine`), and its body is
@@ -2133,12 +2133,11 @@ word for word, as many as the continuation record keeps - beside the steps befor
 never by path; where the stream holds nothing the handoff stands on its first line alone. A reason step's `writes` given
 as an expression is read where the step starts (`ReadAtStart`'s `writes` key, `FlowList` replaced by the names it
 yielded, none refused for an empty list would read as no narrowing), and narrows the ground as a written-out list does.
-The continuation record says the truth of it now: each step of the chain as its own record states it ended
+The continuation record says each step of the chain as its own record states it ended
 (`ReasonStepRunner.EndedOf`), the files changed the paths this agent's folds wrote into the main tree (`FoldLedger`)
 and the paths its worktree holds that no fold has taken (`AgentFold.WeighedAsync`, the fold's own rule of what an
 agent's change is, opened to the record), and the red legs of the agent's newest red build or test with where the
-copied ledger and its logs are (`ReasonStepRunner.RedLegsOf` over the run's own index). The first real run through
-Claude Code straightened four seams no fake had met: the engine stores the agent it names for a read-only step as the
+copied ledger and its logs are (`ReasonStepRunner.RedLegsOf` over the run's own index). The engine stores the agent it names for a read-only step as the
 one the step works in, so the runner makes it on that name (`ReasonStepRunner`'s making, `CreateAgentRunner.MakeAsync`
 answering a live one as already made); the run places the step's records under the agent's directory before the agent
 is made, so `AgentService.CreateAsync` makes an agent in a directory that holds only what a run keeps there; the
@@ -2146,10 +2145,8 @@ program a launch starts is found ready where the step starts (`ClaudeCodeUpdateS
 reason step runner, its answer carrying the program and the version it answered; a step's mask holding every form of
 each web-search key it was given, built of `Runners.ActionValues`); and the agent's scratch is the run's own
 `work/<agent>/` (`OrchestratorLayout.WorkDirectory`), where the child is started and the continuation's copies and
-skills are put. The run itself - a real Claude Code launch over the person's login - ended in the designed safe pause
-of the cause `limits` over the account's own seven-day allowance, its handoff written from the stream, records under
-`.temp\` (never in the suite).
-The two acts of a plan update and their record are built (slice 31d1): `amend-orchestrator-request <run> "<text>"`
+skills are put.
+The two acts of a plan update and their record: `amend-orchestrator-request <run> "<text>"`
 amends the request a run was started with and `answer-orchestrator <run> <answer> --again` changes the last answer a
 person gave - both through one record, `updates.json` (`Flow\FlowUpdates.cs`: its entries `u<n>` by order taken, cause
 `amendment` or `changedAnswer`, state `queued`/`underWay`/`done`/`failed`/`refused`), the one owner of what an update
@@ -2175,7 +2172,7 @@ or a work-item group with no loop around it that has run its own round and every
 allows, its last ended - each visit of the group a round, `FlowStepAt.Visit`, never an instance of its work items), a definition whose
 `amend` names no such change - nothing recorded for one. The report lists every update, and `list-orchestrator` says
 where each stands.
-The planning of a plan update is built (slice 31d2): where the run has begun the scope its plan updates are planned in
+The planning of a plan update: where the run has begun the scope its plan updates are planned in
 (the group its `amend.step` is directly in), a taken change is not refused but planned - the step the block names is
 raised by the update alone as a handler is raised by an ending (`FlowCoordinator.RaisePlanner`: a new visit of it in
 the newest instance of that scope, `FlowInstance.RaisedByUpdate` in its record, a group around it that had ended in
@@ -2199,7 +2196,7 @@ step declared in the same iteration of a `repeat` as the work-item group it plan
 hold keeps open is no work that iteration waits on to come to rest (`FlowCoordinator.HeldOpenForTheUpdate`). The
 whole of it is across a crash and a safe pause: the hold and the raised visit are read back from the run's records at
 the resume, which goes on with the update first.
-The pieces of an update are placed once its plan stands (slice 31d3): the pieces the `amend.scope` expression reads -
+The pieces of an update are placed once its plan stands: the pieces the `amend.scope` expression reads -
 each `{kind, item, for, changed, keep, undo, instead}`, of the kind `added`, `changed`, `removed` or `told` - are placed
 by `FlowCoordinator.PlaceThePieces` and kept in the update's entry (`FlowUpdatePiece`: the kind, the work item, where it
 was placed, the visit that carries it). An `added` piece makes one more work item of the work-item group (the `forEach`
@@ -2226,7 +2223,7 @@ are empty. `PlanValidator.CheckPieces` checks the pieces with the items where a 
 them - each of the four kinds and its texts, an `added` or `changed` item an item of the plan's list by name and member
 for member, no two pieces one work item, a `changed` or `removed` piece naming a work item the plan had - and the items
 an update places are checked with those of the round they join as one list, only the bound of eight not carried over.
-The pieces are told as they are placed (slice 31d4): every `told` piece's message is sent through the attempt's own
+The pieces are told as they are placed: every `told` piece's message is sent through the attempt's own
 telling (`FlowTelling`, made where a reason attempt starts and handed to the runner - `ReasonStepRunner` wires its
 messages channel and its handoff signal into the agent run) - a reason step in flight that a piece names, by its own
 instance or a scope around it, in one message into the conversation it is in, which lands when its calls have
@@ -2960,10 +2957,10 @@ file `body` reads and `edit` writes is reached through the `ConfinedPaths` the t
 tree where query-codebase-graph runs it), which resolves each link, so a link out of the tree is neither read nor written
 through. The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
 `wholeFile` with `narrow`), and a call given a member its operation does not read, one of the wrong type, or missing one
-it needs, is a usage line (`CodebaseGraphTool.Misused`). Nothing gives a step the tool yet: slice 27d adds it to the tool
-runtime's table with its write rules and edit check. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
+it needs, is a usage line (`CodebaseGraphTool.Misused`). Nothing gives a step the tool yet: the tool
+runtime's table does not hold it. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
 
-The context pack (`CodebaseContextPack`, value 370) is the part of the graph a step's work touches, made at its start
+The context pack (`CodebaseContextPack`) is the part of the graph a step's work touches, made at its start
 from the view and what the step says alone (`ContextPackRequest`: its filled prompt, `writes`, the working sets it is
 given, its changes, its read rule and cap), so the same step on the same tree is given the same pack. Its seeds are what
 the prompt names exactly - a symbol or a path in backquotes (a path standing for its declarations), a qualified name
@@ -2983,7 +2980,7 @@ by file - generated code after every other - within the cap in estimated tokens 
 four, rounded up), a line that does not fit left out whole and counted, and a cap too small for the first and last
 lines gives no pack, every node counted left out; the first line names the view, its commit, the files that differ
 from its base and what the pack was seeded from, the last its nodes, its tokens and what was left out.
-Change-first (value 371) starts from `ICodebaseGraphService.ChangesAsync`: the paths that differ from the base
+Change-first starts from `ICodebaseGraphService.ChangesAsync`: the paths that differ from the base
 (`ICodebaseGraphService.DifferingAsync`: git's diff against it and the untracked list, kept to what the graph's
 `include` and `exclude` list), each file's blob at the base sized first (`IGitClient.ReadBlobSizesAsync`) - one past
 `maxFileBytes` not read - and read in memory as a sync reads a file (`CodebaseGraphService.Read`, the one reading of a
@@ -3002,8 +2999,8 @@ its first line counts the lines the changes lead with, and with no base, its cha
 in. `FlowGraphSyncs.ChangesBase` names the base: an agent's recorded `Base`, the run's start commit for the main
 checkout. A pack keeps, beside its text, its seeds (each node once, by its heaviest seed - the one its line says), its
 nodes and each node line it wrote (`ContextPack.Lines`, what a delta gives of a pack a conversation was not given).
-Slice 27d puts the pack at the head of a step's first message and hands the tool its `Near`.
-The working set (`CodebaseWorkingSet`, value 372) is what a reason step that has a graph worked with, kept in its
+No step's first message is given its pack yet, and no tool its `Near`.
+The working set (`CodebaseWorkingSet`) is what a reason step that has a graph worked with, kept in its
 directory as `working-set.json` (`OrchestrationStore.WriteWorkingSet`): each node it edited, served, read or found
 (`WorkingSetUses`), with how often it was touched and its handle, file, lines and hash at the step's end, at most
 `CodebaseWorkingSet.MostNodes` - edited first, then by how often, the rest counted - and a node the view no longer
@@ -3024,7 +3021,7 @@ depends on directly - its own `dependsOn` and `on` and each enclosing group's, a
 then its own earlier visits of the same work item (`FlowInstanceId.SameStep`: the same id but for the visits and
 iterations after its innermost item), newest first, each that began, once; `FlowWorkingSets.SeedsOf` reads their sets
 into `ContextPackRequest.Worked` (`CodebaseWorkingSet.Seeds`: each node once, edited where any set says so, none
-gone). Slice 27d writes both files as a step ends and hands the seeds to its pack.
+gone). No step writes either file as it ends yet, and no pack is given the seeds.
 `query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
 through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a
 view linked in memory from the base's files and its record, and a link result another linker made linked again in

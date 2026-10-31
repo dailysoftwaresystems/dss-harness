@@ -4,8 +4,8 @@ namespace DssHarness.Core.Agents.Runtime;
 
 /// <summary>
 /// One line of a step's <c>graph.jsonl</c>, in its directory beside its stored stream: what the step's codebase graph was
-/// asked and gave, a line for each, appended whole as it happens. A call of the <c>graph</c> tool is the line there is
-/// today; slice 27d adds the prompt's line and each escape's when it gives a step its graph.
+/// asked and gave, a line for each, appended whole as it happens. A call of the <c>graph</c> tool is the only line there
+/// is: no step is given its graph in its prompt yet.
 /// </summary>
 /// <remarks>
 /// Read back by the options that refuse a member the type does not name and one it needs that the line leaves out
