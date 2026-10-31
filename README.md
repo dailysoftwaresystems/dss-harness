@@ -523,9 +523,10 @@ pause the run safely instead - never a failure - and the resume runs that very s
 spends is charged to the run's `budget` turn by turn as its agent works - every token of every kind,
 and its cost at the configuration's prices for the model serving it - and each launch is held to
 what is left of the run's dollars before its reserve where that is less than its agent's own
-`maxBudgetUsd`: a launch that bound ended has reached the run's reserve, not the step's own budget,
-so the workflow's answers may allow more and the step runs again given its handoff, or else the run
-pauses for its budget. Where an agent
+`maxBudgetUsd`, or where it names none: a launch that bound ended has reached the run's reserve, not
+the step's own budget, so the workflow's answers may allow more and the step runs again given its
+handoff, or else the run pauses for its budget - and a launch whose share was reckoned before more was
+granted runs again given its handoff, its share reckoned anew. Where an agent
 gave no handoff of its own - a limit ended its run, a crash cut the attempt off, its handoff turn
 passed its bound or failed - the engine writes one from the stored stream of the step, its first
 line saying why: the files the attempt wrote, the last commands it ran and how each ended, its last

@@ -163,8 +163,8 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// </param>
 /// <param name="BudgetLeftUsd">
 /// What is left of the run's budget in dollars before its reserve, as the attempt starts: a reason step's agent is held to
-/// it where it is less than its own bound (<see cref="FlowRunBudget.Bound"/>), so one long attempt cannot run through the
-/// reserve. Null where the run budgets no dollars.
+/// it where it is less than its own bound, or where it names none (<see cref="FlowRunBudget.Bound"/>), so one long attempt
+/// cannot run through the reserve. Null where the run budgets no dollars.
 /// </param>
 public sealed record FlowStepRun(
     WorkflowStep Step,
@@ -575,7 +575,7 @@ public sealed record FlowStepResult
 /// <param name="Record">What the run stored of the asking step, rendered as a continuation record renders a step.</param>
 /// <param name="Bar">The repository's bar for a recommendation, read where the question was raised.</param>
 /// <param name="Place">Where the run works; null for a run held in memory alone.</param>
-/// <param name="BudgetLeftUsd">What is left of the run's budget in dollars before its reserve, which the advice's agent is held to where it is less than its own bound; null where the run budgets no dollars.</param>
+/// <param name="BudgetLeftUsd">What is left of the run's budget in dollars before its reserve, which the advice's agent is held to where it is less than its own bound, or where it names none; null where the run budgets no dollars.</param>
 public sealed record FlowAdvisorCall(
     FlowAdvisor Advisor,
     string Run,

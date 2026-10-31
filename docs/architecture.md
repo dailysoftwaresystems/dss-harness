@@ -2034,6 +2034,10 @@ read alike. A safe pause - and a plan update that ends a step in order - hands a
 within `handoffSeconds` - all the steps at once - and ended where it outlives them or a stop comes, then waited for
 within `PointOfNoReturn.SafePauseDrain`; only then is the answer read of the step's own record
 (`IFlowHandoffRunner.HandoffAsync`, `AgentRunner.ResultFileName`), the engine writing the handoff where it holds none.
+What the step claimed is held through the turn and let go of after it by one rule for both
+(`FlowCoordinator.AfterTheHandoffTurn`): a runner that has not ended keeps it held until it answers
+(`FlowInstance.Lingering`), so neither an always step of the pause's always phase nor the visit an update makes again
+in its place starts beside a runner still writing; else it is given back.
 The coordinator deletes the read-only agent once no step can go on with its work (`FlowCoordinator.ReadOnlyAgentsOver`,
 over the declarations that resume its maker and the instances drawn of them, each agent once - `_deletedAgents` - through
 the `deleteAgent` the service wires to `IAgentService.DeleteAsync`, which writes a refusal and a throw alike in the
@@ -2064,10 +2068,12 @@ taken yet (`FlowCoordinator.RequestPause`: the first asker's cause, `all` where 
 spends is charged to the run's budget as its agent works (`AgentRunSpend`, the request's event sink: each turn's
 `UsageReported`, every token of every kind - `AgentUsage.AllTokens` - and its cost at the configuration's prices for the
 model serving it, handed on by `IFlowRunEvents.Used`), and each launch is held to what is left of the run's dollars
-before its reserve where that is less than its agent's own `maxBudgetUsd` (`FlowStepRun.BudgetLeftUsd`,
-`FlowRunBudget.Bound`); a launch that bound ended is the run's reserve reached and not the step's own budget
-(`FlowStepResult.AtTheRunsReserve`, `PauseCause` `budget`): the workflow's answers may allow more, the step running again
-at once given its handoff, else the run pauses for its budget. A step that says `ask` is paused on its agent's questions
+before its reserve where that is less than its agent's own `maxBudgetUsd`, or where it names none
+(`FlowStepRun.BudgetLeftUsd`, `FlowRunBudget.Bound`); a launch that bound ended is the run's reserve reached and not the
+step's own budget (`FlowStepResult.AtTheRunsReserve`, `PauseCause` `budget`) - of the grant its share was reckoned under
+(`FlowInstance.ShareGrant`, taken as its runner is asked): where that grant still stands the workflow's answers may allow
+more, the step running again at once given its handoff, else the run pauses for its budget; a share reckoned before more
+was granted reaches no reserve of the grant that stands, and the step runs again at once given its handoff. A step that says `ask` is paused on its agent's questions
 (`AgentRunStatus.Asked` mapped to a question of the kind `ask`, the agent's questions riding with it and the
 recommendation saying the agent recommends within each), and the answer - `answer` with a text, or `decide` - goes back
 into the same attempt (`FlowAnswerGiven` carrying its text and kind): the runner sends the person's words as the

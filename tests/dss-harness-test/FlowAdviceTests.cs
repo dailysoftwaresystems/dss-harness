@@ -222,7 +222,9 @@ public sealed class FlowAdviceTests
             return FlowStepResult.Ended(passed: true, HarnessExit.Success);
         });
         var records = new Records();
-        var coordinator = new FlowCoordinator(Advised(), runner, new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
+
+        // A clock that never passes the bound on the advice's runner on its own: the runner is torn down within it.
+        var coordinator = new FlowCoordinator(Advised(), runner, new RunnerFacts(), new TimerClock(), records: records, advisor: advisor);
 
         var session = coordinator.RunAsync(Token);
         await TestEventuallyAsync(() => coordinator.OpenQuestions.Count == 1 && advisor.Asked.Count == 1);
@@ -247,6 +249,81 @@ public sealed class FlowAdviceTests
             new FlowRecommendation("cancelled", Why: "no recommendation: the question was answered by a person while the advisor ran, and its asking was ended"),
             answered.Recommendation);
         Assert.Equal((0.02, 1500L), (records.Last!.Spent.Usd, records.Last.Spent.Tokens));
+    }
+
+    /// <summary>
+    /// An ended asking whose runner never ends is waited for no longer than a stopped step's runner is: once the drain's
+    /// bound of its end passes it is let go of - the asking step's next attempt starts, and what the asking spent is not
+    /// counted, for it never answered.
+    /// </summary>
+    [Fact]
+    public async Task AnEndedAskingWhoseRunnerNeverEnds_IsLetGoOfAtTheDrainsBound()
+    {
+        var held = new HeldAdvisor();
+        var advisor = new Advisor((_, token) => held.AdviseAsync(token));
+        var secondStarted = false;
+        var runner = new FakeRunner().On("think", run =>
+        {
+            if (run.Attempt == 1)
+            {
+                return FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true };
+            }
+
+            secondStarted = true;
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var records = new Records();
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(Advised(), runner, new RunnerFacts(), clock, records: records, advisor: advisor);
+
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => coordinator.OpenQuestions.Count == 1 && advisor.Asked.Count == 1);
+        var open = coordinator.OpenQuestions.Single();
+
+        _ = await coordinator.OfferAnswerAsync(open.Id, "retry").WaitAsync(Bound, Token);
+        await held.Ended.Task.WaitAsync(Bound, Token);
+
+        // The step waits for the advice's runner while the bound stands.
+        await clock.WaitingAsync().WaitAsync(Bound, Token);
+        Assert.False(session.IsCompleted);
+        Assert.False(secondStarted);
+
+        // The bound passes with the runner still going: the asking is let go of, and the step goes on.
+        clock.Advance(TimeSpan.FromSeconds(90));
+        var end = await session.WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal((2, FlowInstanceState.Done), (coordinator.Instances["think"].Attempt, coordinator.Instances["think"].State));
+        Assert.False(held.RunnerEnded);
+        Assert.Equal((0.0, 0L), (records.Last!.Spent.Usd, records.Last.Spent.Tokens));
+        held.TornDown.SetResult();
+    }
+
+    /// <summary>
+    /// A question answered while its recommendation is still owed - deferred by a pause, or sought by a session a crash
+    /// ended - says it is owed no longer: no advice is sought for a question that is answered.
+    /// </summary>
+    [Fact]
+    public async Task AQuestionAnsweredWhileItsRecommendationIsOwed_SaysItIsOwedNoLonger()
+    {
+        var held = new HeldAdvisor();
+        held.TornDown.SetResult();
+        var advisor = new Advisor((_, token) => held.AdviseAsync(token));
+        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
+
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => advisor.Asked.Count == 1);
+        coordinator.RequestPause("command");
+        _ = await session.WaitAsync(Bound, Token);
+
+        var open = coordinator.OpenQuestions.Single();
+        Assert.Equal("deferred", open.Recommendation.State);
+
+        Assert.True(coordinator.TryAnswer(open.Id, "retry", null, out _));
+
+        Assert.Equal(
+            new FlowRecommendation("cancelled", Why: "no recommendation: the question was answered by a person before one was obtained"),
+            coordinator.Questions.Single(question => question.Id == open.Id).Recommendation);
     }
 
     /// <summary>What an advice spent - in dollars, and every token of every kind - is counted against the run's budget.</summary>

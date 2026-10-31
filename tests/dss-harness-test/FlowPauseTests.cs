@@ -2408,4 +2408,124 @@ public sealed class FlowPauseTests
             "Written by the engine: 'think' spent what was left of the run's budget before its reserve.",
             runner.Runs.Single(run => run.Attempt == 2).Handoff);
     }
+
+    /// <summary>
+    /// Two launches whose shares were reckoned under one grant both end at the run's reserve: the first reaches it and the
+    /// workflow allows more; the second's share was reckoned before that grant, so it reaches no reserve of the grant that
+    /// stands - it runs again at once, given its handoff, and neither a second <c>more</c> nor a question is spent on it.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchWhoseShareWasReckonedBeforeMoreWasGranted_RunsAgain_AndReachesNoReserveOfTheNewGrant()
+    {
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 100
+              reservePercent: 10
+            answers:
+              runBudget:
+                answer: more
+                times: 1
+            steps:
+              - name: one
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: two
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var runner = new FakeRunner()
+            .On("one", run => run.Attempt == 1
+                ? FlowStepResult.AtTheRunsReserve("'one' spent what was left of the run's budget before its reserve")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("two", run => run.Attempt == 1
+                ? FlowStepResult.AtTheRunsReserve("'two' spent what was left of the run's budget before its reserve")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        // Both launched under the first grant, before either ended.
+        Assert.Equal(new double?[] { 90.0, 90.0 }, runner.Runs.Where(run => run.Attempt == 1).Select(run => run.BudgetLeftUsd));
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Null(end.Pause);
+        var asked = Assert.Single(coordinator.Questions);
+        Assert.Equal(("runBudget", "more", "configuration"), (asked.Kind, asked.Given.Single().Answer, asked.Given.Single().By));
+        Assert.Equal(
+            [
+                ("one", "Written by the engine: 'one' spent what was left of the run's budget before its reserve."),
+                ("two", "Written by the engine: 'two' spent what was left of the run's budget before its reserve."),
+            ],
+            runner.Runs.Where(run => run.Attempt == 2).Select(run => (run.Instance, run.Handoff)).OrderBy(run => run.Instance, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A reason step whose runner outlives the pause's handoff turn - past the turn's bound and the drain's - keeps what it
+    /// claimed until it answers: an always step of the pause's always phase that works in the same agent's tree waits on
+    /// that claim and starts only once the old runner has answered, so two never write one worktree at once.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepsRunnerThatOutlivesThePausesHandoffTurn_KeepsItsTreeHeldUntilItAnswers()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: builder
+              - name: think
+                type: reason
+                agent: builder
+                in: make
+                access: write
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [make]
+              - name: tidy
+                type: build
+                in: make
+                always: true
+                dependsOn: [make]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var thinking = runner.Hold("think", hearsTheStop: false);
+        var tidyWaits = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var records = new RecordsWatch((_, snapshot, _, _) =>
+        {
+            if (snapshot.Steps.Any(step => step.Instance == "tidy" && step.WaitsOn.Contains(FlowWaits.Claim)))
+            {
+                tidyWaits.TrySetResult();
+            }
+        });
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("command");
+
+        // The agent gives no answer: the turn's bound passes, then the drain's, its runner still going.
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromSeconds(180));
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromSeconds(90));
+
+        // The always step is drawn, and waits on the claim the old runner still holds - never started beside it.
+        var first = await Task.WhenAny(tidyWaits.Task, runner.StartedAsync("tidy")).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        Assert.Same(tidyWaits.Task, first);
+        Assert.DoesNotContain("tidy", runner.Started);
+
+        // The old runner answers and gives its claim back: the always step runs, and the run stands paused.
+        thinking.Done();
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Contains("tidy", runner.Started);
+        Assert.Equal(
+            (FlowInstanceState.Stopped, "engine"),
+            (coordinator.Instances["think"].State, coordinator.Instances["think"].Handoff!.By));
+    }
 }

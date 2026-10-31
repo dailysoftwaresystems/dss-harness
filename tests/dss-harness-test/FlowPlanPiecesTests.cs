@@ -174,6 +174,15 @@ public sealed class FlowPlanPiecesTests
         public FakeRunner On(string step, FlowStepResult result)
             => On(step, _ => result);
 
+        /// <summary>Answers <paramref name="step"/> by its script, which is handed the run and the attempt's token and answers when it will.</summary>
+        public FakeRunner OnAsync(string step, Func<FlowStepRun, CancellationToken, Task<FlowStepResult>> script)
+        {
+            _withToken[step] = script;
+            return this;
+        }
+
+        private readonly Dictionary<string, Func<FlowStepRun, CancellationToken, Task<FlowStepResult>>> _withToken = new(StringComparer.Ordinal);
+
         /// <summary>Answers <paramref name="step"/> after <paramref name="after"/>, so other steps start beside it.</summary>
         public FakeRunner OnIn(string step, TimeSpan after, FlowStepResult result)
         {
@@ -217,6 +226,11 @@ public sealed class FlowPlanPiecesTests
             if (_scripts.TryGetValue(run.Step.Name, out var script))
             {
                 return script(run);
+            }
+
+            if (_withToken.TryGetValue(run.Step.Name, out var withToken))
+            {
+                return await withToken(run, cancellationToken).ConfigureAwait(false);
             }
 
             if (_slow.TryGetValue(run.Step.Name, out var slow))
@@ -929,6 +943,90 @@ public sealed class FlowPlanPiecesTests
 
             Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
             Assert.Contains("rounds.items[1].build", runner.Started);
+        }
+    }
+
+    /// <summary>
+    /// Every reason step in flight in the instances an update brings to rest is asked for its handoff at once, as a safe
+    /// pause asks its own: none goes on working on the plan the update replaced while another's turn is answered. Each
+    /// agent, asked, finds the other asked too - with a clock that never ends a turn on its own - and both write their
+    /// own handoffs.
+    /// </summary>
+    [Fact]
+    public async Task TheStepsAnUpdateEndsInOrder_AreAskedForTheirHandoffsAtOnce()
+    {
+        using var temp = new TempDirectory();
+
+        // Room for both builds and the update's planning at once.
+        var definition = Parse() with { MaxReasoningAgents = 3 };
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var one = Item("one");
+        one["title"] = "The one item, done differently";
+        var two = Item("two");
+        two["title"] = "The two item, done differently";
+        var inFlight = new System.Collections.Concurrent.ConcurrentDictionary<string, FlowStepRun>(StringComparer.Ordinal);
+        var sawTheOtherAsked = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
+        const string First = "rounds.items[0].build";
+        const string Second = "rounds.items[1].build";
+
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"), Item("two"))))
+            .On("item-check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = run.Read!["items"]!.ToNode()!.DeepClone(),
+            }))
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                new JsonArray(Piece("changed", one.DeepClone(), "the one item is done differently"), Piece("changed", two.DeepClone(), "the two item is done differently")),
+                one.DeepClone(),
+                two.DeepClone())))
+            .OnAsync("build", async (run, token) =>
+            {
+                if (run.Instance is not (First or Second))
+                {
+                    return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+                }
+
+                inFlight[run.Instance] = run;
+                _ = await run.Telling!.Handoff.WhenAsked.WaitAsync(Bound, Token);
+
+                // Asked: the other is looked for asked too, for a few seconds - one asked after this turn ended never is.
+                var other = run.Instance == First ? Second : First;
+                var asked = false;
+
+                for (var tries = 0; tries < 300 && !asked; tries++)
+                {
+                    asked = inFlight.TryGetValue(other, out var theOther) && theOther.Telling?.Asked is not null;
+
+                    if (!asked)
+                    {
+                        await Task.Delay(10, Token);
+                    }
+                }
+
+                sawTheOtherAsked[run.Instance] = asked;
+                return FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "handed off");
+            });
+
+        using (records)
+        {
+            // A clock that ends no handoff turn by its bound: each turn ends as its agent answers.
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync(First).WaitAsync(Bound, Token);
+            await runner.StartedAsync(Second).WaitAsync(Bound, Token);
+            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("both items are different").WaitAsync(Bound, Token));
+            _ = await session.WaitAsync(Bound, Token);
+
+            Assert.Equal([(First, true), (Second, true)], sawTheOtherAsked.OrderBy(seen => seen.Key, StringComparer.Ordinal).Select(seen => (seen.Key, seen.Value)));
+            Assert.Equal(
+                [(First, "agent"), (Second, "agent")],
+                new[] { First, Second }.Select(instance => (instance, coordinator.Instances[instance].Handoff?.By)));
         }
     }
 
