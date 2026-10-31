@@ -2971,7 +2971,7 @@ file `body` reads and `edit` writes is reached through the `ConfinedPaths` the t
 tree where query-codebase-graph runs it), which resolves each link, so a link out of the tree is neither read nor written
 through. The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
 `wholeFile` with `narrow`), and a call given a member its operation does not read, one of the wrong type, or missing one
-it needs, is a usage line (`CodebaseGraphTool.Misused`). Nothing gives a step the tool yet: the tool
+it needs, is a usage line (`CodebaseGraphTool.Misused`). No step is given the tool: the tool
 runtime's table does not hold it. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
 
 The context pack (`CodebaseContextPack`) is the part of the graph a step's work touches, made at its start
@@ -3013,7 +3013,7 @@ its first line counts the lines the changes lead with, and with no base, its cha
 in. `FlowGraphSyncs.ChangesBase` names the base: an agent's recorded `Base`, the run's start commit for the main
 checkout. A pack keeps, beside its text, its seeds (each node once, by its heaviest seed - the one its line says), its
 nodes and each node line it wrote (`ContextPack.Lines`, what a delta gives of a pack a conversation was not given).
-No step's first message is given its pack yet, and no tool its `Near`.
+No step's first message is given its pack, and no tool its `Near`.
 The working set (`CodebaseWorkingSet`) is what a reason step that has a graph worked with, kept in its
 directory as `working-set.json` (`OrchestrationStore.WriteWorkingSet`): each node it edited, served, read or found
 (`WorkingSetUses`), with how often it was touched and its handle, file, lines and hash at the step's end, at most
@@ -3035,7 +3035,7 @@ depends on directly - its own `dependsOn` and `on` and each enclosing group's, a
 then its own earlier visits of the same work item (`FlowInstanceId.SameStep`: the same id but for the visits and
 iterations after its innermost item), newest first, each that began, once; `FlowWorkingSets.SeedsOf` reads their sets
 into `ContextPackRequest.Worked` (`CodebaseWorkingSet.Seeds`: each node once, edited where any set says so, none
-gone). No step writes either file as it ends yet, and no pack is given the seeds.
+gone). No step writes either file as it ends, and no pack is given the seeds.
 `query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
 through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a
 view linked in memory from the base's files and its record, and a link result another linker made linked again in

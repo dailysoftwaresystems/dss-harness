@@ -97,7 +97,7 @@ public enum GraphToolOutcome
 /// The one tool <c>graph</c>, over the lookups of <see cref="CodebaseGraphQueries"/>: its seven operations - <c>find</c>,
 /// <c>node</c>, <c>related</c>, <c>outline</c>, <c>body</c>, <c>edit</c> and <c>wholeFile</c> - the same on every client, each
 /// answering in bounded lines of text with a line range and a hash on every node, and a text search where the graph is not
-/// sure. The schema a step is given holds only the operations it may use. Nothing opens it in a step yet: the tool
+/// sure. The schema a step is given holds only the operations it may use. No step opens it: the tool
 /// runtime's table does not hold it. The <c>query-codebase-graph</c> verb runs its read operations by hand.
 /// </summary>
 /// <remarks>
