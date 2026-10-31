@@ -265,6 +265,15 @@ public sealed record AgentRunResult(
     public IReadOnlyList<string> SessionFilesRemoved { get; init; } = [];
 
     /// <summary>
+    /// How many of the messages a chat's run was given - its prompt first, then each posted to it, in order - are settled:
+    /// answered by a turn of the agent's, taken by a turn the chat's interrupt cut, or dropped by that interrupt, which the
+    /// person is told to send again. A message written and never taken, or taken by a turn that ended without answering,
+    /// is not among them, and is the chat's to send again. Null for every run but a chat's, and where the client does not
+    /// count them.
+    /// </summary>
+    public int? MessagesAnswered { get; init; }
+
+    /// <summary>
     /// The account's limit, where the run ended on one (<see cref="AgentRunStatus.RateLimited"/>): whether its balance or
     /// included usage is spent, and when it lifts where the provider says. Null for every other ending.
     /// </summary>

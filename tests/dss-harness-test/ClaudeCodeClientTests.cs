@@ -1861,6 +1861,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
         Assert.Equal("second said", result.FinalText);
         Assert.Equal(2, result.Turns);
+        Assert.Equal(2, result.MessagesAnswered);
         Assert.Single(kit.Launches());
     }
 
@@ -1932,6 +1933,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
         Assert.Equal("after the cut", result.FinalText);
         Assert.Single(kit.Launches());
+
+        // The message the cut turn took is settled by the cut, as the one after is by its answer.
+        Assert.Equal(2, result.MessagesAnswered);
         Assert.Equal(
             [(AgentMessageKind.FirstPrompt, run.UserPrompt), (AgentMessageKind.ChatMessage, "go on")],
             sink.Events.OfType<MessageSent>().Select(sent => (sent.Which, sent.Text)));
@@ -1972,6 +1976,41 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
         Assert.Contains("the interrupt dropped 1 message(s) the agent had not taken yet; send again what still stands", sink.Events.OfType<Notice>().Select(notice => notice.Text));
+
+        // Settled, in order: the first, cut; the one dropped, the person's to send again; and the one after, answered.
+        Assert.Equal(3, result.MessagesAnswered);
+    }
+
+    /// <summary>
+    /// A chat's run counts the messages its turns answered from what each turn took, never from what was written: a
+    /// message taken by a turn that ends without answering it - its context outgrown - is not among them, for the chat to
+    /// send again; a run that is no chat's counts none.
+    /// </summary>
+    [Fact]
+    public async Task AChatsRun_CountsTheMessagesItsTurnsAnswered_NeverOneTakenByATurnThatEndedWithout()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["text"] = "first said" }, new JsonObject { ["terminal"] = "prompt_too_long" }]);
+        var run = kit.Run() with { Chat = true };
+        var sink = new Sink(@event =>
+        {
+            if (@event is AssistantMessage { Text: "first said" })
+            {
+                run.Messages.Post("and now?");
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token);
+
+        Assert.Equal((AgentRunStatus.ContextExhausted, 2, 1), (result.Status, result.Turns, result.MessagesAnswered));
+        Assert.Equal(
+            [(AgentMessageKind.FirstPrompt, run.UserPrompt), (AgentMessageKind.ChatMessage, "and now?")],
+            sink.Events.OfType<MessageSent>().Select(sent => (sent.Which, sent.Text)));
+
+        using var shot = new Kit();
+        shot.Script([new JsonObject { ["text"] = "said once" }]);
+
+        Assert.Null((await shot.Client().RunAsync(shot.Run(), new Sink(), Token)).MessagesAnswered);
     }
 
     /// <summary>

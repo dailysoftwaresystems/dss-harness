@@ -995,7 +995,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     /// test scripts, and one runner that records every command and stops nothing once begun. No test reaches npm, the
     /// network or the machine's own table.
     /// </summary>
-    private sealed class Kit : IDisposable
+    internal sealed class Kit : IDisposable
     {
         public TempDirectory Temp { get; } = new();
 
@@ -1060,10 +1060,13 @@ public sealed class ClaudeCodeUpdateServiceTests
             }
         }
 
-        /// <summary>The service over the kit's machine, its bound on following links measured by <paramref name="clock"/> where one is given.</summary>
-        public ClaudeCodeUpdateService Service(TimeProvider? clock = null)
+        /// <summary>
+        /// The service over the kit's machine, its bound on following links measured by <paramref name="clock"/> where one
+        /// is given, and its process table <paramref name="table"/> where one is given - else the kit's own.
+        /// </summary>
+        public ClaudeCodeUpdateService Service(TimeProvider? clock = null, IProcessTable? table = null)
             => new(
-                Table,
+                table ?? Table,
                 Runner,
                 Files,
                 Permissions,
@@ -1102,7 +1105,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     }
 
     /// <summary>Runs what the test scripts: npm's prefix, npm's root, the install, and any program's own version.</summary>
-    private sealed class ScriptedRunner : IProcessRunner
+    internal sealed class ScriptedRunner : IProcessRunner
     {
         public List<string> Ran { get; } = [];
 
@@ -1158,7 +1161,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     /// A process table that reads as each of <paramref name="readings"/> in turn, and as the last of them from then on -
     /// read by names alone, and why, where <paramref name="degraded"/> says so; counts its readings.
     /// </summary>
-    private sealed class ScriptedTable(SampledProcess[][] readings, string? degraded = null) : IProcessTable
+    internal sealed class ScriptedTable(SampledProcess[][] readings, string? degraded = null) : IProcessTable
     {
         public int Reads { get; private set; }
 
@@ -1170,7 +1173,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     /// The machine's files, recording every path whose links are followed - and, for the one path a test names, a
     /// following that does not end until the test lets it: a stale network mount, which answers nothing and never fails.
     /// </summary>
-    private sealed class FollowingFiles(IFileSystem inner) : PassThroughFileSystem(inner)
+    internal sealed class FollowingFiles(IFileSystem inner) : PassThroughFileSystem(inner)
     {
         public System.Collections.Concurrent.ConcurrentQueue<string> Followed { get; } = new();
 
@@ -1201,7 +1204,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     /// Every file private and a file that is there one this machine starts, as Windows decides it; another user able to
     /// change the slot's files where a test says so.
     /// </summary>
-    private sealed class FixedPermissions : IFilePermissions
+    internal sealed class FixedPermissions : IFilePermissions
     {
         public bool OthersCanWrite { get; set; }
 

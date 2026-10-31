@@ -27,12 +27,15 @@ public sealed class SideTaskChat(Func<CancellationToken, Task<string?>> read, Ac
 /// The interrupts of one side-task, each counted once whoever sent it - the terminal's Ctrl+C, and off Windows SIGTERM
 /// and a hang-up (<see cref="SideTaskTerminal"/>), or a front end's own key - and none ever ending the process. In a chat
 /// the first cuts the agent's current turn where it stands, leaving the chat open, and a second, whatever the first was
-/// doing, ends the chat; in one shot the first cuts the turn, and the side-task ends interrupted.
+/// doing, ends the chat; in one shot the first cuts the turn, and the side-task ends interrupted. Where no turn runs - the
+/// side-task being set up or opened again, its Claude Code or another model made ready - a press stops what is under
+/// way: a one shot's first, and a chat's second (<see cref="StopsOn"/>).
 /// </summary>
 /// <remarks>
 /// The count is the side-task's and is never cleared: a turn that was interrupted does not clear it, so the next press -
 /// whenever it comes - is the one that ends the chat. What a press does is told inside the count's lock, so once a turn
-/// unwires what it does (<see cref="WhileTurning"/>) no press can reach it, and nothing a turn let go of is touched.
+/// unwires what it does (<see cref="WhileTurning"/>) no press can reach it, and nothing a turn let go of is touched; and
+/// presses counted before the side-task's stop is bound are applied once it is, each once.
 /// </remarks>
 public sealed class SideTaskInterrupts
 {
@@ -40,6 +43,8 @@ public sealed class SideTaskInterrupts
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _pressed;
     private Action<int>? _pressedNow;
+    private CancellationTokenSource? _stop;
+    private bool _chat;
 
     /// <summary>How many interrupts the side-task has been given.</summary>
     public int Presses
@@ -71,8 +76,32 @@ public sealed class SideTaskInterrupts
                 _ended.TrySetResult();
             }
 
+            StopWhereAskedLocked();
+
             return count;
         }
+    }
+
+    /// <summary>
+    /// Binds the side-task's stop to its interrupts, for as long as the binding is held: <paramref name="stop"/> is
+    /// cancelled at a chat's second interrupt, and at a one shot's first where no turn runs to cut - wherever the
+    /// side-task stands. Presses counted before the binding are applied to it at once.
+    /// </summary>
+    /// <param name="stop">The side-task's stop, which the command's own stop is linked to.</param>
+    /// <param name="chat">Whether the side-task is a chat; false for one shot.</param>
+    /// <returns>The binding: disposed, no press reaches <paramref name="stop"/> any more.</returns>
+    internal IDisposable StopsOn(CancellationTokenSource stop, bool chat)
+    {
+        ArgumentNullException.ThrowIfNull(stop);
+
+        lock (_gate)
+        {
+            _stop = stop;
+            _chat = chat;
+            StopWhereAskedLocked();
+        }
+
+        return new Unbinding(this);
     }
 
     /// <summary>
@@ -85,6 +114,27 @@ public sealed class SideTaskInterrupts
         lock (_gate)
         {
             _pressedNow = what;
+        }
+    }
+
+    /// <summary>Cancels the bound stop where the presses ask it: a chat's second, a one shot's first with no turn to cut. Asked, never awaited, inside the lock.</summary>
+    private void StopWhereAskedLocked()
+    {
+        if (_stop is { } stop && (_chat ? _pressed >= 2 : _pressed >= 1 && _pressedNow is null))
+        {
+            _ = stop.CancelAsync();
+        }
+    }
+
+    /// <summary>The binding of a stop, which lets it go.</summary>
+    private sealed class Unbinding(SideTaskInterrupts interrupts) : IDisposable
+    {
+        public void Dispose()
+        {
+            lock (interrupts._gate)
+            {
+                interrupts._stop = null;
+            }
         }
     }
 }

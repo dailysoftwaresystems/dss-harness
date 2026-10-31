@@ -280,8 +280,8 @@ public sealed class SideTaskPolicyTests
 
         var printing = Assert.IsType<AgentPolicyAnswer.Denied>(side.Run((IReadOnlyList<string>)["gh", "auth", "token"]));
 
-        Assert.Equal(AgentPolicySource.Builtin, printing.Source);
-        Assert.Contains("prints a credential", printing.Reason, StringComparison.Ordinal);
+        Assert.Equal(("Run(gh auth token)", AgentPolicySource.Builtin), (printing.Rule, printing.Source));
+        Assert.Equal("'gh auth token' is denied by Run(gh auth token), a rule of this tool: it prints a credential, which an agent of this tool is never handed", printing.Reason);
     }
 
     /// <summary>The root actions stay refused to the side-task's agent as to every agent's, wherever they stand.</summary>

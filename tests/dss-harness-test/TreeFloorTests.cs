@@ -1,3 +1,4 @@
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Repository;
 
 namespace DssHarness.Tests;
@@ -45,14 +46,29 @@ public sealed class TreeFloorTests
     }
 
     /// <summary>
-    /// The tree's own floor holds git's own directory, every root slot the tool keeps a machine's own records in -
-    /// what orchestrators and side-tasks keep, the mutation workers, the legs' copies - and the worktrees root: none is
-    /// left to an ignore rule a repository can edit away.
+    /// The tree's own floor holds git's own directory and every root slot of the layout's - what orchestrators and
+    /// side-tasks keep, the mutation workers, the legs' copies, and the worktrees root - read from the layout's one list
+    /// of them, so a root slot it gains is on the floor the day it is added: none is left to an ignore rule a repository
+    /// can edit away, nor synced to a host's copy.
     /// </summary>
     [Fact]
-    public void TheTreesOwnFloor_HoldsGitsDirectory_EveryRootSlot_AndTheWorktreesRoot()
+    public void TheTreesOwnFloor_HoldsGitsDirectory_AndEveryRootSlot()
     {
-        Assert.Equal([".git", ".orchestrators", ".mutations", ".legs", ".side-tasks", "wt"], TreeFloor.Of("wt"));
+        foreach (var worktreesRoot in new[] { "wt", WorktreeSettings.DefaultRoot, "../elsewhere" })
+        {
+            var floor = TreeFloor.Of(worktreesRoot);
+
+            Assert.Contains(".git", floor);
+
+            foreach (var slot in HarnessLayout.RootSlots(worktreesRoot))
+            {
+                Assert.Contains(slot, floor);
+            }
+
+            Assert.Equal(floor.Count, floor.Distinct(StringComparer.Ordinal).Count());
+        }
+
+        Assert.Equal([".orchestrators", ".mutations", ".legs", ".side-tasks"], HarnessLayout.NamedRootSlots);
         Assert.True(TreeFloor.Covers(TreeFloor.OfAgentMoves("wt"), ".side-tasks/2026-10-31-120000-fix-it/transcript.md"));
     }
 

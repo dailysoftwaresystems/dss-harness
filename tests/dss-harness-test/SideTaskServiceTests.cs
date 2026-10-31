@@ -8,6 +8,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
 using DssHarness.Core.Secrets;
 using DssHarness.Core.Web.Search;
 
@@ -84,7 +85,8 @@ public sealed class SideTaskServiceTests
 
     /// <summary>
     /// A client that renders its conversations, as Claude Code does: one launch held open for a chat, each message said
-    /// as the real client says it - the first as the first prompt, each later one as the chat's.
+    /// as the real client says it - the first as the first prompt, each later one as the chat's, the moment it is written
+    /// to the launch - and its result counting, as the real client's does, the messages its turns answered.
     /// </summary>
     private sealed class RenderedClient : IAgentClient
     {
@@ -107,8 +109,20 @@ public sealed class SideTaskServiceTests
 
         public List<AgentRun> Runs { get; } = [];
 
-        /// <summary>Where set, each launch ends after this many turns of its own, its context outgrown, as a launch that can hold no more does.</summary>
+        /// <summary>
+        /// Where set, each launch's turns past this many outgrow its context, as a launch that can hold no more does: the
+        /// next message is written to it and taken by a turn that ends without answering, and the launch ends with it.
+        /// </summary>
         public int? EndsAfterTurns { get; set; }
+
+        /// <summary>Where set, each launch's turn of this number fails, as an API error ends one, and the launch with it.</summary>
+        public int? FailsOnTurn { get; set; }
+
+        /// <summary>Whether the turn that fails ends with no result of its own, as a program gone in the middle of a turn does.</summary>
+        public bool FailsWithoutAResult { get; set; }
+
+        /// <summary>Where set, waited on before each turn of a launch answers, with the turn's number.</summary>
+        public Func<int, Task>? BeforeAnswering { get; set; }
 
         public async Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken)
         {
@@ -122,44 +136,67 @@ public sealed class SideTaskServiceTests
             // The first message is the launch's own prompt; each later one reaches the agent through the channel a
             // message to an agent at work uses - in a chat, whose launch ends when the channel does.
             await events.EmitAsync(new MessageSent(AgentPromptParts.FirstMessage(run, newConversation: true), AgentMessageKind.FirstPrompt));
-            await OneTurnAsync(run, events, run.UserPrompt);
-            var turns = 1;
 
-            if (run.Chat)
+            var turns = 0;
+            var answered = 0;
+            var message = run.UserPrompt;
+            await using var later = run.Messages.ReadAllAsync(cancellationToken).GetAsyncEnumerator(cancellationToken);
+
+            while (true)
             {
-                await foreach (var message in run.Messages.ReadAllAsync(cancellationToken))
+                turns++;
+
+                if (turns == FailsOnTurn || turns - 1 == EndsAfterTurns)
                 {
-                    if (turns == EndsAfterTurns)
+                    // The turn takes the message and ends without answering it, and the launch ends with that turn.
+                    await events.EmitAsync(new TurnStarted(turns));
+
+                    if (!(turns == FailsOnTurn && FailsWithoutAResult))
                     {
-                        break;
+                        await events.EmitAsync(new TurnFinished(turns, run.Model ?? "m", new AgentUsage(7, 3, 0, 0, 0, 0), "error"));
                     }
 
-                    await events.EmitAsync(new MessageSent(message, AgentMessageKind.ChatMessage));
-                    await OneTurnAsync(run, events, message);
-                    turns++;
+                    return turns == FailsOnTurn
+                        ? new AgentRunResult(AgentRunStatus.Failed, Model: run.Model, Error: "the API failed") { Turns = turns, MessagesAnswered = Chat(answered) }
+                        : new AgentRunResult(AgentRunStatus.ContextExhausted, Model: run.Model, Error: "the context is full") { Turns = turns, MessagesAnswered = Chat(answered) };
                 }
 
-                if (turns == EndsAfterTurns)
+                if (BeforeAnswering is { } before)
                 {
-                    return new AgentRunResult(AgentRunStatus.ContextExhausted, Model: run.Model, Error: "the context is full") { Turns = turns };
+                    await before(turns);
                 }
+
+                await OneTurnAsync(run, events, turns, message);
+                answered++;
+
+                if (!run.Chat || !await later.MoveNextAsync())
+                {
+                    break;
+                }
+
+                // Written to the launch as it comes, and said so the moment it is - as the real client says each message.
+                message = later.Current;
+                await events.EmitAsync(new MessageSent(message, AgentMessageKind.ChatMessage));
             }
 
             return new AgentRunResult(AgentRunStatus.Completed, FinalText: "the launch's last word", Model: run.Model)
             {
                 Turns = turns,
                 Usage = new AgentUsageReport(new AgentUsage(7, 3, 0, 0, 0, 0), []),
+                MessagesAnswered = Chat(answered),
             };
+
+            int? Chat(int count) => run.Chat ? count : null;
         }
 
-        private static async Task OneTurnAsync(AgentRun run, IAgentEventSink events, string message)
+        private static async Task OneTurnAsync(AgentRun run, IAgentEventSink events, int turn, string message)
         {
             var about = "about: " + message[..Math.Min(20, message.Length)];
 
-            await events.EmitAsync(new TurnStarted(1));
+            await events.EmitAsync(new TurnStarted(turn));
             await events.EmitAsync(new TextDelta(about));
             await events.EmitAsync(new AssistantMessage(about, []));
-            await events.EmitAsync(new TurnFinished(1, run.Model ?? "m", new AgentUsage(7, 3, 0, 0, 0, 0), "end_turn"));
+            await events.EmitAsync(new TurnFinished(turn, run.Model ?? "m", new AgentUsage(7, 3, 0, 0, 0, 0), "end_turn"));
         }
     }
 
@@ -207,8 +244,14 @@ public sealed class SideTaskServiceTests
                 });
     }
 
-    /// <summary>A repository with the template's providers - and one model of a narrow effort list - over the two fakes.</summary>
-    private static async Task<(HarnessFactory Harness, TempDirectory Tree, SideTaskService Service, StoredClient Stored, RenderedClient Rendered)> RepoAsync(TimeProvider? clock = null, Func<string, string?>? environment = null)
+    /// <summary>
+    /// A repository with the template's providers - and one model of a narrow effort list - over the two fakes, the Claude
+    /// Code a launch starts made ready by <paramref name="updates"/> where one is given.
+    /// </summary>
+    private static async Task<(HarnessFactory Harness, TempDirectory Tree, SideTaskService Service, StoredClient Stored, RenderedClient Rendered)> RepoAsync(
+        TimeProvider? clock = null,
+        Func<string, string?>? environment = null,
+        DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null)
     {
         var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -254,7 +297,7 @@ public sealed class SideTaskServiceTests
             harness.OrchestrationStore,
             keys,
             new WebSearchKeys(keys, new GhProcess(harness.ProcessRunner)),
-            updates: null,
+            updates,
             harness.FileSystem,
             harness.Output,
             harness.GitClient,
@@ -378,12 +421,15 @@ public sealed class SideTaskServiceTests
 
     /// <summary>
     /// A side-task started under an agent - its environment marked as every agent's child's is - refuses itself, by
-    /// whatever name it was started: nothing is begun and nothing written.
+    /// whatever name it was started and whatever the mark holds, a mark cleared to nothing among them: nothing is begun
+    /// and nothing written.
     /// </summary>
-    [Fact]
-    public async Task ASideTaskStartedUnderAnAgent_RefusesItself()
+    [Theory]
+    [InlineData("1")]
+    [InlineData("")]
+    public async Task ASideTaskStartedUnderAnAgent_RefusesItself(string marked)
     {
-        var (_, temp, service, stored, _) = await RepoAsync(environment: name => name == AgentChildEnvironment.AgentMarker ? "1" : null);
+        var (_, temp, service, stored, _) = await RepoAsync(environment: name => name == AgentChildEnvironment.AgentMarker ? marked : null);
         using var tree = temp;
 
         var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "start another", Model: "glm-5.3", Name: "nested"), Token);
@@ -529,7 +575,9 @@ public sealed class SideTaskServiceTests
 
     /// <summary>
     /// A launch held open that ends by itself - its context outgrown - leaves no line of the person's unanswered: the
-    /// line it never took begins a new launch, going on from the conversation compacted, and the person is told.
+    /// line it was given and never answered - written to it, said as written, and taken by the turn that outgrew the
+    /// context, as the real client does - begins a new launch, going on from the conversation compacted, and the person
+    /// is told. What is unanswered is the client's own count of what its turns answered, never what was written.
     /// </summary>
     [Fact]
     public async Task ALaunchThatEndsByItself_LosesNoLine_ANewLaunchGoesOnFromTheConversation()
@@ -542,14 +590,36 @@ public sealed class SideTaskServiceTests
         var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "claude-sonnet-5-5", Name: "relaunched", Chat: typed.Chat()), Token);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
-        Assert.Equal(2, rendered.Runs.Count);
-        Assert.Equal("first", rendered.Runs[0].UserPrompt);
+        Assert.Equal(["first", "second"], rendered.Runs.Select(run => run.UserPrompt));
         Assert.Null(rendered.Runs[0].Continuation);
-        Assert.Equal("second", rendered.Runs[1].UserPrompt);
-        Assert.StartsWith(AgentCompaction.SaysWhatItIs, rendered.Runs[1].Continuation, StringComparison.Ordinal);
-        Assert.Contains("first", rendered.Runs[1].Continuation!, StringComparison.Ordinal);
-        Assert.Contains("about: second", typed.Said);
-        Assert.Contains("the agent's launch ended ContextExhausted: the context is full; the next message begins a new launch, going on from the conversation so far", typed.Said);
+        Assert.Equal(
+            string.Join(
+                "\n",
+                $"{AgentCompaction.SaysWhatItIs}1. Everything up to iteration 0 is reduced to what you wrote and what you called; the last 1 iterations are word for word.",
+                string.Empty,
+                "The run context and the task, as they were sent:",
+                string.Empty,
+                "first",
+                string.Empty,
+                "The last iterations, word for word:",
+                string.Empty,
+                "iteration 1 of 1:",
+                "about: first",
+                string.Empty,
+                "the engine:",
+                "second",
+                string.Empty,
+                "The task again:",
+                string.Empty,
+                "first"),
+            rendered.Runs[1].Continuation!.ReplaceLineEndings("\n"));
+        Assert.Equal(
+            [
+                "about: first",
+                "the agent's launch ended ContextExhausted: the context is full; the next message begins a new launch, going on from the conversation so far",
+                "about: second",
+            ],
+            typed.Said);
     }
 
     /// <summary>
@@ -570,10 +640,244 @@ public sealed class SideTaskServiceTests
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal(["first", "second", "third"], rendered.Runs.Select(run => run.UserPrompt));
 
-        var carried = rendered.Runs[2].Continuation!;
-        Assert.StartsWith($"{AgentCompaction.SaysWhatItIs}2.", carried, StringComparison.Ordinal);
-        Assert.Contains("iteration 1 of 2:\nabout: first", carried.ReplaceLineEndings("\n"), StringComparison.Ordinal);
-        Assert.Contains("iteration 2 of 2:\nabout: second", carried.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+        // Each launch's turn that outgrew the context is an iteration of the conversation too: the second launch's answer
+        // is the third, never its launch's first.
+        var carried = rendered.Runs[2].Continuation!.ReplaceLineEndings("\n");
+        Assert.StartsWith($"{AgentCompaction.SaysWhatItIs}3.", carried, StringComparison.Ordinal);
+        Assert.Contains("\niteration 1 of 3:\nabout: first\n", carried, StringComparison.Ordinal);
+        Assert.Contains("\niteration 3 of 3:\nabout: second\n", carried, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A launch held open for a chat is never tried again by the runner - a try would begin again from its first message,
+    /// redoing it and losing every line it had taken: a turn that fails ends the launch, and the line it never answered
+    /// begins a new launch going on from the conversation so far, the person told. The launch's ending is its failed
+    /// turn's where that turn ended with a result; where it ended with none, no turn recorded takes it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFailedTurnOfALaunchHeldOpen_IsNeverTriedAgain_ANewLaunchGoesOnFromTheConversation(bool withoutAResult)
+    {
+        var (harness, temp, service, _, rendered) = await RepoAsync();
+        using var tree = temp;
+        rendered.FailsOnTurn = 2;
+        rendered.FailsWithoutAResult = withoutAResult;
+        var typed = new Typed(["first", "second"], until: "about: second");
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "claude-sonnet-5-5", Name: "unretried", Chat: typed.Chat()), Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(["first", "second"], rendered.Runs.Select(run => run.UserPrompt));
+        Assert.StartsWith(AgentCompaction.SaysWhatItIs, rendered.Runs[1].Continuation, StringComparison.Ordinal);
+        Assert.Equal(
+            [
+                "about: first",
+                "the agent's launch ended Failed: the API failed; the next message begins a new launch, going on from the conversation so far",
+                "about: second",
+            ],
+            typed.Said);
+        AgentRunStatus?[] endings = withoutAResult ? [null, AgentRunStatus.Completed] : [null, AgentRunStatus.Failed, AgentRunStatus.Completed];
+        Assert.Equal(endings, RecordOf(harness, temp, LayoutOf(temp, "unretried").Directory)!.Turns.Select(turn => turn.Status));
+    }
+
+    /// <summary>
+    /// Each turn of a launch held open reaches the side-task's record as it ends - one record each, never two merged
+    /// into one, and never only when the launch ends: the first turn is in <c>task.json</c> before the second is
+    /// answered, and the launch's ending is its last turn's.
+    /// </summary>
+    [Fact]
+    public async Task EachTurnOfALaunchHeldOpen_ReachesTheRecordAsItEnds()
+    {
+        var (harness, temp, service, _, rendered) = await RepoAsync();
+        using var tree = temp;
+        var directory = LayoutOf(temp, "turned").Directory;
+        var recordedBeforeTheSecond = -1;
+
+        rendered.BeforeAnswering = async turn =>
+        {
+            if (turn != 2)
+            {
+                return;
+            }
+
+            // The second turn answers once the first is in the record - or, where it never is, after a while.
+            var until = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+
+            while ((RecordOf(harness, temp, directory)?.Turns.Count ?? 0) == 0 && DateTime.UtcNow < until)
+            {
+                await Task.Delay(20, Token);
+            }
+
+            recordedBeforeTheSecond = RecordOf(harness, temp, directory)?.Turns.Count ?? 0;
+        };
+
+        var typed = new Typed(["first", "second"], until: "about: second");
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "claude-sonnet-5-5", Name: "turned", Chat: typed.Chat()), Token);
+
+        Assert.Equal((HarnessExit.Success, "side-task 'turned' ended, 2 turn(s) in all"), (outcome.ExitCode, outcome.Message));
+        Assert.Equal(1, recordedBeforeTheSecond);
+
+        var record = RecordOf(harness, temp, directory)!;
+        var served = rendered.Runs[0].Model!;
+        Assert.Equal(
+            [((AgentRunStatus?)null, served, 1, 7), (AgentRunStatus.Completed, served, 1, 7)],
+            record.Turns.Select(turn => (turn.Status, Assert.Single(turn.Served).Model, turn.Turns, turn.Usage!.Total.InputTokens)));
+    }
+
+    /// <summary>
+    /// A new model named by <c>/model</c> starts from the efforts that name it - the entry for the rest kept - never from an
+    /// entry for the model it replaces, which it does not run on; where no entry is left, at its own default effort.
+    /// </summary>
+    [Fact]
+    public async Task ModelInAChat_KeepsOnlyTheEffortsThatNameTheNewModel()
+    {
+        var (harness, temp, service, stored, _) = await RepoAsync();
+        using var tree = temp;
+        var rest = new Typed(["/model narrow-1", "after the model"]);
+        var none = new Typed(["/model narrow-1", "after the model"]);
+
+        var keptRest = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "rest", Efforts: ["glm-5.3=low", "all=high"], Chat: rest.Chat()), Token);
+        var keptNone = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "none", Efforts: ["glm-5.3=high"], Chat: none.Chat()), Token);
+
+        Assert.Equal((HarnessExit.Success, HarnessExit.Success), (keptRest.ExitCode, keptNone.ExitCode));
+        Assert.Equal(["the next message goes to narrow-1 through glm, at effort high", "the answer"], rest.Said);
+        Assert.Equal(["the next message goes to narrow-1 through glm, at its own default effort", "the answer"], none.Said);
+        Assert.Equal([("narrow-1", "high"), ("narrow-1", (string?)null)], stored.Runs.Select(run => (run.Model!, run.Effort)));
+
+        var restRunsOn = RecordOf(harness, temp, LayoutOf(temp, "rest").Directory)!.RunsOn!;
+        Assert.Equal(("narrow-1", (string?)null), (restRunsOn.Model, restRunsOn.Effort));
+        Assert.Equal([new KeyValuePair<string, string>(SideTaskEffort.Every, "high")], restRunsOn.EffortByModel!);
+        Assert.Equal(new SideTaskRunsOn(Model: "narrow-1"), RecordOf(harness, temp, LayoutOf(temp, "none").Directory)!.RunsOn);
+    }
+
+    /// <summary>
+    /// What a side-task's records and its answer are held to is a step's mask, built by the one builder of it: every
+    /// provider key the slot answers is masked - in the run's mask and in the stored stream - not only the web search's.
+    /// </summary>
+    [Fact]
+    public async Task TheMaskASideTaskIsHeldTo_IsAStepsWithEveryProviderKey()
+    {
+        var (_, temp, service, stored, _) = await RepoAsync();
+        using var tree = temp;
+        const string Keys = "keys: sk-test-one sk-test-two sk-test-three";
+
+        stored.Script = (run, events, _) => StoredClient.Answered(run, events, Keys);
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: "masked"), Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal($"keys: {ActionValues.Mask} {ActionValues.Mask} {ActionValues.Mask}", Assert.Single(stored.Runs).Mask.Redact(Keys));
+        Assert.DoesNotContain("sk-test-", File.ReadAllText(Path.Combine(LayoutOf(temp, "masked").Directory, StoredStream.FileName)), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The Claude Code a side-task starts is made ready as a step's is, and one not ready refuses it on the finder's own
+    /// code and words: an update refused - a session of Claude Code running - is 13, never folded into a missing
+    /// program's 14. Nothing is started or written.
+    /// </summary>
+    [Fact]
+    public async Task AClaudeCodeNotReady_RefusesTheSideTask_OnTheFindersOwnCode()
+    {
+        using var kit = new ClaudeCodeUpdateServiceTests.Kit(package: "2.1.201", program: "2.1.201");
+        kit.Table = new ClaudeCodeUpdateServiceTests.ScriptedTable([[new SampledProcess(4242, 1, "claude", null, "claude --resume", kit.Program)]]);
+        var (_, temp, service, _, rendered) = await RepoAsync(updates: kit.Service());
+        using var tree = temp;
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "claude-sonnet-5-5", Name: "held-back"), Token);
+
+        Assert.Equal(
+            (HarnessExit.Refused, "a session of Claude Code is running on this machine (pid 4242); start the run again when they have ended."),
+            (outcome.ExitCode, outcome.Message));
+        Assert.Equal([SideTaskService.NoRecords], outcome.Details);
+        Assert.Empty(rendered.Runs);
+        Assert.False(Directory.Exists(LayoutOf(temp, "held-back").Directory));
+    }
+
+    /// <summary>
+    /// An interrupt while the side-task is being set up - here while its Claude Code is made ready, the machine's
+    /// processes being read - stops it where it stands: a one shot's first, a chat's second. Nothing is started or
+    /// written, and the command ends interrupted (130).
+    /// </summary>
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 2)]
+    public async Task AnInterruptWhileTheSideTaskIsSetUp_StopsIt(bool chat, int presses)
+    {
+        var interrupts = new SideTaskInterrupts();
+        var table = new PressingTable(interrupts, presses);
+        using var kit = new ClaudeCodeUpdateServiceTests.Kit(package: "2.1.201", program: "2.1.201");
+        var (_, temp, service, _, rendered) = await RepoAsync(updates: kit.Service(table: table));
+        using var tree = temp;
+
+        var call = chat
+            ? new SideTaskCall(temp.Path, Model: "claude-sonnet-5-5", Name: "stopped", Chat: new Typed(["never read"]).Chat())
+            : new SideTaskCall(temp.Path, Prompt: "x", Model: "claude-sonnet-5-5", Name: "stopped");
+
+        var outcome = await service.RunAsync(call with { Interrupts = interrupts }, Token);
+
+        Assert.Equal((HarnessExit.Cancelled, "'run-side-task' was stopped before the side-task began. Nothing was started."), (outcome.ExitCode, outcome.Message));
+        Assert.Equal([SideTaskService.NoRecords], outcome.Details);
+        Assert.True(table.Stopped, "the wait it stood in was stopped");
+        Assert.Empty(rendered.Runs);
+        Assert.False(Directory.Exists(LayoutOf(temp, "stopped").Directory));
+    }
+
+    /// <summary>
+    /// An interrupt the terminal took before the side-task's stop was bound to its interrupts is applied once it is: the
+    /// one shot stops before it begins, never left to run as though the press had not come.
+    /// </summary>
+    [Fact]
+    public async Task AnInterruptTakenBeforeTheStopIsBound_IsAppliedOnceItIs()
+    {
+        var interrupts = new SideTaskInterrupts();
+        var (_, temp, service, stored, _) = await RepoAsync(environment: name =>
+        {
+            // Read as the command begins, before anything else: the person presses Ctrl+C right then.
+            if (name == AgentChildEnvironment.AgentMarker)
+            {
+                interrupts.Pressed();
+            }
+
+            return null;
+        });
+        using var tree = temp;
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: "early") { Interrupts = interrupts }, Token);
+
+        Assert.Equal((HarnessExit.Cancelled, "'run-side-task' was stopped before the side-task began. Nothing was started."), (outcome.ExitCode, outcome.Message));
+        Assert.Equal([SideTaskService.NoRecords], outcome.Details);
+        Assert.Empty(stored.Runs);
+    }
+
+    /// <summary>
+    /// A process table whose reading takes the person's interrupts - pressed as it is read - and waits, as a slow machine
+    /// does, until it is stopped or a while has passed.
+    /// </summary>
+    private sealed class PressingTable(SideTaskInterrupts interrupts, int presses) : IProcessTable
+    {
+        public bool Stopped { get; private set; }
+
+        public async Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
+        {
+            for (var press = 0; press < presses; press++)
+            {
+                interrupts.Pressed();
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(20), cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                Stopped = true;
+                throw;
+            }
+
+            return new ProcessTableReading([], null);
+        }
     }
 
     /// <summary>The first interrupt cuts the agent's turn and leaves the chat open; what was said is kept.</summary>
@@ -851,14 +1155,17 @@ public sealed class SideTaskServiceTests
         Assert.Equal(HarnessExit.Success, again.ExitCode);
         Assert.Equal(2, stored.Runs.Count);
         Assert.Contains(
-            harness.StandardError.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
-            line => line.EndsWith($"the owner recorded for side-task 'orphan' (process {Environment.ProcessId}) has gone; it was reclaimed", StringComparison.Ordinal));
+            $"{SideTaskService.RunCommand}: WARN - the owner recorded for side-task 'orphan' (process {Environment.ProcessId}) has gone; it was reclaimed",
+            harness.StandardError.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
         Assert.False(File.Exists(LayoutOf(temp, "orphan").OwnerFile), "and released once it ended");
     }
 
-    /// <summary>A name that is taken is refused, never taken over, its records named.</summary>
+    /// <summary>
+    /// A name that is taken is refused, never taken over: the command wrote no records, and the records the name holds
+    /// are named as the other side-task's - never as this command's, in text or in its document.
+    /// </summary>
     [Fact]
-    public async Task ANameThatIsTakenIsRefused()
+    public async Task ANameThatIsTakenIsRefused_TheRecordsItHoldsNamedAsTheOthers()
     {
         var (_, temp, service, _, _) = await RepoAsync();
         using var tree = temp;
@@ -867,10 +1174,14 @@ public sealed class SideTaskServiceTests
         Assert.Equal(HarnessExit.Success, first.ExitCode);
 
         var second = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "two", Model: "glm-5.3", Name: "mine"), Token);
+        var json = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "two", Model: "glm-5.3", Name: "mine", Json: true), Token);
 
-        Assert.Equal(HarnessExit.Refused, second.ExitCode);
+        Assert.Equal((HarnessExit.Refused, HarnessExit.Refused), (second.ExitCode, json.ExitCode));
         Assert.Equal("side-task 'mine' is taken: --resume mine opens it again, or --name gives a new one another name. Nothing was changed.", second.Message);
-        Assert.Equal([$"Records: {LayoutOf(temp, "mine").Directory}"], second.Details);
+        Assert.Equal([SideTaskService.NoRecords, $"Side-task 'mine' keeps its own records in {LayoutOf(temp, "mine").Directory}"], second.Details);
+
+        // No document of the side-task's: the command answers in its stopped shape, naming no records of its own.
+        Assert.Empty(json.Data);
     }
 
     /// <summary>A name that begins with what no name begins with, or holds what none holds, is refused by the rule it breaks.</summary>
@@ -1044,10 +1355,14 @@ public sealed class SideTaskServiceTests
         Assert.True(chat.Interrupts.Ended.IsCompleted);
 
         var said = harness.StandardError.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        Assert.EndsWith(SideTaskTerminal.ChatCut, Assert.Single(said), StringComparison.Ordinal);
+        Assert.Equal([$"{SideTaskService.RunCommand}: WARN - {SideTaskTerminal.ChatCut}"], said);
 
-        var oneShot = new SideTaskTerminal(new HarnessFactory().Output, chat: false);
+        var shot = new HarnessFactory();
+        var oneShot = new SideTaskTerminal(shot.Output, chat: false);
         oneShot.Interrupted();
         Assert.Equal(1, oneShot.Interrupts.Presses);
+        Assert.Equal(
+            [$"{SideTaskService.RunCommand}: WARN - {SideTaskTerminal.OneShotCut}"],
+            shot.StandardError.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     }
 }

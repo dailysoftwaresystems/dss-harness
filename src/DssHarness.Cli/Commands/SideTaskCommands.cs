@@ -46,7 +46,7 @@ internal static class RunSideTaskCommand
     private static readonly Option<string?> NameOption = new("--name")
     {
         HelpName = "task",
-        Description = "The side-task's own name, which names its directory under .side-tasks; the date and time it began with the first words of its first message where none is given.",
+        Description = "The side-task's own name, which names its directory under .side-tasks; where none is given, the date and time it began - with the first words of the message, in one shot.",
     };
 
     private static readonly Option<string?> ModelOption = new("--model")
@@ -75,7 +75,7 @@ internal static class RunSideTaskCommand
 
     internal static Command Create()
     {
-        var command = new Command(Name, "An agent outside every workflow: a conversation with a person over the repository's main tree, with no step and no limit of a run's - every action still decided by the engine before it runs and recorded, the built-in refusals kept. A chat in the terminal by default - the agent's text streamed, each action one line as it is decided, Ctrl+C interrupting a turn and a second ending the chat - or one message with --prompt, answered once. Its model is resolved as a step's; its records live under .side-tasks/<task>/, named on every exit and kept until a person removes them.");
+        var command = new Command(Name, "An agent outside every workflow: a conversation with a person over the repository's main tree, with no step and no limit of a run's - every action still decided by the engine before it runs and recorded, the built-in refusals kept. A chat in the terminal by default - the agent's text streamed, each action one line as it is decided, Ctrl+C interrupting a turn and a second ending the chat - or one message with --prompt, answered once. Where no turn runs, while it is set up or a model made ready, an interrupt stops it: a one shot's first, a chat's second. Its model is resolved as a step's; its records live under .side-tasks/<task>/, named on every exit and kept until a person removes them.");
         command.Options.Add(PromptOption);
         command.Options.Add(PromptFileOption);
         command.Options.Add(ResumeOption);

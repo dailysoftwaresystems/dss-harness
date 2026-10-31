@@ -356,6 +356,12 @@ public sealed class ClaudeCodeClient(
         // The ids of the messages written that no turn has taken yet, in the order they were written.
         private readonly List<string> _pending = [];
         private int _taken;
+
+        // How many of the messages taken a turn answered - every one taken before a turn that ended well, or that a chat's
+        // interrupt cut - and how many a chat's interrupts dropped, which the person was told to send again, whenever the
+        // receipt that says so arrives: together, in order, the messages a chat's run settled, the rest its to send again.
+        private int _answeredTaken;
+        private int _dropped;
         private string? _declined;
         private AgentAccountLimit? _limit;
         private DateTimeOffset? _resets;
@@ -477,7 +483,9 @@ public sealed class ClaudeCodeClient(
 
                 await EndAsync(process).ConfigureAwait(false);
 
-                return outcome;
+                // A chat's run says how many of the messages it was given are settled, from its own count of what each
+                // turn took and what each interrupt dropped, so the chat sends again what no turn answered.
+                return run.Chat ? outcome with { Result = outcome.Result with { MessagesAnswered = _answeredTaken + _dropped } } : outcome;
             }
             finally
             {
@@ -1139,6 +1147,7 @@ public sealed class ClaudeCodeClient(
                 // takes them, and the person is told, for each was theirs. The turn it cuts ends by itself, and the
                 // launch stays open for the chat's next message.
                 var dropped = _pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true);
+                _dropped += dropped;
 
                 if (dropped > 0)
                 {
@@ -1205,6 +1214,13 @@ public sealed class ClaudeCodeClient(
             // reached it - however it ended.
             var cut = _chatCut;
             _chatCut = false;
+
+            // Every message a turn took is answered by its end - a turn that ended well, or one the chat's interrupt cut;
+            // one taken by a turn that ended on an error is not, and a chat sends it again.
+            if (cut || Ending(result) is null)
+            {
+                _answeredTaken = _taken;
+            }
 
             // A message the launch has not taken yet begins a turn of its own: this result is not the step's answer.
             if (_pending.Count > 0)

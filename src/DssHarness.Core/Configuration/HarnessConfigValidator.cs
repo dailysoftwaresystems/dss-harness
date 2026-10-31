@@ -223,9 +223,10 @@ public static partial class HarnessConfigValidator
             problems.Add("worktrees.root cannot be the repository root itself");
         }
 
-        // The directories the harness keeps apart from the worktrees: git's own, the one orchestrators keep what they
-        // hold in, beside which their agents' worktrees are made, and the two a tree keeps its own copies in. A root that
-        // is one, or inside one, would mix them. Compared ignoring case: on Windows and macOS the two spellings are one
+        // The directories the harness keeps apart from the worktrees - the never-transfer floor: git's own, and every
+        // root slot the layout names - the one orchestrators keep what they hold in, beside which their agents' worktrees
+        // are made, the one side-tasks keep their records in, and the two a tree keeps its own copies in. A root that is
+        // one, or inside one, would mix them. Compared ignoring case: on Windows and macOS the two spellings are one
         // directory.
         var root = Repository.PathPatterns.Normalize(worktrees.Root);
 

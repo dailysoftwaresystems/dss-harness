@@ -207,12 +207,16 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     {
         ArgumentNullException.ThrowIfNull(worktreesRoot);
 
-        return
-        [
-            .. new[] { PathPatterns.Normalize(worktreesRoot), OrchestratorsDirectoryName, MutationsDirectoryName, LegsDirectoryName, SideTasksDirectoryName }
-                .Distinct(StringComparer.Ordinal),
-        ];
+        return [.. new[] { PathPatterns.Normalize(worktreesRoot) }.Concat(NamedRootSlots).Distinct(StringComparer.Ordinal)];
     }
+
+    /// <summary>
+    /// The root slots (<see cref="RootSlots"/>) the layout names itself - every one but the worktrees root, which the
+    /// configuration places: what orchestrators and side-tasks keep, and the tree's own copies. The one list each reader
+    /// of them is made from, so a slot the layout gains joins every one of them - the never-transfer floor among them -
+    /// the day it is added.
+    /// </summary>
+    public static IReadOnlyList<string> NamedRootSlots { get; } = [OrchestratorsDirectoryName, MutationsDirectoryName, LegsDirectoryName, SideTasksDirectoryName];
 
     /// <summary>
     /// The credential slots that hold connection data, relative to the harness directory: one

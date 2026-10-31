@@ -92,14 +92,7 @@ public sealed class SyncConfig
     /// its actions, which a leg on another host has to be able to run.
     /// </para>
     /// </remarks>
-    public static IReadOnlyList<string> NeverTransferFloor { get; } =
-    [
-        ".git",
-        Repository.HarnessLayout.OrchestratorsDirectoryName,
-        Repository.HarnessLayout.MutationsDirectoryName,
-        Repository.HarnessLayout.LegsDirectoryName,
-        Repository.HarnessLayout.SideTasksDirectoryName,
-    ];
+    public static IReadOnlyList<string> NeverTransferFloor { get; } = [".git", .. Repository.HarnessLayout.NamedRootSlots];
 
     /// <summary>Paths to exclude in addition to those git already ignores.</summary>
     public List<string> Exclude { get; init; } = [];

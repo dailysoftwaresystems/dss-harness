@@ -458,8 +458,9 @@ worktrees where nothing withholds or ignores them, and an entry would protect no
 
 **The root is kept in git by a placeholder, and everything made in it is ignored.** `init` writes
 `/<root>/*` and `!/<root>/.gitkeep` for it and creates the placeholder, as it does for the
-orchestrators directory, `.orchestrators`, for the slots every tree keeps its own copies in,
-`.mutations` for a sweep's workers and `.legs` for the copies its legs work in, and for the harness
+orchestrators directory, `.orchestrators`, for the side-tasks' records, `.side-tasks`, for the slots
+every tree keeps its own copies in, `.mutations` for a sweep's workers and `.legs` for the copies its
+legs work in - the layout's one list of them, `HarnessLayout.RootSlots` - and for the harness
 directories a person fills by hand
 — the credential slots `sshItems`, `wslDistros`, `runner/.env`, `runner/.secrets` and
 `workflows/.env`, the agent clients' keys, read by the runner's one rule for a directory of dotenv
@@ -478,7 +479,8 @@ and `.side-tasks` by name, whatever git says, and never deletes them in a copy, 
 withheld path that stopped being ignored takes each placeholder, untracked until it is committed,
 as the harness's own - any other untracked file there still refuses, named as the worktrees root,
 or the slot whose ignore rule init writes, it is. The root may not be `.git`, `.orchestrators`,
-`.mutations` or `.legs`, or inside any of them. Each copy kept in `.mutations` or `.legs` is a whole
+`.mutations`, `.legs` or `.side-tasks`, or inside any of them - the never-transfer floor, built from
+the layout's root slots (`HarnessLayout.NamedRootSlots`), so a slot the layout gains joins it. Each copy kept in `.mutations` or `.legs` is a whole
 copy of the tree, so a repository's own program that walks the tree from its root must leave out
 what the managed block ignores, as git does - `help layout` says so - or it reads every file again
 for each copy kept there.
@@ -2624,7 +2626,13 @@ hands a step's - the model resolved as a step's (`--model`, `--tier`,
 step's, `AgentEffortRules`), the order built with each entry's credential, what it spends counted
 against its key - so the clients, the tool runtime, the stored stream, compaction and the fallback
 are the ones every step uses; one builder sets all of it up (`SideTaskService.SetUpAsync`), at the
-start and again for the chat's `/model` and `/effort`. What differs is what it is given: its
+start and again for the chat's `/model` and `/effort` - a new model keeping only the levels that name
+it and the one for the rest - and what a reason step is launched with beyond its model it takes from
+that step's own builder (`ReasonLaunch`): its order, the Claude Code directories its ground keeps it
+from, the mask its records and answers are held to - every secret the configuration appoints that the
+slot answers, each provider's keys and each client's token, beside every form of each search key -
+and the Claude Code it starts, made ready as a step's is and refused on the finder's own code and
+words (12 the configuration, 13 an update refused, 14 the program missing). What differs is what it is given: its
 ground (`SideTaskPolicy`) - no restriction list, no allow list of pages, all four capabilities, the
 main checkout the writable root, the worktree rules and the protected paths off, this tool's own
 verbs open to it as the person's own session's are - with the built-in refusals kept (root
@@ -2644,16 +2652,24 @@ messages the way its client goes on with any conversation: one launch held open 
 client renders its conversations (Claude Code), the person's later messages reaching the agent through
 the channel a message to an agent at work uses, recorded as the person's (`ChatMessage`), the first
 interrupt cutting the turn alone and leaving the launch open, a message the interrupt dropped said to
-have been dropped, and a launch that ends by itself recorded and the lines it never took sent again
-to a new one; one request per message where the client stores them, each going on with the stored
+have been dropped, each turn of the launch written to `task.json` as it ends, and a launch that ends
+by itself recorded and the lines it never answered sent again to a new one - counted by the client's
+own count of the messages its turns answered (`AgentRunResult.MessagesAnswered`), never by what was
+written, so a line taken by a turn that ended without answering is sent again. Such a launch is never
+tried again by the runner (`Retries` 0): a try would begin again from its first message and lose
+every line it had taken, so a failed turn ends it, and the chat goes on in a new launch from the
+conversation so far; a fallback move of the runner's inside it still begins from the launch's first
+message. One request per message where the client stores them, each going on with the stored
 one. A chat that outgrows the model's context is compacted as a step's conversation is - the whole
 conversation since the last compaction, every launch of it read as one, the person's later messages
 as they said them - and says so. The side-task's name is the person's (`--name`) or the date and
-time it began with the first words of its first message, a suffix freeing it where another began in
-the same second; its owner (`SideTaskOwner`, the owner file beside its records) is claimed before
+time it began - with the first words of its message in one shot; a chat is claimed, and named, before
+its first message is typed, so by the time alone - a suffix freeing it where another began in the
+same second; its owner (`SideTaskOwner`, the owner file beside its records) is claimed before
 anything is written, under one machine-wide lock for the side-tasks' directory, with `task.json`
 written inside the claim, so two commands never take one name - a name another holds refused (13),
-a dead owner reclaimed and said. `--resume` opens one again, refused (13) where it names no
+the records it holds named as that side-task's and never as the command's, a dead owner reclaimed
+and said. `--resume` opens one again, refused (13) where it names no
 side-task or another process holds it open, and `--name` beside it a usage error (10); it goes on
 with its stored conversation, or, where the model it now runs on is reached by a client that is
 handed none, from the conversation so far (`AgentContinuation`), on what the person last set it
@@ -2668,12 +2684,16 @@ the transcript as a person reads it `transcript.md`, `denials.jsonl` and `web.js
 the stored conversation under `sessions/` where its client stores one - named on every exit,
 in text and in `--json`, or said to be none where the command stopped before any were written.
 Its exits are its turn's (`AgentRunResult.ToOutcome`, the one mapping) in one shot - 20 failed, 21
-cut short, 130 interrupted, 13 or 14 where it could not start - and a chat's are 0 however the
-person leaves it, 130 where the command itself was stopped. Its interrupts are its own
+cut short, 130 interrupted, 12, 13 or 14 where it could not start - and a chat's are 0 however the
+person leaves it once it has begun, 130 where two interrupts stop it while it is still being set up
+or opened again. Its interrupts are its own
 (`SideTaskTerminal` over `TerminalSignals`, the one registration of Ctrl+C, SIGTERM and a hang-up,
 with `PointOfNoReturn.ChatsWithAPerson` turning the command line's own handling off for it): the
-first cuts the agent's turn, the second ends the chat. No host serves either verb: a chat is the
-person's, on this machine (`HostAgentProtocol.NotForwardable`).
+first cuts the agent's turn, the second ends the chat; and the side-task's own stop, linked to the
+command's, is bound to them (`SideTaskInterrupts.StopsOn`) for wherever no turn runs - being set up
+or opened again, its Claude Code or another model made ready: a one shot's first interrupt
+stops it there, a chat's second, and an interrupt taken before the stop was bound is applied once it
+is. No host serves either verb: a chat is the person's, on this machine (`HostAgentProtocol.NotForwardable`).
 
 A session's interrupts are its own (`FlowTerminal`, `FlowInterrupts`): Ctrl+C, and off Windows
 SIGTERM and a hang-up, are taken by `PosixSignalRegistration` and never end the process, and the
@@ -5277,7 +5297,7 @@ directory here cannot drift apart.
   compiling, a deleted test keeps running, and a renamed file exists twice, so the leg's verdict
   describes a tree that no longer exists.
 - **The never-transfer floor is also a never-delete floor.** `.git`, `.orchestrators`,
-  `.mutations`, `.legs`, the worktrees root, everything under `sync.neverTransfer`, and all of
+  `.mutations`, `.legs`, `.side-tasks`, the worktrees root, everything under `sync.neverTransfer`, and all of
   `.harness-config` but `config.json` and the runner's actions are neither written nor deleted. A
   path the harness will not write is one it cannot know the source lacks, so deleting it would
   remove the host's own state rather than a file the source gave up — including the build
@@ -6610,11 +6630,13 @@ a safe pause or a stop. `ask-orchestrator-status` exits `0` wherever it read the
 by a model or not - where none worded them it says why and the facts are still the answer - while
 `ask-orchestrator`, whose answer is the model's words, is refused with the code of why none worded
 them (12, 13, 14, 20 or 21, and 70 where the tool itself failed).
-a safe pause or a stop. `run-side-task` in one shot exits as its turn ended, by the one mapping of an
-agent's ending (`AgentRunResult.ToOutcome`): `0` answered, `20` the model failed past its retries and
-fallback, `21` cut short by the account's limit, a stall or the clock, `130` interrupted, `13` or `14`
-where it could not start; a chat exits `0` however the person leaves it, and `130` where the command
-itself was stopped.
+`run-side-task` in one shot exits as its turn ended, by the one mapping of an agent's ending
+(`AgentRunResult.ToOutcome`): `0` answered, `20` the model failed past its retries and fallback, `21`
+cut short by the account's limit, a stall or the clock, `130` interrupted - an interrupt while it is
+set up among them - and `12`, `13` or `14` where its agent could not start: the configuration, a key
+missing, the tool elevated or an update of Claude Code refused, the program missing. A chat exits `0` however the person leaves it once
+it has begun - `/exit`, the end of its input, a second interrupt - and `130` where two interrupts stop
+it while it is still being set up or opened again.
 `dssharness help exit-codes` prints the shared table from the code itself; this copy, and the
 per-command codes above, are maintained by hand.
 

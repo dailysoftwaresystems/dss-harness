@@ -2426,12 +2426,16 @@ public static class HelpTopics
             + "line as it is decided, a denial with its rule. Ctrl+C interrupts the agent's turn and leaves the chat open, "
             + "what was said kept; a second, /exit or the end of input ends it. /model <model> and /effort <level> - or "
             + "<code>=<level> for each model, or default for the model's own - change what the next message is sent with, "
-            + "each checked as the command line's are; /records prints where this side-task's records are; /help lists "
+            + "each checked as the command line's are, a new model keeping only the levels that name it and the one for "
+            + "the rest; /records prints where this side-task's records are; /help lists "
             + "these. With --prompt or --prompt-file it answers one message once, prints the agent's final text and exits; "
             + "--json answers with one document instead - and --json without a prompt is a usage error "
-            + $"({HarnessExit.UsageError}), for a chat is no document. A side-task the person does not name is named by the "
-            + "date and time it began and the first words of its first message; --name gives it one, refused "
-            + $"({HarnessExit.Refused}) where another side-task holds that name. --resume opens a side-task again, going on "
+            + $"({HarnessExit.UsageError}), for a chat is no document. Where no turn runs - the side-task being set up, its "
+            + "Claude Code made ready, another model made ready by /model - an interrupt stops what is under way: in one "
+            + "shot the first, in a chat the second, and SIGTERM is one like any other. A side-task the person does not "
+            + "name is named by the date and time it began - with the first words of its message in one shot; a chat is "
+            + "named before its first message is typed, by the date and time alone. --name gives it one, refused "
+            + $"({HarnessExit.Refused}) where another side-task holds that name, whose records are named as that one's. --resume opens a side-task again, going on "
             + "with its stored conversation - or, where the model it now runs on is reached by a client that is handed none, "
             + "from the conversation so far - on what the person last set it to run on: its tier with the tier's later "
             + "models, or the model named outright, unless --model or --tier names another; an --effort or a --client given "
@@ -2440,12 +2444,15 @@ public static class HelpTopics
             + "opened again keeps its name. list-side-tasks lists them, newest first: each by its name, when it began and "
             + "last spoke, its model, its turns and cost, whether it is open now. The records' directory is named on every "
             + "exit, in text and in --json - or said to be none where the command stopped before any were written. Exit "
-            + "codes: 0 ended as asked, and a chat 0 however the person leaves it; "
-            + $"{HarnessExit.Cancelled} where the command itself was stopped; {HarnessExit.UsageError} usage, among them an "
-            + $"effort a model does not take; {HarnessExit.ConfigInvalid} the configuration - a model no provider serves, "
-            + $"no model to run on, a web search that does not resolve; {HarnessExit.Refused} refused - a name taken or no "
+            + "codes: 0 ended as asked, and a chat 0 however the person leaves it once it has begun; "
+            + $"{HarnessExit.Cancelled} where interrupts stop it before it began - while it is set up or opened again; "
+            + $"{HarnessExit.UsageError} usage, among them an effort a model does not take; {HarnessExit.ConfigInvalid} "
+            + "the configuration - a model no provider serves, no model to run on, a web search that does not resolve, a "
+            + "program the slot names that does not read, and in one shot an agent the configuration keeps from starting; "
+            + $"{HarnessExit.Refused} refused - a name taken or no "
             + "name a directory takes, a --resume naming no side-task or one open in another process, a .side-tasks "
-            + "git does not ignore, a side-task started under an agent, and in one shot a key missing or the tool running "
+            + "git does not ignore, a side-task started under an agent, an update of Claude Code refused - a session of "
+            + "it running, or the machine's processes unread - and in one shot a key missing or the tool running "
             + $"elevated; {HarnessExit.ToolMissing} a client that cannot start - no claude, no npm; and in one shot "
             + $"besides, {HarnessExit.CommandFailed} the model failed past its retries and fallback, "
             + $"{HarnessExit.Incomplete} cut short by the account's limit, a stall or the clock, {HarnessExit.Cancelled} "
@@ -2483,8 +2490,8 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             "Its records live in .side-tasks/<task>/ at the repository's root, written by the tool alone and kept until a "
-            + "person removes the directory: task.json (its turns, each with its client, provider, model and effort, what "
-            + "it used and cost, and what the agent ran under), the stored stream (stream.jsonl) and the transcript as a "
+            + "person removes the directory: task.json (its turns, each written as it ends, with its client, provider, model "
+            + "and effort, what it used and cost, and what the agent ran under), the stored stream (stream.jsonl) and the transcript as a "
             + "person reads it (transcript.md), each action decided (tools.json holds the offered table), each denial "
             + "(denials.jsonl) and each search and fetch (web.jsonl), and the stored conversation under sessions/ where "
             + "its client stores one. Beside the directory, <task>.owner.json names the process that holds the side-task "
@@ -4913,7 +4920,7 @@ public static class HelpTopics
             + $"and never sent to a host by sync ('{ToolPackage.Command} help side-tasks')"),
         ($"{HarnessLayout.SideTasksDirectoryName}/<task>/",
             "ignored; one side-task: its task.json, stored stream, transcript, denials and web, and its conversation where "
-            + "its client stores one; <task>.owner.json beside it while a chat holds it open"),
+            + "its client stores one; <task>.owner.json beside it while a side-task holds it open"),
         ($"{HarnessLayout.MutationsDirectoryName}/",
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the tree's mutation workers, in every tree, never "
             + $"sent to a host by sync ('{ToolPackage.Command} help mutations')"),

@@ -41,10 +41,10 @@ public sealed class InitService(
     /// the harness's directory (<see cref="HarnessLayout.SecretSlots"/>) - <c>sshItems</c>, <c>wslDistros</c>,
     /// <c>runner/.env</c>, <c>runner/.secrets</c> and the agent clients' <c>workflows/.env</c> - are small
     /// directories a person fills by hand, and keeping each one in the repository tells that person where
-    /// the file goes. The four at the root of the tree (<see cref="HarnessLayout.RootSlots"/>) - the
-    /// worktrees root, the directory orchestrators keep what they hold in, and the two a tree keeps its own
-    /// copies in - are kept so a clone arrives with each in place, and the commands that make worktrees,
-    /// records and copies make them there.
+    /// the file goes. The five at the root of the tree (<see cref="HarnessLayout.RootSlots"/>) - the
+    /// worktrees root, the directory orchestrators keep what they hold in, the one side-tasks keep their
+    /// records in, and the two a tree keeps its own copies in - are kept so a clone arrives with each in
+    /// place, and the commands that make worktrees, records and copies make them there.
     /// </para>
     /// <para>
     /// The worktrees root was excluded whole, with no placeholder, and the costs of this shape are
