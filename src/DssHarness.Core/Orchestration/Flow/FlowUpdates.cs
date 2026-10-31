@@ -241,6 +241,12 @@ public sealed record FlowNotDelivered(string For, string Why);
 /// the round it added to a work-item group with no loop around it - the group's visit that runs it (<c>build.items+2</c>);
 /// null where it added none.
 /// </param>
+/// <param name="AskedAtBound">
+/// The loop whose bound question carries the work the update owes it, where the run had been given every iteration
+/// <c>amend.maxAddedIterations</c> allows when the work was owed: no iteration is added for it, the loop asks at its
+/// bound as it would without it, and the person's answer decides whether the loop runs on to carry it. Written once, as
+/// the loop is found at its bound, so no later session carries the work again; null where no loop was asked for it.
+/// </param>
 public sealed record FlowUpdateEntry(
     string Id,
     string Cause,
@@ -260,7 +266,8 @@ public sealed record FlowUpdateEntry(
     IReadOnlyList<FlowUpdateTold>? Told = null,
     IReadOnlyList<string>? NotConcerned = null,
     IReadOnlyList<FlowNotDelivered>? NotDelivered = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? AddedIteration = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? AddedIteration = null,
+    string? AskedAtBound = null)
 {
     /// <summary>Each piece of the update, as it was placed; empty where the planning concluded no piece.</summary>
     public IReadOnlyList<FlowUpdatePiece> ThePieces => Pieces ?? [];
@@ -283,6 +290,7 @@ public sealed record FlowUpdateEntry(
             : NotConcerned?.Any(concerned => !FlowInstanceId.IsWellFormed(concerned)) == true ? "one it names as not concerned is not an instance's id"
             : NotDelivered?.Any(not => string.IsNullOrWhiteSpace(not.For) || string.IsNullOrWhiteSpace(not.Why)) == true ? "one not delivered names neither the work nor why"
             : AddedIteration is not null && !FlowInstanceId.IsWellFormed(AddedIteration) ? $"'{AddedIteration}' is not an instance's id"
+            : AskedAtBound is not null && !FlowInstanceId.IsWellFormed(AskedAtBound) ? $"'{AskedAtBound}' is not an instance's id"
             : null;
 
     /// <summary>The piece of this update that names the work item <paramref name="name"/>, where one does; null where none does.</summary>
@@ -397,9 +405,12 @@ public sealed record FlowUpdatesFile(
 }
 
 /// <summary>
-/// What a run refuses a change it is given - an amendment of its request, or a changed answer - before anything of
-/// it is recorded: the one owner of the gates every path into a plan update passes, the command's where a person
-/// gives one and the engine's where it takes one. Nothing is changed by a refusal, and no update is recorded for one.
+/// What a run refuses a change it is given - an amendment of its request, or a changed answer - before anything of it
+/// is carried out: the one owner of the gates every path into a plan update passes, the command's where a person gives
+/// one and the engine's where it takes one. Nothing the change asks for is made by a refusal. Where a person gives the
+/// change to a command, the command says why and records nothing; where the engine refuses one the run's records hold
+/// already - an amendment handed over in the inbox, or a change queued behind an update under way - its entry is
+/// recorded refused, with why, so the run says what became of it and never weighs it again.
 /// </summary>
 public static class FlowUpdateGates
 {
@@ -417,7 +428,7 @@ public static class FlowUpdateGates
             definition,
             flow.Run,
             flow.Status,
-            [.. flow.Steps.Select(step => new FlowStepAt(step.Step, step.State, step.Group, step.Iteration, step.Index, step.Visit))],
+            [.. flow.Steps.Select(step => new FlowStepAt(step.Step, step.State, step.Group, step.Iteration, step.Index, step.Visit, step.Instance))],
             updates?.Updates ?? [],
             cause);
 
@@ -501,12 +512,13 @@ public static class FlowUpdateGates
     /// <summary>
     /// Why the work-item group at <paramref name="group"/>, which has no loop around it, runs no round more for the work
     /// of a plan update once its newest round has ended; null where it runs one more. The one owner of that rule: the
-    /// gates read it where a change is given, and the engine where an update's plan stands, where it adds the round and
-    /// where it reads whether a round added waits to open. Such a group runs one round of its own and at most the rounds
-    /// <c>amend.maxAddedIterations</c> lets updates add - counted by the rounds the updates' entries name, never by the
-    /// group's visits, which a redirect adds to as well - and only where every group around it draws again: one still
-    /// open, or one that ended done, which is in progress again for the round. One that ended failed, skipped or never
-    /// run draws nothing more (<see cref="AroundEnded"/>).
+    /// gates read it where a change is given, and the engine where an update's plan stands and where it adds the round.
+    /// Such a group runs one round of its own and at most the rounds <c>amend.maxAddedIterations</c> lets updates add -
+    /// counted by the rounds the updates' entries name, never by the group's visits, which a redirect adds to as well -
+    /// and only where every group around it draws again: one still open, or one that ended done, which is in progress
+    /// again for the round. One that ended failed, skipped or never run draws nothing more (<see cref="AroundEnded"/>).
+    /// A round an update added that has not opened yet runs for every change given before it opens, which joins it
+    /// (<see cref="PendingRound"/>): the work owed to the group is handed whole to the check that opens it.
     /// </summary>
     /// <param name="definition">The definition as the run began with it, whose <c>amend</c> block bounds the rounds.</param>
     /// <param name="group">The path of the work-item group.</param>
@@ -522,11 +534,40 @@ public static class FlowUpdateGates
             return ended;
         }
 
+        if (PendingRound(group, steps, updates) is not null)
+        {
+            return null;
+        }
+
         var allowed = definition.Amend?.AddedIterationsAllowed ?? 0;
 
         return updates.Count(update => update.AddedIteration is not null) >= allowed
             ? $"updates have added the {allowed.ToString(CultureInfo.InvariantCulture)} round(s) amend.maxAddedIterations allows"
             : null;
+    }
+
+    /// <summary>
+    /// The round a plan update added to the work-item group at <paramref name="group"/>, which has no loop around it,
+    /// that has not opened yet, by the id of the group's visit it will be - the visit an update's entry names
+    /// (<see cref="FlowUpdateEntry.AddedIteration"/>) and the run's steps do not hold yet; null where none waits. None
+    /// waits where a group around it draws nothing more, for that round never opens (<see cref="AroundEnded"/>). The one
+    /// owner of that rule: the gates and <see cref="NoRoundMore"/> read it, so a change given while such a round waits
+    /// joins it, and the engine reads it where it adds a round, adding none while one waits.
+    /// </summary>
+    /// <param name="group">The path of the work-item group.</param>
+    /// <param name="steps">Every step instance the run holds, each by its instance's id.</param>
+    /// <param name="updates">Every plan update the run has taken.</param>
+    public static string? PendingRound(string group, IReadOnlyList<FlowStepAt> steps, IReadOnlyList<FlowUpdateEntry> updates)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        ArgumentNullException.ThrowIfNull(steps);
+        ArgumentNullException.ThrowIfNull(updates);
+
+        return AroundEnded(group, steps) is not null
+            ? null
+            : updates.Select(update => update.AddedIteration).FirstOrDefault(added => added is not null
+                && string.Equals(FlowInstanceId.PathOf(added), group, StringComparison.Ordinal)
+                && !steps.Any(step => string.Equals(step.Instance, added, StringComparison.Ordinal)));
     }
 
     /// <summary>
@@ -613,11 +654,12 @@ public static class FlowUpdateGates
     }
 }
 
-/// <summary>One step instance as the gates read it: its declaration's path, its state, and - a group's - its round.</summary>
+/// <summary>One step instance as the gates read it: its id, its declaration's path, its state, and - a group's - its round.</summary>
 /// <param name="Step">The declaration's path among the flow.</param>
 /// <param name="State">How the instance stands, as the engine's identifiers spell it.</param>
 /// <param name="Group">Whether this is a group's own record.</param>
 /// <param name="Iteration">The iteration of the repeat this instance is one of; null outside every one.</param>
 /// <param name="Index">The index of the work item an instance of a <c>forEach</c> group carries; null for the group's own visit and for every other step.</param>
 /// <param name="Visit">Which visit of its step in its scope the instance is, from 1: a group run again for a plan update is its next visit.</param>
-public readonly record struct FlowStepAt(string Step, string State, bool Group, int? Iteration, int? Index = null, int Visit = 1);
+/// <param name="Instance">The instance's id: what tells a visit an update's entry names from one the run holds.</param>
+public readonly record struct FlowStepAt(string Step, string State, bool Group, int? Iteration, int? Index = null, int Visit = 1, string? Instance = null);

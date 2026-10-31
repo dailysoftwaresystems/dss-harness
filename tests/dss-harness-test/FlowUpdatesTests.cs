@@ -117,6 +117,7 @@ public sealed class FlowUpdatesTests
         Assert.Equal("one it names as not concerned is not an instance's id", (entry with { NotConcerned = ["nobody!"] }).Problem());
         Assert.Equal("one not delivered names neither the work nor why", (entry with { NotDelivered = [new FlowNotDelivered("rounds.items[2].build", " ")] }).Problem());
         Assert.Equal("'later!' is not an instance's id", (entry with { AddedIteration = "later!" }).Problem());
+        Assert.Equal("'bound!' is not an instance's id", (entry with { AskedAtBound = "bound!" }).Problem());
     }
 
     /// <summary>
@@ -346,6 +347,13 @@ public sealed class FlowUpdatesTests
         Assert.Null(FlowUpdateGates.Refused(none, Rounds("Running", "Running"), Added(0), FlowUpdateCauses.Amendment));
         Assert.Null(FlowUpdateGates.Refused(one, Rounds("Running", "Done", "Done"), Added(0), FlowUpdateCauses.Amendment));
 
+        // The round an update added that has not opened yet - its entry names a visit the run does not hold - takes the
+        // change, which joins it, though it is the one round the allowance lets updates add.
+        Assert.Null(FlowUpdateGates.Refused(one, Rounds("Running", "Done"), Added(1), FlowUpdateCauses.Amendment));
+        Assert.Equal("rounds.items+2", FlowUpdateGates.PendingRound("rounds.items", Steps(Rounds("Running", "Done")), Added(1).Updates));
+        Assert.Null(FlowUpdateGates.PendingRound("rounds.items", Steps(Rounds("Running", "Done", "Running")), Added(1).Updates));
+        Assert.Null(FlowUpdateGates.PendingRound("rounds.items", Steps(Rounds("Failed", "Done")), Added(1).Updates));
+
         // The newest round has ended and no round more is run - the one added, or its own where none may be added.
         Assert.Equal(
             "run 'r1' is past the work items of 'rounds.items', with no loop around it: its last round has ended, and updates have added the 1 round(s) amend.maxAddedIterations allows - nothing would carry the change out. Start a run for the request once this one has ended",
@@ -359,6 +367,10 @@ public sealed class FlowUpdatesTests
             "run 'r1' is past the work items of 'rounds.items', with no loop around it: its last round has ended, and 'rounds', the group around it, ended failed and draws nothing more - nothing would carry the change out. Start a run for the request once this one has ended",
             FlowUpdateGates.Refused(one, Rounds("Failed", "Failed"), Added(0), FlowUpdateCauses.Amendment));
     }
+
+    /// <summary>The steps of <paramref name="flow"/> as the gates read them, each by its instance's id.</summary>
+    private static IReadOnlyList<FlowStepAt> Steps(FlowFile flow)
+        => [.. flow.Steps.Select(step => new FlowStepAt(step.Step, step.State, step.Group, step.Iteration, step.Index, step.Visit, step.Instance))];
 
     /// <summary>The run's plan updates: <paramref name="rounds"/> of them done, each having added a round of the work-item group.</summary>
     private static FlowUpdatesFile Added(int rounds)

@@ -151,6 +151,11 @@ public static class OrchestrationReports
         {
             yield return $"  {Flow.FlowReports.IterationSaidOf(added)} was added for update {update.Id}";
         }
+
+        if (update.AskedAtBound is { } asked)
+        {
+            yield return $"  {Flow.FlowReports.AskedAtBoundSaidOf(asked, update.Id)}";
+        }
     }
 
     private static string Line(AgentInventory agent)

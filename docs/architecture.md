@@ -2256,8 +2256,10 @@ finished from it by a session's start where a crash came between the two (`FlowC
 (`FlowUpdateGates.Refused`, read by the command over the run's files and by the engine over its own state): a run that
 is done, one past the step its `amend.before` names, one past the work items of its last round (a loop at its bound,
 or a work-item group with no loop around it whose newest round has ended and that runs no round more - updates have
-added every round `amend.maxAddedIterations` allows, counted by the rounds their entries name, or a group around it
-ended otherwise than done and draws nothing more, `FlowUpdateGates.NoRoundMore`, the one rule the engine reads too),
+added every round `amend.maxAddedIterations` allows, counted by the rounds their entries name, and none of them waits
+to open, or a group around it ended otherwise than done and draws nothing more, `FlowUpdateGates.NoRoundMore`, the one
+rule the engine reads too; a round an update added that the run's steps do not hold yet takes a change given
+meanwhile, which joins it, `FlowUpdateGates.PendingRound`),
 a definition whose `amend` names no such change. The command records nothing for a change it refuses; the engine
 records an amendment handed over through the inbox, or a queued change it can no longer take at its turn, `refused`
 with why, under its own id. The report lists every update, and `list-orchestrator` says where each stands.
@@ -2293,11 +2295,15 @@ group `amend.whenAddScope` names a step of), at once where the round is in progr
 round where it has not begun - which checks its own items and the owed ones as one list (`PlanCheckRunner`), its output
 `items` that list, so nothing joins a round unchecked. A `changed` or a `removed` piece finds the newest instance of the
 group whose item has its name: where it waits it is given the piece's item in the place of its own, or - `removed` -
-withdrawn before it began; where it has begun it is brought to rest (nothing more started in it, what it owed dropped,
-each reason step in flight given the handoff turn of a safe pause and stopped, `FlowCoordinator.SettlePiecesEndingAsync`,
-a runner that outlives its stop keeping what it claimed until it answers, and a step of it that ends otherwise than
-done - failed with a retry left or none, asking, or stopped by a pause or a stop - stopped for the update and never
-given a new attempt, `FlowCoordinator.StopForTheUpdate`) and then visited again, in its place and with its agent - a new
+withdrawn before it began; where it has begun - a step of it started, at any depth - it is brought to rest (nothing
+more started or drawn in it, what it owed dropped, what is drawn or raised in it since skipped, each reason step in
+flight given the handoff turn of a safe pause and stopped, `FlowCoordinator.SettlePiecesEndingAsync`, a runner that
+outlives its stop keeping what it claimed until it answers, and a step of it that ends otherwise than done - failed
+with a retry left or none, asking, past its time limit, or stopped by a pause or a stop - stopped for the update and
+never given a new attempt, `FlowCoordinator.StopForTheUpdate`; each of these reaches every step of a group nested in
+the instance, at any depth, by one walk down it, `FlowCoordinator.StepsWithin`, and its counterpart up from a step,
+`BeingEndedAround`, and each nested group ends stopped for the update once the instance has come to rest, never done
+over work the update takes back) and then visited again, in its place and with its agent - a new
 scope of the piece's kind in which the live agent a `create-agent` step made is taken and not made again, made and named
 in the piece's entry before the instance brought to rest ends, so a crash between finds it and never makes a second;
 where it has ended, one more work item of the group, with new agents. What an update did to an instance is in
@@ -2305,7 +2311,8 @@ the instance's own records - ended for the update (`FlowStepRecord.EndedFor`), t
 instance it was visited again in place of (`AgainOf`) - so no session after runs an instance an update ended, a resume
 goes on bringing one to rest, and the pieces are placed once from the update's entry however often a crash makes the
 engine meet its plan standing, an instance an earlier update visited again among them. A visit an update ended waits on
-nothing and is counted ended by the status (`FlowStatus.IsLeft`). Every instance of the group is of one kind, and the step its kind names runs in the place of the one
+nothing and is counted ended by the status, by the engine's own rule (`FlowInstance.IsStoppedForAnUpdate`, read by
+`FlowStatus.IsLeft`). Every instance of the group is of one kind, and the step its kind names runs in the place of the one
 `whenAddScope` names - under its name, with its dependencies and its `when` (`FlowCoordinator.DrawWorkItemPlace`) - the
 other two alternatives skipped in its instance, saying why; a read of the add step (`{add.latest}`) or a resume of it
 follows whichever ran (`FlowCoordinator.EndedDoneLastOf`, which `<step>.latest` reads for every step that goes on with
@@ -2337,13 +2344,17 @@ progress again (`FlowCoordinator.OpenTheRoundAgain`, called again from the entry
 not yet drawn); the check is handed the owed work with its own items as one list, and the visit carries the owed work
 alone (`FlowCoordinator.OpenGroup`), never the items the round before built. An iteration or a round is added once per
 update, at most `amend.maxAddedIterations` over the run, published as an `iterationAdded` event and kept in the entry
-(`FlowUpdateEntry.AddedIteration`, said by `FlowReports.IterationSaidOf` as round n of the loop or of the group); what
+(`FlowUpdateEntry.AddedIteration`, said by `FlowReports.IterationSaidOf` as round n of the loop or of the group); a
+loop at its bound where the run has been given every iteration allowed asks its bound for the owed work, each owing
+entry saying so once (`FlowUpdateEntry.AskedAtBound`), and the answer decides whether the loop runs on to carry it. What
 an update done owes is carried from its entry at every session's start too, so a crash between the update's end and
-its carry loses nothing. Where the group runs no round more - the run has none left to add, or a group around it
+its carry loses nothing, and an entry that says its carry was made - the iteration or round added, or its loop's bound
+asked - is carried no second time, so a loop the bound's answer ended is never run again for it. Where the group runs no round more - the run has none left to add, or a group around it
 ended otherwise than done and draws nothing more (`FlowUpdateGates.NoRoundMore`, the gates' rule) - an update whose
 work only an added round would carry is given up with why before anything is placed, its pieces never carried out
 (`FlowCoordinator.NoRoundForTheWork`). The report and
-`list-orchestrator` say every piece, where it was carried out and how that ended, the iteration or round added, and who
+`list-orchestrator` say every piece, where it was carried out and how that ended, the iteration or round added, a loop's
+bound asked for the work (`FlowReports.AskedAtBoundSaidOf`), and who
 was told what, who was not concerned and what was not delivered.
 Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for

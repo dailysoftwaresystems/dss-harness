@@ -389,6 +389,7 @@ public static class FlowReports
             ["why"] = one.Why,
         })]) : null,
         ["addedIteration"] = update.AddedIteration,
+        ["askedAtBound"] = update.AskedAtBound,
     };
 
     /// <summary>One piece of a plan update as the report's JSON document holds it: its kind, its work item, and where it stands.</summary>
@@ -403,6 +404,16 @@ public static class FlowReports
         ["again"] = piece.Again,
         ["ended"] = piece.Ended,
     };
+
+    /// <summary>
+    /// That a loop's bound was asked for the work an update owes it, as the report and <c>list-orchestrator</c> say it:
+    /// the run had been given every iteration <c>amend.maxAddedIterations</c> allows, and the answer to the bound's
+    /// question decides whether the loop runs on to carry the work.
+    /// </summary>
+    /// <param name="loop">The loop's instance, as the update's entry names it.</param>
+    /// <param name="update">The update's id.</param>
+    internal static string AskedAtBoundSaidOf(string loop, string update)
+        => $"'{loop}' asked at its bound for the work update {update} owes it: the run had been given every iteration amend.maxAddedIterations allows";
 
     /// <summary>
     /// An iteration or a round an update added, as the report says it - <c>round 3 of 'rounds'</c> - read of its own id:
@@ -568,6 +579,11 @@ public static class FlowReports
                 if (update.AddedIteration is { } added)
                 {
                     text.Add($"  - {IterationSaidOf(added)} was added for update {update.Id}");
+                }
+
+                if (update.AskedAtBound is { } asked)
+                {
+                    text.Add($"  - {AskedAtBoundSaidOf(asked, update.Id)}");
                 }
 
                 foreach (var one in update.Told ?? [])

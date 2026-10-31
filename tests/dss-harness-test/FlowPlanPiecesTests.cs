@@ -754,9 +754,110 @@ public sealed class FlowPlanPiecesTests
             StringComparison.Ordinal);
 
     /// <summary>
+    /// A clock that moves only when told, whose waits pass only when a test passes them: so a test orders what the engine
+    /// does against the waits it asks - a retry's, a time limit's, a drain's - and knows when each was asked.
+    /// </summary>
+    private sealed class HeldClock : ManualClock
+    {
+        private readonly Lock _gate = new();
+        private readonly List<Held> _held = [];
+        private readonly Dictionary<TimeSpan, TaskCompletionSource> _asked = [];
+
+        /// <summary>Waits until a wait of <paramref name="due"/> has been asked of the clock.</summary>
+        public Task AskedAsync(TimeSpan due)
+        {
+            lock (_gate)
+            {
+                return AskedOf(due).Task;
+            }
+        }
+
+        /// <summary>Moves the clock on by <paramref name="due"/>, and passes every wait of that length asked of it and neither passed nor given up yet.</summary>
+        public void Pass(TimeSpan due)
+        {
+            List<Held> passing;
+
+            lock (_gate)
+            {
+                passing = [.. _held.Where(held => held.Due == due)];
+                _ = _held.RemoveAll(held => held.Due == due);
+                Advance(due);
+            }
+
+            // Each wait's end is posted to the thread pool rather than run here, as a timer's is.
+            foreach (var held in passing)
+            {
+                _ = ThreadPool.QueueUserWorkItem(_ => held.Callback(held.State));
+            }
+        }
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            lock (_gate)
+            {
+                return base.GetUtcNow();
+            }
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var held = new Held(this, callback, state, dueTime);
+
+            lock (_gate)
+            {
+                _held.Add(held);
+                _ = AskedOf(dueTime).TrySetResult();
+            }
+
+            return held;
+        }
+
+        /// <summary>The signal of a wait of <paramref name="due"/> asked, made the first time it is looked for; under the gate.</summary>
+        private TaskCompletionSource AskedOf(TimeSpan due)
+        {
+            if (!_asked.TryGetValue(due, out var asked))
+            {
+                asked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _asked.Add(due, asked);
+            }
+
+            return asked;
+        }
+
+        /// <summary>One wait asked of the clock, passed only by <see cref="Pass"/>; given up by its owner's dispose.</summary>
+        private sealed class Held(HeldClock clock, TimerCallback callback, object? state, TimeSpan due) : ITimer
+        {
+            public TimeSpan Due => due;
+
+            public TimerCallback Callback => callback;
+
+            public object? State => state;
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) => false;
+
+            public void Dispose()
+            {
+                lock (clock._gate)
+                {
+                    _ = clock._held.Remove(this);
+                }
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
+    /// <summary>
     /// A step of an instance a plan update brings to rest that waits on its retry when the piece is placed is never given
-    /// that retry: it ends stopped for the update as the piece is placed, and the instance comes to rest and is visited
-    /// again in its place.
+    /// that retry: the retry is dropped with what the instance owed, the step ends stopped for the update as the piece is
+    /// placed, and the instance comes to rest and is visited again in its place. The order is the clock's: the amendment
+    /// is handed over once the retry's wait is asked, and that wait is passed once the piece is placed. A step that fails
+    /// after the piece is placed ends by the step's own answer
+    /// (<see cref="AStepThatFailsInAnInstanceBroughtToRest_IsNeverRetried_AndTheInstanceComesToRest"/>).
     /// </summary>
     [Fact]
     public async Task AStepWaitingOnItsRetry_InAnInstanceBroughtToRest_IsStoppedForTheUpdate()
@@ -766,9 +867,9 @@ public sealed class FlowPlanPiecesTests
         var (harness, layout, records) = Records("r1", temp.Path, definition);
         var again = Item("one");
         again["title"] = "The one item, done differently";
+        var clock = new HeldClock();
 
-        // The first item's lint meets inputs that moved, which the retry table runs again after a wait - on a clock that
-        // never moves, so its retry waits for as long as the test runs; the planning of the update is held until then.
+        // The first item's lint meets inputs that moved, which the retry table runs again after 10 s.
         var runner = new FakeRunner()
             .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
             .On("item-check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
@@ -779,33 +880,138 @@ public sealed class FlowPlanPiecesTests
             }))
             .On("lint", run => run.Instance == "rounds.items[0].lint"
                 ? FlowStepResult.Ended(passed: false, DssHarness.Core.Execution.LegExit.InputsMoved, error: "the inputs moved")
-                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var planned = runner.Hold("planupdate");
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                new JsonArray(Piece("changed", again.DeepClone(), "the one item is done differently")),
+                again)));
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
 
+            // The lint waits on its retry before the amendment is handed over.
             var session = coordinator.RunAsync(Token);
-            await runner.StartedAsync("rounds.items[0].lint").WaitAsync(Bound, Token);
-
-            // The lint's ending reaches the loop before the amendment, which is handed over behind it.
-            await Task.Delay(200, Token);
+            await clock.AskedAsync(TimeSpan.FromSeconds(10)).WaitAsync(Bound, Token);
             Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
-            await runner.StartedAsync("planning.planupdate").WaitAsync(Bound, Token);
-            planned.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
-                new JsonArray(Piece("changed", again.DeepClone(), "the one item is done differently")),
-                again)));
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0]" && step.EndedFor == "u1"));
 
+            // The retry's wait passes once the piece is placed: a retry still owed would run the lint again now.
+            clock.Pass(TimeSpan.FromSeconds(10));
             _ = await session.WaitAsync(Bound, Token);
 
             Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
             var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
             Assert.Equal((nameof(FlowInstanceState.Stopped), "u1", 1), (steps["rounds.items[0].lint"].State, steps["rounds.items[0].lint"].EndedFor, steps["rounds.items[0].lint"].Attempt));
             Assert.Single(runner.Started, started => started == "rounds.items[0].lint");
+        }
+    }
+
+    /// <summary>The flow of <see cref="WithLint"/> whose lint has a time limit of one minute.</summary>
+    private static string TimedLint()
+        => WithLint().Replace(
+            "            type: orient\n            dependsOn: [make]\n",
+            "            type: orient\n            dependsOn: [make]\n            timeoutMinutes: 1\n",
+            StringComparison.Ordinal);
+
+    /// <summary>
+    /// A step of an instance a plan update is bringing to rest that passes its time limit, and whose runner does not end
+    /// within the drain's bound, ends stopped for the update as every step there does: no failure is decided for it - no
+    /// retry, no question and no policy - and the instance comes to rest and is visited again in its place.
+    /// </summary>
+    [Fact]
+    public async Task AStepPastItsTimeLimit_InAnInstanceBroughtToRest_EndsStoppedForTheUpdate()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(TimedLint());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var clock = new HeldClock();
+        var runner = ChangingOne();
+        var lint = runner.HoldPastItsStop("lint");
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The amendment reaches the session while the item's lint is in flight; once its piece is placed, the lint
+            // passes its time limit, and its runner outlives the drain's bound.
+            var session = coordinator.RunAsync(Token);
+            await clock.AskedAsync(TimeSpan.FromMinutes(1)).WaitAsync(Bound, Token);
+            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0]" && step.EndedFor == "u1"));
+
+            clock.Pass(TimeSpan.FromMinutes(1));
+            await clock.AskedAsync(DssHarness.Core.Execution.PointOfNoReturn.SafePauseDrain).WaitAsync(Bound, Token);
+            clock.Pass(DssHarness.Core.Execution.PointOfNoReturn.SafePauseDrain);
+            _ = await session.WaitAsync(Bound, Token);
+
+            Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal((nameof(FlowInstanceState.Stopped), "u1", (string?)null), (steps["rounds.items[0].lint"].State, steps["rounds.items[0].lint"].EndedFor, steps["rounds.items[0].lint"].Failure));
+
+            // The runner that outlived its stop answers at last, and says nothing of the run.
+            lint.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        }
+    }
+
+    /// <summary>
+    /// The flow of <see cref="WithReconcile"/> whose nested group holds a handler raised by its catch-up's success, as a
+    /// step's ending raises one.
+    /// </summary>
+    private static string CatchUpHandled()
+        => WithReconcile().Replace(
+            "              - name: catch-up\n                type: orient\n",
+            "              - name: catch-up\n                type: orient\n              - name: after-catch-up\n                type: orient\n                on:\n                  step: catch-up\n                  outcome: success\n",
+            StringComparison.Ordinal);
+
+    /// <summary>
+    /// What a step's ending raises or frees in a group nested in an instance a plan update is bringing to rest never starts
+    /// there: a handler its success raises is held and skipped as what never started in the instance is, a step that
+    /// waited on it is never drawn, the group ends stopped for the update once the instance has come to rest, and the
+    /// instance is visited again in its place, where the handler runs for the catch-up of that visit.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerRaisedInANestedGroupOfAnInstanceBroughtToRest_NeverStarts_AndTheInstanceComesToRest()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(CatchUpHandled());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = ChangingOne();
+        var catchUp = runner.Hold("catch-up");
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The catch-up runs to its own end once the piece is placed, and its success raises the handler.
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[0].reconcile.catch-up").WaitAsync(Bound, Token);
+            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0]" && step.EndedFor == "u1"));
+            catchUp.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+            _ = await session.WaitAsync(Bound, Token);
+
+            Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal(
+                [
+                    ("rounds.items[0].reconcile", nameof(FlowInstanceState.Stopped), null, "u1"),
+                    ("rounds.items[0].reconcile.catch-up", nameof(FlowInstanceState.Done), null, null),
+                    ("rounds.items[0].reconcile.after-catch-up", nameof(FlowInstanceState.Skipped), "withdrawn before it started: ended for update u1", null),
+                    ("rounds.items[0].reconcile.settle", nameof(FlowInstanceState.Skipped), "ended for update u1", null),
+                ],
+                new[] { "rounds.items[0].reconcile", "rounds.items[0].reconcile.catch-up", "rounds.items[0].reconcile.after-catch-up", "rounds.items[0].reconcile.settle" }
+                    .Select(id => (id, steps[id].State, steps[id].SkippedBecause, steps[id].EndedFor)));
+            Assert.DoesNotContain(runner.Started, started => started is "rounds.items[0].reconcile.after-catch-up" or "rounds.items[0].reconcile.settle");
+            Assert.Equal(nameof(FlowInstanceState.Done), steps["rounds.items[1].reconcile.after-catch-up"].State);
         }
     }
 
@@ -880,7 +1086,8 @@ public sealed class FlowPlanPiecesTests
 
             coordinator.RequestStop();
             var stopped = await session.WaitAsync(Bound, Token);
-            Assert.True(FlowRunStatus.Stopped == stopped.Status, stopped.Summary);        }
+            Assert.True(FlowRunStatus.Stopped == stopped.Status, stopped.Summary);
+        }
 
         var (_, _, again) = Records("r1", temp.Path, definition);
         var resumedRunner = ChangingOne();
@@ -896,6 +1103,346 @@ public sealed class FlowPlanPiecesTests
             var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
             Assert.Equal((nameof(FlowInstanceState.Stopped), "u1"), (steps["rounds.items[0].lint"].State, steps["rounds.items[0].lint"].EndedFor));
             Assert.Equal((nameof(FlowInstanceState.Stopped), "u1"), (steps["rounds.items[0]"].State, steps["rounds.items[0]"].EndedFor));
+        }
+    }
+
+    /// <summary>
+    /// The flow of <see cref="Flow"/> whose work item holds a nested group before its build, as the shipped workflow's
+    /// reconcile does: <c>catch-up</c>, a machine step, then <c>settle</c>, a reason step in the item's agent; the build
+    /// waits for the group.
+    /// </summary>
+    private static string WithReconcile()
+        => Flow.Replace(
+            "          - name: probe\n",
+            "          - name: reconcile\n            dependsOn: [make]\n            steps:\n              - name: catch-up\n                type: orient\n              - name: settle\n                type: reason\n                agent: builder\n                in: make\n                dependsOn: [catch-up]\n                prompt: settle.md\n                outputs: out.json\n          - name: probe\n",
+            StringComparison.Ordinal).Replace(
+            "            dependsOn: [make]\n            prompt: build.md\n",
+            "            dependsOn: [make, reconcile]\n            prompt: build.md\n",
+            StringComparison.Ordinal);
+
+    /// <summary>The runner of <see cref="WithReconcile"/> that changes "one", whose first run of <paramref name="held"/> stays in flight until its attempt is ended, and every later run answers at once.</summary>
+    private static FakeRunner HoldingFirst(string held)
+    {
+        var runs = 0;
+
+        return ChangingOne().OnAsync(held, async (_, token) =>
+        {
+            if (Interlocked.Increment(ref runs) == 1)
+            {
+                await Task.Delay(Timeout.Infinite, token);
+            }
+
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+    }
+
+    /// <summary>How every instance of the first item's nested group, and the item itself, stands in the run's records: its state, and the update it was ended for.</summary>
+    private static IReadOnlyList<(string Instance, string State, string? EndedFor)> NestedOf(HarnessFactory harness, OrchestratorLayout layout)
+    {
+        var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+
+        return [.. new[] { "rounds.items[0]", "rounds.items[0].reconcile", "rounds.items[0].reconcile.catch-up", "rounds.items[0].reconcile.settle" }
+            .Select(id => (id, steps[id].State, steps[id].EndedFor))];
+    }
+
+    /// <summary>
+    /// A group nested in an instance a plan update is bringing to rest whose every step has ended while another step of
+    /// the instance is still in flight stays open: it never ends done over work the update takes back, and ends stopped
+    /// for the update with the instance once the instance has come to rest.
+    /// </summary>
+    [Fact]
+    public async Task ANestedGroupWhoseStepsHaveEnded_InAnInstanceBroughtToRest_EndsStoppedForTheUpdate_NeverDone()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(WithLint().Replace(
+            "          - name: probe\n",
+            "          - name: reconcile\n            dependsOn: [make]\n            steps:\n              - name: catch-up\n                type: orient\n          - name: probe\n",
+            StringComparison.Ordinal));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = ChangingOne();
+        var lint = runner.Hold("lint");
+        var catchUp = runner.Hold("catch-up");
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The piece is placed while the lint and the nested catch-up are in flight; the catch-up ends first, which
+            // ends every step of its group, and the lint after it.
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[0].lint").WaitAsync(Bound, Token);
+            await runner.StartedAsync("rounds.items[0].reconcile.catch-up").WaitAsync(Bound, Token);
+            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0]" && step.EndedFor == "u1"));
+            catchUp.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0].reconcile.catch-up" && step.State == nameof(FlowInstanceState.Done)));
+            lint.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+            _ = await session.WaitAsync(Bound, Token);
+
+            Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal((nameof(FlowInstanceState.Stopped), "u1"), (steps["rounds.items[0].reconcile"].State, steps["rounds.items[0].reconcile"].EndedFor));
+        }
+    }
+
+    /// <summary>
+    /// An instance of the work-item group whose only step under way is one of a group nested in it has begun: a changed
+    /// piece against it brings it to rest and visits it again in its place, never gives it the piece's item in the place
+    /// of its own while that step works on the item it had. The second item's nested catch-up starts while its agent waits
+    /// for the first item's to close.
+    /// </summary>
+    [Fact]
+    public async Task AnInstanceWhoseNestedStepHasStarted_HasBegun_AndIsBroughtToRestForAChangedPiece()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(WithReconcile().Replace(
+            "          - name: reconcile\n            dependsOn: [make]\n",
+            "          - name: reconcile\n",
+            StringComparison.Ordinal)) with { MaxOpenAgents = 1 };
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var two = Item("two");
+        two["title"] = "The two item, done differently";
+        var caughtUp = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"), Item("two"))))
+            .On("item-check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = run.Read!["items"]!.ToNode()!.DeepClone(),
+            }))
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                new JsonArray(Piece("changed", two.DeepClone(), "the two item is done differently")),
+                Item("one"),
+                two)))
+            .OnAsync("catch-up", (run, _) => run.Instance == "rounds.items[1].reconcile.catch-up" ? caughtUp.Task : Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)));
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[1].reconcile.catch-up").WaitAsync(Bound, Token);
+            Assert.Equal(nameof(FlowInstanceState.NotStarted), harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "rounds.items[1].make").State);
+            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the two item is different").WaitAsync(Bound, Token));
+
+            // The piece brings the second item to rest; its catch-up runs to its own end there, and it is visited again.
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[1]" && step.EndedFor == "u1"));
+            caughtUp.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+            _ = await session.WaitAsync(Bound, Token);
+
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal((nameof(FlowInstanceState.Stopped), "u1"), (steps["rounds.items[1]"].State, steps["rounds.items[1]"].EndedFor));
+            Assert.Equal("The two item", (steps["rounds.items[1]"].Item as JsonObject)?["title"]?.GetValue<string>());
+            Assert.Equal("The two item, done differently", (steps["rounds.items[2]"].Item as JsonObject)?["title"]?.GetValue<string>());
+            var piece = UpdatesOf(harness, layout).Updates.Single().ThePieces.Single();
+            Assert.Equal(("rounds.items[1]", "rounds.items[2]"), (piece.Placed, piece.Again));
+        }
+    }
+
+    /// <summary>
+    /// A reason step of a group nested in an instance a plan update brings to rest is one of the instance's steps: it is
+    /// asked for its handoff in its own conversation and stopped for the update, the group around it ends stopped for
+    /// the update once every step of the instance has ended, and the instance comes to rest and is visited again in its
+    /// place.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepOfANestedGroup_InAnInstanceBroughtToRest_IsAskedForItsHandoff_AndTheInstanceComesToRest()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(WithReconcile());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = HoldingFirst("settle");
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The amendment reaches the session while the nested settle is in flight.
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[0].reconcile.settle").WaitAsync(Bound, Token);
+            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            _ = await session.WaitAsync(Bound, Token);
+
+            Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
+            Assert.Equal(
+                [
+                    ("rounds.items[0]", nameof(FlowInstanceState.Stopped), "u1"),
+                    ("rounds.items[0].reconcile", nameof(FlowInstanceState.Stopped), "u1"),
+                    ("rounds.items[0].reconcile.catch-up", nameof(FlowInstanceState.Done), null),
+                    ("rounds.items[0].reconcile.settle", nameof(FlowInstanceState.Stopped), "u1"),
+                ],
+                NestedOf(harness, layout));
+
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal("agent", steps["rounds.items[0].reconcile.settle"].Handoff?.By);
+            Assert.Equal((nameof(FlowInstanceState.Skipped), "ended for update u1"), (steps["rounds.items[0].build"].State, steps["rounds.items[0].build"].SkippedBecause));
+            Assert.Single(runner.Started, started => started == "rounds.items[0].reconcile.settle");
+
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+        }
+    }
+
+    /// <summary>
+    /// A machine step of a group nested in an instance a plan update is bringing to rest, which a stop stopped, is not run
+    /// again at the resume: it ends stopped for the update, the group around it too, and the session visits the instance
+    /// again in its place.
+    /// </summary>
+    [Fact]
+    public async Task AStepOfANestedGroupAStopStopped_InAnInstanceBroughtToRest_IsNotRunAgainAtTheResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(WithReconcile());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = HoldingFirst("catch-up");
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The item is being brought to rest, the nested catch-up in flight, when the run is stopped.
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[0].reconcile.catch-up").WaitAsync(Bound, Token);
+            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0]" && step.EndedFor == "u1"));
+
+            coordinator.RequestStop();
+            var stopped = await session.WaitAsync(Bound, Token);
+            Assert.True(FlowRunStatus.Stopped == stopped.Status, stopped.Summary);
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var resumedRunner = ChangingOne();
+
+        using (again)
+        {
+            var resumed = CoordinatorOf(definition, resumedRunner, again, harness, layout, ResumeOf(harness, layout, definition));
+            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal("rounds.items[1].probe", resumed.OpenQuestions.Single().Instance);
+            Assert.DoesNotContain(resumedRunner.Started, started => started.StartsWith("rounds.items[0].", StringComparison.Ordinal));
+            Assert.Equal(
+                [
+                    ("rounds.items[0]", nameof(FlowInstanceState.Stopped), "u1"),
+                    ("rounds.items[0].reconcile", nameof(FlowInstanceState.Stopped), "u1"),
+                    ("rounds.items[0].reconcile.catch-up", nameof(FlowInstanceState.Stopped), "u1"),
+                    ("rounds.items[0].reconcile.settle", nameof(FlowInstanceState.Skipped), null),
+                ],
+                NestedOf(harness, layout));
+        }
+    }
+
+    /// <summary>
+    /// A crash while an instance with a step of a nested group in flight is brought to rest loses nothing: the session
+    /// that takes the run up ends that step stopped for the update - it never runs again, and nothing waits on a runner
+    /// the crash ended - and the instance comes to rest and is visited again in its place.
+    /// </summary>
+    [Fact]
+    public async Task ACrashWithAStepOfANestedGroupInFlight_InAnInstanceBroughtToRest_IsGoneOnFromByTheResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(WithReconcile());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = HoldingFirst("catch-up");
+        var crashing = new CrashingRecords(records, updates => updates.Updates.Any(update => update.State == FlowUpdateStates.Done));
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, crashing, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The process ends once the update is done, the nested catch-up still in flight; the session's own end is
+            // never written.
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[0].reconcile.catch-up").WaitAsync(Bound, Token);
+            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            _ = await UntilAsync(harness, layout, _ => crashing.Ended);
+            coordinator.RequestStop();
+            _ = await session.WaitAsync(Bound, Token);
+        }
+
+        // On disk: the nested catch-up in flight, as the crash left it.
+        var cut = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "rounds.items[0].reconcile.catch-up");
+        Assert.Equal((nameof(FlowInstanceState.Running), (string?)null), (cut.State, cut.EndedFor));
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var resumedRunner = ChangingOne();
+
+        using (again)
+        {
+            var resumed = CoordinatorOf(definition, resumedRunner, again, harness, layout, ResumeOf(harness, layout, definition));
+            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal("rounds.items[1].probe", resumed.OpenQuestions.Single().Instance);
+            Assert.DoesNotContain(resumedRunner.Started, started => started.StartsWith("rounds.items[0].", StringComparison.Ordinal));
+            Assert.Equal(
+                [
+                    ("rounds.items[0]", nameof(FlowInstanceState.Stopped), "u1"),
+                    ("rounds.items[0].reconcile", nameof(FlowInstanceState.Stopped), "u1"),
+                    ("rounds.items[0].reconcile.catch-up", nameof(FlowInstanceState.Stopped), "u1"),
+                    ("rounds.items[0].reconcile.settle", nameof(FlowInstanceState.Skipped), null),
+                ],
+                NestedOf(harness, layout));
+        }
+    }
+
+    /// <summary>
+    /// A reason step of a nested group that a safe pause stopped, and that the resume gives a new attempt, never starts in
+    /// an instance a plan update taken meanwhile brings to rest: it is held while the update is planned, skipped as the
+    /// piece is placed, and the instance comes to rest and is visited again in its place.
+    /// </summary>
+    [Fact]
+    public async Task AStepOfANestedGroupAPauseStopped_NeverStartsInAnInstanceBroughtToRest()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(WithReconcile());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = HoldingFirst("settle");
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The run is paused safely while the nested settle is in flight: it hands off and stops.
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[0].reconcile.settle").WaitAsync(Bound, Token);
+            coordinator.RequestPause("command");
+            var paused = await session.WaitAsync(Bound, Token);
+            Assert.True(FlowRunStatus.Paused == paused.Status, paused.Summary);
+
+            // The amendment is taken while the run is paused, and the next session plans it and places its piece.
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("the one item is different", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
+            Assert.Single(runner.Started, started => started == "rounds.items[0].reconcile.settle");
+
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal(
+                (nameof(FlowInstanceState.Skipped), "withdrawn before it started: ended for update u1"),
+                (steps["rounds.items[0].reconcile.settle"].State, steps["rounds.items[0].reconcile.settle"].SkippedBecause));
+            Assert.Equal(
+                [("rounds.items[0]", nameof(FlowInstanceState.Stopped), "u1"), ("rounds.items[0].reconcile", nameof(FlowInstanceState.Stopped), "u1")],
+                NestedOf(harness, layout).Take(2));
         }
     }
 

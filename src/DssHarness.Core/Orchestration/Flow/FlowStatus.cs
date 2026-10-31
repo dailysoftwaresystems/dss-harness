@@ -461,9 +461,9 @@ public static class FlowStatus
     private static bool IsEnded(FlowStepRecord step)
         => EndedStates.Contains(step.State) || EndedForAnUpdate(step);
 
-    /// <summary>Whether <paramref name="step"/> is a visit a plan update ended: stopped for the update, never run again.</summary>
+    /// <summary>Whether <paramref name="step"/> is a visit a plan update ended: stopped for the update, never run again - the engine's own rule (<see cref="FlowInstance.IsStoppedForAnUpdate"/>), read of the step's record.</summary>
     private static bool EndedForAnUpdate(FlowStepRecord step)
-        => step.State == nameof(FlowInstanceState.Stopped) && step.EndedFor is not null;
+        => Enum.TryParse<FlowInstanceState>(step.State, out var state) && FlowInstance.IsStoppedForAnUpdate(state, step.EndedFor);
 
     /// <summary>The rows under the header: each label once, its lines under it, the rest indented to the label's width.</summary>
     private static IReadOnlyList<string> Rows(IReadOnlyList<(string Label, IReadOnlyList<string> Lines)> rows)
