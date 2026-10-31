@@ -411,7 +411,7 @@ public sealed class FlowOthersTests
         var end = await session.WaitAsync(TimeSpan.FromSeconds(30), Token);
 
         Assert.Equal(FlowInstanceState.NotStarted, first.State);
-        Assert.Equal(["claim"], first.WaitsOn);
+        Assert.Equal([FlowWaits.Claim], first.WaitsOn);
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal(
             [new FlowTargetRecord("a2", FlowTargetRecord.Done, 1, HarnessExit.Success), new FlowTargetRecord("a3", FlowTargetRecord.Done, 1, HarnessExit.Success)],
@@ -481,7 +481,7 @@ public sealed class FlowOthersTests
         var end = await session.WaitAsync(TimeSpan.FromSeconds(30), Token);
 
         Assert.Equal(FlowInstanceState.NotStarted, waiting.State);
-        Assert.Equal(["claim"], waiting.WaitsOn);
+        Assert.Equal([FlowWaits.Claim], waiting.WaitsOn);
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal(
             [("a2", FlowTargetRecord.Done), ("a3", FlowTargetRecord.PassedOver), ("a4", FlowTargetRecord.Done)],

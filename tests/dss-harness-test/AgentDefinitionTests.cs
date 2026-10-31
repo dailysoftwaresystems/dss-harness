@@ -119,6 +119,36 @@ public sealed class AgentDefinitionTests
         Assert.Equal(["the file holds no prompt: the body after its frontmatter is the agent's system prompt, verbatim"], noPrompt);
         Assert.Null(closed);
         Assert.Equal(["the file holds no prompt: the body after its frontmatter is the agent's system prompt, verbatim"], endsAtTheClosingLine);
+
+        // An empty file, and one of blank lines alone, hold no frontmatter either: said as a problem, never thrown.
+        foreach (var blank in new[] { string.Empty, "  \n\n" })
+        {
+            var (nothing, noKeys) = AgentDefinitionParser.Parse(blank, "worker");
+
+            Assert.Null(nothing);
+            Assert.Equal(["the file holds no frontmatter: '---' on the first line, the agent's keys, '---' again, and the system prompt after it"], noKeys);
+        }
+    }
+
+    /// <summary>
+    /// A limit is a whole number as every whole number of a workflow's files is read, and a budget an amount: a value
+    /// that is not one is said once, with its line - a list where a number stands among them.
+    /// </summary>
+    [Fact]
+    public void ALimitThatIsNoWholeNumber_IsSaidOnceWithItsLine()
+    {
+        var (definition, problems) = AgentDefinitionParser.Parse(
+            "---\nname: worker\ndescription: does the work\nmaxTurns: many\nstallSeconds: [1, 2]\nmaxBudgetUsd: [3]\n---\nYou do the work.\n",
+            "worker");
+
+        Assert.Null(definition);
+        Assert.Equal(
+            [
+                "line 4, column 11: 'maxTurns' is 'many', which is not a whole number.",
+                "line 5, column 15: 'stallSeconds' is not a single value.",
+                "line 6, column 15: 'maxBudgetUsd' is not a single value.",
+            ],
+            problems);
     }
 
     /// <summary>A key of another tool's agent files names the key of this tool's that says it.</summary>

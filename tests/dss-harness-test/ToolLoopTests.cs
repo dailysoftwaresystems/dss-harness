@@ -770,6 +770,21 @@ public sealed class ToolLoopTests : IDisposable
     }
 
     /// <summary>
+    /// A run the engine made the session id of begins its conversation as that id - the one a skill's
+    /// <c>${CLAUDE_SESSION_ID}</c> in its prompt was given - and says it where its session begins.
+    /// </summary>
+    [Fact]
+    public async Task ARunTheEngineMadeTheSessionIdOf_BeginsItsConversationAsThatId()
+    {
+        _chat.Answer(FakeChat.Said("done"));
+        const string id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+        var result = await Ran(Run() with { SessionId = id });
+
+        Assert.Equal((id, id), (result.Session, Assert.Single(_events.All.OfType<SessionStarted>()).SessionId));
+    }
+
+    /// <summary>
     /// What a run says of itself: the session it began with its tools and its credential's name, each turn numbered and
     /// finished with what it used, the cumulative usage, and the cost counted at the model's prices.
     /// </summary>
@@ -778,12 +793,13 @@ public sealed class ToolLoopTests : IDisposable
     {
         Write("a.txt", "alpha");
         _chat.Answer(FakeChat.Calling(View("c1", "a.txt"))).Answer(FakeChat.Said("done"));
-        var run = Run() with { Skills = [new AgentSkill("review", "the run's skills", "digest", "folder digest", "review")] };
+        var skill = new AgentSkill("review", ".harness-config/skills", "SKILL.md", "digest", "folder digest", "review");
+        var run = Run() with { Skills = [skill] };
 
         var result = await Ran(run);
 
         var began = Assert.Single(_events.All.OfType<SessionStarted>());
-        Assert.Equal(["review"], began.Skills);
+        Assert.Equal([skill], began.Skills);
         Assert.Equal(AgentCredentialSource.EnvironmentFile, began.Credential!.Kind);
         Assert.Equal([FakeChat.Used(), FakeChat.Used()], _events.All.OfType<UsageReported>().Select(used => used.Turn));
         Assert.Equal(("claude-api", FakeChat.Model, "WORK_KEY", false), (began.Client, began.Model, began.Credential!.Variable, began.HandedConversation));

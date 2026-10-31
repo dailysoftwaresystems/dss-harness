@@ -52,35 +52,13 @@ public sealed record AgentResolution(AgentModelEntry Serving, IReadOnlyList<Agen
     {
         ArgumentNullException.ThrowIfNull(providers);
 
-        // The model, most specific first: the step's own, the first of its tier, the definition's own, the first of the
-        // definition's tier, the first of the default tier's - and the tier the model came from, which its order is: a
-        // model named outright, by the step or by the definition, has no tier and no other model after it.
-        string? fromTier = null;
+        // The model, most specific first (Picked): the step's own, the first of its tier, the definition's own, the first
+        // of the definition's tier, the first of the default tier's - and the tier the model came from, which its order
+        // is: a model named outright, by the step or by the definition, has no tier and no other model after it.
+        var picked = Picked(tier, model, definition);
+        var fromTier = picked.Model is null ? picked.Tier ?? providers.DefaultTier : null;
 
-        if (model is null && tier is not null)
-        {
-            model = FirstOf(providers, tier);
-            fromTier = tier;
-        }
-
-        if (model is null && definition is not null)
-        {
-            if (definition.Model is { } namedByDefinition)
-            {
-                model = namedByDefinition;
-            }
-            else if (definition.Tier is { } definitionTier)
-            {
-                model = FirstOf(providers, definitionTier);
-                fromTier = definitionTier;
-            }
-        }
-
-        if (model is null && providers.DefaultTier is { } defaultTier)
-        {
-            model = FirstOf(providers, defaultTier);
-            fromTier = defaultTier;
-        }
+        model = picked.Model ?? (fromTier is { } serving ? FirstOf(providers, serving) : null);
 
         if (model is null || providers.Of(model) is not { } named)
         {
@@ -129,6 +107,22 @@ public sealed record AgentResolution(AgentModelEntry Serving, IReadOnlyList<Agen
 
         return new AgentResolution(order[0], [.. order.Skip(1)], fromTier);
     }
+
+    /// <summary>
+    /// What a step runs on, as one pick decides it: the step's model, else its tier, else its definition's model, else
+    /// its definition's tier - each level whole, never a tier of one and a model of the other - and neither where the
+    /// configuration's default tier serves. The one pick the run resolves by (<see cref="Of"/>) and the definition's
+    /// check holds a step to, so that what is checked, priced and asked a key for is what runs.
+    /// </summary>
+    /// <param name="tier">The tier the step names, or null.</param>
+    /// <param name="model">The model the step names, or null.</param>
+    /// <param name="definition">The step's agent definition, or null where it names no agent.</param>
+    /// <returns>The model named outright, or the tier whose first model serves; both null for the default tier.</returns>
+    public static (string? Tier, string? Model) Picked(string? tier, string? model, AgentDefinition? definition)
+        => model is not null ? (null, model)
+            : tier is not null ? (tier, null)
+            : definition?.Model is { } byDefinition ? (null, byDefinition)
+            : (definition?.Tier, null);
 
     /// <summary>The first model of a tier, by code, or null where the tier is not defined.</summary>
     private static string? FirstOf(AgentProviders providers, string tier)

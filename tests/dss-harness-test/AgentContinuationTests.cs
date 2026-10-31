@@ -374,7 +374,7 @@ public sealed class AgentContinuationTests : IDisposable
         var client = new Scripted();
         await new AgentRunner([client], _harness.FileSystem, Elevation.User, TimeProvider.System).RunAsync(
             new AgentStepRequest(
-                "r1", "a7", "s1", 1, null, null, null, null, null, null, null, "be terse", "do the {item}", new Dictionary<string, string> { ["item"] = "s3cret thing" }, null,
+                "r1", "a7", "s1", 1, null, null, null, null, null, null, null, "be terse", "do the s3cret thing", null,
                 new AgentWorkspace(null, _temp.Combine("work"), _temp.Path, [], _temp.Combine("work"), _temp.Path),
                 null, null, new AgentLimits(10, null, null, null), new Masking("s3cret", "***"))
             {

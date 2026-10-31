@@ -47,7 +47,7 @@ public sealed class AgentRunnerTests
 
         var search = new AgentWebSearch([], 3, 4, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
         var entries = new AgentEntries(new AgentProviderConfig { Name = "anthropic" }, new AgentModelConfig { Code = "model-x" }, new AgentClientConfig { MaxRetries = 2 });
-        var step = Step(temp, promptValues: new Dictionary<string, string> { ["item"] = "login form" }) with { WebSearch = search, Withheld = ["DEPLOY_TOKEN"], Entries = entries };
+        var step = Step(temp, prompt: "do the login form") with { WebSearch = search, Withheld = ["DEPLOY_TOKEN"], Entries = entries };
 
         var result = await Runner(client).RunAsync(step, new Collecting(seen), TestContext.Current.CancellationToken);
 
@@ -808,22 +808,39 @@ public sealed class AgentRunnerTests
     }
 
     /// <summary>
-    /// The prompt is filled in one pass, by the one template grammar: a value that names another value is put in as it
-    /// is, never filled in its turn; a doubled brace stands for one, another expander's group and a name with no value
-    /// stand as written, and a name may be dotted.
+    /// The skills a step was given and the session id the engine made before its prompt was written reach the client's
+    /// run, for its stream to record the one and its session to begin as the other.
     /// </summary>
     [Fact]
-    public async Task ThePromptIsFilledInOnePass_AValueNamingAnotherIsPutInAsItIs()
+    public async Task TheSkillsAndTheSessionId_ReachTheClientsRun()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient();
+        var skill = new AgentSkill("review", ".harness-config/skills", "SKILL.md", "digest", "folder digest", "skills/review");
+        const string id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+        await Runner(client).RunAsync(Step(temp) with { Skills = [skill], SessionId = id }, events: null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(id, client.Run!.SessionId);
+        Assert.Equal([skill], client.Run.Skills);
+    }
+
+    /// <summary>
+    /// The prompt is handed to the client as the request gives it - the engine filled it once, and the runner never reads
+    /// it as a template again - so a value's braces, a doubled brace and another expander's group all stand as written.
+    /// </summary>
+    [Fact]
+    public async Task ThePrompt_IsHandedAsGiven_NeverReadAsATemplateAgain()
     {
         using var temp = new TempDirectory();
         var client = new FakeClient();
 
         await Runner(client).RunAsync(
-            Step(temp, template: "do {a} then {b}, leaving {c} and {{d}} ${e} for {item.title}", promptValues: new Dictionary<string, string> { ["a"] = "{b}", ["b"] = "x", ["item.title"] = "t" }),
+            Step(temp, prompt: """do {"red":["a"]} then {b}, leaving {{d}} ${e}"""),
             events: null,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("do {b} then x, leaving {c} and {d} ${e} for t", client.Run!.UserPrompt);
+        Assert.Equal("""do {"red":["a"]} then {b}, leaving {{d}} ${e}""", client.Run!.UserPrompt);
     }
 
     /// <summary>
@@ -1242,8 +1259,7 @@ public sealed class AgentRunnerTests
     private static AgentStepRequest Step(
         TempDirectory temp,
         string? client = null,
-        Dictionary<string, string>? promptValues = null,
-        string template = "do the {item}",
+        string prompt = "do the thing",
         int? handoffSeconds = null,
         int attempt = 1)
         => new(
@@ -1259,8 +1275,7 @@ public sealed class AgentRunnerTests
             Effort: null,
             Fallback: null,
             SystemPrompt: "be terse",
-            PromptTemplate: template,
-            promptValues ?? new Dictionary<string, string> { ["item"] = "thing" },
+            Prompt: prompt,
             ResumeTemplate: null,
             new AgentWorkspace(
                 Worktree: null,

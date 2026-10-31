@@ -175,6 +175,48 @@ public sealed class ClaudeCodeUpdateServiceTests
     }
 
     /// <summary>
+    /// What only reads finds Claude Code and never changes it: a ready installation is ready as a run's step finds it,
+    /// one older than this tool needs, none at all and no npm are each refused (14) with the command to run by hand -
+    /// and npm is never asked to install.
+    /// </summary>
+    [Fact]
+    public async Task WhatOnlyReads_FindsClaudeCode_AndNeverChangesIt()
+    {
+        using (var ready = new Kit(package: "2.1.296", program: "2.1.296"))
+        {
+            var answer = await ready.Service().FoundAsync(ready.Layout, [], client: null, steps: " (the run's reporter)", Token);
+
+            Assert.True(answer.Ready);
+            Assert.Equal($"claude 2.1.296, installed with npm: '{ready.Program}'", answer.Message);
+        }
+
+        foreach (var (package, held) in new (string?, string)[] { ("2.1.201", "npm holds claude 2.1.201"), (null, "npm holds no Claude Code") })
+        {
+            using var kit = new Kit(package: package, program: package);
+            kit.Runner.OnInstall = () => throw new InvalidOperationException("npm was asked to install");
+
+            var answer = await kit.Service().FoundAsync(kit.Layout, [], client: null, steps: " (the run's reporter)", Token);
+
+            Assert.Equal((false, HarnessExit.ToolMissing), (answer.Ready, answer.ExitCode));
+            Assert.Equal(
+                $"this needs a Claude model through the client 'claude-code' (the run's reporter), {held}, and this tool needs {ClaudeCodeUpdateService.Needed}; "
+                + $"this only finds Claude Code - installing it and bringing it up to date are a run's step's to do. Run it by hand: {ClaudeCodeUpdateService.InstallCommand()}",
+                answer.Message);
+            Assert.DoesNotContain(kit.Runner.Ran, ran => ran.Contains(" install -g ", StringComparison.Ordinal));
+        }
+
+        using var none = new Kit(npm: false, platform: PlatformId.Linux);
+        var refused = await none.Service().FoundAsync(none.Layout, [], client: null, steps: " (the run's advisor)", Token);
+
+        Assert.Equal(HarnessExit.ToolMissing, refused.ExitCode);
+        Assert.Equal(
+            "this needs a Claude model through the client 'claude-code' (the run's advisor), and no npm is on the PATH. Looked for: npm; "
+            + "this only finds Claude Code - installing it and bringing it up to date are a run's step's to do. Install Node.js 22 or later, "
+            + $"which brings npm, and then run it by hand: {ClaudeCodeUpdateService.InstallCommand()}",
+            refused.Message);
+    }
+
+    /// <summary>
     /// The change is bounded by the ten minutes an install is given, and the readings around it by their own half
     /// minute: a change bounded by a reading's budget would end every install on a slow connection.
     /// </summary>

@@ -295,7 +295,7 @@ public sealed record AgentAssumption(string About, string Assumed, string Why)
 /// <param name="Credential">Where the launch's credential came from; a value is never named.</param>
 /// <param name="SystemPromptHash">The digest of the system prompt as sent.</param>
 /// <param name="Tools">The tools the launch was given, as it names them.</param>
-/// <param name="Skills">The skills its prompt holds.</param>
+/// <param name="Skills">The skills its prompt holds, each with the place and file it was read from and the SHA-256 of its <c>SKILL.md</c> and of its folder.</param>
 /// <param name="ApiKeySource">Claude Code: the credential source its <c>system/init</c> named.</param>
 /// <param name="SettingsFile">Claude Code: the user's settings file the launch read.</param>
 /// <param name="SettingsDigest">Claude Code: the digest of that file.</param>
@@ -305,7 +305,7 @@ public sealed record SessionStarted(
     string Model,
     string SystemPromptHash,
     IReadOnlyList<string> Tools,
-    IReadOnlyList<string> Skills,
+    IReadOnlyList<AgentSkill> Skills,
     bool HandedConversation,
     string? Provider = null,
     string? Tier = null,

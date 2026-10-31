@@ -598,8 +598,7 @@ public sealed class AgentFallbackTests : IDisposable
             Effort: null,
             Fallback: null,
             SystemPrompt: "be terse",
-            PromptTemplate: "do the {item}",
-            new Dictionary<string, string> { ["item"] = "thing" },
+            Prompt: "do the thing",
             ResumeTemplate: null,
             new AgentWorkspace(
                 Worktree: null,
@@ -721,6 +720,41 @@ public sealed class AgentFallbackTests : IDisposable
 
         Assert.Equal("failed past its 2 retries", moved.Why);
         Assert.Equal("glm-5.3", moved.ToModel);
+    }
+
+    /// <summary>
+    /// The session id the engine made before the prompt was written is the first launch's alone: a retry on the model,
+    /// and the move to the next, each begin a session of their own, which their clients name.
+    /// </summary>
+    [Fact]
+    public async Task TheSessionIdTheEngineMade_IsTheFirstLaunchsAlone()
+    {
+        var given = new List<string?>();
+        var failing = new Scripted("one")
+        {
+            Script = (run, events, _) =>
+            {
+                given.Add(run.SessionId);
+                return Task.FromResult(new AgentRunResult(AgentRunStatus.Failed, Model: run.Model, Error: "it broke"));
+            },
+        };
+        var next = new Scripted("glm")
+        {
+            Script = (run, events, _) =>
+            {
+                given.Add(run.SessionId);
+                return Completed(run, events, "glm-5.3", turns: 1);
+            },
+        };
+        const string id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+        var result = await new AgentRunner([failing, next], _harness.FileSystem, Elevation.User, TimeProvider.System).RunAsync(
+            Step([Entry("claude-fable-5-1", "anthropic", "one"), Entry("glm-5.3", "zai", "glm", key: null)]) with { Retries = 1, BackoffSeconds = 0, SessionId = id },
+            new Collecting(),
+            Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal([id, null, null], given);
     }
 
     /// <summary>

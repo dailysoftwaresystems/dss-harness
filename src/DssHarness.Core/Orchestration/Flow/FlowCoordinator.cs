@@ -1047,7 +1047,7 @@ public sealed class FlowCoordinator
 
                 // A step that waits on a claim a runner that outlived its attempt still holds waits for that runner's
                 // answer, which gives it back: it is never failed as stalled over a claim that will be freed.
-                if (_created.Any(instance => instance.Lingering.Count > 0) && AdmissionWalk().Any(decision => decision.WaitsOn.Contains("claim")))
+                if (_created.Any(instance => instance.Lingering.Count > 0) && AdmissionWalk().Any(decision => decision.WaitsOn.Contains(FlowWaits.Claim)))
                 {
                     await WaitNextAsync(cancellationToken).ConfigureAwait(false);
                     continue;
@@ -4359,12 +4359,8 @@ public sealed class FlowCoordinator
     /// <summary>The iterations a repeat's own bound allows: its maxIterations, or its rounds and the further ones its blocking holds for.</summary>
     private static int BoundOf(WorkflowStep declaration, FlowInstance instance)
     {
-        var repeat = declaration.Repeat!;
-
         // blockersLimitRounds: false is no bound but the budget: no count of iterations ever reaches it.
-        return repeat.Rounds is { } rounds
-            ? repeat.BlockersUnbounded ? int.MaxValue : rounds + (repeat.BlockersLimitRounds ?? 3) + instance.ExtraIterations
-            : (repeat.MaxIterations ?? 0) + instance.ExtraIterations;
+        return declaration.Repeat!.Bound(instance.ExtraIterations);
     }
 
     /// <summary>Makes the repeat group's next iteration where its bound allows one, and asks at its bound where it does not.</summary>
@@ -4379,7 +4375,7 @@ public sealed class FlowCoordinator
         if (iteration > bound)
         {
             var said = declaration.Repeat!.Rounds is { } rounds
-                ? $"{rounds.ToString(System.Globalization.CultureInfo.InvariantCulture)} rounds and {(declaration.Repeat.BlockersUnbounded ? "no further bound but the budget" : (declaration.Repeat.BlockersLimitRounds ?? 3).ToString(System.Globalization.CultureInfo.InvariantCulture) + " more while blocking holds")} (rounds, blockersLimitRounds)"
+                ? $"{rounds.ToString(System.Globalization.CultureInfo.InvariantCulture)} rounds and {(declaration.Repeat.BlockersUnbounded ? "no further bound but the budget" : declaration.Repeat.BlockersRounds.ToString(System.Globalization.CultureInfo.InvariantCulture) + " more while blocking holds")} (rounds, blockersLimitRounds)"
                 : $"at most {(declaration.Repeat?.MaxIterations ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture)} are allowed (maxIterations)";
             _ = Ask(
                 instance,
@@ -4775,7 +4771,7 @@ public sealed class FlowCoordinator
 
             if (running.Any(other => other.Step.Alone == true))
             {
-                decisions.Add(new(instance, [], ["quiet"]));
+                decisions.Add(new(instance, [], [FlowWaits.Quiet]));
                 continue;
             }
 
@@ -4786,7 +4782,7 @@ public sealed class FlowCoordinator
 
             if (barrier is not null && (!ReferenceEquals(instance, barrier) || running.Count > 0))
             {
-                decisions.Add(new(instance, [], ["quiet"]));
+                decisions.Add(new(instance, [], [FlowWaits.Quiet]));
                 continue;
             }
 
@@ -4798,7 +4794,7 @@ public sealed class FlowCoordinator
             if (claims.Any(claim => held.Concat(reserved).Any(claim.Conflicts)))
             {
                 reserved.AddRange(claims);
-                decisions.Add(new(instance, [], ["claim"]));
+                decisions.Add(new(instance, [], [FlowWaits.Claim]));
                 continue;
             }
 
@@ -4894,7 +4890,7 @@ public sealed class FlowCoordinator
         var walk = AdmissionWalk();
 
         // An alone step the walk left waiting for quiet is the barrier from now until it starts.
-        _barrier = walk.FirstOrDefault(decision => decision.Instance.Step.Alone == true && decision.WaitsOn is ["quiet"]).Instance;
+        _barrier = walk.FirstOrDefault(decision => decision.Instance.Step.Alone == true && decision.WaitsOn is [FlowWaits.Quiet]).Instance;
 
         foreach (var decision in walk.Where(decision => decision.Starts))
         {
@@ -5118,10 +5114,13 @@ public sealed class FlowCoordinator
 
                 step = filled;
 
-                // A reason step's prompt is its runner's to fill - the skill blocks a step starts with are put in there
-                // - so the engine reads the files and fills every other name here, handing the texts as read. One that
-                // cannot be filled fails the step, as a template key's that breaks. A run held in memory alone reads
-                // no files: its runner is handed none, and refuses where it needs one.
+                // A reason step's prompt is its runner's to finish - the skill blocks a step starts with are put in
+                // there - so the engine reads the files and fills every other name here, handing each text in its
+                // pieces with every skill in its place: the runner never reads filled text as a template again. One
+                // that cannot be filled fails the step, as a template key's that breaks. A run held in memory alone
+                // reads no files: its runner is handed none, and refuses where it needs one.
+                var prompts = new Dictionary<string, IReadOnlyList<FlowTemplate.Piece>>(StringComparer.Ordinal);
+
                 if (step.Type == "reason" && _workflowFile is { } readFile)
                 {
                     foreach (var (promptKey, promptFileNamed) in new[] { ("prompt", step.Prompt), ("resumePrompt", step.ResumePrompt) })
@@ -5131,17 +5130,17 @@ public sealed class FlowCoordinator
                             continue;
                         }
 
-                        if (Filled(instance, readFile(promptFileNamed), out var promptBroken) is not { } promptText)
+                        if (FlowTemplate.FillAroundSkills(readFile(promptFileNamed), path => Read(path, instance.DeclaredScope!, reader: instance), out var promptBroken) is not { } promptPieces)
                         {
                             _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable(promptKey, instance.Id, promptBroken!)), null, Attempt: attempt));
                             return;
                         }
 
-                        read[promptKey] = FlowValue.Of(promptText);
+                        prompts[promptKey] = promptPieces;
                     }
                 }
 
-                var result = await _runner.RunAsync(RunOf(instance, step, attempt, read, handoff?.Text), token).ConfigureAwait(false);
+                var result = await _runner.RunAsync(RunOf(instance, step, attempt, read, handoff?.Text) with { Prompts = prompts.Count > 0 ? prompts : null }, token).ConfigureAwait(false);
 
                 _ = _messages.Writer.TryWrite(new Message(instance, result, null, Attempt: attempt));
             }
@@ -5949,7 +5948,7 @@ public sealed class FlowCoordinator
                 }
             }
 
-            if (RaisedVisits(scope, handler) >= (handler.MaxVisits ?? 3) + scope.ExtraVisits.GetValueOrDefault(handler.Name))
+            if (RaisedVisits(scope, handler) >= handler.VisitsAllowed + scope.ExtraVisits.GetValueOrDefault(handler.Name))
             {
                 if (failed && _definition.Recover is not null)
                 {
@@ -7355,10 +7354,10 @@ public sealed class FlowCoordinator
     private string? CounterFull(FlowInstance instance, IReadOnlyList<FlowInstance> running)
         => instance.Step.Type switch
         {
-            "reason" when running.Count(step => step.Step.Type == "reason") >= Limit().MaxReasoningAgents => "reasoning agents",
+            "reason" when running.Count(step => step.Step.Type == "reason") >= Limit().MaxReasoningAgents => FlowWaits.ReasoningAgents,
             "build" or "test" or "run" or "check-mutations"
-                when running.Count(step => step.Step.Type is "build" or "test" or "run" or "check-mutations") >= Limit().MaxParallelProcesses => "parallel processes",
-            "create-agent" when running.Count(step => step.Step.Type == "create-agent") + _agentsOpen.Count >= Limit().MaxOpenAgents => "open agents",
+                when running.Count(step => step.Step.Type is "build" or "test" or "run" or "check-mutations") >= Limit().MaxParallelProcesses => FlowWaits.ParallelProcesses,
+            "create-agent" when running.Count(step => step.Step.Type == "create-agent") + _agentsOpen.Count >= Limit().MaxOpenAgents => FlowWaits.OpenAgents,
             _ => null,
         };
 
@@ -9155,7 +9154,7 @@ public sealed class FlowCoordinator
         => scope.GroupPath.Length == 0 ? declaration.Name : $"{scope.GroupPath}.{declaration.Name}";
 
     /// <summary>The retries a step is given: its own where it says, the workflow's where it does not, and three where neither does.</summary>
-    private int RetryCap(WorkflowStep step) => step.Retries ?? _definition.MaxRetries ?? 3;
+    private int RetryCap(WorkflowStep step) => _definition.RetriesOf(step);
 
     /// <summary>The limits of this run, as the definition says them and as the plan defaults them.</summary>
     private (int MaxReasoningAgents, int MaxParallelProcesses, int MaxOpenAgents, int MaxInstances) Limit()

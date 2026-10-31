@@ -161,7 +161,8 @@ public sealed class FlowReasonStepTests
 
     /// <summary>
     /// A reason step's prompt file is read and filled where the step starts, every name but a skill's filled by the
-    /// same roots an expression reads, and handed to its runner under prompt; a name that reads nothing fails the step.
+    /// same roots an expression reads, and handed to its runner under prompt as pieces - the filled text, and each skill
+    /// kept in its place for the runner to hand over - never as text to be read as a template again.
     /// </summary>
     [Fact]
     public async Task AReasonStepsPromptFile_IsReadAndFilledWhereTheStepStarts_SkillsLeftForItsRunner()
@@ -183,8 +184,13 @@ public sealed class FlowReasonStepTests
         var end = await coordinator.RunAsync(Token);
 
         Assert.Equal(FlowRunStatus.Done, end.Status);
-        Assert.Equal("Plan the work for run r1 with {skill.planning}.", runner.Runs.Single().Read!["prompt"].AsScalar("prompt"));
-        Assert.False(runner.Runs.Single().Read!.ContainsKey("resumePrompt"));
+        var prompts = runner.Runs.Single().Prompts!;
+        Assert.Equal(
+            [(FlowTemplate.PieceKind.Text, "Plan the work for run r1 with "), (FlowTemplate.PieceKind.Placeholder, "skill.planning"), (FlowTemplate.PieceKind.Text, ".")],
+            prompts["prompt"].Select(piece => (piece.Kind, piece.Text)));
+        Assert.Equal("Plan the work for run r1 with {skill.planning}.", FlowTemplate.Joined(prompts["prompt"]));
+        Assert.False(prompts.ContainsKey("resumePrompt"));
+        Assert.False(runner.Runs.Single().Read?.ContainsKey("prompt") ?? false);
     }
 
     /// <summary>
@@ -218,8 +224,8 @@ public sealed class FlowReasonStepTests
                 : throw new ArgumentException(named)).RunAsync(Token);
 
         Assert.Equal(FlowRunStatus.Done, end.Status);
-        Assert.Equal("First attempt.", runner.Runs.Single(asked => asked.Step.Name == "plan").Read!["prompt"].AsScalar("prompt"));
-        Assert.Equal("Going on with r1.", runner.Runs.Single(asked => asked.Step.Name == "check").Read!["resumePrompt"].AsScalar("resumePrompt"));
+        Assert.Equal("First attempt.", FlowTemplate.Joined(runner.Runs.Single(asked => asked.Step.Name == "plan").Prompts!["prompt"]));
+        Assert.Equal("Going on with r1.", FlowTemplate.Joined(runner.Runs.Single(asked => asked.Step.Name == "check").Prompts!["resumePrompt"]));
     }
 
     /// <summary>

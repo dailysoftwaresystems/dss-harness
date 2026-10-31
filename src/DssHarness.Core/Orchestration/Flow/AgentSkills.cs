@@ -55,27 +55,29 @@ public static class AgentSkillFileParser
 
     /// <summary>
     /// Reads <paramref name="text"/>, the whole of one <c>SKILL.md</c>, as the skill <paramref name="folder"/> names:
-    /// its problems each name the line of the file they stand on, and the file is returned null only where nothing of it
-    /// reads - the frontmatter is no YAML - so that every other problem is said beside the skill it is of.
+    /// every problem it has is said at once, each naming the line of the file it stands on, and the file is returned
+    /// null wherever it has one - as an agent's file is read, for none of a skill's problems is advisory.
     /// </summary>
     /// <param name="text">The file's whole text.</param>
     /// <param name="folder">The skill's name: the folder's, which the file's frontmatter must say again where it names one.</param>
-    /// <returns>The file, or null where its frontmatter is not one mapping; and every problem, each with its line.</returns>
+    /// <returns>The file, or null where it has any problem; and every problem, each with its line.</returns>
     public static (AgentSkillFile? Skill, IReadOnlyList<string> Problems) Parse(string text, string folder)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentException.ThrowIfNullOrWhiteSpace(folder);
 
         var problems = new List<string>();
-        var (frontmatter, body, closed) = Split(text);
+        var split = Frontmatter.Of(text);
 
-        if (frontmatter is null)
+        if (split.Keys is not { } frontmatter)
         {
-            problems.Add(closed
+            problems.Add(split.Opened
                 ? "its frontmatter is not closed (no second '---' line)"
                 : "it holds no frontmatter: '---' on the first line, the skill's keys, '---' again, and the skill's text after it");
             return (null, problems);
         }
+
+        var body = split.Body;
 
         // The frontmatter's first line is the file's second, so a leading line's end puts every problem's line where the
         // file has it.
@@ -149,7 +151,7 @@ public static class AgentSkillFileParser
 
         var bodyText = body ?? string.Empty;
 
-        problems.AddRange(BodyProblems(bodyText, frontmatter, arguments));
+        problems.AddRange(BodyProblems(bodyText, split.BodyLine, arguments));
 
         if (bodyText.Length > BodyLimit)
         {
@@ -230,11 +232,8 @@ public static class AgentSkillFileParser
     /// Every refused read of the body, each naming the line of the file it stands on: an argument, a command run when
     /// the skill is loaded, and the reads only a plugin has or this tool does not give a skill.
     /// </summary>
-    private static IEnumerable<string> BodyProblems(string body, string frontmatter, IReadOnlyList<string> arguments)
+    private static IEnumerable<string> BodyProblems(string body, int first, IReadOnlyList<string> arguments)
     {
-        // The body's first line: one for '---', one for each of the frontmatter's lines and the line's end after the last
-        // of them, one for the '---' that closes it.
-        var first = frontmatter.Split('\n').Length + 2;
         var lines = body.Split('\n');
 
         for (var index = 0; index < lines.Length; index++)
@@ -402,43 +401,6 @@ public static class AgentSkillFileParser
         ];
     }
 
-    /// <summary>
-    /// The file's frontmatter and body, split at the closing of the frontmatter: null frontmatter where the file holds
-    /// none, the third answer saying whether one was opened at all.
-    /// </summary>
-    private static (string? Frontmatter, string? Body, bool Closed) Split(string text)
-    {
-        var opening = text.StartsWith("---\n", StringComparison.Ordinal) || text.StartsWith("---\r\n", StringComparison.Ordinal)
-            ? text.IndexOf('\n') + 1
-            : 0;
-
-        if (opening == 0)
-        {
-            return (null, null, false);
-        }
-
-        var at = opening;
-
-        while (at < text.Length)
-        {
-            var end = text.IndexOf('\n', at);
-
-            if (text.AsSpan(at, (end < 0 ? text.Length : end) - at).TrimEnd('\r').SequenceEqual("---"))
-            {
-                // The closing '---' may end the file; the body is then empty rather than past the file's end.
-                return (text[opening..at], text[(end < 0 ? text.Length : end + 1)..], true);
-            }
-
-            if (end < 0)
-            {
-                break;
-            }
-
-            at = end + 1;
-        }
-
-        return (null, null, true);
-    }
 }
 
 /// <summary>
@@ -453,11 +415,11 @@ public static class AgentSkillFileParser
 /// <param name="Digest">The SHA-256 of the <c>SKILL.md</c>, lowercase hex; null where the file could not be read.</param>
 /// <param name="FolderDigest">The SHA-256 of the folder, over each file's path and content in order; null where the folder is refused.</param>
 /// <param name="Files">Every file under the folder, absolute, in the walk's order; empty where the folder is refused.</param>
-/// <param name="Skill">The file as it was read; null where it holds no frontmatter that reads.</param>
+/// <param name="Skill">The file as it was read; null where the file is not there, cannot be read or has any problem (<see cref="AgentSkillFileParser.Parse"/>).</param>
 /// <param name="Problems">
 /// Why the skill cannot be used or read, each a sentence's tail after <c>skill 'name' ('file')</c> - never empty where
 /// <see cref="Skill"/> is null, and said even where it is not, for a folder that holds a link or too much is refused
-/// with the file's own problems beside it.
+/// though its file reads.
 /// </param>
 public sealed record AgentSkillFound(
     string Name,
@@ -565,6 +527,54 @@ public sealed class AgentSkills(IFileSystem fileSystem, IHostPlatform platform, 
     /// <summary>At most this many bytes of a skill's folder are handed to a step.</summary>
     public const long SizeLimit = 16 * 1024 * 1024;
 
+    /// <summary>The root a placeholder names a skill by: <c>{skill.&lt;name&gt;}</c>.</summary>
+    public const string Root = "skill";
+
+    /// <summary>
+    /// Whether <paramref name="placeholder"/> - what a placeholder's braces hold before a <c>|</c>, trimmed - names a
+    /// skill: its first segment, read as every read's is, is <see cref="Root"/>. The one test the engine's fill, the
+    /// definition's check and a step's start all ask, so a placeholder one of them leaves for the skills is one the
+    /// others read as a skill; its name is <see cref="NameIn"/>'s to read.
+    /// </summary>
+    /// <param name="placeholder">The placeholder's name, as <see cref="FlowTemplate.Piece.Name"/> reads it.</param>
+    public static bool Names(string placeholder)
+    {
+        ArgumentNullException.ThrowIfNull(placeholder);
+
+        return WorkflowExpressions.ReadOf(placeholder, template: true, insideAny: false).Root == Root;
+    }
+
+    /// <summary>
+    /// The skill <paramref name="placeholder"/> names, by the one rule of a skill's name: the folder's name, written
+    /// right after <c>skill.</c> - words of letters, digits, <c>-</c> and <c>_</c>, a <c>.</c> between two - so a name
+    /// is one segment of a path and none reaches past the place it is looked for in, or past the directory it is copied
+    /// into. Null where it names none, <paramref name="problem"/> then the end of the sentence that says so, after the
+    /// words <c>names</c>.
+    /// </summary>
+    /// <param name="placeholder">The placeholder's name, one <see cref="Names"/> holds to name a skill.</param>
+    /// <param name="problem">Why it names no skill, after <c>names</c>; null where it names one.</param>
+    public static string? NameIn(string placeholder, out string? problem)
+    {
+        ArgumentNullException.ThrowIfNull(placeholder);
+
+        var name = placeholder.StartsWith(Root + ".", StringComparison.Ordinal) ? placeholder[(Root.Length + 1)..] : null;
+
+        if (placeholder == Root || name is { Length: 0 })
+        {
+            problem = $"{{{placeholder}}} alone: name one - {{{Root}.<name>}} names it by its folder's name";
+            return null;
+        }
+
+        if (name is null || !name.Split('.').All(word => word.Length > 0 && word.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_')))
+        {
+            problem = $"{{{placeholder}}}, which is no skill's name: a skill is named by its folder's name alone, in letters, digits, '-' and '_', a '.' between two words";
+            return null;
+        }
+
+        problem = null;
+        return name;
+    }
+
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly ClaudeTranscripts _claude = new(fileSystem, platform, environment);
     private readonly string _checkout = checkout;
@@ -592,6 +602,12 @@ public sealed class AgentSkills(IFileSystem fileSystem, IHostPlatform platform, 
     private IReadOnlyList<(string From, string Folder)> PlacesIn(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        // A name the one rule refuses could reach past the places: none is looked for, whoever asks.
+        if (NameIn($"{Root}.{name}", out var problem) is null)
+        {
+            throw new ArgumentException($"'{name}' is no skill's name: the placeholder names {problem}", nameof(name));
+        }
 
         return
         [

@@ -125,12 +125,40 @@ public sealed class ClaudeCodeUpdateService(
     /// <param name="client">The configuration's entry for the client being made ready; null where it declares none (<see cref="UpdatesOn"/>).</param>
     /// <param name="steps">The steps that need the client, as a refusal names them; empty where the asker names none.</param>
     /// <param name="cancellationToken">Stops everything before the change; the change itself, once begun, is never stopped.</param>
-    public async Task<ClaudeCodeAnswer> ReadyAsync(
+    public Task<ClaudeCodeAnswer> ReadyAsync(
         HarnessLayout? layout,
         IReadOnlyList<AppointedKey> appointed,
         AgentClientConfig? client,
         string steps,
         CancellationToken cancellationToken = default)
+        => AnswerAsync(layout, appointed, client, steps, mayChange: true, cancellationToken);
+
+    /// <summary>
+    /// The Claude Code a run that only reads would start, found as <see cref="ReadyAsync"/> finds it and never changed:
+    /// where npm holds none, or one older than this tool needs, it is refused (14), for installing and updating are a
+    /// run's step's to do - the run's advisor and its reporter find the program and move nothing.
+    /// </summary>
+    /// <param name="layout">The repository's layout, where the slot is; null where no slot is to be asked.</param>
+    /// <param name="appointed">Every name the configuration appoints, of providers, clients and web-search sources.</param>
+    /// <param name="client">The configuration's entry for the client; null where it declares none.</param>
+    /// <param name="steps">What needs the client, as a refusal names it.</param>
+    /// <param name="cancellationToken">Stops the asking.</param>
+    public Task<ClaudeCodeAnswer> FoundAsync(
+        HarnessLayout? layout,
+        IReadOnlyList<AppointedKey> appointed,
+        AgentClientConfig? client,
+        string steps,
+        CancellationToken cancellationToken = default)
+        => AnswerAsync(layout, appointed, client, steps, mayChange: false, cancellationToken);
+
+    /// <summary>The Claude Code a run needs, made ready where <paramref name="mayChange"/> lets a change run, else only found.</summary>
+    private async Task<ClaudeCodeAnswer> AnswerAsync(
+        HarnessLayout? layout,
+        IReadOnlyList<AppointedKey> appointed,
+        AgentClientConfig? client,
+        string steps,
+        bool mayChange,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(appointed);
 
@@ -165,8 +193,11 @@ public sealed class ClaudeCodeUpdateService(
         {
             return Refused(
                 HarnessExit.ToolMissing,
-                $"this run needs a Claude model through the client 'claude-code'{steps}, and {found.Missing}. "
-                + "This tool installs Claude Code and brings it up to date with npm. Install Node.js 22 or later, which brings npm, and start the run again");
+                mayChange
+                    ? $"this run needs a Claude model through the client 'claude-code'{steps}, and {found.Missing}. "
+                        + "This tool installs Claude Code and brings it up to date with npm. Install Node.js 22 or later, which brings npm, and start the run again"
+                    : $"this needs a Claude model through the client 'claude-code'{steps}, and {found.Missing}; this only finds Claude Code - "
+                        + $"installing it and bringing it up to date are a run's step's to do. Install Node.js 22 or later, which brings npm, and then run it by hand: {InstallCommand()}");
         }
 
         var asked = await _npm.RootAsync(npm, cancellationToken).ConfigureAwait(false);
@@ -211,6 +242,15 @@ public sealed class ClaudeCodeUpdateService(
                     $"'{program}' says it is claude {answer} and its package says {version}, and the two do not agree. "
                     + $"Install it again: {InstallCommand()}; an installation whose step after the install did not run "
                     + "(npm install --ignore-scripts) is the usual cause.");
+        }
+
+        if (!mayChange)
+        {
+            return Refused(
+                HarnessExit.ToolMissing,
+                $"this needs a Claude model through the client 'claude-code'{steps}, "
+                    + (held.Version is { } installed ? $"npm holds claude {installed}" : "npm holds no Claude Code")
+                    + $", and this tool needs {Needed}; this only finds Claude Code - installing it and bringing it up to date are a run's step's to do. Run it by hand: {InstallCommand()}");
         }
 
         if (!UpdatesOn(client) || _environment(UpdatesVariable) is { Length: > 0 })

@@ -129,6 +129,7 @@ public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSp
 /// <param name="keyStore">The slot the advisor's model reads its key from.</param>
 /// <param name="clock">When the run's records are written, and how every wait of these commands is timed.</param>
 /// <param name="timings">How often the commands look; <see cref="FlowTimings.Default"/> where not given.</param>
+/// <param name="updates">Finds the Claude Code the advisor's and the reporter's orders start, never changing it; null where nothing starts one.</param>
 public sealed class FlowService(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -147,7 +148,8 @@ public sealed class FlowService(
     Agents.IAgentRunner agentRunner,
     Secrets.AgentKeyStore keyStore,
     TimeProvider? clock = null,
-    FlowTimings? timings = null) : IFlowService
+    FlowTimings? timings = null,
+    Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null) : IFlowService
 {
     /// <summary>The command that starts a run.</summary>
     public const string RunCommand = "run-orchestrator";
@@ -899,7 +901,7 @@ public sealed class FlowService(
                     [$"record: {Path.Combine(asks, AskFileName)}"]);
         }
 
-        var reported = await new ReporterRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore).ReportAsync(
+        var reported = await new ReporterRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore, updates).ReportAsync(
             new FlowReporterCall(
                 run,
                 definition.Name,
@@ -1217,7 +1219,7 @@ public sealed class FlowService(
 
                     return deleted.Outcome;
                 },
-                new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output),
+                new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output, updates),
                 updates: () => _store.ReadFlowUpdates(layout));
             var before = _store.ReadFlowQuestions(layout);
 

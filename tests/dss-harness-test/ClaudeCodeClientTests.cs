@@ -55,6 +55,22 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// A launch the engine made the session id of begins its session as that id - the one a skill's
+    /// <c>${CLAUDE_SESSION_ID}</c> in its prompt was given - and says it as the session it began.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchTheEngineMadeTheSessionIdOf_BeginsItsSessionAsThatId()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        const string id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+        var result = await kit.Client().RunAsync(kit.Run(new AgentOutput("o", Schema)) with { SessionId = id }, new Sink(), Token);
+
+        Assert.Equal((id, id), (Value(Assert.Single(kit.Launches()).Arguments, "--session-id"), result.Session));
+    }
+
+    /// <summary>
     /// A launch is a new session, streamed both ways, by the whole argument list and nothing else: no <c>-p</c>, the prompt
     /// never an argument but the first message on its input after the <c>initialize</c> request, a session id the engine
     /// made and a new one for every launch, no session kept, every root but the working directory an <c>--add-dir</c>, the
@@ -2991,7 +3007,6 @@ public sealed class ClaudeCodeClientTests : IDisposable
                 null,
                 "be terse",
                 "do the work",
-                new Dictionary<string, string>(),
                 null,
                 Workspace(),
                 null,

@@ -18,10 +18,11 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// The <c>reason</c> step: the agent a reason step is given, made where the step names none (a read-only agent, with no
 /// worktree - <see cref="CreateAgentRunner.MakeAsync"/> over the one verb that makes agents), and its step worked
-/// through <see cref="IAgentRunner"/> - the step's model resolved with its agent definition below its own, its order
-/// built with each entry's credential read from the slot, its prompt read and filled and its skills handed over, the
-/// work it goes on with rendered as its continuation record, and its going on by the client's kind (the stored
-/// conversation handed, or a rendered launch: <see cref="AgentRunner"/> owns which).
+/// through <see cref="IAgentRunner"/> - the definition it works by read where the chain of work it goes on with began
+/// (<see cref="ResumeChain.Root"/>), the step's model resolved with that definition below its own, its order, workspace,
+/// ground and mask built as every launch builds them (<see cref="ReasonLaunch"/>), its prompt as the engine filled it
+/// with its skills handed over, the work it goes on with rendered as its continuation record, and its going on by the
+/// client's kind (the stored conversation handed, or a rendered launch: <see cref="AgentRunner"/> owns which).
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
@@ -68,11 +69,11 @@ public sealed class ReasonStepRunner(
         var (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
         var layout = OrchestratorLayout.Of(context.Layout, place.Run);
         var files = new WorkflowNamedFiles(fileSystem, platform.PathComparison);
+        var launch = new ReasonLaunch(fileSystem, platform, keys, updates);
 
         var promptFile = run.Step.Prompt;
 
-        if (promptFile is null || run.Read?.TryGetValue("prompt", out var promptValue) is not true
-            || promptValue.AsScalar("prompt") is not string readPrompt)
+        if (promptFile is null || run.Prompts?.TryGetValue("prompt", out var readPrompt) is not true)
         {
             return FlowStepResult.Ended(passed: false, HarnessExit.InternalError, $"'{run.Instance}' is a reason step whose prompt file '{promptFile ?? "none"}' the engine did not read for it");
         }
@@ -113,21 +114,16 @@ public sealed class ReasonStepRunner(
             return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, "the configuration's agent providers do not resolve, and the step has no model to run on");
         }
 
-        // The agent definition, read as the definition's check reads it: the system prompt sent as written, and the
-        // level below the step's own for the model, the effort and the client. A step that goes on with another's work
-        // inherits what the chain it resumes names, where it names anything and the step names none of its own.
-        var resumed = run.Step.Resume is { } goesOnWith ? Resumed(place.Definition, goesOnWith) : null;
-        var definition = DefinitionOf(files, context.Layout, place.Definition.Name, run.Step.Agent);
-        var inherited = definition ?? (run.Step.Agent is null ? DefinitionOf(files, context.Layout, place.Definition.Name, resumed?.Agent) : null);
+        // The step the work it goes on with began with - itself, where it begins its own - whose agent definition, client,
+        // tier, model and writes it works with: a step that goes on with another's work is the same agent going on, and
+        // names none of them. The definition, read as the definition's check reads it, is the one the step
+        // works by everywhere: its system prompt sent as written, its capabilities, restrictions and writes on the
+        // ground, its limits, and the level below the step's own for the model, the effort and the client.
+        var root = ResumeChain.Root(place.Definition, FlowInstanceId.PathOf(run.Instance), run.Step);
+        var definition = DefinitionOf(files, context.Layout, place.Definition.Name, root.Agent);
+        var step = ReferenceEquals(root, run.Step) ? run.Step : run.Step with { Writes = root.Writes };
 
-        var resolution = AgentResolution.Of(
-            providers,
-            run.Step.Tier ?? (run.Step.Model is null ? resumed?.Tier : null),
-            run.Step.Model ?? (run.Step.Tier is null ? resumed?.Model : null),
-            run.Step.Effort,
-            run.Step.EffortByModel,
-            run.Step.Client,
-            inherited);
+        var resolution = AgentResolution.Of(providers, root.Tier, root.Model, run.Step.Effort, run.Step.EffortByModel, root.Client, definition);
 
         if (resolution is null)
         {
@@ -143,42 +139,27 @@ public sealed class ReasonStepRunner(
         // step starts and kept for it; what each entry spends is recorded for the next step's choice.
         var spend = new AgentKeySpend(fileSystem, store, clock);
         var spent = context.Config.BalanceKeyUsage == true ? spend.Spent(context.Layout) : null;
-        var order = AgentStepOrder.Of(providers, resolution, context.Layout, keys, new ClaudeTranscripts(fileSystem, platform).ConfigDirectory, spent);
+        var order = launch.Order(providers, resolution, context.Layout, spent);
 
         // Where the order holds the client that starts a program, the program is found ready here - installed and
         // brought up to date where it must be - and the run starts what was found, never a launcher of its own: a
         // program not ready refuses the step with the finder's own words and code.
-        string? program = null;
-        string? programVersion = null;
+        var program = await launch.ProgramAsync(context.Layout, providers, order, steps: $" (step '{run.Instance}')", change: true, cancellationToken).ConfigureAwait(false);
 
-        if (updates is not null && order.Any(entry => string.Equals(entry.Client, "claude-code", StringComparison.Ordinal)))
+        if (program is { Ready: false })
         {
-            var ready = await updates.ReadyAsync(
-                context.Layout,
-                providers.Appointed(),
-                providers.ClientOf("claude-code"),
-                steps: $"'{run.Instance}'",
-                cancellationToken).ConfigureAwait(false);
-
-            if (!ready.Ready)
-            {
-                return FlowStepResult.Ended(passed: false, ready.ExitCode, ready.Message);
-            }
-
-            program = ready.Program;
-            programVersion = ready.Version;
+            return FlowStepResult.Ended(passed: false, program.ExitCode, program.Message);
         }
 
-        var workspace = Workspace(agentRecord, context.Layout.MainCheckoutRoot, layout, agent);
+        var workspace = ReasonLaunch.Workspace(agentRecord, context.Layout, layout.WorkDirectory(agent), layout.Directory);
         var (webSearch, webMask) = await WebSearchOf(context, providers, run.Step, cancellationToken).ConfigureAwait(false);
-        var claude = new ClaudeTranscripts(fileSystem, platform).ConfigDirectory;
         var ground = AgentStepGround.Of(
             context.Config,
             definition,
-            run.Step,
+            step,
             workspace,
             webSearch is not null,
-            [.. order.Select(entry => entry.Credential?.ConfigDirectory).OfType<string>().Append(claude).Distinct(StringComparer.Ordinal)],
+            launch.ClaudeDirectories(order),
             context.Layout.WorkflowsEnvSlot);
 
         // The prompt with each skill it names handed over: the folder copied into the agent's own work directory, the
@@ -193,16 +174,20 @@ public sealed class ReasonStepRunner(
         // words, or what a granted bound tells the agent - in the attempt's own conversation; a compaction sends the
         // engine's record as the run's first message and the filled prompt stands for the files that read it; every
         // other start fills the step's prompt, the resume prompt where the step goes on with earlier work and names one.
-        string? resume = null;
+        IReadOnlyList<FlowTemplate.Piece>? resume = null;
 
         if (goingOn is null && run.Step.ResumePrompt is not null && GoesOnWithEarlierWork(run)
-            && run.Read.TryGetValue("resumePrompt", out var resumeValue) && resumeValue.AsScalar("resumePrompt") is string readResume)
+            && run.Prompts.TryGetValue("resumePrompt", out var readResume))
         {
             resume = readResume;
         }
 
-        string? filled;
-        string? refusedSkill = null;
+        // A run that begins a conversation of its own - a start, or a compaction's new conversation - is given the id
+        // its first session begins as here, before the prompt is written, so a skill's ${CLAUDE_SESSION_ID} is that
+        // session's; an answer that goes on with the attempt's own conversation keeps that conversation's.
+        string filled;
+        string? session = null;
+        IReadOnlyList<AgentSkill> skills = [];
 
         if (goingOn is { Prompt: { } message })
         {
@@ -210,12 +195,16 @@ public sealed class ReasonStepRunner(
         }
         else
         {
-            filled = SkillBlocks(goingOn is { Compact: true } || resume is null ? readPrompt : resume!, run, agent, ground.Capabilities, workspace, resolution, out refusedSkill);
-        }
+            session = Guid.NewGuid().ToString("D");
 
-        if (filled is null)
-        {
-            return FlowStepResult.Ended(passed: false, HarnessExit.Refused, refusedSkill!);
+            var handed = SkillBlocks(goingOn is { Compact: true } || resume is null ? readPrompt : resume, run, root.Agent ?? agent, ground.Capabilities, workspace, resolution, session);
+
+            if (handed.Refused is { } refusedSkill)
+            {
+                return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, refusedSkill);
+            }
+
+            (filled, skills) = (handed.Prompt!, handed.Skills);
         }
 
         // The handoff the attempt is given - a stop wrote it, or a limit the attempt before this one reached - stands
@@ -227,7 +216,17 @@ public sealed class ReasonStepRunner(
         // its conversations - Claude Code - is handed none, and the attempt's own continuation record stands in its
         // place. A compaction is the engine's reduction of the conversation so far, which every client begins a NEW
         // conversation from - the old one stays whole and is never sent again.
-        var stream = goingOn is null ? [] : StreamOf(layout, agent, run.Instance);
+        IReadOnlyList<AgentEvent> stream;
+
+        try
+        {
+            stream = goingOn is null ? [] : StreamOf(layout, agent, run.Instance);
+        }
+        catch (HarnessException unread)
+        {
+            return FlowStepResult.Ended(passed: false, unread.ExitCode, unread.Message);
+        }
+
         var conversation = goingOn is null or { Compact: true } ? null : SessionIn(stream, layout, agent);
         var ownContinuation = goingOn is null || conversation is not null ? null : await OwnContinuationOfAsync(layout, agent, run, context, cancellationToken).ConfigureAwait(false);
         var continuation = ownContinuation ?? await ContinuationOfAsync(run, layout, agent, context, cancellationToken).ConfigureAwait(false);
@@ -238,7 +237,7 @@ public sealed class ReasonStepRunner(
             agent,
             run.Instance,
             run.Attempt,
-            run.Step.Agent,
+            root.Agent,
             Provider: null,
             resolution.Serving.Client,
             run.Step.Tier,
@@ -247,7 +246,6 @@ public sealed class ReasonStepRunner(
             Fallback: null,
             definition?.Prompt ?? string.Empty,
             filled,
-            new Dictionary<string, string>(StringComparer.Ordinal),
             ResumeTemplate: null,
             workspace,
             OutputOf(files, context.Layout, place.Definition.Name, run.Step, run),
@@ -258,7 +256,7 @@ public sealed class ReasonStepRunner(
                 definition?.MaxMinutes is { } minutes ? TimeSpan.FromMinutes(minutes) : null,
                 definition?.StallSeconds,
                 place.Definition.HandoffSeconds),
-            Mask: webMask)
+            Mask: launch.Mask(context.Layout, providers, webMask))
         {
             Ground = ground,
             Credential = order.FirstOrDefault(entry => entry.Usable)?.Credential,
@@ -268,10 +266,12 @@ public sealed class ReasonStepRunner(
             WebSearch = webSearch,
             Spend = spend.RecordingIn(context.Layout),
             Compaction = compaction,
-            Retries = run.Step.Retries ?? place.Definition.MaxRetries ?? 3,
+            Retries = place.Definition.RetriesOf(run.Step),
             BackoffSeconds = run.Step.BackoffSeconds ?? place.Definition.BackoffSeconds,
-            Program = program,
-            ProgramVersion = programVersion,
+            Program = program?.Program,
+            ProgramVersion = program?.Version,
+            Skills = skills,
+            SessionId = conversation is null ? session : null,
 
             // What the engine tells the attempt's agent while it works - a plan update's message into the
             // conversation, its handoff where one ends the step in order - and what a plan update that told this
@@ -341,7 +341,7 @@ public sealed class ReasonStepRunner(
     /// The engine's account of the step's stored stream - the body of the handoff it writes where the agent gave none:
     /// what the newest attempt's events show (the files it wrote, the last commands it ran and how each ended, its last
     /// messages word for word, as many as the continuation record keeps) beside the steps before it that left notes,
-    /// named by step and not by path. Null where the stream holds nothing to say.
+    /// named by step and not by path. Null where the stream holds nothing to say, or a whole line of it does not read.
     /// </summary>
     /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
     string? IFlowHandoffRunner.Account(FlowStepRun run)
@@ -356,7 +356,18 @@ public sealed class ReasonStepRunner(
         }
 
         var layout = OrchestratorLayout.Of(new HarnessLayout(place.Repository, place.Repository), place.Run);
-        var stream = StreamOf(layout, agent, run.Instance);
+        IReadOnlyList<AgentEvent> stream;
+
+        try
+        {
+            stream = StreamOf(layout, agent, run.Instance);
+        }
+        catch (HarnessException)
+        {
+            // A stream whose whole lines do not all read gives no account: one written from part of it would say less
+            // than the attempt did as though it were all, and the handoff stands on its first line alone.
+            return null;
+        }
 
         if (stream.Count == 0)
         {
@@ -390,7 +401,8 @@ public sealed class ReasonStepRunner(
     }
 
     /// <summary>
-    /// The step's ending as its run's maps it: an answer that read against its schema is the step's output; a stop is
+    /// The step's ending as its run's maps it: an answer that read against its schema is the step's output, with the
+    /// issues it reports that were there before the run (<see cref="FlowPreExistingReport.In"/>); a stop is
     /// incomplete, whatever it ended; the person asked is the step's question; a limit of the step's own asks, saying
     /// whether a stored conversation of the attempt can be handed, which is where the answer <c>more</c> is offered;
     /// every account at its limit, or the provider's service failing past the client's own tries, pauses the run safely
@@ -406,12 +418,17 @@ public sealed class ReasonStepRunner(
             return FlowStepResult.Ended(passed: false, HarnessExit.InternalError, $"'{instance}' answered a result that does not hold together: {wrong}");
         }
 
+        // The output an answer read against its schema, and the issues it reports there that were before the run - each
+        // raising the triage the step's onPreExisting names.
+        var output = result.Status == AgentRunStatus.Completed && result.StructuredOutput is { Length: > 0 } json ? JsonNode.Parse(json) : null;
+
         return result.Status switch
         {
             AgentRunStatus.Completed => FlowStepResult.Ended(
                 passed: true,
                 HarnessExit.Success,
-                output: result.StructuredOutput is { Length: > 0 } json && JsonNode.Parse(json) is { } parsed ? parsed : null)
+                output: output,
+                preExisting: FlowPreExistingReport.In(output))
                 with { Assumptions = result.Assumptions },
             AgentRunStatus.Asked => FlowStepResult.Asking(
                 new FlowQuestion(FlowQuestions.RunsOwn, "ask", instance, AskedProblemOf(result, instance), FlowQuestions.OptionsOf("ask", step: null))
@@ -450,12 +467,13 @@ public sealed class ReasonStepRunner(
 
     /// <summary>
     /// The handoff the attempt is given, at the head of its prompt: a part of its own, so what goes on with the prompt
-    /// reads the agent's account first and the task after it.
+    /// reads the agent's account first and the task after it - its lines ended as every part of a prompt's are, by a
+    /// line feed alone, so a prompt is the same bytes on every system.
     /// </summary>
     /// <param name="handoff">The handoff's text; null where the attempt is given none.</param>
     /// <param name="prompt">The filled prompt.</param>
     private static string WithHandoff(string? handoff, string prompt)
-        => handoff is { Length: > 0 } ? $"<{HandoffTag}>{Environment.NewLine}{handoff.TrimEnd()}{Environment.NewLine}</{HandoffTag}>{Environment.NewLine}{Environment.NewLine}{prompt}" : prompt;
+        => handoff is { Length: > 0 } ? $"<{HandoffTag}>\n{handoff.TrimEnd()}\n</{HandoffTag}>\n\n{prompt}" : prompt;
 
     /// <summary>The tag the handoff's part of a prompt is wrapped in, as the first user message wraps its own parts.</summary>
     public const string HandoffTag = "handoff";
@@ -476,7 +494,7 @@ public sealed class ReasonStepRunner(
             switch (given.Kind, given.Answer)
             {
                 case ("ask", "answer"):
-                    return new(given.Text is { Length: > 0 } ? $"The person answered:{Environment.NewLine}{given.Text}" : "The person answered with nothing: decide for yourself and finish the task.", Compact: false);
+                    return new(given.Text is { Length: > 0 } ? $"The person answered:\n{given.Text}" : "The person answered with nothing: decide for yourself and finish the task.", Compact: false);
                 case ("ask", "decide"):
                     return new("The person leaves the questions to you: go on with what you recommended for each, record each under your assumptions, and finish the task.", Compact: false);
                 default:
@@ -514,28 +532,6 @@ public sealed class ReasonStepRunner(
     /// <param name="Prompt">The attempt's message; null where it sends its own filled prompt.</param>
     /// <param name="Compact">Whether the answer was <c>compact</c>, and the attempt begins from the engine's reduction of the conversation so far.</param>
     private sealed record GoingOn(string? Prompt, bool Compact);
-
-    /// <summary>
-    /// Where the run works: its agent's worktree where it has one - the working directory, which it writes - or, for a
-    /// read-only agent, the main checkout, which it only reads; its own work directory either way, and the run's
-    /// directory for the run's own records.
-    /// </summary>
-    /// <param name="record">The agent's record.</param>
-    /// <param name="mainCheckout">The main checkout's root.</param>
-    /// <param name="layout">The run's own paths.</param>
-    /// <param name="agent">The agent's name.</param>
-    private static AgentWorkspace Workspace(AgentRecord record, string mainCheckout, OrchestratorLayout layout, string agent)
-    {
-        var work = layout.WorkDirectory(agent);
-
-        return new AgentWorkspace(
-            record.Reads ? null : record.Worktree,
-            work,
-            mainCheckout,
-            [],
-            record.Reads || record.Worktree is not { Length: > 0 } ? work : record.Worktree,
-            layout.Directory);
-    }
 
     /// <summary>
     /// The agent definition <paramref name="agent"/> names, read whole; null where none is named. The file that does
@@ -784,46 +780,16 @@ public sealed class ReasonStepRunner(
         => run.Step.Resume is not null || run.Attempt > 1 || run.Handoff is not null;
 
     /// <summary>
-    /// The events the step's own stream holds, masked as it holds them: the step's transcript, from which the engine
-    /// reads what no agent can say any more - the session a conversation goes on as, and the conversation a compaction
-    /// reduces. Empty where the step streamed nothing yet.
+    /// The events the step's own stream holds, masked as it holds them, read by the store's one reader of it: the step's
+    /// transcript, from which the engine reads what no agent can say any more - the session a conversation goes on as,
+    /// and the conversation a compaction reduces. A torn last line a killed writer left is set aside; a whole line that
+    /// does not read refuses (<see cref="OrchestrationStore.ReadStepStream"/>). Empty where the step streamed nothing yet.
     /// </summary>
     /// <param name="layout">The run's own paths.</param>
     /// <param name="agent">The agent the step works as, whose directory keeps the step's records.</param>
     /// <param name="instance">The step instance's name.</param>
     private IReadOnlyList<AgentEvent> StreamOf(OrchestratorLayout layout, string agent, string instance)
-    {
-        var file = Path.Combine(layout.AgentStepDirectory(agent, instance), StoredStream.FileName);
-
-        if (!fileSystem.FileExists(file))
-        {
-            return [];
-        }
-
-        var events = new List<AgentEvent>();
-
-        foreach (var line in fileSystem.ReadAllText(file).Split('\n'))
-        {
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            try
-            {
-                if (JsonSerializer.Deserialize<AgentEvent>(line.TrimEnd('\r'), JsonStateFile.LineOptions) is { } read)
-                {
-                    events.Add(read);
-                }
-            }
-            catch (JsonException)
-            {
-                // A torn line a killed writer left takes itself back; the whole ones before it stand.
-            }
-        }
-
-        return events;
-    }
+        => store.ReadStepStream(layout.AgentStepDirectory(agent, instance));
 
     /// <summary>
     /// The stored conversation the step's own stream names last, where the engine holds one it can hand: the session's
@@ -868,145 +834,83 @@ public sealed class ReasonStepRunner(
     }
 
     /// <summary>
-    /// The prompt with each skill it names handed over: every <c>{skill.&lt;name&gt;}</c> read again where the step
-    /// starts - the first place that has the folder deciding, one that is there and cannot be used refused, never
-    /// fallen past - the folder copied whole into the agent's <c>skills/&lt;name&gt;/</c> in place of an earlier copy,
-    /// and the block put where the placeholder stood, its tools held to the capabilities the agent's own ground gives
-    /// it. Null, with why, where one could not be handed.
+    /// The prompt with each skill it names handed over, from the pieces the engine filled around them - its own text
+    /// joined as the engine filled it, never read as a template again, so a value's braces stay as the value holds
+    /// them: every <c>{skill.&lt;name&gt;}</c> read again where the step starts - its name by the one rule of a skill's
+    /// name, the first place that has the folder deciding, one that is there and cannot be used refused, never fallen
+    /// past - the folder copied whole into the agent's <c>skills/&lt;name&gt;/</c> in place of an earlier copy, and the
+    /// block put where the placeholder stood, its tools held to the capabilities the agent's own ground gives it and
+    /// its <c>${CLAUDE_SESSION_ID}</c> the session the run begins as. Every skill that could not be handed is the
+    /// prompt's refusal, said whole; the skills handed are what the step's stream records.
     /// </summary>
-    /// <param name="prompt">The prompt, its other names already filled by the engine.</param>
-    /// <param name="run">The step, whose instance names the skills and whose agent holds them.</param>
-    /// <param name="agent">The agent the step works as.</param>
+    /// <param name="pieces">The prompt as the engine filled it around its skills.</param>
+    /// <param name="run">The step, whose instance names the skills.</param>
+    /// <param name="agent">The agent a refusal names: the definition the step works by, else the agent it works as.</param>
     /// <param name="capabilities">The capabilities the agent's own ground gives it, its tools held to them.</param>
     /// <param name="workspace">Where the run works, the skills copied under its work directory.</param>
     /// <param name="resolution">The step's resolution, whose effort the blocks are given.</param>
-    /// <param name="problem">Why a skill could not be handed; null where every one was.</param>
-    private string? SkillBlocks(
-        string prompt,
+    /// <param name="session">The id the run's first session begins as.</param>
+    private HandedSkills SkillBlocks(
+        IReadOnlyList<FlowTemplate.Piece> pieces,
         FlowStepRun run,
         string agent,
         IReadOnlyList<AgentCapability> capabilities,
         AgentWorkspace workspace,
         AgentResolution resolution,
-        out string? problem)
+        string session)
     {
         var skills = new AgentSkills(fileSystem, platform, workspace.MainCheckout);
         var may = capabilities.Select(one => one.ToString().ToLowerInvariant()).ToList();
-        var filled = new StringBuilder(prompt.Length);
+        var filled = new StringBuilder();
+        var handed = new List<AgentSkill>();
 
-        foreach (var piece in FlowTemplate.Pieces(prompt))
+        foreach (var piece in pieces)
         {
-            if (piece.Kind != FlowTemplate.PieceKind.Placeholder || !piece.Name.StartsWith("skill.", StringComparison.Ordinal))
+            if (piece.Kind != FlowTemplate.PieceKind.Placeholder)
             {
                 filled.Append(piece.Text);
                 continue;
             }
 
-            var name = piece.Name["skill.".Length..];
-
-            if (name.Length == 0)
+            if (AgentSkills.NameIn(piece.Name, out var unnamed) is not { } name)
             {
-                problem = "the prompt names {skill.} for no skill";
-                return null;
+                return HandedSkills.RefusedFor($"'{run.Instance}' prompt names {unnamed}");
             }
 
-            var found = skills.Find(name) ?? throw new HarnessException(HarnessExit.Refused, skills.Missing(name));
+            if (skills.Find(name) is not { } found)
+            {
+                return HandedSkills.RefusedFor($"'{run.Instance}' prompt names {{{piece.Name}}}, and {skills.Missing(name)}");
+            }
 
             if (found.ProblemsFor(run.Instance, agent, may) is [_, ..] refused)
             {
-                problem = string.Join(" ", refused);
-                return null;
+                return HandedSkills.RefusedFor(string.Join(" ", refused));
             }
 
             var directory = skills.Copy(found, workspace.WorkDirectory);
-            var block = found.Block(directory, workspace.Worktree ?? workspace.MainCheckout, run.Instance, resolution.Serving.Effort ?? string.Empty, out var unread);
 
-            if (block is null)
+            if (found.Block(directory, workspace.Worktree ?? workspace.MainCheckout, session, resolution.Serving.Effort ?? string.Empty, out var unread) is not { } block)
             {
-                problem = unread ?? $"skill '{name}' cannot be used";
-                return null;
+                return HandedSkills.RefusedFor(unread ?? $"skill '{name}' ('{found.File}') cannot be used");
             }
 
             filled.Append(block);
+            handed.Add(new AgentSkill(found.Name, found.From, found.File, found.Digest!, found.FolderDigest!, directory));
         }
 
-        problem = null;
-        return filled.ToString();
+        return new HandedSkills(filled.ToString(), handed, Refused: null);
     }
 
-    /// <summary>
-    /// What the chain of work <paramref name="name"/> resumes names, where its first naming step names it: each step
-    /// the chain goes on with in turn - the resumed step, then the step that resumes, until one names a tier, a model
-    /// or an agent - for a step that goes on with another's work inherits what that chain names, where the chain names
-    /// anything and the step itself names none. Null where no step of the chain names anything.
-    /// </summary>
-    /// <param name="definition">The workflow the run runs.</param>
-    /// <param name="name">The resumed step's name.</param>
-    private static ResumedStep? Resumed(WorkflowDefinition definition, string name)
+    /// <summary>The prompt with its skills handed over, or why one could not be.</summary>
+    /// <param name="Prompt">The prompt the run sends; null where a skill was refused.</param>
+    /// <param name="Skills">Each skill handed over, as the step's stream records it.</param>
+    /// <param name="Refused">Why a skill could not be handed, said whole; null where every one was.</param>
+    private sealed record HandedSkills(string? Prompt, IReadOnlyList<AgentSkill> Skills, string? Refused)
     {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-
-        while (seen.Add(name))
-        {
-            if (Declared(definition, name) is not { } step)
-            {
-                return null;
-            }
-
-            // The first step of the chain that names what a step that goes on with its work inherits: the chain stops
-            // there, for the steps before it named nothing to inherit.
-            if (step.Tier is not null || step.Model is not null || step.Agent is not null)
-            {
-                return new ResumedStep(step.Tier, step.Model, step.Agent);
-            }
-
-            if (step.Resume is not { } next || string.Equals(next, step.Name, StringComparison.Ordinal))
-            {
-                return null;
-            }
-
-            name = next;
-        }
-
-        return null;
+        /// <summary>The answer of a prompt one of whose skills could not be handed.</summary>
+        /// <param name="why">Why, said whole.</param>
+        public static HandedSkills RefusedFor(string why) => new(Prompt: null, [], why);
     }
-
-    /// <summary>The reason step named <paramref name="name"/>, as the definition declares it; null where none is.</summary>
-    /// <param name="definition">The workflow the run runs.</param>
-    /// <param name="name">The step's name.</param>
-    private static WorkflowStep? Declared(WorkflowDefinition definition, string name)
-    {
-        WorkflowStep? found = null;
-
-        void Walk(IReadOnlyList<WorkflowStep> steps)
-        {
-            foreach (var step in steps)
-            {
-                if (found is not null)
-                {
-                    return;
-                }
-
-                if (step.Type == "reason" && string.Equals(step.Name, name, StringComparison.Ordinal))
-                {
-                    found = step;
-                    return;
-                }
-
-                Walk(step.Steps);
-            }
-        }
-
-        Walk(definition.Steps);
-
-        return found;
-    }
-
-    /// <summary>What a resumed step hands the step that goes on with its work, where that names none of its own.</summary>
-    /// <param name="Tier">The tier the resumed step runs on; null where it names none.</param>
-    /// <param name="Model">The model it names outright; null where it names none.</param>
-    /// <param name="Agent">The agent definition it names, its model below the step's own; null where it names none.</param>
-    private sealed record ResumedStep(string? Tier, string? Model, string? Agent);
 }
 
 /// <summary>The runner of a step type that can answer a stopped step's handoff turn; every other type's runner cannot, and the engine writes the handoff itself.</summary>

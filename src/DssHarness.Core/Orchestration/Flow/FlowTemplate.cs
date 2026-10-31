@@ -163,11 +163,41 @@ public static class FlowTemplate
     /// <param name="problem">Why it could not be filled; null where it was.</param>
     /// <returns>The text filled; null where it could not be.</returns>
     public static string? Fill(string template, Func<FlowExpression.Path, FlowExpression.PathRead> read, out string? problem)
+        => FillAroundSkills(template, read, out problem) is { } filled ? Joined(filled) : null;
+
+    /// <summary>
+    /// Fills <paramref name="template"/> as <see cref="Fill"/> does, but each placeholder that names a skill
+    /// (<see cref="AgentSkills.Names"/>) kept in its place as a piece of its own: a reason step's prompt, whose skills
+    /// its runner hands over. What was filled is never read as a template again - a brace a value holds stays a brace,
+    /// and a skill a value names, a person's words among them, stays text. A name that reads nothing says why, in
+    /// <paramref name="problem"/>, and fills nothing.
+    /// </summary>
+    /// <param name="template">The template, as the definition spells it.</param>
+    /// <param name="read">Reads one path of a name, as the run's expressions read it.</param>
+    /// <param name="problem">Why it could not be filled; null where it was.</param>
+    /// <returns>
+    /// The text filled, in order: <see cref="PieceKind.Text"/> pieces holding what was filled, and a
+    /// <see cref="PieceKind.Placeholder"/> piece for each skill, holding what its braces hold; null where it could not be.
+    /// </returns>
+    public static IReadOnlyList<Piece>? FillAroundSkills(string template, Func<FlowExpression.Path, FlowExpression.PathRead> read, out string? problem)
     {
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(read);
 
+        var pieces = new List<Piece>();
         var filled = new StringBuilder(template.Length);
+        var filledAt = 0;
+
+        void Close(int at)
+        {
+            if (filled.Length > 0)
+            {
+                pieces.Add(new(filledAt, filled.ToString(), PieceKind.Text));
+                filled.Clear();
+            }
+
+            filledAt = at;
+        }
 
         foreach (var piece in Pieces(template))
         {
@@ -186,9 +216,11 @@ public static class FlowTemplate
             // A skill's name is a reason step's prompt's alone, and is not read here: the folder is handed over where
             // the step starts, by its runner, which puts the skill's block where the placeholder stands. The
             // definition's check refuses the name in every other key a template fills.
-            if (name == "skill" || name.StartsWith("skill.", StringComparison.Ordinal))
+            if (AgentSkills.Names(name))
             {
-                filled.Append($"{{{piece.Text}}}");
+                Close(piece.At);
+                pieces.Add(piece);
+                filledAt = piece.At + piece.Text.Length + 2;
                 continue;
             }
 
@@ -216,8 +248,21 @@ public static class FlowTemplate
             }
         }
 
+        Close(template.Length);
         problem = null;
-        return filled.ToString();
+        return pieces;
+    }
+
+    /// <summary>
+    /// Filled pieces (<see cref="FillAroundSkills"/>) as one text: each filled text as it is, and each skill's
+    /// placeholder written back in its braces, where nothing hands its skill over.
+    /// </summary>
+    /// <param name="pieces">The pieces, in order.</param>
+    public static string Joined(IReadOnlyList<Piece> pieces)
+    {
+        ArgumentNullException.ThrowIfNull(pieces);
+
+        return string.Concat(pieces.Select(piece => piece.Kind == PieceKind.Placeholder ? $"{{{piece.Text}}}" : piece.Text));
     }
 
     /// <summary>

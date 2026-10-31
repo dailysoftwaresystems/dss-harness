@@ -23,7 +23,43 @@ public sealed record FlowAnswerGiven(string Question, string Answer, string? Tex
 /// <param name="Where">The paths or the command it is in, as the repository spells them.</param>
 /// <param name="Evidence">What the agent read or ran and saw: a file and line it quotes, a command and the output.</param>
 /// <param name="Blocks">Whether the issue stops the reporting step's own work.</param>
-public sealed record FlowPreExistingReport(string Title, string Description, string Where, string Evidence, bool Blocks);
+public sealed record FlowPreExistingReport(string Title, string Description, string Where, string Evidence, bool Blocks)
+{
+    /// <summary>
+    /// The issues a reason step's output reports under <c>preExisting</c>, in the order it gives them, each as the shipped
+    /// schemas spell one - its <c>title</c>, <c>description</c>, <c>where</c> (the paths or the command, a list or one
+    /// text), <c>evidence</c> and <c>blocks</c> - a member the output leaves out read as empty, or false. Empty where the
+    /// output reports none; an entry that is no object holding a title names no issue, and is none.
+    /// </summary>
+    /// <param name="output">The step's output, as its schema held it; null where it gave none.</param>
+    public static IReadOnlyList<FlowPreExistingReport> In(JsonNode? output)
+    {
+        if (output is not JsonObject answer || answer["preExisting"] is not JsonArray reported)
+        {
+            return [];
+        }
+
+        static string Text(JsonNode? node)
+            => node switch
+            {
+                JsonValue value when value.TryGetValue<string>(out var text) => text,
+                JsonArray list => string.Join(", ", list.OfType<JsonValue>().Select(item => item.TryGetValue<string>(out var text) ? text : null).OfType<string>()),
+                _ => string.Empty,
+            };
+
+        return
+        [
+            .. reported.OfType<JsonObject>()
+                .Where(issue => Text(issue["title"]).Length > 0)
+                .Select(issue => new FlowPreExistingReport(
+                    Text(issue["title"]),
+                    Text(issue["description"]),
+                    Text(issue["where"]),
+                    Text(issue["evidence"]),
+                    issue["blocks"] is JsonValue blocks && blocks.TryGetValue<bool>(out var stops) && stops)),
+        ];
+    }
+}
 
 /// <summary>
 /// The run a step belongs to: where it works, its name, the commit and the branch it started from and the workflow it
@@ -88,9 +124,8 @@ public sealed record FlowMadeAgent(string Name, string? Model);
     /// rebase's <c>merge</c>, each the names its expression yielded, under its key - <c>allow.new</c> and <c>allow.merge</c>
     /// spelt so - and none where one that may read nothing did; a <c>ci-wait</c> step's <c>commit</c> where it names none,
     /// the commit the run last pushed; a <c>commit</c> step's <c>folds</c>, the instances of the fold and delete-agent steps
-    /// upstream of it that fold; a <c>pull-request</c> step's <c>body</c>, the text of the file it names, filled; a
-    /// <c>reason</c> step's <c>prompt</c> and <c>resumePrompt</c>, the text of each file it names, filled with every name
-    /// but a skill's, and its <c>writes</c>, the names its expression yielded, narrowed as a written-out list narrows
+    /// upstream of it that fold; a <c>pull-request</c> step's <c>body</c>, the text of the file it names, filled; and a
+    /// <c>reason</c> step's <c>writes</c>, the names its expression yielded, narrowed as a written-out list narrows
     /// before its runner is asked. Empty for every other step.
     /// </param>
 /// <param name="Made">The agent a <c>create-agent</c> step makes, as the engine named it; null for every other step.</param>
@@ -120,6 +155,12 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// reads it whole. Null where no update told this work, and for a step that carries a piece out, which its own prompt
 /// reads as <c>{piece.*}</c>.
 /// </param>
+/// <param name="Prompts">
+/// A reason step's <c>prompt</c> and <c>resumePrompt</c>, by key, each the text of the file it names filled with every
+/// name but a skill's (<see cref="FlowTemplate.FillAroundSkills"/>): its pieces as filled, each skill in its place, so its
+/// runner hands each skill over and never reads filled text as a template again. Null for every other step, and for a
+/// run held in memory alone, which reads no files.
+/// </param>
 public sealed record FlowStepRun(
     WorkflowStep Step,
     string Instance,
@@ -139,7 +180,8 @@ public sealed record FlowStepRun(
     string? Target = null,
     IReadOnlyList<FlowWorkedFrom>? WorkedFrom = null,
     FlowTelling? Telling = null,
-    string? PlanTold = null);
+    string? PlanTold = null,
+    IReadOnlyDictionary<string, IReadOnlyList<FlowTemplate.Piece>>? Prompts = null);
 
 /// <summary>
 /// The one who runs a step: the code a step type calls - a machine step's service, a reason step's client runner - asked

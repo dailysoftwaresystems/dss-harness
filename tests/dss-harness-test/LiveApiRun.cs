@@ -115,7 +115,6 @@ internal sealed class LiveApiRun : IDisposable
             null,
             "You are a careful agent. Do exactly what you are asked, and nothing more.",
             prompt,
-            new Dictionary<string, string>(),
             null,
             new AgentWorkspace(_tree, _work, _temp.Path, [], _tree, Path.Combine(_temp.Path, ".orchestrators", "r1")),
             output,

@@ -95,6 +95,26 @@ public sealed class AgentStepGroundTests
         Assert.Null(open.Writes);
     }
 
+    /// <summary>
+    /// An agent whose definition says <c>writes: false</c>, and a run that only reads - the run's advisor - work in the
+    /// worktree and never write it: the work directory is all either writes, and the worktree is still read and worked
+    /// in.
+    /// </summary>
+    [Fact]
+    public void ADefinitionThatWritesNothing_AndARunThatOnlyReads_LeaveTheWorktreeUnwritten()
+    {
+        var readOnly = new AgentDefinition("planner", "what it is for", "the system prompt", Writes: false);
+        var byDefinition = AgentStepGround.Of(new HarnessConfig(), readOnly, Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], slotDirectory: "slot");
+        var byRun = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], slotDirectory: "slot", readsOnly: true);
+
+        foreach (var ground in new[] { byDefinition, byRun })
+        {
+            Assert.Equal(["C:/runs/r1/agents/a1/work"], ground.WritableRoots);
+            Assert.Equal("C:/trees/w1", ground.WorkingDirectory);
+            Assert.Contains("C:/trees/w1", ground.ReadRoots);
+        }
+    }
+
     /// <summary>A workspace over a worktree, the shape most of the tests use.</summary>
     private static AgentWorkspace Workspace()
         => new("C:/trees/w1", "C:/runs/r1/agents/a1/work", "C:/source/repo", [], "C:/trees/w1", "C:/source/repo/.orchestrators/r1");

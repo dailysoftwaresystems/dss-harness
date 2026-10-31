@@ -300,7 +300,7 @@ public sealed class ToolLoop(
         private readonly AgentUsageTally _used = new();
         private readonly List<string> _keysRefused = [];
         private readonly CancellationTokenSource _pause = new();
-        private readonly string _session = run.Conversation?.Id ?? Guid.NewGuid().ToString("D");
+        private readonly string _session = run.Conversation?.Id ?? run.SessionId ?? Guid.NewGuid().ToString("D");
 
         // The run's order on this provider and client: the serving model's keys in the credential's order, then each
         // later model of the same provider and client with each of its keys, each model's keys before the next model, up
@@ -402,7 +402,7 @@ public sealed class ToolLoop(
                 run.Model!,
                 FileContentHash.Of(Encoding.UTF8.GetBytes(conversation.SystemPrompt)),
                 [.. runtime.Tools.Select(tool => tool.Name)],
-                [.. run.Skills.Select(skill => skill.Name)],
+                run.Skills,
                 HandedConversation: run.Conversation is not null,
                 run.Provider,
                 Effort: run.Effort,

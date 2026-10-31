@@ -26,6 +26,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="fileSystem">The file system the workflow's files are read on.</param>
 /// <param name="keys">The slot the entry's keys are read from.</param>
 /// <param name="harnessOutput">Writes output the copies of a continuation record name.</param>
+/// <param name="updates">Finds the Claude Code the advice's order starts, where it holds the client that starts one; null where nothing does.</param>
 public sealed class AdvisorRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -33,7 +34,8 @@ public sealed class AdvisorRunner(
     IAgentRunner runner,
     IFileSystem fileSystem,
     AgentKeyStore keys,
-    Output.IHarnessOutput harnessOutput) : IFlowAdvisorRunner
+    Output.IHarnessOutput harnessOutput,
+    Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null) : IFlowAdvisorRunner
 {
     /// <inheritdoc/>
     public async Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, CancellationToken cancellationToken)
@@ -81,20 +83,33 @@ public sealed class AdvisorRunner(
             return NotObtained($"the advisor has no model to run on: name a tier or a model on it, or a tier under defaults.agentTier");
         }
 
-        // The asking step's agent decides where the advice works: its worktree where it has one, else the main tree -
-        // and the advice's records sit under the asking step's own directory, whichever agent it names.
+        var launch = new ReasonLaunch(fileSystem, platform, keys, updates);
+        var order = launch.Order(providers, resolution, context.Layout);
+
+        // The advisor only reads, so a Claude Code its order starts is only found: one that is not there, or is too old,
+        // is why no advice was obtained, and installing or updating it is a run's step's to do.
+        var program = await launch.ProgramAsync(context.Layout, providers, order, steps: " (the run's advisor)", change: false, cancellationToken).ConfigureAwait(false);
+
+        if (program is { Ready: false })
+        {
+            return NotObtained(program.Message);
+        }
+
+        // The asking step's agent decides where the advice works: its worktree where it has one - at the path its record
+        // resolves, as every launch's is - else the main tree; the advice only reads either way, its own work directory
+        // the one place it writes, and its records sit under the asking step's own directory, whichever agent it names.
         var working = call.Agent;
         var agentRecord = working is null ? null : store.ReadAgent(layout, working);
-        var workspace = Workspace(agentRecord, context.Layout.MainCheckoutRoot, layout, call);
-        var order = AgentStepOrder.Of(providers, resolution, context.Layout, keys, new ClaudeTranscripts(fileSystem, platform).ConfigDirectory, spent: null);
+        var workspace = ReasonLaunch.Workspace(agentRecord, context.Layout, Path.Combine(StepDirectoryOf(layout, call), "work"), layout.Directory);
         var ground = AgentStepGround.Of(
             context.Config,
             definition,
             new WorkflowStep { Name = "advisor", Type = "reason" },
             workspace,
             webSearchGiven: false,
-            [.. order.Select(entry => entry.Credential?.ConfigDirectory).OfType<string>()],
-            context.Layout.WorkflowsEnvSlot);
+            launch.ClaudeDirectories(order),
+            context.Layout.WorkflowsEnvSlot,
+            readsOnly: true);
 
         // What the run stored of the asking step, rendered as a continuation record renders a step and within the
         // same bounds - the question's own record, read by {question.record}.
@@ -116,13 +131,12 @@ public sealed class AdvisorRunner(
             Fallback: null,
             definition.Prompt,
             prompt,
-            new Dictionary<string, string>(StringComparer.Ordinal),
             ResumeTemplate: null,
             workspace,
             OutputOf(call),
             Conversation: null,
             new AgentLimits(definition.MaxTurns, definition.MaxBudgetUsd, definition.MaxMinutes is { } minutes ? TimeSpan.FromMinutes(minutes) : null, definition.StallSeconds, place.Definition.HandoffSeconds),
-            Mask: null)
+            Mask: launch.Mask(context.Layout, providers))
         {
             Ground = ground,
             Credential = order.FirstOrDefault(entry => entry.Usable)?.Credential,
@@ -130,6 +144,8 @@ public sealed class AdvisorRunner(
             Order = order,
             Retries = call.Advisor.Retries,
             BackoffSeconds = call.Advisor.BackoffSeconds,
+            Program = program?.Program,
+            ProgramVersion = program?.Version,
         };
 
         try
@@ -292,29 +308,6 @@ public sealed class AdvisorRunner(
             ["answers"] = string.Join("\n", call.Answers.Select(option => $"- {option.Answer}: {option.Does}{(option.Text ? " (takes a text)" : string.Empty)}")),
             ["record"] = call.Record ?? string.Empty,
         });
-
-    /// <summary>
-    /// Where the advice works: the asking agent's worktree where it has one - which it writes - or, for a step that
-    /// names no agent or an agent that only reads, the main checkout; its own work directory under the asking step's
-    /// advice directory either way.
-    /// </summary>
-    /// <param name="record">The asking agent's record; null where the step names no agent.</param>
-    /// <param name="mainCheckout">The main checkout's root.</param>
-    /// <param name="layout">The run's own paths.</param>
-    /// <param name="call">The asking.</param>
-    private static AgentWorkspace Workspace(AgentRecord? record, string mainCheckout, OrchestratorLayout layout, FlowAdvisorCall call)
-    {
-        var directory = StepDirectoryOf(layout, call);
-        var work = Path.Combine(directory, "work");
-
-        return new AgentWorkspace(
-            record is { Reads: false } ? record.Worktree : null,
-            work,
-            mainCheckout,
-            [],
-            record is { Reads: false } && record.Worktree is { Length: > 0 } ? record.Worktree : work,
-            layout.Directory);
-    }
 
     /// <summary>The events of an advice, which tells the coordinator nothing while it runs - its answer is all it says.</summary>
     private sealed class NoEvents : IFlowRunEvents

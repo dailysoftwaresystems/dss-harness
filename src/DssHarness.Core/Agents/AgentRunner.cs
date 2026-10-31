@@ -366,6 +366,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         var retried = new Dictionary<(string Model, string Provider, string Client), int>();
         var watching = new Watching(pump);
         var messages = step.Messages ?? new AgentMessages();
+        var session = step.SessionId;
 
         // The move that brought the walk to the entry it stands on - from which entry, and why - said again to the entry
         // after it where the one it moved to could not be started; null before the walk has moved.
@@ -420,6 +421,11 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 {
                     watching.Began();
 
+                    // The session the engine made for the step - the one its prompt names - is the first launch's alone:
+                    // a retry or a move to another model begins a session of its own.
+                    var launchSession = session;
+                    session = null;
+
                     try
                     {
                         var now = _clock.GetUtcNow();
@@ -432,7 +438,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                             CredentialFor(order, at, refused, limits, now),
                             LaterFor(order, at, refused, limits, now),
                             step.Conversation,
-                            client.Capabilities.GoesOnWith == AgentConversationHandling.Handed);
+                            client.Capabilities.GoesOnWith == AgentConversationHandling.Handed,
+                            launchSession);
 
                         WroteUserMd(resolved, NewConversation(client, resolved));
                         var answered = await InLaneAsync(client, resolved, watching, pump).ConfigureAwait(false);
@@ -1035,7 +1042,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     private static AgentRun Resolved(AgentStepRequest step, string directory, ILineMask mask, AgentMessages messages)
         => new(
             step.SystemPrompt,
-            Filled(step.PromptTemplate, step.PromptValues),
+            step.Prompt,
             step.Workspace,
             step.Output,
             step.Conversation,
@@ -1045,7 +1052,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             step.Effort,
             [],
             [],
-            [],
+            step.Skills,
             mask,
             directory,
             step.Handoff ?? new AgentHandoffSignal(Bound(step)),
@@ -1059,6 +1066,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             Credential = step.Credential,
             Program = step.Program,
             ProgramVersion = step.ProgramVersion,
+            SessionId = step.SessionId,
             Withheld = step.Withheld,
             Commands = step.Commands,
             WebSearch = step.WebSearch,
@@ -1084,10 +1092,11 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <param name="later">The entries after it, of every client, as each may go on with.</param>
     /// <param name="conversation">The stored conversation the step's answer goes on with, where its attempt has one.</param>
     /// <param name="storesConversations">Whether the entry's client is one the engine hands a stored conversation to.</param>
-    private static AgentRun Resolved(AgentStepRequest step, string directory, ILineMask mask, AgentMessages messages, AgentRunEntry entry, AgentCredential? credential, IReadOnlyList<AgentRunEntry> later, AgentSessionRef? conversation, bool storesConversations)
+    /// <param name="session">The id the session this launch begins is given, where it is the step's first; null where the client makes its own.</param>
+    private static AgentRun Resolved(AgentStepRequest step, string directory, ILineMask mask, AgentMessages messages, AgentRunEntry entry, AgentCredential? credential, IReadOnlyList<AgentRunEntry> later, AgentSessionRef? conversation, bool storesConversations, string? session)
         => new(
             step.SystemPrompt,
-            Filled(step.PromptTemplate, step.PromptValues),
+            step.Prompt,
             step.Workspace,
             step.Output,
             Conversation: conversation is { } handed
@@ -1102,7 +1111,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             entry.Effort,
             later,
             [],
-            [],
+            step.Skills,
             mask,
             directory,
             step.Handoff ?? new AgentHandoffSignal(Bound(step)),
@@ -1116,6 +1125,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             Credential = credential,
             Program = step.Program,
             ProgramVersion = step.ProgramVersion,
+            SessionId = session,
             Withheld = step.Withheld,
             Commands = step.Commands,
             WebSearch = step.WebSearch,
@@ -1138,29 +1148,6 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <param name="step">The step.</param>
     private static TimeSpan Bound(AgentStepRequest step)
         => step.Limits.HandoffSeconds is { } seconds and > 0 ? TimeSpan.FromSeconds(seconds) : AgentLimits.DefaultHandoffBound;
-
-    /// <summary>The template with each of its values filled where the template names it, each place once.</summary>
-    /// <param name="template">The template.</param>
-    /// <param name="values">Its values.</param>
-    /// <remarks>
-    /// Read by the one template grammar (<see cref="Orchestration.Flow.FlowTemplate.Pieces(string)"/>): a brace doubled stands for
-    /// one, another expander's <c>${...}</c> is left as written, and a placeholder this step has no value for stands as
-    /// written, as does the rest of a template from a placeholder never closed. The template is read once, so a value
-    /// that names another value is never filled in its turn.
-    /// </remarks>
-    private static string Filled(string template, IReadOnlyDictionary<string, string> values)
-    {
-        var filled = new StringBuilder(template.Length);
-
-        foreach (var piece in Orchestration.Flow.FlowTemplate.Pieces(template))
-        {
-            filled.Append(piece.Kind != Orchestration.Flow.FlowTemplate.PieceKind.Placeholder
-                ? piece.Text
-                : values.TryGetValue(piece.Name, out var value) ? value : $"{{{piece.Text}}}");
-        }
-
-        return filled.ToString();
-    }
 
     /// <summary>One sink that takes each event into a channel, as the front end reads it; nothing once no one reads.</summary>
     /// <param name="yielded">The channel the events are yielded through.</param>

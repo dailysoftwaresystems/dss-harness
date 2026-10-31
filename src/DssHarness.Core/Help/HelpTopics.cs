@@ -2554,8 +2554,9 @@ public static class HelpTopics
         builder.AppendLine("written for Claude Code is used here as it is, and one written here is a skill there. This");
         builder.AppendLine("tool adds no key and no syntax of its own.");
         builder.AppendLine();
-        builder.AppendLine("<name> is the folder's name - letters, digits, '_', '-' and '.' alone, for that is what a");
-        builder.AppendLine("placeholder can name. The first place that has the folder decides:");
+        builder.AppendLine("<name> is the folder's name alone - letters, digits, '_' and '-', a '.' between two words -");
+        builder.AppendLine("so no name reaches past the place it is looked for in; any other is refused, by the check and");
+        builder.AppendLine("by the step alike. The first place that has the folder decides:");
         builder.AppendLine();
         builder.AppendLine($"  1  {AgentSkills.HarnessPlace}/<name>/SKILL.md   in the main checkout - the tool's own place; tracked");
         builder.AppendLine($"  2  {AgentSkills.ClaudePlace}/<name>/SKILL.md           in the main checkout - the repository's Claude Code skills");
@@ -2585,8 +2586,9 @@ public static class HelpTopics
         builder.AppendLine("place of any earlier copy; that path is the directory the text states and what");
         builder.AppendLine("${CLAUDE_SKILL_DIR} becomes. The work directory is a root every agent already reads and runs");
         builder.AppendLine($"commands in, on every client. A folder that holds a link, more than {AgentSkills.FileLimit} files or more than 16 MB is");
-        builder.AppendLine("refused. Each step's record names every skill it was given, the place, and the SHA-256 of");
-        builder.AppendLine("SKILL.md and of the folder.");
+        builder.AppendLine("refused. The step's stream records every skill it was given: its sessionStarted event names");
+        builder.AppendLine("each one's place, its SKILL.md, the folder handed to the step, and the SHA-256 of SKILL.md");
+        builder.AppendLine("and of the folder.");
         builder.AppendLine();
         builder.AppendLine("The frontmatter's keys, each honoured, recorded or refused:");
         builder.AppendLine();
@@ -2611,8 +2613,10 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine("In the body, replaced: ${CLAUDE_SKILL_DIR} (the folder handed to the step),");
         builder.AppendLine("${CLAUDE_PROJECT_DIR} (the agent's worktree; for an agent with none, the main checkout),");
-        builder.AppendLine("${CLAUDE_SESSION_ID} (the session's id), ${CLAUDE_EFFORT} (the effort the step resolved");
-        builder.AppendLine("to), and \\$ (a dollar). Refused, each naming its line: a read of an argument ($ARGUMENTS,");
+        builder.AppendLine("${CLAUDE_SESSION_ID} (the id the step's run begins its first session as, which the stream's");
+        builder.AppendLine("first sessionStarted names; a retry or a later model of the order begins one of its own with");
+        builder.AppendLine("the same prompt), ${CLAUDE_EFFORT} (the effort the step resolved to), and \\$ (a dollar).");
+        builder.AppendLine("Refused, each naming its line: a read of an argument ($ARGUMENTS,");
         builder.AppendLine("$ARGUMENTS[N], $1, a $name the arguments key declares) - a placeholder gives a skill no");
         builder.AppendLine("arguments; a command run when the skill is loaded (both exclamation-mark forms) - this");
         builder.AppendLine("tool runs nothing to build a prompt; and ${CLAUDE_PLUGIN_ROOT} and ${CLAUDE_PLUGIN_DATA}");
@@ -2634,7 +2638,7 @@ public static class HelpTopics
         builder.AppendLine("validate-workflow, and the start of run-orchestrator and resume-orchestrator (exit 12,");
         builder.AppendLine("nothing started, every problem of every prompt together) - and when the step starts, for a");
         builder.AppendLine("file can go or change between: the step is not started, it ends Failed with the same");
-        builder.AppendLine("sentence, and its onFailure decides what follows.");
+        builder.AppendLine("sentence and exit 12, and its onFailure decides what follows.");
 
         return builder.ToString();
     }
@@ -3683,16 +3687,20 @@ public static class HelpTopics
             + $"{FlowService.AskCommand} a person's, both answered with the engine's facts, computed from the run's records and never "
             + "guessed: how the run stands and for how long, its engine and its pause; each step instance in progress with its type, "
             + "its agent, a reason step's model, its attempt and how long it has run; what it waits for - each open question with "
-            + "since when and the command that answers it, a plan update under way or queued, an instance waiting on another or on a "
-            + "claim or room, a ci-wait reading the checks of the commit the run last pushed; what is done, the failures a handler "
-            + "took and what was spent of the budget; what is left at least and at most, with the bound that gave the most - a loop's "
-            + "iterations to its bound, a handler's visits to its maxVisits, a forEach not yet expanded and a piece of a plan update "
-            + "not carried out named - and when it may finish, as a range that rests on this run alone: of each step of the "
-            + "definition, the shortest and the longest time an instance of it took to end Done, the lower end laying what is left "
-            + "along what depends on what so work that runs side by side is counted once, the upper end summing every instance and "
-            + "every one a loop or a handler can add, one after another; a step no instance of which has ended Done in this run is "
-            + "counted and named and in neither end, the time a person takes to answer and a wait for a claim or room are left out "
-            + "and said to be, and where nothing has ended or the run has ended there is no estimate, and the facts say which. Where "
+            + "since when and the command that answers it, a plan update under way or queued, an instance waiting on another, on "
+            + "the resume or on room - a claim, the run to be quiet, a counter of its limits - a ci-wait reading the checks of the "
+            + "commit the run last pushed; what is done, the failures a handler took and what was spent of the budget; what is left "
+            + "at least and at most - a stopped instance among it, for it runs again at the resume - with the bound that gave the "
+            + "most, by the engine's own bounds: a loop's iterations to its bound, a handler's visits to its maxVisits in each "
+            + "scope its source is under way in, a forEach not yet expanded and a piece of a plan update not carried out named - "
+            + "and when it may finish, as a range that rests on this run alone: of each step of the definition that works, the "
+            + "shortest and the longest time an instance of it took to end Done - a group's own span is its members' time, never "
+            + "counted beside it - the lower end laying what is left along what depends on what, as the engine orders it, so work "
+            + "that runs side by side is counted once, the upper end summing every instance and every iteration or visit a loop or "
+            + "a handler can add, one after another; a step no instance of which has ended Done in this run is counted and named "
+            + "and in neither end, the time a person takes to answer and a wait for room are left out and said to be, and where "
+            + "nothing has ended or the run has ended - done or failed; a stopped run goes on at its resume - there is no "
+            + "estimate, and the facts say which. Where "
             + "the workflow's reporter names an agent, its words follow the facts - it is the run's own reporter, offered the tools "
             + "that read and no other, reading the run's directory and nowhere else, its answer masked and what it costs the "
             + "person's, never the run's; each call keeps its own record under the run's asks/, the facts as given, the files of its "
@@ -3700,7 +3708,8 @@ public static class HelpTopics
             + "step, no agent, no budget, no lock an engine needs - they take no lock at all - and they work while a run goes on, is "
             + "paused, waits, or has ended. Where no model words them the status still prints the facts, says no model worded this "
             + "and why, and exits 0: the facts are the answer, and the words were a service; the person's question is refused - 12 "
-            + "where the workflow names no reporter, 13 where the key is not there, 14 where npm or Claude Code is missing or too "
+            + "where the workflow names no reporter or the reporter's own files do not read, 13 where the key is not there, 14 "
+            + "where npm or Claude Code is missing or too "
             + "old, 20 where the model failed, 21 where it could not be reached or its account is at its limit - and neither "
             + "command installs Claude Code or brings one up to date: that is a run's to do, and these only read. An orchestrator "
             + "made by hand, which no flow runs, has no reporter and fewer facts: its status prints what list-orchestrator has of it "

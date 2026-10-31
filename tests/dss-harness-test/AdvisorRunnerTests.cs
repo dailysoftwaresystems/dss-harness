@@ -143,10 +143,34 @@ public sealed class AdvisorRunnerTests
         Assert.Equal(Path.Combine(advice.Directory!, "work"), asked.Workspace.WorkDirectory);
         Assert.Equal(
             "Question of\nthink\nkind\nturnLimit\nproblem\n'think' reached its turns (12 turns)\nTried: attempt 1 of the step\nThe answers:\n- more: one more of what was bounded\n- retry: the step runs again as a new attempt\nThe bar:\nPrefer the cheaper answer.\n\nThe input:\nbuild the login\n",
-            asked.PromptTemplate);
+            asked.Prompt);
         Assert.Contains("\"enum\": [\"more\", \"retry\"]", asked.Output!.Schema, StringComparison.Ordinal);
         Assert.Equal("q1", asked.Output!.Name);
         Assert.Null(asked.Output!.AskRounds);
+    }
+
+    /// <summary>
+    /// The advice asked of a step whose agent writes in a worktree works where that agent works - the worktree's path on
+    /// the disk, never its record's address - and only reads it: its own work directory is all it writes. The tool's
+    /// own Claude Code directory is kept from it, and every secret the slot answers is in its mask.
+    /// </summary>
+    [Fact]
+    public async Task AnAdviceInAWritingAgentsWorktree_ReadsItAndWritesNothingThere()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        agents.Answer = _ => new AgentRunResult(AgentRunStatus.Completed, StructuredOutput: """{"answer":"retry","why":"start again"}""");
+
+        var advice = await Runner(kit, agents).AdviseAsync(Call(kit, agent: "ag"), Token);
+
+        Assert.Equal("retry", advice.Answer);
+        var asked = agents.Asked.Single();
+        var work = Path.Combine(advice.Directory!, "work");
+        Assert.Equal((kit.Worktree("ag"), kit.Worktree("ag"), work), (asked.Workspace.Worktree, asked.Workspace.WorkingDirectory, asked.Workspace.WorkDirectory));
+        Assert.Equal([work], asked.Ground!.WritableRoots);
+        Assert.Contains(new ClaudeTranscripts(kit.Harness.FileSystem, kit.Harness.Platform).ConfigDirectory, asked.Ground.ClaudeCodeDirectories);
+        Assert.Equal($"the key {DssHarness.Core.Runners.ActionValues.Mask}", asked.Mask!.Redact("the key sk-test-one"));
     }
 
     /// <summary>

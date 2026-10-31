@@ -199,11 +199,11 @@ public sealed class RunReporterTests
         var status = reporter.Asked[0];
         var asked = reporter.Asked[1];
 
-        Assert.StartsWith($"The facts:\nrun '{run}' (workflow '{Workflow}'), as of ", status.PromptTemplate, StringComparison.Ordinal);
-        Assert.Contains($"\nThe records:\n{Path.Combine(temp.Path, ".orchestrators", run)}\n", status.PromptTemplate, StringComparison.Ordinal);
-        Assert.DoesNotContain("The question:", status.PromptTemplate, StringComparison.Ordinal);
-        Assert.StartsWith("The question:\nwhat did the gate ask?\nThe facts:\n", asked.PromptTemplate, StringComparison.Ordinal);
-        Assert.Contains($"\nThe records:\n{Path.Combine(temp.Path, ".orchestrators", run)}\n", asked.PromptTemplate, StringComparison.Ordinal);
+        Assert.StartsWith($"The facts:\nrun '{run}' (workflow '{Workflow}'), as of ", status.Prompt, StringComparison.Ordinal);
+        Assert.Contains($"\nThe records:\n{Path.Combine(temp.Path, ".orchestrators", run)}\n", status.Prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("The question:", status.Prompt, StringComparison.Ordinal);
+        Assert.StartsWith("The question:\nwhat did the gate ask?\nThe facts:\n", asked.Prompt, StringComparison.Ordinal);
+        Assert.Contains($"\nThe records:\n{Path.Combine(temp.Path, ".orchestrators", run)}\n", asked.Prompt, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -261,6 +261,54 @@ public sealed class RunReporterTests
             Assert.Equal(HarnessExit.Success, status.ExitCode);
             Assert.Contains(status.Details!, line => line.StartsWith("no model worded this:", StringComparison.Ordinal));
         }
+    }
+
+    /// <summary>
+    /// The reporter's answer is masked as the run's records are: a secret the slot holds that its words repeat reaches
+    /// neither the person's terminal nor the call's own record - and its ground keeps the tool's own Claude Code
+    /// directory from it, whatever client it is on.
+    /// </summary>
+    [Fact]
+    public async Task TheReportersAnswer_IsMaskedAsTheRunsRecordsAre()
+    {
+        var (harness, temp, reporter, service, run) = await PausedAsync();
+        using var disposed = temp;
+        reporter.Answer = _ => new AgentRunResult(AgentRunStatus.Completed, FinalText: "The key is sk-test-one.");
+
+        var status = await service.AskStatusAsync(temp.Path, run, json: false, Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, status.ExitCode);
+        Assert.Equal($"The key is {DssHarness.Core.Runners.ActionValues.Mask}.", status.Details!.Single(line => line.StartsWith("The key is", StringComparison.Ordinal)));
+        Assert.All(
+            Directory.EnumerateFiles(Path.Combine(temp.Path, ".orchestrators", run, "asks"), "*", SearchOption.AllDirectories),
+            file => Assert.DoesNotContain("sk-test-one", File.ReadAllText(file), StringComparison.Ordinal));
+        Assert.Contains(new ClaudeTranscripts(harness.FileSystem, harness.Platform).ConfigDirectory, reporter.Asked.Single().Ground!.ClaudeCodeDirectories);
+    }
+
+    /// <summary>
+    /// Whatever keeps the reporter from wording the facts - its own definition not reading among them - is why no model
+    /// worded them, with the code it means: the status still answers with the facts and exits 0, keeping its record,
+    /// and the person's question is refused with that code.
+    /// </summary>
+    [Fact]
+    public async Task AReporterWhoseDefinitionDoesNotRead_LeavesTheStatusAnsweringWithTheFacts()
+    {
+        var (_, temp, reporter, service, run) = await PausedAsync();
+        using var disposed = temp;
+        temp.WriteFile($".harness-config/workflows/{Workflow}/agents/reporter.md", string.Empty);
+        var why = $"agents/reporter.md does not read: {string.Join("; ", AgentDefinitionParser.Parse(string.Empty, "reporter").Problems)}";
+
+        var status = await service.AskStatusAsync(temp.Path, run, json: false, Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, status.ExitCode);
+        Assert.StartsWith($"run '{run}' (workflow '{Workflow}'), as of ", status.Message, StringComparison.Ordinal);
+        Assert.Equal($"no model worded this: {why}", status.Details!.Single(line => line.StartsWith("no model worded this", StringComparison.Ordinal)));
+        Assert.Empty(reporter.Asked);
+        Assert.Single(Directory.EnumerateFiles(Path.Combine(temp.Path, ".orchestrators", run, "asks"), "ask.json", SearchOption.AllDirectories));
+
+        var asked = await service.AskAsync(temp.Path, run, "what is it doing?", json: false, Token).WaitAsync(Bound, Token);
+
+        Assert.Equal((HarnessExit.ConfigInvalid, $"ask-orchestrator was refused: no model worded an answer: {why}"), (asked.ExitCode, asked.Message));
     }
 
     /// <summary>The <c>--json</c> answer holds the facts and the answer apart, with the cost and the record.</summary>

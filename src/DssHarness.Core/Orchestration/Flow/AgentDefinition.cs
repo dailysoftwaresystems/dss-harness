@@ -60,18 +60,20 @@ public sealed record AgentDefinition(
 public static class AgentDefinitionParser
 {
     /// <summary>
-    /// One definition's file, read whole.
+    /// One definition's file, read whole: an empty file is one that holds no frontmatter, said as a problem like every
+    /// other, for a definition's check says what is wrong with a file and never fails on one.
     /// </summary>
     /// <param name="text">The file's whole text.</param>
     /// <param name="agent">The agent's name, as a step names it: the file's name, which the definition must say again.</param>
     /// <returns>The definition, or null where the file does not read; and every problem, each with its line.</returns>
     public static (AgentDefinition? Definition, IReadOnlyList<string> Problems) Parse(string text, string agent)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        ArgumentNullException.ThrowIfNull(text);
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);
 
         var problems = new List<string>();
-        var (frontmatter, prompt) = Split(text);
+        var split = Frontmatter.Of(text);
+        var (frontmatter, prompt) = (split.Keys, split.Body);
 
         if (frontmatter is null)
         {
@@ -212,7 +214,8 @@ public static class AgentDefinitionParser
                 capabilities,
                 writes ?? true,
                 [.. restrictions]),
-            problems);    }
+            problems);
+    }
 
     /// <summary>Every key an agent definition takes, in the order help lists them.</summary>
     public static readonly IReadOnlyList<string> Known =
@@ -238,49 +241,11 @@ public static class AgentDefinitionParser
             _ => null,
         };
 
-    /// <summary>The file's frontmatter and its body, split at the closing of the frontmatter; null frontmatter where the file opens with none.</summary>
-    private static (string? Frontmatter, string? Prompt) Split(string text)
-    {
-        var opening = text.StartsWith("---\n", StringComparison.Ordinal) || text.StartsWith("---\r\n", StringComparison.Ordinal)
-            ? text.IndexOf('\n') + 1
-            : 0;
-
-        if (opening == 0)
-        {
-            return (null, null);
-        }
-
-        var at = opening;
-
-        while (at < text.Length)
-        {
-            var end = text.IndexOf('\n', at);
-
-            if (text.AsSpan(at, (end < 0 ? text.Length : end) - at).TrimEnd('\r').SequenceEqual("---"))
-            {
-                // The closing '---' may end the file; the body is then empty rather than past the file's end.
-                return (text[opening..at], text[(end < 0 ? text.Length : end + 1)..]);
-            }
-
-            if (end < 0)
-            {
-                break;
-            }
-
-            at = end + 1;
-        }
-
-        return (null, null);
-    }
-
-    /// <summary>A whole number at least one, as a limit is; null where the value does not read.</summary>
+    /// <summary>A whole number at least one, as a limit is, read as every whole number of a workflow's files is (<see cref="WorkflowFileParser.RequireInt"/>); null where the value does not read.</summary>
     private static int? Whole(YamlNode node, string what, List<string> problems)
     {
-        var scalar = YamlReading.RequireScalar(node, what, problems);
-
-        if (!int.TryParse(scalar, out var whole))
+        if (WorkflowFileParser.RequireInt(node, what, problems) is not { } whole)
         {
-            problems.Add(YamlReading.At(node, $"'{what}' is not a whole number; a limit is"));
             return null;
         }
 
@@ -296,7 +261,11 @@ public static class AgentDefinitionParser
     /// <summary>An amount of money at least naught, as a budget is; null where the value does not read.</summary>
     private static decimal? Amount(YamlNode node, string what, List<string> problems)
     {
-        var scalar = YamlReading.RequireScalar(node, what, problems);
+        // A value that is no scalar is said once, by the scalar's own reading.
+        if (YamlReading.RequireScalar(node, what, problems) is not { } scalar)
+        {
+            return null;
+        }
 
         if (!decimal.TryParse(scalar, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var amount))
         {

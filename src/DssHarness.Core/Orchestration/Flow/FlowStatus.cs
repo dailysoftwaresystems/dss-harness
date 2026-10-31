@@ -14,19 +14,22 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// </summary>
 /// <remarks>
 /// <para>
-/// What is left counts at least the instances that exist and have not ended, and at most those and every one a loop or
-/// a handler can still add at its bound - a loop without a numeric bound, and a <c>forEach</c> not yet expanded, are
-/// bounded only by the run's own bound of instances, and the facts say which bound gave the number.
+/// What is left counts at least the instances that exist and have not ended - a stopped one among them, which runs
+/// again at the resume - and at most those and every one a loop or a handler can still add at its bound, by the
+/// engine's own bounds and in each scope it counts them in - a loop without a numeric bound, and a <c>forEach</c> not
+/// yet expanded, are bounded only by the run's own bound of instances, and the facts say which bound gave the number.
 /// </para>
 /// <para>
-/// The estimate rests on this run alone: of each step of the definition, the shortest and the longest time an instance
-/// of it took to end <c>Done</c>. Its lower end lays the instances that are left along what depends on what - so work
+/// The estimate rests on this run alone: of each step of the definition that works, the shortest and the longest time
+/// an instance of it took to end <c>Done</c> - a group's own span is its members' time, and is never counted beside
+/// them. Its lower end lays the instances that are left along what depends on what, as the engine orders them - so work
 /// that runs side by side is counted once - each at its step's shortest time, and a step in progress with what is left
-/// of that; its upper end sums every instance that is left and every one a loop or a handler can add, each at its
-/// step's longest, one after another. A step none of whose instances has ended <c>Done</c> has no time to go by: its
-/// instances are counted and named, and are in neither end. It leaves out, and says that it does, the time a person
-/// takes to answer and a wait for a claim or for room. Where nothing has ended, or the run has ended, there is no
-/// estimate, and the facts say which.
+/// of that; its upper end sums every instance that is left and every iteration or visit a loop or a handler can add,
+/// each at its longest, one after another. A step none of whose instances has ended <c>Done</c> has no time to go by:
+/// its instances are counted and named, and are in neither end. It leaves out, and says that it does, the time a person
+/// takes to answer and a wait for room - a claim, the run to be quiet, a counter of its limits - as the admission that
+/// wrote the wait classes it (<see cref="FlowWaits"/>). Where nothing has ended, or the run has ended - done or failed,
+/// for a stopped run goes on at its resume - there is no estimate, and the facts say which.
 /// </para>
 /// </remarks>
 public static class FlowStatus
@@ -202,7 +205,10 @@ public static class FlowStatus
         return [line];
     }
 
-    /// <summary>When the run may finish, as a range from this run's own times - or why there is none.</summary>
+    /// <summary>
+    /// When the run may finish, as a range from this run's own times - or why there is none. Only the steps that work
+    /// are timed: a group's own record spans its members' work, which is counted in its members.
+    /// </summary>
     private static IReadOnlyList<string> Estimate(WorkflowDefinition definition, FlowFile flow, FlowQuestionsFile? questions, FlowUpdatesFile? updates, DateTimeOffset asOf)
     {
         if (Ended(flow.Status))
@@ -226,17 +232,19 @@ public static class FlowStatus
 
         // A step none of whose instances has ended Done has no time to go by: its instances are counted and named, and
         // are in neither end.
-        var named = left.Select(step => PathOf(step.Instance)).Where(path => !times.TryGetValue(path, out var time) || time.Longest <= TimeSpan.Zero).Distinct(StringComparer.Ordinal).ToList();
-        var measured = left.Where(step => times.TryGetValue(PathOf(step.Instance), out var time) && time.Longest > TimeSpan.Zero).ToList();
+        var working = left.Where(step => !step.Group).ToList();
+        var named = working.Select(step => FlowInstanceId.PathOf(step.Instance)).Where(path => !times.TryGetValue(path, out var time) || time.Longest <= TimeSpan.Zero).Distinct(StringComparer.Ordinal).ToList();
+        var measured = working.Where(step => times.TryGetValue(FlowInstanceId.PathOf(step.Instance), out var time) && time.Longest > TimeSpan.Zero).ToList();
 
-        if (measured.Count == 0)
+        if (measured.Count == 0 && named.Count > 0)
         {
             return [$"none: every step instance that is left is of a step that has ended no instance Done in this run{Named(named)}"];
         }
 
         var done = flow.Steps.Count(step => step.State == nameof(FlowInstanceState.Done));
         var loops = LoopAdditionsOf(definition, flow, updates, left, out var unbounded, out _);
-        var line = $"between {Span(ChainOf(definition, measured, times, asOf))} and {Span(AllOf(definition, loops, left, times, asOf))} more, "
+        var least = measured.Count == 0 ? TimeSpan.Zero : ChainOf(definition, measured, times, asOf);
+        var line = $"between {Span(least)} and {Span(AllOf(definition, loops, measured, times, asOf))} more, "
             + $"from the {Count(done, "step instance")} that ended Done in this run";
 
         if (unbounded)
@@ -258,20 +266,25 @@ public static class FlowStatus
             line += $"; not counting the time a person takes to answer {string.Join(", ", open)}";
         }
 
-        if (flow.Steps.Any(step => LeftStates.Contains(step.State) && step.WaitsOn?.Any(wait => wait.Contains("claim", StringComparison.Ordinal) || wait.Contains("room", StringComparison.Ordinal) || wait.Contains("quiet", StringComparison.Ordinal)) == true))
+        // A wait for room - a claim, the run to be quiet, a counter of the run's limits - as the admission that wrote it
+        // classes its own words (FlowWaits): only the run's pace ends it, and no step's time says how long it lasts.
+        if (flow.Steps.Any(step => LeftStates.Contains(step.State) && step.WaitsOn?.Any(FlowWaits.ForRoom) == true))
         {
-            line += "; not counting a wait for a claim, a counter or room";
+            line += "; not counting a wait for a claim, for the run to be quiet or for room under its limits";
         }
 
         return [line];
     }
 
-    /// <summary>The shortest and the longest time instances of each step of the definition took to end Done in this run, by the step's declaration path.</summary>
+    /// <summary>
+    /// The shortest and the longest time instances of each step of the definition that works took to end Done in this
+    /// run, by the step's declaration path - a group's own span left out, for its members' times are its time.
+    /// </summary>
     private static Dictionary<string, (TimeSpan Shortest, TimeSpan Longest)> TimesOf(FlowFile flow)
     {
         var times = new Dictionary<string, (TimeSpan Shortest, TimeSpan Longest)>(StringComparer.Ordinal);
 
-        foreach (var step in flow.Steps.Where(step => step.State == nameof(FlowInstanceState.Done) && step.StartedAt is not null && step.FinishedAt is not null))
+        foreach (var step in flow.Steps.Where(step => !step.Group && step.State == nameof(FlowInstanceState.Done) && step.StartedAt is not null && step.FinishedAt is not null))
         {
             var took = step.FinishedAt!.Value - step.StartedAt!.Value;
 
@@ -280,7 +293,7 @@ public static class FlowStatus
                 took = TimeSpan.Zero;
             }
 
-            var path = PathOf(step.Instance);
+            var path = FlowInstanceId.PathOf(step.Instance);
             times[path] = times.TryGetValue(path, out var held)
                 ? (TimeSpan.FromTicks(Math.Min(held.Shortest.Ticks, took.Ticks)), TimeSpan.FromTicks(Math.Max(held.Longest.Ticks, took.Ticks)))
                 : (took, took);
@@ -291,9 +304,8 @@ public static class FlowStatus
 
     /// <summary>
     /// The estimate's lower end: the longest chain of the instances that are left and measured, laid along what depends
-    /// on what - a chain runs through two instances of one container where the one waits for the other, and through two
-    /// iterations or visits of one step - each at its step's shortest time, and a step in progress with what is left of
-    /// that time, and with nothing where it has already run longer.
+    /// on what as the engine orders two instances (<see cref="Blocks"/>) - each at its step's shortest time, and a step
+    /// in progress with what is left of that time, and with nothing where it has already run longer.
     /// </summary>
     private static TimeSpan ChainOf(
         WorkflowDefinition definition,
@@ -338,18 +350,18 @@ public static class FlowStatus
 
     /// <summary>
     /// The estimate's upper end: every instance that is left and measured at its step's longest time, one after another,
-    /// and every one a loop or a handler can still add at its numeric bound, each at the longest of its group's steps -
-    /// unmeasured steps add nothing and are named beside the range.
+    /// and every iteration or visit a loop or a handler can still add at its numeric bound, each at the longest one
+    /// iteration or visit of it takes (<see cref="LongestUnder"/>) - unmeasured steps add nothing and are named beside
+    /// the range.
     /// </summary>
     private static TimeSpan AllOf(
         WorkflowDefinition definition,
         IReadOnlyList<(string Path, int Iterations)> loops,
-        IReadOnlyList<FlowStepRecord> left,
+        IReadOnlyList<FlowStepRecord> measured,
         IReadOnlyDictionary<string, (TimeSpan Shortest, TimeSpan Longest)> times,
         DateTimeOffset asOf)
     {
-        var all = left.Where(step => times.TryGetValue(PathOf(step.Instance), out var time) && time.Longest > TimeSpan.Zero)
-            .Aggregate(TimeSpan.Zero, (whole, step) => whole + LeftOf(step, times, shortest: false, asOf));
+        var all = measured.Aggregate(TimeSpan.Zero, (whole, step) => whole + LeftOf(step, times, shortest: false, asOf));
 
         foreach (var (path, iterations) in loops)
         {
@@ -367,112 +379,43 @@ public static class FlowStatus
     /// <summary>What one instance adds to an end of the estimate: its step's shortest or longest time, less what it has already run where it is in progress, and never below naught.</summary>
     private static TimeSpan LeftOf(FlowStepRecord step, IReadOnlyDictionary<string, (TimeSpan Shortest, TimeSpan Longest)> times, bool shortest, DateTimeOffset asOf)
     {
-        var whole = shortest ? times[PathOf(step.Instance)].Shortest : times[PathOf(step.Instance)].Longest;
+        var whole = shortest ? times[FlowInstanceId.PathOf(step.Instance)].Shortest : times[FlowInstanceId.PathOf(step.Instance)].Longest;
 
         return step.State == nameof(FlowInstanceState.Running) && step.StartedAt is { } began
             ? TimeSpan.FromTicks(Math.Max(0, whole.Ticks - (asOf - began).Ticks))
             : whole;
     }
 
-    /// <summary>Whether <paramref name="step"/> starts only after <paramref name="other"/> ends: by the declaration's own edges within one container, or by being a later iteration or visit of one step.</summary>
+    /// <summary>
+    /// Whether <paramref name="step"/> starts only after <paramref name="other"/> ends, as the engine orders two
+    /// instances: an earlier visit or iteration of a group both sit in holds it (<see cref="FlowInstanceId.Precedes"/>),
+    /// and in the same group instances its declaration waits for the other's (<see cref="FlowGraph.Waits"/>); another
+    /// item of a <c>forEach</c> runs beside it.
+    /// </summary>
     private static bool Blocks(WorkflowDefinition definition, FlowStepRecord step, FlowStepRecord other, Dictionary<string, bool> memo)
     {
-        if (ContainerOf(step.Instance) != ContainerOf(other.Instance))
+        if (FlowInstanceId.Precedes(other.Instance, step.Instance) is { } ordered)
         {
-            return LaterOf(step.Instance, other.Instance) == true;
+            return ordered;
         }
 
-        var key = $"{PathOf(step.Instance)}<-{PathOf(other.Instance)}";
+        var (waiter, target) = (FlowInstanceId.PathOf(step.Instance), FlowInstanceId.PathOf(other.Instance));
+        var key = $"{waiter}<-{target}";
 
         if (!memo.TryGetValue(key, out var waits))
         {
-            waits = FlowGraph.Waits(definition, PathOf(step.Instance), PathOf(other.Instance));
+            waits = FlowGraph.Waits(definition, waiter, target);
             memo[key] = waits;
         }
 
-        return waits || LaterOf(step.Instance, other.Instance) == true;
+        return waits;
     }
 
     /// <summary>
-    /// Whether one id is a later iteration or visit of the same step as the other - <c>rounds#3</c> after
-    /// <c>rounds#2</c>, <c>gate+2</c> after <c>gate</c> - read at the first segment the two spell differently; null
-    /// where they are not two of one step.
-    /// </summary>
-    private static bool? LaterOf(string one, string other)
-    {
-        if (!FlowInstanceId.SameStep(one, other))
-        {
-            return null;
-        }
-
-        var segments = one.Split('.');
-        var others = other.Split('.');
-
-        for (var at = 0; at < Math.Min(segments.Length, others.Length); at++)
-        {
-            if (string.Equals(segments[at], others[at], StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            return MarksOf(segments[at]) is { } mine && MarksOf(others[at]) is { } theirs && Later(mine.Visit, mine.Iteration, theirs.Visit, theirs.Iteration);
-        }
-
-        return false;
-
-        static bool Later(int visit, int iteration, int otherVisit, int otherIteration)
-            => visit != otherVisit ? visit > otherVisit : iteration > otherIteration;
-    }
-
-    /// <summary>One segment's marks: its visit, from 1, and its iteration, where it holds one; null where the segment holds an item, which no ordering of two instances reads.</summary>
-    private static (int Visit, int Iteration)? MarksOf(string segment)
-    {
-        if (segment.Contains('['))
-        {
-            return null;
-        }
-
-        var visit = 1;
-        var iteration = 0;
-
-        for (var at = 0; at < segment.Length;)
-        {
-            var mark = segment[at];
-
-            if (mark is not ('+' or '#'))
-            {
-                at++;
-                continue;
-            }
-
-            var end = segment.IndexOfAny(['+', '#'], at + 1) is >= 0 and var next ? next : segment.Length;
-
-            if (!int.TryParse(segment.AsSpan(at + 1, end - at - 1), NumberStyles.None, CultureInfo.InvariantCulture, out var count))
-            {
-                return null;
-            }
-
-            if (mark == '+')
-            {
-                visit = count;
-            }
-            else
-            {
-                iteration = count;
-            }
-
-            at = end;
-        }
-
-        return (visit, iteration);
-    }
-
-    /// <summary>
-    /// Every instance a loop or a handler can still add at its bound, with each loop's group named and the iterations
-    /// or visits left to it: for each open repeat, the iterations left to its bound; for each handler whose source is
-    /// still under way, the visits left to its bound - each times the steps its group holds. Loops without a numeric
-    /// bound, and a <c>forEach</c> not yet expanded, say so through <paramref name="unbounded"/> and
-    /// <paramref name="forEach"/>.
+    /// How many instances the loops and handlers can still add at their bounds: each iteration or visit
+    /// <see cref="LoopAdditionsOf"/> counts, times the instances one of it holds - its own record and every step
+    /// declared under it. A loop without a numeric bound, and a <c>forEach</c> not yet expanded, add none here and say
+    /// so through <paramref name="unbounded"/> and <paramref name="forEach"/>.
     /// </summary>
     private static int AdditionsOf(
         WorkflowDefinition definition,
@@ -493,9 +436,13 @@ public static class FlowStatus
     }
 
     /// <summary>
-    /// Each loop and handler still open with the iterations or visits left to its bound, and where a loop has no numeric
-    /// bound of its own, or a <c>forEach</c> has not been expanded, that said: the run's own bound of instances is the
-    /// only one left.
+    /// Each loop and handler still open in each scope it is open in, with the iterations or visits left to its bound
+    /// there, by the engine's own bounds: for each repeat with an iteration under way, the iterations its bound
+    /// (<see cref="FlowRepeat.Bound"/>) leaves past the newest, with one more for each iteration a plan update owes it;
+    /// for each handler whose source is under way - a handler has no instance until it is raised - the visits its bound
+    /// (<see cref="WorkflowStep.VisitsAllowed"/>) leaves in the source's scope, as the engine counts the visits raised
+    /// there. A loop with no numeric bound, and a <c>forEach</c> not yet expanded, say so through
+    /// <paramref name="unbounded"/> and <paramref name="forEach"/>: the run's own bound of instances is the only one left.
     /// </summary>
     private static IReadOnlyList<(string Path, int Iterations)> LoopAdditionsOf(
         WorkflowDefinition definition,
@@ -511,7 +458,23 @@ public static class FlowStatus
 
         foreach (var (path, step) in WorkflowFiles.Steps(definition))
         {
-            var open = left.Where(held => PathOf(held.Instance) == path).ToList();
+            // A handler is raised in the scope of the source that ends under way there: the visits its bound leaves in
+            // each such scope, counted as the engine counts them - the raised visits of the handler in that scope alone.
+            if (step.On is { } raised && SiblingOf(definition, path, raised.Step) is { } source)
+            {
+                foreach (var scope in left.Where(held => FlowInstanceId.PathOf(held.Instance) == source).Select(held => ContainerOf(held.Instance)).Distinct(StringComparer.Ordinal))
+                {
+                    var visits = flow.Steps.Count(held => held.RaisedBy is not null && FlowInstanceId.PathOf(held.Instance) == path && ContainerOf(held.Instance) == scope);
+                    var remaining = Math.Max(0, step.VisitsAllowed - visits);
+
+                    if (remaining > 0)
+                    {
+                        loops.Add((path, remaining));
+                    }
+                }
+            }
+
+            var open = left.Where(held => FlowInstanceId.PathOf(held.Instance) == path).ToList();
 
             if (open.Count == 0)
             {
@@ -520,24 +483,28 @@ public static class FlowStatus
 
             if (step.Repeat is { } repeat)
             {
-                var added = (updates?.Updates ?? []).Count(update => update.AddedIteration is { } iteration && PathOf(iteration) == path);
-                var numeric = repeat.MaxIterations
-                    ?? (repeat.Rounds is { } rounds && !repeat.BlockersUnbounded ? rounds + (repeat.Blocking is null ? 0 : repeat.BlockersLimitRounds ?? 3) : (int?)null);
-
-                if (numeric is { } bound)
+                // Each scope the loop is open in is a loop of its own: its newest iteration there, and the iterations a
+                // plan update owes it there.
+                foreach (var iterations in open.GroupBy(held => ContainerOf(held.Instance), StringComparer.Ordinal))
                 {
-                    var newest = open.Select(held => held.Iteration ?? 0).DefaultIfEmpty(0).Max();
-                    var remaining = Math.Max(0, bound + added - newest);
+                    var added = (updates?.Updates ?? []).Count(update => update.AddedIteration is { } iteration
+                        && FlowInstanceId.PathOf(iteration) == path
+                        && ContainerOf(iteration) == iterations.Key);
+                    var bound = repeat.Bound(added);
+
+                    if (bound == int.MaxValue)
+                    {
+                        // Its blockers are unbounded: nothing numeric stops it but the budget.
+                        unbounded = true;
+                        continue;
+                    }
+
+                    var remaining = Math.Max(0, bound - iterations.Max(held => held.Iteration ?? 0));
 
                     if (remaining > 0)
                     {
                         loops.Add((path, remaining));
                     }
-                }
-                else
-                {
-                    // The loop's bound is its until alone, or its blockers unbounded: nothing numeric stops it.
-                    unbounded = true;
                 }
             }
 
@@ -551,19 +518,6 @@ public static class FlowStatus
                     unbounded = true;
                 }
             }
-
-            if (step.On is { } raised
-                && SiblingOf(definition, path, raised.Step) is { } source
-                && left.Any(held => PathOf(held.Instance) == source))
-            {
-                var visits = flow.Steps.Count(held => PathOf(held.Instance) == path);
-                var remaining = Math.Max(0, (step.MaxVisits ?? 3) - visits);
-
-                if (remaining > 0)
-                {
-                    loops.Add((path, remaining));
-                }
-            }
         }
 
         forEach = groups;
@@ -575,7 +529,11 @@ public static class FlowStatus
     private static int CountedUnder(WorkflowStep step)
         => 1 + step.Steps.Sum(CountedUnder);
 
-    /// <summary>The longest time one iteration or visit of the group at <paramref name="path"/> holds, at the longest of each step declared under it; naught where one of them has no time to go by.</summary>
+    /// <summary>
+    /// The longest time one iteration or visit of the step at <paramref name="path"/> takes: a step that works, its own
+    /// longest; a group, the longest of each step declared under it one after another - its own span is theirs, and is
+    /// never added to them. Naught where one of them has no time to go by.
+    /// </summary>
     private static long LongestUnder(WorkflowDefinition definition, string path, IReadOnlyDictionary<string, (TimeSpan Shortest, TimeSpan Longest)> times)
     {
         if (StepOf(definition, path) is not { } step)
@@ -583,7 +541,12 @@ public static class FlowStatus
             return 0;
         }
 
-        var longest = times.TryGetValue(path, out var own) ? own.Longest.Ticks : 0;
+        if (step.Steps.Count == 0)
+        {
+            return times.TryGetValue(path, out var own) ? own.Longest.Ticks : 0;
+        }
+
+        var longest = 0L;
 
         foreach (var child in step.Steps)
         {
@@ -612,14 +575,6 @@ public static class FlowStatus
         return WorkflowFiles.Steps(definition).FirstOrDefault(held => held.Step.Name == name && (held.Path.LastIndexOf('.') is >= 0 and var other ? held.Path[..other] : null) == container).Path;
     }
 
-    /// <summary>The declaration's path of an instance id: each segment's name, its marks gone.</summary>
-    internal static string PathOf(string id)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(id);
-
-        return string.Join(".", id.Split('.').Select(segment => segment.IndexOfAny(['+', '#', '[']) is >= 0 and var first ? segment[..first] : segment));
-    }
-
     /// <summary>The container of an instance id: everything before its last segment, marks and all - the group instance its step runs in.</summary>
     private static string ContainerOf(string id)
         => id.LastIndexOf('.') is >= 0 and var at ? id[..at] : string.Empty;
@@ -640,17 +595,20 @@ public static class FlowStatus
     private static string Named(IReadOnlyList<string> paths)
         => paths.Count <= 5 ? $": {string.Join(", ", paths)}" : $": {string.Join(", ", paths.Take(5))} and {(paths.Count - 5).ToString(CultureInfo.InvariantCulture)} more";
 
-    /// <summary>Whether the run's status is one it has ended in.</summary>
+    /// <summary>
+    /// Whether the run's status is one it has ended in: done or failed. A stopped run goes on at its resume, and so is
+    /// not ended.
+    /// </summary>
     private static bool Ended(string status)
-        => status is nameof(FlowRunStatus.Done) or nameof(FlowRunStatus.Failed) or nameof(FlowRunStatus.Stopped);
+        => status is nameof(FlowRunStatus.Done) or nameof(FlowRunStatus.Failed);
 
-    /// <summary>The states an instance has not ended in.</summary>
+    /// <summary>The states an instance has not ended in: a stopped one among them, which runs again at the resume.</summary>
     private static readonly IReadOnlyList<string> LeftStates =
-        [nameof(FlowInstanceState.NotStarted), nameof(FlowInstanceState.Running), nameof(FlowInstanceState.Paused)];
+        [nameof(FlowInstanceState.NotStarted), nameof(FlowInstanceState.Running), nameof(FlowInstanceState.Paused), nameof(FlowInstanceState.Stopped)];
 
     /// <summary>The states an instance has ended in.</summary>
     private static readonly IReadOnlyList<string> EndedStates =
-        [nameof(FlowInstanceState.Done), nameof(FlowInstanceState.Failed), nameof(FlowInstanceState.Skipped), nameof(FlowInstanceState.Stopped), nameof(FlowInstanceState.NotRun)];
+        [nameof(FlowInstanceState.Done), nameof(FlowInstanceState.Failed), nameof(FlowInstanceState.Skipped), nameof(FlowInstanceState.NotRun)];
 
     /// <summary>The rows under the header: each label once, its lines under it, the rest indented to the label's width.</summary>
     private static IReadOnlyList<string> Rows(IReadOnlyList<(string Label, IReadOnlyList<string> Lines)> rows)

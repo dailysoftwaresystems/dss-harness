@@ -145,11 +145,25 @@ public sealed class ReasonStepRunnerTests
             Issue: null,
             Visit: 1,
             new FlowRunPlace(kit.Main, "o1", StartCommit: null, WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: orient\n    type: orient\n")),
-            new Dictionary<string, FlowValue>(StringComparer.Ordinal) { ["prompt"] = FlowValue.Of(prompt ?? string.Empty) },
+            Read: null,
             made,
             agent,
             Target: null,
-            workedFrom);
+            workedFrom,
+            Prompts: new Dictionary<string, IReadOnlyList<FlowTemplate.Piece>>(StringComparer.Ordinal) { ["prompt"] = Filled(prompt ?? string.Empty) });
+
+    /// <summary>
+    /// A prompt as the engine hands it to the runner, filled around its skills: each name <paramref name="values"/>
+    /// holds read by its root as a run's expressions read it, every other name reading nothing.
+    /// </summary>
+    /// <param name="prompt">The prompt file's text.</param>
+    /// <param name="values">What each root reads; none where the prompt reads nothing but skills.</param>
+    private static IReadOnlyList<FlowTemplate.Piece> Filled(string prompt, IReadOnlyDictionary<string, JsonNode?>? values = null)
+        => FlowTemplate.FillAroundSkills(
+                prompt,
+                path => values is not null && values.TryGetValue(path.Root, out var value) ? new(FlowValue.Of(value), 0) : new(FlowValue.Missing, 0),
+                out var problem)
+            ?? throw new InvalidOperationException(problem);
 
     /// <summary>
     /// A step the engine named a read-only agent for is given one - made, with no worktree - and worked as: its
@@ -213,45 +227,205 @@ public sealed class ReasonStepRunnerTests
 
     /// <summary>
     /// Each skill the prompt names is looked up again where the step starts, its folder copied whole into the agent's
-    /// work directory, and its block put where the placeholder stood; a skill that is not there refuses the step, and
-    /// so does one that asks a tool of a capability the agent has not.
+    /// work directory, and its block put where the placeholder stood - its <c>${CLAUDE_SESSION_ID}</c> the id the run's
+    /// first session begins as, which the request hands the client - and the skill recorded on the request, for the
+    /// step's stream to say what it was given.
     /// </summary>
     [Fact]
     public async Task EachSkillThePromptNames_IsHandedOver_AndItsBlockPutInThePrompt()
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
-        await kit.CreateReadingAgentAsync("reader");
-        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "skills", "planning", "SKILL.md"), "---\ndescription: how to plan\n---\nPlan in steps, session ${CLAUDE_SESSION_ID}.\n");
+        const string text = "---\ndescription: how to plan\n---\nPlan in steps, session ${CLAUDE_SESSION_ID}.\n";
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "skills", "planning", "SKILL.md"), text);
         OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "skills", "planning", "ways.md"), "Three ways.\n");
 
         var handed = await Runner(kit, agents).RunAsync(Run(kit, prompt: "Plan with {skill.planning}.", made: new FlowMadeAgent("a9", "claude-opus-5-5")), Token);
 
         Assert.True(handed.Passed, handed.Error);
         var asked = agents.Asked.Single();
-        Assert.StartsWith("Plan with ", asked.PromptTemplate, StringComparison.Ordinal);
-        Assert.Contains("<skill name=\"planning\" from=\".harness-config/skills\" directory=\"", asked.PromptTemplate, StringComparison.Ordinal);
-        Assert.Contains("Files this skill refers to are in that directory. Read them from there.", asked.PromptTemplate, StringComparison.Ordinal);
-        Assert.EndsWith("Plan in steps, session think.\n\n</skill>.", asked.PromptTemplate, StringComparison.Ordinal);
         var copied = Path.Combine(kit.Layout.WorkDirectory("a9"), "skills", "planning");
-        Assert.Equal("---\ndescription: how to plan\n---\nPlan in steps, session ${CLAUDE_SESSION_ID}.\n", OrchestrationKit.Read(copied, "SKILL.md"));
+        Assert.True(Guid.TryParseExact(asked.SessionId, "D", out _), asked.SessionId);
+        Assert.Equal(
+            $"Plan with <skill name=\"planning\" from=\".harness-config/skills\" directory=\"{copied}\">\nFiles this skill refers to are in that directory. Read them from there.\n\nPlan in steps, session {asked.SessionId}.\n\n</skill>.",
+            asked.Prompt);
+        Assert.Equal(text, OrchestrationKit.Read(copied, "SKILL.md"));
         Assert.Equal("Three ways.\n", OrchestrationKit.Read(copied, "ways.md"));
 
-        var missing = await Assert.ThrowsAsync<HarnessException>(
-            () => Runner(kit, agents).RunAsync(Run(kit, prompt: "Plan with {skill.nosuch}.", made: new FlowMadeAgent("a9", "claude-opus-5-5")), Token));
+        var skill = Assert.Single(asked.Skills);
+        var found = new AgentSkills(kit.Harness.FileSystem, kit.Harness.Platform, kit.Main).Find("planning")!;
+        Assert.Equal(
+            new AgentSkill("planning", ".harness-config/skills", Path.Combine(kit.Main, ".harness-config", "skills", "planning", "SKILL.md"), found.Digest!, found.FolderDigest!, copied),
+            skill);
+    }
 
-        Assert.Equal(HarnessExit.Refused, missing.ExitCode);
-        Assert.Contains("there is no such skill", missing.Message, StringComparison.Ordinal);
+    /// <summary>
+    /// What a skill the prompt names cannot be handed for refuses the step with the configuration's code, as the
+    /// definition's check refuses it - one that is not there, one whose name reaches past the places it is looked for
+    /// in, one named by no name, and one that asks a tool of a capability the agent has not - each said whole.
+    /// </summary>
+    [Fact]
+    public async Task ASkillThatCannotBeHanded_RefusesTheStep_AsTheConfigurations()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var skills = new AgentSkills(kit.Harness.FileSystem, kit.Harness.Platform, kit.Main);
 
-        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "skills", "searching", "SKILL.md"), "---\ndescription: how to search\nallowed-tools: Bash, WebSearch\n---\nSearch.\n");
+        var missing = await Runner(kit, agents).RunAsync(Run(kit, prompt: "Plan with {skill.nosuch}.", agent: "reader"), Token);
+
+        Assert.Equal((false, HarnessExit.ConfigInvalid), (missing.Passed, missing.Exit));
+        Assert.Equal($"'think' prompt names {{skill.nosuch}}, and {skills.Missing("nosuch")}", missing.Error);
+
+        var beyond = await Runner(kit, agents).RunAsync(Run(kit, prompt: "Plan with {skill.a/../../x}.", agent: "reader"), Token);
+
+        Assert.Equal((false, HarnessExit.ConfigInvalid), (beyond.Passed, beyond.Exit));
+        Assert.Equal(
+            "'think' prompt names {skill.a/../../x}, which is no skill's name: a skill is named by its folder's name alone, in letters, digits, '-' and '_', a '.' between two words",
+            beyond.Error);
+
+        var unnamed = await Runner(kit, agents).RunAsync(Run(kit, prompt: "Plan with {skill}.", agent: "reader"), Token);
+
+        Assert.Equal((false, HarnessExit.ConfigInvalid), (unnamed.Passed, unnamed.Exit));
+        Assert.Equal("'think' prompt names {skill} alone: name one - {skill.<name>} names it by its folder's name", unnamed.Error);
+
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "skills", "searching", "SKILL.md"), "---\ndescription: how to search\nallowed-tools: Bash\n---\nSearch.\n");
         OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", "flow", "agents", "narrow.md"), "---\nname: narrow\ndescription: narrow\ncapabilities: [read, write]\n---\nYou work without the web.\n");
         var narrow = new WorkflowStep { Name = "think", Type = "reason", Agent = "narrow", Prompt = "prompts/plan.md", Outputs = "schemas/plan.schema.json" };
 
-        var beyond = await Runner(kit, agents).RunAsync(Run(kit, prompt: "Plan with {skill.searching}.", agent: "reader") with { Step = narrow }, Token);
+        var withoutRun = await Runner(kit, agents).RunAsync(Run(kit, prompt: "Plan with {skill.searching}.", agent: "reader") with { Step = narrow }, Token);
 
-        Assert.False(beyond.Passed);
-        Assert.Equal(HarnessExit.Refused, beyond.Exit);
-        Assert.Contains("has no 'run' capability", beyond.Error, StringComparison.Ordinal);
+        Assert.Equal((false, HarnessExit.ConfigInvalid), (withoutRun.Passed, withoutRun.Exit));
+        Assert.Equal(
+            $"skill 'searching' ('{Path.Combine(kit.Main, ".harness-config", "skills", "searching", "SKILL.md")}') cannot be used by step 'think': it asks for the tool 'Bash', and agent 'narrow' has no 'run' capability",
+            withoutRun.Error);
+        Assert.Empty(agents.Asked);
+    }
+
+    /// <summary>
+    /// The prompt the engine filled is never read as a template again: a value's braces - a red leg's JSON - and a skill
+    /// a value names stand as the value holds them, and only the skills the prompt file itself names are handed over.
+    /// </summary>
+    [Fact]
+    public async Task ThePromptTheEngineFilled_IsNeverReadAgain_AValuesBracesStand()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var red = JsonValue.Create("the {item} test failed, {{left}} as {skill.x} said");
+
+        var run = Run(kit, agent: "reader") with
+        {
+            Prompts = new Dictionary<string, IReadOnlyList<FlowTemplate.Piece>>(StringComparer.Ordinal)
+            {
+                ["prompt"] = Filled("Fix what {red}.", new Dictionary<string, JsonNode?>(StringComparer.Ordinal) { ["red"] = red }),
+            },
+        };
+        var result = await Runner(kit, agents).RunAsync(run, Token);
+
+        Assert.True(result.Passed, result.Error);
+        Assert.Equal("Fix what the {item} test failed, {{left}} as {skill.x} said.", agents.Asked.Single().Prompt);
+        Assert.Empty(agents.Asked.Single().Skills);
+    }
+
+    /// <summary>
+    /// A step that goes on with another's work is the same agent going on: it works by the definition, the client and
+    /// the writes of the step its chain of work began with - none of which it names - the definition's system prompt
+    /// sent, its limits held and its capabilities on the ground, with its own effort beside them.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatGoesOnWithAnothersWork_WorksByTheDefinitionItsChainBeganWith()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", "flow", "agents", "planner.md"), "---\nname: planner\ndescription: plans\ncapabilities: [read, run]\nmaxTurns: 7\nstallSeconds: 90\n---\nYou plan.\n");
+        var definition = WorkflowFileParser.Parse(
+            "workflows/flow/flow.yml",
+            "name: flow\nsteps:\n"
+                + "  - name: plan\n    type: reason\n    agent: planner\n    client: claude-code\n    writes: [src/**]\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n"
+                + "  - name: go-on\n    type: reason\n    resume: plan\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n"
+                + "  - name: think\n    type: reason\n    resume: go-on\n    effort: high\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
+        var run = Run(kit, agent: "reader");
+
+        var result = await Runner(kit, agents).RunAsync(run with { Step = definition.Steps.Single(step => step.Name == "think"), Place = run.Place! with { Definition = definition } }, Token);
+
+        Assert.True(result.Passed, result.Error);
+        var asked = agents.Asked.Single();
+        Assert.Equal(("planner", "You plan.\n", "claude-code", "high"), (asked.AgentDefinition, asked.SystemPrompt, asked.Client, asked.Effort));
+        Assert.Equal((7, 90), (asked.Limits.MaxTurns, asked.Limits.StallSeconds));
+        Assert.Equal([AgentCapability.Read, AgentCapability.Run], asked.Ground!.Capabilities);
+        Assert.Equal(["src/**"], asked.Ground.Writes);
+    }
+
+    /// <summary>
+    /// A step's launch is built as every launch's is: the tool's own Claude Code directory among those no action of its
+    /// agent reaches, whatever client it is on; every secret the slot answers in its mask; and the retries its workflow
+    /// allows a step.
+    /// </summary>
+    [Fact]
+    public async Task AStepsLaunch_KeepsTheToolsClaudeDirectory_AndMasksTheSlotsSecrets()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+
+        var result = await Runner(kit, agents).RunAsync(Run(kit, agent: "reader"), Token);
+
+        Assert.True(result.Passed, result.Error);
+        var asked = agents.Asked.Single();
+        Assert.Equal([new ClaudeTranscripts(kit.Harness.FileSystem, kit.Harness.Platform).ConfigDirectory], asked.Ground!.ClaudeCodeDirectories);
+        Assert.Equal($"the key {DssHarness.Core.Runners.ActionValues.Mask}", asked.Mask!.Redact("the key sk-test-one"));
+        Assert.Equal(WorkflowDefinition.DefaultMaxRetries, asked.Retries);
+    }
+
+    /// <summary>
+    /// The issues a step's answer reports were there before the run are the step's own, each as its output spells it -
+    /// a list of places joined - for the triage its <c>onPreExisting</c> names.
+    /// </summary>
+    [Fact]
+    public async Task TheIssuesAnAnswerReportsWereThereBefore_AreTheStepsOwn()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        agents.Answer = _ => new AgentRunResult(
+            AgentRunStatus.Completed,
+            StructuredOutput: """{"preExisting":[{"title":"flaky test","description":"fails one run in ten","where":["tests/a.cs","tests/b.cs"],"evidence":"3 of 30 runs","blocks":true}]}""");
+
+        var result = await Runner(kit, agents).RunAsync(Run(kit, agent: "reader"), Token);
+
+        Assert.True(result.Passed, result.Error);
+        Assert.Equal([new FlowPreExistingReport("flaky test", "fails one run in ten", "tests/a.cs, tests/b.cs", "3 of 30 runs", Blocks: true)], result.PreExisting);
+    }
+
+    /// <summary>
+    /// The step's own stream is read by the store's one reader of it: a whole line that does not read refuses the
+    /// attempt that goes on with it, in the reader's own words - never a stream read past the line - and leaves the
+    /// engine's account of it nothing to say.
+    /// </summary>
+    [Fact]
+    public async Task AStreamWithALineThatDoesNotRead_RefusesTheAttemptThatGoesOnWithIt()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var directory = kit.Layout.AgentStepDirectory("reader", "think");
+        var stream = StoredStream.Open(kit.Harness.FileSystem, directory, new Masking());
+
+        await stream.EmitAsync(new RunStarted(1));
+        await stream.EmitAsync(new AssistantMessage("I planned.", []));
+        stream.Dispose();
+
+        var lines = File.ReadAllLines(Path.Combine(directory, StoredStream.FileName));
+        File.WriteAllText(Path.Combine(directory, StoredStream.FileName), $"{lines[0]}\nnot an event\n{lines[1]}\n");
+        var unread = Assert.Throws<HarnessException>(() => kit.Harness.OrchestrationStore.ReadStepStream(directory));
+
+        var refused = await Runner(kit, agents).RunAsync(Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "more", null, "turnLimit", Attempt: 1)]), Token);
+
+        Assert.Equal((false, HarnessExit.Refused, unread.Message), (refused.Passed, refused.Exit, refused.Error));
+        Assert.Empty(agents.Asked);
+        Assert.Null(((IFlowHandoffRunner)Runner(kit, agents)).Account(Run(kit, agent: "reader", handoff: "cut off")));
     }
 
     /// <summary>A step that goes on with earlier work is given the continuation record of the instances it goes on with.</summary>
@@ -275,14 +449,21 @@ public sealed class ReasonStepRunnerTests
         Assert.Contains("You are going on with work begun by step 'plan'.", asked.Continuation, StringComparison.Ordinal);
     }
 
-    /// <summary>A step that works in an agent's worktree is given it: the worktree its workspace names, the working directory the worktree itself.</summary>
+    /// <summary>
+    /// A step that works in an agent's worktree is given it: the worktree's path on the disk - the one its record
+    /// resolves under the worktrees root, never the record's address - as its workspace's worktree and its working
+    /// directory, and among the roots it writes.
+    /// </summary>
     [Fact]
     public async Task AStepWorkingInAnAgentsWorktree_IsGivenTheWorktreeAsItsWorkingDirectory()
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
         await kit.CreateAgentAsync("ag");
-        var worktree = kit.Record("ag").Worktree!;
+        var worktree = kit.Worktree("ag");
+
+        Assert.True(Directory.Exists(worktree));
+        Assert.NotEqual(worktree, kit.Record("ag").Worktree);
 
         await Runner(kit, agents).RunAsync(Run(kit, agent: "ag"), Token);
 
@@ -290,7 +471,7 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal(worktree, asked.Workspace.Worktree);
         Assert.Equal(worktree, asked.Workspace.WorkingDirectory);
         Assert.Equal(kit.Layout.WorkDirectory("ag"), asked.Workspace.WorkDirectory);
-        Assert.Contains(worktree, asked.Ground!.WritableRoots);
+        Assert.Equal([worktree, kit.Layout.WorkDirectory("ag")], asked.Ground!.WritableRoots);
     }
 
     /// <summary>
@@ -642,25 +823,25 @@ public sealed class ReasonStepRunnerTests
 
         await runner.RunAsync(Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "answer", "split the parser item in two", "ask", Attempt: 1)]), Token);
 
-        Assert.Equal($"The person answered:{Environment.NewLine}split the parser item in two", agents.Asked[0].PromptTemplate);
+        Assert.Equal("The person answered:\nsplit the parser item in two", agents.Asked[0].Prompt);
 
         await runner.RunAsync(Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "decide", null, "ask", Attempt: 1)]), Token);
 
-        Assert.Contains("leaves the questions to you", agents.Asked[1].PromptTemplate, StringComparison.Ordinal);
+        Assert.Contains("leaves the questions to you", agents.Asked[1].Prompt, StringComparison.Ordinal);
 
         await runner.RunAsync(Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "more", null, "turnLimit", Attempt: 1)]), Token);
 
-        Assert.Contains("allowed the step's turn bound once again", agents.Asked[2].PromptTemplate, StringComparison.Ordinal);
+        Assert.Contains("allowed the step's turn bound once again", agents.Asked[2].Prompt, StringComparison.Ordinal);
 
         await runner.RunAsync(Run(kit, agent: "reader"), Token);
 
-        Assert.Equal("Plan the work.", agents.Asked[3].PromptTemplate);
+        Assert.Equal("Plan the work.", agents.Asked[3].Prompt);
 
         // An earlier attempt's answers are never served: each attempt is its own, and the second begins a fresh start
         // even where the first was answered.
         await runner.RunAsync(Run(kit, agent: "reader", attempt: 2, answers: [new FlowAnswerGiven("q1", "answer", "split the parser item in two", "ask", Attempt: 1)]), Token);
 
-        Assert.Equal("Plan the work.", agents.Asked[4].PromptTemplate);
+        Assert.Equal("Plan the work.", agents.Asked[4].Prompt);
     }
 
     /// <summary>
@@ -730,7 +911,7 @@ public sealed class ReasonStepRunnerTests
 
         await Runner(kit, agents).RunAsync(Run(kit, agent: "reader", handoff: "what was left", answers: [new FlowAnswerGiven("q1", "retry", null, "turnLimit")]) with { Events = spent }, Token);
 
-        Assert.StartsWith($"<handoff>{Environment.NewLine}what was left{Environment.NewLine}</handoff>", agents.Asked.Single().PromptTemplate, StringComparison.Ordinal);
+        Assert.Equal("<handoff>\nwhat was left\n</handoff>\n\nPlan the work.", agents.Asked.Single().Prompt);
         Assert.Equal(1, spent.Taken);
     }
 

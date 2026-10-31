@@ -1401,8 +1401,9 @@ recovery, the step it was in the way of running again after), `list` (added, pro
 `pre-existing-issues.json`, shown in the pull request's body and the handoff, a quote or an output
 cut to 4,000 characters, the cut said), `duplicate` (naming in `duplicates` the listed issue it
 repeats) or `unproven`; an answer whose course is none of the four, or whose issue to list does not
-read back, fails the triage step (12) before it ends. The engine raises it and keeps the list -
-though until the reasoning step runner lands no step reports an issue; `issue` is read only by the
+read back, fails the triage step (12) before it ends. The engine raises it for each issue a reason
+step's answer reports under `preExisting` (`FlowPreExistingReport.In`, as the shipped schemas spell
+one) and keeps the list; `issue` is read only by the
 triage and the recovery, and `source` by them and by a handler.
 
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
@@ -1428,7 +1429,10 @@ its line, the iteration before only in a `resumePrompt`. A skill a prompt names 
 the skills' own lookup (`AgentSkills`, part 03's "Skills in a prompt"): the first of the three
 places that has the folder decides, a `SKILL.md` that is there and cannot be used is refused
 without falling to the next, its `allowed-tools` held to the one table of Claude Code's tools and
-the step's agent's capabilities, a skill named twice in one prompt is refused, and the body of an
+the step's agent's capabilities - the capabilities of the definition the step works by, its own or
+the one the work it goes on with began with - a name that is not a folder's name alone is refused by
+the one rule the step's start holds it to too (`AgentSkills.NameIn`), a skill named twice in one
+prompt is refused, and the body of an
 agent definition - the system prompt, sent as written - names none. The lookup is given to the
 check by whoever reads the repository's files, so the shipped definition is checked without one and
 a skill it does not name is never looked for. It checks every question
@@ -1995,17 +1999,28 @@ holds is waited out as a held lock is; and `IAgentService.CreateAsync(new AgentC
 makes a read-only reason step's agent the same way. `ReasonStepRunner` works the reason step itself: the agent it is
 given - the one its `in` names, the work a `resume` goes on with (`FlowCoordinator.NamedAgentOf` walks the chain), or
 the engine's own read-only one, named with its model before its record (`FlowCoordinator.Start`) and made through
-`CreateAgentRunner.MakeAsync(noWorktree: true)` where the step names none - the model resolved by `AgentResolution.Of`
-with its definition below its own (a `resume` inheriting what the resumed step names), the order built by
-`AgentStepOrder.Of` as running entries with each credential read from the slot and a key the slot does not hold said
-and passed over, the workspace and the policy's ground by `AgentStepGround.Of` (a read-only agent reading the main
-tree and writing its work directory alone), each skill its prompt names looked up again where the step starts
-(`AgentSkills.Find`), the folder copied whole into `work/<agent>/skills/<name>/` and the block put where the
-placeholder stood - the engine having filled every other name into the prompt (`FlowStepRun.Read`'s `prompt` and
-`resumePrompt`, `FlowTemplate.Fill` leaving a `skill.` name for the runner) - the work it goes on with rendered as its
-continuation record (`AgentContinuation.Render` over its `FlowStepRun.WorkedFrom`), and the run answered through
-`IAgentRunner`, its ending mapped to the step's own (`FlowStepResult.AtLimit` for a limit of its own, incomplete for a
-stop, the schema-validated output the step's). A stopped step's handoff turn is answered of its own record
+`CreateAgentRunner.MakeAsync(noWorktree: true)` where the step names none - the definition it works by read where
+the chain of work it goes on with began (`ResumeChain.Root`, the one owner the validator reads it by too: a step that
+goes on with another's work is the same agent going on, and works by that step's definition, client, tier, model
+and writes - its system prompt sent, its limits held, its capabilities and `writes: false` on the ground - with its
+own effort and restrictions beside them), the model resolved by `AgentResolution.Of` with that definition below its
+own through the one pick the validator checks by (`AgentResolution.Picked`: the step's model, else its tier, else the
+definition's model, else its tier, each level whole), the order, the workspace, the Claude Code directories its
+ground keeps every action from and the mask built as every launch builds them (`ReasonLaunch`, shared with the
+advisor and the reporter: the agent's worktree at the path its record resolves, the tool's own `~/.claude` always
+among the directories, every secret the slot answers in the mask), the policy's ground by `AgentStepGround.Of` (a
+read-only agent reading the main tree and writing its work directory alone), each skill its prompt names looked up
+again where the step starts (`AgentSkills.Find`, its name by `AgentSkills.NameIn`'s one rule), the folder copied
+whole into `work/<agent>/skills/<name>/` and the block put where the placeholder stood, its `${CLAUDE_SESSION_ID}` the
+id the run's first session begins as (`AgentStepRequest.SessionId`), each skill handed recorded on the request and in
+the stream's `sessionStarted` - the engine having filled every other name into the prompt once and handed it as
+pieces (`FlowStepRun.Prompts`, `FlowTemplate.FillAroundSkills`), so what was filled is never read as a template again
+and a value's braces stand - a skill that cannot be handed refusing the step (12), the work it goes on with rendered
+as its continuation record (`AgentContinuation.Render` over its `FlowStepRun.WorkedFrom`), and the run answered
+through `IAgentRunner`, its ending mapped to the step's own (`FlowStepResult.AtLimit` for a limit of its own,
+incomplete for a stop, the schema-validated output the step's, with the issues it reports under `preExisting`). The
+step's stream is read by the store's one reader of it (`OrchestrationStore.ReadStepStream`): a whole line that does
+not read refuses the attempt that goes on with it. A stopped step's handoff turn is answered of its own record
 (`IFlowHandoffRunner.HandoffAsync`, `AgentRunner.ResultFileName`), and the coordinator deletes the read-only agent
 once no step can go on with its work (`FlowCoordinator.ReadOnlyAgentOver`, over the declarations that resume its
 maker and the instances drawn of them, through the `deleteAgent` the service wires to `IAgentService.DeleteAsync`).
@@ -2181,7 +2196,8 @@ Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine r
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`
 - a `ci-wait`'s commit where it names none - the one the run last pushed - a commit's `folds`, the instances of the
-steps that fold upstream of it, and a reason step's `prompt` and `resumePrompt`), the agent it works in (`FlowStepRun.WorksIn`)
+steps that fold upstream of it) - and a reason step's `prompt` and `resumePrompt` filled around their skills, as
+pieces (`FlowStepRun.Prompts`) - the agent it works in (`FlowStepRun.WorksIn`)
 or, of `others`, the target whose turn it is (`FlowStepRun.Target`), and its keys' templates filled (`FlowStepTemplates`, the one
 reader of which text each template key holds, the definition's check its other caller). The leg steps - `build`, `test`,
 `run`, `check-mutations` - share `LegStepRunner`: the use case of each command (`IBuildLegs`, `ITestLegs`,
@@ -2442,12 +2458,19 @@ checks of the commit the run last pushed; what is done and what was spent of the
 left at least and at most, with the bound that gave the most - a loop's iterations to its bound, a
 handler's visits to its `maxVisits`, a `forEach` not yet expanded and a piece of a plan update not
 carried out named - and when it may finish, as a range that rests on this run alone: of each step of
-the definition the shortest and the longest time an instance of it took to end `Done` (the lower end
-laying what is left along what depends on what, so work that runs side by side is counted once; the
-upper end summing every instance and every one a loop or a handler can add, one after another), a
-step no instance of which has ended `Done` in this run counted and named and in neither end, the
-time a person takes to answer and a wait for a claim or room left out and said to be, and no
-estimate at all where nothing has ended or the run has ended, the facts saying which. Where the
+the definition that works the shortest and the longest time an instance of it took to end `Done` - a
+group's own span is its members' time, never counted beside it - (the lower end laying what is left
+along what depends on what as the engine orders two instances, `FlowInstanceId.Precedes` then
+`FlowGraph.Waits`, so work that runs side by side is counted once; the upper end summing every
+instance and every iteration or visit a loop or a handler can add, one after another), a step no
+instance of which has ended `Done` in this run counted and named and in neither end, the time a
+person takes to answer and a wait for room - a claim, the run to be quiet, a counter of its limits,
+each a word the admission writes from `FlowWaits` and the facts class by it - left out and said to
+be, and no estimate at all where nothing has ended or the run has ended (done or failed: a stopped
+run goes on at its resume, and its stopped instances are among what is left), the facts saying
+which. What is left counts by the engine's own bounds - `FlowRepeat.Bound` for a loop,
+`WorkflowStep.VisitsAllowed` for a handler, in each scope its source is under way in, as the engine
+counts its visits - so the most is a bound. Where the
 workflow's `reporter` names an agent, its words follow the facts, run by the reason step's own
 runner as the advisor is (`ReporterRunner`), its reads narrowed to the run's directory alone
 (`AgentPolicyGround.ReporterRoot`: no command, no write, no web - the three tools that read and no
@@ -2457,7 +2480,9 @@ command over an orchestrator makes first - what a call leaves behind is its own 
 run's `asks/<stamp>/` (the facts as given, the files of its reporter's attempt, `ask.json`), a
 directory the engine never reads. Where no model words them the status still prints the facts, says
 `no model worded this` and why, and exits 0 - the facts are the answer, and the words were a
-service; the person's question is refused, naming why (12 where the workflow names no reporter, 13
+service; the person's question is refused, naming why (12 where the workflow names no reporter or
+the reporter's own files do not read - whatever keeps the reporter from wording the facts is why no
+model did, read by `KnownCauses.Meaning`, and never an error of the command - 13
 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model
 failed, 21 where it could not be reached or its account is at its limit - `AgentRunResult.ToOutcome`
 the one mapping), and neither command installs Claude Code or brings one up to date. An orchestrator
@@ -6434,7 +6459,10 @@ A session of a run (`run-orchestrator`, `resume-orchestrator`, `answer-orchestra
 where it ends paused on a question - a step's, or the budget's at its reserve (`FlowExit.Paused`) -
 so a wrapper that retries 21 never loops on a question nobody answered; otherwise `0` done, `20`
 failed, `21` failed where every failure that ended it was incomplete after its retries, and `130` at
-a safe pause or a stop.
+a safe pause or a stop. `ask-orchestrator-status` exits `0` wherever it read the run's facts, worded
+by a model or not - where none worded them it says why and the facts are still the answer - while
+`ask-orchestrator`, whose answer is the model's words, is refused with the code of why none worded
+them (12, 13, 14, 20 or 21, and 70 where the tool itself failed).
 `dssharness help exit-codes` prints the shared table from the code itself; this copy, and the
 per-command codes above, are maintained by hand.
 

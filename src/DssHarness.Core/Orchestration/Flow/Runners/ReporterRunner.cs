@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
+using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
@@ -10,35 +11,63 @@ using DssHarness.Core.Results;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// The run's reporter (part 04, "Asking a run about itself"): one reason step that only reads, run by the reason step's
+/// The run's reporter: one reason step that only reads, run by the reason step's
 /// own runner as the advisor is, over the engine's facts and the run's records alone - its reads narrowed to the run's
-/// directory and nowhere else, offered no command, no write and no web, its answer masked - worked under the run's
-/// <c>asks/&lt;stamp&gt;/</c>, a directory the engine never reads. Nothing of the run is written or locked, and what it
-/// costs is the person's, never the run's.
+/// directory and nowhere else, offered no command, no write and no web, its answer masked as the run's records are -
+/// worked under the run's <c>asks/&lt;stamp&gt;/</c>, a directory the engine never reads. Nothing of the run is written
+/// or locked, nothing of the machine is changed - a Claude Code it needs is only found, never installed or brought up to
+/// date - and what it costs is the person's, never the run's. Whatever keeps it from wording the facts is why no model
+/// worded them, with the code it means; the asking itself never fails over it.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
 /// <param name="runner">Works the reporter, whatever the client is.</param>
 /// <param name="fileSystem">The file system the workflow's files are read on.</param>
 /// <param name="keys">The slot the entry's keys are read from.</param>
+/// <param name="updates">Finds the Claude Code the reporter's order starts, where it holds the client that starts one; null where nothing does.</param>
 public sealed class ReporterRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
     IAgentRunner runner,
     IFileSystem fileSystem,
-    Secrets.AgentKeyStore keys) : IFlowReporterRunner
+    Secrets.AgentKeyStore keys,
+    ClaudeCodeUpdateService? updates = null) : IFlowReporterRunner
 {
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IHostPlatform _platform = platform;
     private readonly IAgentRunner _runner = runner;
     private readonly IFileSystem _fileSystem = fileSystem;
-    private readonly Secrets.AgentKeyStore _keys = keys;
+    private readonly ReasonLaunch _launch = new(fileSystem, platform, keys, updates);
 
     /// <inheritdoc/>
     public async Task<FlowReported> ReportAsync(FlowReporterCall call, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(call);
 
+        try
+        {
+            return await WordedAsync(call, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception failed)
+        {
+            // Whatever kept the reporter from wording the facts - its definition or prompt not reading, the slot or the
+            // configuration refusing, its client failing - is why no model worded them, with the code it means by the
+            // one mapping every command's failure is read by.
+            var meaning = KnownCauses.Meaning(failed);
+
+            return Wordless(meaning.Message, meaning.ExitCode);
+        }
+    }
+
+    /// <summary>The reporter's run: its definition read, its model resolved, its launch built and its answer masked.</summary>
+    /// <param name="call">The asking.</param>
+    /// <param name="cancellationToken">Ends the asking.</param>
+    private async Task<FlowReported> WordedAsync(FlowReporterCall call, CancellationToken cancellationToken)
+    {
         var (place, context) = await FlowStepRunners.PlaceOf(
             new FlowStepRun(
                 new WorkflowStep { Name = "reporter", Type = "reason" },
@@ -65,7 +94,7 @@ public sealed class ReporterRunner(
 
         if (problems.Count > 0 || definition is null)
         {
-            throw new HarnessException(HarnessExit.ConfigInvalid, $"agents/{call.Reporter.Agent}.md does not read: {string.Join("; ", problems)}");
+            return Wordless($"agents/{call.Reporter.Agent}.md does not read: {string.Join("; ", problems)}", HarnessExit.ConfigInvalid);
         }
 
         if (AgentProviders.Resolve(context.Config) is not { Providers: { } providers })
@@ -80,29 +109,34 @@ public sealed class ReporterRunner(
             return Wordless("the reporter has no model to run on: name a tier or a model on it, or a tier under defaults.agentTier", HarnessExit.ConfigInvalid);
         }
 
+        var order = _launch.Order(providers, resolution, context.Layout);
+
+        // The reporter only reads, so a Claude Code its order starts is only found: one that is not there, or is too old,
+        // is why no model worded the facts, and installing or updating it is a run's step's to do.
+        var program = await _launch.ProgramAsync(context.Layout, providers, order, steps: " (the run's reporter)", change: false, cancellationToken).ConfigureAwait(false);
+
+        if (program is { Ready: false })
+        {
+            return Wordless(program.Message, program.ExitCode);
+        }
+
         // The reporter works over the run's records alone: its work directory under the call's own asks/ directory,
         // which is inside the run's, and its reads narrowed to the run's directory by the policy's one rule for it.
         var asks = Path.Combine(layout.AsksDirectory, call.Stamp);
-        var work = Path.Combine(asks, "work");
-        var workspace = new AgentWorkspace(
-            Worktree: null,
-            work,
-            context.Layout.MainCheckoutRoot,
-            [],
-            work,
-            layout.Directory);
-        var order = AgentStepOrder.Of(providers, resolution, context.Layout, _keys, new ClaudeTranscripts(_fileSystem, _platform).ConfigDirectory, spent: null);
+        var workspace = ReasonLaunch.Workspace(record: null, context.Layout, Path.Combine(asks, "work"), layout.Directory);
         var ground = AgentStepGround.Of(
             context.Config,
             definition,
             new WorkflowStep { Name = "reporter", Type = "reason" },
             workspace,
             webSearchGiven: false,
-            [.. order.Select(entry => entry.Credential?.ConfigDirectory).OfType<string>()],
-            context.Layout.WorkflowsEnvSlot) with
+            _launch.ClaudeDirectories(order),
+            context.Layout.WorkflowsEnvSlot,
+            readsOnly: true) with
         {
             ReporterRoot = layout.Directory,
         };
+        var mask = _launch.Mask(context.Layout, providers);
 
         var request = new AgentStepRequest(
             call.Run,
@@ -118,13 +152,12 @@ public sealed class ReporterRunner(
             Fallback: null,
             definition.Prompt,
             PromptOf(files, context.Layout, call),
-            new Dictionary<string, string>(StringComparer.Ordinal),
             ResumeTemplate: null,
             workspace,
             Output: null,
             Conversation: null,
             new AgentLimits(definition.MaxTurns, definition.MaxBudgetUsd, definition.MaxMinutes is { } minutes ? TimeSpan.FromMinutes(minutes) : null, definition.StallSeconds, place.Definition.HandoffSeconds),
-            Mask: null)
+            mask)
         {
             Ground = ground,
             Credential = order.FirstOrDefault(entry => entry.Usable)?.Credential,
@@ -133,34 +166,27 @@ public sealed class ReporterRunner(
             Retries = call.Reporter.Retries,
             BackoffSeconds = call.Reporter.BackoffSeconds,
             RecordDirectory = asks,
+            Program = program?.Program,
+            ProgramVersion = program?.Version,
         };
 
-        try
-        {
-            var result = await _runner.RunAsync(request, events: null, cancellationToken).ConfigureAwait(false);
+        var result = await _runner.RunAsync(request, events: null, cancellationToken).ConfigureAwait(false);
 
-            return result.Problem() is { } wrong
-                ? Wordless($"the reporter answered a result that does not hold together: {wrong}", HarnessExit.CommandFailed, result)
-                : result.Status == AgentRunStatus.Completed && result.FinalText is { Length: > 0 }
-                    ? new FlowReported(result.FinalText, Model: result.Model, Usd: (double?)result.Usage?.Cost?.Usd, Tokens: result.Usage?.Total.OutputTokens)
-                    : Wordless(result.Error ?? $"the reporter's run ended {result.Status}", result.ToOutcome().ExitCode, result);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (HarnessException refused)
-        {
-            return Wordless(refused.Message, refused.ExitCode);
-        }
-        catch (Exception failed)
-        {
-            return Wordless(failed.Message, HarnessExit.CommandFailed);
-        }
-
-        FlowReported Wordless(string why, int exitCode, AgentRunResult? result = null)
-            => new(Answer: null, WhyNot: why, ExitCode: exitCode, result?.Model, (double?)result?.Usage?.Cost?.Usd, result?.Usage?.Total.OutputTokens);
+        // The answer is masked as the run's records are: whatever the reporter read or was told, no secret the slot holds
+        // reaches the person's terminal or the call's record in its words.
+        return result.Problem() is { } wrong
+            ? Wordless($"the reporter answered a result that does not hold together: {wrong}", HarnessExit.CommandFailed, result)
+            : result.Status == AgentRunStatus.Completed && result.FinalText is { Length: > 0 } worded
+                ? new FlowReported(mask?.Redact(worded) ?? worded, Model: result.Model, Usd: (double?)result.Usage?.Cost?.Usd, Tokens: result.Usage?.Total.OutputTokens)
+                : Wordless(result.Error is { } error ? mask?.Redact(error) ?? error : $"the reporter's run ended {result.Status}", result.ToOutcome().ExitCode, result);
     }
+
+    /// <summary>Why no model worded the facts, with the code it means and what the reporter's run cost where one ran.</summary>
+    /// <param name="why">Why, said whole.</param>
+    /// <param name="exitCode">The code it means.</param>
+    /// <param name="result">The reporter's run, where one ran.</param>
+    private static FlowReported Wordless(string why, int exitCode, AgentRunResult? result = null)
+        => new(Answer: null, WhyNot: why, ExitCode: exitCode, result?.Model, (double?)result?.Usage?.Cost?.Usd, result?.Usage?.Total.OutputTokens);
 
     /// <summary>
     /// The reporter's prompt, filled with what it reads: the facts as text, the person's question where one was typed,

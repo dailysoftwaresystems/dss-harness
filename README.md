@@ -83,7 +83,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `pause-orchestrator <run> [--all] [--json]` | Ask the engine running a run for the safe pause through `stop.json` - its agents hand off, the machine steps finish unless `--all`, then the run is paused - and wait until it is complete |
 | `stop-orchestrator <run> [--now] [--json]` | Ask the engine running a run to stop where it stands, and wait 30 s; `--now` ends the engine's process - only on this machine, and only the process its owner names by its start |
 | `ask-orchestrator-status <run> [--json]` | The tool's own question of a run - what is happening now, what is done, what is left, what it waits for, and when it may finish - answered with the engine's facts (computed from the run's records, stamped with the moment they were read) and, where the workflow's `reporter` names one, its words: the facts first, then the model's, then what the answer cost - the person's, never the run's. Reads only: nothing of the run is written or locked but the command's own record under the run's `asks/`; where no model words the facts, they are still the answer, the command says why no model did, and it exits 0. `--json` gives the facts and the answer apart; an orchestrator that holds no run is answered with `list-orchestrator`'s facts of it, said to be such |
-| `ask-orchestrator <run> "<question>" [--json]` | A person's question about a run, answered from its records by the workflow's `reporter` over the engine's facts; reads only, as `ask-orchestrator-status` does. Refused where no model can answer: 12 where the workflow names no reporter, 13 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model failed, 21 where it could not be reached or its account is at its limit; neither command installs Claude Code or brings one up to date |
+| `ask-orchestrator <run> "<question>" [--json]` | A person's question about a run, answered from its records by the workflow's `reporter` over the engine's facts; reads only, as `ask-orchestrator-status` does. Refused where no model can answer: 12 where the workflow names no reporter or the reporter's own files do not read, 13 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model failed, 21 where it could not be reached or its account is at its limit; neither command installs Claude Code or brings one up to date |
 | `run-side-task [--prompt <text> \| --prompt-file <path>] [--resume <task>] [--name <task>] [--model <code> \| --tier <tier>] [--client <client>] [--effort <level> \| --effort <code>=<level>]... [--json]` | An agent outside every workflow: a conversation with a person over the repository's main tree, with no step and no limit of a run's - every action still decided by the engine before it runs and recorded, the built-in refusals kept (root actions, credential slots, git's own files, the tool's state, `run-side-task` itself), the tool's own verbs open to it as the person's are; its `web_search` asks every configured source and one more - `native`, the provider's own search: a request of the harness's own on the two APIs, Claude Code's own `WebSearch` kept in its tools. A chat in the terminal by default - the agent's text streamed, each action one line as it is decided, Ctrl+C interrupting a turn and a second ending the chat, `/exit`, `/model`, `/effort`, `/records`, `/help` - or one message with `--prompt`/`--prompt-file`, answered once with the agent's final text (`--json` its one document, and a usage error without a prompt). `--resume` opens one again from its stored conversation, refused (13) where it names no side-task or another process holds it open; the model is resolved as a step's and is the one it last used on a `--resume`; what it spends is counted against its key. Exits 0 ended as asked, 10 usage (an effort a model does not take among them), 13, 14 a client that cannot start, 20 the model failed past its retries and fallback, 21 interrupted in one shot; the records under `.side-tasks/<task>/` are named on every exit and kept until a person removes them (`help side-tasks`) |
 | `list-side-tasks [--json]` | The repository's side-tasks, newest first: each by its name, when it began and last spoke, its model, its turns and cost, and whether it is open now |
 | `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there (`help workflows`). Nothing is run |
@@ -493,7 +493,7 @@ as the recovery is not - and `onAddress: recover`: it reproduces the issue on th
 gives the recovery one that is in a step's way, related to the work or critical, to fix at its root,
 and lists the rest, proven, with a title and a description, in the run's `pre-existing-issues.json`,
 shown in the pull request's body and the handoff. Where a workflow has such a step, every other reasoning step names it, so no issue is lost. The
-engine raises the triage and keeps the list; until the reasoning step runner is built, no step reports an issue.
+engine raises the triage for each issue a reasoning step's answer reports under `preExisting`, as the shipped schemas spell it, and keeps the list.
 
 A reasoning step's `effort` is one level for every model it may run on, or a map giving each its own -
 `all` for the rest and a model's code for one; the shipped workflow runs its heaviest steps at
@@ -977,7 +977,9 @@ A reason step's prompt says `{skill.<name>}` where a skill's text goes, and the 
 text there before the prompt is sent, on every client alike (`help skills`): the two API clients
 have no skill mechanism, and the `claude` child is started with `--setting-sources user`, under
 which it loads none of the worktree's. The file is Claude Code's own `SKILL.md`, unchanged - this
-tool adds no key and no syntax of its own - and `<name>` is the folder's name. The first place
+tool adds no key and no syntax of its own - and `<name>` is the folder's name alone: letters,
+digits, `_` and `-`, a `.` between two words, so no name reaches past the place it is looked for
+in - any other refused by the check and the step alike. The first place
 that has the folder decides: `.harness-config/skills/<name>/` in the main checkout (the tool's own
 place, tracked), `.claude/skills/<name>/` in the main checkout (the repository's Claude Code
 skills), and `skills/<name>/` in the user's Claude directory (`CLAUDE_CONFIG_DIR` where it is set,
@@ -989,13 +991,15 @@ body, not the frontmatter, inside one block that names the skill, its place and 
 to the step; the folder is copied whole into the agent's work directory,
 `work/<agent>/skills/<name>/`, in place of any earlier copy, and that path is what
 `${CLAUDE_SKILL_DIR}` becomes. A folder that holds a link, more than 500 files or more than 16 MB
-is refused. The frontmatter's keys are each honoured, recorded or refused: `allowed-tools` is
+is refused. The step's stream records every skill it was given: its `sessionStarted` event names
+each one's place, its `SKILL.md`, the folder handed over, and the SHA-256 of the file and of the
+folder. The frontmatter's keys are each honoured, recorded or refused: `allowed-tools` is
 honoured as what the skill needs, each tool it names held to the one table of Claude Code's tools
 for each capability and the step's agent's - and it grants nothing; `model`, `effort`, `context`,
 `agent`, `background`, `hooks` and `disallowed-tools` are refused, for text put into a prompt runs
 in the step's own agent, on its model, under its policy; any other key is refused naming the keys
 this tool knows. In the body `${CLAUDE_SKILL_DIR}`, `${CLAUDE_PROJECT_DIR}`,
-`${CLAUDE_SESSION_ID}`, `${CLAUDE_EFFORT}` and `\$` are replaced, a read of an argument, a command
+`${CLAUDE_SESSION_ID}` (the id the step's run begins its first session as), `${CLAUDE_EFFORT}` and `\$` are replaced, a read of an argument, a command
 run when the skill is loaded and the reads only a plugin has are refused each naming their line,
 and a body is at most 64,000 characters after its substitutions. A skill's text is not scanned for
 placeholders again: `{skill.b}` inside skill `a` is plain text. The placeholder stands in a reason
@@ -1005,7 +1009,7 @@ that is missing or unusable fails loud, twice: when the definition is checked (`
 and the start of `run-orchestrator` and `resume-orchestrator`; exit 12, nothing started, every
 problem of every prompt together, each refusal naming every place looked for it), and when the
 step starts, for a file can go or change between - the step is not started, it ends `Failed` with
-the same sentence, and its `onFailure` decides what follows.
+the same sentence and exit 12, and its `onFailure` decides what follows.
 
 The `claude-api` client works a step through the Claude API by the loop above, every call run by
 the tool runtime: each request is posted to its provider's `api` with `/v1/messages` after it,

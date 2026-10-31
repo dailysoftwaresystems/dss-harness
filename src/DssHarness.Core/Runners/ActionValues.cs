@@ -79,6 +79,39 @@ public sealed class ActionValues : ILineMask
         ];
     }
 
+    /// <summary>
+    /// These values and <paramref name="other"/>'s as one mask, without a secret leaving either: every secret of the two
+    /// masked - one name both hold for different values kept as two - and a plain value the first holds kept over the
+    /// other's.
+    /// </summary>
+    /// <param name="other">The values to add.</param>
+    public ActionValues With(ActionValues other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+
+        var values = new Dictionary<string, string>(_values, StringComparer.OrdinalIgnoreCase);
+        var secrets = new Dictionary<string, string>(_secrets, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (name, value) in other._values)
+        {
+            values.TryAdd(name, value);
+        }
+
+        foreach (var (name, value) in other._secrets)
+        {
+            var key = name;
+
+            for (var another = 2; secrets.TryGetValue(key, out var held) && !string.Equals(held, value, StringComparison.Ordinal); another++)
+            {
+                key = $"{name}#{another.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+            }
+
+            secrets[key] = value;
+        }
+
+        return new ActionValues(values, secrets);
+    }
+
     /// <summary>No values at all, for a repository that declares none.</summary>
     public static ActionValues Empty { get; } = new(
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),

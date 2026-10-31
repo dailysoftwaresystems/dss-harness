@@ -1503,7 +1503,14 @@ public static class WorkflowFileParser
     private static bool? BooleanIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
         => keys.Where(entry => string.Equals(entry.Key, KeyNameOf(what), StringComparison.Ordinal)).Select(entry => YamlReading.RequireBoolean(entry.Value, what, problems)).FirstOrDefault();
 
-    private static int? RequireInt(YamlNode node, string what, List<string> problems)
+    /// <summary>
+    /// A whole number, read with the invariant culture whatever the machine's: null where the value is not one scalar -
+    /// said once, by the scalar's own reading - or is not a whole number, said with what it holds.
+    /// </summary>
+    /// <param name="node">The value.</param>
+    /// <param name="what">The key, as a problem names it.</param>
+    /// <param name="problems">Where a problem is said.</param>
+    internal static int? RequireInt(YamlNode node, string what, List<string> problems)
     {
         var text = YamlReading.RequireScalar(node, what, problems);
 

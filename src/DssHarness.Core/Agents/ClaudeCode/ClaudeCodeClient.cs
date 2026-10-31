@@ -336,7 +336,7 @@ public sealed class ClaudeCodeClient(
         // Every call Claude Code refused by itself, by its id: each is told once, by its permission_denied line, its
         // result, or both.
         private readonly HashSet<string> _refused = new(StringComparer.Ordinal);
-        private readonly string _session = Guid.NewGuid().ToString("D");
+        private readonly string _session = run.SessionId ?? Guid.NewGuid().ToString("D");
         private readonly string _auth = run.Credential?.Auth ?? AgentAuth.Login;
 
         private AppendLog? _control;
@@ -663,7 +663,7 @@ public sealed class ClaudeCodeClient(
                     named,
                     FileContentHash.Of(Encoding.UTF8.GetBytes(Masked(run.SystemPrompt))),
                     init.Tools,
-                    [.. run.Skills.Select(skill => skill.Name)],
+                    run.Skills,
                     HandedConversation: false,
                     run.Provider,
                     Effort: run.Effort,

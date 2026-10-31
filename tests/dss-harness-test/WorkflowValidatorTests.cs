@@ -1923,6 +1923,74 @@ public sealed class WorkflowValidatorTests
                 """), hasCommitTemplate: false, files: AgentFiles(("worker", "---\nname: worker\ndescription: works\nfallback: []\n---\nYou work.\n")), providers: providers));
     }
 
+    /// <summary>
+    /// A step's model is checked as the run resolves it, by the one pick: the step's tier whole over the definition's
+    /// model - never the definition's model beside the step's tier - so the level the definition gives is held to the
+    /// tier's own models, which are what run.
+    /// </summary>
+    [Fact]
+    public void AStepsTier_IsCheckedWhole_OverItsDefinitionsModel()
+    {
+        Assert.Equal(
+            ["workflow 'default' step 'plan' runs at effort 'xhigh', which 'glm-5.3' (tier 'balanced') does not take. It takes: low, high, max. Give it a level of its own under effort, in the agent's definition: glm-5.3: max"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    tier: balanced
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: AgentFiles(("thinker", "---\nname: thinker\ndescription: thinks\nmodel: claude-fable-5-1\neffort: xhigh\n---\nYou think.\n")), providers: TwoModels()));
+    }
+
+    /// <summary>
+    /// A step that goes on with another's work is checked as the same agent going on: the client, the tier and the
+    /// definition of the step its chain of work began with - a client that signs in with the machine's login reading no
+    /// key, for the step that names it and every step that goes on with its work alike.
+    /// </summary>
+    [Fact]
+    public void AStepThatGoesOnWithAnothersWork_IsCheckedWithTheClientItsChainBeganWith()
+    {
+        var config = new HarnessConfig
+        {
+            Defaults = new HarnessDefaults { AgentTier = "best" },
+            Providers =
+            [
+                new()
+                {
+                    Name = "anthropic", Type = "anthropic", Api = "https://api.anthropic.com", ApiKeyNames = ["ANTHROPIC_API_KEY"], Client = "claude-api",
+                    Currency = "USD", ReadOn = "2026-10-12",
+                    Models = [new() { Code = "claude-fable-5-1", Name = "Claude Fable 5.1", Tiers = ["best"], Efforts = ["low", "high"], ContextTokens = 1_000_000, MaxOutputTokens = 128_000 }],
+                },
+            ],
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["best"] = ["claude-fable-5-1"] },
+        };
+        var definition = Parse("""
+            name: default
+            steps:
+              - name: plan
+                type: reason
+                tier: best
+                client: claude-code
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+              - name: check
+                type: reason
+                resume: plan
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+              - name: mend
+                type: reason
+                resume: check
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+            """);
+
+        Assert.Empty(WorkflowValidator.MissingKeys(definition, AgentProviders.Resolve(config).Providers!, held: []));
+    }
+
     /// <summary>The named files of a workflow's directory, reading each agent definition the steps name.</summary>
     private static Func<string, string?>? AgentFiles(params (string Agent, string Text)[] agents)
         => agents.Length == 0 ? null : named => named is { } file && file.StartsWith("agents/", StringComparison.Ordinal) && file.EndsWith(".md", StringComparison.Ordinal)

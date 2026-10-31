@@ -194,13 +194,14 @@ public sealed record AgentLimits(int? MaxTurns, decimal? MaxBudgetUsd, TimeSpan?
     public static readonly TimeSpan DefaultHandoffBound = TimeSpan.FromSeconds(180);
 }
 
-/// <summary>One skill the step's prompt named, as the run was given it.</summary>
-/// <param name="Name">The skill's name.</param>
-/// <param name="Where">Where it was read.</param>
+/// <summary>One skill the step's prompt named, as the run was given it - what the step's stream names where its session begins.</summary>
+/// <param name="Name">The skill's name: its folder's.</param>
+/// <param name="Place">The place it was read, as the prompt's block names it.</param>
+/// <param name="File">The <c>SKILL.md</c> it was read from.</param>
 /// <param name="Digest">The SHA-256 of its <c>SKILL.md</c>, lowercase hex.</param>
 /// <param name="FolderDigest">The SHA-256 of its folder, over each file's path and content in order.</param>
 /// <param name="Folder">The folder handed to the step.</param>
-public sealed record AgentSkill(string Name, string Where, string Digest, string FolderDigest, string Folder);
+public sealed record AgentSkill(string Name, string Place, string File, string Digest, string FolderDigest, string Folder);
 
 /// <summary>
 /// The signal the engine raises when a run is pausing, beside the cancellation token, which stays the hard stop: the
@@ -434,8 +435,10 @@ public sealed class AgentTurnInterrupt
 /// <param name="Effort">The step's own effort, where it names one.</param>
 /// <param name="Fallback">The step's own fallback, in order, where it names one.</param>
 /// <param name="SystemPrompt">The system prompt, filled from the definition's body.</param>
-/// <param name="PromptTemplate">The prompt's template, before its values are filled.</param>
-/// <param name="PromptValues">The template's values.</param>
+/// <param name="Prompt">
+/// The prompt, whole as whoever built the request filled it: sent as it is and never read as a template again, so a
+/// brace a filled value holds stays a brace.
+/// </param>
 /// <param name="ResumeTemplate">The resume template, where the step goes on with earlier work.</param>
 /// <param name="Workspace">Where the run works.</param>
 /// <param name="Output">The output it is to produce, where its step names one.</param>
@@ -455,8 +458,7 @@ public sealed record AgentStepRequest(
     string? Effort,
     IReadOnlyList<string>? Fallback,
     string SystemPrompt,
-    string PromptTemplate,
-    IReadOnlyDictionary<string, string> PromptValues,
+    string Prompt,
     string? ResumeTemplate,
     AgentWorkspace Workspace,
     AgentOutput? Output,
@@ -478,6 +480,17 @@ public sealed record AgentStepRequest(
 
     /// <summary>The version that program answered when the engine found it ready, as a refusal names it; null where it was not asked.</summary>
     public string? ProgramVersion { get; init; }
+
+    /// <summary>The skills the prompt holds, each as the step was given it: what the step's stream names where its session begins.</summary>
+    public IReadOnlyList<AgentSkill> Skills { get; init; } = [];
+
+    /// <summary>
+    /// The id the session the step's first launch begins is given, made before the prompt was written - a skill's
+    /// <c>${CLAUDE_SESSION_ID}</c> is it - where the step begins a conversation of its own; null where it goes on with a
+    /// stored one, or the client makes the id. A later launch of the same attempt - a retry, a move to another model -
+    /// begins a session of its own.
+    /// </summary>
+    public string? SessionId { get; init; }
 
     /// <summary>
     /// The names a child the run starts never inherits, whatever the tool's own environment holds: every name the
@@ -631,6 +644,13 @@ public sealed record AgentRun(
 
     /// <summary>The version that program answered when the engine found it ready, as a refusal names it; null where it was not asked.</summary>
     public string? ProgramVersion { get; init; }
+
+    /// <summary>
+    /// The id the session this launch begins is given, where the engine made it before the prompt was written - the
+    /// step's first launch of a conversation of its own; null where the client makes its own, or goes on with a stored
+    /// conversation, whose id it keeps.
+    /// </summary>
+    public string? SessionId { get; init; }
 
     /// <summary>The names a child the run starts never inherits: every name the configuration appoints a value of the slot for.</summary>
     public IReadOnlyList<string> Withheld { get; init; } = [];

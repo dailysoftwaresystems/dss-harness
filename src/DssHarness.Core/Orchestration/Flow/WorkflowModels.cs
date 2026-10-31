@@ -55,6 +55,22 @@ public sealed record WorkflowDefinition(
     /// <summary>The most step instances a run may have where the file says nothing (<c>maxInstances</c>).</summary>
     public const int DefaultMaxInstances = 5_000;
 
+    /// <summary>The retries a step is given where neither it nor the workflow says (<c>maxRetries</c>).</summary>
+    public const int DefaultMaxRetries = 3;
+
+    /// <summary>
+    /// The retries <paramref name="step"/> is given: its own where it says, the workflow's where it does not, and
+    /// <see cref="DefaultMaxRetries"/> where neither does - the one rule the engine's retry table and a reasoning step's
+    /// agent runner both read.
+    /// </summary>
+    /// <param name="step">The step.</param>
+    public int RetriesOf(WorkflowStep step)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+
+        return step.Retries ?? MaxRetries ?? DefaultMaxRetries;
+    }
+
     /// <summary>The inputs, by name, as a prompt or a template reads them.</summary>
     public IReadOnlyDictionary<string, FlowInput> InputsByName
         => new Dictionary<string, FlowInput>(Inputs.Select(input => new KeyValuePair<string, FlowInput>(input.Name, input)), StringComparer.Ordinal);
@@ -381,6 +397,16 @@ public sealed record WorkflowStep
     /// <summary>How often this handler may be raised; past it the run asks.</summary>
     public int? MaxVisits { get; init; } = null;
 
+    /// <summary>How often a handler may be raised in one scope where its file names no <c>maxVisits</c>.</summary>
+    public const int DefaultMaxVisits = 3;
+
+    /// <summary>
+    /// How often this handler may be raised in one scope before the run asks: its <c>maxVisits</c>, else
+    /// <see cref="DefaultMaxVisits"/> - the one bound the engine holds a handler to and the facts of a run count by.
+    /// </summary>
+    [JsonIgnore]
+    public int VisitsAllowed => MaxVisits ?? DefaultMaxVisits;
+
     /// <summary>
     /// The longest one attempt of a step that runs may take, in whole minutes, where the file says: counted by the engine
     /// from each start of the step and never while it waits on a question, and past it the step is stopped and ends
@@ -701,7 +727,27 @@ public sealed record FlowRepeat(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Blocking,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? BlockersLimitRounds,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Leftover,
-    bool BlockersUnbounded = false);
+    bool BlockersUnbounded = false)
+{
+    /// <summary>The further rounds past <see cref="Rounds"/> while blocking holds, where the file names none.</summary>
+    public const int DefaultBlockersLimitRounds = 3;
+
+    /// <summary>The further rounds past <see cref="Rounds"/> while blocking holds: the file's, else <see cref="DefaultBlockersLimitRounds"/>.</summary>
+    [JsonIgnore]
+    public int BlockersRounds => BlockersLimitRounds ?? DefaultBlockersLimitRounds;
+
+    /// <summary>
+    /// The iterations the loop's own bound allows, with <paramref name="extra"/> more its answers or a plan update gave:
+    /// its <c>maxIterations</c>, or its rounds and the further ones its blocking holds for - <see cref="int.MaxValue"/>
+    /// where <c>blockersLimitRounds</c> is <c>false</c>, which no count of iterations ever reaches. The one bound the
+    /// engine holds a loop to and the facts of a run count what is left by.
+    /// </summary>
+    /// <param name="extra">The iterations given beyond the file's bound.</param>
+    public int Bound(int extra)
+        => Rounds is { } rounds
+            ? BlockersUnbounded ? int.MaxValue : rounds + BlockersRounds + extra
+            : (MaxIterations ?? 0) + extra;
+}
 
 /// <summary>What a fold or a deletion is allowed to carry, member for member the fold command's options.</summary>
 /// <param name="Settled">Paths reconciled by hand. A person's answer, written out only.</param>

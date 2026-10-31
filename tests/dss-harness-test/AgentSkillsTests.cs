@@ -458,16 +458,29 @@ public sealed class AgentSkillsTests
             Checked(prompt: "Use {skill.release-notes} and {skill.release-notes} here.\n"));
     }
 
-    /// <summary>A placeholder that names no skill at all is refused, not passed over as the engine's own root, and one that reads an index is too.</summary>
+    /// <summary>
+    /// A placeholder that names no skill at all is refused, not passed over as the engine's own root, and so is one whose
+    /// name is not a folder's name alone - one that reads an index, or reaches past the places a skill is looked for in -
+    /// by the one rule of a skill's name, which the lookup holds every name to as well.
+    /// </summary>
     [Fact]
     public void APlaceholderThatNamesNoSkillIsRefused()
     {
+        const string NoName = "which is no skill's name: a skill is named by its folder's name alone, in letters, digits, '-' and '_', a '.' between two words";
+
         Assert.Equal(
-            ["step 'implement' prompt 'prompts/implement.md' line 1 names '{skill}' alone: name one - {skill.<name>} names it by its folder's name"],
+            ["step 'implement' prompt 'prompts/implement.md' line 1 names {skill.} alone: name one - {skill.<name>} names it by its folder's name"],
             Checked(prompt: "Use {skill.} here.\n"));
         Assert.Equal(
-            ["prompt 'prompts/implement.md' line 1 names {skill.release-notes[0]}, which reads an index: a skill is named by its folder's name alone"],
+            [$"step 'implement' prompt 'prompts/implement.md' line 1 names {{skill.release-notes[0]}}, {NoName}"],
             Checked(prompt: "Use {skill.release-notes[0]} here.\n"));
+        Assert.Equal(
+            [$"step 'implement' prompt 'prompts/implement.md' line 1 names {{skill.a/../../outside}}, {NoName}"],
+            Checked(prompt: "Use {skill.a/../../outside} here.\n"));
+
+        Assert.Equal(
+            $"'../outside' is no skill's name: the placeholder names {{skill.../outside}}, {NoName} (Parameter 'name')",
+            Assert.Throws<ArgumentException>(() => Find("../outside")).Message);
     }
 
     /// <summary>A file that ends at its closing '---' reads an empty body, and an empty file is refused for holding no frontmatter - neither ends the check.</summary>

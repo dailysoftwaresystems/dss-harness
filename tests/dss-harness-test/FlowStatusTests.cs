@@ -42,7 +42,8 @@ public sealed class FlowStatusTests
         int? iteration = null,
         IReadOnlyList<string>? waitsOn = null,
         string? handledBy = null,
-        string? failure = null)
+        string? failure = null,
+        string? raisedBy = null)
         => new(
             instance,
             instance.Split('.')[^1].Split(['+', '#', '['])[0],
@@ -59,7 +60,8 @@ public sealed class FlowStatusTests
             Model: model,
             Iteration: iteration,
             HandledBy: handledBy,
-            Failure: failure);
+            Failure: failure,
+            RaisedBy: raisedBy);
 
     /// <summary>The run's state in one file, in the shape flow.json holds it.</summary>
     private static FlowFile File(string status, IReadOnlyList<FlowStepRecord> steps, DateTimeOffset? started = null, double usd = 0, FlowPauseRecord? pause = null)
@@ -147,7 +149,7 @@ public sealed class FlowStatusTests
                 Step("build", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 2)),
                 Step("gate", nameof(FlowInstanceState.Done), "pause", started: At(10, 1), finished: At(10, 2)),
                 Step("gate+2", nameof(FlowInstanceState.Paused), "pause", started: At(10, 2), visit: 2),
-                Step("hold", nameof(FlowInstanceState.NotStarted), waitsOn: ["claim"]),
+                Step("hold", nameof(FlowInstanceState.NotStarted), waitsOn: [FlowWaits.Claim]),
             ]);
         var questions = new FlowQuestionsFile(
             1,
@@ -181,10 +183,10 @@ public sealed class FlowStatusTests
             waits     question q1 (ask) since 10:02:00Z: 'dssharness answer-orchestrator r1 <answer> --question q1'
                       plan update u1 under way: the run is held while 'plan+2' plans it
                       plan update u2 is recorded and waits for the run to be gone on with
-                      hold waits for claim
+                      hold waits for a claim
             done      2 step instances ended; 0.00 USD, 0 tokens spent
             left      at least 2 step instances, at most 2 step instances (nothing more can come)
-            estimate  between 1m00s and 1m00s more, from the 2 step instances that ended Done in this run; 1 step of what is left has not run to an end in this run and is not in the estimate: hold; not counting the time a person takes to answer q1; not counting a wait for a claim, a counter or room
+            estimate  between 1m00s and 1m00s more, from the 2 step instances that ended Done in this run; 1 step of what is left has not run to an end in this run and is not in the estimate: hold; not counting the time a person takes to answer q1; not counting a wait for a claim, for the run to be quiet or for room under its limits
             """,
             string.Join("\n", facts));
     }
@@ -214,6 +216,9 @@ public sealed class FlowStatusTests
               - name: sweep
                 repeat:
                   until: 'sweep.done'
+                  rounds: 1
+                  blocking: 'sweep.done'
+                  blockersLimitRounds: false
                 steps:
                   - name: clean
                     type: orient
@@ -240,7 +245,7 @@ public sealed class FlowStatusTests
             waits     nothing
             done      3 step instances ended; 0.00 USD, 0 tokens spent
             left      at least 5 step instances, at most 4997 step instances (the loops' bounds and the run's own bound of at most 5000 instances)
-            estimate  between 30s and 1m30s more, from the 3 step instances that ended Done in this run; a loop still open has no numeric bound of its own, and the time it may yet take is not in the estimate; 2 steps of what is left have not run to an end in this run and are not in the estimate: sweep, sweep.clean
+            estimate  between 30s and 1m00s more, from the 3 step instances that ended Done in this run; a loop still open has no numeric bound of its own, and the time it may yet take is not in the estimate; 1 step of what is left has not run to an end in this run and is not in the estimate: sweep.clean
             """,
             string.Join("\n", facts));
     }
@@ -284,7 +289,7 @@ public sealed class FlowStatusTests
             "left      at least 3 step instances, at most 6 step instances (the loops' bounds)",
             facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
         Assert.Equal(
-            "estimate  between 30s and 1m30s more, from the 3 step instances that ended Done in this run",
+            "estimate  between 30s and 1m00s more, from the 3 step instances that ended Done in this run",
             facts.First(fact => fact.StartsWith("estimate", StringComparison.Ordinal)));
     }
 
@@ -370,5 +375,127 @@ public sealed class FlowStatusTests
         Assert.Equal(
             "left      at least 1 step instance, at most 1 step instance (nothing more can come); 1 piece of plan updates not carried out to an end yet; update u1 owes 'rounds#2' to its loop, and it is not made yet",
             facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A stopped run has not ended - it goes on at its resume - and a stopped instance, which runs again there, is among
+    /// what is left and in the estimate, waiting for the resume: never counted as ended.
+    /// </summary>
+    [Fact]
+    public void AStoppedRun_HasNotEnded_ItsStoppedInstancesAreLeft()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: verify
+                type: test
+                dependsOn: [build]
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Stopped),
+            [
+                Step("build", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 2)),
+                Step("verify", nameof(FlowInstanceState.Done), "test", started: At(10, 2), finished: At(10, 4)),
+                Step("verify+2", nameof(FlowInstanceState.Stopped), "test", started: At(10, 4), visit: 2, waitsOn: ["resume"]),
+            ]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, NoEngine, AsOf);
+
+        Assert.Equal(
+            """
+            run 'r1' (workflow 'flow'), as of 10:10:00Z: stopped, for 10m00s; no engine
+            running   nothing is running
+            waits     verify+2 waits for resume
+            done      2 step instances ended; 0.00 USD, 0 tokens spent
+            left      at least 1 step instance, at most 1 step instance (nothing more can come)
+            estimate  between 2m00s and 2m00s more, from the 2 step instances that ended Done in this run
+            """,
+            string.Join("\n", facts));
+    }
+
+    /// <summary>
+    /// A handler whose source is under way can still be raised, though it has no instance until it is: in each scope the
+    /// source is under way in, the visits its bound leaves there - counted as the engine counts them, the visits raised
+    /// in that scope alone - are among the most that is left and in the estimate's upper end, each at the handler's
+    /// longest. Two items of a <c>forEach</c> run beside each other, so neither is laid after the other.
+    /// </summary>
+    [Fact]
+    public void AHandlerWhoseSourceIsUnderWay_IsCountedInEachScopeAtItsBound()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: plan
+                type: orient
+              - name: items
+                forEach: plan.list
+                dependsOn: [plan]
+                steps:
+                  - name: build
+                    type: orient
+                  - name: fix
+                    type: orient
+                    on:
+                      step: build
+                      outcome: failure
+                    maxVisits: 2
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Running),
+            [
+                Step("plan", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 1)),
+                Step("items[0]", nameof(FlowInstanceState.Running), group: true, started: At(10, 1)),
+                Step("items[0].build", nameof(FlowInstanceState.Done), "orient", started: At(10, 1), finished: At(10, 2)),
+                Step("items[0].fix", nameof(FlowInstanceState.Done), "orient", started: At(10, 2), finished: At(10, 4), raisedBy: "items[0].build"),
+                Step("items[0].build+2", nameof(FlowInstanceState.Running), "orient", started: At(10, 9, 30), visit: 2),
+                Step("items[1]", nameof(FlowInstanceState.Running), group: true, started: At(10, 1)),
+                Step("items[1].build", nameof(FlowInstanceState.Running), "orient", started: At(10, 9, 30)),
+            ]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, Engine, AsOf);
+
+        Assert.Equal(
+            "left      at least 4 step instances, at most 7 step instances (the loops' bounds)",
+            facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
+        Assert.Equal(
+            "estimate  between 30s and 7m00s more, from the 3 step instances that ended Done in this run",
+            facts.First(fact => fact.StartsWith("estimate", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A wait for room is read as the admission classes its own words: a counter of the run's limits is one, left out of
+    /// the estimate and said to be; a dependency whose name holds the word of a claim is a step, and is not.
+    /// </summary>
+    [Fact]
+    public void AWaitForRoom_IsReadAsTheAdmissionClassesIt()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: claims
+                type: orient
+              - name: think
+                type: orient
+                dependsOn: [claims]
+            """);
+        FlowFile Waiting(string wait)
+            => File(
+                nameof(FlowRunStatus.Running),
+                [
+                    Step("claims", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 1)),
+                    Step("claims+2", nameof(FlowInstanceState.Running), "orient", started: At(10, 9, 30), visit: 2),
+                    Step("think", nameof(FlowInstanceState.NotStarted), "orient", waitsOn: [wait]),
+                ]);
+        string EstimateOf(FlowFile flow)
+            => FlowStatus.Facts(definition, flow, questions: null, updates: null, Engine, AsOf).First(fact => fact.StartsWith("estimate", StringComparison.Ordinal));
+
+        Assert.Equal(
+            "estimate  between 30s and 30s more, from the 1 step instance that ended Done in this run; 1 step of what is left has not run to an end in this run and is not in the estimate: think; not counting a wait for a claim, for the run to be quiet or for room under its limits",
+            EstimateOf(Waiting(FlowWaits.ReasoningAgents)));
+        Assert.Equal(
+            "estimate  between 30s and 30s more, from the 1 step instance that ended Done in this run; 1 step of what is left has not run to an end in this run and is not in the estimate: think",
+            EstimateOf(Waiting("claims")));
     }
 }

@@ -29,7 +29,7 @@ public sealed class AgentStreamTests
         using var temp = new TempDirectory();
         var stream = StoredStream.Open(Disk(), Step(temp), new Masking("s3cret", "***"));
 
-        await stream.EmitAsync(new SessionStarted("fake", "model-x", "hash", ["Read"], ["skill-a"], HandedConversation: false, SessionId: "s1"));
+        await stream.EmitAsync(new SessionStarted("fake", "model-x", "hash", ["Read"], [new AgentSkill("skill-a", ".harness-config/skills", "SKILL.md", "digest", "folder digest", "skills/skill-a")], HandedConversation: false, SessionId: "s1"));
         await stream.EmitAsync(new MessageSent("the key is s3cret", AgentMessageKind.FirstPrompt));
         await stream.EmitAsync(new AssistantMessage("done, holding s3cret", [new AgentToolCall("c1", "Read")]));
         await stream.EmitAsync(new RunFinished(AgentRunStatus.Completed));

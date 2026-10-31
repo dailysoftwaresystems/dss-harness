@@ -1546,7 +1546,7 @@ public sealed class FlowCoordinatorTests
         var next = (await after.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Steps.Single(step => step.Instance == "next");
 
         Assert.Equal(FlowInstanceState.NotStarted, next.State);
-        Assert.Equal(["claim"], next.WaitsOn);
+        Assert.Equal([FlowWaits.Claim], next.WaitsOn);
         Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["gate"].State);
         Assert.DoesNotContain("next", runner.Started.ToArray());
 

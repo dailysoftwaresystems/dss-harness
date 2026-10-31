@@ -15,17 +15,21 @@ public static class AgentStepGround
 {
     /// <summary>
     /// The ground of a reason step working in <paramref name="workspace"/>: its agent's worktree where it has one -
-    /// which it writes below, its work directory always - or, for an agent with none, the main checkout, which it only
-    /// reads. The tool's own state under each tree it touches, and the slot its keys are read from, no action of the
-    /// agent's reaches.
+    /// which it writes below, unless its definition says <c>writes: false</c> or the run only reads, its work directory
+    /// always - or, for an agent with none, the main checkout, which it only reads. The tool's own state under each tree
+    /// it touches, and the slot its keys are read from, no action of the agent's reaches.
     /// </summary>
     /// <param name="config">The configuration, whose <c>agentPolicy</c> restricts and whose state paths are guarded.</param>
-    /// <param name="definition">The step's agent definition, where it names one; null where it names none.</param>
+    /// <param name="definition">The agent definition the step works by, where there is one; null where it names none.</param>
     /// <param name="step">The step, whose <c>restrictions</c> add and whose <c>writes</c> narrow.</param>
     /// <param name="workspace">Where the run works, as the step's agent answers it.</param>
     /// <param name="webSearchGiven">Whether the run is given a web search, which without it the agent has not.</param>
     /// <param name="claudeDirectories">Every Claude Code directory a client of this run uses, and the tool's own.</param>
     /// <param name="slotDirectory">The directory the agents' key slot reads.</param>
+    /// <param name="readsOnly">
+    /// Whether the run only reads whatever its definition gives it - the run's advisor, which works where the asking step
+    /// works and writes nothing there, and its reporter: its own work directory is all it writes.
+    /// </param>
     public static AgentPolicyGround Of(
         HarnessConfig config,
         AgentDefinition? definition,
@@ -33,7 +37,8 @@ public static class AgentStepGround
         AgentWorkspace workspace,
         bool webSearchGiven,
         IReadOnlyList<string> claudeDirectories,
-        string slotDirectory)
+        string slotDirectory,
+        bool readsOnly = false)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(step);
@@ -83,7 +88,9 @@ public static class AgentStepGround
             reads.Add(workspace.MainCheckout);
         }
 
-        var writable = workspace.Worktree is { Length: > 0 }
+        // A worktree is written only where the agent writes: a definition's `writes: false`, and a run that only reads,
+        // leave it to be read, and the work directory is all the agent writes.
+        var writable = workspace.Worktree is { Length: > 0 } && definition?.Writes != false && !readsOnly
             ? Distinct([workspace.Worktree, workspace.WorkDirectory])
             : [workspace.WorkDirectory];
 

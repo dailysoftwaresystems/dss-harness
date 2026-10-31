@@ -402,7 +402,6 @@ internal sealed class Working
             Fallback: null,
             SideTaskService.AgentSystemPrompt,
             message,
-            new Dictionary<string, string>(StringComparer.Ordinal),
             ResumeTemplate: null,
             _workspace,
             Output: null,
