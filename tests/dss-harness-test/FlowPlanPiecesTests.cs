@@ -919,7 +919,7 @@ public sealed class FlowPlanPiecesTests
 
             // The old build is ended for the update, its runner still running: the visit made again waits on the claim
             // it still holds.
-            var waiting = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[1].build" && step.WaitsOn.Contains("claim")));
+            var waiting = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[1].build" && step.WaitsOn.Contains(FlowWaits.Claim)));
             Assert.Equal((nameof(FlowInstanceState.Stopped), "u1"), waiting.Steps.Where(step => step.Instance == "rounds.items[0].build").Select(step => (step.State, step.EndedFor)).Single());
             Assert.DoesNotContain("rounds.items[1].build", runner.Started);
 

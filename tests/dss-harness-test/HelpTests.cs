@@ -177,7 +177,7 @@ public sealed partial class HelpTests
 
         Assert.Equal(HelpTopics.LayoutEntries.Select(entry => $"{entry.Path,-44} {entry.Text}"), block);
         Assert.Contains(
-            (HarnessLayout.SideTasksDirectoryName + "/", "contents ignored, .gitkeep tracked; the side-tasks' records, in the main checkout ('dssharness help side-tasks')"),
+            (HarnessLayout.SideTasksDirectoryName + "/", "contents ignored, .gitkeep tracked; the side-tasks' records, in the main checkout, and never sent to a host by sync ('dssharness help side-tasks')"),
             HelpTopics.LayoutEntries);
     }
 
@@ -2794,8 +2794,8 @@ public sealed partial class HelpTests
                 + "sync ('dssharness help mutations')",
             ".legs/ contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree, never sent to a "
                 + "host by sync",
-            ".side-tasks/ contents ignored, .gitkeep tracked; each side-task's records under its name, in the main checkout, never "
-                + "sent to a host by sync ('dssharness help side-tasks')",
+            ".side-tasks/ contents ignored, .gitkeep tracked; the side-tasks' records, in the main checkout, and never sent to a host "
+                + "by sync ('dssharness help side-tasks')",
             "The worktrees root, the orchestrators directory, .mutations, .legs and .side-tasks are kept in git by their placeholders, so each "
                 + "reads as not ignored itself while everything made in it is, and none can be a link: init names one it finds, and "
                 + "writes nothing through it. Sync withholds each by name. Each copy in them is a whole copy of the tree, so a "
