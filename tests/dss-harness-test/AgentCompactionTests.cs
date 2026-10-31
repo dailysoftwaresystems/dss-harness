@@ -14,7 +14,7 @@ using DssHarness.Core.Web;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The engine's compaction (part 03): the reduction the engine works out from the stored stream - the same input
+/// The engine's compaction: the reduction the engine works out from the stored stream - the same input
 /// always the same record, no model in it - the run context and the task whole, the last iterations word for word by
 /// the continuation record's rule, the earlier messages reduced with their calls one line and their results left out,
 /// and the new conversation it begins, on every client.

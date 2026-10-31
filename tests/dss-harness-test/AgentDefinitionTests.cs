@@ -8,7 +8,7 @@ namespace DssHarness.Tests;
 /// An agent definition, read by its parser, and a step's model resolved over the configuration with its definition
 /// below it: the definition's keys each on their own, its retired keys refused as a step's are, its effort read
 /// through after the step's, and the order a step goes on by the entries of the tier's models and their provider's
-/// keys (value 424).
+/// keys.
 /// </summary>
 public sealed class AgentDefinitionTests
 {
@@ -313,7 +313,7 @@ public sealed class AgentDefinitionTests
             client: null,
             definition: new AgentDefinition("worker", "does the work", "You do the work.", Model: "claude-fable-5-1"));
 
-        // The step's tier over the definition's model (part 03), and its order the tier's.
+        // The step's tier over the definition's model, and its order the tier's.
         Assert.Equal("glm-5.3", resolved?.Serving.Model);
         Assert.Equal("balanced", resolved?.Tier);
         Assert.Equal(2, resolved?.After.Count);

@@ -4,7 +4,7 @@ using DssHarness.Core.Configuration;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The gate (part 03, "Coordination"): one lane per provider and key - a client that signs in with a login one lane by
+/// The gate: one lane per provider and key - a client that signs in with a login one lane by
 /// its client - holding the client's <c>maxParallel</c> (the built-in's where its entry says none), the optional
 /// buckets that pace a minute's requests, input and output tokens, and a cool-down a 429 sets for every waiter. The
 /// engine's step runner holds the lane a run's requests go through; here the lane is held over a clock and a wait that

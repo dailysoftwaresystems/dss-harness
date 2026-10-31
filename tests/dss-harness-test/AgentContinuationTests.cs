@@ -13,7 +13,7 @@ using DssHarness.Core.Web;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// Going on with earlier work (part 03): the continuation record the engine puts together from the step directories of
+/// Going on with earlier work: the continuation record the engine puts together from the step directories of
 /// the agent - its parts in their order, its bounds, whatever is cut named with the copy that holds it whole, the last
 /// iterations word for word from the stored stream of the newest attempt - and the first user message's parts, the run
 /// context, the plan updates and the continuation record, as each client is sent them.

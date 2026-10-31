@@ -38,7 +38,7 @@ public sealed record AgentCompactionBounds(int ReducedChars = AgentCompactionBou
 public sealed record AgentCompacted(string Record, int KeptWordForWord, int Reduced, long SizeBefore, long SizeAfter);
 
 /// <summary>
-/// The engine's compaction (part 03, "Compaction"): a reduction the engine works out from the stored stream, the same
+/// The engine's compaction: a reduction the engine works out from the stored stream, the same
 /// input always giving the same output, no model in it - the run context and the task whole as they were sent, the
 /// last iterations word for word by the continuation record's rule, every earlier message of the agent its text whole
 /// with its thinking left out, every earlier call one line, every earlier result left out, and every message the

@@ -75,7 +75,7 @@ public sealed record ToolLoopTerms(
 }
 
 /// <summary>
-/// The loop the two API clients share (part 03, "The loop for the two APIs"): one request after another over a provider
+/// The loop the two API clients share: one request after another over a provider
 /// (<see cref="IChatProvider"/>), each turn's calls decided and run by the harness's tool runtime before the agent goes on,
 /// and everything that happens told as the run's events. The loop owns the budgets, the policy and the tools, the events,
 /// the stored conversation, the keys, the retries and the stops; the provider owns its wire.
@@ -972,7 +972,7 @@ public sealed class ToolLoop(
                 // What a request that failed said it used is counted as an answer's is: its input was read, and billed.
                 var uncounted = soFar is { } used ? await CountedAsync(used).ConfigureAwait(false) : null;
 
-                // The engine's fallback, inside the one conversation (part 03, "How it moves"): a refused key, an
+                // The engine's fallback, inside the one conversation: a refused key, an
                 // account at its limit and a declined request move the run to its next entry of this provider and
                 // client - the same request sent again, with the model or the key changed - where one is left. The
                 // rest of the step's order is the runner's, and the ending stands for it to read. The move is planned

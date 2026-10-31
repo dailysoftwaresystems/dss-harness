@@ -5,10 +5,10 @@ using DssHarness.Core.Execution;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// What the walk of a step's order records of its keys' spend, and the lane it holds (part 03's "A provider's keys,
-/// and balancing them" and "Coordination"): each entry's cost recorded by the key's name - what the client reported
-/// where it does, else what the engine counted - and the run's requests held to the client's parallel bound on one
-/// provider and key, a 429's cool-down set from when the provider said the limit lifts.
+/// What the walk of a step's order records of its keys' spend, and the lane it holds: each entry's cost recorded by the
+/// key's name - what the client reported where it does, else what the engine counted - and the run's requests held to
+/// the client's parallel bound on one provider and key, a 429's cool-down set from when the provider said the limit
+/// lifts.
 /// </summary>
 public sealed class AgentRunnerSpendTests
 {

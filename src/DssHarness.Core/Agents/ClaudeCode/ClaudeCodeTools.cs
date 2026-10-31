@@ -36,7 +36,7 @@ public static class ClaudeCodeTools
     ];
 
     /// <summary>
-    /// Claude Code's own web tools, kept in a side-task's <c>--tools</c> beside the engine's tool server (value 395):
+    /// Claude Code's own web tools, kept in a side-task's <c>--tools</c> beside the engine's tool server:
     /// its <c>WebSearch</c> is the side-task's <c>native</c> search, and its <c>WebFetch</c> another way to read a page.
     /// A step's launch is given neither - the web reaches a step through the harness's own tools alone.
     /// </summary>
@@ -109,7 +109,8 @@ public static class ClaudeCodeTools
 
     /// <summary>The tools a launch is given, in the table's order, each once.</summary>
     /// <param name="capabilities">What its tools are given by: the agent's own, or the reporter's (<see cref="Policy.AgentPolicyGround.Given"/>).</param>
-    /// <param name="ownWeb">Whether Claude Code's own web tools are given with them, as a side-task's launch alone is (value 395).</param>
+    /// <param name="ownWeb">Whether Claude Code's own web tools are given with them, as a side-task's launch alone
+    /// is.</param>
     public static IReadOnlyList<string> Of(IReadOnlyList<AgentCapability> capabilities, bool ownWeb = false)
     {
         ArgumentNullException.ThrowIfNull(capabilities);

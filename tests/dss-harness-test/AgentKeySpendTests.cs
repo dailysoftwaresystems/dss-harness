@@ -10,10 +10,9 @@ using DssHarness.Core.Secrets;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// What each key spent, for the next step's choice of one (<c>balanceKeyUsage</c>, part 03's "A provider's keys, and
-/// balancing them"): the record across runs written by the key's name and never its value, its week read, its lines
-/// older than the week dropped when it is next written - and the order the keys run in, the least spent first, a tie
-/// in the list's order.
+/// What each key spent, for the next step's choice of one (<c>balanceKeyUsage</c>): the record across runs written by
+/// the key's name and never its value, its week read, its lines older than the week dropped when it is next written -
+/// and the order the keys run in, the least spent first, a tie in the list's order.
 /// </summary>
 public sealed class AgentKeySpendTests
 {

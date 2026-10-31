@@ -9,11 +9,11 @@ using DssHarness.Core.Repository;
 namespace DssHarness.Core.Agents;
 
 /// <summary>
-/// Where a run records what each key spent, for the next step's choice of one (<c>balanceKeyUsage</c>, part 03's "A
-/// provider's keys, and balancing them"): <c>key-spend.jsonl</c> in the repository's records across runs, one line for
-/// a run's every entry - the time, the provider, the key's name (never its value), the model, the cost. A key's week
-/// is read for the balancing, and the lines older than seven days are dropped when the file is next written; what the
-/// same key spent in another repository, on another machine or in another tool is not seen.
+/// Where a run records what each key spent, for the next step's choice of one (<c>balanceKeyUsage</c>):
+/// <c>key-spend.jsonl</c> in the repository's records across runs, one line for a run's every entry - the time, the
+/// provider, the key's name (never its value), the model, the cost. A key's week is read for the balancing, and the
+/// lines older than seven days are dropped when the file is next written; what the same key spent in another
+/// repository, on another machine or in another tool is not seen.
 /// </summary>
 /// <param name="fileSystem">The file system the record is kept on.</param>
 /// <param name="store">Runs the record's reads and writes in the repository's section across runs, so two engines never lose one a line.</param>

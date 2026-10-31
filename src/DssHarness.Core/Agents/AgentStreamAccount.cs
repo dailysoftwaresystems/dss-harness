@@ -10,7 +10,7 @@ namespace DssHarness.Core.Agents;
 /// pause, a limit or a cut-off leaves holds what the stream shows and no more - the files the newest attempt wrote
 /// over every run of it, the last <see cref="LastCommands"/> commands it ran and how each ended (the earlier ones
 /// counted), and its last messages word for word, as many as the continuation record keeps - beside the steps before
-/// it that left notes, named by step and never by path (part 03, "The handoff turn"). Nothing in it is written or
+/// it that left notes, named by step and never by path. Nothing in it is written or
 /// shortened by a model, and nothing the engine wrote is given out as the model's own account: the first line says
 /// the engine wrote it.
 /// </summary>

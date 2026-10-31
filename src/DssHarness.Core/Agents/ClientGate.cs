@@ -5,7 +5,7 @@ using DssHarness.Core.Configuration;
 namespace DssHarness.Core.Agents;
 
 /// <summary>
-/// One client's bounds as the gate holds them (part 03, "Coordination"): how many of its requests - its launches, for
+/// One client's bounds as the gate holds them: how many of its requests - its launches, for
 /// Claude Code, which has no seam between one request and the next - are under way at once on one provider and one
 /// key, and the optional buckets that pace them. The built-in clients each name their own parallel bound; nothing else
 /// is said by default, and the provider's answers pace the client.
@@ -46,7 +46,7 @@ public sealed record ClientGateSettings(
 }
 
 /// <summary>
-/// The lanes of a session's requests, one per provider and key (part 03, "Coordination"): a client that signs in with a
+/// The lanes of a session's requests, one per provider and key: a client that signs in with a
 /// login is one lane by its client, for the login is the account, and two keys of one provider are two lanes, keyed by
 /// a hash of the key. The gate bounds requests; the orchestrator's <c>maxReasoningAgents</c> bounds agents; both
 /// apply.

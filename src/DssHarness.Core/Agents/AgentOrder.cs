@@ -2,7 +2,7 @@ namespace DssHarness.Core.Agents;
 
 /// <summary>
 /// One entry of the order a step runs by, as the engine resolved it for running: a model with one of its provider's
-/// keys (value 424) - the first entry serving, each later model of the tier with each of its keys in turn, each
+/// keys - the first entry serving, each later model of the tier with each of its keys in turn, each
 /// model's keys before the next model - the effort the step gives that model resolved with it, and whether it can be
 /// used on this machine.
 /// </summary>
@@ -23,7 +23,7 @@ public sealed record AgentRunEntry(string Model, string Provider, string Client,
 }
 
 /// <summary>
-/// The rules the engine's fallback walks a step's order by (part 03, "The engine's fallback"): what a limit covers,
+/// The rules the engine's fallback walks a step's order by: what a limit covers,
 /// which entry a cause moves to, and which decline moves nowhere. One owner, read by the loop for its own provider's
 /// entries and by the runner for every entry of the order.
 /// </summary>

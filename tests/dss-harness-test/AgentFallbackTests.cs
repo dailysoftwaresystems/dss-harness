@@ -11,7 +11,7 @@ using DssHarness.Core.Web;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The engine's fallback (part 03, "The engine's fallback"): a declined request, an account at its limit and a key the
+/// The engine's fallback: a declined request, an account at its limit and a key the
 /// provider refuses move a step through its order - inside the one conversation on the same provider and client, across
 /// clients with the step's prompt - each model's keys before the next model, a limit passed over by what it covers, and
 /// what each move records.
@@ -482,7 +482,7 @@ public sealed class AgentFallbackTests : IDisposable
     }
 
     /// <summary>
-    /// A message written by a model nobody asked for is an agent failure like any other (the user, 2026-10-17): tried
+    /// A message written by a model nobody asked for is an agent failure like any other: tried
     /// again on the model that served it - its retries, and none here - and then on each next model of the order, for
     /// only when every model was tried does the step end failed.
     /// </summary>

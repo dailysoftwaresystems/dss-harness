@@ -4,7 +4,7 @@ using YamlDotNet.RepresentationModel;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// One agent definition, as a workflow's <c>agents/&lt;name&gt;.md</c> file declares it (part 03, "Agent definitions"):
+/// One agent definition, as a workflow's <c>agents/&lt;name&gt;.md</c> file declares it:
 /// markdown whose frontmatter declares the agent and whose body is the system prompt, verbatim. The level below a
 /// step's: where a step names a tier, a model, an effort or a client, its own wins; where it names none, the
 /// definition's stands. A definition names no fallback - that is the order of the tier's models in <c>tierConfig</c>.

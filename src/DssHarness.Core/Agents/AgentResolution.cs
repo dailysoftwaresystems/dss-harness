@@ -4,7 +4,7 @@ using DssHarness.Core.Orchestration.Flow;
 namespace DssHarness.Core.Agents;
 
 /// <summary>
-/// One entry of the order a step's model is reached by: a model with one of its provider's keys (value 424) - the
+/// One entry of the order a step's model is reached by: a model with one of its provider's keys - the
 /// serving entry the first, and each later model of its tier with each of its keys in turn, each model's keys before
 /// the next model - the effort the step gives that model resolved with it.
 /// </summary>
@@ -28,7 +28,7 @@ public sealed record AgentResolution(AgentModelEntry Serving, IReadOnlyList<Agen
 {
     /// <summary>
     /// A step's model, effort and client resolved against the configuration, with its agent definition's as the level
-    /// below its own (part 04's table): the step's <c>model</c>, the first of its <c>tier</c>, the definition's
+    /// below its own: the step's <c>model</c>, the first of its <c>tier</c>, the definition's
     /// <c>model</c>, the first of the definition's <c>tier</c>, the first of <c>defaults.agentTier</c> - each model's
     /// effort through the step's entry, its <c>all</c> or one level, the definition's entry, its <c>all</c> or one
     /// level, else the model's own default - the client the step's, the definition's, else the provider's own.
@@ -69,7 +69,7 @@ public sealed record AgentResolution(AgentModelEntry Serving, IReadOnlyList<Agen
         var through = client ?? definition?.Client ?? named.Provider.Client;
 
         // The step's whole order as entries of a model and one of its provider's keys, each model's keys before the
-        // next model (value 424): every model of the tier the model came from, in tierConfig's order - a model named
+        // next model: every model of the tier the model came from, in tierConfig's order - a model named
         // outright has its own keys and nothing after them. The first entry serves; the rest is what the step goes on
         // by, later keys of the serving model first.
         var order = new List<AgentModelEntry>();
@@ -129,9 +129,9 @@ public sealed record AgentResolution(AgentModelEntry Serving, IReadOnlyList<Agen
         => providers.ModelsOf(tier) is [var first, ..] ? first.Model.Code : null;
 
     /// <summary>
-    /// The level one model runs at, through the four sources of value 418 - its own entry under the step's effort map,
-    /// the map's <c>all</c>, the step's one level, the definition's entry, the definition's <c>all</c> or one level,
-    /// else none (the model's own default) - and where the level came from, as a refusal says it.
+    /// The level one model runs at, through the four sources an effort is read from - its own entry under the step's
+    /// effort map, the map's <c>all</c>, the step's one level, the definition's entry, the definition's <c>all</c> or
+    /// one level, else none (the model's own default) - and where the level came from, as a refusal says it.
     /// </summary>
     /// <param name="code">The model's code.</param>
     /// <param name="effort">The step's one effort level, or null.</param>

@@ -84,7 +84,7 @@ public sealed record AgentContinuationWork(
 }
 
 /// <summary>
-/// The continuation record (part 03, "Going on with earlier work"): text the engine puts together each time from the
+/// The continuation record: text the engine puts together each time from the
 /// step directories of the agent - what it is, the steps so far, the files changed, the last red build or test, the
 /// handoff, and the last iterations word for word from the stored stream of the newest attempt - nothing in it written
 /// or shortened by a model, whatever is cut named with a file that holds it whole, the copies put in the agent's own
@@ -450,7 +450,7 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
 }
 
 /// <summary>
-/// The parts of a step's first user message (part 03, "Prompts" and "What each client is sent"), and the one owner of
+/// The parts of a step's first user message, and the one owner of
 /// their order: the run context, the plan updates, the continuation record - only where the conversation is a new one,
 /// which is every conversation on Claude Code and a fallback's or a compaction's on the API clients - and the step's
 /// filled prompt as the task. A run given no part sends its prompt as it always did, shaped by nothing.

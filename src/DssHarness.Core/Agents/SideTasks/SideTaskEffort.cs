@@ -5,7 +5,7 @@ using DssHarness.Core.Execution;
 namespace DssHarness.Core.Agents.SideTasks;
 
 /// <summary>
-/// The effort levels a side-task is asked for on its command line (value 418, as a step's <c>effort</c> is given): one
+/// The effort levels a side-task is asked for on its command line (as a step's <c>effort</c> is given): one
 /// level for every model (<c>--effort high</c>), or one entry per model (<c>--effort glm-5.3=high</c>), with
 /// <c>all=&lt;level&gt;</c> for the rest. The one reader of the form; whether a model takes the level it is given is
 /// checked where the model is resolved.
