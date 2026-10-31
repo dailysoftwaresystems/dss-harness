@@ -36,12 +36,13 @@ internal sealed class Working
     private SideTaskSetUp _now;
     private SideTaskRecord _record;
     private AgentSessionRef? _conversation;
-    private AgentCompacted? _carried;
     private AgentUsageReport? _inAll;
     private int _attempts;
 
-    // The side-task's stop, which a launch held open for the chat runs under.
-    private CancellationToken _stopping;
+    // The command's own stop, which a launch held open for the chat runs under: the person leaving - a second interrupt
+    // among the ways - ends a launch as /exit does, its turn cut and its messages ended, never by stopping it hard, so
+    // what it used, cost and answered is its result's.
+    private CancellationToken _launching;
 
     /// <summary>Initializes the turn engine over the record the side-task goes on from.</summary>
     public Working(
@@ -82,8 +83,11 @@ internal sealed class Working
     /// <summary>The side-task's interrupts.</summary>
     private SideTaskInterrupts Interrupts => _call.Interrupts;
 
-    /// <summary>The entry the side-task's turns are served by first.</summary>
-    private AgentModelEntry Serving => _now.Resolution.Serving;
+    /// <summary>
+    /// The entry the side-task's turns are served by first: its order's first - the resolution's serving entry, or the
+    /// one the walk moved a chat to (<see cref="AgentRunResult.GoesOnBy"/>).
+    /// </summary>
+    private AgentRunEntry Serving => _now.Order[0];
 
     /// <summary>Whether the client the side-task runs on holds one launch open between the person's messages.</summary>
     private bool LaunchStaysOpen
@@ -146,14 +150,15 @@ internal sealed class Working
     /// records.
     /// </summary>
     /// <param name="cancellationToken">The side-task's stop: the command's, and its second interrupt.</param>
-    public async Task<CommandOutcome> ChatAsync(CancellationToken cancellationToken)
+    /// <param name="command">The command's own stop, which a launch held open for the chat runs under.</param>
+    public async Task<CommandOutcome> ChatAsync(CancellationToken cancellationToken, CancellationToken command)
     {
         var chat = _call.Chat ?? throw new InvalidOperationException("a chat was asked for and no front end was given");
         using var front = new TurnFront(_layout, _fileSystem, _clock, chat.Say);
         Launch? open = null;
         Task<string?>? reading = null;
 
-        _stopping = cancellationToken;
+        _launching = command;
         _output.Info(SideTaskService.RunCommand, $"side-task '{_layout.Name}' on {Serving.Model} through {Serving.Client}; /help lists what the chat takes");
 
         try
@@ -320,30 +325,34 @@ internal sealed class Working
         _inAll = AgentUsageReport.Sum(_inAll, result.Usage);
         Kept(SideTaskStatus.Open);
 
-        if (result.Status == AgentRunStatus.ContextExhausted)
-        {
-            Compacted();
-        }
-        else if (result.Status == AgentRunStatus.Cancelled && !cancellationToken.IsCancellationRequested && !Interrupts.Ended.IsCompleted)
+        // A turn that outgrew its model's context is said as its ending alone: the compaction the next message begins
+        // from is said once, as it is given (the Compacted event).
+        if (result.Status == AgentRunStatus.Cancelled && !cancellationToken.IsCancellationRequested && !Interrupts.Ended.IsCompleted)
         {
             chat.Say("the turn was interrupted; the conversation keeps what was said - ask again, or /exit to leave");
         }
         else if (result.Status is not (AgentRunStatus.Completed or AgentRunStatus.Cancelled))
         {
-            chat.Say($"the turn ended {result.Status}{(result.Error is null ? string.Empty : ": " + result.Error)}; the conversation keeps what was said");
+            chat.Say($"the turn ended {result.Status}{(result.Error is null ? string.Empty : ": " + result.Error)}; "
+                + (result.Status == AgentRunStatus.ContextExhausted
+                    ? "the next message begins a new conversation, going on from the conversation so far"
+                    : "the conversation keeps what was said"));
         }
     }
 
     /// <summary>
     /// Begins a launch held open for the chat, with the first of <paramref name="lines"/> as its prompt and the rest
-    /// posted to it; the first interrupt cuts its current turn alone, and the side-task's stop ends it.
+    /// posted to it; each interrupt cuts its current turn alone, and only the command's own stop ends it hard.
     /// </summary>
-    private Launch Begin(IReadOnlyList<string> lines, TurnFront front)
+    /// <param name="lines">The lines it is given, in order.</param>
+    /// <param name="front">The chat's front.</param>
+    /// <param name="alreadyWritten">How many of the first lines the transcript holds already: given to the launch before, which never answered them.</param>
+    private Launch Begin(IReadOnlyList<string> lines, TurnFront front, int alreadyWritten = 0)
     {
         var launch = new Launch();
 
-        front.Seen.LaunchBegins();
-        launch.Run = _runner.RunAsync(Request(lines[0], launch.Messages, launch.Interrupt), front, _stopping);
+        front.Seen.LaunchBegins(alreadyWritten);
+        launch.Run = _runner.RunAsync(Request(lines[0], launch.Messages, launch.Interrupt), front, _launching);
         launch.Given.Add(lines[0]);
 
         foreach (var line in lines.Skip(1))
@@ -358,14 +367,28 @@ internal sealed class Working
 
     /// <summary>
     /// A launch that ended by itself, recorded - compacted where it outgrew its context - and gone on from: the lines it
-    /// never answered, and <paramref name="more"/>, sent to a new launch going on from the conversation so far. A new
-    /// launch that also ends before answering any of them gives them back to the person, so none is lost unsaid.
+    /// never answered, and <paramref name="more"/>, sent on from the conversation so far - on the entry the walk moved the
+    /// chat to where it handed a move back (<see cref="AgentRunResult.GoesOnBy"/>), as a new launch where that entry's
+    /// client holds one open and as a request each where it stores its conversations, else to a new launch on the same
+    /// entry. A new launch on the same entry that also ends before answering any of them gives them back to the person, so
+    /// none is lost unsaid; a move goes on down the order, which ends.
     /// </summary>
     /// <returns>The new launch; null where none was begun.</returns>
     private async Task<Launch?> GoneOnAsync(Launch ended, TurnFront front, SideTaskChat chat, CancellationToken cancellationToken, IReadOnlyList<string>? more = null)
     {
         var (result, unsaid) = await EndAsync(ended, front, chat, leaving: false).ConfigureAwait(false);
         IReadOnlyList<string> lines = [.. unsaid, .. more ?? []];
+
+        // The lines the transcript holds already: written to the launch that ended, which never answered them.
+        var alreadyWritten = Math.Max(0, front.Seen.Given - (result?.MessagesAnswered ?? 0));
+
+        // The walk's move, handed back: the chat goes on by the order the walk would have moved to.
+        var moved = result?.GoesOnBy is { Count: > 0 } onward;
+
+        if (moved)
+        {
+            _now = _now with { Order = result!.GoesOnBy! };
+        }
 
         if (result is { } done && done.Status is not AgentRunStatus.Completed)
         {
@@ -377,13 +400,31 @@ internal sealed class Working
             return null;
         }
 
-        if (ended.Retried && unsaid.Count == ended.Given.Count)
+        if (ended.Retried && unsaid.Count == ended.Given.Count && !moved)
         {
             chat.Say($"the new launch ended too before it answered {ReportText.Counted(lines.Count, "message")}; send again what still stands: {string.Join(" / ", lines)}");
             return null;
         }
 
-        var again = Begin(lines, front);
+        if (!LaunchStaysOpen)
+        {
+            // Moved to a client that stores its conversations: each line is a request of its own, as such a chat's are.
+            front.Seen.LaunchBegins(alreadyWritten);
+
+            foreach (var line in lines)
+            {
+                if (cancellationToken.IsCancellationRequested || Interrupts.Ended.IsCompleted)
+                {
+                    break;
+                }
+
+                await ChatTurnAsync(line, front, chat, cancellationToken).ConfigureAwait(false);
+            }
+
+            return null;
+        }
+
+        var again = Begin(lines, front, alreadyWritten);
         again.Retried = true;
 
         return again;
@@ -430,9 +471,9 @@ internal sealed class Working
         RecordEnded(launch, front);
 
         // The launch's ending is its last turn's where that turn ended with it - the turns before it ended inside the launch,
-        // which went on; where a message was given that no turn ended, the launch ended inside a turn no record holds, and
-        // the turns recorded keep their own endings.
-        if (result is not null && launch.Recorded > 0 && !front.Seen.TurnUnderWay)
+        // which went on; where a turn was under way, or a line waited for a turn of its own, the launch ended where no
+        // record holds a turn, and the turns recorded keep their own endings.
+        if (result is not null && launch.Recorded > 0 && front.Seen.EndedAtATurnsEnd)
         {
             _turns[^1] = _turns[^1] with { Status = result.Status };
         }
@@ -440,17 +481,12 @@ internal sealed class Working
         _inAll = AgentUsageReport.Sum(_inAll, result?.Usage);
         Kept(SideTaskStatus.Open);
 
-        if (!leaving && result?.Status == AgentRunStatus.ContextExhausted)
-        {
-            Compacted();
-        }
-
         return (result, unsaid);
     }
 
     /// <summary>
-    /// Records each turn of the open launch that ended since the last were recorded - one record each, from when its
-    /// first message was given to it, with the model that served it and what it used - and keeps the side-task's record
+    /// Records each turn of the open launch that ended since the last were recorded - one record each, from when it began,
+    /// the agent taking the message it answers, with the model that served it and what it used - and keeps the side-task's record
     /// with them, so each turn reaches its record as it ends, whatever the person types meanwhile.
     /// </summary>
     private void RecordEnded(Launch launch, TurnFront front)
@@ -489,13 +525,7 @@ internal sealed class Working
     {
         _attempts++;
 
-        // Where the next turn begins a conversation of its own - a new launch, another provider's model, a fallback, a
-        // compaction - the conversation so far is carried in its first message, reduced as the engine's compaction
-        // reduces it; where the stored conversation is handed, the client sends none of it. A compaction is carried as the
-        // request's own, so the runner says and counts it as it does a step's.
-        var compacted = _carried;
-        var continuation = compacted is null && _turns.Count > 0 ? Reduced()?.Record : null;
-        _carried = null;
+        var (conversation, compacted, continuation) = GoingOn();
 
         return new AgentStepRequest(
             _layout.Name,
@@ -520,7 +550,7 @@ internal sealed class Working
                 _common.Context.Layout.MainCheckoutRoot,
                 _layout.Directory),
             Output: null,
-            _conversation,
+            conversation,
             new AgentLimits(MaxTurns: null, MaxBudgetUsd: null, MaxDuration: null, StallSeconds: null),
             _common.Mask ?? NoMask.One)
         {
@@ -595,10 +625,16 @@ internal sealed class Working
     /// The stored conversation the side-task's stream names last, where it holds one it can go on with: the session's
     /// id with the client and provider that began it, and only where its <c>conversation.jsonl</c> is there - a client
     /// that renders its conversations, Claude Code among them, names a session of its own that no conversation can be
-    /// handed to. Null where none is.
+    /// handed to. Null where none is, and where the last run that worked outgrew its model's context
+    /// (<see cref="Outgrown"/>): handed again, it would meet the same wall.
     /// </summary>
     private AgentSessionRef? ConversationIn(IReadOnlyList<AgentEvent> stream)
     {
+        if (Outgrown(stream))
+        {
+            return null;
+        }
+
         var last = stream.OfType<SessionStarted>().LastOrDefault(started => started.SessionId is { Length: > 0 });
 
         return last?.SessionId is { } id
@@ -608,22 +644,56 @@ internal sealed class Working
     }
 
     /// <summary>
-    /// The engine's compaction of the conversation the side-task's stream holds: carried in the first message of the next
-    /// turn's new conversation, before the person's next message as its task (<see cref="AgentCompacted.BeforeItsTask"/>),
-    /// and said by the runner as a <see cref="DssHarness.Core.Agents.Compacted"/> event and counted as the client is given it, as a step's answer
-    /// <c>compact</c> is. The person is told where it happens.
+    /// How the side-task's next turn goes on, read from its stream - the one owner of it for a chat's every turn and
+    /// launch and for a side-task opened again, in this process or a later one. Where the last run that worked outgrew
+    /// its model's context (<see cref="Outgrown"/>), no stored conversation is handed and the engine's compaction of the
+    /// conversation is carried in the next conversation's first message, before the person's next message as its task
+    /// (<see cref="AgentCompacted.BeforeItsTask"/>), said by the runner as a <see cref="DssHarness.Core.Agents.Compacted"/>
+    /// event and counted as the client is given it - as a step's answer <c>compact</c> is, and said once. Otherwise the
+    /// stored conversation goes on where there is one, and where the next turn begins a conversation of its own - a new
+    /// launch, another provider's model, a fallback - the conversation so far is carried in its first message, reduced
+    /// as the engine's compaction reduces it; where the stored conversation is handed, the client sends none of it.
     /// </summary>
-    private void Compacted()
+    private (AgentSessionRef? Conversation, AgentCompacted? Compaction, string? Continuation) GoingOn()
     {
-        if (Reduced() is not { } record)
+        var stream = Whole();
+
+        if (Outgrown(stream))
         {
-            return;
+            return (null, Reduced(stream) is { } record ? record with { Why = AgentCompaction.OutgrewItsContext, BeforeItsTask = true } : null, null);
         }
 
-        _carried = record with { Why = AgentCompaction.OutgrewItsContext, BeforeItsTask = true };
-        _conversation = null;
+        return (_conversation, null, _turns.Count > 0 ? Reduced(stream)?.Record : null);
+    }
 
-        _output.Info(SideTaskService.RunCommand, "the conversation outgrew the model's context and was compacted; the next message begins a new conversation from what it holds");
+    /// <summary>
+    /// Whether the conversation outgrew its model's context: the last run of the stream that worked - one that began a
+    /// session - ended <see cref="AgentRunStatus.ContextExhausted"/>. A run given the compaction of it begins a session of
+    /// its own, so once one has worked the conversation goes on as any does; a run that never began one leaves it as it
+    /// stood.
+    /// </summary>
+    /// <param name="stream">The side-task's stream, read as one conversation.</param>
+    private static bool Outgrown(IReadOnlyList<AgentEvent> stream)
+    {
+        var outgrown = false;
+        var worked = false;
+
+        foreach (var one in stream)
+        {
+            switch (one)
+            {
+                case SessionStarted:
+                    worked = true;
+                    break;
+
+                case RunFinished finished when worked:
+                    outgrown = finished.Status == AgentRunStatus.ContextExhausted;
+                    worked = false;
+                    break;
+            }
+        }
+
+        return outgrown;
     }
 
     /// <summary>
@@ -631,10 +701,9 @@ internal sealed class Working
     /// first message whole, every later message of the person's whole, the last iterations word for word and every
     /// earlier one shortened - null where nothing streamed yet.
     /// </summary>
-    private AgentCompacted? Reduced()
+    /// <param name="stream">The side-task's stream, read as one conversation.</param>
+    private AgentCompacted? Reduced(IReadOnlyList<AgentEvent> stream)
     {
-        var stream = Whole();
-
         return stream.Count == 0
             ? null
             : AgentCompaction.Reduce(
@@ -648,7 +717,9 @@ internal sealed class Working
     /// the first left out, so what reads the newest attempt of a step reads the whole side-task - its turns numbered on
     /// across its runs, each run's own count going on from the last turn of the run before it, as an attempt's are - and
     /// each later turn's first message the person's alone, as a chat's later message is, never the conversation it
-    /// carried before it.
+    /// carried before it. A message a chat's launch was given and never answered is read where the launch after it was
+    /// given it again, never twice: its run's end says how many it settled (<see cref="RunFinished.MessagesAnswered"/>),
+    /// the conversation's first message kept whatever it says.
     /// </summary>
     private IReadOnlyList<AgentEvent> Whole()
     {
@@ -658,16 +729,34 @@ internal sealed class Working
         var before = 0;
         var last = 0;
 
+        // Where each of the person's messages of the run read so far stands in the conversation, in the order the run was
+        // given them; null for the conversation's first message, which stays.
+        var given = new List<int?>();
+
         foreach (var one in _stream.Events())
         {
             switch (one)
             {
                 case RunStarted when started:
                     before = last;
+                    given.Clear();
                     continue;
 
                 case RunStarted:
                     started = true;
+                    break;
+
+                case RunFinished { MessagesAnswered: { } answered }:
+                    foreach (var at in given.Skip(answered).OfType<int>().Reverse())
+                    {
+                        whole.RemoveAt(at);
+                    }
+
+                    given.Clear();
+                    break;
+
+                case MessageSent { Which: AgentMessageKind.ChatMessage }:
+                    given.Add(whole.Count);
                     break;
 
                 case TurnStarted turn:
@@ -682,10 +771,12 @@ internal sealed class Working
                 // Each later turn's first message is the person's: what it carried of the conversation before it is
                 // that conversation's, which the stream holds itself, so it stands as the person's message alone.
                 case MessageSent { Which: AgentMessageKind.FirstPrompt } sent when asked:
+                    given.Add(whole.Count);
                     whole.Add(sent with { Text = AgentPromptParts.TaskOf(sent.Text), Which = AgentMessageKind.ChatMessage });
                     continue;
 
                 case MessageSent { Which: AgentMessageKind.FirstPrompt }:
+                    given.Add(null);
                     asked = true;
                     break;
             }
@@ -907,7 +998,12 @@ internal sealed class Working
                     break;
 
                 case MessageSent sent when sent.Which is AgentMessageKind.FirstPrompt or AgentMessageKind.ChatMessage:
-                    Seen.OneSent();
+                    // A line given again, which the launch before never answered, is in the transcript once already.
+                    if (!Seen.OneGiven())
+                    {
+                        break;
+                    }
+
                     Write(string.Empty);
                     Write("person:");
                     foreach (var line in Lines(AgentPromptParts.TaskOf(sent.Text)))
@@ -915,6 +1011,10 @@ internal sealed class Working
                         Write($"    {line}");
                     }
 
+                    break;
+
+                case TurnStarted:
+                    Seen.TurnBegan();
                     break;
 
                 case ToolCallStarted:
@@ -939,7 +1039,8 @@ internal sealed class Working
                     break;
 
                 case Compacted compacted:
-                    Said("the conversation was compacted");
+                    // The one place a compaction is said: as the run given it begins.
+                    Said($"compacted: {compacted.Why}; this turn begins a new conversation from what it holds");
                     Write($"    compacted: {compacted.Why}");
                     break;
 
@@ -988,10 +1089,10 @@ internal sealed class Working
     /// <summary>
     /// What the turns were seen to do, filled from the run's drain and taken whole by the chat: each turn's denials, the
     /// models that served it with what each used and its calls - for a run that is one turn of the side-task's - and,
-    /// for a launch held open for a chat, each turn of the agent's as it ended, from when its first message was given -
-    /// every touch under one lock, and what is taken handed across as copies.
+    /// for a launch held open for a chat, each turn of the agent's as it ended, from when it began, and how many of the
+    /// person's messages the launch was given - every touch under one lock, and what is taken handed across as copies.
     /// </summary>
-    /// <param name="clock">Tells when a message was given and a turn ended.</param>
+    /// <param name="clock">Tells when a turn began and ended.</param>
     internal sealed class SeenTurns(TimeProvider clock)
     {
         private readonly Lock _gate = new();
@@ -1000,9 +1101,11 @@ internal sealed class Working
         private readonly List<AgentModelUsage> _used = [];
         private readonly List<EndedTurn> _ended = [];
         private TaskCompletionSource _turnEnded = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private DateTimeOffset? _since;
-        private bool _givenSince;
+        private DateTimeOffset? _began;
         private int _calls;
+        private int _given;
+        private int _givenSinceATurnEnded;
+        private int _alreadyWritten;
 
         /// <summary>Completes when a turn ended that is not taken yet (<see cref="TakeEnded"/>).</summary>
         public Task TurnEnded
@@ -1016,14 +1119,29 @@ internal sealed class Working
             }
         }
 
-        /// <summary>Whether a message was given to the open launch that no turn has ended yet.</summary>
-        public bool TurnUnderWay
+        /// <summary>
+        /// Whether the launch's last turn ended with it: no turn of the agent's under way - one began and has not ended - and
+        /// no message of the person's given since the last turn ended, which would have waited for a turn of its own.
+        /// </summary>
+        public bool EndedAtATurnsEnd
         {
             get
             {
                 lock (_gate)
                 {
-                    return _since is not null;
+                    return _began is null && _givenSinceATurnEnded == 0;
+                }
+            }
+        }
+
+        /// <summary>How many of the person's messages the launch begun last was given, each as it was written to it.</summary>
+        public int Given
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _given;
                 }
             }
         }
@@ -1058,33 +1176,48 @@ internal sealed class Working
             }
         }
 
-        /// <summary>A launch begins: no turn is under way, and nothing an earlier launch left is its.</summary>
-        public void LaunchBegins()
+        /// <summary>
+        /// A launch - or a run of requests going on from one - begins: no turn is under way, nothing an earlier launch left
+        /// is its, and the first <paramref name="alreadyWritten"/> of the person's messages it is given are ones the
+        /// transcript holds already, given again after the launch before it never answered them.
+        /// </summary>
+        /// <param name="alreadyWritten">How many of its first messages the transcript holds already.</param>
+        public void LaunchBegins(int alreadyWritten)
         {
             lock (_gate)
             {
-                _since = null;
-                _givenSince = false;
+                _began = null;
+                _given = 0;
+                _givenSinceATurnEnded = 0;
+                _alreadyWritten = alreadyWritten;
                 TakeEndedLocked();
             }
         }
 
-        /// <summary>
-        /// One more of the person's messages was given to the agent: the turn it begins starts now, where none is under
-        /// way; one given while a turn runs is taken when that turn ends, and the next turn starts then.
-        /// </summary>
-        public void OneSent()
+        /// <summary>One more of the person's messages was given to the agent: whether the transcript is to write it - not one it holds already.</summary>
+        public bool OneGiven()
         {
             lock (_gate)
             {
-                if (_since is null)
+                _given++;
+                _givenSinceATurnEnded++;
+
+                if (_alreadyWritten > 0)
                 {
-                    _since = clock.GetUtcNow();
+                    _alreadyWritten--;
+                    return false;
                 }
-                else
-                {
-                    _givenSince = true;
-                }
+
+                return true;
+            }
+        }
+
+        /// <summary>A turn of the agent's began: it took the message it answers.</summary>
+        public void TurnBegan()
+        {
+            lock (_gate)
+            {
+                _began = clock.GetUtcNow();
             }
         }
 
@@ -1114,10 +1247,9 @@ internal sealed class Working
                 _served.Add(new AgentServedModel(model, _served.Count + 1));
                 _used.Add(new AgentModelUsage(model, usage));
 
-                var now = clock.GetUtcNow();
-                _ended.Add(new EndedTurn(_since ?? now, [new AgentServedModel(model, 1)], new AgentUsageReport(usage, [new AgentModelUsage(model, usage)])));
-                _since = _givenSince ? now : null;
-                _givenSince = false;
+                _ended.Add(new EndedTurn(_began ?? clock.GetUtcNow(), [new AgentServedModel(model, 1)], new AgentUsageReport(usage, [new AgentModelUsage(model, usage)])));
+                _began = null;
+                _givenSinceATurnEnded = 0;
                 _turnEnded.TrySetResult();
             }
         }
@@ -1139,7 +1271,7 @@ internal sealed class Working
     }
 
     /// <summary>One turn of the agent's that ended inside a launch held open for a chat.</summary>
-    /// <param name="Began">When its first message was given to the agent - or the turn before it ended, where it was given while that one ran.</param>
+    /// <param name="Began">When it began: when the agent took the message it answers.</param>
     /// <param name="Served">The model that served it.</param>
     /// <param name="Usage">What it used, with no cost: a launch's cost is the launch's.</param>
     internal sealed record EndedTurn(DateTimeOffset Began, IReadOnlyList<AgentServedModel> Served, AgentUsageReport Usage);

@@ -723,6 +723,69 @@ public sealed class AgentFallbackTests : IDisposable
     }
 
     /// <summary>
+    /// A chat's run is never moved inside the runner: a launch begun there would answer the chat's first message again,
+    /// on the channel the ended one had read the person's lines from. The walk ends with the launch's ending, says the
+    /// move as the chat's own going on, and hands back the order the chat goes on by - the entry it would move to, and
+    /// each after it marked as the walk would pass it over.
+    /// </summary>
+    [Fact]
+    public async Task AChatsRun_IsNeverMovedInsideTheRunner_TheMoveHandedBack()
+    {
+        var limited = new Scripted("one") { Script = (run, events, _) => AtLimit(run, events, "WORK_KEY") };
+        var next = new Scripted("glm");
+        var runner = new AgentRunner([limited, next], _harness.FileSystem, Elevation.User, TimeProvider.System);
+        var seen = new Collecting();
+
+        var result = await runner.RunAsync(
+            Step([Entry("claude-fable-5-1", "anthropic", "one"), Entry("glm-5.3", "zai", "glm", key: null), Entry("claude-opus-5-5", "anthropic", "one")])
+                with { Chat = true, Messages = new AgentMessages() },
+            seen,
+            Token);
+
+        Assert.Equal(AgentRunStatus.RateLimited, result.Status);
+        Assert.Null(next.Given);
+        Assert.Equal(
+            [("glm-5.3", true, (string?)null), ("claude-opus-5-5", false, $"the limit covers it until {StillLifts:u}")],
+            result.GoesOnBy!.Select(entry => (entry.Model, entry.Usable, entry.WhyNot)));
+
+        var moved = Assert.Single(seen.Seen.OfType<FallbackStarted>());
+        Assert.Equal(("claude-fable-5-1", "glm-5.3", "limit", AgentFallback.ChatGoesOn), (moved.FromModel, moved.ToModel, moved.Why, moved.How));
+    }
+
+    /// <summary>
+    /// A chat's run is one launch held open between the person's messages, which only a client that renders its
+    /// conversations holds: one that stores them, and takes each message as a run of its own, never begins one - so a
+    /// chat's run is always counted by a client that says which of its messages it answered.
+    /// </summary>
+    [Fact]
+    public async Task AChatsRun_OnAClientThatStoresItsConversations_NeverBegins()
+    {
+        var storing = new Scripted("glm")
+        {
+            Capabilities = new(
+                Streaming: true,
+                Thinking: true,
+                WritableWhileWorking: true,
+                AgentConversationHandling.Handed,
+                SchemaEnforcedOutput: false,
+                AgentToolsOwner.Harness,
+                AgentToolsOwner.Harness,
+                ReportsCost: false,
+                ["low", "high"],
+                ProviderType: "none",
+                ToldModelBy: "the test"),
+        };
+        var runner = new AgentRunner([storing], _harness.FileSystem, Elevation.User, TimeProvider.System);
+
+        var result = await runner.RunAsync(Step([Entry("glm-5.3", "zai", "glm", key: null)]) with { Chat = true, Messages = new AgentMessages() }, new Collecting(), Token);
+
+        Assert.Equal(
+            (AgentRunStatus.NotStarted, (AgentNotStartedBecause?)AgentNotStartedBecause.ConfigurationWrong, "client 'glm' was not started: a chat's run is one launch held open between the person's messages, and the client 'glm' holds none open: it takes each message as a run of its own"),
+            (result.Status, result.NotStartedBecause, result.Error));
+        Assert.Null(storing.Given);
+    }
+
+    /// <summary>
     /// The session id the engine made before the prompt was written is the first launch's alone: a retry on the model,
     /// and the move to the next, each begin a session of their own, which their clients name.
     /// </summary>

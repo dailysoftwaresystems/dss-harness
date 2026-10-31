@@ -39,6 +39,12 @@ public static class AgentFallback
     public const string NewConversation = "a new conversation with the step's prompt";
 
     /// <summary>
+    /// How a chat's move is told: the chat's own next launch - or request, on a client that stores its conversations -
+    /// going on from the conversation so far with the lines no turn answered (<see cref="AgentRunResult.GoesOnBy"/>).
+    /// </summary>
+    public const string ChatGoesOn = "the chat going on from the conversation so far";
+
+    /// <summary>
     /// Whether <paramref name="limit"/> - met while the step was on <paramref name="limitClient"/> - covers
     /// <paramref name="entry"/>: a limit of a model on a key covers that model on that key alone; a limit of a key
     /// covers every entry on that key; a limit of a client's login covers every entry on that login.

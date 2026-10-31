@@ -280,6 +280,17 @@ public sealed record AgentRunResult(
     public int? MessagesAnswered { get; init; }
 
     /// <summary>
+    /// Where a chat's run ended on what moves a step on to its next entry - a decline, a limit, a refused key, a failure -
+    /// the order the chat goes on by: the entry the walk would have moved to first, and each entry after it marked as the
+    /// walk would pass it over, its key refused or a limit the run met covering it. A chat's run is never moved inside the
+    /// runner, for a launch begun there would answer the run's first message again and lose every line its channel had
+    /// given the one before; the chat goes on there itself, from the conversation so far with the lines no turn answered.
+    /// Null for every other run, and where no entry is left. Never written to a record: its entries hold their keys.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<AgentRunEntry>? GoesOnBy { get; init; }
+
+    /// <summary>
     /// The account's limit, where the run ended on one (<see cref="AgentRunStatus.RateLimited"/>): whether its balance or
     /// included usage is spent, and when it lifts where the provider says. Null for every other ending.
     /// </summary>

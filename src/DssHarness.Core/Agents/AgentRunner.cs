@@ -144,7 +144,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                         ? worked
                         : worked.FailedFor(mask.Redact($"The step's stored stream '{stream.FilePath}' could not be written, so the run was stopped: {lost.Message}"));
 
-                    return new RunFinished(result.Status, result.Error);
+                    return new RunFinished(result.Status, result.Error) { MessagesAnswered = result.MessagesAnswered };
                 }).ConfigureAwait(false);
 
                 // A stop the record's loss raised is the runner's own doing and not the client's failure; anything else
@@ -390,9 +390,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 null);
         }
 
-        if (Priceless(step, client, step.Entries) is { } priceless)
+        if ((Priceless(step, client, step.Entries) ?? NotForAChat(step, client)) is { } wrong)
         {
-            return (AgentEndings.NotStarted(client.Name, AgentNotStartedBecause.ConfigurationWrong, priceless, step.Model, mask), null);
+            return (AgentEndings.NotStarted(client.Name, AgentNotStartedBecause.ConfigurationWrong, wrong, step.Model, mask), null);
         }
 
         var messages = step.Messages ?? new AgentMessages();
@@ -428,7 +428,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// client already taken inside the client's own run. Where no entry is left the ending stands; a move to another
     /// client begins a new conversation with the step's prompt, and a limit the run met is remembered until its end. An
     /// entry the step moved to that could not be started is passed over, said so, as one the machine cannot use is: the
-    /// step has done work by then, and the ending that moved it stands where no entry is left.
+    /// step has done work by then, and the ending that moved it stands where no entry is left. A chat's run is never
+    /// moved: the move is said, and handed back with the order the chat goes on by (<see cref="AgentRunResult.GoesOnBy"/>).
     /// </summary>
     /// <param name="order">The step's whole order, the serving entry first.</param>
     /// <param name="step">The step.</param>
@@ -510,9 +511,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 {
                     result = AgentEndings.NotStarted(entry.Client, AgentNotStartedBecause.ConfigurationWrong, $"No agent client named '{entry.Client}' is registered.", entry.Model, mask);
                 }
-                else if (Priceless(step, client, entry.Entries) is { } priceless)
+                else if ((Priceless(step, client, entry.Entries) ?? NotForAChat(step, client)) is { } wrong)
                 {
-                    result = AgentEndings.NotStarted(entry.Client, AgentNotStartedBecause.ConfigurationWrong, priceless, entry.Model, mask);
+                    result = AgentEndings.NotStarted(entry.Client, AgentNotStartedBecause.ConfigurationWrong, wrong, entry.Model, mask);
                 }
                 else
                 {
@@ -574,7 +575,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                         break;
                     }
 
-                    at = await MovedAsync(watching, onward, order, brought.From, brought.Why, totals.Turns).ConfigureAwait(false);
+                    at = await MovedAsync(watching, onward, order, brought.From, brought.Why, totals.Turns, AgentFallback.NewConversation).ConfigureAwait(false);
                     continue;
                 }
 
@@ -670,11 +671,22 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
                 var why = decline ? $"declined ({result.DeclinedFor ?? "the request"})"
                     : atLimit ? "limit"
-                    : agentFailed ? $"failed past its {(step.Retries ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture)} retries"
+                    : agentFailed ? step.Retries is > 0 and var tries ? $"failed past its {tries.ToString(System.Globalization.CultureInfo.InvariantCulture)} retries" : "failed, with no retries"
                     : "key refused";
 
+                if (step.Chat)
+                {
+                    // A chat's run is one launch: one begun here would answer the run's first message again, on the
+                    // channel the ended one had taken lines from. The move is said, and handed back for the chat to make
+                    // itself, from the conversation so far - the entry moved to, and each after it as this walk would
+                    // take it.
+                    var onward = await MovedAsync(watching, next, order, from, why, totals.Turns, AgentFallback.ChatGoesOn).ConfigureAwait(false);
+
+                    return (totals.Finished(step) with { GoesOnBy = [order[onward], .. LaterFor(step, order, onward, refused, limits, _clock.GetUtcNow())] }, null);
+                }
+
                 moved = (from, why);
-                at = await MovedAsync(watching, next, order, from, why, totals.Turns).ConfigureAwait(false);
+                at = await MovedAsync(watching, next, order, from, why, totals.Turns, AgentFallback.NewConversation).ConfigureAwait(false);
             }
 
             return (totals.Finished(step), null);
@@ -697,8 +709,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     }
 
     /// <summary>
-    /// Says the walk's move to <paramref name="next"/> - the entries passed over to reach it, then the move itself, a new
-    /// conversation with the step's prompt - and answers where the walk stands now.
+    /// Says the walk's move to <paramref name="next"/> - the entries passed over to reach it, then the move itself, made
+    /// as <paramref name="how"/> says - and answers where the walk stands now.
     /// </summary>
     /// <param name="watching">Where the walk's events go.</param>
     /// <param name="next">The move the fallback's rules made.</param>
@@ -706,7 +718,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <param name="from">The entry the step moves from: the one that served it last.</param>
     /// <param name="why">Why it moves, as the record says it.</param>
     /// <param name="turn">The turns the step has taken.</param>
-    private static async Task<int> MovedAsync(Watching watching, (int At, IReadOnlyList<(string Model, string Why)> PassedOver) next, IReadOnlyList<AgentRunEntry> order, AgentRunEntry from, string why, int turn)
+    /// <param name="how">How the move goes on: a new conversation with the step's prompt, or a chat's own going on (<see cref="AgentFallback.ChatGoesOn"/>).</param>
+    private static async Task<int> MovedAsync(Watching watching, (int At, IReadOnlyList<(string Model, string Why)> PassedOver) next, IReadOnlyList<AgentRunEntry> order, AgentRunEntry from, string why, int turn, string how)
     {
         foreach (var (model, passed) in next.PassedOver)
         {
@@ -723,7 +736,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             to.Provider,
             to.Client,
             why,
-            AgentFallback.NewConversation,
+            how,
             turn,
             ThrewAway: false,
             CreditAsked: false,
@@ -1044,6 +1057,19 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             }
         }
     }
+
+    /// <summary>
+    /// Why a chat's run may not be worked by <paramref name="client"/>: a chat's run is one launch held open between the
+    /// person's messages, settling them in order and counting what it answered (<see cref="AgentRunResult.MessagesAnswered"/>),
+    /// which only a client that renders its conversations holds - one that stores them takes each message as a run of its
+    /// own. Null for every other run, and where the client holds one open.
+    /// </summary>
+    /// <param name="step">The step, which says whether it is a chat's.</param>
+    /// <param name="client">The client that would work it.</param>
+    private static string? NotForAChat(AgentStepRequest step, IAgentClient client)
+        => step.Chat && client.Capabilities.GoesOnWith != AgentConversationHandling.Rendered
+            ? $"a chat's run is one launch held open between the person's messages, and the client '{client.Name}' holds none open: it takes each message as a run of its own"
+            : null;
 
     /// <summary>The client named, or null where none is registered under the name.</summary>
     /// <param name="client">The client's key under <c>agentClients</c>.</param>

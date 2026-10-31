@@ -567,7 +567,8 @@ public sealed class AgentStreamTests
 
     /// <summary>
     /// A value of <paramref name="type"/>, built from its widest constructor and its settable members, every member that
-    /// may be absent filled or left null as <paramref name="fill"/> says.
+    /// may be absent filled or left null as <paramref name="fill"/> says - but a member never written, which holds what
+    /// is handed across a call alone and so is no part of what reads back.
     /// </summary>
     private static object? Sample(Type type, Fill fill)
     {
@@ -636,7 +637,9 @@ public sealed class AgentStreamTests
             .ToArray();
         var made = constructor.Invoke(arguments);
 
-        foreach (var property in type.GetProperties().Where(property => property.SetMethod is { IsPublic: true } && !constructor.GetParameters().Any(parameter => string.Equals(parameter.Name, property.Name, StringComparison.Ordinal))))
+        foreach (var property in type.GetProperties().Where(property => property.SetMethod is { IsPublic: true }
+            && property.GetCustomAttribute<JsonIgnoreAttribute>() is not { Condition: JsonIgnoreCondition.Always }
+            && !constructor.GetParameters().Any(parameter => string.Equals(parameter.Name, property.Name, StringComparison.Ordinal))))
         {
             property.SetValue(made, Absent(nullability.Create(property).WriteState, property.PropertyType, fill) ? null : Sample(property.PropertyType, fill));
         }

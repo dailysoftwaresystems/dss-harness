@@ -225,7 +225,7 @@ public sealed class SideTaskService(
 
         try
         {
-            return await StartAsync(call, stop.Token).ConfigureAwait(false);
+            return await StartAsync(call, stop.Token, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested)
         {
@@ -234,7 +234,10 @@ public sealed class SideTaskService(
     }
 
     /// <summary>Begins the side-task <paramref name="call"/> asks for, or opens it again, until <paramref name="cancellationToken"/> stops it.</summary>
-    private async Task<CommandOutcome> StartAsync(SideTaskCall call, CancellationToken cancellationToken)
+    /// <param name="call">What the command line said and how its chat is driven.</param>
+    /// <param name="cancellationToken">The side-task's stop: the command's, and the interrupts where no turn takes them.</param>
+    /// <param name="command">The command's own stop, which a launch held open for a chat runs under.</param>
+    private async Task<CommandOutcome> StartAsync(SideTaskCall call, CancellationToken cancellationToken, CancellationToken command)
     {
         if (call.Resume is not null && call.Name is not null)
         {
@@ -328,8 +331,8 @@ public sealed class SideTaskService(
         var asked = new SideTaskRunsOn(call.Tier, call.Model, effort, effortByModel, call.Client);
 
         return call.Resume is { } again
-            ? await AgainAsync(call, common, owner, SideTaskLayout.Of(context.Layout, again), asked, prompt?.Text, cancellationToken).ConfigureAwait(false)
-            : await NewAsync(call, common, owner, name, derived: call.Name is null, asked, prompt?.Text, cancellationToken).ConfigureAwait(false);
+            ? await AgainAsync(call, common, owner, SideTaskLayout.Of(context.Layout, again), asked, prompt?.Text, cancellationToken, command).ConfigureAwait(false)
+            : await NewAsync(call, common, owner, name, derived: call.Name is null, asked, prompt?.Text, cancellationToken, command).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -367,7 +370,7 @@ public sealed class SideTaskService(
     /// A new side-task: set up from what the person asked, then claimed with its first record written inside the claim,
     /// and worked; released however it ends.
     /// </summary>
-    private async Task<CommandOutcome> NewAsync(SideTaskCall call, SideTaskCommon common, SideTaskOwner owner, string name, bool derived, SideTaskRunsOn asked, string? prompt, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> NewAsync(SideTaskCall call, SideTaskCommon common, SideTaskOwner owner, string name, bool derived, SideTaskRunsOn asked, string? prompt, CancellationToken cancellationToken, CancellationToken command)
     {
         var (setUp, refused) = await SetUpAsync(common, asked, name, "--effort", cancellationToken).ConfigureAwait(false);
 
@@ -397,14 +400,14 @@ public sealed class SideTaskService(
                 : refusal;
         }
 
-        return await WorkAsync(call, common, owner, layout, record, setUp, prompt, cancellationToken).ConfigureAwait(false);
+        return await WorkAsync(call, common, owner, layout, record, setUp, prompt, cancellationToken, command).ConfigureAwait(false);
     }
 
     /// <summary>
     /// A side-task opened again: claimed with its record read inside the claim, then set up from what it ran on as the
     /// person last set it - where the command line names no model and no tier - and worked; released however it ends.
     /// </summary>
-    private async Task<CommandOutcome> AgainAsync(SideTaskCall call, SideTaskCommon common, SideTaskOwner owner, SideTaskLayout layout, SideTaskRunsOn asked, string? prompt, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> AgainAsync(SideTaskCall call, SideTaskCommon common, SideTaskOwner owner, SideTaskLayout layout, SideTaskRunsOn asked, string? prompt, CancellationToken cancellationToken, CancellationToken command)
     {
         SideTaskRecord record;
 
@@ -442,7 +445,7 @@ public sealed class SideTaskService(
             return Told(setting.Refused!, call.Json, layout);
         }
 
-        return await WorkAsync(call, common, owner, layout, record, setUp, prompt, cancellationToken).ConfigureAwait(false);
+        return await WorkAsync(call, common, owner, layout, record, setUp, prompt, cancellationToken, command).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -469,7 +472,7 @@ public sealed class SideTaskService(
     }
 
     /// <summary>One side-task's work, its owner released however it ends.</summary>
-    private async Task<CommandOutcome> WorkAsync(SideTaskCall call, SideTaskCommon common, SideTaskOwner owner, SideTaskLayout layout, SideTaskRecord record, SideTaskSetUp setUp, string? prompt, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> WorkAsync(SideTaskCall call, SideTaskCommon common, SideTaskOwner owner, SideTaskLayout layout, SideTaskRecord record, SideTaskSetUp setUp, string? prompt, CancellationToken cancellationToken, CancellationToken command)
     {
         try
         {
@@ -490,7 +493,7 @@ public sealed class SideTaskService(
                 spend.RecordingIn(common.Context.Layout));
 
             return prompt is null
-                ? await working.ChatAsync(cancellationToken).ConfigureAwait(false)
+                ? await working.ChatAsync(cancellationToken, command).ConfigureAwait(false)
                 : await working.OneShotAsync(prompt, call.Json, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)

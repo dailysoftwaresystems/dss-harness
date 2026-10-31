@@ -170,7 +170,9 @@ public sealed class ClaudeCodeClient(
             {
                 totals.Refused.Add(refused.Name);
 
-                if (entry + 1 < keys.Count && !totals.Worked)
+                // A chat's run is one launch: a second would answer the chat's first message again, on the channel the
+                // first had read the person's lines from. The refused key ends it, and the walk moves the chat on.
+                if (entry + 1 < keys.Count && !totals.Worked && !run.Chat)
                 {
                     await events.EmitAsync(FallbackStarted.KeyRefused(
                         model, run.Provider ?? string.Empty, ClientName, refused.Name, keys[entry + 1]!.Name,

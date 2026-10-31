@@ -62,12 +62,13 @@ public sealed class SideTaskInterrupts
     public Task Ended => _ended.Task;
 
     /// <summary>One interrupt: the first cuts the agent's current turn, a second ends the chat.</summary>
-    /// <returns>How many interrupts the side-task has been given, this one counted.</returns>
-    public int Pressed()
+    /// <returns>How many interrupts the side-task has been given, this one counted, and whether a turn took this one.</returns>
+    public SideTaskPress Pressed()
     {
         lock (_gate)
         {
             var count = ++_pressed;
+            var turning = _pressedNow is not null;
 
             _pressedNow?.Invoke(count);
 
@@ -78,7 +79,7 @@ public sealed class SideTaskInterrupts
 
             StopWhereAskedLocked();
 
-            return count;
+            return new SideTaskPress(count, turning);
         }
     }
 
@@ -139,13 +140,18 @@ public sealed class SideTaskInterrupts
     }
 }
 
+/// <summary>One interrupt of a side-task's, as its count took it.</summary>
+/// <param name="Count">Its place in the count.</param>
+/// <param name="Turning">Whether a turn of the agent's - or a launch held open for a chat - was there to take it; false where none was, the side-task being set up or between its turns.</param>
+public readonly record struct SideTaskPress(int Count, bool Turning);
+
 /// <summary>
 /// The terminal of one side-task: how the interrupts a terminal sends reach it. Ctrl+C - and off Windows SIGTERM and a
 /// hang-up - are each taken as one interrupt of the side-task (<see cref="SideTaskInterrupts"/>), through the one
 /// registration of the process's signals (<see cref="TerminalSignals"/>), and never end the process: the command line's
 /// own handling of them is off for <c>run-side-task</c> (<see cref="PointOfNoReturn.ChatsWithAPerson"/>). Each is said by
-/// its place in the count; a terminal that hung up says nothing more, and its lines are dropped where it can no longer
-/// take them - what happened is in the side-task's records.
+/// its place in the count and by whether a turn was there to cut; a terminal that hung up says nothing more, and its
+/// lines are dropped where it can no longer take them - what happened is in the side-task's records.
 /// </summary>
 /// <param name="output">Says what each interrupt does, as a line of <c>run-side-task</c>.</param>
 /// <param name="chat">Whether the side-task is a chat; false for one shot.</param>
@@ -166,24 +172,32 @@ public sealed class SideTaskTerminal(IHarnessOutput output, bool chat)
     /// <summary>What the first interrupt of one shot is said as.</summary>
     public const string OneShotCut = "interrupted: the turn is cut where it stands, and the side-task ends with what it said in its records";
 
+    /// <summary>What the first interrupt of a chat is said as where no turn of the agent's runs to cut.</summary>
+    public const string ChatIdle = "interrupted: no turn of the agent's runs to cut; a second interrupt ends the chat";
+
+    /// <summary>What the first interrupt of one shot is said as where no turn runs to cut: it is set up, or its turn has ended.</summary>
+    public const string OneShotStopped = "interrupted: no turn runs to cut, and the side-task stops where it stands";
+
     /// <summary>Takes the process's interrupts for the side-task until disposed.</summary>
     public IDisposable TakeSignals() => TerminalSignals.Take(Interrupted, HungUp);
 
-    /// <summary>One interrupt of the terminal: counted for the side-task, and said by its place in the count.</summary>
+    /// <summary>One interrupt of the terminal: counted for the side-task, and said by its place in the count and by whether a turn took it.</summary>
     internal void Interrupted()
     {
-        var count = Interrupts.Pressed();
+        var press = Interrupts.Pressed();
 
         if (_hungUp)
         {
             return;
         }
 
-        var said = (chat, count) switch
+        var said = (chat, press.Count, press.Turning) switch
         {
-            (true, 1) => ChatCut,
-            (true, 2) => ChatEnds,
-            (false, 1) => OneShotCut,
+            (true, 1, true) => ChatCut,
+            (true, 1, false) => ChatIdle,
+            (true, 2, _) => ChatEnds,
+            (false, 1, true) => OneShotCut,
+            (false, 1, false) => OneShotStopped,
             _ => null,
         };
 

@@ -2706,7 +2706,8 @@ that step's own builder (`ReasonLaunch`): its order, the Claude Code directories
 from, the mask its records and answers are held to - every secret the configuration appoints that the
 slot answers, each provider's keys and each client's token, beside every form of each search key -
 and the Claude Code it starts, made ready as a step's is and refused on the finder's own code and
-words (12 the configuration, 13 an update refused, 14 the program missing). What differs is what it is given: its
+words (12 the configuration, 13 an update refused, 14 the program missing, 21 the install of Claude
+Code timed out or could not reach the registry). What differs is what it is given: its
 ground (`SideTaskPolicy`) - no restriction list, no allow list of pages, all four capabilities, the
 main checkout the writable root, the worktree rules and the protected paths off, this tool's own
 verbs open to it as the person's own session's are - with the built-in refusals kept (root
@@ -2743,15 +2744,31 @@ have been dropped, each turn of the launch written to `task.json` as it ends, an
 by itself recorded and the lines it never answered sent again to a new one - counted by the client's
 own count of the messages its turns answered (`AgentRunResult.MessagesAnswered`), never by what was
 written, so a line taken by a turn that ended without answering is sent again. Such a launch is never
-tried again by the runner (`Retries` 0): a try would begin again from its first message and lose
-every line it had taken, so a failed turn ends it, and the chat goes on in a new launch from the
-conversation so far; a fallback move of the runner's inside it still begins from the launch's first
-message. One request per message where the client stores them, each going on with the stored
-one. A chat that outgrows the model's context is compacted as a step's conversation is - the whole
-conversation since the last compaction, every launch of it read as one, the person's later messages
-as they said them - and says so, the record carried as the next request's `Compaction` before the person's
-message (`AgentCompacted.BeforeItsTask`), so the runner says it in the side-task's stream as `Compacted` and counts
-it as it does a step's. The side-task's name is the person's (`--name`) or the date and
+tried again nor moved by the runner: a try or a move begun inside the walk would begin again from its
+first message and lose every line it had taken. Its retries are 0, so a failed turn ends it; and where
+the walk would move on - a decline, a limit, a refused key, a failure - it ends the run on that ending,
+says the move (`FallbackStarted`, `AgentFallback.ChatGoesOn`) and hands back the order it would have
+gone on by (`AgentRunResult.GoesOnBy`: the entry `AgentFallback.Next` finds, and each after it as the
+walk would take it). The chat goes on in a new launch from the conversation so far with the lines no
+turn answered - on the entry handed back where there is one, as one request per line where that
+entry's client stores its conversations. A chat's run is begun only on a client that renders its
+conversations - the runner refuses it, never started, on any other - and Claude Code moves to no
+other key inside it, so `MessagesAnswered` is always its one launch's own count; the run's end says
+it (`RunFinished.MessagesAnswered`), and a line given to a launch that never answered it is read once
+in the conversation that goes on and written once in `transcript.md`. Whether a turn of the launch is
+under way is the client's own turns' (`TurnStarted`, `TurnFinished`), however many lines were written
+to it meanwhile: the launch's ending is its last turn's only where it ended at that turn's end. One
+request per message where the client stores them, each going on with the stored
+one. A side-task whose last run that worked - one that began a session - ended `ContextExhausted`, a
+chat's or a one shot's, has outgrown its context (`Working.Outgrown`, read from its stream): it keeps
+no stored conversation to go on with, in `task.json` or in this process, for handed again it would
+meet the same wall, and its next request - the chat's next message or launch, or a `--resume` in a
+later process, by the one owner of how the next turn goes on (`Working.GoingOn`) - carries the
+engine's compaction of the conversation as a step's is made - the whole conversation since the last
+compaction, every launch of it read as one, the person's later messages as they said them - as the
+request's `Compaction` before the person's message (`AgentCompacted.BeforeItsTask`), so the runner
+says it in the side-task's stream as `Compacted` and counts it as it does a step's; the person is
+told once, as the run given it begins, and the turn that outgrew it says only how it ended. The side-task's name is the person's (`--name`) or the date and
 time it began - with the first words of its message in one shot; a chat is claimed, and named, before
 its first message is typed, so by the time alone - a suffix freeing it where another began in the
 same second; its owner (`SideTaskOwner`, the owner file beside its records) is claimed before
@@ -2773,12 +2790,15 @@ the transcript as a person reads it `transcript.md`, `denials.jsonl` and `web.js
 the stored conversation under `sessions/` where its client stores one - named on every exit,
 in text and in `--json`, or said to be none where the command stopped before any were written.
 Its exits are its turn's (`AgentRunResult.ToOutcome`, the one mapping) in one shot - 20 failed, 21
-cut short, 130 interrupted, 12, 13 or 14 where it could not start - and a chat's are 0 however the
+cut short, 130 interrupted - and, in either, 12, 13, 14 or 21 where it could not start; a chat's are 0 however the
 person leaves it once it has begun, 130 where two interrupts stop it while it is still being set up
 or opened again. Its interrupts are its own
 (`SideTaskTerminal` over `TerminalSignals`, the one registration of Ctrl+C, SIGTERM and a hang-up,
 with `PointOfNoReturn.ChatsWithAPerson` turning the command line's own handling off for it): the
-first cuts the agent's turn, the second ends the chat; and the side-task's own stop, linked to the
+first cuts the agent's turn, the second ends the chat as `/exit` does - a launch held open runs under
+the command's own stop, never the side-task's, so the second cuts its turn, ends its messages and
+waits for its result, what it used, cost and spent kept - each said by whether a turn was wired to
+take it (`SideTaskPress.Turning`); and the side-task's own stop, linked to the
 command's, is bound to them (`SideTaskInterrupts.StopsOn`) for wherever no turn runs - being set up
 or opened again, its Claude Code or another model made ready: a one shot's first interrupt
 stops it there, a chat's second, and an interrupt taken before the stop was bound is applied once it
@@ -6725,8 +6745,9 @@ them (12, 13, 14, 20 or 21, and 70 where the tool itself failed).
 `run-side-task` in one shot exits as its turn ended, by the one mapping of an agent's ending
 (`AgentRunResult.ToOutcome`): `0` answered, `20` the model failed past its retries and fallback, `21`
 cut short by the account's limit, a stall or the clock, `130` interrupted - an interrupt while it is
-set up among them - and `12`, `13` or `14` where its agent could not start: the configuration, a key
-missing, the tool elevated or an update of Claude Code refused, the program missing. A chat exits `0` however the person leaves it once
+set up among them - and `12`, `13`, `14` or `21` where its agent could not start: the configuration, a key
+missing, the tool elevated or an update of Claude Code refused, the program missing, the install of
+Claude Code timed out or could not reach the registry - a chat's set-up as well. A chat exits `0` however the person leaves it once
 it has begun - `/exit`, the end of its input, a second interrupt - and `130` where two interrupts stop
 it while it is still being set up or opened again.
 `dssharness help exit-codes` prints the shared table from the code itself; this copy, and the

@@ -792,6 +792,34 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal(0.02m, result.Usage.Cost!.Reported);
     }
 
+    /// <summary>
+    /// A chat's run is one launch: a key Claude Code reports invalid ends it, the key named refused, and no second launch
+    /// of the run's begins - one would answer the chat's first message again on the channel the first had read lines
+    /// from. The walk moves the chat on, and the chat goes on from the conversation so far.
+    /// </summary>
+    [Fact]
+    public async Task AKeyReportedInvalidInAChat_EndsItsOneLaunch_NoSecondBegun()
+    {
+        using var kit = new Kit();
+        kit.Script(new JsonObject
+        {
+            ["byKey"] = new JsonObject
+            {
+                ["sk-one"] = new JsonArray(new JsonObject { ["error"] = "authentication_failed" }),
+                ["sk-two"] = new JsonArray(new JsonObject { ["text"] = "served" }),
+            },
+        });
+        var sink = new Sink();
+        var credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("KEY_ONE", "sk-one"), new AgentKey("KEY_TWO", "sk-two")], "https://api.example");
+
+        var result = await kit.Client().RunAsync(kit.Run(credential: credential) with { Chat = true }, sink, Token);
+
+        Assert.Equal((AgentRunStatus.Failed, 0), (result.Status, result.MessagesAnswered));
+        Assert.Equal(["KEY_ONE"], result.KeysRefused);
+        Assert.Equal(["sk-one"], kit.Launches().Select(launch => launch.Environment["ANTHROPIC_API_KEY"]));
+        Assert.Empty(sink.Of<FallbackStarted>());
+    }
+
     /// <summary>Where every key is refused, the step fails naming them all, each passed over.</summary>
     [Fact]
     public async Task EveryKeyRefused_FailsTheStep_NamingEach()

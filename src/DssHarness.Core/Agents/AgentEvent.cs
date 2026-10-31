@@ -531,4 +531,13 @@ public sealed record RunStarted(int Attempt) : AgentEvent;
 /// </summary>
 /// <param name="Status">How it ended, as its result says.</param>
 /// <param name="Error">Why it failed, where it did; null where it did not.</param>
-public sealed record RunFinished(AgentRunStatus Status, string? Error = null) : AgentEvent;
+public sealed record RunFinished(AgentRunStatus Status, string? Error = null) : AgentEvent
+{
+    /// <summary>
+    /// How many of a chat's messages the run settled, as its result says (<see cref="AgentRunResult.MessagesAnswered"/>):
+    /// the rest of the messages the stream says it was given, in order, no turn answered, and the chat gives them again to
+    /// the launch after it - so whoever reads the stream as one conversation reads each once. Null for every run but a
+    /// chat's.
+    /// </summary>
+    public int? MessagesAnswered { get; init; }
+}

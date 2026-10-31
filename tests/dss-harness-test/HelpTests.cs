@@ -383,11 +383,11 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
 
-        // The compaction: made where a full context is answered compact - the side-task's chat its own by itself - the
+        // The compaction: made where a full context is answered compact - a side-task its own by itself - the
         // engine's own reduction of the attempt's every run, its bounds said, a new conversation on every client.
         Assert.Contains(
             "A step whose conversation has filled its model's context ends ContextExhausted, and where its limit's question "
-                + "is answered compact the engine compacts the conversation - a side-task's chat compacts its own by itself - "
+                + "is answered compact the engine compacts the conversation - a side-task compacts its own by itself - "
                 + "and no model does: a reduction worked out from the stored stream of the attempt, every run of it, the same "
                 + "input always the same record - the run context and the task whole as they were first sent, the last "
                 + "iterations word for word by the continuation record's rule, every earlier message of the agent its text whole "
@@ -428,6 +428,44 @@ public sealed partial class HelpTests
                 + "costs counted then to that model and key, a failure of it - a gate held past the longest wait among them - "
                 + "one failed part of the search saying why;",
             Prose.Words(HelpText.Of("side-tasks").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The side-tasks topic says every code its set-up ends on - the install of Claude Code not finished among them, which
+    /// a script reading the help would otherwise take for a model cut short - how the second interrupt ends a chat, that
+    /// a chat moved to a later model goes on from the conversation so far, and that a side-task that outgrew its context
+    /// goes on from a compaction of it, a resume among the ways.
+    /// </summary>
+    [Fact]
+    public void TheSideTasksTopic_SaysEveryCodeItsSetUpEndsOn_AndHowAChatEndsAndMoves()
+    {
+        var prose = Prose.Words(HelpText.Of("side-tasks").StandardOutput);
+
+        Assert.Contains(
+            $"{HarnessExit.ToolMissing} a client that cannot start - no claude, no npm; {HarnessExit.Incomplete} the install of "
+                + $"Claude Code timed out or could not reach the registry; and in one shot besides, {HarnessExit.CommandFailed} "
+                + "the model failed past its retries and fallback, "
+                + $"{HarnessExit.Incomplete} cut short by the account's limit, a stall or the clock, {HarnessExit.Cancelled} interrupted.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a second, /exit or the end of input ends it, the agent's open launch let end as /exit lets it - its turn cut - so "
+                + "what it used, cost and spent is kept. Each interrupt says whether a turn, or a launch held open, was there to take it.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "On a tier the later models of its order are followed as for a step, and said in the chat; a chat moved to a later "
+                + "model goes on from the conversation so far, never from its first message, with the messages no turn answered "
+                + "sent on there.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A side-task whose turn outgrew the model's context - a chat's, or a one shot's - keeps no stored conversation to go "
+                + "on with, for handed again it would meet the same wall: its next message, in the chat or in a --resume, begins a "
+                + "new conversation from the engine's compaction of it, made as a step's conversation is - the whole conversation "
+                + "since the last compaction, the person's messages as they were said - and said once, as the turn given it begins.",
+            prose,
             StringComparison.Ordinal);
     }
 

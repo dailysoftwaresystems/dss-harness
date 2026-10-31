@@ -2424,7 +2424,9 @@ public static class HelpTopics
             $"In the terminal, by default, {Agents.SideTasks.SideTaskService.RunCommand} holds a chat: the person types a message "
             + "(a line ending in \\ goes on to the next); the agent's text streams as it comes and each action it takes is one "
             + "line as it is decided, a denial with its rule. Ctrl+C interrupts the agent's turn and leaves the chat open, "
-            + "what was said kept; a second, /exit or the end of input ends it. /model <model> and /effort <level> - or "
+            + "what was said kept; a second, /exit or the end of input ends it, the agent's open launch let end as /exit "
+            + "lets it - its turn cut - so what it used, cost and spent is kept. Each interrupt says whether a turn, or a "
+            + "launch held open, was there to take it. /model <model> and /effort <level> - or "
             + "<code>=<level> for each model, or default for the model's own - change what the next message is sent with, "
             + "each checked as the command line's are, a new model keeping only the levels that name it and the one for "
             + "the rest; /records prints where this side-task's records are; /help lists "
@@ -2454,8 +2456,9 @@ public static class HelpTopics
             + "git does not ignore, a side-task started under an agent or whose starting processes could not be read, an "
             + "update of Claude Code refused - a session of "
             + "it running, or the machine's processes unread - and in one shot a key missing or the tool running "
-            + $"elevated; {HarnessExit.ToolMissing} a client that cannot start - no claude, no npm; and in one shot "
-            + $"besides, {HarnessExit.CommandFailed} the model failed past its retries and fallback, "
+            + $"elevated; {HarnessExit.ToolMissing} a client that cannot start - no claude, no npm; "
+            + $"{HarnessExit.Incomplete} the install of Claude Code timed out or could not reach the registry; and in one "
+            + $"shot besides, {HarnessExit.CommandFailed} the model failed past its retries and fallback, "
             + $"{HarnessExit.Incomplete} cut short by the account's limit, a stall or the clock, {HarnessExit.Cancelled} "
             + $"interrupted. {StoppedDocument}");
         builder.AppendLine();
@@ -2464,7 +2467,9 @@ public static class HelpTopics
             "Its model is resolved as a step's: --model names one outright by its code, --tier a tier of tierConfig, "
             + "neither the configuration's defaults.agentTier; the provider, the keys and the client follow from the model, "
             + "and --client picks among the clients that reach it. On a tier the later models of its order are followed as "
-            + "for a step, and said in the chat. --effort is a step's effort on the command line: one level for every "
+            + "for a step, and said in the chat; a chat moved to a later model goes on from the conversation so far, never "
+            + "from its first message, with the messages no turn answered sent on there. --effort is a step's effort on the "
+            + "command line: one level for every "
             + "model, or code=level given again for each model that is to have its own, with all=<level> for the rest - "
             + "each checked against what the model takes. Its key is chosen as a step's is - the order of the list, or "
             + "least spent where balanceKeyUsage is on - and what it spends is counted against that key.");
@@ -2508,9 +2513,12 @@ public static class HelpTopics
             + "(denials.jsonl) and each search and fetch (web.jsonl), and the stored conversation under sessions/ where "
             + "its client stores one. Beside the directory, <task>.owner.json names the process that holds the side-task "
             + "open, claimed before anything is written and task.json written inside the claim, so two commands never "
-            + "take one name; a dead one is reclaimed and said. A chat that outgrows the model's context is compacted as "
-            + "a step's conversation is - the whole conversation since the last compaction, the person's messages as "
-            + "they were said - and says so. The directory is on the tree's floor: sync never carries it to a host's copy "
+            + "take one name; a dead one is reclaimed and said. A side-task whose turn outgrew the model's context - a "
+            + "chat's, or a one shot's - keeps no stored conversation to go on with, for handed again it would meet the "
+            + "same wall: its next message, in the chat or in a --resume, begins a new conversation from the engine's "
+            + "compaction of it, made as a step's conversation is - the whole conversation since the last compaction, the "
+            + "person's messages as they were said - and said once, as the turn given it begins. The directory is on the "
+            + "tree's floor: sync never carries it to a host's copy "
             + "and no agent's worktree is seeded with it.");
 
         return builder.ToString();
@@ -2791,7 +2799,7 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             "A step whose conversation has filled its model's context ends ContextExhausted, and where its limit's question "
-            + "is answered compact the engine compacts the conversation - a side-task's chat compacts its own by itself - "
+            + "is answered compact the engine compacts the conversation - a side-task compacts its own by itself - "
             + "and no model does: a reduction worked out from the stored stream of the attempt, every run of it, the same "
             + "input always the same record - the run context and the task whole as they were first sent, the last "
             + "iterations word for word by the continuation record's rule, every earlier message of the agent its text whole "

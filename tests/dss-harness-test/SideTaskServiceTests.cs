@@ -5,8 +5,10 @@ using DssHarness.Core.Ci;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
 using DssHarness.Core.Secrets;
@@ -60,6 +62,7 @@ public sealed class SideTaskServiceTests
             // conversation is a new one.
             await events.EmitAsync(new MessageSent(AgentPromptParts.FirstMessage(run, newConversation: run.Conversation is null), AgentMessageKind.FirstPrompt));
             await events.EmitAsync(new SessionStarted(run.Conversation?.Client ?? ClientName, run.Model ?? "glm-5.3", "hash", [], [], HandedConversation: run.Conversation is not null, Provider: run.Provider ?? "zai", SessionId: session));
+            await events.EmitAsync(new TurnStarted(1));
             await events.EmitAsync(new TextDelta(text));
             await events.EmitAsync(new AssistantMessage(text, []));
             await events.EmitAsync(new TurnFinished(1, run.Model ?? "glm-5.3", new AgentUsage(10, 5, 0, 0, 0, 0), "end_turn"));
@@ -124,6 +127,16 @@ public sealed class SideTaskServiceTests
         /// <summary>Where set, waited on before each turn of a launch answers, with the turn's number.</summary>
         public Func<int, Task>? BeforeAnswering { get; set; }
 
+        /// <summary>
+        /// Where set, waited on inside each turn of a launch, once it began, with the turn's number; the messages written to
+        /// the launch meanwhile are said then - as the real client says each the moment it is written - and each waits for
+        /// a turn of its own.
+        /// </summary>
+        public Func<int, Task>? WhileTurning { get; set; }
+
+        /// <summary>Where set, what each launch that ends well reports it cost, booked to the key it signed in with, as Claude Code reports a launch's.</summary>
+        public decimal? LaunchCost { get; set; }
+
         public async Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken)
         {
             lock (Runs)
@@ -140,6 +153,7 @@ public sealed class SideTaskServiceTests
             var turns = 0;
             var answered = 0;
             var message = run.UserPrompt;
+            var written = new Queue<string>();
             await using var later = run.Messages.ReadAllAsync(cancellationToken).GetAsyncEnumerator(cancellationToken);
 
             while (true)
@@ -166,8 +180,14 @@ public sealed class SideTaskServiceTests
                     await before(turns);
                 }
 
-                await OneTurnAsync(run, events, turns, message);
+                await OneTurnAsync(run, events, turns, message, written);
                 answered++;
+
+                if (run.Chat && written.TryDequeue(out var waited))
+                {
+                    message = waited;
+                    continue;
+                }
 
                 if (!run.Chat || !await later.MoveNextAsync())
                 {
@@ -179,21 +199,36 @@ public sealed class SideTaskServiceTests
                 await events.EmitAsync(new MessageSent(message, AgentMessageKind.ChatMessage));
             }
 
+            var used = new AgentUsage(7, 3, 0, 0, 0, 0);
+
             return new AgentRunResult(AgentRunStatus.Completed, FinalText: "the launch's last word", Model: run.Model)
             {
                 Turns = turns,
-                Usage = new AgentUsageReport(new AgentUsage(7, 3, 0, 0, 0, 0), []),
+                Usage = LaunchCost is { } cost
+                    ? new AgentUsageReport(used, [new AgentModelUsage(run.Model ?? "m", used, run.Credential?.Keys[0].Name, new AgentCost(Reported: cost))], new AgentCost(Reported: cost))
+                    : new AgentUsageReport(used, []),
                 MessagesAnswered = Chat(answered),
             };
 
             int? Chat(int count) => run.Chat ? count : null;
         }
 
-        private static async Task OneTurnAsync(AgentRun run, IAgentEventSink events, int turn, string message)
+        private async Task OneTurnAsync(AgentRun run, IAgentEventSink events, int turn, string message, Queue<string> written)
         {
             var about = "about: " + message[..Math.Min(20, message.Length)];
 
             await events.EmitAsync(new TurnStarted(turn));
+
+            if (WhileTurning is { } meanwhile)
+            {
+                await meanwhile(turn);
+
+                while (run.Messages.TryTake(out var line))
+                {
+                    written.Enqueue(line);
+                    await events.EmitAsync(new MessageSent(line, AgentMessageKind.ChatMessage));
+                }
+            }
             await events.EmitAsync(new TextDelta(about));
             await events.EmitAsync(new AssistantMessage(about, []));
             await events.EmitAsync(new TurnFinished(turn, run.Model ?? "m", new AgentUsage(7, 3, 0, 0, 0, 0), "end_turn"));
@@ -252,7 +287,8 @@ public sealed class SideTaskServiceTests
         TimeProvider? clock = null,
         Func<string, string?>? environment = null,
         DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null,
-        Func<int, ProcessTableReading>? tree = null)
+        Func<int, ProcessTableReading>? tree = null,
+        Dictionary<string, AgentClientConfig>? clients = null)
     {
         var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -271,12 +307,19 @@ public sealed class SideTaskServiceTests
             ],
         };
 
+        // A tier of two models Claude Code reaches, for a move between two launches held open.
+        foreach (var model in agents.Providers.SelectMany(provider => provider.Models).Where(model => model.Code is "claude-sonnet-5-5" or "claude-opus-5-5"))
+        {
+            model.Tiers.Add("claudes");
+        }
+
         temp.WriteFile("file.txt", "content\n");
         await harness.InitializeHarnessAsync(temp.Path, Token, new HarnessConfig
         {
             Defaults = new() { AgentTier = agents.AgentTier },
             Providers = [.. agents.Providers, narrow],
-            TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase) { ["narrow"] = ["narrow-1"], ["pair"] = ["narrow-2", "narrow-1"] },
+            TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase) { ["narrow"] = ["narrow-1"], ["pair"] = ["narrow-2", "narrow-1"], ["claudes"] = ["claude-sonnet-5-5", "claude-opus-5-5"] },
+            AgentClients = clients ?? new(StringComparer.OrdinalIgnoreCase),
         });
 
         foreach (var (name, value) in new[] { ("zai.env", "ZAI_API_KEY=sk-test-one\n"), ("anthropic.env", "ANTHROPIC_API_KEY=sk-test-two\n"), ("narrow.env", "NARROW_API_KEY=sk-test-three\n") })
@@ -308,6 +351,30 @@ public sealed class SideTaskServiceTests
 
         return (harness, temp, service, stored, rendered);
     }
+
+    /// <summary>
+    /// The conversation so far as a new conversation's first message carries it, where every iteration is kept word for
+    /// word: compacted at <paramref name="iterations"/>, the task as it was first sent, the iterations' own lines, and the
+    /// task again.
+    /// </summary>
+    private static string Carried(int iterations, string task, IReadOnlyList<string> last)
+        => string.Join(
+            "\n",
+            [
+                $"{AgentCompaction.SaysWhatItIs}{iterations}. Everything up to iteration 0 is reduced to what you wrote and what you called; the last {iterations} iterations are word for word.",
+                string.Empty,
+                "The run context and the task, as they were sent:",
+                string.Empty,
+                task,
+                string.Empty,
+                "The last iterations, word for word:",
+                string.Empty,
+                .. last,
+                string.Empty,
+                "The task again:",
+                string.Empty,
+                task,
+            ]);
 
     /// <summary>The side-task's layout under the tree.</summary>
     private static SideTaskLayout LayoutOf(TempDirectory temp, string name) => new(Path.Combine(temp.Path, ".side-tasks"), name);
@@ -648,9 +715,6 @@ public sealed class SideTaskServiceTests
                 "iteration 1 of 1:",
                 "about: first",
                 string.Empty,
-                "the engine:",
-                "second",
-                string.Empty,
                 "The task again:",
                 string.Empty,
                 "first"),
@@ -659,10 +723,79 @@ public sealed class SideTaskServiceTests
             [
                 "about: first",
                 "the agent's launch ended ContextExhausted: the context is full; the next message begins a new launch, going on from the conversation so far",
-                "the conversation was compacted",
+                $"compacted: {AgentCompaction.OutgrewItsContext}; this turn begins a new conversation from what it holds",
                 "about: second",
             ],
             typed.Said);
+
+        // The line the ended launch never answered is the new launch's own, read and written once.
+        var transcript = await File.ReadAllLinesAsync(Path.Combine(LayoutOf(temp, "relaunched").Directory, "transcript.md"), Token);
+        Assert.Equal(["    first", "    second"], transcript.Where((line, at) => at > 0 && transcript[at - 1] == "person:"));
+    }
+
+    /// <summary>
+    /// Whether a turn of the agent's is under way is told by its own turns - one begun and not ended - however many of the
+    /// person's messages were written to the launch while another ran: a launch gone in the middle of its third turn,
+    /// two messages written while its first ran, leaves its second turn - which ended well - as it ended, never with the
+    /// launch's failure, and the third turn's line goes on to the next launch, written to the transcript once.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchGoneInsideATurn_LeavesTheTurnsThatEndedAsTheyEnded_HoweverManyMessagesWaited()
+    {
+        var (harness, temp, service, _, rendered) = await RepoAsync();
+        using var tree = temp;
+        rendered.FailsOnTurn = 3;
+        rendered.FailsWithoutAResult = true;
+        var posted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var heard = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rendered.WhileTurning = _ => posted.Task.WaitAsync(TimeSpan.FromMinutes(1));
+        var lines = new Queue<string>(["first", "second", "third"]);
+        var said = new List<string>();
+        var chat = new SideTaskChat(
+            async token =>
+            {
+                if (lines.TryDequeue(out var line))
+                {
+                    return line;
+                }
+
+                // Every line is written to the launch while its first turn runs; the person waits for the last one's
+                // answer, then leaves.
+                posted.TrySetResult();
+                await heard.Task.WaitAsync(TimeSpan.FromMinutes(1), token);
+                return null;
+            },
+            line =>
+            {
+                lock (said)
+                {
+                    said.Add(line);
+                }
+
+                if (line == "about: third")
+                {
+                    heard.TrySetResult();
+                }
+            });
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "claude-sonnet-5-5", Name: "waited", Chat: chat), Token);
+
+        Assert.Equal((HarnessExit.Success, "side-task 'waited' ended, 3 turn(s) in all"), (outcome.ExitCode, outcome.Message));
+        Assert.Equal(["first", "third"], rendered.Runs.Select(run => run.UserPrompt));
+        Assert.Equal(
+            [
+                "about: first",
+                "about: second",
+                "the agent's launch ended Failed: the API failed; the next message begins a new launch, going on from the conversation so far",
+                "about: third",
+            ],
+            said);
+
+        var record = RecordOf(harness, temp, LayoutOf(temp, "waited").Directory)!;
+        Assert.Equal([(AgentRunStatus?)null, null, AgentRunStatus.Completed], record.Turns.Select(turn => turn.Status));
+
+        var transcript = await File.ReadAllLinesAsync(Path.Combine(LayoutOf(temp, "waited").Directory, "transcript.md"), Token);
+        Assert.Equal(["    first", "    second", "    third"], transcript.Where((line, at) => at > 0 && transcript[at - 1] == "person:"));
     }
 
     /// <summary>
@@ -684,11 +817,32 @@ public sealed class SideTaskServiceTests
         Assert.Equal(["first", "second", "third"], rendered.Runs.Select(run => run.UserPrompt));
 
         // Each launch's turn that outgrew the context is an iteration of the conversation too: the second launch's answer
-        // is the third, never its launch's first.
-        var carried = rendered.Runs[2].Continuation!.ReplaceLineEndings("\n");
-        Assert.StartsWith($"{AgentCompaction.SaysWhatItIs}3.", carried, StringComparison.Ordinal);
-        Assert.Contains("\niteration 1 of 3:\nabout: first\n", carried, StringComparison.Ordinal);
-        Assert.Contains("\niteration 3 of 3:\nabout: second\n", carried, StringComparison.Ordinal);
+        // is the third, never its launch's first. Each line a launch never answered is read once, as the next launch's
+        // own: "second" once, and "third" not yet, for it is the third launch's task.
+        Assert.Equal(
+            string.Join(
+                "\n",
+                $"{AgentCompaction.SaysWhatItIs}3. Everything up to iteration 0 is reduced to what you wrote and what you called; the last 2 iterations are word for word.",
+                string.Empty,
+                "The run context and the task, as they were sent:",
+                string.Empty,
+                "first",
+                string.Empty,
+                "The last iterations, word for word:",
+                string.Empty,
+                "iteration 1 of 3:",
+                "about: first",
+                string.Empty,
+                "the engine:",
+                "second",
+                string.Empty,
+                "iteration 3 of 3:",
+                "about: second",
+                string.Empty,
+                "The task again:",
+                string.Empty,
+                "first"),
+            rendered.Runs[2].Continuation!.ReplaceLineEndings("\n"));
     }
 
     /// <summary>
@@ -712,7 +866,9 @@ public sealed class SideTaskServiceTests
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal(["first", "second"], rendered.Runs.Select(run => run.UserPrompt));
-        Assert.StartsWith(AgentCompaction.SaysWhatItIs, rendered.Runs[1].Continuation, StringComparison.Ordinal);
+        Assert.Equal(
+            Carried(1, "first", ["iteration 1 of 1:", "about: first"]),
+            rendered.Runs[1].Continuation!.ReplaceLineEndings("\n"));
         Assert.Equal(
             [
                 "about: first",
@@ -722,6 +878,124 @@ public sealed class SideTaskServiceTests
             typed.Said);
         AgentRunStatus?[] endings = withoutAResult ? [null, AgentRunStatus.Completed] : [null, AgentRunStatus.Failed, AgentRunStatus.Completed];
         Assert.Equal(endings, RecordOf(harness, temp, LayoutOf(temp, "unretried").Directory)!.Turns.Select(turn => turn.Status));
+    }
+
+    /// <summary>
+    /// A model fallback inside a chat's launch is the chat's to make, never the runner's: the walk ends with the launch's
+    /// ending and hands back the entry it would move to, and the chat goes on there from the conversation so far with the
+    /// line no turn answered - a new launch where that entry's client holds one open, a request of its own where it
+    /// stores its conversations - never answering the chat's first message again. The move is said, and each line is
+    /// read and written once.
+    /// </summary>
+    [Theory]
+    [InlineData("claudes", "claude-opus-5-5")]
+    [InlineData("balanced", "glm-5.3")]
+    public async Task AFallbackInAChat_GoesOnFromTheConversation_NeverFromTheLaunchsFirstMessage(string tier, string movedTo)
+    {
+        var (harness, temp, service, stored, rendered) = await RepoAsync();
+        using var tree = temp;
+        rendered.FailsOnTurn = 2;
+        var rendersIt = movedTo != "glm-5.3";
+        var typed = new Typed(["first", "second"], until: rendersIt ? "about: second" : "the answer");
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Tier: tier, Name: "moved", Chat: typed.Chat()), Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(
+            [
+                "about: first",
+                $"claude-sonnet-5-5 -> {movedTo} (failed, with no retries)",
+                "the agent's launch ended Failed: the API failed; the next message begins a new launch, going on from the conversation so far",
+                rendersIt ? "about: second" : "the answer",
+            ],
+            typed.Said);
+
+        // The launch that failed was the walk's only one: what goes on is the chat's, from "second", the conversation so far
+        // carried before it.
+        IReadOnlyList<AgentRun> after = rendersIt ? [rendered.Runs[1]] : [Assert.Single(stored.Runs)];
+        Assert.Equal(rendersIt ? 2 : 1, rendered.Runs.Count);
+        Assert.Equal((movedTo, "second", false), (after[0].Model, after[0].UserPrompt, after[0].Continuation is null));
+        Assert.Equal(rendersIt, after[0].Chat);
+
+        var transcript = await File.ReadAllLinesAsync(Path.Combine(LayoutOf(temp, "moved").Directory, "transcript.md"), Token);
+        Assert.Equal(["    first", "    second"], transcript.Where((line, at) => at > 0 && transcript[at - 1] == "person:"));
+
+        var record = RecordOf(harness, temp, LayoutOf(temp, "moved").Directory)!;
+        Assert.Equal(
+            [("claude-sonnet-5-5", (AgentRunStatus?)null), ("claude-sonnet-5-5", AgentRunStatus.Failed), (movedTo, AgentRunStatus.Completed)],
+            record.Turns.Select(turn => (turn.Model, turn.Status)));
+    }
+
+    /// <summary>
+    /// The person leaving a chat by the second interrupt ends its open launch as <c>/exit</c> does - its turn cut, its
+    /// messages ended - never by stopping it hard: what the launch used and cost is the side-task's, what its key spent is
+    /// recorded for the balancing of keys, and its last turn has the launch's ending.
+    /// </summary>
+    [Fact]
+    public async Task TheSecondInterrupt_EndsTheOpenLaunchAsExitDoes_ItsUseCostAndSpendKept()
+    {
+        // Claude Code signed in with the slot's key, whose spend is the one a balancing of keys reads.
+        var (harness, temp, service, _, rendered) = await RepoAsync(clients: new(StringComparer.OrdinalIgnoreCase) { ["claude-code"] = new() { Auth = AgentAuth.ApiKey } });
+        using var tree = temp;
+        rendered.LaunchCost = 0.25m;
+        var interrupts = new SideTaskInterrupts();
+        var answered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lines = new Queue<string>(["first"]);
+        var chat = new SideTaskChat(
+            async token =>
+            {
+                if (lines.TryDequeue(out var line))
+                {
+                    return line;
+                }
+
+                // The answer in, the person presses Ctrl+C twice and types nothing more.
+                await answered.Task.WaitAsync(TimeSpan.FromMinutes(1), token);
+                interrupts.Pressed();
+                interrupts.Pressed();
+                await Task.Delay(Timeout.Infinite, token);
+                return null;
+            },
+            line =>
+            {
+                if (line == "about: first")
+                {
+                    answered.TrySetResult();
+                }
+            });
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "claude-sonnet-5-5", Name: "left", Chat: chat) { Interrupts = interrupts }, Token);
+
+        Assert.Equal((HarnessExit.Success, "side-task 'left' ended, 1 turn(s) in all"), (outcome.ExitCode, outcome.Message));
+
+        var record = RecordOf(harness, temp, LayoutOf(temp, "left").Directory)!;
+        Assert.Equal((new AgentUsage(7, 3, 0, 0, 0, 0), (decimal?)0.25m), (record.InAll!.Total, record.InAll.Cost!.Usd));
+        Assert.Equal([(AgentRunStatus?)AgentRunStatus.Completed], record.Turns.Select(turn => turn.Status));
+        Assert.Equal(
+            [new KeyValuePair<(string Provider, string Key), decimal>(("anthropic", "ANTHROPIC_API_KEY"), 0.25m)],
+            new AgentKeySpend(harness.FileSystem, harness.OrchestrationStore, TimeProvider.System).Spent(new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path)));
+    }
+
+    /// <summary>
+    /// Making Claude Code ready can end on a change npm did not finish - not within its bound, or the registry not
+    /// reached - which is the code every program's update begun and not finished ends on (21), passed through as the
+    /// finder answers it with its own words: never read as a model cut short, never as a program missing.
+    /// </summary>
+    [Fact]
+    public async Task AnInstallOfClaudeCodeNotFinished_RefusesTheSideTask_Incomplete()
+    {
+        using var kit = new ClaudeCodeUpdateServiceTests.Kit(package: "2.1.201", program: "2.1.201");
+        kit.Runner.Install = new ProcessResult(-1, "running postinstall\n", string.Empty, ToolPackage.ChangeBudget, TimedOut: true);
+        var finder = await kit.Service().ReadyAsync(kit.Layout, [], client: null, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeAsker.SideTask("unfinished"), Token);
+        var (_, temp, service, _, rendered) = await RepoAsync(updates: kit.Service());
+        using var tree = temp;
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "claude-sonnet-5-5", Name: "unfinished"), Token);
+
+        Assert.Equal((HarnessExit.Incomplete, finder.Message), (outcome.ExitCode, outcome.Message));
+        Assert.Equal([.. finder.Details, SideTaskService.NoRecords], outcome.Details);
+        Assert.Empty(rendered.Runs);
+        Assert.False(Directory.Exists(LayoutOf(temp, "unfinished").Directory));
     }
 
     /// <summary>
@@ -1027,25 +1301,17 @@ public sealed class SideTaskServiceTests
     /// <summary>
     /// A turn that outgrew its model's context compacts the conversation: the next message begins a new conversation,
     /// the engine's compaction of the one before carried in its first message before the person's message - and the
-    /// compaction is said in the side-task's stream and counted in its run's record, as a step's is, once.
+    /// compaction is said in the side-task's stream and counted in its run's record, as a step's is, once, and told the
+    /// person once, as the run given it begins: the turn's ending says what the next message does, never that it was
+    /// compacted, and the command's own lines say nothing of it.
     /// </summary>
     [Fact]
     public async Task ATurnThatOutgrewItsContext_CompactsTheConversation_ForTheNextMessage()
     {
-        var (_, temp, service, stored, _) = await RepoAsync();
+        var (harness, temp, service, stored, _) = await RepoAsync();
         using var tree = temp;
         var typed = new Typed(["a long one", "go on"]);
-
-        stored.Script = async (run, events, _) =>
-        {
-            if (run.UserPrompt == "a long one")
-            {
-                await StoredClient.SpeakAsync(run, events, "too much");
-                return new AgentRunResult(AgentRunStatus.ContextExhausted, Model: run.Model, Error: "the context is full") { Turns = 1 };
-            }
-
-            return await StoredClient.Answered(run, events, "fresh");
-        };
+        stored.Script = OutgrowsItsContextOn("a long one");
 
         await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "compacted", Chat: typed.Chat()), Token);
 
@@ -1053,8 +1319,9 @@ public sealed class SideTaskServiceTests
         Assert.Null(stored.Runs[1].Conversation);
         Assert.Null(stored.Runs[1].Compaction);
         Assert.Equal("go on", stored.Runs[1].UserPrompt);
-        Assert.StartsWith(AgentCompaction.SaysWhatItIs, stored.Runs[1].Continuation, StringComparison.Ordinal);
-        Assert.Contains("a long one", stored.Runs[1].Continuation!, StringComparison.Ordinal);
+        Assert.Equal(
+            Carried(1, "a long one", ["iteration 1 of 1:", "too much"]),
+            stored.Runs[1].Continuation!.ReplaceLineEndings("\n"));
 
         var directory = LayoutOf(temp, "compacted").Directory;
         var stream = (await File.ReadAllLinesAsync(Path.Combine(directory, StoredStream.FileName), Token))
@@ -1070,7 +1337,75 @@ public sealed class SideTaskServiceTests
         Assert.Equal(
             1,
             System.Text.Json.JsonSerializer.Deserialize<AgentRunResult>(File.ReadAllText(Path.Combine(directory, AgentRunner.ResultFileName)), JsonStateFile.Options)!.Compactions);
+
+        Assert.Equal(
+            [
+                "too much",
+                "the turn ended ContextExhausted: the context is full; the next message begins a new conversation, going on from the conversation so far",
+                $"compacted: {AgentCompaction.OutgrewItsContext}; this turn begins a new conversation from what it holds",
+                "fresh",
+            ],
+            typed.Said);
+        Assert.Equal(
+            [$"{SideTaskService.RunCommand}: side-task 'compacted' on glm-5.3 through glm; /help lists what the chat takes"],
+            harness.StandardOutput.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     }
+
+    /// <summary>
+    /// A side-task whose last turn outgrew its model's context - a one shot's, or a chat's left right after it - keeps no
+    /// stored conversation to go on with, for handed again it would meet the same wall: opened again, it goes on from
+    /// the engine's compaction of its conversation, said and counted once as the run given it begins, and the new
+    /// conversation that run began is the one it goes on with after.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ASideTaskThatOutgrewItsContext_OpenedAgain_GoesOnFromItsCompaction(bool chat)
+    {
+        var (harness, temp, service, stored, _) = await RepoAsync();
+        using var tree = temp;
+        stored.Script = OutgrowsItsContextOn("a long one");
+
+        var first = await service.RunAsync(
+            chat
+                ? new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "walled", Chat: new Typed(["a long one"]).Chat())
+                : new SideTaskCall(temp.Path, Prompt: "a long one", Model: "glm-5.3", Name: "walled"),
+            Token);
+
+        var directory = LayoutOf(temp, "walled").Directory;
+        Assert.Equal(chat ? HarnessExit.Success : HarnessExit.CommandFailed, first.ExitCode);
+        Assert.Null(RecordOf(harness, temp, directory)!.Conversation);
+
+        var again = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "go on", Resume: "walled"), Token);
+
+        Assert.Equal((HarnessExit.Success, "side-task 'walled' answered on glm-5.3"), (again.ExitCode, again.Message));
+        Assert.Equal(2, stored.Runs.Count);
+        Assert.Equal(("go on", (AgentSessionRef?)null), (stored.Runs[1].UserPrompt, stored.Runs[1].Conversation));
+        Assert.Equal(
+            Carried(1, "a long one", ["iteration 1 of 1:", "too much"]),
+            stored.Runs[1].Continuation!.ReplaceLineEndings("\n"));
+
+        var stream = (await File.ReadAllLinesAsync(Path.Combine(directory, StoredStream.FileName), Token))
+            .Select(line => System.Text.Json.JsonSerializer.Deserialize<AgentEvent>(line, JsonStateFile.LineOptions)!)
+            .ToList();
+        Assert.Equal(AgentCompaction.OutgrewItsContext, Assert.Single(stream.OfType<Compacted>()).Why);
+
+        var began = stream.OfType<SessionStarted>().Last();
+        Assert.Equal(new AgentSessionRef(StoredClient.ClientName, "zai", began.SessionId!), RecordOf(harness, temp, directory)!.Conversation);
+    }
+
+    /// <summary>A stored client's script whose turn on <paramref name="prompt"/> outgrows the model's context, every other answered.</summary>
+    private static Func<AgentRun, IAgentEventSink, CancellationToken, Task<AgentRunResult>> OutgrowsItsContextOn(string prompt)
+        => async (run, events, _) =>
+        {
+            if (run.UserPrompt == prompt)
+            {
+                await StoredClient.SpeakAsync(run, events, "too much");
+                return new AgentRunResult(AgentRunStatus.ContextExhausted, Model: run.Model, Error: "the context is full") { Turns = 1 };
+            }
+
+            return await StoredClient.Answered(run, events, "fresh");
+        };
 
     /// <summary>
     /// --resume opens a side-task again on what the person set it to run on: begun on a tier, it keeps the tier's later
@@ -1112,13 +1447,14 @@ public sealed class SideTaskServiceTests
         var claude = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "and here", Resume: "moved", Model: "claude-sonnet-5-5"), Token);
 
         Assert.Equal((HarnessExit.Success, HarnessExit.Success), (other.ExitCode, claude.ExitCode));
-        Assert.Null(stored.Runs[1].Conversation);
-        Assert.StartsWith(AgentCompaction.SaysWhatItIs, stored.Runs[1].Continuation, StringComparison.Ordinal);
-        Assert.Contains("begin here", stored.Runs[1].Continuation!, StringComparison.Ordinal);
+        Assert.Equal(
+            Carried(1, "begin here", ["iteration 1 of 1:", "the answer"]),
+            stored.Runs[1].Continuation!.ReplaceLineEndings("\n"));
 
         var launch = Assert.Single(rendered.Runs);
-        Assert.StartsWith(AgentCompaction.SaysWhatItIs, launch.Continuation, StringComparison.Ordinal);
-        Assert.Contains("begin here", launch.Continuation!, StringComparison.Ordinal);
+        Assert.Equal(
+            Carried(2, "begin here", ["iteration 1 of 2:", "the answer", string.Empty, "the engine:", "go on there", string.Empty, "iteration 2 of 2:", "the answer"]),
+            launch.Continuation!.ReplaceLineEndings("\n"));
     }
 
     /// <summary>
@@ -1143,13 +1479,52 @@ public sealed class SideTaskServiceTests
         var six = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "six", Resume: "carried", Model: "claude-sonnet-5-5"), Token);
 
         Assert.Equal(HarnessExit.Success, six.ExitCode);
-        Assert.StartsWith(AgentCompaction.SaysWhatItIs, stored.Runs[1].Continuation, StringComparison.Ordinal);
+        Assert.Equal(
+            Carried(1, "one", ["iteration 1 of 1:", "the answer"]),
+            stored.Runs[1].Continuation!.ReplaceLineEndings("\n"));
         Assert.Null(stored.Runs[1].Conversation);
         Assert.All(stored.Runs.Skip(2), run => Assert.NotNull(run.Conversation));
 
-        var carried = Assert.Single(rendered.Runs).Continuation!;
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(carried, System.Text.RegularExpressions.Regex.Escape(AgentCompaction.SaysWhatItIs)));
-        Assert.Contains("two", carried.ReplaceLineEndings("\n").Split('\n'));
+        // Carried once: the earlier turns reduced, the last three word for word, and no record inside another.
+        Assert.Equal(
+            string.Join(
+                "\n",
+                $"{AgentCompaction.SaysWhatItIs}5. Everything up to iteration 2 is reduced to what you wrote and what you called; the last 3 iterations are word for word.",
+                string.Empty,
+                "The run context and the task, as they were sent:",
+                string.Empty,
+                "one",
+                string.Empty,
+                "Reduced, everything up to the last iterations:",
+                string.Empty,
+                "iteration 1: the answer",
+                "the engine:",
+                "two",
+                "iteration 2: the answer",
+                "the engine:",
+                "three",
+                string.Empty,
+                "The last iterations, word for word:",
+                string.Empty,
+                "iteration 3 of 5:",
+                "the answer",
+                string.Empty,
+                "the engine:",
+                "four",
+                string.Empty,
+                "iteration 4 of 5:",
+                "the answer",
+                string.Empty,
+                "the engine:",
+                "five",
+                string.Empty,
+                "iteration 5 of 5:",
+                "the answer",
+                string.Empty,
+                "The task again:",
+                string.Empty,
+                "one"),
+            Assert.Single(rendered.Runs).Continuation!.ReplaceLineEndings("\n"));
     }
 
     /// <summary>--resume naming no side-task is refused saying none were written, and one open in another process is refused naming its records.</summary>
@@ -1399,31 +1774,34 @@ public sealed class SideTaskServiceTests
     }
 
     /// <summary>
-    /// The terminal's interrupts are counted for the side-task and said by their place in the count - the first cuts
-    /// the turn, a second ends the chat - and a hang-up is one more, after which nothing more is said.
+    /// The terminal's interrupts are counted for the side-task and said by their place in the count and by whether a turn
+    /// was there to cut - the first cuts the turn where one runs, a second ends the chat - and a hang-up is one more, after
+    /// which nothing more is said. A first interrupt with no turn to cut - the side-task being set up - never says a turn
+    /// was cut.
     /// </summary>
-    [Fact]
-    public void TheTerminalsInterrupts_AreCountedAndSaid()
+    [Theory]
+    [InlineData(true, true, SideTaskTerminal.ChatCut)]
+    [InlineData(true, false, SideTaskTerminal.ChatIdle)]
+    [InlineData(false, true, SideTaskTerminal.OneShotCut)]
+    [InlineData(false, false, SideTaskTerminal.OneShotStopped)]
+    public void TheTerminalsInterrupts_AreCountedAndSaid_ByWhetherATurnTookThem(bool chat, bool turning, string first)
     {
         var harness = new HarnessFactory();
-        var chat = new SideTaskTerminal(harness.Output, chat: true);
+        var terminal = new SideTaskTerminal(harness.Output, chat);
+        var cut = 0;
 
-        chat.Interrupted();
-        Assert.False(chat.Interrupts.Ended.IsCompleted);
-        chat.HungUp();
+        if (turning)
+        {
+            terminal.Interrupts.WhileTurning(_ => cut++);
+        }
 
-        Assert.Equal(2, chat.Interrupts.Presses);
-        Assert.True(chat.Interrupts.Ended.IsCompleted);
+        terminal.Interrupted();
+        Assert.False(terminal.Interrupts.Ended.IsCompleted);
+        terminal.HungUp();
 
-        var said = harness.StandardError.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        Assert.Equal([$"{SideTaskService.RunCommand}: WARN - {SideTaskTerminal.ChatCut}"], said);
-
-        var shot = new HarnessFactory();
-        var oneShot = new SideTaskTerminal(shot.Output, chat: false);
-        oneShot.Interrupted();
-        Assert.Equal(1, oneShot.Interrupts.Presses);
+        Assert.Equal((2, true, turning ? 2 : 0), (terminal.Interrupts.Presses, terminal.Interrupts.Ended.IsCompleted, cut));
         Assert.Equal(
-            [$"{SideTaskService.RunCommand}: WARN - {SideTaskTerminal.OneShotCut}"],
-            shot.StandardError.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            [$"{SideTaskService.RunCommand}: WARN - {first}"],
+            harness.StandardError.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     }
 }
