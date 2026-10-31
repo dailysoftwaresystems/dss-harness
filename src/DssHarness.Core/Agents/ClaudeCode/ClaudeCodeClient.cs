@@ -199,7 +199,7 @@ public sealed class ClaudeCodeClient(
             WebRequests = totals.WebRequests,
             Duration = duration,
             Session = totals.Session,
-            Usage = totals.Used.Report(new AgentCost(Reported: totals.Cost)),
+            Usage = totals.Used.Report(totals.Cost is { } reported ? new AgentCost(Reported: reported) : null),
             Served = [.. totals.Used.Served],
             KeysRefused = [.. totals.Refused],
             SessionFilesRemoved = [.. totals.Removed],

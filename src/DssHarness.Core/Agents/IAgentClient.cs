@@ -563,8 +563,9 @@ public sealed record AgentStepRequest(
 
     /// <summary>
     /// The engine's compaction of the conversation the run begins from, where it compacted one: the record the new
-    /// conversation's first message is, and what it kept and reduced, said as the run's <see cref="Compacted"/> event and
-    /// counted in its compactions; null where it did not. A run given one begins a new conversation.
+    /// conversation's first message is - or, carried before a task of its own (<see cref="AgentCompacted.BeforeItsTask"/>),
+    /// the run's continuation - and what it kept and reduced, said as the run's <see cref="Compacted"/> event and counted
+    /// in its compactions once a client is given it; null where it did not. A run given one begins a new conversation.
     /// </summary>
     public AgentCompacted? Compaction { get; init; }
 
@@ -720,8 +721,9 @@ public sealed record AgentRun(
 
     /// <summary>
     /// The provider's own web search, which a side-task's <c>web_search</c> asks beside the configured sources - its
-    /// <c>native</c> part; null where this run's provider runs none - every client but the Claude API's - and for every
-    /// step of a run, whose web is the harness's own alone.
+    /// <c>native</c> part, asked by the client's loop as the run stands when the agent asks it, with the entry serving the
+    /// run then; null where this run's provider runs none - every client but the Claude API's - and for every step of a
+    /// run, whose web is the harness's own alone.
     /// </summary>
     public IAgentNativeSearch? NativeSearch { get; init; }
 
@@ -735,21 +737,50 @@ public sealed record AgentRun(
 }
 
 /// <summary>
-/// The provider's own web search: one query, answered as a source's part of the same search, with what the request of
-/// the provider used - its tokens, the results billed as input among them, and its searches - which the run folds into
-/// its usage and prices as it prices every request of the provider's.
+/// The provider's own web search, as its wire asks it: one query of the model and the key it is given, answered as a
+/// source's part of the same search, with what the request used - its tokens, the results billed as input among them,
+/// and its searches - and the failure it met. Which entry it asks, the gate it goes through and the part of the run's
+/// usage it is counted to are the asking loop's, as they are for every request of the conversation.
 /// </summary>
 public interface IAgentNativeSearch
 {
     /// <summary>The part's source name, as the answer and the records name it: <c>native</c>.</summary>
     string Source { get; }
 
-    /// <summary>Searches <paramref name="query"/> with the provider's own search.</summary>
+    /// <summary>The tokens a search of <paramref name="query"/> on <paramref name="model"/> sends, as the gate counts a request's input as it enters.</summary>
     /// <param name="query">The query, as the agent wrote it.</param>
+    /// <param name="model">The model the search is asked of.</param>
+    long InputTokens(string query, string model);
+
+    /// <summary>Searches <paramref name="query"/> with the provider's own search, asked of <paramref name="model"/> and signed with <paramref name="key"/>.</summary>
+    /// <param name="query">The query, as the agent wrote it.</param>
+    /// <param name="model">The model the search is asked of: the one serving the run when the agent asks.</param>
+    /// <param name="key">The key the request is signed with: the one serving the run when the agent asks.</param>
     /// <param name="cancellationToken">Stops the search.</param>
-    /// <returns>The part it came to - failed, saying why, where the provider did not answer with a search - and what its request used.</returns>
-    Task<(Web.Search.WebSearchPart Part, AgentUsage Used)> SearchAsync(string query, CancellationToken cancellationToken);
+    /// <returns>The part it came to - failed, saying why, where the provider did not answer with a search - what its request used, and the failure it met.</returns>
+    Task<AgentNativeSearched> SearchAsync(string query, string model, AgentKey key, CancellationToken cancellationToken);
+
+    /// <summary>The part of a search of <paramref name="query"/> that failed for <paramref name="why"/>: the one shape every failed native part takes.</summary>
+    /// <param name="query">The query, as the agent wrote it.</param>
+    /// <param name="why">Why it failed, as the part says it.</param>
+    Web.Search.WebSearchPart Failed(string query, string why)
+        => new(Source, Source, Version: 1, query, Web.Search.WebSearchAnswer.Failed(why), Withheld: 0, Cached: false, KeyMissing: null);
 }
+
+/// <summary>What one request of the provider's own search came to.</summary>
+/// <param name="Part">The part it came to, failed where the provider did not answer with a search.</param>
+/// <param name="Used">What the request used.</param>
+/// <param name="Failure">The failure the request met, read as every failure of the provider's is; null where it answered.</param>
+public sealed record AgentNativeSearched(Web.Search.WebSearchPart Part, AgentUsage Used, Loop.ChatFailure? Failure = null);
+
+/// <summary>
+/// Asks a run's native search for its tool runtime, as the run stands when the agent asks it: the client's loop, which
+/// knows the entry serving the run then, goes through its gate and counts what the search used.
+/// </summary>
+/// <param name="query">The query, as the agent wrote it.</param>
+/// <param name="cancellationToken">Stops the search: the run's stop and the turn's cut.</param>
+/// <returns>The part the search came to.</returns>
+public delegate Task<Web.Search.WebSearchPart> AgentNativeAsk(string query, CancellationToken cancellationToken);
 
 /// <summary>
 /// The configuration's entries a run's model is reached by: its provider - the API's address and the currency of its

@@ -1313,43 +1313,82 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
-    /// The provider's own search that does not answer in time is a failed part of the search, saying so, beside the
-    /// configured sources' answers; the run stopped while it searches is no failed part - the stop goes on as every stop
-    /// of the run does.
+    /// The provider's own search is asked through what its opener gives - the client's loop, as the run stands - and the
+    /// part it comes to is one more part of the same search, recorded as every source's is, beside the configured
+    /// sources' answers; the run stopped while it searches is no failed part - the stop goes on as every stop of the run
+    /// does.
     /// </summary>
     [Fact]
-    public async Task WebSearch_ANativeSearchThatTimesOut_IsAFailedPart_TheRunStoppedIsAStop()
+    public async Task WebSearch_TheNativePart_IsAskedThroughItsOpener_TheRunStoppedIsAStop()
     {
         var endpoint = new WebEndpoint(_ => SearchAnswer("""{ "items": [ { "title": "One", "link": "https://one.example.test/" } ] }"""));
-        var late = Open(capabilities: [AgentCapability.Read, AgentCapability.Web], endpoint: endpoint, webSearch: TwoSources(), native: new StoppedNativeSearch(stop: null));
+        var asked = new List<string>();
+        var failing = Open(
+            capabilities: [AgentCapability.Read, AgentCapability.Web],
+            endpoint: endpoint,
+            webSearch: TwoSources(),
+            native: (query, _) =>
+            {
+                asked.Add(query);
+                return Task.FromResult(NoWire.FailedPart(query, "the lane of WORK_KEY is held"));
+            });
 
-        var answered = await Call(late, AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" }));
+        var answered = await Call(failing, AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" }));
 
         Assert.True(answered.Ok);
-        Assert.EndsWith(DssHarness.Core.Web.WebBlocks.Search("group by", "native", "native: the provider did not answer the search in time"), answered.Text, StringComparison.Ordinal);
-        late.Dispose();
+        Assert.Equal(["group by"], asked);
+        Assert.EndsWith(DssHarness.Core.Web.WebBlocks.Search("group by", "native", "native: the lane of WORK_KEY is held"), answered.Text, StringComparison.Ordinal);
+        failing.Dispose();
+
+        var searched = File.ReadAllLines(Path.Combine(_step, AgentCallRecords.WebFileName)).Select(line => JsonNode.Parse(line)!).Where(line => line["line"]!.GetValue<string>() == "searched").ToList();
+
+        Assert.Equal([("alpha", "Ok"), ("native", "Failed")], searched.Select(line => (line["by"]!.GetValue<string>(), line["outcome"]!.GetValue<string>())));
 
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
-        var stopped = Open(capabilities: [AgentCapability.Read, AgentCapability.Web], endpoint: endpoint, webSearch: TwoSources(), native: new StoppedNativeSearch(stop));
+        var stopped = Open(
+            capabilities: [AgentCapability.Read, AgentCapability.Web],
+            endpoint: endpoint,
+            webSearch: TwoSources(),
+            native: async (_, cancellationToken) =>
+            {
+                await stop.CancelAsync();
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new InvalidOperationException("the stop did not reach the search");
+            });
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stopped.RunAsync(Request("call_1", AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" })), stop.Token));
     }
 
-    /// <summary>A provider's own search that never answers: its request ends cancelled - by the run's stop where it is given one, else by its own clock.</summary>
-    private sealed class StoppedNativeSearch(CancellationTokenSource? stop) : IAgentNativeSearch
+    /// <summary>
+    /// A runtime opened for a run that carries a native search is given what asks it, and one given an asker carries a
+    /// native search: neither is left without the other.
+    /// </summary>
+    [Fact]
+    public void ANativeSearch_AndWhatAsksIt_AreGivenTogether()
+    {
+        var host = new AgentToolHost(_harness.FileSystem, _harness.Platform, _harness.GitClient, new PhaseRunner(_harness.ProcessRunner, _harness.FileSystem, _harness.Output), _harness.ChildSessions, new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain"))), new RunningToolDouble("1.2.3"), TimeProvider.System);
+        var run = AgentRuns.Of(_step, _worktree, null, PolicyGrounds.Of(_worktree, [_main], [_worktree], [], [], [], [AgentCapability.Read]));
+
+        Assert.Equal(
+            "the run carries a native search, and nothing was given to ask it as the run stands (Parameter 'native')",
+            Assert.Throws<ArgumentException>(() => host.Open(run with { NativeSearch = new NoWire() }, _events)).Message);
+        Assert.Equal(
+            "the run carries no native search, and the runtime was given one to ask (Parameter 'native')",
+            Assert.Throws<ArgumentException>(() => host.Open(run, _events, (query, _) => Task.FromResult(NoWire.FailedPart(query, "never")))).Message);
+    }
+
+    /// <summary>A provider's own search the runtime never asks itself: the loop asks it, as the run stands.</summary>
+    private sealed class NoWire : IAgentNativeSearch
     {
         public string Source => "native";
 
-        public async Task<(DssHarness.Core.Web.Search.WebSearchPart Part, AgentUsage Used)> SearchAsync(string query, CancellationToken cancellationToken)
-        {
-            if (stop is not null)
-            {
-                await stop.CancelAsync();
-                cancellationToken.ThrowIfCancellationRequested();
-            }
+        public long InputTokens(string query, string model) => 0;
 
-            throw new TaskCanceledException("the request's own clock ran out");
-        }
+        public Task<AgentNativeSearched> SearchAsync(string query, string model, AgentKey key, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("the runtime asked the wire itself");
+
+        /// <summary>The part of a search of <paramref name="query"/> that failed for <paramref name="why"/>, in the one shape the wire gives it.</summary>
+        public static DssHarness.Core.Web.Search.WebSearchPart FailedPart(string query, string why) => ((IAgentNativeSearch)new NoWire()).Failed(query, why);
     }
 
     /// <summary>A query holding the run's secret is denied by the mask, nothing asked; a search no source answered fails, saying what each came to.</summary>
@@ -1559,7 +1598,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         IProcessRunner? processes = null,
         TimeProvider? clock = null,
         AgentWebSearch? webSearch = null,
-        IAgentNativeSearch? native = null)
+        AgentNativeAsk? native = null)
     {
         var ground = PolicyGrounds.Of(
             _worktree,
@@ -1577,7 +1616,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var files = fileSystem ?? _harness.FileSystem;
         var search = webSearch is null ? null : Search(fetch, clock ?? TimeProvider.System);
         var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), clock ?? TimeProvider.System, search: search);
-        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch) with { NativeSearch = native }, _events);
+        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch) with { NativeSearch = native is null ? null : new NoWire() }, _events, native);
 
         _opened.Add(fetch);
         _opened.Add(runtime);

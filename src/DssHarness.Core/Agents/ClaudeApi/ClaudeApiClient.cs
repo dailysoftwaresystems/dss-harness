@@ -77,15 +77,15 @@ public sealed class ClaudeApiClient(
 
     /// <summary>
     /// <paramref name="run"/> as the loop is given it: a side-task's web search asks the provider's own beside the
-    /// configured sources, as its native part - a request of the harness's own, signed with the side-task's key, through
-    /// the gate's lane of the provider and that key as every request of the loop's goes - and a step's search asks the
-    /// configured sources alone.
+    /// configured sources, as its native part - a request of the harness's own, which the loop asks with the entry
+    /// serving the run when the agent asks, through the gate as every request of the loop's goes - and a step's search
+    /// asks the configured sources alone.
     /// </summary>
     /// <param name="connection">How the native search's request is posted.</param>
     /// <param name="run">The run.</param>
     /// <param name="entries">The run's entries: its provider, model and client.</param>
     internal static AgentRun WithNativeSearch(ApiConnection connection, AgentRun run, AgentEntries entries)
-        => run.Ground is { SideTask: true } && run.WebSearch is not null && run.Credential?.Keys is [_, ..] keys
-            ? run with { NativeSearch = new ClaudeApiNativeSearch(connection, entries.Provider.Api, run.Model ?? entries.Model.Code, keys[0], run.Gates?.LaneOf(entries.Provider.Name, ClientName, entries.Client, keys[0])) }
+        => run.Ground is { SideTask: true } && run.WebSearch is not null && run.Credential?.Keys is [_, ..]
+            ? run with { NativeSearch = new ClaudeApiNativeSearch(connection, entries.Provider.Api) }
             : run;
 }

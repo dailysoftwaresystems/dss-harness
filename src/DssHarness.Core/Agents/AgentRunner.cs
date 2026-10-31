@@ -309,25 +309,47 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 null);
         }
 
-        if (step.Compaction is not { } compaction)
+        // A run begun from the engine's compaction says so as the first client given the compacted conversation is
+        // launched, and counts it once: a run that ends before any client is given it - one never started, or held at the
+        // gate - compacted nothing.
+        var compaction = new CompactionToSay(step.Compaction);
+        var (worked, thrown) = await ClientsAsync(step, directory, mask, pump, compaction, cancellationToken).ConfigureAwait(false);
+
+        return (compaction.Said ? worked with { Compactions = worked.Compactions + 1 } : worked, thrown);
+    }
+
+    /// <summary>
+    /// The engine's compaction a step's run begins from, said once: as the first launch given the compacted conversation
+    /// begins - the conversation it leaves, the one it begins, and what the record kept and reduced - and never by a launch
+    /// after it, which is given the same conversation.
+    /// </summary>
+    /// <param name="compaction">The step's compaction; null where it has none, and nothing is said.</param>
+    private sealed class CompactionToSay(AgentCompacted? compaction)
+    {
+        /// <summary>Whether a launch was given the compacted conversation: the step's run counts the compaction.</summary>
+        public bool Said { get; private set; }
+
+        /// <summary>Says the compaction where <paramref name="run"/> is the first launch given it.</summary>
+        /// <param name="run">The launch about to begin.</param>
+        /// <param name="events">Where the launch's events go.</param>
+        public async ValueTask SayAsync(AgentRun run, IAgentEventSink events)
         {
-            return await ClientsAsync(step, directory, mask, pump, cancellationToken).ConfigureAwait(false);
+            if (compaction is null || Said)
+            {
+                return;
+            }
+
+            Said = true;
+
+            await events.EmitAsync(new Compacted(
+                compaction.Why,
+                compaction.Left ?? string.Empty,
+                run.SessionId ?? string.Empty,
+                compaction.KeptWordForWord,
+                compaction.Reduced,
+                compaction.SizeBefore,
+                compaction.SizeAfter)).ConfigureAwait(false);
         }
-
-        // A run begun from the engine's compaction says so before any client is taken, and counts it: the conversation it
-        // leaves, the one it begins, and what the record kept and reduced.
-        await pump.EmitAsync(new Compacted(
-            AgentCompaction.AnsweredCompact,
-            compaction.Left ?? string.Empty,
-            step.SessionId ?? string.Empty,
-            compaction.KeptWordForWord,
-            compaction.Reduced,
-            compaction.SizeBefore,
-            compaction.SizeAfter)).ConfigureAwait(false);
-
-        var (worked, thrown) = await ClientsAsync(step, directory, mask, pump, cancellationToken).ConfigureAwait(false);
-
-        return (worked with { Compactions = worked.Compactions + 1 }, thrown);
     }
 
     /// <summary>
@@ -338,19 +360,21 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <param name="directory">The step's own directory.</param>
     /// <param name="mask">What masks the secrets the run's text may carry.</param>
     /// <param name="pump">The run's pump, the sink the client is handed.</param>
+    /// <param name="compaction">The step's compaction, said as the first launch given it begins.</param>
     /// <param name="cancellationToken">The hard stop.</param>
     private async Task<(AgentRunResult Result, Exception? Thrown)> ClientsAsync(
         AgentStepRequest step,
         string directory,
         ILineMask mask,
         AgentEventPump pump,
+        CompactionToSay compaction,
         CancellationToken cancellationToken)
     {
         if (step.Order is { Count: > 0 } order)
         {
             // The step's whole order is the engine's to walk: a decline, a limit and a refused key move it from entry
             // to entry, across clients as within one, until an ending stands.
-            return await OrderedAsync(order, step, directory, mask, pump, cancellationToken).ConfigureAwait(false);
+            return await OrderedAsync(order, step, directory, mask, pump, compaction, cancellationToken).ConfigureAwait(false);
         }
 
         if (Client(step) is not { } client)
@@ -377,7 +401,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         {
             var resolved = Resolved(step, directory, mask, messages);
             WroteUserMd(resolved, NewConversation(client, resolved));
-            var result = await InLaneAsync(client, resolved, pump, pump).ConfigureAwait(false);
+            var result = await InLaneAsync(client, resolved, pump, pump, compaction).ConfigureAwait(false);
 
             return (Holding(client, result, step, mask), null);
         }
@@ -411,6 +435,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <param name="directory">The step's own directory.</param>
     /// <param name="mask">What masks the secrets the run's text may carry.</param>
     /// <param name="pump">The run's pump, the sink the client is handed.</param>
+    /// <param name="compaction">The step's compaction, said as the first launch given it begins.</param>
     /// <param name="cancellationToken">The hard stop.</param>
     private async Task<(AgentRunResult Result, Exception? Thrown)> OrderedAsync(
         IReadOnlyList<AgentRunEntry> order,
@@ -418,6 +443,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         string directory,
         ILineMask mask,
         AgentEventPump pump,
+        CompactionToSay compaction,
         CancellationToken cancellationToken)
     {
         var totals = new WalkTotals();
@@ -513,7 +539,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                             launchSession);
 
                         WroteUserMd(resolved, NewConversation(client, resolved));
-                        var answered = await InLaneAsync(client, resolved, watching, pump).ConfigureAwait(false);
+                        var answered = await InLaneAsync(client, resolved, watching, pump, compaction).ConfigureAwait(false);
 
                         // An answer that does not hold together is no ending the engine could read, and no ending to
                         // move on from either.
@@ -848,27 +874,29 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// handed the gate's lanes and enters one for each request; any other is held in the lane of its provider and first
     /// key for the whole run - a Claude Code launch, whose requests the runner cannot see one by one - its wait said as it
     /// waits and ended by the run's pause, which leaves a run that never began with no handoff to give; the answer's
-    /// tokens are charged once they are had, and an account limit the run met holds the lane until it lifts.
+    /// tokens are charged once they are had, and an account limit the run met holds the lane until it lifts. The step's
+    /// compaction is said as the client is given the run, never before.
     /// </summary>
     /// <param name="client">The client.</param>
     /// <param name="run">The run, resolved.</param>
     /// <param name="events">Where the run's events go.</param>
     /// <param name="pump">The run's pump, whose stop the run is held to.</param>
-    private async Task<AgentRunResult> InLaneAsync(IAgentClient client, AgentRun run, IAgentEventSink events, AgentEventPump pump)
+    /// <param name="compaction">The step's compaction, said as the first launch given it begins.</param>
+    private async Task<AgentRunResult> InLaneAsync(IAgentClient client, AgentRun run, IAgentEventSink events, AgentEventPump pump, CompactionToSay compaction)
     {
         if (_gates is null)
         {
-            return await client.RunAsync(run, events, pump.Stopping).ConfigureAwait(false);
+            return await LaunchedAsync(run).ConfigureAwait(false);
         }
 
         if (client.Capabilities.PacesRequests)
         {
-            return await client.RunAsync(run with { Gates = _gates }, events, pump.Stopping).ConfigureAwait(false);
+            return await LaunchedAsync(run with { Gates = _gates }).ConfigureAwait(false);
         }
 
         if (run.Provider is not { Length: > 0 } provider)
         {
-            return await client.RunAsync(run, events, pump.Stopping).ConfigureAwait(false);
+            return await LaunchedAsync(run).ConfigureAwait(false);
         }
 
         var key = run.Credential?.Auth == AgentAuth.Login ? null : run.Credential?.Keys.FirstOrDefault();
@@ -921,7 +949,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
         using (slot)
         {
-            result = await client.RunAsync(run, events, pump.Stopping).ConfigureAwait(false);
+            result = await LaunchedAsync(run).ConfigureAwait(false);
         }
 
         slot.Answered(result.Usage?.Total.OutputTokens ?? 0);
@@ -935,6 +963,14 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         }
 
         return result;
+
+        // The client given the run, the step's compaction said as it is.
+        async Task<AgentRunResult> LaunchedAsync(AgentRun given)
+        {
+            await compaction.SayAsync(given, events).ConfigureAwait(false);
+
+            return await client.RunAsync(given, events, pump.Stopping).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -1183,6 +1219,14 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             Path.Combine(StepDirectoryOf(run), OrchestratorLayout.StepUserFileName),
             run.Mask.Redact(run.Compaction is { Length: > 0 } compacted ? compacted : AgentPromptParts.FirstMessage(run, newConversation)));
 
+    /// <summary>
+    /// The continuation a run of the step carries: the record of a compaction carried before a task of its own
+    /// (<see cref="AgentCompacted.BeforeItsTask"/>) in place of the request's, else the request's own.
+    /// </summary>
+    /// <param name="step">The step.</param>
+    private static string? ContinuationOf(AgentStepRequest step)
+        => step.Compaction is { BeforeItsTask: true } carried ? carried.Record : step.Continuation;
+
     /// <summary>The step's run, as the client takes it: the prompt filled, the places as they are, the directory its own.</summary>
     /// <param name="step">The step.</param>
     /// <param name="directory">The step's own directory.</param>
@@ -1208,8 +1252,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             messages,
             step.RunContext,
             step.PlanUpdates,
-            step.Continuation,
-            step.Compaction?.Record)
+            ContinuationOf(step),
+            step.Compaction is { BeforeItsTask: false } whole ? whole.Record : null)
         {
             Ground = step.Ground,
             Credential = step.Credential,
@@ -1267,8 +1311,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             messages,
             step.RunContext,
             step.PlanUpdates,
-            step.Continuation,
-            step.Compaction?.Record)
+            ContinuationOf(step),
+            step.Compaction is { BeforeItsTask: false } whole ? whole.Record : null)
         {
             Ground = step.Ground,
             Credential = credential,

@@ -758,6 +758,58 @@ public sealed class AgentFallbackTests : IDisposable
     }
 
     /// <summary>
+    /// A compacted step is said compacted once, as its first launch is given the compacted conversation, and counted
+    /// once however many launches its walk makes - a retry and a move are given the same conversation, never a new
+    /// compaction. Each launch is given the record as the compaction says it is carried: the first message whole, or
+    /// the continuation before the step's own task.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACompactedStep_IsSaidCompactedOnce_AsItsFirstLaunchIsGivenIt(bool beforeItsTask)
+    {
+        var given = new List<(string? Compaction, string? Continuation, string Task)>();
+        var failing = new Scripted("one")
+        {
+            Script = (run, events, _) =>
+            {
+                given.Add((run.Compaction, run.Continuation, run.UserPrompt));
+                return Task.FromResult(new AgentRunResult(AgentRunStatus.Failed, Model: run.Model, Error: "it broke"));
+            },
+        };
+        var next = new Scripted("glm")
+        {
+            Script = (run, events, _) =>
+            {
+                given.Add((run.Compaction, run.Continuation, run.UserPrompt));
+                return Completed(run, events, "glm-5.3", turns: 1);
+            },
+        };
+        var compaction = new AgentCompacted("the record", KeptWordForWord: 1, Reduced: 2, SizeBefore: 300, SizeAfter: 10) { BeforeItsTask = beforeItsTask };
+        var seen = new Collecting();
+
+        var result = await new AgentRunner([failing, next], _harness.FileSystem, Elevation.User, TimeProvider.System).RunAsync(
+            Step([Entry("claude-fable-5-1", "anthropic", "one"), Entry("glm-5.3", "zai", "glm", key: null)]) with
+            {
+                Retries = 1,
+                BackoffSeconds = 0,
+                Continuation = "the request's own continuation",
+                Compaction = compaction,
+            },
+            seen,
+            Token);
+
+        (string?, string?, string) each = beforeItsTask ? (null, "the record", "do the thing") : ("the record", "the request's own continuation", "do the thing");
+
+        Assert.Equal((AgentRunStatus.Completed, 1), (result.Status, result.Compactions));
+        Assert.Equal([each, each, each], given);
+        Assert.Equal(
+            new Compacted(AgentCompaction.AnsweredCompact, string.Empty, string.Empty, 1, 2, 300, 10),
+            Assert.Single(seen.Seen.OfType<Compacted>()) with { Seq = 0, At = default });
+        Assert.True(seen.Seen.FindIndex(one => one is Compacted) < seen.Seen.FindIndex(one => one is WaitingToRetry), "said as the first launch is given it, before the retry");
+    }
+
+    /// <summary>
     /// A failed agent with no retries given moves at once, and one whose retries are spent on its last model ends
     /// failed: only when every model was tried does the failure meet the step's own ending.
     /// </summary>

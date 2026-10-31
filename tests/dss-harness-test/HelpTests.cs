@@ -402,11 +402,32 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "It begins a new conversation, on every client - the record is the first message of one and the old is kept "
-                + "whole, never edited or sent again - said in the step's stream as Compacted and counted in its result; an "
-                + "attempt compacted again is reduced whole again, its earlier records never copied into the next, and a later "
+                + "whole, never edited or sent again - said in the step's stream as Compacted and counted in its result once, "
+                + "as the first launch given it begins, so a run never started (its client missing, its model unpriced) or held "
+                + "at the gate compacted nothing, and a retry or a move is given the same record and counts no other; a "
+                + "side-task's compaction is said and counted the same way, its record carried before the person's next "
+                + "message; an attempt compacted again is reduced whole again, its earlier records never copied into the next, and a later "
                 + "launch's first message is read as its task alone, never the record it carried; a claude-code child is "
                 + "started with DISABLE_COMPACT=1, so it never compacts by itself and a full context ends the step ContextExhausted.",
             prose,
+            StringComparison.Ordinal);
+
+        // The envelope said in words where the wire holds no schema: a message of its own after the first, so the first
+        // message is the parts alone.
+        Assert.Contains(
+            $"the {DssHarness.Core.Agents.ZaiApi.ZaiApiClient.ClientName} client, whose wire holds no answer to a schema, says it "
+                + "in words in a message of its own after the step's first, in every conversation the step begins, and asks an "
+                + "answer that read as no JSON again in JSON alone",
+            prose,
+            StringComparison.Ordinal);
+
+        // A side-task's own search on the Claude API, asked as the side-task stands when the agent asks it.
+        Assert.Contains(
+            "on the Claude API a request of the harness's own whose only tool is the provider's search, asked with the model "
+                + "and key serving the side-task when the agent asks and through that key's gate as every request is, what it "
+                + "costs counted then to that model and key, a failure of it - a gate held past the longest wait among them - "
+                + "one failed part of the search saying why;",
+            Prose.Words(HelpText.Of("side-tasks").StandardOutput),
             StringComparison.Ordinal);
     }
 

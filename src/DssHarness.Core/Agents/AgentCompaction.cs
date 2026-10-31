@@ -40,6 +40,16 @@ public sealed record AgentCompacted(string Record, int KeptWordForWord, int Redu
 {
     /// <summary>The conversation the compaction leaves: the last session the attempt's stream names; null where it names none.</summary>
     public string? Left { get; init; }
+
+    /// <summary>Why the conversation was compacted, as the <see cref="Compacted"/> event of the run begun from it says.</summary>
+    public string Why { get; init; } = AgentCompaction.AnsweredCompact;
+
+    /// <summary>
+    /// Whether the record is carried before a task of its own - the run's continuation, a side-task's next message its
+    /// task - rather than being the new conversation's first message whole, the task again at its end, as a step's
+    /// answer <c>compact</c> begins one. Either way it stands in place of any continuation the request carries.
+    /// </summary>
+    public bool BeforeItsTask { get; init; }
 }
 
 /// <summary>
@@ -57,6 +67,9 @@ public static class AgentCompaction
 
     /// <summary>Why a step's conversation is compacted, as the <see cref="Compacted"/> event says it.</summary>
     public const string AnsweredCompact = "the conversation filled its model's context, and its limit's question was answered compact";
+
+    /// <summary>Why a side-task's conversation is compacted, as the <see cref="Compacted"/> event says it.</summary>
+    public const string OutgrewItsContext = "the conversation outgrew its model's context";
 
     /// <summary>
     /// Works the compaction of an attempt out: the record, and how much of the attempt it kept and reduced. The same

@@ -1703,6 +1703,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal(new AgentAccountLimit(spent, DateTimeOffset.FromUnixTimeSeconds(1_790_000_000)), result.Limit);
         Assert.Contains("five_hour", result.Error, StringComparison.Ordinal);
 
+        // Rejected before any result line, the launch said no cost and used nothing: its usage holds no cost at all, never
+        // an empty one a fold would read as unknown.
+        Assert.Equal((AgentUsage.None, (AgentCost?)null), (result.Usage!.Total, result.Usage.Cost));
+
         kit.Script([new JsonObject { ["rateLimit"] = new JsonObject { ["status"] = "allowed_warning", ["rateLimitType"] = "seven_day" } }]);
 
         var warned = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);

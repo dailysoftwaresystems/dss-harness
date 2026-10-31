@@ -61,7 +61,8 @@ public static class AgentAttempt
     /// (<see cref="AgentPromptParts.TaskOf"/>) - the answer it went on with - never the run context or the continuation
     /// record it carried, which are the engine's record of what the attempt's events hold themselves; and none where it
     /// is a compaction record, which stands for the items before it, or the attempt's own task sent again to a new
-    /// conversation, which the attempt's first prompt already is.
+    /// conversation, which the attempt's first prompt already is. The envelope said in words is an item the first time
+    /// it is said alone: each conversation a provider that holds no schema begins is told it again, the same words.
     /// </summary>
     /// <param name="attempt">The attempt's events.</param>
     public static AgentAttemptItems Items(IReadOnlyList<AgentEvent> attempt)
@@ -70,6 +71,7 @@ public static class AgentAttempt
 
         string? first = null;
         string? task = null;
+        var envelopes = new HashSet<string>(StringComparer.Ordinal);
         var items = new List<AgentAttemptItem>();
         var answers = new Dictionary<string, ToolCallFinished>(StringComparer.Ordinal);
         var turn = 0;
@@ -112,6 +114,9 @@ public static class AgentAttempt
                         items.Add(new AgentAttemptItem(turn, Engine: later with { Text = answer }));
                     }
 
+                    break;
+
+                case MessageSent { Which: AgentMessageKind.EnvelopeInWords } envelope when !envelopes.Add(envelope.Text):
                     break;
 
                 case MessageSent sent:

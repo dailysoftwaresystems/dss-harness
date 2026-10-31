@@ -968,23 +968,196 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Equal(new AgentCost(Counted: 0.01775m), result.Usage.Cost);
     }
 
-    /// <summary>The provider's own search, answering one result and saying what its request used.</summary>
-    private sealed class UsingNativeSearch(AgentUsage used) : IAgentNativeSearch
+    /// <summary>
+    /// The provider's own search is asked as the run stands when the agent asks it: a run that moved to its next key -
+    /// the first refused - asks the search with the key serving it then, and what the search used is counted at once to
+    /// that key's part, never the key the run began on.
+    /// </summary>
+    [Fact]
+    public async Task TheProvidersOwnSearch_IsAskedWithTheEntryServingTheRunNow_AndCountedToIt()
     {
+        var native = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1));
+        var run = Searching(native) with { Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", "sk-1"), new AgentKey("SPARE_KEY", "sk-2")]) };
+        _chat.Fail(new ChatFailure(ChatFailureKind.KeyRefused, "invalid x-api-key"))
+            .Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by"))))
+            .Answer(FakeChat.Said("done"));
+
+        var result = await Ran(run, Terms(perThousandSearches: 10), loop: Loop(search: true));
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal([(FakeChat.Model, "SPARE_KEY")], native.Asked);
+        Assert.Equal([new AgentModelUsage(FakeChat.Model, new AgentUsage(1200, 70, 0, 0, 0, 1), "SPARE_KEY", new AgentCost(Counted: 0.01775m))], result.Usage!.PerModel);
+
+        // The search's usage is said when it is had, before the request that follows it.
+        Assert.Equal(
+            [FakeChat.Used(), new AgentUsage(1000, 50, 0, 0, 0, 1), FakeChat.Used()],
+            _events.All.OfType<UsageReported>().Select(used => used.Turn));
+    }
+
+    /// <summary>
+    /// The provider's own search goes through the lane of its provider and the key serving the run, as every request of
+    /// the conversation does: a hold past the client's longest wait fails its part at once, naming the limit, and the
+    /// search is never sent; a shorter one is waited, said as the search waits.
+    /// </summary>
+    [Fact]
+    public async Task TheProvidersOwnSearch_GoesThroughTheLane_FailingAtOnceWhereItIsHeldPastTheLongestWait()
+    {
+        var clock = new ManualClock();
+        var waits = new List<TimeSpan>();
+        var gates = new ClientGates(clock, (wait, _) =>
+        {
+            waits.Add(wait);
+            clock.Advance(wait);
+            return Task.CompletedTask;
+        });
+        var lane = gates.LaneOf("anthropic", "claude-api", null, new AgentKey("WORK_KEY", "sk-1"));
+        var held = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1));
+        var heldRun = Searching(held) with { Gates = gates };
+
+        // The model is held for an hour as the agent calls the search, past the longest wait of 300 s: the search's part
+        // fails at once, and the run's next request meets the same limit.
+        _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by"))));
+
+        var limited = await Ran(heldRun, Terms(perThousandSearches: 10), loop: Loop(search: true, clock: clock), sink: new Reacting(_events, @event => @event is ToolCallStarted, () => lane.RateLimited(TimeSpan.FromHours(1), FakeChat.Model)));
+        var until = clock.GetUtcNow() + TimeSpan.FromHours(1);
+
+        Assert.Empty(held.Asked);
+        Assert.Empty(waits);
+        Assert.Equal(AgentRunStatus.RateLimited, limited.Status);
+        Assert.EndsWith(
+            DssHarness.Core.Web.WebBlocks.Search("group by", "native", $"native: the lane of WORK_KEY holds '{FakeChat.Model}' by a 429's cool-down until {until:u}"),
+            Assert.Single(_events.All.OfType<ToolCallFinished>()).Result,
+            StringComparison.Ordinal);
+
+        // Held for less than the longest wait, the search waits the hold out, said as the search's wait, and is asked
+        // after it.
+        var shortLane = gates.LaneOf("anthropic", "claude-api", null, new AgentKey("SPARE_KEY", "sk-2"));
+        var chat = new FakeChat();
+        chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by")))).Answer(FakeChat.Said("done"));
+        var waited = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1));
+        var seen = new RecordedEvents();
+        var spare = Searching(waited) with { Gates = gates, Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("SPARE_KEY", "sk-2")]) };
+
+        var shortly = await Ran(spare, Terms(perThousandSearches: 10), loop: Loop(search: true, clock: clock), chat: chat, sink: new Reacting(seen, @event => @event is ToolCallStarted, () => shortLane.RateLimited(TimeSpan.FromSeconds(5), FakeChat.Model)));
+
+        Assert.Equal(AgentRunStatus.Completed, shortly.Status);
+        Assert.Equal([(FakeChat.Model, "SPARE_KEY")], waited.Asked);
+        Assert.Equal([TimeSpan.FromSeconds(5)], waits);
+        Assert.Equal([$"the search waits for {ClientGate.CoolDown}"], seen.All.OfType<WaitingToRetry>().Select(wait => wait.Cause));
+    }
+
+    /// <summary>A side-task's run that searches the configured source alpha and carries <paramref name="native"/>, the provider's own search.</summary>
+    private AgentRun Searching(IAgentNativeSearch native)
+        => Run(capabilities: [AgentCapability.Read, AgentCapability.Web]) with
+        {
+            WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()),
+            NativeSearch = native,
+        };
+
+    /// <summary>
+    /// The provider's own search that meets a 429 holds the lane it was asked through, as the conversation's own request
+    /// does: the model is held there for the wait the 429 named, so the run's next request - past the longest wait - meets
+    /// the limit and is never sent.
+    /// </summary>
+    [Fact]
+    public async Task TheProvidersOwnSearch_ThatMeetsA429_HoldsTheLaneItWasAskedThrough()
+    {
+        var clock = new ManualClock();
+        var gates = new ClientGates(clock, (wait, _) => Task.CompletedTask);
+        var lane = gates.LaneOf("anthropic", "claude-api", null, new AgentKey("WORK_KEY", "sk-1"));
+        var native = new UsingNativeSearch(AgentUsage.None, failure: new ChatFailure(ChatFailureKind.RateLimited, "rate limited", RetryAfter: TimeSpan.FromHours(1)));
+        _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by")))).Answer(FakeChat.Said("done"));
+
+        var result = await Ran(Searching(native) with { Gates = gates }, Terms(perThousandSearches: 10), loop: Loop(search: true, clock: clock));
+
+        Assert.Equal(AgentRunStatus.RateLimited, result.Status);
+        Assert.Single(_chat.Requests);
+        Assert.Equal((FakeChat.Model, TimeSpan.FromHours(1)), (lane.CoolDownOf(FakeChat.Model)?.Model, lane.CoolDownOf(FakeChat.Model)?.Left));
+    }
+
+    /// <summary>
+    /// The provider's own search whose cost cannot be counted under a budget ends the run before its next request, saying
+    /// so - the agent given the search's answer, and nothing more asked of the model.
+    /// </summary>
+    [Fact]
+    public async Task TheProvidersOwnSearch_WhoseCostCannotBeCounted_EndsABudgetedRun()
+    {
+        var native = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1));
+        _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by")))).Answer(FakeChat.Said("done"));
+
+        var result = await Ran(Searching(native) with { Limits = Limits(budget: 5m) }, Terms(), loop: Loop(search: true));
+
+        Assert.Equal(
+            (AgentRunStatus.Failed, $"the step's cost cannot be counted against its budget: no price for '{FakeChat.Model}' (providers 'anthropic', model '{FakeChat.Model}': pricePerThousandSearches)"),
+            (result.Status, result.Error));
+        Assert.Single(_chat.Requests);
+    }
+
+    /// <summary>
+    /// The provider's own search, answering one result and saying what its request used and the failure it met - or
+    /// throwing <paramref name="throws"/> - each ask kept with the model and the key it was asked with.
+    /// </summary>
+    private sealed class UsingNativeSearch(AgentUsage used, Exception? throws = null, ChatFailure? failure = null) : IAgentNativeSearch
+    {
+        private readonly List<(string Model, string Key)> _asked = [];
+
+        public IReadOnlyList<(string Model, string Key)> Asked
+        {
+            get
+            {
+                lock (_asked)
+                {
+                    return [.. _asked];
+                }
+            }
+        }
+
         public string Source => "native";
 
-        public Task<(DssHarness.Core.Web.Search.WebSearchPart Part, AgentUsage Used)> SearchAsync(string query, CancellationToken cancellationToken)
-            => Task.FromResult((
-                new DssHarness.Core.Web.Search.WebSearchPart(
-                    Source,
-                    Source,
-                    1,
-                    query,
-                    DssHarness.Core.Web.Search.WebSearchAnswer.Read([new DssHarness.Core.Web.Search.WebSearchResult("One", "https://one.example.test/", "the one")]),
-                    Withheld: 0,
-                    Cached: false,
-                    KeyMissing: null),
-                used));
+        public long InputTokens(string query, string model) => 10;
+
+        public Task<AgentNativeSearched> SearchAsync(string query, string model, AgentKey key, CancellationToken cancellationToken)
+        {
+            lock (_asked)
+            {
+                _asked.Add((model, key.Name));
+            }
+
+            return throws is not null
+                ? Task.FromException<AgentNativeSearched>(throws)
+                : Task.FromResult(new AgentNativeSearched(
+                    new DssHarness.Core.Web.Search.WebSearchPart(
+                        Source,
+                        Source,
+                        1,
+                        query,
+                        DssHarness.Core.Web.Search.WebSearchAnswer.Read([new DssHarness.Core.Web.Search.WebSearchResult("One", "https://one.example.test/", "the one")]),
+                        Withheld: 0,
+                        Cached: false,
+                        KeyMissing: null),
+                    used,
+                    failure));
+        }
+    }
+
+    /// <summary>
+    /// The provider's own search that does not answer in time is a failed part of the search, saying so, beside the
+    /// configured sources' answers, and counted as nothing it used.
+    /// </summary>
+    [Fact]
+    public async Task TheProvidersOwnSearch_ThatDoesNotAnswerInTime_IsAFailedPart()
+    {
+        var native = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1), new TaskCanceledException("the request's own clock ran out"));
+        _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by")))).Answer(FakeChat.Said("done"));
+
+        var result = await Ran(Searching(native), Terms(perThousandSearches: 10), loop: Loop(search: true));
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.EndsWith(
+            DssHarness.Core.Web.WebBlocks.Search("group by", "native", "native: the provider did not answer the search in time"),
+            Answer(_chat.Requests[1].Messages, "c1").Text,
+            StringComparison.Ordinal);
+        Assert.Equal(new AgentUsage(200, 20, 0, 0, 0, 0), result.Usage!.Total);
     }
 
     /// <summary>The harness's own search for a loop's host, over <paramref name="fetch"/>, its pace and indexes beside the step.</summary>
@@ -1778,9 +1951,10 @@ public sealed class ToolLoopTests : IDisposable
     }
 
     /// <summary>
-    /// A provider whose wire holds no answer to the schema is told it in words in the step's first message; an answer that
-    /// read as no JSON is asked again in JSON alone, and the request after any other turn - a turn of calls, JSON that did
-    /// not read - is asked as every other is. A provider whose wire holds it is told nothing in words.
+    /// A provider whose wire holds no answer to the schema is told it in words in a message of its own after the step's
+    /// first - the first message exactly the parts the engine writes, which its reader takes apart again to the task - an
+    /// answer that read as no JSON is asked again in JSON alone, and the request after any other turn - a turn of calls,
+    /// JSON that did not read - is asked as every other is. A provider whose wire holds it is told nothing in words.
     /// </summary>
     [Fact]
     public async Task AProviderThatHoldsNoSchema_IsToldItInWords_AndAnAnswerOfNoJson_IsAskedAgainInJsonAlone()
@@ -1788,18 +1962,25 @@ public sealed class ToolLoopTests : IDisposable
         Write("a.txt", "alpha");
         var chat = new FakeChat { SendsSchema = false };
         chat.Answer(FakeChat.Said("not json")).Answer(FakeChat.Calling(View("c1", "a.txt"))).Answer(FakeChat.Said("""{"a":1}""")).Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
+        var run = Run(output: Schema) with { RunContext = "run facts" };
+        var first = AgentPromptParts.FirstMessage(run, newConversation: true);
+        var inWords = AgentEnvelope.InWords(AgentEnvelope.Schema(Schema));
 
-        var result = await Ran(Run(output: Schema), chat: chat);
+        var result = await Ran(run, chat: chat);
 
         Assert.Equal((AgentRunStatus.Completed, """{"a":"x"}"""), (result.Status, result.StructuredOutput));
         Assert.Equal([false, true, false, false], chat.Requests.Select(request => request.JsonAlone));
-        Assert.Equal($"{Asked}\n\n{AgentEnvelope.InWords(AgentEnvelope.Schema(Schema))}", FakeChat.ContentOf(chat.Requests[0].Messages[0]));
+        Assert.Equal([FakeChat.User(first), FakeChat.User(inWords)], chat.Requests[0].Messages);
+        Assert.Equal(
+            [(AgentMessageKind.FirstPrompt, first), (AgentMessageKind.EnvelopeInWords, inWords)],
+            _events.All.OfType<MessageSent>().Take(2).Select(sent => (sent.Which, sent.Text)));
+        Assert.Equal(Asked, AgentPromptParts.TaskOf(_events.All.OfType<MessageSent>().First().Text));
         Assert.Equal([StructuredOutputGate.NoObject], _events.All.OfType<OutputRepair>().First().Problems);
 
         _chat.Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
         await Ran(Run(output: Schema));
 
-        Assert.Equal(Asked, FakeChat.ContentOf(_chat.Requests[0].Messages[0]));
+        Assert.Equal([FakeChat.User(Asked)], _chat.Requests[0].Messages);
     }
 
     /// <summary>

@@ -1889,8 +1889,11 @@ that model's requests on the lane, an account's limit every request of it (`Clie
 wait; `RateLimited`, never shortened by a sooner one; `CoolDownOf`, the longer of the two a model is held by) - all
 counted on the clock's timestamps so a wall clock stepped holds no lane. Each client enters the lane at its own seam
 (`AgentClientCapabilities.PacesRequests`): the loop the API clients share before each request, its input estimated
-(`EstimatedTokens`), and the claude-api client's own server-side search (`ClaudeApiNativeSearch`) before each of its
-requests; the runner around each Claude Code launch (`AgentRunner.InLaneAsync`), whose requests it cannot see one by one.
+(`EstimatedTokens`) - the provider's own search among them, which the loop asks for the tool runtime as the run stands
+(`AgentNativeAsk`, the loop's `NativeSearchAsync` over the wire `IAgentNativeSearch`, `ClaudeApiNativeSearch` on the
+Claude API: the entry serving the run then, its key's lane by the same turn every request takes, `LaneTurnAsync`, and
+what it used counted at once to that entry's part); the runner around each Claude Code launch
+(`AgentRunner.InLaneAsync`), whose requests it cannot see one by one.
 A cool-down past the client's longest wait (`ToolLoopTerms.LongestWaitOf`) is waited by neither: the loop meets it as
 the limit it is, and the runner ends the launch at that limit before it begins, the walk moving on to an entry the
 cool-down does not hold. A wait is said as `WaitingToRetry` and ended by the run's pause - a launch paused at the gate
@@ -1967,17 +1970,23 @@ names one), every earlier result left out, and every message the engine sent sin
 to their first 2,000 characters each where the reduced part is over), what it kept and reduced held by
 `AgentCompacted`. It begins a new conversation, on every client (`AgentRun.Compaction` - the record is the first
 message of one, the old kept whole; the loop and the claude-code client ask it before any parts), the step's stream
-saying it as a `Compacted` event - the session left and the one begun, what was kept and reduced, the sizes - and its
-result counting it
-(`AgentRunResult.Compactions`). What each client is sent: `--json-schema` the
+saying it as a `Compacted` event - why, the session left and the one begun, what was kept and reduced, the sizes - and
+its result counting it (`AgentRunResult.Compactions`), once: the runner's one `CompactionToSay` says it as the first
+launch given the compacted conversation begins (`InLaneAsync`, just before the client is taken), so a run that ends
+not started or held at the gate compacted nothing, and a retry or a move given the same record counts no other. A
+compaction carried before a task of its own (`AgentCompacted.BeforeItsTask`, a side-task's, whose why is
+`AgentCompaction.OutgrewItsContext`) is the run's continuation in place of the request's (`AgentRunner.ContinuationOf`),
+said and counted the same way. What each client is sent: `--json-schema` the
 envelope as built; the loop's `ChatRequest.Schema`, which the Claude API sends as `output_config.format` in the copy
 `ClaudeApiRequest.Sent` makes - every array bound structured outputs do not take moved into its description, over
 `JsonSchemaSubset.SchemasIn` - and which, once the API refuses it as more than it compiles
 (`ClaudeApiFailures.RefusesTheFormat`, failed as `ChatFailureKind.SchemaRefused`), the loop sends the run's later requests
 none of, the envelope said in words in a message it appends to the conversation (`AgentMessageKind.EnvelopeInWords`) -
 never in the system prompt, which every stored turn's thinking was made under - and which a provider whose wire holds no answer to a schema (`IChatProvider.SendsSchema` false, Z.AI) is told in words
-in the step's first message (`AgentEnvelope.InWords`), an answer that read as no JSON asked again in JSON alone
-(`ChatRequest.JsonAlone`: no tool offered, `response_format` a JSON object).
+in a message of the same kind after the step's first, in every conversation the run begins (`AgentEnvelope.InWords`),
+so the first message is exactly what `AgentPromptParts.FirstMessage` wrote and `AgentPromptParts.TaskOf` takes apart,
+and the attempt's items hold the envelope once (`AgentAttempt.Items`); an answer that read as no JSON asked again in JSON
+alone (`ChatRequest.JsonAlone`: no tool offered, `response_format` a JSON object).
 
 The harness's own web search is built under `Web\Search`: each kind of source an implementation of `IWebSearchKind` -
 pure, asking and reading only what it is handed - found by the one scan of the core (`CoreImplementations<T>`, which
@@ -2716,9 +2725,11 @@ whose application - the first word past its own options, never an argument of it
 process, refused saying why, never read as a tree with no agent in it); no limits, no output envelope; the web
 search of every configured source turned on, with one more asked beside them: `native`, the
 provider's own search - on the Claude API a request of the harness's own whose only tool is the
-provider's web search (`ClaudeApiNativeSearch`, no server tool in any conversation), its usage
-folded into the turn's and priced at the provider's `pricePerThousandSearches`, a failure of it one
-failed part of the search saying why; on Claude Code its own `WebSearch`, kept in a side-task's
+provider's web search (`ClaudeApiNativeSearch`, no server tool in any conversation), asked by the
+loop with the model and key serving the run when the agent asks, through that key's lane, its usage
+counted then to that entry's part and priced at the provider's `pricePerThousandSearches`, a failure
+of it - a hold past the longest wait among them, named - one failed part of the search saying why;
+on Claude Code its own `WebSearch`, kept in a side-task's
 `--tools` beside the engine's server; on Z.AI none. A chat goes on between the person's
 messages the way its client goes on with any conversation: one launch held open where the
 client renders its conversations (Claude Code), the person's later messages reaching the agent through
@@ -2734,7 +2745,9 @@ conversation so far; a fallback move of the runner's inside it still begins from
 message. One request per message where the client stores them, each going on with the stored
 one. A chat that outgrows the model's context is compacted as a step's conversation is - the whole
 conversation since the last compaction, every launch of it read as one, the person's later messages
-as they said them - and says so. The side-task's name is the person's (`--name`) or the date and
+as they said them - and says so, the record carried as the next request's `Compaction` before the person's
+message (`AgentCompacted.BeforeItsTask`), so the runner says it in the side-task's stream as `Compacted` and counts
+it as it does a step's. The side-task's name is the person's (`--name`) or the date and
 time it began - with the first words of its message in one shot; a chat is claimed, and named, before
 its first message is typed, so by the time alone - a suffix freeing it where another began in the
 same second; its owner (`SideTaskOwner`, the owner file beside its records) is claimed before

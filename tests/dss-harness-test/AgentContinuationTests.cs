@@ -219,6 +219,47 @@ public sealed class AgentContinuationTests : IDisposable
     }
 
     /// <summary>
+    /// On a provider told the envelope in words - Z.AI - each launch is sent its first message as the parts and then the
+    /// envelope in a message of its own: the later launch's first message is read as its answer alone and the envelope
+    /// said again is no new message of the engine's, so the record holds neither the record the launch carried nor the
+    /// schema twice.
+    /// </summary>
+    [Fact]
+    public void ALaterLaunchOfAProviderToldTheEnvelopeInWords_IsReadAsItsAnswerAlone()
+    {
+        var launch = AgentRuns.Of(_temp.Combine("step"), _temp.Combine("work")) with { RunContext = "run facts", UserPrompt = "do the work" };
+        const string InWords = "Answer with a JSON object of this schema: {}";
+        var stream = new AgentEvent[]
+        {
+            new RunStarted(1),
+            new MessageSent(AgentPromptParts.FirstMessage(launch, newConversation: true), AgentMessageKind.FirstPrompt),
+            new MessageSent(InWords, AgentMessageKind.EnvelopeInWords),
+            new TurnStarted(1),
+            new AssistantMessage("asked", []),
+            new RunStarted(1),
+            new MessageSent(AgentPromptParts.FirstMessage(launch with { Continuation = "the record of the launch before", UserPrompt = "the person's answer" }, newConversation: true), AgentMessageKind.FirstPrompt),
+            new MessageSent(InWords, AgentMessageKind.EnvelopeInWords),
+            new TurnStarted(1),
+            new AssistantMessage("answered", []),
+        };
+
+        var told = AgentContinuation.Iterations(AgentAttempt.Newest(stream), new AgentContinuationBounds(), _temp.Combine("copies"));
+
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "iteration 1 of 2:",
+                "asked",
+                string.Empty,
+                AgentContinuation.EngineSaid,
+                "the person's answer",
+                string.Empty,
+                "iteration 2 of 2:",
+                "answered"),
+            told);
+    }
+
+    /// <summary>
     /// The task of a first message is what the engine put in its task part, whichever parts came before it; a message
     /// sent without parts is its own task, and so is one that only looks like parts.
     /// </summary>

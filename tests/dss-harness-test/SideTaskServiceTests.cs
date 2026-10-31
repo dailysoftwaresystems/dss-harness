@@ -618,7 +618,8 @@ public sealed class SideTaskServiceTests
     /// A launch held open that ends by itself - its context outgrown - leaves no line of the person's unanswered: the
     /// line it was given and never answered - written to it, said as written, and taken by the turn that outgrew the
     /// context, as the real client does - begins a new launch, going on from the conversation compacted, and the person
-    /// is told. What is unanswered is the client's own count of what its turns answered, never what was written.
+    /// is told, and told again the conversation was compacted as the new launch is given it. What is unanswered is the
+    /// client's own count of what its turns answered, never what was written.
     /// </summary>
     [Fact]
     public async Task ALaunchThatEndsByItself_LosesNoLine_ANewLaunchGoesOnFromTheConversation()
@@ -658,6 +659,7 @@ public sealed class SideTaskServiceTests
             [
                 "about: first",
                 "the agent's launch ended ContextExhausted: the context is full; the next message begins a new launch, going on from the conversation so far",
+                "the conversation was compacted",
                 "about: second",
             ],
             typed.Said);
@@ -1024,7 +1026,8 @@ public sealed class SideTaskServiceTests
 
     /// <summary>
     /// A turn that outgrew its model's context compacts the conversation: the next message begins a new conversation,
-    /// the engine's compaction of the one before carried in its first message.
+    /// the engine's compaction of the one before carried in its first message before the person's message - and the
+    /// compaction is said in the side-task's stream and counted in its run's record, as a step's is, once.
     /// </summary>
     [Fact]
     public async Task ATurnThatOutgrewItsContext_CompactsTheConversation_ForTheNextMessage()
@@ -1048,8 +1051,25 @@ public sealed class SideTaskServiceTests
 
         Assert.Equal(2, stored.Runs.Count);
         Assert.Null(stored.Runs[1].Conversation);
+        Assert.Null(stored.Runs[1].Compaction);
+        Assert.Equal("go on", stored.Runs[1].UserPrompt);
         Assert.StartsWith(AgentCompaction.SaysWhatItIs, stored.Runs[1].Continuation, StringComparison.Ordinal);
         Assert.Contains("a long one", stored.Runs[1].Continuation!, StringComparison.Ordinal);
+
+        var directory = LayoutOf(temp, "compacted").Directory;
+        var stream = (await File.ReadAllLinesAsync(Path.Combine(directory, StoredStream.FileName), Token))
+            .Select(line => System.Text.Json.JsonSerializer.Deserialize<AgentEvent>(line, JsonStateFile.LineOptions)!)
+            .ToList();
+        var left = stream.OfType<SessionStarted>().First().SessionId;
+        var said = Assert.Single(stream.OfType<Compacted>());
+
+        Assert.Equal(
+            (AgentCompaction.OutgrewItsContext, left, string.Empty, 1, 0, (long)stored.Runs[1].Continuation!.Length),
+            (said.Why, said.Left, said.Began, said.KeptWordForWord, said.Reduced, said.SizeAfter));
+        Assert.True(stream.FindLastIndex(one => one is RunStarted) < stream.IndexOf(said), "said by the second turn's run, which is given it");
+        Assert.Equal(
+            1,
+            System.Text.Json.JsonSerializer.Deserialize<AgentRunResult>(File.ReadAllText(Path.Combine(directory, AgentRunner.ResultFileName)), JsonStateFile.Options)!.Compactions);
     }
 
     /// <summary>

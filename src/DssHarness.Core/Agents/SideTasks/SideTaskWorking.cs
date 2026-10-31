@@ -36,7 +36,7 @@ internal sealed class Working
     private SideTaskSetUp _now;
     private SideTaskRecord _record;
     private AgentSessionRef? _conversation;
-    private string? _carried;
+    private AgentCompacted? _carried;
     private AgentUsageReport? _inAll;
     private int _attempts;
 
@@ -491,8 +491,10 @@ internal sealed class Working
 
         // Where the next turn begins a conversation of its own - a new launch, another provider's model, a fallback, a
         // compaction - the conversation so far is carried in its first message, reduced as the engine's compaction
-        // reduces it; where the stored conversation is handed, the client sends none of it.
-        var continuation = _carried ?? (_turns.Count > 0 ? Reduced() : null);
+        // reduces it; where the stored conversation is handed, the client sends none of it. A compaction is carried as the
+        // request's own, so the runner says and counts it as it does a step's.
+        var compacted = _carried;
+        var continuation = compacted is null && _turns.Count > 0 ? Reduced()?.Record : null;
         _carried = null;
 
         return new AgentStepRequest(
@@ -536,6 +538,7 @@ internal sealed class Working
             RecordDirectory = _layout.Directory,
             SessionsDirectory = _layout.SessionsDirectory,
             Continuation = continuation,
+            Compaction = compacted,
             Program = _now.Program,
             ProgramVersion = _now.ProgramVersion,
             Messages = messages,
@@ -605,9 +608,10 @@ internal sealed class Working
     }
 
     /// <summary>
-    /// The engine's compaction of the conversation the side-task's stream holds: carried as the first message of the next
-    /// turn's new conversation, with the person's next message as its task, as a step's answer <c>compact</c> carries it.
-    /// Said where it happens.
+    /// The engine's compaction of the conversation the side-task's stream holds: carried in the first message of the next
+    /// turn's new conversation, before the person's next message as its task (<see cref="AgentCompacted.BeforeItsTask"/>),
+    /// and said by the runner as a <see cref="DssHarness.Core.Agents.Compacted"/> event and counted as the client is given it, as a step's answer
+    /// <c>compact</c> is. The person is told where it happens.
     /// </summary>
     private void Compacted()
     {
@@ -616,7 +620,7 @@ internal sealed class Working
             return;
         }
 
-        _carried = record;
+        _carried = record with { Why = AgentCompaction.OutgrewItsContext, BeforeItsTask = true };
         _conversation = null;
 
         _output.Info(SideTaskService.RunCommand, "the conversation outgrew the model's context and was compacted; the next message begins a new conversation from what it holds");
@@ -627,7 +631,7 @@ internal sealed class Working
     /// first message whole, every later message of the person's whole, the last iterations word for word and every
     /// earlier one shortened - null where nothing streamed yet.
     /// </summary>
-    private string? Reduced()
+    private AgentCompacted? Reduced()
     {
         var stream = Whole();
 
@@ -636,7 +640,7 @@ internal sealed class Working
             : AgentCompaction.Reduce(
                 stream,
                 AgentContinuationBounds.Of(_common.Context.Config.AgentContext?.Continuation),
-                AgentCompactionBounds.Of(_common.Context.Config.AgentContext?.Compaction)).Record;
+                AgentCompactionBounds.Of(_common.Context.Config.AgentContext?.Compaction));
     }
 
     /// <summary>

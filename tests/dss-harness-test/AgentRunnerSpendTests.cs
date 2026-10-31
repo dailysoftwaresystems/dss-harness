@@ -395,6 +395,33 @@ public sealed class AgentRunnerSpendTests
     }
 
     /// <summary>
+    /// An entry whose launch used nothing and said no number - Claude Code rejected by its limit before any result - adds
+    /// nothing to the walk's cost: the entry after it that counted its cost is the walk's whole, never made unknown by a
+    /// launch that never began its work.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnEntryThatUsedNothing_LeavesTheWalksCostToTheOthers(bool emptyCost)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var rejected = new Scripted("one")
+        {
+            Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.RateLimited, Error: "five_hour", Usage: new AgentUsageReport(AgentUsage.None, [], emptyCost ? new AgentCost() : null))
+            {
+                Limit = new AgentAccountLimit(BalanceSpent: false, Key: "WORK_KEY"),
+            }),
+        };
+        var counted = new Scripted("two") { Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Completed, FinalText: "done", Usage: Used(100, 50, "claude-fable-5-1", "SPARE_KEY", new AgentCost(Counted: 0.40m)))) };
+        var runner = new AgentRunner([rejected, counted], harness.FileSystem, Elevation.User, TimeProvider.System);
+
+        var result = await runner.RunAsync(Step([Entry(client: "one"), Entry(model: "claude-fable-5-1", key: "SPARE_KEY", client: "two")], new Spent(), temp), events: null, Token);
+
+        Assert.Equal((AgentRunStatus.Completed, new AgentCost(Counted: 0.40m)), (result.Status, result.Usage!.Cost));
+    }
+
+    /// <summary>
     /// What a run spent that cannot be recorded for the balancing of keys - its section held past its wait, the disk full -
     /// is said as a notice, and the step ends as it ended: the record is for choosing a key, never part of the work.
     /// </summary>

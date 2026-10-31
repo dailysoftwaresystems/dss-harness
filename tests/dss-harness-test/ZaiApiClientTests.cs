@@ -158,9 +158,10 @@ public sealed class ZaiApiClientTests : IDisposable
     }
 
     /// <summary>
-    /// Z.AI holds no answer to a schema: the step's envelope is said in words in its first message; an answer that read as
-    /// no JSON is asked again in JSON alone - no tool offered, a JSON object asked for - and the request after one that read
-    /// as JSON offers the tools again.
+    /// Z.AI holds no answer to a schema: the step's envelope is said in words in a message of its own after the step's
+    /// first, which is the parts the engine writes and nothing else; an answer that read as no JSON is asked again in JSON
+    /// alone - no tool offered, a JSON object asked for - and the request after one that read as JSON offers the tools
+    /// again.
     /// </summary>
     [Fact]
     public async Task TheEnvelope_IsSaidInWords_AndAnAnswerOfNoJson_IsAskedAgainInJsonAlone()
@@ -170,12 +171,15 @@ public sealed class ZaiApiClientTests : IDisposable
             .Then(ZaiApiFixtures.Answer("The word is alpha."))
             .Then(ZaiApiFixtures.Answer(Envelopes.Of(JsonNode.Parse("""{"wrd":"alpha"}""")).ToJsonString()))
             .Then(ZaiApiFixtures.Answer(Envelopes.Of(JsonNode.Parse("""{"word":"alpha"}""")).ToJsonString()));
+        var run = Run() with { Output = output, RunContext = "run facts" };
 
-        var result = await Ran(Run() with { Output = output });
+        var result = await Ran(run);
 
         Assert.Equal((AgentRunStatus.Completed, """{"word":"alpha"}"""), (result.Status, result.StructuredOutput));
         var bodies = _endpoint.Asked.Select(asked => JsonNode.Parse(asked.Body)!.AsObject()).ToList();
-        Assert.EndsWith($"\n\n{AgentEnvelope.InWords(AgentEnvelope.Schema(output))}", bodies[0]["messages"]![1]!["content"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal(
+            [("user", AgentPromptParts.FirstMessage(run, newConversation: true)), ("user", AgentEnvelope.InWords(AgentEnvelope.Schema(output)))],
+            bodies[0]["messages"]!.AsArray().Skip(1).Select(message => (message!["role"]!.GetValue<string>(), message["content"]!.GetValue<string>())));
         Assert.Equal([true, false, true], bodies.Select(body => body.ContainsKey("tools")));
         Assert.Equal([false, true, false], bodies.Select(body => body.ContainsKey("response_format")));
     }

@@ -455,21 +455,23 @@ public sealed class ClaudeApiClientTests : IDisposable
 
         var connection = new ApiConnection(TimeProvider.System, _endpoint);
         _opened.Add(connection);
-        var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com", Model, new AgentKey("WORK_KEY", "sk-1"));
+        var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com");
 
-        var (part, used) = await search.SearchAsync("polymorphism in System.Text.Json", TestContext.Current.CancellationToken);
+        var (part, used, failure) = await search.SearchAsync("polymorphism in System.Text.Json", "claude-sonnet-5-5", new AgentKey("SPARE_KEY", "sk-2"), TestContext.Current.CancellationToken);
 
-        Assert.Equal(new AgentUsage(3400, 30, 0, 0, 0, 2), used);
+        Assert.Equal((new AgentUsage(3400, 30, 0, 0, 0, 2), (ChatFailure?)null), (used, failure));
         Assert.Equal("native", part.Source);
         Assert.Equal(WebSearchOutcome.Ok, part.Answer.Outcome);
         Assert.Equal(["One", "Two"], part.Answer.Results.Select(result => result.Title));
         Assert.All(part.Answer.Results, result => Assert.StartsWith("https://example.org/", result.Link, StringComparison.Ordinal));
 
+        // Asked of the model and signed with the key it was given: the ones serving the run when the agent asked.
         var asked = _endpoint.Asked.Single();
         var body = JsonNode.Parse(asked.Body!)!;
 
         Assert.Equal([ClaudeApiNativeSearch.ToolType], body["tools"]!.AsArray().Select(tool => tool!["type"]!.GetValue<string>()));
-        Assert.Equal("sk-1", asked.Headers.Single(header => header.Key == "x-api-key").Value);
+        Assert.Equal(("claude-sonnet-5-5", "sk-2"), (body["model"]!.GetValue<string>(), asked.Headers.Single(header => header.Key == "x-api-key").Value));
+        Assert.Equal(DssHarness.Core.Codebase.EstimatedTokens.Of(asked.Body!), search.InputTokens("polymorphism in System.Text.Json", "claude-sonnet-5-5"));
     }
 
     /// <summary>
@@ -502,9 +504,9 @@ public sealed class ClaudeApiClientTests : IDisposable
             endpoint.Then(reply);
             var connection = new ApiConnection(TimeProvider.System, endpoint);
             _opened.Add(connection);
-            var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com", Model, new AgentKey("WORK_KEY", "sk-1"));
+            var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com");
 
-            var (part, _) = await search.SearchAsync("anything", TestContext.Current.CancellationToken);
+            var (part, _, _) = await search.SearchAsync("anything", Model, new AgentKey("WORK_KEY", "sk-1"), TestContext.Current.CancellationToken);
 
             Assert.Equal(("native", WebSearchOutcome.Failed), (part.Source, part.Answer.Outcome));
             Assert.Empty(part.Answer.Results);
@@ -515,41 +517,26 @@ public sealed class ClaudeApiClientTests : IDisposable
     }
 
     /// <summary>
-    /// A side-task's native search is handed the gate's lane of its provider and key, and goes through it as every
-    /// request of the loop's does: a cool-down holding its model is waited out before it is sent, and a rate limit it
-    /// meets holds the lane's requests of that model - and no other model's - for the wait the provider named. A step's
-    /// run is handed no native search.
+    /// A side-task's run is handed the provider's own search and a step's is not; a 429 the search meets is given back
+    /// as the failure it is, read as every failure of the API's, for the gate of the loop that asked it to hold the lane
+    /// by.
     /// </summary>
     [Fact]
-    public async Task ANativeSearch_GoesThroughTheLaneOfItsProviderAndKey()
+    public async Task ANativeSearch_IsASideTasksAlone_AndGivesBackThe429ItMet()
     {
-        var clock = new ManualClock(new DateTimeOffset(2026, 10, 31, 12, 0, 0, TimeSpan.Zero));
-        var waits = new List<TimeSpan>();
-        var gates = new ClientGates(clock, (wait, _) =>
-        {
-            waits.Add(wait);
-            clock.Advance(wait);
-            return Task.CompletedTask;
-        });
-        var lane = gates.LaneOf("anthropic", ClaudeApiClient.ClientName, null, new AgentKey("WORK_KEY", "sk-1"));
-        lane.RateLimited(TimeSpan.FromSeconds(20), Model);
-
         _endpoint.Then(ApiReply.Error(429, "rate_limit_error", "slow down", TimeSpan.FromSeconds(30)));
         var connection = new ApiConnection(TimeProvider.System, _endpoint);
         _opened.Add(connection);
-        var step = Run() with { WebSearch = new AgentWebSearch([], 3, 4, new Dictionary<string, WebSearchKey>()), Gates = gates };
+        var step = Run() with { WebSearch = new AgentWebSearch([], 3, 4, new Dictionary<string, WebSearchKey>()) };
         var sideTask = step with { Ground = step.Ground! with { SideTask = true } };
 
         Assert.Null(ClaudeApiClient.WithNativeSearch(connection, step, step.Entries!).NativeSearch);
 
         var search = ClaudeApiClient.WithNativeSearch(connection, sideTask, sideTask.Entries!).NativeSearch!;
-        var (part, _) = await search.SearchAsync("anything", TestContext.Current.CancellationToken);
+        var (part, _, failure) = await search.SearchAsync("anything", Model, new AgentKey("WORK_KEY", "sk-1"), TestContext.Current.CancellationToken);
 
-        Assert.Equal([TimeSpan.FromSeconds(20)], waits);
         Assert.Equal(WebSearchOutcome.Failed, part.Answer.Outcome);
-        Assert.Equal(
-            (new ClientCoolDown(TimeSpan.FromSeconds(30), Model), (ClientCoolDown?)null),
-            (lane.CoolDownOf(Model), lane.CoolDownOf("claude-haiku-5-5")));
+        Assert.Equal((ChatFailureKind.RateLimited, TimeSpan.FromSeconds(30)), (failure!.Kind, failure.RetryAfter));
     }
 
     private async Task<AgentRunResult> Ran(AgentRun run)

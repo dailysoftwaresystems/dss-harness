@@ -160,9 +160,15 @@ public sealed record AgentUsageReport(AgentUsage Total, IReadOnlyList<AgentModel
             ? first ?? second
             : new(first.Total.Plus(second.Total), [.. first.PerModel, .. second.PerModel], AgentCost.Sum(CostOf(first), CostOf(second)));
 
-    /// <summary>A part's cost as the fold reads it: its own, unknown where it used something and nothing said or counted it, and nothing where it used nothing.</summary>
+    /// <summary>
+    /// A part's cost as the fold reads it: its own, unknown where it used something and nothing said or counted it, and
+    /// nothing where it used nothing and no number was said or counted of it - a launch that never began its work leaves
+    /// no cost to know, so it never makes the whole's unknown.
+    /// </summary>
     private static AgentCost? CostOf(AgentUsageReport part)
-        => part.Cost ?? (part.Total == AgentUsage.None ? null : AgentCost.Unknown);
+        => part.Total == AgentUsage.None && part.Cost is not { Reported: not null } and not { Counted: not null }
+            ? null
+            : part.Cost ?? AgentCost.Unknown;
 }
 
 /// <summary>

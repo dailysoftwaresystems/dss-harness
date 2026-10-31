@@ -95,7 +95,7 @@ public enum AgentMessageKind
     /// <summary>A nudge to go on with an answer the provider cut off at its length.</summary>
     Continue,
 
-    /// <summary>The step's envelope said in words, once the provider refused it as a schema.</summary>
+    /// <summary>The step's envelope said in words: after the first message where the provider holds no schema, or once it refused it as one.</summary>
     EnvelopeInWords,
 
     /// <summary>An effort change told in the conversation: the step goes on at another level.</summary>

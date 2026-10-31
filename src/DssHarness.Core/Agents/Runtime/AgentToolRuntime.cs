@@ -68,8 +68,6 @@ public sealed class AgentToolTally
     private int _denials;
     private int _filesWritten;
     private int _webRequests;
-    private readonly Lock _nativeGate = new();
-    private AgentUsage _nativeUsed = AgentUsage.None;
     private readonly ConcurrentQueue<string> _uncontained = new();
     private readonly ConcurrentDictionary<string, byte> _files = new(StringComparer.Ordinal);
 
@@ -84,18 +82,6 @@ public sealed class AgentToolTally
 
     /// <summary>How many requests of the web were asked, the refused among them.</summary>
     public int WebRequests => Volatile.Read(ref _webRequests);
-
-    /// <summary>What the requests of the provider's own search used - a side-task's native part among the web search's asks - in all.</summary>
-    public AgentUsage NativeUsed
-    {
-        get
-        {
-            lock (_nativeGate)
-            {
-                return _nativeUsed;
-            }
-        }
-    }
 
     /// <summary>The files read and written, each once, in ordinal order.</summary>
     public IReadOnlyList<string> Files => [.. _files.Keys.Order(StringComparer.Ordinal)];
@@ -124,18 +110,6 @@ public sealed class AgentToolTally
 
     /// <summary>Counts a request of the web asked, allowed or refused.</summary>
     internal void Asked() => Interlocked.Increment(ref _webRequests);
-
-    /// <summary>Adds what one request of the provider's own search used, a side-task's native part.</summary>
-    /// <param name="used">What the provider said the request used.</param>
-    internal void NativeSearched(AgentUsage used)
-    {
-        ArgumentNullException.ThrowIfNull(used);
-
-        lock (_nativeGate)
-        {
-            _nativeUsed = _nativeUsed.Plus(used);
-        }
-    }
 
     /// <summary>Keeps what a command's container could not reach when it ended.</summary>
     /// <param name="what">The command, and what was left.</param>
@@ -186,6 +160,7 @@ public sealed partial class AgentToolRuntime : IDisposable
     private readonly IReadOnlyDictionary<string, JsonNode> _schemas;
     private readonly ConcurrentDictionary<string, string> _viewed;
     private readonly Web.Search.WebSearchStep? _webSearch;
+    private readonly AgentNativeAsk? _native;
 
     /// <summary>The runtime of <paramref name="run"/>, its ground decided once.</summary>
     /// <param name="run">The run.</param>
@@ -193,11 +168,13 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// <param name="host">What its tools are run with.</param>
     /// <param name="records">The run's records, where its client keeps them already - they are not closed with the runtime; the runtime's own where none is given.</param>
     /// <param name="only">The tools it offers of those the step is given, by name; every one where none is given.</param>
-    internal AgentToolRuntime(AgentRun run, IAgentEventSink events, AgentToolHost host, AgentCallRecords? records = null, IReadOnlyCollection<string>? only = null)
+    /// <param name="native">What asks the run's native search as the run stands; null where the run carries none.</param>
+    internal AgentToolRuntime(AgentRun run, IAgentEventSink events, AgentToolHost host, AgentCallRecords? records = null, IReadOnlyCollection<string>? only = null, AgentNativeAsk? native = null)
     {
         _run = run;
         _events = events;
         _host = host;
+        _native = native;
 
         var ground = run.Ground ?? throw new ArgumentException(AgentEndings.NoPolicy, nameof(run));
 
@@ -631,13 +608,27 @@ public sealed class AgentToolHost(
     /// <summary>Opens the runtime of <paramref name="run"/>: its tools, its policy and its records.</summary>
     /// <param name="run">The run, whose ground decides every call.</param>
     /// <param name="events">Where its calls' ends, denials and requests of the web are emitted.</param>
-    /// <exception cref="ArgumentException">The run was given no ground: no call runs undecided.</exception>
-    public AgentToolRuntime Open(AgentRun run, IAgentEventSink events)
+    /// <param name="native">
+    /// What asks the run's native search - the client's loop, as the run stands when the agent asks - where the run
+    /// carries one (<see cref="AgentRun.NativeSearch"/>); null for a run that carries none.
+    /// </param>
+    /// <exception cref="ArgumentException">
+    /// The run was given no ground: no call runs undecided; or it carries a native search and nothing asks it, or is
+    /// given an asker and carries no native search.
+    /// </exception>
+    public AgentToolRuntime Open(AgentRun run, IAgentEventSink events, AgentNativeAsk? native = null)
     {
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(events);
 
-        return new AgentToolRuntime(run, events, this);
+        if ((run.NativeSearch is null) != (native is null))
+        {
+            throw new ArgumentException(
+                run.NativeSearch is null ? "the run carries no native search, and the runtime was given one to ask" : "the run carries a native search, and nothing was given to ask it as the run stands",
+                nameof(native));
+        }
+
+        return new AgentToolRuntime(run, events, this, native: native);
     }
 
     /// <summary>

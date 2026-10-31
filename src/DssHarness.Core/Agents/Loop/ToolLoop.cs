@@ -341,6 +341,11 @@ public sealed class ToolLoop(
         private string? _unknown;
         private bool _handing;
 
+        // The provider's own searches a turn's calls ask together are counted one at a time; one whose cost could not be
+        // counted against the step's budget ends the run at the loop's next top, as a request's does at once.
+        private readonly SemaphoreSlim _searchCounting = new(1, 1);
+        private AgentRunResult? _searchUncounted;
+
         // The credit a declined request left, sent back with the same request on the next model; dropped where the
         // provider answers that retry naming it, and never sent where the move changes the level.
         private AgentFallbackCredit? _credit;
@@ -371,7 +376,8 @@ public sealed class ToolLoop(
             loop._fileSystem.CreateDirectory(run.StepDirectory);
             JoinLaterEntries();
 
-            using var runtime = _runtime = loop._tools.Open(run, events);
+            using var counting = _searchCounting;
+            using var runtime = _runtime = loop._tools.Open(run, events, run.NativeSearch is { } native ? (query, cancellationToken) => NativeSearchAsync(native, query, cancellationToken) : null);
             var system = Masked(run.SystemPrompt);
             var tools = provider.Tools(runtime.Tools);
             using var conversation = _conversation = StoredConversation.Open(
@@ -417,15 +423,21 @@ public sealed class ToolLoop(
 
             // The first message: a compacted conversation begins with the engine's compaction record, whole; any
             // other begins with the run's parts in their order, the continuation record only where the conversation
-            // is a new one, which on an API client a handed conversation never is. A provider whose wire holds no
-            // answer to the schema is told it in words after it.
+            // is a new one, which on an API client a handed conversation never is - the message exactly as
+            // AgentPromptParts writes it, so its one reader takes it apart again.
             var first = run.Compaction is { Length: > 0 } compacted
                 ? compacted
                 : AgentPromptParts.FirstMessage(run, newConversation: run.Conversation is null);
 
-            await SayAsync(
-                _gate is { } gate && !provider.SendsSchema && run.Compaction is null ? $"{first}\n\n{AgentEnvelope.InWords(gate.Envelope)}" : first,
-                AgentMessageKind.FirstPrompt).ConfigureAwait(false);
+            await SayAsync(first, AgentMessageKind.FirstPrompt).ConfigureAwait(false);
+
+            // A provider whose wire holds no answer to the schema is told it in words in a message of its own after the
+            // first, as a provider that refuses the schema part way is: every conversation the run begins, a compacted
+            // one among them, is told it once.
+            if (_gate is { } gate && !provider.SendsSchema)
+            {
+                await SayAsync(AgentEnvelope.InWords(gate.Envelope), AgentMessageKind.EnvelopeInWords).ConfigureAwait(false);
+            }
 
             var result = await LoopAsync(stop).ConfigureAwait(false);
 
@@ -448,6 +460,11 @@ public sealed class ToolLoop(
                 if (_deadline!.HasPassed())
                 {
                     return TimedOut();
+                }
+
+                if (_searchUncounted is { } uncountedSearch)
+                {
+                    return uncountedSearch;
                 }
 
                 if (run.Limits.MaxBudgetUsd is { } budget && _cost >= budget)
@@ -809,36 +826,23 @@ public sealed class ToolLoop(
                 ChatFailure? failed = null;
                 AgentRunResult? other = null;
 
-                // The lane of the provider and the key the request is signed with, entered for this request alone, its
-                // input counted as it enters: a cool-down past the client's longest wait that holds this model - the
-                // model's own rate limit, or the key's whole - is that limit met, as a 429 naming that wait is, and the
-                // request is not sent; another model's rate limit holds nothing of this one's; a shorter hold is waited,
-                // said as it is waited, and ended by the run's own stops.
-                var lane = run.Gates?.LaneOf(terms.Provider.Name, terms.Client, run.Entries?.Client, Now.Key);
+                // The lane of the provider and the key the request is signed with, entered for this request alone.
+                var lane = Lane;
                 ClientGate.ClientSlot? slot = null;
 
-                if (lane?.CoolDownOf(Now.Model) is { } cooling && cooling.Left > terms.LongestWait)
+                try
                 {
-                    var until = loop._clock.GetUtcNow() + cooling.Left;
-
-                    failed = cooling.Model is null
-                        ? new ChatFailure(ChatFailureKind.AccountLimit, $"the lane of {Now.Key!.Name} is held by a 429's cool-down until {until:u}", Lifts: until)
-                        : new ChatFailure(ChatFailureKind.RateLimited, $"the lane of {Now.Key!.Name} holds '{cooling.Model}' by a 429's cool-down until {until:u}", RetryAfter: cooling.Left);
+                    (slot, failed) = await LaneTurnAsync(
+                        lane,
+                        Codebase.EstimatedTokens.Of(request.System) + Codebase.EstimatedTokens.Of(request.Tools) + request.Messages.Sum(message => (long)Codebase.EstimatedTokens.Of(message)),
+                        "the request",
+                        tried,
+                        terms.MaxRetries,
+                        left.Token).ConfigureAwait(false);
                 }
-                else if (lane is not null)
+                catch (OperationCanceledException) when (!stop.IsCancellationRequested && left.IsCancellationRequested)
                 {
-                    try
-                    {
-                        slot = await lane.EnterAsync(
-                            Codebase.EstimatedTokens.Of(request.System) + Codebase.EstimatedTokens.Of(request.Tools) + request.Messages.Sum(message => (long)Codebase.EstimatedTokens.Of(message)),
-                            Now.Model,
-                            (wait, why) => Emit(new WaitingToRetry($"the request waits for {why}", tried, terms.MaxRetries, wait, loop._clock.GetUtcNow() + wait)),
-                            left.Token).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException) when (!stop.IsCancellationRequested && left.IsCancellationRequested)
-                    {
-                        return await LeftAsync(0, null).ConfigureAwait(false);
-                    }
+                    return await LeftAsync(0, null).ConfigureAwait(false);
                 }
 
                 using var held = slot;
@@ -1414,6 +1418,110 @@ public sealed class ToolLoop(
             }
         }
 
+        /// <summary>The gate's lane of the run's provider and the key serving the run now; null where the run holds no gate.</summary>
+        private ClientGate? Lane => run.Gates?.LaneOf(terms.Provider.Name, terms.Client, run.Entries?.Client, Now.Key);
+
+        /// <summary>
+        /// The lane's turn for one request of the entry serving the run - a request of the conversation's, or the
+        /// provider's own search - its input counted as it enters: a cool-down past the client's longest wait that holds
+        /// this model - the model's own rate limit, or the key's whole - is that limit met, as a 429 naming that wait is,
+        /// and nothing is sent; another model's rate limit holds nothing of this one's; a shorter hold is waited, said as
+        /// it is waited, and ended by <paramref name="token"/>.
+        /// </summary>
+        /// <param name="lane">The lane; null where the run holds no gate.</param>
+        /// <param name="inputTokens">The request's input, as the gate counts it.</param>
+        /// <param name="what">What waits, as the wait says it.</param>
+        /// <param name="tried">The try the request is, as the wait says it.</param>
+        /// <param name="of">The tries it may have, as the wait says it.</param>
+        /// <param name="token">Ends the wait.</param>
+        /// <returns>The slot the request holds while it is under way, and the limit met where the lane holds it past the longest wait.</returns>
+        private async Task<(ClientGate.ClientSlot? Slot, ChatFailure? Held)> LaneTurnAsync(ClientGate? lane, long inputTokens, string what, int tried, int of, CancellationToken token)
+        {
+            if (lane is null)
+            {
+                return (null, null);
+            }
+
+            if (lane.CoolDownOf(Now.Model) is { } cooling && cooling.Left > terms.LongestWait)
+            {
+                var until = loop._clock.GetUtcNow() + cooling.Left;
+
+                return (null, cooling.Model is null
+                    ? new ChatFailure(ChatFailureKind.AccountLimit, $"the lane of {Now.Key!.Name} is held by a 429's cool-down until {until:u}", Lifts: until)
+                    : new ChatFailure(ChatFailureKind.RateLimited, $"the lane of {Now.Key!.Name} holds '{cooling.Model}' by a 429's cool-down until {until:u}", RetryAfter: cooling.Left));
+            }
+
+            var slot = await lane.EnterAsync(
+                inputTokens,
+                Now.Model,
+                (wait, why) => Emit(new WaitingToRetry($"{what} waits for {why}", tried, of, wait, loop._clock.GetUtcNow() + wait)),
+                token).ConfigureAwait(false);
+
+            return (slot, null);
+        }
+
+        /// <summary>
+        /// The provider's own search - a side-task's native part - asked as the run stands when the agent asks it: of the
+        /// model and with the key serving the run then, through that key's lane as every request of the conversation goes
+        /// (<see cref="LaneTurnAsync"/>: a hold past the longest wait fails the part at once, naming the limit; a shorter one
+        /// waited, said as it is waited), a 429 it meets holding the lane's waiters it covers, and what it used counted at
+        /// once, at that entry's prices, to that model's part on that key. A request that never answers in time, or that
+        /// fails on the way, is a part that failed, saying why; the run's stop and the turn's cut go on as stops.
+        /// </summary>
+        /// <param name="native">The provider's own search, which the run carries.</param>
+        /// <param name="query">The query, as the agent wrote it.</param>
+        /// <param name="cancellationToken">The run's stop and the turn's cut.</param>
+        private async Task<Web.Search.WebSearchPart> NativeSearchAsync(IAgentNativeSearch native, string query, CancellationToken cancellationToken)
+        {
+            var model = Now.Model;
+            var key = Now.Key!;
+            var lane = Lane;
+
+            try
+            {
+                var (slot, held) = await LaneTurnAsync(lane, native.InputTokens(query, model), "the search", 1, 1, cancellationToken).ConfigureAwait(false);
+
+                if (held is not null)
+                {
+                    return native.Failed(query, held.Message);
+                }
+
+                AgentNativeSearched searched;
+
+                using (slot)
+                {
+                    searched = await native.SearchAsync(query, model, key, cancellationToken).ConfigureAwait(false);
+                    slot?.Answered(searched.Used.OutputTokens);
+                }
+
+                if (searched.Failure is { } failure)
+                {
+                    lane?.Met(failure, model);
+                }
+
+                if (searched.Used != AgentUsage.None)
+                {
+                    await _searchCounting.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+
+                    try
+                    {
+                        _searchUncounted ??= await CountedAsync(searched.Used).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        _searchCounting.Release();
+                    }
+                }
+
+                return searched.Part;
+            }
+            catch (Exception ex) when (ex is IOException or System.Net.Http.HttpRequestException or JsonException
+                || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+            {
+                return native.Failed(query, ex is OperationCanceledException ? "the provider did not answer the search in time" : ex.Message);
+            }
+        }
+
         /// <summary>
         /// Counts what a request used - the run's totals, the model's part, the cost at the model's prices - and holds the
         /// turn to the model asked for: the run's end where another model wrote it, or where a budget's cost cannot be
@@ -1600,41 +1708,6 @@ public sealed class ToolLoop(
         private AgentRunResult Finished(AgentRunResult result)
         {
             var usage = _used.Report(_unknown is null ? new AgentCost(Counted: _cost) : new AgentCost(MissingPrice: _unknown));
-            var cost = _cost;
-
-            // What the provider's own search used, a side-task's native part - its tokens, the results billed as input
-            // among them, and its searches - joins the run's usage and is priced as every request of the provider's is.
-            if (Runtime.Tally.NativeUsed is var native && native != AgentUsage.None)
-            {
-                var code = Now.Terms!.Model.Code;
-                var key = Now.Key?.Name;
-                var searched = AgentPrices.CostOf(Now.Terms!.Provider, Now.Terms.Model, native) is { } counted
-                    ? new AgentCost(Counted: (decimal)counted)
-                    : new AgentCost(MissingPrice: AgentPrices.UnknownOf(Now.Terms.Provider, Now.Terms.Model, native));
-
-                // The search's part is the serving model's on the key it was signed with, its cost added to that part's.
-                static bool Serving(AgentModelUsage part, string code, string? key)
-                    => string.Equals(part.Model, code, StringComparison.Ordinal) && string.Equals(part.Key, key, StringComparison.Ordinal);
-
-                usage = usage with
-                {
-                    Total = usage.Total.Plus(native),
-                    PerModel = usage.PerModel.Any(part => Serving(part, code, key))
-                        ? [.. usage.PerModel.Select(part => Serving(part, code, key) ? part with { Usage = part.Usage.Plus(native), Cost = AgentCost.Sum(part.Cost, searched) } : part)]
-                        : [.. usage.PerModel, new AgentModelUsage(code, native, key, searched)],
-                };
-
-                if (searched.Counted is { } added)
-                {
-                    cost += added;
-                    usage = _unknown is null ? usage with { Cost = new AgentCost(Counted: cost) } : usage;
-                }
-                else
-                {
-                    _unknown ??= searched.MissingPrice;
-                    usage = usage with { Cost = new AgentCost(MissingPrice: _unknown) };
-                }
-            }
 
             return result with
             {
