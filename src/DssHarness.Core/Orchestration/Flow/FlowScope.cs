@@ -192,6 +192,45 @@ public static class FlowScope
     }
 
     /// <summary>
+    /// The step declared at <paramref name="path"/>, with its path - at <see cref="Recovery"/>, the recovery itself as a
+    /// group of the flow (<see cref="FlowRecover.Declaration"/>); null where none is.
+    /// </summary>
+    /// <param name="path">A step's path among the flow, as <see cref="Located.Path"/> spells it.</param>
+    /// <param name="definition">The workflow, as it was read.</param>
+    public static Located? At(string path, WorkflowDefinition definition)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return path == Recovery
+            ? definition.Recover is { } recover ? new Located(Recovery, recover.Declaration) : null
+            : Member(path[(path.LastIndexOf('.') + 1)..], ScopeOf(path), definition);
+    }
+
+    /// <summary>
+    /// The step whose <c>onFailure</c> decides for the step at <paramref name="path"/>: the step itself where it writes
+    /// one, else the nearest group around it that does - the recovery's own for a step of it; null where none does. The one reading of which policy a failure
+    /// goes by that the definition's check and the facts of a run both ask.
+    /// </summary>
+    /// <param name="path">A step's path among the flow.</param>
+    /// <param name="definition">The workflow, as it was read.</param>
+    public static Located? OnFailureOf(string path, WorkflowDefinition definition)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(definition);
+
+        for (string? at = path; at is not null; at = ScopeOf(at))
+        {
+            if (At(at, definition) is { Step.OnFailure: not null } deciding)
+            {
+                return deciding;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Every inner step that takes, by bare name, a name it can see from where it is - a step beside a group around
     /// it, or that group, declared before or after; for the recovery's steps, a step of the flow's top level - each
     /// with the path of the step it hides, the nearest first. No shadowing: one name must say one thing wherever it

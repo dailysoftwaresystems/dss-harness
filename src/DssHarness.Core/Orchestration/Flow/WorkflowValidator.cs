@@ -497,7 +497,7 @@ public static class WorkflowValidator
             // The recovery's own onFailure is what a failure of one of its steps does where the step says none, as a
             // group's is for its members. Its place is the recovery's whatever a step of the flow is named, as
             // FlowScope reads the path.
-            _recover = new Entry(new WorkflowStep { Name = FlowScope.Recovery, Steps = recover.Steps, OnFailure = recover.OnFailure }, FlowScope.Recovery, _entries.Count, null);
+            _recover = new Entry(recover.Declaration, FlowScope.Recovery, _entries.Count, null);
             _entries.Add(_recover);
             _byPath[FlowScope.Recovery] = _recover;
             Index(recover.Steps, _recover);
@@ -1889,17 +1889,9 @@ public static class WorkflowValidator
         /// writes one, with the step that writes it; <see langword="null"/> where none does.
         /// </summary>
         private (string Policy, Entry Owner)? EffectiveOnFailure(Entry entry)
-        {
-            for (var scope = entry; scope is not null; scope = scope.Parent)
-            {
-                if (scope.Step.OnFailure is { } policy)
-                {
-                    return (policy, scope);
-                }
-            }
-
-            return null;
-        }
+            => FlowScope.OnFailureOf(entry.Path, _definition) is { Step.OnFailure: { } policy } deciding && _byPath.GetValueOrDefault(deciding.Path) is { } owner
+                ? (policy, owner)
+                : null;
 
         /// <summary>The nearest group around <paramref name="entry"/> - never the step itself - that says <c>always</c>, or <see langword="null"/>.</summary>
         private Entry? AlwaysAround(Entry entry)

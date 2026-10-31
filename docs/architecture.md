@@ -2511,27 +2511,41 @@ were read: how the run stands and for how long, its engine and its pause; each s
 progress; what it waits for - each open question with the command that answers it, a plan update
 under way or queued, an instance waiting on another or on a claim or room, a `ci-wait` reading the
 checks of the commit the run last pushed; what is done and what was spent of the budget; what is
-left at least and at most, with the bound that gave the most - a loop's iterations to its bound, a
-handler's visits to its `maxVisits`, a `forEach` not yet expanded and a piece of a plan update not
-carried out named - and when it may finish, as a range that rests on this run alone: of each step of
+left at least and at most, with the bound that gave the most - each member of a scope still open not
+drawn yet, a loop's iterations to its bound, a handler's visits to its `maxVisits` with the steps its
+`then` sends the run back over, the recovery's visits to its `maxVisits` for each failure it can take
+with the steps it sends the run back over, and what no numeric bound holds named - and when it may
+finish, as a range that rests on this run alone: of each step of
 the definition that works the shortest and the longest time an instance of it took to end `Done` - a
 group's own span is its members' time, never counted beside it - (the lower end laying what is left
 along what depends on what as the engine orders two instances, `FlowInstanceId.Precedes` then
 `FlowGraph.Waits`, so work that runs side by side is counted once; the upper end summing every
-instance and every iteration or visit a loop or a handler can add, one after another), a step no
+instance that is left and everything the run may still make, one after another), a step no
 instance of which has ended `Done` in this run counted and named and in neither end, the time a
 person takes to answer and a wait for room - a claim, the run to be quiet, a counter of its limits,
 each a word the admission writes from `FlowWaits` and the facts class by it - left out and said to
 be, and no estimate at all where nothing has ended or the run has ended (done or failed: a stopped
 run goes on at its resume, and its stopped instances are among what is left), the facts saying
-which. What is left counts by the engine's own bounds - `FlowRepeat.Bound` for each repeat instance
-not ended, past the iterations it made, `WorkflowStep.VisitsAllowed` for a handler, in each scope its
-source is under way in, as the engine counts its visits - each widened by what was granted past it
-(`FlowGrants`, the one owner the engine applies an answer by and counts the answers back by at a
-resume: each `more` a repeat's or a handler's bound was answered in `questions.json`, and each
-iteration a plan update added to a loop), a handler's granted visit the run has not carried out yet
-counted in the scope it was granted in - so the most is a bound, and a question open at a bound is
-named as what can grant more past it. Where the
+which. The most is everything the run may still make by the engine's own bounds and rules
+(`FlowComing`), so it is a bound: in each scope still open - the top level while the run goes on, and
+each group, iteration, item and recovery visit not ended - each member the schedule has not drawn yet;
+`FlowRepeat.Bound` for each repeat instance not ended, past the iterations it made;
+`WorkflowStep.VisitsAllowed` for a handler, in each scope its source can still end in, as the engine
+counts its visits, with the steps its `then` sends the run back over at each visit; and
+`FlowRecover.VisitsAllowed` for each step whose failure the recovery can take (the policy that decides
+for it, `FlowScope.OnFailureOf`, is `recover`), each visit of the recovery with the steps it sends the
+run back over - what a redirect resets read by the engine's one rule of it, `FlowResets.Of`, and a step
+it resets counted as able to end again - each bound widened by what was granted past it (`FlowGrants`,
+the one owner the engine applies an answer by and counts the answers back by at a resume: each `more`
+a repeat's, a handler's or the recovery's bound was answered in `questions.json`, and each iteration a
+plan update added to a loop), a handler's granted visit the run has not carried out yet counted in the
+scope it was granted in, and each piece of a plan update not carried out one item of the work-item
+group. What such a visit makes is counted whole - a group with all that is in it, its loops to their
+bounds and its own handlers and recovery. What no numeric bound holds - a `forEach` not yet expanded, a
+repeat with no numeric bound, a step whose pre-existing issues each raise a triage, a handler that
+sends the run back outside its own group, a plan update still to be planned - is named, the run's own
+bound of instances the only one that holds it; and a question open at a bound is named as what can
+grant more past it. Where the
 workflow's `reporter` names an agent, its words follow the facts, run by the reason step's own
 runner as the advisor is (`ReporterRunner`), its reads narrowed to the run's directory alone
 (`AgentPolicyGround.ReporterRoot`: no command, no write, no web - the three tools that read and no

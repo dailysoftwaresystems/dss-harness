@@ -6727,12 +6727,7 @@ public sealed class FlowCoordinator
 
     /// <summary>The declaration the recovery's instances are made of: its steps, under the reserved name.</summary>
     private WorkflowStep RecoveryDeclaration()
-        => new()
-        {
-            Name = FlowScope.Recovery,
-            Steps = _definition.Recover!.Steps,
-            OnFailure = _definition.Recover.OnFailure,
-        };
+        => _definition.Recover!.Declaration;
 
     /// <summary>Decides the redirect a handler that ended done names: what it resets is written to the run's records before the first reset.</summary>
     private void DecideRedirect(FlowInstance handler)
@@ -6809,23 +6804,16 @@ public sealed class FlowCoordinator
         Record(FlowChangeKind.Step, handler, detail: $"the run is sent to '{redirect.Target}' by '{handler.Id}'");
     }
 
-    /// <summary>Collects what a redirect resets: the target, and every step of its scope that depends on it, directly or through others - a group with all that is in it.</summary>
+    /// <summary>
+    /// Collects what a redirect resets, by the one rule of it (<see cref="FlowResets.Of"/>): the target, and every step of
+    /// its scope that depends on it, directly or through others - a group with all that is in it - never a handler nor a
+    /// step of the always phase.
+    /// </summary>
     private void Collect(PendingRedirect redirect, Scope scope, WorkflowStep declaration)
     {
-        if (redirect.Set.Any(entry => entry.Scope == scope && entry.Declaration.Name == declaration.Name)
-            || declaration.On is not null
-            || IsAlways(declaration, scope))
+        foreach (var reset in FlowResets.Of(DeclarationsOf(scope), declaration, AlwaysAround(scope)))
         {
-            // A handler is not given a visit by the reset: its next visit is made when it is next raised. An always
-            // step runs once in a session and is never gone back to.
-            return;
-        }
-
-        redirect.Set.Add((scope, declaration));
-
-        foreach (var dependent in DeclarationsOf(scope).Where(dependent => dependent.DependsOn.Contains(declaration.Name, StringComparer.Ordinal)))
-        {
-            Collect(redirect, scope, dependent);
+            redirect.Set.Add((scope, reset));
         }
     }
 
@@ -7012,7 +7000,7 @@ public sealed class FlowCoordinator
         var scope = source.DeclaredScope ?? _top;
         var (_, issue, key) = RecoveryOf(source);
         var visits = _recoveryVisits.TryGetValue(key, out var taken) ? taken + 1 : 1;
-        var allowed = (recover.MaxVisits ?? FlowRecover.MostVisits) + _recoveryExtra.GetValueOrDefault(key);
+        var allowed = recover.VisitsAllowed + _recoveryExtra.GetValueOrDefault(key);
 
         if (visits > allowed)
         {
@@ -9754,12 +9742,11 @@ public sealed class FlowCoordinator
 
     /// <summary>Whether a step runs in the always phase: it says <c>always</c>, or a group around it does.</summary>
     private static bool IsAlways(WorkflowStep declaration, Scope scope)
-    {
-        if (declaration.Always == true)
-        {
-            return true;
-        }
+        => declaration.Always == true || AlwaysAround(scope);
 
+    /// <summary>Whether a group around <paramref name="scope"/> - its own or one it sits in - says <c>always</c>.</summary>
+    private static bool AlwaysAround(Scope scope)
+    {
         for (var at = scope; at is not null; at = at.Parent)
         {
             if (at.Group?.Always == true)

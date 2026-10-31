@@ -174,7 +174,7 @@ public sealed class WorkflowStatusWriter
         var visits = snapshot.Steps
             .Where(step => step.Group && string.Equals(step.Step, FlowScope.Recovery, StringComparison.Ordinal) && step.RaisedBy is not null)
             .ToList();
-        var maxVisits = context.Definition.Recover?.MaxVisits ?? FlowRecover.MostVisits;
+        var maxVisits = context.Definition.Recover?.VisitsAllowed ?? FlowRecover.MostVisits;
         var recoveries = new RecoveryView(
             visits.GroupBy(visit => visit.RaisedBy!, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal),
             visits.Where(visit => visit.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused)

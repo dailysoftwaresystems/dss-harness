@@ -185,8 +185,8 @@ public sealed class FlowStatusTests
                       plan update u2 is recorded and waits for the run to be gone on with
                       hold waits for a claim
             done      2 step instances ended; 0.00 USD, 0 tokens spent
-            left      at least 2 step instances, at most 2 step instances (nothing more can come)
-            estimate  between 1m00s and 1m00s more, from the 2 step instances that ended Done in this run; 1 step of what is left has not run to an end in this run and is not in the estimate: hold; not counting the time a person takes to answer q1; not counting a wait for a claim, for the run to be quiet or for room under its limits
+            left      at least 2 step instances, at most 4998 step instances (the engine's bounds and the run's own bound of at most 5000 instances); plan update u1 is still to be planned; plan update u2 is still to be planned
+            estimate  between 1m00s and 1m00s more, from the 2 step instances that ended Done in this run; what no numeric bound holds is not in the estimate; 1 step of what is left has not run to an end in this run and is not in the estimate: hold; not counting the time a person takes to answer q1; not counting a wait for a claim, for the run to be quiet or for room under its limits
             """,
             string.Join("\n", facts));
     }
@@ -246,15 +246,15 @@ public sealed class FlowStatusTests
             running   nothing is running
             waits     nothing
             done      3 step instances ended; 0.00 USD, 0 tokens spent
-            left      at least 7 step instances, at most 4997 step instances (the loops' bounds and the run's own bound of at most 5000 instances)
-            estimate  between 30s and 1m00s more, from the 3 step instances that ended Done in this run; a loop still open has no numeric bound of its own, and the time it may yet take is not in the estimate; 1 step of what is left has not run to an end in this run and is not in the estimate: sweep.clean
+            left      at least 7 step instances, at most 4997 step instances (the engine's bounds and the run's own bound of at most 5000 instances); 'sweep' repeats with no numeric bound of its own
+            estimate  between 30s and 1m00s more, from the 3 step instances that ended Done in this run; what no numeric bound holds is not in the estimate; 1 step of what is left has not run to an end in this run and is not in the estimate: sweep.clean
             """,
             string.Join("\n", facts));
     }
 
     /// <summary>
     /// A loop at its numeric bound with no <c>forEach</c> open beside it: the most counts only what its bound allows,
-    /// said to be the loops' bounds alone, and the estimate's upper end holds the iterations left at the longest of
+    /// said to be the engine's bounds alone, and the estimate's upper end holds the iterations left at the longest of
     /// the group's steps.
     /// </summary>
     [Fact]
@@ -289,7 +289,7 @@ public sealed class FlowStatusTests
         var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, Engine, AsOf);
 
         Assert.Equal(
-            "left      at least 4 step instances, at most 7 step instances (the loops' bounds)",
+            "left      at least 4 step instances, at most 7 step instances (the engine's bounds)",
             facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
         Assert.Equal(
             "estimate  between 30s and 1m00s more, from the 3 step instances that ended Done in this run",
@@ -356,7 +356,7 @@ public sealed class FlowStatusTests
 
         // Its bound, 2, a person's more and an update's iteration: 4, three of them made - one more of three instances.
         Assert.Equal(
-            "left      at least 4 step instances, at most 7 step instances (the loops' bounds); update u1 owes 'rounds#4' to its loop, and it is not made yet",
+            "left      at least 4 step instances, at most 7 step instances (the engine's bounds); update u1 owes 'rounds#4' to its loop, and it is not made yet",
             facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
 
         // At its bound with its question open, the loop's own record is all that is left of it: no iteration is counted
@@ -385,7 +385,7 @@ public sealed class FlowStatusTests
             ]);
 
         Assert.Equal(
-            "left      at least 1 step instance, at most 1 step instance (the loops' bounds); question q2 (loopBound) can be answered with more past its bound",
+            "left      at least 1 step instance, at most 1 step instance (the engine's bounds); question q2 (loopBound) can be answered with more past its bound",
             FlowStatus.Facts(definition, asking, open, updates: null, NoEngine, AsOf).First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
     }
 
@@ -438,8 +438,112 @@ public sealed class FlowStatusTests
             ]);
 
         Assert.Equal(
-            "left      at least 1 step instance, at most 2 step instances (the loops' bounds)",
+            "left      at least 1 step instance, at most 2 step instances (the engine's bounds)",
             FlowStatus.Facts(definition, flow, questions, updates: null, NoEngine, AsOf).First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A step whose failure the recovery can take counts, to the recovery's bound, a visit of the recovery - its record
+    /// and its steps - and the steps it sends the run back over - the step and what depends on it - at each visit; a
+    /// step not drawn yet counts once: the most is what the engine can make, and the estimate's upper end holds each.
+    /// </summary>
+    [Fact]
+    public void AFailureTheRecoveryCanTake_CountsItsVisitsAndWhatItSendsTheRunBackOver()
+    {
+        var definition = Definition("""
+            name: flow
+            recover:
+              maxVisits: 2
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: build
+                type: orient
+                onFailure: recover
+              - name: verify
+                type: orient
+                dependsOn: [build]
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Running),
+            [
+                Step("build", nameof(FlowInstanceState.Failed), "orient", started: At(10, 0), finished: At(10, 1)),
+                Step("recover", nameof(FlowInstanceState.Done), group: true, started: At(10, 1), finished: At(10, 2), raisedBy: "build"),
+                Step("recover.mend", nameof(FlowInstanceState.Done), "orient", started: At(10, 1), finished: At(10, 2)),
+                Step("build+2", nameof(FlowInstanceState.Running), "orient", started: At(10, 9), visit: 2),
+            ]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, Engine, AsOf);
+
+        // verify, not drawn yet: 1; one more visit of the recovery (2 instances) with build and verify again (2): 4.
+        Assert.Equal(
+            "left      at least 1 step instance, at most 6 step instances (the engine's bounds)",
+            facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A handler that can still be raised counts, to its bound, its own visits and the steps its <c>then</c> sends the
+    /// run back over - the step it names and what depends on it in its scope - at each visit; one that sends the run back
+    /// outside its own group is held by no numeric bound, the run's own bound of instances all that holds it, and is said.
+    /// </summary>
+    [Fact]
+    public void AHandlersRedirect_CountsWhatItSendsTheRunBackOver_AtEachVisit()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: test
+                type: orient
+                dependsOn: [build]
+              - name: fix
+                type: orient
+                on: {step: test, outcome: failure}
+                maxVisits: 2
+                then: build
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Running),
+            [
+                Step("build", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 1)),
+                Step("test", nameof(FlowInstanceState.Running), "orient", started: At(10, 9)),
+            ]);
+
+        // Two visits of fix, each with build and test again: 6.
+        Assert.Equal(
+            "left      at least 1 step instance, at most 7 step instances (the engine's bounds)",
+            FlowStatus.Facts(definition, flow, questions: null, updates: null, Engine, AsOf).First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
+
+        var outward = Definition("""
+            name: flow
+            steps:
+              - name: prepare
+                type: orient
+              - name: stage
+                dependsOn: [prepare]
+                steps:
+                  - name: test
+                    type: orient
+                  - name: fix
+                    type: orient
+                    on: {step: test, outcome: failure}
+                    then: prepare
+            """);
+        var staged = File(
+            nameof(FlowRunStatus.Running),
+            [
+                Step("prepare", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 1)),
+                Step("stage", nameof(FlowInstanceState.Running), group: true, started: At(10, 1)),
+                Step("stage.test", nameof(FlowInstanceState.Running), "orient", started: At(10, 9)),
+            ]);
+
+        Assert.Equal(
+            "left      at least 2 step instances, at most 4999 step instances (the engine's bounds and the run's own bound of at most 5000 instances); 'stage.fix' sends the run back to 'prepare', outside its own group",
+            FlowStatus.Facts(outward, staged, questions: null, updates: null, Engine, AsOf).First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
     }
 
     /// <summary>
@@ -611,7 +715,7 @@ public sealed class FlowStatusTests
         var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, Engine, AsOf);
 
         Assert.Equal(
-            "left      at least 4 step instances, at most 7 step instances (the loops' bounds)",
+            "left      at least 4 step instances, at most 7 step instances (the engine's bounds)",
             facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
         Assert.Equal(
             "estimate  between 30s and 7m00s more, from the 3 step instances that ended Done in this run",

@@ -151,6 +151,21 @@ public sealed record FlowRecover(int? MaxVisits, IReadOnlyList<WorkflowStep> Ste
     public const int MostVisits = 99;
 
     /// <summary>
+    /// How many visits the recovery may make for one step in one scope before the run asks: its <c>maxVisits</c>, else
+    /// <see cref="MostVisits"/> - the one bound the engine holds the recovery to and the facts of a run count by.
+    /// </summary>
+    [JsonIgnore]
+    public int VisitsAllowed => MaxVisits ?? MostVisits;
+
+    /// <summary>
+    /// The recovery as a group of the flow: its steps under the reserved name (<see cref="FlowScope.Recovery"/>), its
+    /// <c>onFailure</c> the policy of every one of them that says none - what the engine makes each visit of, and what the
+    /// definition's check and the facts of a run read its steps' policy through.
+    /// </summary>
+    [JsonIgnore]
+    public WorkflowStep Declaration => new() { Name = FlowScope.Recovery, Steps = Steps, OnFailure = OnFailure };
+
+    /// <summary>
     /// The <c>onSuccess</c> that sends the run back to the step that gave the recovery its failure, to run again from
     /// where it stopped - a build, a test, a commit, whatever failed - once what stood in its way was put right. That step
     /// is never a reasoning step, which is never recovered, so it runs again whole.
