@@ -80,6 +80,14 @@ public static class ToolPackage
     private static string[] Kept(string? toolPath) => toolPath is null ? ["--global"] : ["--tool-path", toolPath];
 
     /// <summary>
+    /// Whether <paramref name="program"/>, a path or a bare name, is the tool's own command (<see cref="Command"/>), as
+    /// a process listing names a program: what tells a running process of the tool's from the rest by its program.
+    /// </summary>
+    /// <param name="program">The program a process runs, a path or a bare name; null where the listing gave none.</param>
+    public static bool IsCommand(string? program)
+        => program is not null && HostProbes.ListsProcess(program, Command);
+
+    /// <summary>
     /// Where a global install of the tool is, from the home directory commands start in, with the extension
     /// the host's operating system needs and the separator its shell needs.
     /// </summary>

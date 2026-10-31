@@ -2760,7 +2760,7 @@ public static class WorkflowValidator
                 }
 
                 EffortRules([(named.Provider, named.Model)], null, effort, effortByModel, definition, where);
-                BudgetPrices([(named.Provider, named.Model)], definition, runBudget, where);
+                BudgetPrices(providers, [(named.Provider, named.Model)], client, definition, runBudget, where);
                 return;
             }
 
@@ -2786,7 +2786,7 @@ public static class WorkflowValidator
                 }
 
                 EffortRules(defaults, providers.DefaultTier, effort, effortByModel, definition, where);
-                BudgetPrices(defaults, definition, runBudget, where);
+                BudgetPrices(providers, defaults, client, definition, runBudget, where);
                 return;
             }
 
@@ -2807,17 +2807,22 @@ public static class WorkflowValidator
             }
 
             EffortRules(models, tier, effort, effortByModel, definition, where);
-            BudgetPrices(models, definition, runBudget, where);
+            BudgetPrices(providers, models, client, definition, runBudget, where);
         }
 
         /// <summary>
         /// Each model of an agent budgeted in dollars - by its definition's <c>maxBudgetUsd</c>, or by the run's budget where
-        /// it is charged to it - checked for the prices every request of every client is billed by, in the words of the one
-        /// owner of the rule (<see cref="DssHarness.Core.Agents.AgentPrices.BudgetRefusal"/>): a budget is charged with the
-        /// cost counted from them. The run refuses the kinds its own client adds, before any client is taken.
+        /// it is charged to it - checked for the prices of every kind its run is billed by, in the words of the one owner of
+        /// the rule (<see cref="DssHarness.Core.Agents.AgentPrices.BudgetRefusal"/>): a budget is charged with the cost
+        /// counted from them. Each model is checked against the client the run reaches it through
+        /// (<see cref="DssHarness.Core.Agents.AgentResolution.ClientOf"/>, each entry of the order on its own) and what that
+        /// client's kind is billed by given its entry (<see cref="DssHarness.Core.Agents.AgentProviders.BilledBy"/>) - the
+        /// one fact the run asks before any client is taken - so a model a run would refuse is refused here, before the run.
         /// </summary>
         private void BudgetPrices(
+            DssHarness.Core.Agents.AgentProviders providers,
             IReadOnlyList<(DssHarness.Core.Configuration.AgentProviderConfig Provider, DssHarness.Core.Configuration.AgentModelConfig Model)> models,
+            string? client,
             AgentDefinition? definition,
             bool runBudget,
             string where)
@@ -2829,9 +2834,12 @@ public static class WorkflowValidator
 
             foreach (var (provider, model) in models)
             {
-                if (DssHarness.Core.Agents.AgentPrices.BudgetRefusal(provider, model, DssHarness.Core.Agents.AgentPrices.EveryRequestUses) is { } priceless)
+                var through = DssHarness.Core.Agents.AgentResolution.ClientOf(client, definition, provider);
+                var billedBy = DssHarness.Core.Agents.AgentProviders.BilledBy(through, providers.ClientOf(through));
+
+                if (DssHarness.Core.Agents.AgentPrices.BudgetRefusal(provider, model, billedBy) is { } priceless)
                 {
-                    _problems.Add($"{where} runs under a budget in dollars, and {priceless}");
+                    _problems.Add($"{where} runs under a budget in dollars through client '{through}', and {priceless}");
                 }
             }
         }

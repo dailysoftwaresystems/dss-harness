@@ -327,7 +327,7 @@ public sealed class ClaudeApiClientTests : IDisposable
 
         Assert.Equal(
             "no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceCacheWrite1h), and a budget is charged with the cost counted from them",
-            AgentPrices.BudgetRefusal(entries.Provider, entries.Model, Client().BilledBy(entries)));
+            AgentPrices.BudgetRefusal(entries.Provider, entries.Model, ((IAgentClient)Client()).BilledBy(entries)));
         Assert.Single(_endpoint.Asked);
     }
 

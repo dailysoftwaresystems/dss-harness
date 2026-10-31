@@ -112,8 +112,8 @@ public sealed class ReporterRunner(
         var order = _launch.Order(providers, resolution, context.Layout);
 
         // The reporter only reads, so a Claude Code its order starts is only found: one that is not there, or is too old,
-        // is why no model worded the facts, and installing or updating it is a run's step's to do.
-        var program = await _launch.ProgramAsync(context.Layout, providers, order, steps: " (the run's reporter)", change: false, cancellationToken).ConfigureAwait(false);
+        // is why no model worded the facts, and installing or updating it is a run's step's or a side-task's to do.
+        var program = await _launch.ProgramAsync(context.Layout, providers, order, ClaudeCodeAsker.Run(" (the run's reporter)"), change: false, cancellationToken).ConfigureAwait(false);
 
         if (program is { Ready: false })
         {

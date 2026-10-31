@@ -123,8 +123,8 @@ public sealed class AdvisorRunner(
         var order = launch.Order(providers, resolution, context.Layout);
 
         // The advisor only reads, so a Claude Code its order starts is only found: one that is not there, or is too old,
-        // is why no advice was obtained, and installing or updating it is a run's step's to do.
-        var program = await launch.ProgramAsync(context.Layout, providers, order, steps: " (the run's advisor)", change: false, cancellationToken).ConfigureAwait(false);
+        // is why no advice was obtained, and installing or updating it is a run's step's or a side-task's to do.
+        var program = await launch.ProgramAsync(context.Layout, providers, order, Agents.ClaudeCode.ClaudeCodeAsker.Run(" (the run's advisor)"), change: false, cancellationToken).ConfigureAwait(false);
 
         if (program is { Ready: false })
         {

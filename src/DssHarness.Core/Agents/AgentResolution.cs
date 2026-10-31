@@ -66,7 +66,7 @@ public sealed record AgentResolution(AgentModelEntry Serving, IReadOnlyList<Agen
         }
 
         // The client the step names, else the definition's, else the provider's own of the provider that lists the model.
-        var through = client ?? definition?.Client ?? named.Provider.Client;
+        var through = ClientOf(client, definition, named.Provider);
 
         // The step's whole order as entries of a model and one of its provider's keys, each model's keys before the
         // next model: every model of the tier the model came from, in tierConfig's order - a model named
@@ -97,7 +97,7 @@ public sealed record AgentResolution(AgentModelEntry Serving, IReadOnlyList<Agen
         {
             foreach (var (provider, entry) in providers.ModelsOf(ordered))
             {
-                Entries(provider, entry, client ?? definition?.Client ?? provider.Client);
+                Entries(provider, entry, ClientOf(client, definition, provider));
             }
         }
         else
@@ -123,6 +123,22 @@ public sealed record AgentResolution(AgentModelEntry Serving, IReadOnlyList<Agen
             : tier is not null ? (tier, null)
             : definition?.Model is { } byDefinition ? (null, byDefinition)
             : (definition?.Tier, null);
+
+    /// <summary>
+    /// The client a model of <paramref name="provider"/>'s is reached through: the step's, else its definition's, else the
+    /// provider's own - each entry of the order on its own, so a tier whose models two providers list reaches each through
+    /// its own provider's client where neither the step nor its definition names one. The one rule the run resolves by
+    /// (<see cref="Of"/>) and the definition's check holds each model to.
+    /// </summary>
+    /// <param name="client">The client the step names, or null.</param>
+    /// <param name="definition">The step's agent definition, or null where it names no agent.</param>
+    /// <param name="provider">The provider that lists the model.</param>
+    public static string ClientOf(string? client, AgentDefinition? definition, AgentProviderConfig provider)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+
+        return client ?? definition?.Client ?? provider.Client;
+    }
 
     /// <summary>The first model of a tier, by code, or null where the tier is not defined.</summary>
     private static string? FirstOf(AgentProviders providers, string tier)

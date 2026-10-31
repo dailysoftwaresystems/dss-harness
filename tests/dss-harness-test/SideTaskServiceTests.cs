@@ -251,7 +251,8 @@ public sealed class SideTaskServiceTests
     private static async Task<(HarnessFactory Harness, TempDirectory Tree, SideTaskService Service, StoredClient Stored, RenderedClient Rendered)> RepoAsync(
         TimeProvider? clock = null,
         Func<string, string?>? environment = null,
-        DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null)
+        DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null,
+        Func<int, ProcessTableReading>? tree = null)
     {
         var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -301,6 +302,7 @@ public sealed class SideTaskServiceTests
             harness.FileSystem,
             harness.Output,
             harness.GitClient,
+            new AgentAncestry(new AgentAncestryTests.FixedTable(tree?.Invoke(harness.Identity.CurrentId) ?? AgentAncestryTests.UnderAShell(harness.Identity.CurrentId)), harness.Identity, new AgentAncestryTests.OwnProgramAt(null), harness.Platform),
             clock,
             environment ?? (_ => null));
 
@@ -439,6 +441,45 @@ public sealed class SideTaskServiceTests
         Assert.Equal([SideTaskService.NoRecords], outcome.Details);
         Assert.Empty(stored.Runs);
         Assert.False(Directory.Exists(LayoutOf(temp, "nested").Directory));
+    }
+
+    /// <summary>
+    /// A side-task whose mark was taken away is still told by the process tree: started, through an agent and its shell,
+    /// by a process of this tool's, it refuses itself in the mark's own words; where the tree could not be read it is
+    /// refused saying why, never read as one with no agent in it. Nothing is begun and nothing written.
+    /// </summary>
+    [Fact]
+    public async Task ASideTaskStartedUnderAnAgent_WithItsMarkTakenAway_IsToldByTheProcessTree()
+    {
+        ProcessTableReading UnderTheEngine(int current)
+            => new(
+                [
+                    new SampledProcess(10, null, "dssharness", null, "dssharness run-orchestrator implementation", null),
+                    new SampledProcess(20, 10, "claude", null, "claude --print", "/usr/bin/node"),
+                    new SampledProcess(30, 20, "bash", null, "bash -c 'printf ... | sed e'", "/usr/bin/bash"),
+                    new SampledProcess(current, 30, "dssharness", null, "dssharness run-side-task --prompt x", null),
+                ],
+                null);
+
+        var (_, temp, service, stored, _) = await RepoAsync(tree: UnderTheEngine);
+        using var tree = temp;
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "start another", Model: "glm-5.3", Name: "nested"), Token);
+
+        Assert.Equal((HarnessExit.Refused, $"'run-side-task' is refused: {SideTaskService.NoAgentStartsOne}. Nothing was started."), (outcome.ExitCode, outcome.Message));
+        Assert.Equal([SideTaskService.NoRecords], outcome.Details);
+
+        var (_, unreadTemp, unread, _, _) = await RepoAsync(tree: current => new ProcessTableReading([new SampledProcess(current, null, "dssharness", null, null)], "the process table came back empty, which no running machine's is"));
+        using var unreadTree = unreadTemp;
+
+        var refused = await unread.RunAsync(new SideTaskCall(unreadTemp.Path, Prompt: "start another", Model: "glm-5.3", Name: "nested"), Token);
+
+        Assert.Equal(
+            (HarnessExit.Refused, $"'run-side-task' is refused: which processes started this one could not be read - the process table came back empty, which no running machine's is - so whether an agent started it could not be told, and {SideTaskService.NoAgentStartsOne}. Nothing was started."),
+            (refused.ExitCode, refused.Message));
+        Assert.Empty(stored.Runs);
+        Assert.False(Directory.Exists(LayoutOf(temp, "nested").Directory));
+        Assert.False(Directory.Exists(LayoutOf(unreadTemp, "nested").Directory));
     }
 
     /// <summary>
@@ -788,7 +829,7 @@ public sealed class SideTaskServiceTests
         var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "claude-sonnet-5-5", Name: "held-back"), Token);
 
         Assert.Equal(
-            (HarnessExit.Refused, "a session of Claude Code is running on this machine (pid 4242); start the run again when they have ended."),
+            (HarnessExit.Refused, "a session of Claude Code is running on this machine (pid 4242); start the side-task again when they have ended."),
             (outcome.ExitCode, outcome.Message));
         Assert.Equal([SideTaskService.NoRecords], outcome.Details);
         Assert.Empty(rendered.Runs);

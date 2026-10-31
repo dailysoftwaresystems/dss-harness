@@ -200,9 +200,9 @@ public sealed class ToolUpdateService(
 
         var move = installed is null ? $"{ToolPackage.Id} {target} was not installed in {kept}" : $"{ToolPackage.Id} in {kept} was not updated from {installed} to {target}";
         var table = await _processes.ReadAsync(cancellationToken).ConfigureAwait(false);
-        var running = _updates.Running(table, one => IsTheTool(one.Name), _process.CurrentId);
+        var running = _updates.Running(table, one => ToolPackage.IsCommand(one.Name), _process.CurrentId);
 
-        if (_platform.Current == PlatformId.Windows && IsTheTool(_program.Path))
+        if (_platform.Current == PlatformId.Windows && ToolPackage.IsCommand(_program.Path))
         {
             return new CommandOutcome(
                 HarnessExit.Refused,
@@ -333,7 +333,7 @@ public sealed class ToolUpdateService(
         }
 
         // Where this process is the installed tool, its files are about to be replaced under it.
-        if (IsTheTool(_program.Path))
+        if (ToolPackage.IsCommand(_program.Path))
         {
             _program.LoadWhole();
         }
@@ -370,7 +370,7 @@ public sealed class ToolUpdateService(
         {
             var started = _updates.Running(
                 await _processes.ReadAsync(CancellationToken.None).ConfigureAwait(false),
-                one => IsTheTool(one.Name),
+                one => ToolPackage.IsCommand(one.Name),
                 _process.CurrentId);
 
             // dotnet says a feed it did not reach in the machine's own language, with no code a reader could match
@@ -407,7 +407,7 @@ public sealed class ToolUpdateService(
             waited += LooksEvery;
             running = _updates.Running(
                 await _processes.ReadAsync(cancellationToken).ConfigureAwait(false),
-                one => IsTheTool(one.Name),
+                one => ToolPackage.IsCommand(one.Name),
                 _process.CurrentId);
 
             if (running.Count > 0 && waited >= SaidAgainEvery)
@@ -430,10 +430,6 @@ public sealed class ToolUpdateService(
         Arguments = ToolPackage.ListArguments(toolPath),
         Timeout = ListBudget,
     };
-
-    /// <summary>Whether <paramref name="program"/>, a path or a bare name, is the tool's own command, as a host's process listing is read.</summary>
-    private static bool IsTheTool(string? program)
-        => program is not null && HostProbes.ListsProcess(program, ToolPackage.Command);
 
     /// <summary>
     /// That <paramref name="table"/> was read by names alone, and why, where it was: what each process was asked is then

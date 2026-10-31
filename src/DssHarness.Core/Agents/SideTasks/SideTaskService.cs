@@ -105,6 +105,7 @@ internal sealed record SideTaskSetUp(
 /// <param name="fileSystem">The file system the side-task's records are kept on.</param>
 /// <param name="output">Says what each side-task's turns and refusals say.</param>
 /// <param name="git">Asks git whether the side-tasks' directory is ignored before anything is written there.</param>
+/// <param name="ancestry">Tells, by the process tree, whether a process of this tool's started this one - the engine an agent's child runs under.</param>
 /// <param name="clock">Tells when each turn began and what the balancing of keys reads.</param>
 /// <param name="environment">Reads this process's environment, where the mark of an agent's child is looked for.</param>
 public sealed class SideTaskService(
@@ -120,6 +121,7 @@ public sealed class SideTaskService(
     IFileSystem fileSystem,
     Output.IHarnessOutput output,
     IGitClient git,
+    AgentAncestry ancestry,
     TimeProvider? clock = null,
     Func<string, string?>? environment = null) : ISideTaskService
 {
@@ -131,7 +133,8 @@ public sealed class SideTaskService(
 
     /// <summary>
     /// Why no agent starts a side-task, as every refusal of it says: the agent's policy, and the command itself where it
-    /// is started under an agent (<see cref="AgentChildEnvironment.AgentMarker"/>).
+    /// is started under an agent - told by the agent's mark (<see cref="AgentChildEnvironment.AgentMarker"/>) and by the
+    /// process tree (<see cref="AgentAncestry"/>).
     /// </summary>
     public const string NoAgentStartsOne = "a side-task is a person's own conversation in the person's terminal, with no limit of a run's, and no agent starts one";
 
@@ -183,6 +186,7 @@ public sealed class SideTaskService(
         updates);
     private readonly Output.IHarnessOutput _output = output ?? throw new ArgumentNullException(nameof(output));
     private readonly IGitClient _git = git ?? throw new ArgumentNullException(nameof(git));
+    private readonly AgentAncestry _ancestry = ancestry ?? throw new ArgumentNullException(nameof(ancestry));
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly Func<string, string?> _environment = environment ?? Environment.GetEnvironmentVariable;
 
@@ -195,6 +199,21 @@ public sealed class SideTaskService(
         // verb or by any other name of the program - refuses itself. The mark is read by its presence, whatever it holds:
         // a child that cleared its value is still an agent's.
         if (_environment(AgentChildEnvironment.AgentMarker) is not null)
+        {
+            return Unwritten(CommandOutcome.Refused($"'{RunCommand}' is refused: {NoAgentStartsOne}. Nothing was started."));
+        }
+
+        // The second, which no form of taking the mark away reaches: a process of this tool's among the ones that started
+        // this one is the engine an agent's child runs under. A tree that could not be read is said and refused, never
+        // read as one with no agent in it; a process detached from the agent's tree is told by the mark alone.
+        var tree = await _ancestry.ReadAsync(cancellationToken).ConfigureAwait(false);
+
+        if (tree.Unread is { } unread)
+        {
+            return Unwritten(CommandOutcome.Refused($"'{RunCommand}' is refused: {unread} so whether an agent started it could not be told, and {NoAgentStartsOne}. Nothing was started."));
+        }
+
+        if (tree.Tool is not null)
         {
             return Unwritten(CommandOutcome.Refused($"'{RunCommand}' is refused: {NoAgentStartsOne}. Nothing was started."));
         }
@@ -554,7 +573,7 @@ public sealed class SideTaskService(
         // Where the order holds the client that starts a program, it is made ready here - installed and brought up to
         // date where it must be - as a step's is: one not ready refuses the side-task with the finder's own words and
         // code - the configuration (12), an update refused (13), a program missing (14).
-        var program = await _launch.ProgramAsync(layout, providers, order, steps: $" (side-task '{task}')", change: true, cancellationToken).ConfigureAwait(false);
+        var program = await _launch.ProgramAsync(layout, providers, order, ClaudeCodeAsker.SideTask(task), change: true, cancellationToken).ConfigureAwait(false);
 
         if (program is { Ready: false })
         {

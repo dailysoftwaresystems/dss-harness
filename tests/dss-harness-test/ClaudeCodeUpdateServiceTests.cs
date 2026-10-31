@@ -22,7 +22,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     {
         using var kit = new Kit(package: "2.1.296", program: "2.1.296");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.True(answer.Ready);
         Assert.Equal($"claude 2.1.296, installed with npm: '{kit.Program}'", answer.Message);
@@ -53,7 +53,7 @@ public sealed class ClaudeCodeUpdateServiceTests
             kit.Layout,
             [],
             client: standing == "update-false" ? new AgentClientConfig { Update = false } : null,
-            steps: string.Empty,
+            ClaudeCodeAsker.Run(),
             Token);
 
         Assert.True(answer.Ready);
@@ -66,7 +66,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     {
         using var kit = new Kit(npm: false);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: " (steps: plan, plan-audit)", Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(" (steps: plan, plan-audit)"), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
@@ -75,6 +75,15 @@ public sealed class ClaudeCodeUpdateServiceTests
             + "Looked for: npm.exe and npm.cmd, and the node.exe and npm-cli.js npm.cmd starts. This tool installs Claude Code "
             + "and brings it up to date with npm. Install Node.js 22 or later, which brings npm, and start the run again",
             answer.Message);
+
+        // A side-task is told in its own words what needs the client and what to start again.
+        var sideTask = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.SideTask("t1"), Token);
+
+        Assert.Equal(
+            "this side-task needs a Claude model through the client 'claude-code' (side-task 't1'), and no npm is on the PATH. "
+            + "Looked for: npm.exe and npm.cmd, and the node.exe and npm-cli.js npm.cmd starts. This tool installs Claude Code "
+            + "and brings it up to date with npm. Install Node.js 22 or later, which brings npm, and start the side-task again",
+            sideTask.Message);
     }
 
     /// <summary>
@@ -88,7 +97,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     {
         using var kit = new Kit(npm: false, platform: system);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
         Assert.Equal(
@@ -108,7 +117,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: null);
         File.Delete(kit.Node);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
         Assert.Equal(
@@ -131,7 +140,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         kit.Table = new ScriptedTable([[new(4242, 1, "claude", null, "claude", @"C:\Users\someone\.local\bin\claude.exe")]]);
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.True(answer.Ready);
         Assert.Equal($"npm has no Claude Code installed: installed 2.1.287 with '{ClaudeCodeUpdateService.InstallCommand()}'", answer.Message);
@@ -146,7 +155,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: null);
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: new AgentClientConfig(), steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: new AgentClientConfig(), ClaudeCodeAsker.Run(), Token);
 
         Assert.True(answer.Ready);
         Assert.Equal($"npm has no Claude Code installed: installed 2.1.287 with '{ClaudeCodeUpdateService.InstallCommand()}'", answer.Message);
@@ -168,7 +177,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.True(answer.Ready);
         Assert.Equal($"claude 2.1.201 is older than this tool needs ({ClaudeCodeUpdateService.Needed}): updated with '{ClaudeCodeUpdateService.InstallCommand()}'; it now says 2.1.287", answer.Message);
@@ -184,7 +193,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     {
         using (var ready = new Kit(package: "2.1.296", program: "2.1.296"))
         {
-            var answer = await ready.Service().FoundAsync(ready.Layout, [], client: null, steps: " (the run's reporter)", Token);
+            var answer = await ready.Service().FoundAsync(ready.Layout, [], client: null, ClaudeCodeAsker.Run(" (the run's reporter)"), Token);
 
             Assert.True(answer.Ready);
             Assert.Equal($"claude 2.1.296, installed with npm: '{ready.Program}'", answer.Message);
@@ -195,23 +204,23 @@ public sealed class ClaudeCodeUpdateServiceTests
             using var kit = new Kit(package: package, program: package);
             kit.Runner.OnInstall = () => throw new InvalidOperationException("npm was asked to install");
 
-            var answer = await kit.Service().FoundAsync(kit.Layout, [], client: null, steps: " (the run's reporter)", Token);
+            var answer = await kit.Service().FoundAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(" (the run's reporter)"), Token);
 
             Assert.Equal((false, HarnessExit.ToolMissing), (answer.Ready, answer.ExitCode));
             Assert.Equal(
                 $"this needs a Claude model through the client 'claude-code' (the run's reporter), {held}, and this tool needs {ClaudeCodeUpdateService.Needed}; "
-                + $"this only finds Claude Code - installing it and bringing it up to date are a run's step's to do. Run it by hand: {ClaudeCodeUpdateService.InstallCommand()}",
+                + $"this only finds Claude Code - installing it and bringing it up to date are a run's step's or a side-task's to do. Run it by hand: {ClaudeCodeUpdateService.InstallCommand()}",
                 answer.Message);
             Assert.DoesNotContain(kit.Runner.Ran, ran => ran.Contains(" install -g ", StringComparison.Ordinal));
         }
 
         using var none = new Kit(npm: false, platform: PlatformId.Linux);
-        var refused = await none.Service().FoundAsync(none.Layout, [], client: null, steps: " (the run's advisor)", Token);
+        var refused = await none.Service().FoundAsync(none.Layout, [], client: null, ClaudeCodeAsker.Run(" (the run's advisor)"), Token);
 
         Assert.Equal(HarnessExit.ToolMissing, refused.ExitCode);
         Assert.Equal(
             "this needs a Claude model through the client 'claude-code' (the run's advisor), and no npm is on the PATH. Looked for: npm; "
-            + "this only finds Claude Code - installing it and bringing it up to date are a run's step's to do. Install Node.js 22 or later, "
+            + "this only finds Claude Code - installing it and bringing it up to date are a run's step's or a side-task's to do. Install Node.js 22 or later, "
             + $"which brings npm, and then run it by hand: {ClaudeCodeUpdateService.InstallCommand()}",
             refused.Message);
     }
@@ -226,7 +235,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287");
 
-        await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(
             [NpmClient.AskBudget, NpmClient.AskBudget, ToolPackage.ChangeBudget, NpmClient.AskBudget, ClaudeCodeInstall.AskBudget],
@@ -242,11 +251,11 @@ public sealed class ClaudeCodeUpdateServiceTests
     {
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287");
-        await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
         var named = kit.Temp.WriteFile("mine.exe", "a program");
         kit.Temp.WriteFile(".harness-config/workflows/.env/named.env", $"CLAUDE_EXECUTABLE={named}\n");
         kit.Runner.Versions[$"{named} --version"] = Says("2.1.296");
-        await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, steps: string.Empty, Token);
+        await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, ClaudeCodeAsker.Run(), Token);
 
         var started = kit.Runner.Requests.Where(request => request.Arguments is ["--version"]).ToList();
 
@@ -260,7 +269,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287");
 
-        await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         // The readings before the change take the token; the change, its reading back and the program's own version
         // take none.
@@ -274,7 +283,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Table = new ScriptedTable([[new(4242, 1, "claude", null, "claude --resume", kit.Program), new(9000, 1, "dotnet", null, null)]]);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.Refused, answer.ExitCode);
@@ -293,7 +302,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         var script = Path.Combine(kit.Root, "@anthropic-ai", "claude-code", "cli.js");
         kit.Table = new ScriptedTable([[new(5150, 1, "node", null, $"\"{kit.Node}\" \"{script}\" --continue", kit.Node)]]);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.Refused, answer.ExitCode);
         Assert.Equal("a session of Claude Code is running on this machine (pid 5150); start the run again when they have ended.", answer.Message);
@@ -311,7 +320,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         TestLinks.OrSkip(() => TestLinks.DirectoryLink(link, Path.Combine(kit.Root, "@anthropic-ai", "claude-code")));
         kit.Table = new ScriptedTable([[new(6060, 1, "node", null, $"node {Path.Combine(link, "cli.js")}", null)]]);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.Refused, answer.ExitCode);
         Assert.Equal("a session of Claude Code is running on this machine (pid 6060); start the run again when they have ended.", answer.Message);
@@ -329,7 +338,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         kit.Table = new ScriptedTable([[new(4242, 1, "claude", null, $"\"{native}\"", native)]]);
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.True(answer.Ready);
         Assert.Equal(1, kit.Table.Reads);
@@ -346,7 +355,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Table = new ScriptedTable([[new(7070, 1, "claude", null, null), new(7071, 1, "node", null, null)]]);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.Refused, answer.ExitCode);
         Assert.Equal(
@@ -370,7 +379,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Table = new ScriptedTable([[new(5151, 1, "claude", null, "claude", node)]]);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.Refused, answer.ExitCode);
         Assert.Equal(
@@ -391,7 +400,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Table = new ScriptedTable([[new(5150, null, "node", null, null)]], degraded: Why);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.Refused, answer.ExitCode);
         Assert.Equal(
@@ -426,7 +435,7 @@ public sealed class ClaudeCodeUpdateServiceTests
             ]);
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.True(answer.Ready);
         Assert.Equal([ClaudeCodeInstall.PackageDirectory(kit.Root), kit.Node, server], kit.Files.Followed);
@@ -444,7 +453,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         kit.Table = new ScriptedTable([[new(7272, 1, "node", null, $"\"{kit.Node}\" {broken}", kit.Node)]]);
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.True(answer.Ready);
         Assert.Contains($"{kit.Node} {kit.RootScript} install -g @anthropic-ai/claude-code@{ClaudeCodeUpdateService.Needed}", kit.Runner.Ran);
@@ -466,7 +475,7 @@ public sealed class ClaudeCodeUpdateServiceTests
 
         try
         {
-            var asked = kit.Service(clock).ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+            var asked = kit.Service(clock).ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
             // The clock is moved past the bound only once the following stands stalled and the wait on it is armed.
             Assert.True(kit.Files.Reached.Wait(TimeSpan.FromSeconds(30), Token), "The stalling path was never followed.");
@@ -493,7 +502,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         using var held = new ProgramUpdate(kit.Runner, kit.Platform).TryHold(kit.Root);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.Refused, answer.ExitCode);
@@ -505,7 +514,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     {
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: new AgentClientConfig { Update = false }, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: new AgentClientConfig { Update = false }, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
@@ -520,7 +529,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     {
         using var kit = new Kit(package: null, disableUpdates: true);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
@@ -536,7 +545,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: null);
         kit.WritePackage("2.1.296", "2.1.296", bin: false);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
@@ -555,7 +564,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         kit.Temp.WriteFile(Path.GetRelativePath(kit.Temp.Path, kit.Manifest).Replace('\\', '/'), broken);
         var stopped = Assert.ThrowsAny<JsonException>(() => JsonDocument.Parse(broken)).Message.TrimEnd('.');
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
         Assert.Equal(
@@ -577,7 +586,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: null);
         kit.Temp.WriteFile(Path.GetRelativePath(kit.Temp.Path, kit.Manifest).Replace('\\', '/'), manifest);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
         Assert.Equal(
@@ -592,7 +601,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.296", program: "2.1.296");
         kit.Runner.Versions.Clear();
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
@@ -610,7 +619,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.296", program: "2.1.296");
         kit.Runner.Versions[$"{kit.Program} --version"] = new ProcessResult(3, string.Empty, "error: the platform's binary is missing\n", TimeSpan.Zero, TimedOut: false);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(
             $"'{kit.Program}' would not answer its own --version, so this tool cannot start it: asking it failed (exit 3): "
@@ -625,7 +634,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     {
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
@@ -644,7 +653,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: null);
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287", bin: false);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
         Assert.Equal(
@@ -664,7 +673,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", answered: null);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
         Assert.Equal(
@@ -681,7 +690,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.201");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
         Assert.Equal(
@@ -696,7 +705,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     {
         using var kit = new Kit(package: "2.1.296", program: "2.1.300");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
@@ -713,7 +722,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.296", program: "2.1.296");
         kit.Runner.Root = null;
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
@@ -730,7 +739,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.296", program: "2.1.296");
         kit.Runner.RootAnswers.Enqueue(new ProcessResult(1, string.Empty, "npm ERR! Cannot find module 'semver'\n", TimeSpan.Zero, TimedOut: false));
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(
             "npm was found but would not say where its global packages are ('npm root -g' failed (exit 1): npm ERR! Cannot find module 'semver'), "
@@ -752,7 +761,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Runner.Install = new ProcessResult(1, string.Empty, said + "\n", TimeSpan.FromSeconds(3), TimedOut: false);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.Incomplete, answer.ExitCode);
@@ -773,7 +782,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Runner.Install = new ProcessResult(-1, "running postinstall\n", string.Empty, ToolPackage.ChangeBudget, TimedOut: true);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.Incomplete, answer.ExitCode);
         Assert.Equal(
@@ -794,7 +803,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", answered: null);
         kit.Runner.Install = new ProcessResult(1, string.Empty, "npm ERR! code ENOTEMPTY\n", TimeSpan.FromSeconds(3), TimedOut: false);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
         Assert.Equal(
@@ -815,11 +824,11 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: null);
         kit.Runner.Install = new ProcessResult(1, string.Empty, "npm ERR! code E404\n", TimeSpan.FromSeconds(3), TimedOut: false);
 
-        var nothing = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var nothing = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         kit.Runner.RootAnswers.Enqueue(new ProcessResult(0, kit.Root + "\n", string.Empty, TimeSpan.Zero, TimedOut: false));
         kit.Runner.RootAnswers.Enqueue(new ProcessResult(1, string.Empty, "npm ERR! EPERM\n", TimeSpan.Zero, TimedOut: false));
-        var unknown = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var unknown = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.Equal(["npm holds no Claude Code since.", "npm ERR! code E404"], nothing.Details);
         Assert.Equal(["What npm holds since is not known: 'npm root -g' failed (exit 1): npm ERR! EPERM.", "npm ERR! code E404"], unknown.Details);
@@ -832,7 +841,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         var named = kit.Temp.WriteFile("mine.exe", "a program");
         kit.Temp.WriteFile(".harness-config/workflows/.env/named.env", $"CLAUDE_EXECUTABLE={named}\n");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
@@ -850,7 +859,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         kit.Temp.WriteFile(".harness-config/workflows/.env/keys.env", "CLAUDE_EXECUTABLE=one\n");
         kit.Temp.WriteFile(".harness-config/workflows/.env/work.env", "CLAUDE_EXECUTABLE=two\n");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ConfigInvalid, answer.ExitCode);
@@ -872,7 +881,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         var file = Path.Combine(kit.Temp.Path, ".harness-config", "workflows", ".env", "named.env");
         kit.Permissions.OthersCanWrite = true;
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ConfigInvalid, answer.ExitCode);
@@ -888,7 +897,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Runner.Install = new ProcessResult(1, string.Empty, "EACCES: permission denied, access '/usr/lib/node_modules'\n", TimeSpan.FromSeconds(3), TimedOut: false);
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
@@ -909,7 +918,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         kit.Temp.WriteFile(".harness-config/workflows/.env/named.env", $"CLAUDE_EXECUTABLE={named}\n");
         kit.Runner.Versions[$"{named} --version"] = Says("2.1.296");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.True(answer.Ready);
         Assert.Equal($"claude 2.1.296, named by the slot: '{named}'", answer.Message);
@@ -931,7 +940,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         var client = new AgentClientConfig { Executable = "MY_CLAUDE" };
         AppointedKey[] appointed = [new("MY_CLAUDE", "agentClients.claude-code", "the program's path", "executable", Secret: false)];
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, appointed, client, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, appointed, client, ClaudeCodeAsker.Run(), Token);
 
         Assert.True(answer.Ready);
         Assert.Equal($"claude 2.1.296, named by the slot: '{named}'", answer.Message);
@@ -939,7 +948,7 @@ public sealed class ClaudeCodeUpdateServiceTests
 
         kit.Runner.Versions[$"{named} --version"] = Says("2.1.100");
 
-        var older = await kit.Service().ReadyAsync(kit.Layout, appointed, client, steps: string.Empty, Token);
+        var older = await kit.Service().ReadyAsync(kit.Layout, appointed, client, ClaudeCodeAsker.Run(), Token);
 
         Assert.EndsWith("Update it by hand, or take MY_CLAUDE out of the slot", older.Message, StringComparison.Ordinal);
     }
@@ -952,7 +961,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         kit.Temp.WriteFile(".harness-config/workflows/.env/named.env", $"CLAUDE_EXECUTABLE={named}\n");
         kit.Runner.Versions[$"{named} --version"] = Says("2.1.100");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);
@@ -973,7 +982,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         var named = kit.Temp.WriteFile(name, "@echo off\n");
         kit.Temp.WriteFile(".harness-config/workflows/.env/named.env", $"CLAUDE_EXECUTABLE={named}\n");
 
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, steps: string.Empty, Token);
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [Named()], client: null, ClaudeCodeAsker.Run(), Token);
 
         Assert.False(answer.Ready);
         Assert.Equal(HarnessExit.ToolMissing, answer.ExitCode);

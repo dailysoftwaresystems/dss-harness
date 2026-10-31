@@ -1861,11 +1861,15 @@ entry it takes, watching the events of each client it works for where it got to 
 merging what every entry did into the step's one result (`WalkTotals`, its usage folded by the one fold of usage and
 cost, `AgentUsageReport.Sum` over `AgentCost.Sum`: a count is known only where every part with usage has one, and a
 part with usage and no cost is unknown, never nothing). A step budgeted in dollars is never started on an entry
-without a price of each kind its client is billed by (`IAgentClient.BilledBy`: input, cache read and output on every
-client, the claude-api client's cache write of its cache lifetime and both of the claude-code client's), nor
+without a price of each kind its client is billed by (`IAgentClient.BilledBy`, which reads the one fact of the client's
+kind given its entry, `AgentClientKind.BilledBy` through `AgentProviders.BilledBy`: input, cache read and output on
+every client, the claude-api client's cache write of its cache lifetime and both of the claude-code client's), nor
 on a provider that prices in another currency: the runner refuses it, on every client, before any is taken
 (`AgentRunner.Priceless`, in the words of `AgentPrices.BudgetRefusal`) - the step's own first entry ending the step
-`NotStarted`, a later one passed over and handed to the serving client as an entry it may not take. The first request asks for a quarter of the model's `maxOutputTokens` (`ToolLoop.FirstMaxTokens`), a turn
+`NotStarted`, a later one passed over and handed to the serving client as an entry it may not take. The workflow's
+check asks the same fact first (`WorkflowValidator`'s budget prices), each model of the order against the client it
+is reached through (`AgentResolution.ClientOf`, the one rule the run resolves each entry's client by), so a model the
+run would refuse is refused before the run, naming the model, the client and the missing price. The first request asks for a quarter of the model's `maxOutputTokens` (`ToolLoop.FirstMaxTokens`), a turn
 cut off while it called a tool, before it wrote anything, or while its request held it to a schema (`ToolLoop.WhileHeld`: the
 answer to a nudge would be a whole object of its own), doubling it. Every message the engine sends the agent - the step's
 prompt, a nudge, a repair, the handoff's question, a message to an agent at work - is masked as the system prompt is,
@@ -2682,7 +2686,13 @@ command's write into `.git`, the tool's own state - each state path under the ma
 git or gh command called by a name none of its own commands is, and `run-side-task` itself,
 refused to every agent by any name of the program and by a verb the shell expands, and refusing
 itself where the agent's mark, `AgentChildEnvironment.AgentMarker`, is in its environment, which
-no command of an agent takes away); no limits, no output envelope; the web
+no command of an agent takes away, or where a process of this tool's is among the ones that started it
+(`AgentAncestry`, over the process table's seam: the tree walked parent by parent, a process that took a
+freed id - started after the child that names it - never read as a parent, the tool told by its command's name
+(`ToolPackage.IsCommand`, the rule the tool's update finds its running copies by), the file this process runs as, or a runtime
+whose application - the first word past its own options, never an argument of it - is the tool's assembly; one detached from the agent's tree - `at`, a
+`tmux` server, a double fork - told by the mark alone, and a table read by names alone, or one without this
+process, refused saying why, never read as a tree with no agent in it); no limits, no output envelope; the web
 search of every configured source turned on, with one more asked beside them: `native`, the
 provider's own search - on the Claude API a request of the harness's own whose only tool is the
 provider's web search (`ClaudeApiNativeSearch`, no server tool in any conversation), its usage

@@ -59,14 +59,6 @@ public sealed class ClaudeApiClient(
     public AgentClientCapabilities Capabilities => Descriptor;
 
     /// <inheritdoc/>
-    public AgentUsage BilledBy(AgentEntries entries)
-    {
-        ArgumentNullException.ThrowIfNull(entries);
-
-        return ClaudeApiProvider.UsesOf(ClaudeApiSettings.Of(entries.Client));
-    }
-
-    /// <inheritdoc/>
     public Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(run);

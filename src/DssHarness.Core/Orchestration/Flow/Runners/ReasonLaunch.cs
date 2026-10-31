@@ -9,11 +9,11 @@ using DssHarness.Core.Secrets;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// What a reason agent's run is launched with beyond its model - a step's, the advisor's and the reporter's alike: where
-/// it works, the order its model is reached by with each entry's credential, the Claude Code directories no action of
-/// the agent's reaches, the mask its records and its answer are held to, and the program a client that starts one
-/// starts. The one builder of each for the three runners, so a rule of where an agent works or what it may not reach is
-/// written once.
+/// What an agent's run is launched with beyond its model - a reason step's, the advisor's, the reporter's and a
+/// side-task's alike: where a run of the engine's works, the order its model is reached by with each entry's credential,
+/// the Claude Code directories no action of the agent's reaches, the mask its records and its answer are held to, and the
+/// program a client that starts one starts. The one builder of each for every launch of an agent, so a rule of where an
+/// agent works or what it may not reach is written once.
 /// </summary>
 /// <param name="fileSystem">Makes a run's work directory and finds the tool's own Claude Code directory.</param>
 /// <param name="platform">This machine, whose home holds that directory.</param>
@@ -109,26 +109,28 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
 
     /// <summary>
     /// The program the run's client starts, where its order holds the client that starts one (<c>claude-code</c>): made
-    /// ready - installed and brought up to date where it must be - for a step of a run, and only found, never changed,
-    /// for the advisor and the reporter, which only read. Null where the order holds no such client, or nothing here
-    /// starts one; an answer that is not ready refuses the run with its own words and code.
+    /// ready - installed and brought up to date where it must be - for a step of a run and for a side-task, and only
+    /// found, never changed, for the advisor and the reporter, which only read. Null where the order holds no such client,
+    /// or nothing here starts one; an answer that is not ready refuses the asker with its own words and code, saying what
+    /// to start again in the asker's own noun.
     /// </summary>
     /// <param name="layout">The repository, whose slot may name the program.</param>
     /// <param name="providers">The configuration's providers and clients, resolved.</param>
     /// <param name="order">The run's order.</param>
-    /// <param name="steps">What needs the program, as a refusal names it.</param>
-    /// <param name="change">Whether a change may run: true for a step of a run, false for one that only reads.</param>
+    /// <param name="asker">What needs the program - a run's step, advisor or reporter, or a side-task - as a refusal names it.</param>
+    /// <param name="change">Whether a change may run: true for a step of a run and a side-task, false for the advisor and the reporter, which only read.</param>
     /// <param name="cancellationToken">Stops the asking.</param>
     public async Task<ClaudeCodeAnswer?> ProgramAsync(
         HarnessLayout layout,
         AgentProviders providers,
         IReadOnlyList<AgentRunEntry> order,
-        string steps,
+        ClaudeCodeAsker asker,
         bool change,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(providers);
         ArgumentNullException.ThrowIfNull(order);
+        ArgumentNullException.ThrowIfNull(asker);
 
         if (updates is null || !order.Any(entry => string.Equals(entry.Client, ClaudeCodeClient.ClientName, StringComparison.Ordinal)))
         {
@@ -138,7 +140,7 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
         var client = providers.ClientOf(ClaudeCodeClient.ClientName);
 
         return change
-            ? await updates.ReadyAsync(layout, providers.Appointed(), client, steps, cancellationToken).ConfigureAwait(false)
-            : await updates.FoundAsync(layout, providers.Appointed(), client, steps, cancellationToken).ConfigureAwait(false);
+            ? await updates.ReadyAsync(layout, providers.Appointed(), client, asker, cancellationToken).ConfigureAwait(false)
+            : await updates.FoundAsync(layout, providers.Appointed(), client, asker, cancellationToken).ConfigureAwait(false);
     }
 }

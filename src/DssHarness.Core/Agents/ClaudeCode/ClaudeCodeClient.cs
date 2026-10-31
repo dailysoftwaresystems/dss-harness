@@ -110,13 +110,6 @@ public sealed class ClaudeCodeClient(
     /// <inheritdoc/>
     public AgentClientCapabilities Capabilities => Descriptor;
 
-    /// <summary>
-    /// What a launch is billed by: input, cache read and output, and both cache writes - Claude Code reports the hour's
-    /// apart from the five minutes', and which it writes is its own to choose.
-    /// </summary>
-    /// <param name="entries">The entries the launch would work on.</param>
-    public AgentUsage BilledBy(AgentEntries entries) => AgentPrices.EveryRequestUses with { CacheWriteTokens = 1, CacheWrite1hTokens = 1 };
-
     /// <inheritdoc/>
     public async Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken)
     {

@@ -144,7 +144,7 @@ public sealed class ReasonStepRunner(
         // Where the order holds the client that starts a program, the program is found ready here - installed and
         // brought up to date where it must be - and the run starts what was found, never a launcher of its own: a
         // program not ready refuses the step with the finder's own words and code.
-        var program = await launch.ProgramAsync(context.Layout, providers, order, steps: $" (step '{run.Instance}')", change: true, cancellationToken).ConfigureAwait(false);
+        var program = await launch.ProgramAsync(context.Layout, providers, order, ClaudeCodeAsker.Run($" (step '{run.Instance}')"), change: true, cancellationToken).ConfigureAwait(false);
 
         if (program is { Ready: false })
         {

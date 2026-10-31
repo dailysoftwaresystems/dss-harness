@@ -35,11 +35,17 @@ public interface IAgentClient
 
     /// <summary>
     /// A token of each kind a run of this client on <paramref name="entries"/> is billed by: the prices a run budgeted in
-    /// dollars needs before the client is taken (<see cref="AgentPrices.BudgetRefusal"/>). What every request of every
-    /// provider may be billed by, where the client bills by nothing more.
+    /// dollars needs before the client is taken (<see cref="AgentPrices.BudgetRefusal"/>). Its kind's, given the client's
+    /// own entry (<see cref="AgentProviders.BilledBy"/>) - the one fact the definition's check reads too - and what every
+    /// request of every provider may be billed by for a client of no kind the tool builds in.
     /// </summary>
     /// <param name="entries">The entries the run would work on: its provider, its model, the client's own.</param>
-    AgentUsage BilledBy(AgentEntries entries) => AgentPrices.EveryRequestUses;
+    AgentUsage BilledBy(AgentEntries entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        return AgentProviders.BilledBy(Name, entries.Client);
+    }
 }
 
 /// <summary>

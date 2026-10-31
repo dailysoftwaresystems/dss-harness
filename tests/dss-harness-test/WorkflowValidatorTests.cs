@@ -2299,10 +2299,85 @@ public sealed class WorkflowValidatorTests
             """;
 
         Assert.Equal(
-            ["workflow 'flow' step 'think' runs under a budget in dollars, and no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss, priceInputHit, priceOutput), and a budget is charged with the cost counted from them"],
+            ["workflow 'flow' step 'think' runs under a budget in dollars through client 'glm', and no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss, priceInputHit, priceOutput), and a budget is charged with the cost counted from them"],
             WorkflowValidator.Validate(Parse($"name: flow\nbudget:\n  usd: 5\n{Steps}"), hasCommitTemplate: false, files: null, providers: Providers()));
         Assert.Empty(WorkflowValidator.Validate(Parse($"name: flow\nbudget:\n  tokens: 5000\n{Steps}"), hasCommitTemplate: false, files: null, providers: Providers()));
         Assert.Empty(WorkflowValidator.Validate(Parse($"name: flow\n{Steps}"), hasCommitTemplate: false, files: null, providers: Providers()));
+    }
+
+    /// <summary>
+    /// A model priced for what every request is billed by - input, cached input and output - is checked before the run
+    /// against what its own client is billed by too, as the run asks it before any client is taken: claude-api the cache
+    /// write of the lifetime its entry says, claude-code both writes, glm nothing more. Each model of a tier is checked
+    /// against the client it is reached through, and a step's own client is the one its models are checked against.
+    /// </summary>
+    [Fact]
+    public void AStepUnderABudgetInDollars_NeedsThePricesItsOwnClientIsBilledBy()
+    {
+        const string Budgeted = "name: flow\nbudget:\n  usd: 5\nsteps:\n  - name: think\n    type: reason\n    agent: agents/worker.md\n    prompt: prompts/think.md\n    outputs: schemas/think.json\n";
+        const string Tail = "and a budget is charged with the cost counted from them";
+
+        IReadOnlyList<string> Checked(string client, string? cacheTtl = null, string flow = Budgeted)
+            => WorkflowValidator.Validate(Parse(flow), hasCommitTemplate: false, files: null, providers: PricedForEveryRequest(client, cacheTtl));
+
+        Assert.Equal(
+            [$"workflow 'flow' step 'think' runs under a budget in dollars through client 'claude-api', and no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceCacheWrite), {Tail}"],
+            Checked("claude-api"));
+        Assert.Equal(
+            [$"workflow 'flow' step 'think' runs under a budget in dollars through client 'claude-api', and no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceCacheWrite1h), {Tail}"],
+            Checked("claude-api", cacheTtl: "1h"));
+        Assert.Equal(
+            [$"workflow 'flow' step 'think' runs under a budget in dollars through client 'claude-code', and no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceCacheWrite, priceCacheWrite1h), {Tail}"],
+            Checked("claude-code"));
+
+        // glm is billed by nothing more than every request is: its model priced so is priced for a budget.
+        Assert.Empty(Checked("claude-api", flow: Budgeted.Replace("    agent: agents/worker.md\n", "    agent: agents/worker.md\n    model: glm-5.3\n", StringComparison.Ordinal)));
+
+        // The step's own client is the one its model is checked against, whatever its provider's own is.
+        Assert.Equal(
+            [$"workflow 'flow' step 'think' runs under a budget in dollars through client 'claude-code', and no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceCacheWrite, priceCacheWrite1h), {Tail}"],
+            Checked("claude-api", flow: Budgeted.Replace("    agent: agents/worker.md\n", "    agent: agents/worker.md\n    model: claude-opus-5-5\n    client: claude-code\n", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A configuration whose tier <c>best</c> holds Claude's model, reached through <paramref name="client"/>, and GLM's,
+    /// reached through glm - each priced for what every request is billed by and nothing more.
+    /// </summary>
+    /// <param name="client">The client the anthropic provider reaches its model through.</param>
+    /// <param name="cacheTtl">The cache lifetime claude-api's entry says; null where the configuration declares no entry.</param>
+    private static AgentProviders? PricedForEveryRequest(string client, string? cacheTtl)
+    {
+        var config = new HarnessConfig
+        {
+            Defaults = new HarnessDefaults { AgentTier = "best" },
+            AgentClients = cacheTtl is null
+                ? new(StringComparer.OrdinalIgnoreCase)
+                : new(StringComparer.OrdinalIgnoreCase) { ["claude-api"] = new AgentClientConfig { CacheTtl = cacheTtl } },
+            Providers =
+            [
+                new()
+                {
+                    Name = "anthropic", Type = "anthropic", Api = "https://api.anthropic.com", ApiKeyNames = ["ANTHROPIC_API_KEY"], Client = client,
+                    Currency = "USD", ReadOn = "2026-10-12",
+                    Models =
+                    [
+                        new() { Code = "claude-opus-5-5", Name = "Opus", Tiers = ["best"], Efforts = ["low", "high"], ContextTokens = 200_000, MaxOutputTokens = 32_000, PriceInputMiss = 10, PriceInputHit = 1, PriceOutput = 50 },
+                    ],
+                },
+                new()
+                {
+                    Name = "zai", Type = "zai", Api = "https://api.z.ai", ApiKeyNames = ["ZAI_API_KEY"], Client = "glm",
+                    Currency = "USD", ReadOn = "2026-10-12",
+                    Models =
+                    [
+                        new() { Code = "glm-5.3", Name = "GLM 5.3", Tiers = ["best"], Efforts = ["low", "high"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072, PriceInputMiss = 1, PriceInputHit = 0.2, PriceOutput = 3 },
+                    ],
+                },
+            ],
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["best"] = ["claude-opus-5-5", "glm-5.3"] },
+        };
+
+        return AgentProviders.Resolve(config).Providers;
     }
 
     /// <summary>One provider, one model, one tier, as the config-half tests spell the configuration.</summary>
