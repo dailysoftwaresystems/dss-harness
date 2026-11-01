@@ -68,6 +68,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <summary>Why a run paused while it waited its turn at the gate has no handoff: its client never began.</summary>
     public const string PausedAtTheGate = "the run was paused while it waited its turn at the gate, before its client began";
 
+    /// <summary>Why a chat's run ended with no launch begun: the person left - its messages ended - before a client was given it.</summary>
+    public const string LeftBeforeItBegan = "the person left the chat before its launch began";
+
     /// <summary>Why a step paused while its failed agent waited to be tried again has no handoff: no launch was running to give one.</summary>
     public const string PausedWhileItWaited = "the run was paused while it waited to be tried again, before its next launch began";
 
@@ -486,8 +489,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         var session = step.SessionId;
 
         // The move that brought the walk to the entry it stands on - from which entry, and why - said again to the entry
-        // after it where the one it moved to could not be started; null before the walk has moved.
-        (AgentRunEntry From, string Why)? moved = null;
+        // after it where the one it moved to could not be started; a chat's handed back by its earlier run where its
+        // order is one a move made; null before the walk has moved.
+        var moved = step.Moved;
 
         try
         {
@@ -605,6 +609,15 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                         break;
                     }
 
+                    // A chat goes on there itself, as from every move: handed back from the move that brought it here.
+                    if (step.Chat)
+                    {
+                        totals.Add(result);
+                        var going = await MovedAsync(watching, onward, order, brought.From, brought.Why, totals.Turns, AgentFallback.ChatGoesOn).ConfigureAwait(false);
+
+                        return (totals.Finished(step) with { GoesOnBy = new AgentGoingOn([order[going], .. LaterFor(step, order, going, refused, limits, _clock.GetUtcNow())], brought) }, null);
+                    }
+
                     at = await MovedAsync(watching, onward, order, brought.From, brought.Why, totals.Turns, AgentFallback.NewConversation).ConfigureAwait(false);
                     continue;
                 }
@@ -712,10 +725,10 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                     // take it.
                     var onward = await MovedAsync(watching, next, order, from, why, totals.Turns, AgentFallback.ChatGoesOn).ConfigureAwait(false);
 
-                    return (totals.Finished(step) with { GoesOnBy = [order[onward], .. LaterFor(step, order, onward, refused, limits, _clock.GetUtcNow())] }, null);
+                    return (totals.Finished(step) with { GoesOnBy = new AgentGoingOn([order[onward], .. LaterFor(step, order, onward, refused, limits, _clock.GetUtcNow())], new AgentMove(from, why)) }, null);
                 }
 
-                moved = (from, why);
+                moved = new AgentMove(from, why);
                 at = await MovedAsync(watching, next, order, from, why, totals.Turns, AgentFallback.NewConversation).ConfigureAwait(false);
             }
 
@@ -927,6 +940,12 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <param name="compaction">The step's compaction, said as the first launch given it begins.</param>
     private async Task<AgentRunResult> InLaneAsync(IAgentClient client, AgentRun run, IAgentEventSink events, AgentEventPump pump, CompactionToSay compaction)
     {
+        // A chat the person left before its client was given it begins no launch, here or after the gate's wait.
+        if (run.Chat && run.Messages.Ended.IsCompleted)
+        {
+            return LeftBefore(run);
+        }
+
         if (_gates is null)
         {
             return await LaunchedAsync(run).ConfigureAwait(false);
@@ -968,8 +987,11 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 (wait, why) => events.EmitAsync(new WaitingToRetry($"the run waits for {why}", 1, 1, wait, _clock.GetUtcNow() + wait)),
                 paused.Token);
 
-            // The run's pause ends the wait: a run that never began has nothing to hand off, and says why.
-            if (await Task.WhenAny(entering, run.Handoff.WhenAsked).ConfigureAwait(false) != entering)
+            // The run's pause ends the wait - a run that never began has nothing to hand off, and says why - and so does a
+            // chat's person leaving, before any launch begins.
+            var left = run.Chat ? run.Messages.Ended : NeverLeft;
+
+            if (await Task.WhenAny(entering, run.Handoff.WhenAsked, left).ConfigureAwait(false) is var first && first != entering)
             {
                 await paused.CancelAsync().ConfigureAwait(false);
 
@@ -982,7 +1004,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                     // The wait the pause ended, as it was asked to.
                 }
 
-                return AgentEndings.HandedOff(null, PausedAtTheGate, run.Mask);
+                return first == left ? LeftBefore(run) : AgentEndings.HandedOff(null, PausedAtTheGate, run.Mask);
             }
 
             slot = await entering.ConfigureAwait(false);
@@ -1017,6 +1039,13 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             return ended;
         }
     }
+
+    /// <summary>What a run that is no chat's is left by: never.</summary>
+    private static readonly Task NeverLeft = new TaskCompletionSource().Task;
+
+    /// <summary>A chat's run the person left before a client was given it: no launch, nothing answered.</summary>
+    private static AgentRunResult LeftBefore(AgentRun run)
+        => new(AgentRunStatus.Cancelled, Model: run.Model, Error: LeftBeforeItBegan) { MessagesAnswered = 0 };
 
     /// <summary>
     /// The result a client answered, or - where it does not hold together, no ending the engine could read - the run

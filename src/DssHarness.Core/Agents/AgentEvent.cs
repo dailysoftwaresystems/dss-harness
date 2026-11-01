@@ -26,7 +26,6 @@ namespace DssHarness.Core.Agents;
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(SessionStarted), "sessionStarted")]
 [JsonDerivedType(typeof(MessageSent), "messageSent")]
-[JsonDerivedType(typeof(MessageTaken), "messageTaken")]
 [JsonDerivedType(typeof(MessagesDropped), "messagesDropped")]
 [JsonDerivedType(typeof(TurnStarted), "turnStarted")]
 [JsonDerivedType(typeof(TurnFinished), "turnFinished")]
@@ -333,13 +332,6 @@ public sealed record SessionStarted(
 /// <param name="Text">The message.</param>
 /// <param name="Which">Which of the messages the engine gives an agent while it works.</param>
 public sealed record MessageSent(string Text, AgentMessageKind Which) : AgentEvent;
-
-/// <summary>
-/// The agent took the oldest of the messages written to it that it had not taken - for the turn under way, or for the
-/// turn it begins - as a client that writes messages ahead of the agent's taking them (Claude Code) saw it take it.
-/// </summary>
-/// <param name="Waiting">How many of the messages written to the agent it has still not taken, by the client's own count.</param>
-public sealed record MessageTaken(int Waiting) : AgentEvent;
 
 /// <summary>An interrupt dropped messages written to the agent that it had not taken: no turn takes them.</summary>
 /// <param name="Count">How many it dropped.</param>

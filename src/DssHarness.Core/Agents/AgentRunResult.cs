@@ -280,15 +280,25 @@ public sealed record AgentRunResult(
     public int? MessagesAnswered { get; init; }
 
     /// <summary>
-    /// Where a chat's run ended on what moves a step on to its next entry - a decline, a limit, a refused key, a failure -
-    /// the order the chat goes on by: the entry the walk would have moved to first, and each entry after it marked as the
-    /// walk would pass it over, its key refused or a limit the run met covering it. A chat's run is never moved inside the
-    /// runner, for a launch begun there would answer the run's first message again and lose every line its channel had
-    /// given the one before; the chat goes on there itself, from the conversation so far with the lines no turn answered.
-    /// Null for every other run, and where no entry is left. Never written to a record: its entries hold their keys.
+    /// The order a chat goes on by, where its run ended on what moves a step on to its next entry - a decline, a limit, a
+    /// refused key, a failure, or a first entry a move had brought it to that could not be started: the entry the walk
+    /// would have moved to first, each entry after it marked as the walk would pass it over, its key refused or a limit
+    /// the run met covering it, and the move that brought the chat there. A chat's run is never moved inside the runner,
+    /// for a launch begun there would answer the run's first message again and lose every line its channel had given the
+    /// one before; the chat goes on there itself, from the conversation so far with the lines no turn answered. Null for
+    /// every other run, and where no entry is left. Never written to a record: its entries hold their keys.
     /// </summary>
     [JsonIgnore]
-    public IReadOnlyList<AgentRunEntry>? GoesOnBy { get; init; }
+    public AgentGoingOn? GoesOnBy { get; init; }
+
+    /// <summary>
+    /// Whether the run ended at its last turn's own end: its ending was read from that turn's result, or nothing happened
+    /// after that turn but the run's messages ending. False where it ended anywhere else - its program gone between two
+    /// turns or in the middle of one, a bound passed, a stop - so the turn before keeps its own ending, never the run's.
+    /// Said by a client that holds a launch open (Claude Code); false for every other.
+    /// </summary>
+    [JsonIgnore]
+    public bool EndedWithItsLastTurn { get; init; }
 
     /// <summary>
     /// The account's limit, where the run ended on one (<see cref="AgentRunStatus.RateLimited"/>): whether its balance or
@@ -437,3 +447,17 @@ public sealed record AgentRunResult(
         };
     }
 }
+
+/// <summary>A move of a walk's: the entry it moved from and why, as its record says it.</summary>
+/// <param name="From">The entry it moved from: the one that served last.</param>
+/// <param name="Why">Why it moved.</param>
+public sealed record AgentMove(AgentRunEntry From, string Why);
+
+/// <summary>
+/// The order a chat goes on by, handed back by the run that ended it (<see cref="AgentRunResult.GoesOnBy"/>): the entry
+/// to go on from first, and the entries after it; and the move that brought it there, which the next run's walk goes on
+/// from (<see cref="AgentStepRequest.Moved"/>).
+/// </summary>
+/// <param name="Order">The order, the entry to go on from first.</param>
+/// <param name="Moved">The move that brought the chat to its first entry.</param>
+public sealed record AgentGoingOn(IReadOnlyList<AgentRunEntry> Order, AgentMove Moved);

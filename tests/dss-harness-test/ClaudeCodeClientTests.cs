@@ -371,7 +371,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
             .ToList();
         Assert.Equal(
             [
-                "runStarted", "messageSent", "sessionStarted", "turnStarted", "messageTaken", "toolCallStarted", "assistantMessage",
+                "runStarted", "messageSent", "sessionStarted", "turnStarted", "toolCallStarted", "assistantMessage",
                 "toolCallFinished", "assistantMessage", "turnFinished", "usageReported", "runFinished",
             ],
             kinds);
@@ -1695,8 +1695,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         var at = Assert.Single(sink.BegunAt);
         string[] before = how == "aCallRan"
-            ? ["MessageSent", "SessionStarted", "TurnStarted", "MessageTaken", "ToolCallStarted", "ToolCallInputDelta", "AssistantMessage", "ToolCallFinished"]
-            : ["MessageSent", "SessionStarted", "TurnStarted", "MessageTaken", "AssistantMessage"];
+            ? ["MessageSent", "SessionStarted", "TurnStarted", "ToolCallStarted", "ToolCallInputDelta", "AssistantMessage", "ToolCallFinished"]
+            : ["MessageSent", "SessionStarted", "TurnStarted", "AssistantMessage"];
         string[] after = how == "aCallRan" ? ["AssistantMessage", "TurnFinished", "UsageReported"] : ["TurnFinished", "UsageReported"];
 
         Assert.Equal(before, sink.Events.Take(at).Select(one => one.GetType().Name));
@@ -2880,6 +2880,107 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
     /// <summary>One launch as the fake recorded it: its start, and every line it read.</summary>
     private sealed record Recorded(IReadOnlyList<string> Arguments, string WorkingDirectory, IReadOnlyDictionary<string, string?> Environment, IReadOnlyList<JsonObject> Read);
+
+    /// <summary>
+    /// The person leaving a chat - its messages ended - while a turn runs never drops that turn: the launch interrupts it
+    /// - by its own interrupt, or the person's still unanswered - drops what waits, reads on to the cut turn's result and
+    /// ends there, so the turn is finished, counted as answered, and what it used and cost is the run's; the launch ends
+    /// at its last turn's own end.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "chat-leave")]
+    [InlineData(true, "chat-interrupt")]
+    public async Task ThePersonLeavingWhileATurnRuns_CutsIt_AndReadsOnToItsResult(bool pressedFirst, string interrupt)
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["text"] = "first said" }, new JsonObject { ["hang"] = true, ["slowInterrupt"] = 1000 }]);
+        var run = kit.Run() with { Chat = true, Interrupt = new AgentTurnInterrupt() };
+        var sink = new Sink(@event =>
+        {
+            if (@event is AssistantMessage { Text: "first said" })
+            {
+                run.Messages.Post("and now?");
+            }
+            else if (@event is TurnStarted { Turn: 2 })
+            {
+                // The second turn under way, the person leaves - or presses Ctrl+C first, and leaves once it is sent.
+                if (pressedFirst)
+                {
+                    run.Interrupt!.Interrupt();
+                }
+                else
+                {
+                    run.Messages.Complete();
+                }
+            }
+            else if (@event is Notice { Text: "the turn was interrupted where it stands; the conversation keeps what was said" })
+            {
+                run.Messages.Complete();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        Assert.Equal(
+            (AgentRunStatus.Completed, 2, (int?)2, true, (decimal?)0.02m),
+            (result.Status, result.Turns, result.MessagesAnswered, result.EndedWithItsLastTurn, result.Usage?.Cost?.Usd));
+        Assert.Equal([1, 2], sink.Of<TurnFinished>().Select(finished => finished.Turn));
+        Assert.Equal(
+            [interrupt],
+            Control(kit)
+                .Where(line => line["type"]?.GetValue<string>() == "control_request" && line["request"]?["subtype"]?.GetValue<string>() == "interrupt")
+                .Select(line => line["request_id"]!.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// A launch whose program is gone in the middle of a turn ended anywhere but at its last turn's own end: the turn
+    /// before it, which ended at its own result, keeps its own ending.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchGoneInsideATurn_EndsNotWithItsLastTurn()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["text"] = "first said" }, new JsonObject { ["exit"] = 3 }]);
+        var run = kit.Run() with { Chat = true, Interrupt = new AgentTurnInterrupt() };
+        var sink = new Sink(@event =>
+        {
+            if (@event is AssistantMessage { Text: "first said" })
+            {
+                run.Messages.Post("and now?");
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        Assert.Equal((AgentRunStatus.Failed, false), (result.Status, result.EndedWithItsLastTurn));
+        Assert.Equal([1], sink.Of<TurnFinished>().Select(finished => finished.Turn));
+    }
+
+    /// <summary>
+    /// A one shot's interrupt cuts its launch's turn and never kills the launch: it ends at the cut turn's result,
+    /// <see cref="AgentRunStatus.Cancelled"/>, with what the turn used and cost - so what the key spent is counted.
+    /// </summary>
+    [Fact]
+    public async Task AOneShotsInterrupt_EndsItsLaunchAtTheCutTurnsResult_WhatItUsedKept()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["hang"] = true }]);
+        var run = kit.Run() with { Interrupt = new AgentTurnInterrupt() };
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnStarted)
+            {
+                run.Interrupt!.Interrupt();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        Assert.Equal(
+            (AgentRunStatus.Cancelled, ClaudeCodeClient.TurnCut, 1, true, (decimal?)0.01m),
+            (result.Status, result.Error, result.Turns, result.EndedWithItsLastTurn, result.Usage?.Cost?.Usd));
+        Assert.Single(sink.Of<TurnFinished>());
+    }
 
     /// <summary>
     /// A sink that keeps every event a launch emitted, in the order taken, from any number of writers - a call of the

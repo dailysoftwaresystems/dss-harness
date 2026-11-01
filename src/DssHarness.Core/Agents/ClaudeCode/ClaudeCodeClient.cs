@@ -68,6 +68,12 @@ public sealed class ClaudeCodeClient(
     /// <summary>The id of the host's <c>initialize</c> request, which its answer names.</summary>
     public const string InitializeId = "initialize";
 
+    /// <summary>What a run that is no chat's - a one shot - ends with where its interrupt cut its turn.</summary>
+    public const string TurnCut = "the turn was interrupted where it stood";
+
+    /// <summary>The id of the interrupt a launch asks of itself where the person left the chat while a turn ran or a line waited.</summary>
+    private const string LeaveInterruptId = "chat-leave";
+
     /// <summary>The stop reason of a message the model declined to write.</summary>
     private const string Declined = "refusal";
 
@@ -286,6 +292,9 @@ public sealed class ClaudeCodeClient(
 
         /// <summary>The engine interrupted the agent's current turn alone, the launch left open for the chat's next message.</summary>
         public sealed record TurnInterrupted : Arrival;
+
+        /// <summary>The bound a launch the person left reads on to its cut turn's result in passed.</summary>
+        public sealed record LeaveBound : Arrival;
     }
 
     /// <summary>Where a launch stands with the handoff.</summary>
@@ -375,6 +384,16 @@ public sealed class ClaudeCodeClient(
         // never the launch's - an interrupted turn ends on an error of its own, and the chat goes on.
         private bool _chatCut;
         private decimal _cost;
+
+        // Whether the person left the chat - its messages ended - while a turn ran or a line waited: the launch interrupts
+        // the turn, drops the lines, reads on to the cut turn's result within the interrupt's bound, and ends there; and
+        // whether its own interrupt for that is still unanswered.
+        private bool _leaving;
+        private bool _leaveAsked;
+
+        // Whether the launch ended at its last turn's own end: its ending read from that turn's result, or nothing after
+        // that turn but the messages ending.
+        private bool _withItsLastTurn;
 
         public async Task<LaunchOutcome> RunAsync(CancellationToken cancellationToken)
         {
@@ -479,8 +498,16 @@ public sealed class ClaudeCodeClient(
                 await EndAsync(process).ConfigureAwait(false);
 
                 // A chat's run says how many of the messages it was given are settled, from its own count of what each
-                // turn took and what each interrupt dropped, so the chat sends again what no turn answered.
-                return run.Chat ? outcome with { Result = outcome.Result with { MessagesAnswered = _answeredTaken + _dropped } } : outcome;
+                // turn took and what each interrupt dropped, so the chat sends again what no turn answered; and every run
+                // whether it ended at its last turn's own end.
+                return outcome with
+                {
+                    Result = outcome.Result with
+                    {
+                        MessagesAnswered = run.Chat ? _answeredTaken + _dropped : outcome.Result.MessagesAnswered,
+                        EndedWithItsLastTurn = _withItsLastTurn,
+                    },
+                };
             }
             finally
             {
@@ -543,6 +570,7 @@ public sealed class ClaudeCodeClient(
                     Arrival.ServeFailed failed => OnServeFailed(failed),
                     Arrival.ChatEnded => ChatEnded(),
                     Arrival.TurnInterrupted => await OnTurnInterruptedAsync().ConfigureAwait(false),
+                    Arrival.LeaveBound => _leaving ? Left(withItsLastTurn: false) : null,
                     _ => null,
                 };
 
@@ -711,11 +739,13 @@ public sealed class ClaudeCodeClient(
                     _limit = null;
                     totals.Turns++;
                     await Emit(new TurnStarted(totals.Turns)).ConfigureAwait(false);
-                }
 
-                // Each message taken is said, with how many still wait: a launch that ends with one waiting ended between
-                // turns, never at the end of the turn before it.
-                await Emit(new MessageTaken(_pending.Count)).ConfigureAwait(false);
+                    // A turn that began after the person left - a line taken before the interrupt dropped it - is cut too.
+                    if (_leaving && !_leaveAsked)
+                    {
+                        AskToLeave();
+                    }
+                }
 
                 return null;
             }
@@ -1153,9 +1183,33 @@ public sealed class ClaudeCodeClient(
                     await Emit(new MessagesDropped(dropped, _pending.Count)).ConfigureAwait(false);
                 }
 
-                Watch();
+                // An interrupt that found no turn to cut - it dropped the lines waiting - leaves no result to come for it.
+                if (!_inTurn)
+                {
+                    _chatCut = false;
 
-                return null;
+                    // A run that is no chat's - a one shot - ends where its interrupt left nothing to come.
+                    if (!run.Chat && _pending.Count == 0)
+                    {
+                        return new LaunchOutcome(Failed(AgentRunStatus.Cancelled, TurnCut));
+                    }
+                }
+
+                return Leaving() ?? Watch(null);
+            }
+
+            if (answered.RequestId == LeaveInterruptId)
+            {
+                _leaveAsked = false;
+
+                // The lines it dropped were never taken: no turn answers them, so they are the run's unsettled, which the
+                // chat sends on to its next launch - never said to the person as dropped.
+                if (answered.Succeeded)
+                {
+                    _pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true);
+                }
+
+                return Leaving();
             }
 
             if (answered.RequestId == _interruptId && !answered.Succeeded)
@@ -1180,7 +1234,16 @@ public sealed class ClaudeCodeClient(
             return await AskWhenCutAsync().ConfigureAwait(false);
         }
 
+        /// <summary>A turn's result, and where the launch ends at it, the launch's ending its own.</summary>
         private async Task<LaunchOutcome?> OnResultAsync(ClaudeLine.Result result)
+        {
+            var outcome = await OnTurnEndedAsync(result).ConfigureAwait(false);
+            _withItsLastTurn |= outcome is not null;
+
+            return outcome;
+        }
+
+        private async Task<LaunchOutcome?> OnTurnEndedAsync(ClaudeLine.Result result)
         {
             _inTurn = false;
             await ActedAsync().ConfigureAwait(false);
@@ -1224,6 +1287,12 @@ public sealed class ClaudeCodeClient(
                 _answeredTaken = _taken;
             }
 
+            // A run that is no chat's - a one shot - ends at the turn its interrupt cut, with what it said and used.
+            if (cut && !run.Chat)
+            {
+                return new LaunchOutcome(Failed(AgentRunStatus.Cancelled, TurnCut));
+            }
+
             // A message the launch has not taken yet begins a turn of its own: this result is not the step's answer.
             if (_pending.Count > 0)
             {
@@ -1243,8 +1312,9 @@ public sealed class ClaudeCodeClient(
             if (run.Chat && (Ending(result) is null || (cut && _limit is null && _declined is null)))
             {
                 _chatText = Masked(result.Text ?? _lastText ?? _chatText ?? string.Empty);
-                Watch();
-                return null;
+
+                // The person left while this turn ran: the launch ends at its result, what it used counted.
+                return Leaving() ?? Watch(null);
             }
 
             if (Ending(result) is { } ended)
@@ -1468,6 +1538,13 @@ public sealed class ClaudeCodeClient(
             }
         }
 
+        /// <summary>Starts the stall bound as <see cref="Watch()"/> does, answering <paramref name="outcome"/>: the launch goes on.</summary>
+        private LaunchOutcome? Watch(LaunchOutcome? outcome)
+        {
+            Watch();
+            return outcome;
+        }
+
         /// <summary>
         /// Writes a user message, as the event that says so first - masked, as the system prompt is: the agent is never told
         /// a secret of the run's, and nothing Claude Code keeps of what it was told holds one the engine wrote.
@@ -1543,13 +1620,64 @@ public sealed class ClaudeCodeClient(
         }
 
         /// <summary>
-        /// The chat's messages ended - the person left - and the launch that was held open for them ends with its
-        /// last text; null where the run was no chat, for the end of any run's messages reaches here too.
+        /// The chat's messages ended - the person left - and the launch that was held open for them ends with its last
+        /// text: at once where no turn runs and no line waits, its last turn's end its own; else the turn under way is
+        /// interrupted and the lines waiting dropped, as the person's interrupt does, and the launch reads on to that
+        /// turn's result - what it used counted - within the interrupt's bound, ending there. Null where the run was no
+        /// chat, for the end of any run's messages reaches here too.
         /// </summary>
         private LaunchOutcome? ChatEnded()
-            => run.Chat
-                ? new LaunchOutcome(new AgentRunResult(AgentRunStatus.Completed, FinalText: _chatText ?? _lastText ?? string.Empty))
-                : null;
+        {
+            if (!run.Chat)
+            {
+                return null;
+            }
+
+            if (!_inTurn && _pending.Count == 0)
+            {
+                return Left(withItsLastTurn: true);
+            }
+
+            _leaving = true;
+
+            // The person's own interrupt, still unanswered, cuts the turn already; otherwise the launch asks its own.
+            if (_chatInterruptId is null)
+            {
+                AskToLeave();
+            }
+
+            After(InterruptBound, new Arrival.LeaveBound());
+
+            return null;
+        }
+
+        /// <summary>
+        /// Interrupts the turn under way, and drops the lines waiting, for the person left: the result that follows is the
+        /// cut turn's.
+        /// </summary>
+        private void AskToLeave()
+        {
+            _leaveAsked = true;
+            _chatCut = true;
+            Control(new JsonObject
+            {
+                ["type"] = "control_request",
+                ["request_id"] = LeaveInterruptId,
+                ["request"] = new JsonObject { ["subtype"] = "interrupt", ["cancel_queued"] = true },
+            });
+        }
+
+        /// <summary>The launch's end, where the person left and nothing is to come: no turn runs and no line waits.</summary>
+        private LaunchOutcome? Leaving()
+            => _leaving && !_inTurn && _pending.Count == 0 ? Left(withItsLastTurn: true) : null;
+
+        /// <summary>The chat's launch ended for the person left, with its last text.</summary>
+        /// <param name="withItsLastTurn">Whether it ends at its last turn's own end - false where a bound ended it while a turn ran.</param>
+        private LaunchOutcome Left(bool withItsLastTurn)
+        {
+            _withItsLastTurn = withItsLastTurn;
+            return new LaunchOutcome(new AgentRunResult(AgentRunStatus.Completed, FinalText: _chatText ?? _lastText ?? string.Empty));
+        }
 
         /// <summary>
         /// The engine interrupted the agent's current turn alone: the interrupt control request is sent, the launch
@@ -1558,7 +1686,7 @@ public sealed class ClaudeCodeClient(
         /// </summary>
         private Task<LaunchOutcome?> OnTurnInterruptedAsync()
         {
-            if (!_inTurn || _chatInterruptId is not null)
+            if ((!_inTurn && _pending.Count == 0) || _chatInterruptId is not null || _leaving)
             {
                 return Task.FromResult<LaunchOutcome?>(null);
             }

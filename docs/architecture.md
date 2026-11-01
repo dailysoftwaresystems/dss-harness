@@ -2841,19 +2841,35 @@ tried again nor moved by the runner: a try or a move begun inside the walk would
 first message and lose every line it had taken. Its retries are 0, so a failed turn ends it; and where
 the walk would move on - a decline, a limit, a refused key, a failure - it ends the run on that ending,
 says the move (`FallbackStarted`, `AgentFallback.ChatGoesOn`) and hands back the order it would have
-gone on by (`AgentRunResult.GoesOnBy`: the entry `AgentFallback.Next` finds, and each after it as the
-walk would take it). The chat goes on in a new launch from the conversation so far with the lines no
-turn answered - on the entry handed back where there is one, as one request per line where that
-entry's client stores its conversations. A chat's run is begun only on a client that renders its
+gone on by with the move that brought it there (`AgentRunResult.GoesOnBy`, an `AgentGoingOn`: the
+entry `AgentFallback.Next` finds, each after it as the walk would take it, and the `AgentMove`). The
+chat goes on in a new launch from the conversation so far with the lines no turn answered - on the
+entry handed back where there is one, as one request per line where that entry's client stores its
+conversations - and its next request carries that move (`AgentStepRequest.Moved`, cleared once the
+person sets the model or effort again), so the walk passes a first entry that cannot be started over
+as one a move of its own reached and, the run being a chat's, hands back the entry after it with the
+same move, never asking the one that cannot start again. A chat's run whose messages have ended - the
+person left - before a client took it is never launched: the runner returns it before its turn of the
+lane and races the gate's wait against the messages' end (`AgentMessages.Ended`) as it races a
+handoff, ending it `Cancelled` with no message answered (`AgentRunner.LeftBeforeItBegan`); the gate's
+wait is said in the chat as it begins (`WaitingToRetry`). A chat's run is begun only on a client that renders its
 conversations - the runner refuses it, never started, on any other - and Claude Code moves to no
 other key inside it, so `MessagesAnswered` is always its one launch's own count; the run's end says
 it (`RunFinished.MessagesAnswered`), and a line given to a launch that never answered it is read once
 in the conversation that goes on and written once in `transcript.md`. Whether a turn of the launch is
 under way is the client's own turns' (`TurnStarted`, `TurnFinished`), however many lines were written
-to it meanwhile, and whether a line written to it waits untaken is the client's own count, said as it
-takes each (`MessageTaken`) and as an interrupt drops some (`MessagesDropped`): the launch's ending is
-its last turn's only where it ended at that turn's end - no turn under way and no line waiting - so a
-launch gone between one turn's end and taking the next line marks no finished turn with its failure. One
+to it meanwhile, and a line an interrupt drops is said (`MessagesDropped`). The launch's ending is its
+last turn's only where the client says the run ended at that turn's own result
+(`AgentRunResult.EndedWithItsLastTurn`: Claude Code's run ending at a turn's result, or idle with
+nothing waiting as the person leaves), so a launch gone between turns, or in the middle of one, marks
+no finished turn with its failure. The person leaving while a turn runs or a line waits never drops
+that turn: Claude Code interrupts the turn under way with the waiting lines cancelled - unless the
+person's own interrupt is still unanswered - reads on to the cut turn's result within
+`ClaudeCodeClient.InterruptBound`, counts it and ends there, the lines it dropped never counted as
+answered, so what the turn used, cost and spent is kept and a line it never took goes on with the
+chat. `/model` or `/effort` typed while the launch works ends it the same way and carries the lines it
+never took to the new launch (`GoneOnAsync`), each turn written on the entry of the launch that served
+it. One
 request per message where the client stores them, each going on with the stored
 one. A side-task whose last run that worked - one that began a session - ended `ContextExhausted`, a
 chat's or a one shot's, has outgrown its context (`Working.Outgrown`, read from its stream): it keeps
@@ -2886,7 +2902,10 @@ the transcript as a person reads it `transcript.md`, `denials.jsonl` and `web.js
 the stored conversation under `sessions/` where its client stores one - named on every exit,
 in text and in `--json`, or said to be none where the command stopped before any were written.
 Its exits are its turn's (`AgentRunResult.ToOutcome`, the one mapping) in one shot - 20 failed, 21
-cut short, 130 interrupted - and, in either, 12, 13, 14 or 21 where it could not start; a chat's are 0 however the
+cut short, 130 interrupted: a one shot's interrupt cuts its turn by the turn's interrupt where its
+client renders its conversations, Claude Code ending the launch at the cut turn's result,
+`Cancelled` (`ClaudeCodeClient.TurnCut`), with what it used, cost and spent kept, and cancels the
+turn's request on any other client - and, in either, 12, 13, 14 or 21 where it could not start; a chat's are 0 however the
 person leaves it once it has begun, 130 where two interrupts stop it while it is still being set up
 or opened again. Its interrupts are its own
 (`SideTaskTerminal` over `TerminalSignals`, the one registration of Ctrl+C, SIGTERM and a hang-up,

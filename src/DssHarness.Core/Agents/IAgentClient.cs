@@ -397,6 +397,14 @@ public sealed class AgentMessages
     private readonly Channel<string> _messages = Channel.CreateUnbounded<string>(
         new UnboundedChannelOptions { SingleReader = true });
 
+    private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// Completes once the messages are ended (<see cref="Complete"/>), whatever is still unread: for a chat, the person
+    /// leaving - which ends every stage of its run before a client is given it, as the run's pause does.
+    /// </summary>
+    public Task Ended => _ended.Task;
+
     /// <summary>Tells the agent <paramref name="message"/>.</summary>
     /// <param name="message">The message, whole.</param>
     /// <returns>Whether the channel holds it for the agent: false where the run's messages were ended, so nothing posted to an ended run is lost unsaid.</returns>
@@ -421,7 +429,11 @@ public sealed class AgentMessages
         => _messages.Reader.ReadAllAsync(cancellationToken);
 
     /// <summary>Ends the messages: no more will be posted, and the reader's wait ends.</summary>
-    public void Complete() => _messages.Writer.TryComplete();
+    public void Complete()
+    {
+        _messages.Writer.TryComplete();
+        _ended.TrySetResult();
+    }
 }
 
 /// <summary>
@@ -609,6 +621,14 @@ public sealed record AgentStepRequest(
     /// channel, ending only when they end. False for every step of a run.
     /// </summary>
     public bool Chat { get; init; }
+
+    /// <summary>
+    /// The move that brought a chat to the first entry of its <see cref="Order"/>, where an earlier run's walk handed it
+    /// back (<see cref="AgentRunResult.GoesOnBy"/>): the walk goes on from it as from its own, so a first entry that
+    /// cannot be started is passed over as one a move brought it to, and the chat handed the entries after it. Null where
+    /// the run's order is its own.
+    /// </summary>
+    public AgentMove? Moved { get; init; }
 }
 
 /// <summary>

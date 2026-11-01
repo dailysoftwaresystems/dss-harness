@@ -452,15 +452,29 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "a second, /exit or the end of input ends it, the agent's open launch let end as /exit lets it - its turn cut - so "
-                + "what it used, cost and spent is kept. Each interrupt says whether a turn of the agent's was under way to cut, or none "
-                + "was and nothing is cut.",
+            "a second, /exit or the end of input ends it: a turn under way is cut and its result read - within "
+                + $"{DssHarness.Core.Agents.ClaudeCode.ClaudeCodeClient.InterruptBound.TotalSeconds:0} s - and the lines the agent had not "
+                + "taken are dropped, so what the turn used, cost and spent is kept; a launch still waiting its turn at the gate - a "
+                + "limit not lifted, its wait said in the chat - is never begun. Each interrupt says whether a turn of the agent's was "
+                + "under way to cut, or none was and nothing is cut.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "On a tier the later models of its order are followed as for a step, and said in the chat; a chat moved to a later "
-                + "model goes on from the conversation so far, never from its first message, with the messages no turn answered "
-                + "sent on there.",
+            "a launch at work gives way as the person leaving does, and the lines it never took go on to the new one;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Ctrl+C there cuts its turn - a Claude Code launch's at that turn's result, what it used kept - and it ends "
+                + $"interrupted ({HarnessExit.Cancelled});",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "On a tier the later models of its order are followed, and said in the chat: a one shot's turn, and each message of a "
+                + "chat whose client stores its conversations, is tried again on its model "
+                + $"{DssHarness.Core.Agents.SideTasks.SideTaskService.DefaultRetries} times before it moves on, as a step's; a chat's "
+                + "launch held open is never tried again - it moves on at its first failure, a decline, a limit, a refused key or a "
+                + "model that cannot be started - and goes on from the conversation so far, never from its first message, with the "
+                + "messages no turn answered sent on there.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(

@@ -746,10 +746,46 @@ public sealed class AgentFallbackTests : IDisposable
         Assert.Null(next.Given);
         Assert.Equal(
             [("glm-5.3", true, (string?)null), ("claude-opus-5-5", false, $"the limit covers it until {StillLifts:u}")],
-            result.GoesOnBy!.Select(entry => (entry.Model, entry.Usable, entry.WhyNot)));
+            result.GoesOnBy!.Order.Select(entry => (entry.Model, entry.Usable, entry.WhyNot)));
+        Assert.Equal(("claude-fable-5-1", "limit"), (result.GoesOnBy.Moved.From.Model, result.GoesOnBy.Moved.Why));
 
         var moved = Assert.Single(seen.Seen.OfType<FallbackStarted>());
         Assert.Equal(("claude-fable-5-1", "glm-5.3", "limit", AgentFallback.ChatGoesOn), (moved.FromModel, moved.ToModel, moved.Why, moved.How));
+    }
+
+    /// <summary>
+    /// A chat whose order a move handed back goes on from that move: the walk passes a first entry that cannot be started
+    /// over - as it passes one a move of its own reached - and, a chat's run never being moved inside the runner, hands
+    /// back the order from the entry after it with the move that brought the chat there, said again as the chat's own
+    /// going on, so the chat's next run begins there and never asks the entry that cannot start again.
+    /// </summary>
+    [Fact]
+    public async Task AChatAMoveBroughtToAnEntryThatCannotStart_IsHandedTheEntryAfterIt()
+    {
+        var unserved = new Scripted("two") { Script = (run, _, _) => Task.FromResult(AgentEndings.NotStarted("two", AgentNotStartedBecause.ConfigurationWrong, "the model has no maxOutputTokens", run.Model, run.Mask)) };
+        var third = new Scripted("three") { Script = (run, events, _) => Completed(run, events, "claude-haiku-5-5", turns: 1) };
+        var runner = new AgentRunner([unserved, third], _harness.FileSystem, Elevation.User, TimeProvider.System);
+        var seen = new Collecting();
+        var from = Entry("claude-fable-5-1", "anthropic", "one", key: null);
+
+        var result = await runner.RunAsync(
+            Step([Entry("claude-opus-5-5", "anthropic", "two", key: null), Entry("claude-haiku-5-5", "anthropic", "three", key: null)])
+                with { Chat = true, Messages = new AgentMessages(), Moved = new AgentMove(from, "failed, with no retries") },
+            seen,
+            Token);
+
+        Assert.Equal(
+            (AgentRunStatus.NotStarted, "client 'two' was not started: the model has no maxOutputTokens"),
+            (result.Status, result.Error));
+        Assert.Null(third.Given);
+        Assert.Equal(
+            ("claude-opus-5-5", "client 'two' was not started: the model has no maxOutputTokens"),
+            (Assert.Single(seen.Seen.OfType<FallbackPassedOver>()).Model, seen.Seen.OfType<FallbackPassedOver>().Single().Why));
+        Assert.Equal(
+            [("claude-fable-5-1", "claude-haiku-5-5", "failed, with no retries", AgentFallback.ChatGoesOn)],
+            seen.Seen.OfType<FallbackStarted>().Select(moved => (moved.FromModel, moved.ToModel, moved.Why, moved.How)));
+        Assert.Equal(["claude-haiku-5-5"], result.GoesOnBy!.Order.Select(entry => entry.Model));
+        Assert.Equal(("claude-fable-5-1", "failed, with no retries"), (result.GoesOnBy.Moved.From.Model, result.GoesOnBy.Moved.Why));
     }
 
     /// <summary>
