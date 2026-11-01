@@ -877,36 +877,48 @@ side-task.
 Beneath the policy, the operating system isolates every command an agent runs, so a command spelt
 past a reader of words still reads no credential slot and writes neither git's code-running files
 nor the tool's state. On Linux, WSL 2's included, the mechanism is the system's bubblewrap 0.8 or
-newer - the first `bwrap` in an absolute directory of the PATH outside the tree - which the
-contained step becomes in the child's place, so no child runs outside it for an instant. Inside it
-every credential slot of the main checkout and every Claude Code directory is an empty place; git's
-code-running files of every tree the agent touches (the hooks git runs, the common directory's
-`config`, `config.worktree` and `info/`, each linked worktree's `config.worktree`, every
-submodule's hooks and config), the user's own git configuration (`~/.gitconfig`, and `git/` under
-`XDG_CONFIG_HOME` or `~/.config`), the tool's state under each tree and the launch's own directory
-are read-only, the agent's writable roots - its worktree, its work directory - written again inside
-them; git's objects, index and refs stay writable, so `git add`, `fetch`, `rm` and `status` work.
-Each place not there is made, empty, before the launch, so no command makes it inside and has it
-read or run outside later - but a state file, which the tool reads as meaning something, is never
-made, and the words policy alone guards it. The child has a user namespace of its own that allows
-no further one (`--disable-userns`) and a process namespace with its own `/proc`; WSL's
-interoperation sockets (`/run/WSL`, and `WSL_INTEROP` taken from its environment), the user's
-service manager and message bus are hidden; the network is the user's. A `claude-code` launch runs
-whole inside it, the Claude Code directories open to it - it reads its own login there - and
-guarded for it by the words policy alone; the API clients' `run_command` starts each command inside
-it. The mechanism is proved once per process, before the first launch whose agent may run a
-command: a canary in a hidden place unread, a place written by nobody unwritten, an open place
-written. `agentPolicy.isolation` says what happens where this machine has none: `required`, where
+newer - the first `bwrap` in an absolute directory of the PATH outside the tree - and on macOS the
+system's own sandbox, `/usr/bin/sandbox-exec`; either is what the contained step becomes in the
+child's place, so no child runs outside it for an instant. Inside it every credential slot of the
+main checkout and every Claude Code directory is hidden - an empty place under bubblewrap, refused
+by macOS's sandbox; git's code-running files of every tree the agent touches (the hooks git runs,
+the common directory's `config`, `config.worktree` and `info/`, each linked worktree's
+`config.worktree`, every submodule's hooks and config), the user's own git configuration
+(`~/.gitconfig`, and `git/` under `XDG_CONFIG_HOME` or `~/.config`), the tool's state under each
+tree and the launch's own directory are written by nobody, the agent's writable roots - its
+worktree, its work directory - written again inside them; git's objects, index and refs stay
+writable, so `git add`, `fetch`, `rm` and `status` work. No directory above any of those places,
+and no writable root itself, is renamed or removed - a place moved away would take its rule with it
+and leave its name free to be made again, and a root put back as a link would lead the next
+launch's rules elsewhere. Each place not there is made, empty, before the launch, so no command
+makes it inside and has it read or run outside later - but a state file, which the tool reads as
+meaning something, is never made, and the words policy alone guards it. Under bubblewrap the child
+has a user namespace of its own that allows no further one (`--disable-userns`) and a process
+namespace with its own `/proc`; each place is a mount, each directory above one a mount point no
+command moves; WSL's interoperation sockets (`/run/WSL`, and `WSL_INTEROP` taken from its
+environment), the user's service manager and message bus are hidden. macOS's sandbox denies every
+operation it does not allow - never allowing all but a list, which would leave LaunchServices free
+to start a program outside it - and allows what a build, a test and a shell do as the user: its own
+processes, the system's settings, a terminal, the services that resolve names and trust
+certificates, and every file but the rules' places, each ruled at its real spelling (`/var` is
+`/private/var` there); it is no mechanism where this tool already runs inside a sandbox, for macOS
+starts none inside another. On either, the network is the user's. A `claude-code` launch runs whole
+inside it, the Claude Code directories open to it - it reads its own login there, and on macOS from
+the login keychain, which every agent's command reaches as the user does - guarded for it by the words policy
+alone, and Claude Code's own sandbox is turned off in its settings, for none nests in this one; the
+API clients' `run_command` starts each command inside it. The mechanism is proved once per process,
+before the first launch whose agent may run a command: a canary in a hidden place unread, a place
+written by nobody unwritten, an open place written. `agentPolicy.isolation` says what happens where this machine has none: `required`, where
 nothing is said, starts no agent that may run a command - its step ends failed (14), the advisor
 gives no advice, `run-side-task` exits 14, each saying why and the remedy (on Ubuntu, where
 `kernel.apparmor_restrict_unprivileged_userns` is 1, the `bwrap-userns-restrict` AppArmor profile);
 `preferred` runs it on the words policy alone, said at every launch. An agent that may run no
 command - the reporter - needs none, and none is probed. Each launch's records say what it ran
 under - `isolation` in `result.json` and in each turn of a side-task's `task.json`: the mode, with
-the mechanism and its version or why there was none. Windows and macOS have no mechanism of this
-tool's yet: on each, `required` refuses and `preferred` runs on the words alone; from WSL 2,
-bubblewrap isolates. What no mount reaches - a hard link made before the launch, another path bound
-to the same files - is where it ends. This tool's verbs that read a credential slot or write its
+the mechanism and its version - macOS's own, for its sandbox - or why there was none. Windows has no
+mechanism of this tool's yet: there `required` refuses and `preferred` runs on the words alone; from
+WSL 2, bubblewrap isolates. What no rule at a path reaches - a hard link made before the launch,
+another path bound to the same files - is where it ends. This tool's verbs that read a credential slot or write its
 state would fail inside it, so each is refused to every agent by name, a side-task's as well as a
 step's (`AgentPolicy.SlotOrStateVerbs`, listed by `help agent-clients`): `init`,
 `create-worktree`, `delete-worktree`, `create-orchestrator`, `delete-orchestrator`,

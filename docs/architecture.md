@@ -210,20 +210,41 @@ system's bubblewrap (`Bubblewrap`): the machine bound whole (`--bind / /`, `--de
 a user namespace of its own allowing no further one (`--unshare-user --disable-userns`), a process
 namespace with its own `/proc` (`--unshare-pid --proc /proc`, so `/proc/<id>/root` reaches no
 process outside), `--die-with-parent`; then the profile's writes in its order, parent first and the
-last mount at a place winning (`--ro-bind` where denied, `--bind` where written again), then each
-hidden place (an empty read-only `tmpfs` over a directory, `/dev/null` read-only over a file), then
-the machine's own escapes the same way - WSL's `/run/WSL`, the user's `systemd` and `bus` under
-`XDG_RUNTIME_DIR` - and `WSL_INTEROP` unset. No `--new-session`: `contain-exec`'s `setsid` made
-the child's session already, and a second would take it out of the session a stop ends; the
-process tree the stop reads from outside sees every process inside by its outside id. Which
-mechanism the machine has is the platform's (`IIsolationPlatform`, `IsolationPlatform`): on Linux
-the first `bwrap` in an absolute directory of the PATH outside the tree, 0.8 or newer, proved once
-per process by a probe started exactly as every isolated child is - a canary in a hidden place
-unread, a place written by nobody unwritten, an open place written, each checked from outside -
-and why not with the remedy where it fails (Ubuntu's `apparmor_restrict_unprivileged_userns` named
-with the `bwrap-userns-restrict` profile); on Windows and macOS none is built yet, each saying so
-through the same seam, so the mode already behaves there. What a launch's profile holds is the
-agents' isolation's, below.
+last mount at a place winning (`--ro-bind` where denied, `--bind` where written again), each anchor
+among them by its depth (`IsolationProfile.Anchors`: every directory above a place the profile
+names, and each writable root itself) bound onto itself as the nearest rule above it leaves it -
+read-only inside a sealed place, written elsewhere - so it is a mount point inside, which the kernel
+keeps from being renamed or removed, and no rule beneath it is covered by it, a bind taking the
+machine's own view of its place; then each hidden place (an empty read-only `tmpfs` over a
+directory, `/dev/null` read-only over a file), then the machine's own escapes the same way - WSL's
+`/run/WSL`, the user's `systemd` and `bus` under `XDG_RUNTIME_DIR` - and `WSL_INTEROP` unset. No
+`--new-session`: `contain-exec`'s `setsid` made the child's session already, and a second would
+take it out of the session a stop ends; the process tree the stop reads from outside sees every
+process inside by its outside id. On macOS the mechanism is the system's own sandbox
+(`SandboxExec`): `/usr/bin/sandbox-exec -p <profile> -D<NAME>=<path>... -- <program>`, its profile
+written for the child (`SandboxExec.Policy`) - `(deny default)`, never `(allow default)`, which
+would leave LaunchServices free to start a program outside every sandbox; then what a build, a test
+and a shell do as the user (its own processes forked, run and signalled, the system's settings read,
+a terminal, the whole network, the services that resolve names and trust certificates, every file
+read and written); then the profile's own rules last, for the last rule an operation meets holds -
+each write rule in its order (`deny file-write*`, `allow file-write*` at a writable root), each
+hidden place (`deny file-read* file-write*`), each anchor (`deny file-write-unlink` of a directory),
+and the two file controls that write through a descriptor opened only to read
+(`F_MAKECOMPRESSED`, `F_TRANSFEREXTENTS`). The sandbox meets a path as the file system names it,
+so each place is ruled at its real spelling (`/var` is `/private/var`) and, where it is itself a
+link, at its own entry too, and the anchors are those of the spellings; each spelling is handed
+over as a parameter, never written into the profile's text. Which mechanism the machine has is the
+platform's (`IIsolationPlatform`, `IsolationPlatform`): on Linux the first `bwrap` in an absolute
+directory of the PATH outside the tree, 0.8 or newer; on macOS `/usr/bin/sandbox-exec` alone, never
+one the PATH names, where this process runs inside no sandbox already (`sandbox_check`), for macOS
+starts none inside another - its questions of the machine one seam a test answers anywhere
+(`MacSandboxHost`: the file there, the sandbox already, the version of macOS a record names, each
+path's real spelling from `realpath`). Either is proved once per process by a probe started exactly
+as every isolated child is - a canary in a hidden place unread, a place written by nobody unwritten,
+an open place written, each checked from outside - and why not with the remedy where it fails
+(Ubuntu's `apparmor_restrict_unprivileged_userns` named with the `bwrap-userns-restrict` profile);
+on Windows none is built yet, saying so through the same seam, so the mode already behaves there.
+What a launch's profile holds is the agents' isolation's, below.
 
 A request can ask instead for a child **bound** to the harness's life (`ProcessRequest.Bound`):
 on Windows it is placed through `contain-exec` too, in the one job object the process holds for its
@@ -2221,7 +2242,11 @@ names them (`AgentIsolation.GitPlacesAsync`: `rev-parse --path-format=absolute -
 then the common directory's `config`, `config.worktree` and `info/`, each linked worktree's `config.worktree`, every
 submodule's `hooks/` and `config` under `modules/`), the user's own git configuration, which the tool's own git reads
 outside, each state path (`StateDirectories`) and the launch's own directory; written again, the ground's writable
-roots - laid parent first, a place both sealed and writable staying sealed. Objects, the index and the refs are left
+roots - laid parent first, a place both sealed and writable staying sealed; anchored, every directory above any of
+those places and each writable root itself, which no command renames or removes (`IsolationProfile.Anchors`, a
+property of the profile, so no mechanism keeps a list of its own): a rule stands at a path, so a directory above a
+guarded place moved away would take the place out from under its rule and leave its name free to make again - a
+`.git` moved aside and a new one with hooks of the agent's, run by the tool's own git outside. Objects, the index and the refs are left
 writable, so `git add` and `fetch` work inside, and the words policy still refuses a step the verbs that move a tree.
 A place not there is made empty first, so no command makes it inside and has it read or run outside later; a state
 file never is (`HarnessLayout.StateFileNames`), for the tool reads one as meaning something, and the words policy
@@ -2238,7 +2263,12 @@ its own (`SideTaskTurn.Isolation`). The request carries the launch's isolation (
 inside the one that leaves the Claude Code directories open (`ForClaudeCode`). Claude Code's own Bash sandbox is not
 used: the whole process held by the tool's own mechanism holds every command it starts, one mechanism for every
 client, and nothing rests on how that sandbox treats the network in print mode or weighs its own write rules against
-the profile. Inside the isolation a verb of this tool's that reads a slot or writes state would fail part way, so
+the profile - and the launch's settings turn it off (`ClaudeSettings.Render`'s `isolated`, `"sandbox": {"enabled":
+false}`) over any the user's own settings ask for, for neither mechanism nests another (macOS no sandbox inside a
+sandbox, bubblewrap no namespace inside its own) and each command would fail in it. On macOS Claude Code keeps its
+login in the login keychain, which every agent's command reaches as the user does - the sandbox lets the services that
+trust certificates be reached, and they are the keychain's: the words policy alone guards it, as it guards the Claude
+Code directories for a Claude Code launch. Inside the isolation a verb of this tool's that reads a slot or writes state would fail part way, so
 the words policy refuses each to every agent by name (`AgentPolicy.SlotOrStateVerbs`, after `ToolVerbs` for a step
 and the side-task's own refusal for a side-task); the verbs that only read, and those that write only the tree's own
 files, stay open.

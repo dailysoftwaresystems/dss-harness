@@ -2420,10 +2420,12 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
     /// <summary>
     /// A launch whose run was given an isolation starts the whole Claude Code process inside it, with the profile that keeps
-    /// the Claude Code directories open - its own login is read there - never the one a command of the API clients gets.
+    /// the Claude Code directories open - its own login is read there - never the one a command of the API clients gets;
+    /// and its settings turn Claude Code's own sandbox off, which would fail every command inside, while a launch with
+    /// none leaves that sandbox to the user's own settings.
     /// </summary>
     [Fact]
-    public async Task ALaunch_StartsTheWholeClaudeCodeInsideTheRunsIsolation_ItsDirectoriesOpen()
+    public async Task ALaunch_StartsTheWholeClaudeCodeInsideTheRunsIsolation_ItsDirectoriesOpen_ItsOwnSandboxOff()
     {
         using var kit = new Kit();
         kit.Script([new JsonObject()]);
@@ -2434,6 +2436,14 @@ public sealed class ClaudeCodeClientTests : IDisposable
         await kit.Client().RunAsync(kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, whole, null, null) }, new Sink(), Token);
 
         Assert.Equal(new DssHarness.Core.Processes.ProcessIsolation(mechanism, whole), Assert.Single(kit.Runner.Requests).Isolation);
+        Assert.Equal("""{"enabled":false}""", JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["sandbox"]!.ToJsonString());
+
+        using var bare = new Kit();
+        bare.Script([new JsonObject()]);
+
+        await bare.Client().RunAsync(bare.Run(), new Sink(), Token);
+
+        Assert.Null(JsonNode.Parse(File.ReadAllText(Path.Combine(bare.StepDirectory, ClaudeLaunch.SettingsFileName)))!["sandbox"]);
     }
 
     /// <summary>

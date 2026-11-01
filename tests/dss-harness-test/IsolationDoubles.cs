@@ -95,6 +95,39 @@ internal sealed class HomedPlatform(string home) : IHostPlatform
     public string ExecutableName(string command) => _machine.ExecutableName(command);
 }
 
+/// <summary>The machine as it is, but said to be a Mac: what the isolation's probe is asked on, whatever runs the test.</summary>
+internal sealed class MacPlatform : IHostPlatform
+{
+    private readonly HostPlatform _machine = new();
+
+    /// <inheritdoc/>
+    public PlatformId Current => PlatformId.MacOs;
+
+    /// <inheritdoc/>
+    public string PlatformKey => _machine.PlatformKey;
+
+    /// <inheritdoc/>
+    public string Processor => _machine.Processor;
+
+    /// <inheritdoc/>
+    public string HomeDirectory => _machine.HomeDirectory;
+
+    /// <inheritdoc/>
+    public bool IsPrivilegedProcess => false;
+
+    /// <inheritdoc/>
+    public StringComparison PathComparison => _machine.PathComparison;
+
+    /// <inheritdoc/>
+    public int? MaxPathLength => _machine.MaxPathLength;
+
+    /// <inheritdoc/>
+    public MachineIdentity MachineId => _machine.MachineId;
+
+    /// <inheritdoc/>
+    public string ExecutableName(string command) => _machine.ExecutableName(command);
+}
+
 /// <summary>A platform of a test's: the one answer it gives every probe, and how many times it was asked.</summary>
 /// <param name="answer">The answer.</param>
 internal sealed class FixedIsolationPlatform(IsolationAvailability answer) : IIsolationPlatform

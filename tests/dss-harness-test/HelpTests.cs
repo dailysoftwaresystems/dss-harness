@@ -875,9 +875,35 @@ public sealed partial class HelpTests
         // records, and the verbs refused for it - named from the one list the policy refuses by.
         Assert.Contains(
             "On Linux, WSL 2's included, the mechanism is the system's bubblewrap 0.8.0 or newer - the first bwrap in an absolute "
-                + "directory of the PATH outside the tree - which the contained step becomes in the child's place, so no child runs "
-                + "outside it for an instant. Inside it every credential slot of the main checkout and every Claude Code directory is "
-                + "an empty place;",
+                + "directory of the PATH outside the tree - and on macOS the system's own sandbox, /usr/bin/sandbox-exec; either is "
+                + "what the contained step becomes in the child's place, so no child runs outside it for an instant. Inside it every "
+                + "credential slot of the main checkout and every Claude Code directory is hidden - an empty place under bubblewrap, "
+                + "refused by macOS's sandbox;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "No directory above any of those places, and no writable root itself, is renamed or removed - a place moved away would "
+                + "take its rule with it and leave its name free to be made again, and a root put back as a link would lead the next "
+                + "launch's rules elsewhere.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "macOS's sandbox denies every operation it does not allow - never allowing all but a list, which would leave "
+                + "LaunchServices free to start a program outside it - and allows what a build, a test and a shell do as the user: its "
+                + "own processes, the system's settings, a terminal, the services that resolve names and trust certificates, and every "
+                + "file but the rules' places, each ruled at its real spelling (/var is /private/var there); it is no mechanism where "
+                + "this tool already runs inside a sandbox, for macOS starts none inside another.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A claude-code launch runs whole inside it, the Claude Code directories open to it - it reads its own login there, and on "
+                + "macOS from the login keychain, which every agent's command reaches as the user does - guarded for it by the words policy alone, "
+                + "and Claude Code's own sandbox is turned off in its settings, for none nests in this one;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Windows has no mechanism of this tool's yet: there required refuses and preferred runs on the words alone; from WSL 2, "
+                + "bubblewrap isolates.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -896,6 +922,22 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
 
+        // The architecture names each owner of the isolation by the type that is it.
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        foreach (var owner in new[]
+        {
+            nameof(DssHarness.Core.Processes.Bubblewrap),
+            nameof(DssHarness.Core.Processes.SandboxExec),
+            $"{nameof(DssHarness.Core.Processes.SandboxExec)}.{nameof(DssHarness.Core.Processes.SandboxExec.Policy)}",
+            $"{nameof(DssHarness.Core.Processes.IsolationProfile)}.{nameof(DssHarness.Core.Processes.IsolationProfile.Anchors)}",
+            nameof(DssHarness.Core.Platform.MacSandboxHost),
+            nameof(DssHarness.Core.Platform.IsolationPlatform),
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
+
         // The side-tasks topic says the same of what a side-task's words are held to, and where that reading ends.
         Assert.Contains(
             "and run-side-task itself, refused to every agent where a word of a command or of a script the policy reads names it or a verb the "
@@ -910,7 +952,7 @@ public sealed partial class HelpTests
                 + "path, an archive of it or a search - is not told from one over its sources, and reaches their files; and code an interpreter "
                 + "runs (python -c, perl -e, awk's system) or a process apart from the agent's tree does what no word the policy reads says. This "
                 + "is a policy of what a command names, not a sandbox; beneath it, where this machine has one, the operating system's isolation "
-                + "('help agent-clients') hides every credential slot from each command - one over the main tree whole finds each slot empty - "
+                + "('help agent-clients') hides every credential slot from each command - one over the main tree whole finds each slot empty, or is refused it - "
                 + "and keeps it from git's code-running files and the tool's state.",
             Prose.Words(HelpText.Of("side-tasks").StandardOutput),
             StringComparison.Ordinal);

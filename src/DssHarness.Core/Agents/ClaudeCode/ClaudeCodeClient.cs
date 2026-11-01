@@ -403,7 +403,7 @@ public sealed class ClaudeCodeClient(
 
             var settings = Path.Combine(directory, ClaudeLaunch.SettingsFileName);
             var system = Path.Combine(directory, ClaudeLaunch.SystemFileName);
-            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(_given, run.Ground!, run.Commands, client._platform.PathComparison));
+            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(_given, run.Ground!, run.Commands, client._platform.PathComparison, isolated: run.Isolation?.ForClaudeCode is not null));
             files.WriteAllTextAtomic(system, run.Mask.Redact(run.SystemPrompt));
 
             // The engine's tool server, named where the launch takes its tools and nowhere else.

@@ -41,16 +41,20 @@ public interface IIsolationPlatform
 }
 
 /// <summary>
-/// The isolation this machine has. On Linux, WSL's included, the system's bubblewrap 0.8 or newer - the first <c>bwrap</c>
-/// in an absolute directory of the PATH outside the tree, where Ubuntu's AppArmor profile for it attaches - proved by the
-/// probe through the process runner's contained step, as every isolated child is started. On Windows and macOS the
-/// mechanism is not built yet, and each says so.
+/// The isolation this machine has, proved by the probe through the process runner's contained step, as every isolated
+/// child is started. On Linux, WSL's included, the system's bubblewrap 0.8 or newer - the first <c>bwrap</c> in an
+/// absolute directory of the PATH outside the tree, where Ubuntu's AppArmor profile for it attaches. On macOS the
+/// system's own sandbox, <c>/usr/bin/sandbox-exec</c>, where this process is not already inside a sandbox, which macOS
+/// would not start another inside. On Windows the mechanism is not built yet, and it says so.
 /// </summary>
 /// <param name="platform">This machine.</param>
 /// <param name="runner">Starts the version's question and the probe, the probe as a contained child is started.</param>
 /// <param name="path">Reads the PATH bubblewrap is looked for on; this process's own where left out.</param>
-public sealed partial class IsolationPlatform(IHostPlatform platform, IProcessRunner runner, Func<string?>? path = null) : IIsolationPlatform
+/// <param name="mac">What finds macOS's sandbox on this machine; this machine's own where left out.</param>
+public sealed partial class IsolationPlatform(IHostPlatform platform, IProcessRunner runner, Func<string?>? path = null, MacSandboxHost? mac = null) : IIsolationPlatform
 {
+    private readonly MacSandboxHost _mac = mac ?? MacSandboxHost.ThisMachine;
+
     /// <summary>The program's name.</summary>
     public const string BubblewrapProgram = "bwrap";
 
@@ -104,9 +108,7 @@ public sealed partial class IsolationPlatform(IHostPlatform platform, IProcessRu
                     "run the agents from WSL 2, where bubblewrap isolates them" + OrPreferred);
 
             case PlatformId.MacOs:
-                return IsolationAvailability.None(
-                    "the operating system's isolation of an agent's commands is not built for macOS yet",
-                    PreferredRemedy);
+                return await MacOsAsync(cancellationToken).ConfigureAwait(false);
         }
 
         if (Found(tree) is not { } program)
@@ -125,7 +127,35 @@ public sealed partial class IsolationPlatform(IHostPlatform platform, IProcessRu
 
         var mechanism = new Bubblewrap(program, version.Said!, Masked());
 
-        return await ProvedAsync(mechanism, cancellationToken).ConfigureAwait(false);
+        return await ProvedAsync(mechanism, how => Unproved(mechanism, how), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// macOS's sandbox: its program at the one path it is taken from, this process inside no sandbox already - macOS starts
+    /// none inside another - and the probe through it.
+    /// </summary>
+    private async Task<IsolationAvailability> MacOsAsync(CancellationToken cancellationToken)
+    {
+        if (!_mac.FileThere(SandboxExec.ProgramPath))
+        {
+            return IsolationAvailability.None($"macOS's sandbox ('{SandboxExec.ProgramPath}') is not on this machine", PreferredRemedy);
+        }
+
+        if (_mac.InsideASandbox())
+        {
+            return IsolationAvailability.None(
+                "this process already runs inside a sandbox of macOS's, which starts no sandbox inside another",
+                "run this tool outside every sandbox - not from inside another agent's or an application's" + OrPreferred);
+        }
+
+        var mechanism = new SandboxExec(_mac.MacOsVersion(), _mac.RealPath);
+
+        return await ProvedAsync(
+            mechanism,
+            how => IsolationAvailability.None(
+                $"macOS {mechanism.Version}'s sandbox ('{SandboxExec.ProgramPath}') did not prove itself: its probe {how}",
+                $"check that the sandbox runs here ('{SandboxExec.ProgramPath} -p \"(version 1)(allow default)\" /usr/bin/true')" + OrPreferred),
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>The first <c>bwrap</c> in an absolute directory of the PATH outside <paramref name="tree"/>; null where none is.</summary>
@@ -237,9 +267,10 @@ public sealed partial class IsolationPlatform(IHostPlatform platform, IProcessRu
 
     /// <summary>
     /// The probe through the real mechanism, started as every isolated child is: a canary in a hidden place unread, a
-    /// place written by nobody unwritten, an open place written - each said by the command inside and checked outside.
+    /// place written by nobody unwritten, an open place written - each said by the command inside and checked outside -
+    /// or what <paramref name="unproved"/> makes of how it failed.
     /// </summary>
-    private async Task<IsolationAvailability> ProvedAsync(Bubblewrap mechanism, CancellationToken cancellationToken)
+    private async Task<IsolationAvailability> ProvedAsync(IIsolationMechanism mechanism, Func<string, IsolationAvailability> unproved, CancellationToken cancellationToken)
     {
         var probe = Directory.CreateTempSubdirectory("dssharness-isolation-").FullName;
 
@@ -273,21 +304,21 @@ public sealed partial class IsolationPlatform(IHostPlatform platform, IProcessRu
             }
             catch (ProgramStartException ex)
             {
-                return Unproved(mechanism, $"could not be started: {ex.Message.TrimEnd('.')}");
+                return unproved($"could not be started: {ex.Message.TrimEnd('.')}");
             }
 
             if (result.ExitCode != 0 || result.TimedOut)
             {
                 var said = FirstLine(result.StandardOutput.Trim().Length > 0 ? result.StandardOutput : result.StandardError);
 
-                return Unproved(mechanism, result.TimedOut
+                return unproved(result.TimedOut
                     ? $"did not end within {ProbeBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s"
                     : $"ended {result.ExitCode.ToString(CultureInfo.InvariantCulture)}: '{said}'");
             }
 
             if (File.ReadAllText(canary) != "canary" || File.Exists(Path.Combine(sealedPlace, "w")) || !File.Exists(Path.Combine(open, "w")))
             {
-                return Unproved(mechanism, "ended 0, and the places outside do not hold what it said");
+                return unproved("ended 0, and the places outside do not hold what it said");
             }
 
             return IsolationAvailability.Of(mechanism);

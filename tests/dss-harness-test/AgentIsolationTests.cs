@@ -19,12 +19,13 @@ public sealed class AgentIsolationTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
-    /// Bubblewrap binds the machine whole, then lays each write rule in the profile's order, then hides each hidden place
-    /// and the machine's own escapes - a directory under an empty read-only tmpfs, a file under /dev/null - takes WSL's
-    /// interoperation variable away, and hands the program its own words after '--'.
+    /// Bubblewrap binds the machine whole, then lays each write rule and each anchor among them, parent first - an anchor
+    /// bound onto itself as the nearest rule above it leaves it, so it is a mount point no command renames - then hides
+    /// each hidden place and the machine's own escapes - a directory under an empty read-only tmpfs, a file under
+    /// /dev/null - takes WSL's interoperation variable away, and hands the program its own words after '--'.
     /// </summary>
     [Fact]
-    public void Bubblewrap_BindsTheMachine_LaysEachRuleInOrder_AndHidesLast()
+    public void Bubblewrap_BindsTheMachine_LaysEachRuleAndAnchorInOrder_AndHidesLast()
     {
         var mechanism = new Bubblewrap("/usr/bin/bwrap", "0.9.0", [new IsolatedPath("/run/WSL", Directory: true), new IsolatedPath("/run/user/1000/bus", Directory: false)]);
         var profile = new IsolationProfile(
@@ -40,9 +41,13 @@ public sealed class AgentIsolationTests
                 "--bind", "/", "/",
                 "--dev-bind", "/dev", "/dev",
                 "--proc", "/proc",
+                "--bind", "/r", "/r",
                 "--ro-bind", "/r/.worktrees", "/r/.worktrees",
+                "--bind", "/r/.harness-config", "/r/.harness-config",
+                "--bind", "/r/.git", "/r/.git",
                 "--bind", "/r/.worktrees/a1", "/r/.worktrees/a1",
                 "--ro-bind", "/r/.git/config", "/r/.git/config",
+                "--bind", "/r/.harness-config/runner", "/r/.harness-config/runner",
                 "--tmpfs", "/r/.harness-config/sshItems", "--remount-ro", "/r/.harness-config/sshItems",
                 "--ro-bind", "/dev/null", "/r/.harness-config/runner/.env",
                 "--tmpfs", "/run/WSL", "--remount-ro", "/run/WSL",
@@ -52,6 +57,61 @@ public sealed class AgentIsolationTests
             ],
             arguments);
         Assert.Equal(("bubblewrap", "0.9.0"), (mechanism.Name, mechanism.Version));
+    }
+
+    /// <summary>
+    /// A profile's anchors are every directory above a place it names and each writable root itself, parent first, short of
+    /// the file system's root; bubblewrap lays each among the write rules by its depth, bound onto itself as the nearest
+    /// rule above it leaves it - read-only inside a sealed place, written inside a writable root or where no rule stands -
+    /// so every directory a guarded place hangs from is a mount point, and no rule beneath one is covered by it.
+    /// </summary>
+    [Fact]
+    public void TheAnchors_AreEveryDirectoryAboveAPlaceAndEachRoot_BubblewrapBindingEachAsTheRuleAboveLeavesIt()
+    {
+        var profile = new IsolationProfile(
+            [new IsolatedPath("/home/me/.claude", Directory: true)],
+            [
+                new IsolatedWrite("/r/.orchestrators", Directory: true, Writable: false),
+                new IsolatedWrite("/r/.worktrees/a1", Directory: true, Writable: true),
+                new IsolatedWrite("/r/.orchestrators/o1/steps/s1", Directory: true, Writable: false),
+                new IsolatedWrite("/r/.orchestrators/o1/work/a1", Directory: true, Writable: true),
+                new IsolatedWrite("/r/.worktrees/a1/.harness-config/runs", Directory: true, Writable: false),
+            ]);
+
+        var (_, arguments) = new Bubblewrap("/usr/bin/bwrap", "0.9.0", []).Command(profile, "/bin/true", []);
+
+        Assert.Equal(
+            [
+                "/home", "/r", "/home/me", "/r/.worktrees", "/r/.orchestrators", "/r/.orchestrators/o1", "/r/.worktrees/a1",
+                "/r/.orchestrators/o1/steps", "/r/.orchestrators/o1/work", "/r/.worktrees/a1/.harness-config", "/r/.orchestrators/o1/work/a1",
+            ],
+            profile.Anchors);
+        Assert.Equal(
+            [
+                "--unshare-user", "--disable-userns", "--unshare-pid", "--die-with-parent",
+                "--bind", "/", "/",
+                "--dev-bind", "/dev", "/dev",
+                "--proc", "/proc",
+                "--bind", "/home", "/home",
+                "--bind", "/r", "/r",
+                "--ro-bind", "/r/.orchestrators", "/r/.orchestrators",
+                "--bind", "/home/me", "/home/me",
+                "--bind", "/r/.worktrees", "/r/.worktrees",
+                "--bind", "/r/.worktrees/a1", "/r/.worktrees/a1",
+                "--ro-bind", "/r/.orchestrators/o1", "/r/.orchestrators/o1",
+                "--ro-bind", "/r/.orchestrators/o1/steps", "/r/.orchestrators/o1/steps",
+                "--ro-bind", "/r/.orchestrators/o1/work", "/r/.orchestrators/o1/work",
+                "--bind", "/r/.worktrees/a1/.harness-config", "/r/.worktrees/a1/.harness-config",
+                "--ro-bind", "/r/.orchestrators/o1/steps/s1", "/r/.orchestrators/o1/steps/s1",
+                "--bind", "/r/.orchestrators/o1/work/a1", "/r/.orchestrators/o1/work/a1",
+                "--ro-bind", "/r/.worktrees/a1/.harness-config/runs", "/r/.worktrees/a1/.harness-config/runs",
+                "--tmpfs", "/home/me/.claude", "--remount-ro", "/home/me/.claude",
+                "--unsetenv", "WSL_INTEROP",
+                "--", "/bin/true",
+            ],
+            arguments);
+        Assert.Empty(IsolationProfile.Nothing.Anchors);
+        Assert.Equal([@"C:\r"], new IsolationProfile([new IsolatedPath(@"C:\r\x", Directory: false)], []).Anchors);
     }
 
     /// <summary>

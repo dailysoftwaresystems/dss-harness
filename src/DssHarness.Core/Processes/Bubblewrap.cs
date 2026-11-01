@@ -4,8 +4,10 @@ namespace DssHarness.Core.Processes;
 /// Linux's mechanism: the system's bubblewrap (<c>bwrap</c>), which the contained step becomes in the child's place, so
 /// the child starts inside it and never outside for an instant. The whole machine is bound as it is, and the profile's
 /// rules are laid over it in order - the last mount at a place wins: each write rule (<c>--ro-bind</c> where denied,
-/// <c>--bind</c> where allowed again), then each hidden place (an empty read-only <c>tmpfs</c> over a directory,
-/// <c>/dev/null</c> read-only over a file), then the machine's own escapes hidden the same way.
+/// <c>--bind</c> where allowed again), each anchor among them bound onto itself as the rule above it leaves it, so it is
+/// a mount point the child can neither rename nor remove, all parent first; then each hidden place (an empty read-only
+/// <c>tmpfs</c> over a directory, <c>/dev/null</c> read-only over a file), then the machine's own escapes hidden the same
+/// way.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -54,7 +56,7 @@ public sealed record Bubblewrap(string Program, string Version, IReadOnlyList<Is
             "--proc", "/proc",
         };
 
-        foreach (var write in profile.Writes)
+        foreach (var write in Laid(profile))
         {
             line.AddRange([write.Writable ? "--bind" : "--ro-bind", write.Path, write.Path]);
         }
@@ -70,4 +72,28 @@ public sealed record Bubblewrap(string Program, string Version, IReadOnlyList<Is
 
         return (Program, line);
     }
+
+    /// <summary>
+    /// The binds laid, parent first: each write rule, and each anchor that is none bound onto itself as the rule above it
+    /// leaves it - written where the nearest rule above it allows writes or none does, read-only where it denies them - so
+    /// it is a mount point inside, which no child renames or removes, and every rule beneath it is laid after it: a bind
+    /// takes the machine's own view of its place, which would cover a rule laid before it.
+    /// </summary>
+    private static IEnumerable<IsolatedWrite> Laid(IsolationProfile profile)
+    {
+        var ruled = profile.Writes.Select(write => write.Path).ToHashSet(StringComparer.Ordinal);
+
+        return profile.Writes
+            .Concat(profile.Anchors.Where(anchor => !ruled.Contains(anchor)).Select(anchor => new IsolatedWrite(anchor, Directory: true, Writable: AsLeft(profile, anchor))))
+            .Select((write, at) => (write, at))
+            .OrderBy(pair => pair.write.Path.Count(letter => letter == '/'))
+            .ThenBy(pair => pair.at)
+            .Select(pair => pair.write);
+    }
+
+    /// <summary>Whether the nearest write rule above <paramref name="place"/> leaves it written: the machine's own where no rule stands above it.</summary>
+    private static bool AsLeft(IsolationProfile profile, string place)
+        => profile.Writes
+            .Where(write => place.StartsWith(write.Path.TrimEnd('/') + "/", StringComparison.Ordinal))
+            .MaxBy(write => write.Path.Length)?.Writable ?? true;
 }

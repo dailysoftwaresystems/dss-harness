@@ -84,6 +84,45 @@ public sealed class ClaudeSettingsTests
     }
 
     /// <summary>
+    /// A launch that runs whole inside this tool's isolation turns Claude Code's own sandbox off, written after the output
+    /// style and before the environment, so the user's own settings cannot start one that no command inside could run in.
+    /// </summary>
+    [Fact]
+    public void AnIsolatedLaunch_TurnsClaudeCodesOwnSandboxOff()
+    {
+        var rendered = ClaudeSettings.Render(["Bash"], SettingsGround(Posix, []), AgentCommandSettings.Default, StringComparison.Ordinal, isolated: true);
+
+        Assert.Equal(
+            """
+            {
+              "disableAllHooks": true,
+              "fallbackModel": [],
+              "switchModelsOnFlag": false,
+              "outputStyle": "default",
+              "sandbox": {
+                "enabled": false
+              },
+              "env": {
+                "DISABLE_COMPACT": "1",
+                "DISABLE_AUTOUPDATER": "1",
+                "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
+                "CLAUDE_CODE_RETRY_WATCHDOG": "0",
+                "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
+                "BASH_DEFAULT_TIMEOUT_MS": "120000",
+                "BASH_MAX_TIMEOUT_MS": "3600000"
+              },
+              "permissions": {
+                "ask": [
+                  "Bash"
+                ],
+                "deny": []
+              }
+            }
+            """.ReplaceLineEndings().TrimEnd(),
+            rendered.ReplaceLineEndings().TrimEnd());
+    }
+
+    /// <summary>
     /// Every shell command of a launch starts in the launch's own directory, never where an earlier one's cd left it: the
     /// policy reads a command's relative paths against that directory, so a cd in one call and a relative path in the
     /// next would reach a place it never decided. Set in the settings' env and the child's environment alike.

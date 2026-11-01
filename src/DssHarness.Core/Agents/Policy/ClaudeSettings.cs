@@ -15,8 +15,8 @@ namespace DssHarness.Core.Agents.Policy;
 /// its searches too - a second layer behind the engine's answers, never the one relied on; <c>"fallbackModel": []</c> and
 /// <c>"switchModelsOnFlag": false</c>, for the engine's fallback is the only one; Claude Code's own
 /// output style, because its prompt is kept; an <c>env</c> holding every name the engine controls,
-/// so the user's own <c>env</c> cannot turn one back; and the user's hooks off in every launch.
-/// No key is ever in it.
+/// so the user's own <c>env</c> cannot turn one back; the user's hooks off in every launch; and Claude Code's own sandbox
+/// off where the launch runs whole inside this tool's isolation, which no sandbox nests in. No key is ever in it.
 /// </para>
 /// <para>
 /// Every path in a deny rule is written as an absolute path, once for each root the launch has, so
@@ -81,7 +81,13 @@ public static class ClaudeSettings
     /// <param name="ground">The launch's ground: its restrictions and the roots it reads and writes.</param>
     /// <param name="commands">What the configuration says of an agent's commands, whose times the settings' <c>env</c> holds.</param>
     /// <param name="comparison">How a name in a pattern and a name in a path compare: the case rule of the tree the path is in.</param>
-    public static string Render(IReadOnlyList<string> tools, AgentPolicyGround ground, AgentCommandSettings commands, StringComparison comparison)
+    /// <param name="isolated">
+    /// Whether the launch runs whole inside the operating system's isolation of this tool's: Claude Code's own sandbox is
+    /// then turned off (<c>"sandbox": {"enabled": false}</c>), over any the user's settings ask for - the isolation holds
+    /// every command the launch starts, and neither mechanism starts another inside it (macOS no sandbox inside a sandbox,
+    /// bubblewrap no namespace inside its own), so a sandbox of Claude Code's would fail each command.
+    /// </param>
+    public static string Render(IReadOnlyList<string> tools, AgentPolicyGround ground, AgentCommandSettings commands, StringComparison comparison, bool isolated = false)
     {
         ArgumentNullException.ThrowIfNull(tools);
         ArgumentNullException.ThrowIfNull(ground);
@@ -98,6 +104,13 @@ public static class ClaudeSettings
             writer.WriteEndArray();
             writer.WriteBoolean("switchModelsOnFlag", false);
             writer.WriteString("outputStyle", "default");
+
+            if (isolated)
+            {
+                writer.WriteStartObject("sandbox");
+                writer.WriteBoolean("enabled", false);
+                writer.WriteEndObject();
+            }
 
             writer.WriteStartObject("env");
 
