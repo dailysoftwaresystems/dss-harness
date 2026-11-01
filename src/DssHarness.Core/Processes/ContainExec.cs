@@ -47,6 +47,9 @@ public static class ContainExec
     /// <summary>The option asking for a process group of one's own, apart from the terminal.</summary>
     public const string GroupOption = "--group";
 
+    /// <summary>The option asking the program become inside Landlock's scope of abstract sockets and signals, on Linux (<see cref="Landlock.Scope"/>).</summary>
+    public const string ScopeOption = "--scope";
+
     /// <summary>The option naming the channel the step says whether the program started on.</summary>
     public const string StatusOption = "--status";
 
@@ -83,6 +86,9 @@ public static class ContainExec
         /// <summary>Joining the job object named.</summary>
         Job,
 
+        /// <summary>Entering Landlock's scope of abstract sockets and signals.</summary>
+        Scope,
+
         /// <summary>Starting, or becoming, the program.</summary>
         Start,
     }
@@ -93,28 +99,30 @@ public static class ContainExec
     /// </summary>
     /// <param name="job">The name of the Windows job object to join, for full containment there.</param>
     /// <param name="group">Whether a process group of one's own is the containment asked for, apart from the terminal alone.</param>
+    /// <param name="scope">Whether the program is become inside Landlock's scope of abstract sockets and signals, on Linux.</param>
     /// <param name="status">The name of the channel the process runner reads the start from.</param>
     /// <param name="program">The program, by its resolved path.</param>
     /// <param name="arguments">The program's arguments.</param>
     /// <param name="error">Where a refusal of the step's own command line is said.</param>
     /// <returns>The program's own exit code, or <see cref="Failed"/> where the step did not start it.</returns>
-    public static int Run(string? job, bool group, string? status, string program, IReadOnlyList<string> arguments, TextWriter error)
-        => Run(job, group, status, program, arguments, error, ReachBound);
+    public static int Run(string? job, bool group, bool scope, string? status, string program, IReadOnlyList<string> arguments, TextWriter error)
+        => Run(job, group, scope, status, program, arguments, error, ReachBound);
 
     /// <summary>
-    /// The step as <see cref="Run(string?, bool, string?, string, IReadOnlyList{string}, TextWriter)"/> runs it, waiting
+    /// The step as <see cref="Run(string?, bool, bool, string?, string, IReadOnlyList{string}, TextWriter)"/> runs it, waiting
     /// <paramref name="reachBound"/> to reach its channel: a test's bound, shorter than the step's own, so that a channel
     /// never reached is given up within a test's time.
     /// </summary>
     /// <param name="job">The name of the Windows job object to join, for full containment there.</param>
     /// <param name="group">Whether a process group of one's own is the containment asked for, apart from the terminal alone.</param>
+    /// <param name="scope">Whether the program is become inside Landlock's scope of abstract sockets and signals, on Linux.</param>
     /// <param name="status">The name of the channel the process runner reads the start from.</param>
     /// <param name="program">The program, by its resolved path.</param>
     /// <param name="arguments">The program's arguments.</param>
     /// <param name="error">Where a refusal of the step's own command line is said.</param>
     /// <param name="reachBound">How long the step waits to reach the channel.</param>
     /// <returns>The program's own exit code, or <see cref="Failed"/> where the step did not start it.</returns>
-    internal static int Run(string? job, bool group, string? status, string program, IReadOnlyList<string> arguments, TextWriter error, TimeSpan reachBound)
+    internal static int Run(string? job, bool group, bool scope, string? status, string program, IReadOnlyList<string> arguments, TextWriter error, TimeSpan reachBound)
     {
         ArgumentNullException.ThrowIfNull(program);
         ArgumentNullException.ThrowIfNull(arguments);
@@ -166,7 +174,7 @@ public static class ContainExec
 
         using (channel)
         {
-            return Containment.Place(job, group, program, arguments, channel, error);
+            return Containment.Place(job, group, scope, program, arguments, channel, error);
         }
     }
 
@@ -207,6 +215,7 @@ public static class ContainExec
         Stage.Session => "start a session of its own",
         Stage.Group => "join a group of its own",
         Stage.Job => "join the job object that contains it",
+        Stage.Scope => "enter Landlock's scope of abstract sockets and signals",
         _ => "start it",
     };
 

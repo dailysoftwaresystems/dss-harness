@@ -4,11 +4,14 @@ using DssHarness.Core.Repository;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The system's bubblewrap, run for real on Linux: the probe proves it once for the process, and the profile a step's
-/// launch is given over a real repository keeps a command inside from a credential slot's file, git's hooks, the tool's
-/// state and the launch's own directory, and from moving any directory above them, while it writes its worktree and git
-/// stages there. Skipped where this machine's bubblewrap does not prove itself, saying why and the remedy - and failed
-/// instead where the machine says it holds every build tool, as the continuous integration runners do.
+/// The system's bubblewrap: from doubles of the machine on every system, the probe refuses one the user could replace and
+/// proves one only the system writes, scoped by Landlock where the kernel has it; then run for real on Linux, the probe
+/// proves it once for the process, and the profile a step's launch is given over a real repository keeps a command inside
+/// from a credential slot's file, git's hooks, the tool's state, the launch's own directory and every place outside its
+/// roots, and from moving any directory above them, while it writes its worktree, its own temporary directory and its
+/// caches and git stages there. The real tests are skipped where this machine's bubblewrap does not prove itself, saying
+/// why and the remedy - and failed instead where the machine says it holds every build tool, as the continuous
+/// integration runners do.
 /// </summary>
 public sealed class BubblewrapTests
 {
@@ -72,9 +75,11 @@ public sealed class BubblewrapTests
     }
 
     /// <summary>
-    /// A command inside moves no directory above a guarded place - neither the repository's git directory, whose hooks it
-    /// may not write, nor the directory that holds the credential slots - for a place moved away would take its rule with
-    /// it and leave its name free to make again: each is a mount point inside, which the system keeps from being renamed.
+    /// A command inside moves no directory above a guarded place, for a place moved away would take its rule with it and
+    /// leave its name free to make again: the repository's git directory and the directory that holds the credential slots
+    /// stand in the main checkout, which the read-only machine keeps; and the directories of the git directory it writes
+    /// that hold the worktree's own pointers - the worktrees directory and the worktree's own - are each a mount point
+    /// inside, which the system keeps from being renamed.
     /// </summary>
     [Fact]
     public async Task ACommandInside_MovesNoDirectoryAboveAGuardedPlace()
@@ -86,16 +91,47 @@ public sealed class BubblewrapTests
         var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
         var git = Path.Combine(launch.Kit.Main, ".git");
         var config = Path.Combine(launch.Kit.Main, HarnessLayout.DirectoryName);
+        var worktrees = Path.Combine(git, "worktrees");
+        var linked = Assert.Single(Directory.GetDirectories(worktrees));
 
-        foreach (var anchor in new[] { git, config })
+        foreach (var (anchor, said) in new[] { (git, "Read-only file system"), (config, "Read-only file system"), (worktrees, "Device or resource busy"), (linked, "Device or resource busy") })
         {
             var moved = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", "mv \"$1\" \"$1-moved\"", "sh", anchor);
 
             Assert.NotEqual(0, moved.ExitCode);
-            Assert.Contains("Device or resource busy", moved.StandardError, StringComparison.Ordinal);
+            Assert.Contains(said, moved.StandardError, StringComparison.Ordinal);
             Assert.True(Directory.Exists(anchor), anchor);
             Assert.False(Directory.Exists(anchor + "-moved"), anchor);
         }
+    }
+
+    /// <summary>
+    /// A command inside writes nowhere on the machine but its roots: a place beside the repository is read-only; the system's
+    /// temporary directory is the launch's own, so what it writes there lands in that one and never in the machine's; and
+    /// each declared tool cache is named to it inside the isolation's own.
+    /// </summary>
+    [Fact]
+    public async Task ACommandInside_WritesNothingOutsideItsRoots_ItsTempItsOwn_ItsCachesNamed()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var platform = RealIsolation.Platform();
+        await ProvedAsync(platform, temp.Path);
+        var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
+        var beside = Path.Combine(temp.Path, "planted");
+        var name = "dssharness-" + Guid.NewGuid().ToString("N");
+        var profile = launch.Commands.Profile;
+
+        var outside = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", ": > \"$1\"", "sh", beside);
+        var temporary = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", ": > \"/tmp/$1\"", "sh", name);
+        var cache = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", "printf %s \"$npm_config_cache\"");
+
+        Assert.NotEqual(0, outside.ExitCode);
+        Assert.Contains("Read-only file system", outside.StandardError, StringComparison.Ordinal);
+        Assert.False(File.Exists(beside), beside);
+        Assert.Equal(0, temporary.ExitCode);
+        Assert.Equal((false, true), (File.Exists(Path.Combine("/tmp", name)), File.Exists(Path.Combine(profile.Temp!, name))));
+        Assert.Equal(profile.Environment.Single(variable => variable.Key == "npm_config_cache").Value, cache.StandardOutput);
     }
 
     /// <summary>
@@ -136,6 +172,81 @@ public sealed class BubblewrapTests
         Assert.NotEqual(before, await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token));
         Assert.Contains("No such file or directory", await File.ReadAllTextAsync(Path.Combine(kit.Main, "hook-read.txt"), Token), StringComparison.Ordinal);
         Assert.Equal("secret", await File.ReadAllTextAsync(canary, Token));
+    }
+
+    /// <summary>
+    /// The probe refuses a bubblewrap this user could replace - the program, or a directory above it, writable to them - for
+    /// the tool runs it outside before anything is isolated: no mechanism, saying which and the remedy, and nothing asked.
+    /// </summary>
+    [Fact]
+    public async Task ABubblewrapTheUserCouldReplace_IsNoMechanism_AndIsAskedNothing()
+    {
+        using var tools = new TempDirectory();
+        using var tree = new TempDirectory();
+        var program = Path.Combine(tools.Path, "bwrap");
+        await File.WriteAllTextAsync(program, string.Empty, Token);
+        var runner = new AnsweringRunner(_ => Ended(0, string.Empty));
+        var platform = new Core.Platform.IsolationPlatform(new SaidPlatform(Core.Platform.PlatformId.Linux), runner, path: () => tools.Path, userWrites: place => place == tools.Path, landlock: () => 6);
+
+        var found = await platform.ProbeAsync(tree.Path, Token);
+
+        Assert.Equal(
+            ((IIsolationMechanism?)null,
+                $"bubblewrap '{program}' is one this user may replace ('{tools.Path}' is writable to them), and the tool runs it outside every isolation",
+                "install bubblewrap where only the system writes it (sudo apt-get install bubblewrap puts it in /usr/bin) and put that directory first on the PATH, or set agentPolicy.isolation to \"preferred\" to run agents on the words policy alone, said at every launch"),
+            (found.Mechanism, found.Unavailable, found.Remedy));
+        Assert.Empty(runner.Asked);
+    }
+
+    /// <summary>
+    /// A bubblewrap only the system writes is asked its version and proved by the trial, contained and inside it - scoped by
+    /// Landlock where the kernel has its scope, and its record saying what it leaves reached where the kernel has not.
+    /// </summary>
+    [Theory]
+    [InlineData(6, true)]
+    [InlineData(5, false)]
+    public async Task ABubblewrapOnlyTheSystemWrites_IsProved_ScopedWhereTheKernelHasLandlocksScope(int landlock, bool scoped)
+    {
+        using var tools = new TempDirectory();
+        using var tree = new TempDirectory();
+        var program = Path.Combine(tools.Path, "bwrap");
+        await File.WriteAllTextAsync(program, string.Empty, Token);
+        var runner = new AnsweringRunner(request =>
+        {
+            if (request.Arguments is ["--version"])
+            {
+                return Ended(0, "bubblewrap 0.9.0\n");
+            }
+
+            File.WriteAllText(Path.Combine(request.Arguments[^2], "w"), string.Empty);
+            return Ended(0, string.Empty);
+        });
+        var platform = new Core.Platform.IsolationPlatform(new SaidPlatform(Core.Platform.PlatformId.Linux), runner, path: () => tools.Path, userWrites: _ => false, landlock: () => landlock);
+
+        var found = await platform.ProbeAsync(tree.Path, Token);
+
+        var bubblewrap = Assert.IsType<Bubblewrap>(found.Mechanism);
+
+        Assert.Equal((program, "0.9.0", scoped, scoped ? null : Bubblewrap.Unscoped), (bubblewrap.Program, bubblewrap.Version, bubblewrap.Scoped, bubblewrap.Leaves));
+        Assert.Equal([(program, false), ("/bin/sh", true)], runner.Asked.Select(asked => (asked.FileName, asked.Contained)));
+        Assert.Same(bubblewrap, runner.Asked[1].Isolation!.Mechanism);
+    }
+
+    /// <summary>A process's end as a test gives it.</summary>
+    private static ProcessResult Ended(int code, string output) => new(code, output, string.Empty, TimeSpan.Zero, TimedOut: false);
+
+    /// <summary>A process runner that answers each request as a test says, keeping every request it was asked.</summary>
+    private sealed class AnsweringRunner(Func<ProcessRequest, ProcessResult> answer) : IProcessRunner
+    {
+        public List<ProcessRequest> Asked { get; } = [];
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            Asked.Add(request);
+            return Task.FromResult(answer(request));
+        }
+
+        public string? FindExecutable(string command) => null;
     }
 
     /// <summary>The bubblewrap the probe proved: the test skipped where this is not Linux.</summary>

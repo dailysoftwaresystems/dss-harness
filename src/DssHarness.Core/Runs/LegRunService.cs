@@ -1164,13 +1164,12 @@ public sealed class LegRunService(
         // The work of a run's machine step's leg builds, tests and runs what its agents wrote: held inside the operating
         // system's isolation, the leg's own, decided before anything of it starts. Where the isolation is required and
         // cannot be had for the leg's tree, the leg is skipped saying why; where it is preferred and there is none, the
-        // leg's line says what runs outside it.
+        // leg's line says what runs outside it. Its temporary directory goes with the leg.
         ProcessIsolation? isolated = null;
+        using var held = request.Isolation is { } isolation ? await isolation.ForLegAsync(runsAs.HostTreeRoot, runDirectory, cancellationToken).ConfigureAwait(false) : null;
 
-        if (request.Isolation is { } isolation)
+        if (held is not null)
         {
-            var held = await isolation.ForLegAsync(runsAs.HostTreeRoot, runDirectory, cancellationToken).ConfigureAwait(false);
-
             if (held.Refusal($"leg '{runsAs.Name}'") is { } refused)
             {
                 return Ended(runsAs, LegVerdict.SkippedUnavailable, refused, started);

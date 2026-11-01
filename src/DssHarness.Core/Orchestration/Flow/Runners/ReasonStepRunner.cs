@@ -166,7 +166,7 @@ public sealed class ReasonStepRunner(
         // The operating system's isolation the agent's commands run under, decided before anything of the step is handed
         // over: where agentPolicy.isolation is required and this machine has none, the step does not start, saying why and
         // what would give it one.
-        var isolated = await launch.IsolationAsync(context.Config, ground, context.Layout, StepDirectoryOf(layout, run.Instance, agent), cancellationToken).ConfigureAwait(false);
+        using var isolated = await launch.IsolationAsync(context.Config, ground, context.Layout, StepDirectoryOf(layout, run.Instance, agent), cancellationToken).ConfigureAwait(false);
 
         if (isolated.Refusal($"'{run.Instance}'") is { } unisolated)
         {

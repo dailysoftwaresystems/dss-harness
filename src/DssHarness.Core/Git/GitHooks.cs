@@ -30,18 +30,18 @@ public static class GitHooks
     public static string Nowhere(PlatformId system) => system == PlatformId.Windows ? @"\\.\NUL" : "/dev/null";
 
     /// <summary>
-    /// The arguments that run none of the repository's hooks, put before <paramref name="arguments"/> - nothing where the
-    /// command is one of <see cref="Questions"/>.
+    /// The setting that runs none of the repository's hooks, as <c>key=value</c> - none where the command is one of
+    /// <see cref="Questions"/>, which so answers where the hooks are as git runs them for everyone else.
     /// </summary>
     /// <param name="system">The operating system git runs on.</param>
     /// <param name="arguments">The command's arguments, its subcommand after any of git's own options.</param>
-    public static IReadOnlyList<string> Off(PlatformId system, IReadOnlyList<string> arguments)
+    public static string? Off(PlatformId system, IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
         return Subcommand(arguments) is { } subcommand && Questions.Contains(subcommand, StringComparer.Ordinal)
-            ? arguments
-            : ["-c", $"{PathKey}={Nowhere(system)}", .. arguments];
+            ? null
+            : $"{PathKey}={Nowhere(system)}";
     }
 
     /// <summary>The subcommand <paramref name="arguments"/> run: the first word past git's own options, each <c>-c</c> and <c>-C</c> with its value.</summary>

@@ -548,6 +548,13 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
             : throw new NotSupportedException($"a {opened.GetType().Name} is open on no file this file system opened, so where it stands cannot be named");
     }
 
+    public string FinalPathOfDirectory(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+
+        return OperatingSystem.IsWindows() ? OpenedFiles.FinalDirectoryPath(directory) : LinkPaths.Resolve(directory);
+    }
+
     public Stream OpenRead(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

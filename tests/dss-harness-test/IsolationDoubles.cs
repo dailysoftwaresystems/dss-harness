@@ -47,7 +47,7 @@ internal sealed class TestIsolation(
     /// <param name="why">Why there is none.</param>
     /// <param name="remedy">What would give one.</param>
     public static TestIsolation Unavailable(string why, string remedy)
-        => new((config, _) => new LaunchIsolation(AgentIsolationMode.Of(config), null, null, null, why, remedy));
+        => new((config, _) => new LaunchIsolation(AgentIsolationMode.Of(config), null, null, why, remedy));
 
     /// <inheritdoc/>
     public Task<LaunchIsolation> ForLaunchAsync(HarnessConfig config, AgentPolicyGround ground, string mainCheckout, string launchDirectory, CancellationToken cancellationToken)
@@ -75,7 +75,8 @@ internal sealed class TestIsolation(
 /// <summary>A mechanism of a test's: it hands the program its own command line unchanged, recording each it was asked for.</summary>
 /// <param name="name">Its name.</param>
 /// <param name="version">Its version.</param>
-internal sealed class PassThroughMechanism(string name = "test", string version = "1.0") : IIsolationMechanism
+/// <param name="holdsEveryCase">Whether its rules hold a place under every spelling a file system that ignores case reaches it by.</param>
+internal sealed class PassThroughMechanism(string name = "test", string version = "1.0", bool holdsEveryCase = true) : IIsolationMechanism
 {
     /// <summary>Every profile it was asked to start a program in, in order.</summary>
     public List<IsolationProfile> Profiles { get; } = [];
@@ -85,6 +86,24 @@ internal sealed class PassThroughMechanism(string name = "test", string version 
 
     /// <inheritdoc/>
     public string Version => version;
+
+    /// <inheritdoc/>
+    public bool HoldsEveryCase => holdsEveryCase;
+
+    /// <inheritdoc/>
+    public bool Scoped => false;
+
+    /// <inheritdoc/>
+    public string? Leaves => null;
+
+    /// <inheritdoc/>
+    public string? AnchorCost { get; init; }
+
+    /// <inheritdoc/>
+    public bool OwnTemp { get; init; }
+
+    /// <inheritdoc/>
+    public bool TakesHandedCommands { get; init; } = true;
 
     /// <inheritdoc/>
     public (string Program, IReadOnlyList<string> Arguments) Command(IsolationProfile profile, string program, IReadOnlyList<string> arguments)

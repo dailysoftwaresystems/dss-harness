@@ -190,6 +190,16 @@ public interface IFileSystem
     string FinalPathOf(Stream opened);
 
     /// <summary>
+    /// Where the directory <paramref name="directory"/> stands, as the system names it opened - the form
+    /// <see cref="FinalPathOf"/> names an open file in: on Windows by its handle, every link, substituted drive and short
+    /// name followed and a mapped drive named by its share; elsewhere every link followed. The one way a place an open file
+    /// is named by is held to a directory spelled otherwise.
+    /// </summary>
+    /// <param name="directory">The directory, absolute.</param>
+    /// <exception cref="IOException">The directory could not be opened, or the system would not name it.</exception>
+    string FinalPathOfDirectory(string directory);
+
+    /// <summary>
     /// Opens a file of lines that only grows, made where it is not there: read back from any place and cut to a length
     /// while its writer recovers it, and appended to with each write on the disk before the next is taken. Others may
     /// read it while it is open, and no one else may write it, on every system: a second writer, in this process or

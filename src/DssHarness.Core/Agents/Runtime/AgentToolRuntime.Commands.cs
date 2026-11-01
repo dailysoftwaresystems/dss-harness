@@ -95,7 +95,7 @@ public sealed partial class AgentToolRuntime
             StallSeconds = _run.Limits.StallSeconds ?? 0,
             Mask = _run.Mask,
             Contained = true,
-            Isolation = _run.Isolation?.ForCommands,
+            Isolation = _run.Isolation?.Commands,
             SessionRecord = _host.Sessions.For(_run.StepDirectory),
         };
 

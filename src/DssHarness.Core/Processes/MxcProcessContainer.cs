@@ -20,8 +20,8 @@ namespace DssHarness.Core.Processes;
 /// holds granted again as the profile has it, so nothing is renamed, made or removed directly inside it.
 /// </para>
 /// <para>
-/// The container gets the child's environment as the step was given it; MXC gives it a temporary directory of its own,
-/// removed with it. Its user interface is the container's own - no clipboard, no input sent to another window - which the
+/// The container gets the child's environment as the step was given it, the profile's variables set over it - the
+/// declared tool caches'; MXC gives it a temporary directory of its own, removed with it. Its user interface is the container's own - no clipboard, no input sent to another window - which the
 /// programs that load the system's user interface library need to start at all; the network is the user's, the loopback
 /// both ways among it.
 /// </para>
@@ -42,17 +42,47 @@ public sealed class MxcProcessContainer(string version, (string Program, IReadOn
     /// <summary>The option naming a place written by nobody.</summary>
     public const string SealedOption = "--sealed";
 
+    /// <summary>The option naming a variable the profile sets in the child, as <c>NAME=VALUE</c>.</summary>
+    public const string VariableOption = "--variable";
+
     /// <summary>The option naming a writable root.</summary>
     public const string WritableOption = "--writable";
 
     /// <summary>What separates the step's own options from the program and its arguments.</summary>
     public const string Separator = "--";
 
+    /// <summary>What holding an anchor costs under MXC, as a record says it (<see cref="AnchorCost"/>).</summary>
+    public const string AnchorReadAlone =
+        "every directory above a guarded place whose own directory is written is read alone - nothing is made or removed "
+        + "directly inside it - for MXC meets a place by its path and refuses no rename alone: git makes no lock file in a "
+        + ".git, or a linked worktree's directory under it, that holds a sealed place, so git add, commit, fetch and push - and a run's commit and push steps - fail there";
+
     /// <inheritdoc/>
     public string Name => MechanismName;
 
     /// <inheritdoc/>
     public string Version { get; } = version ?? throw new ArgumentNullException(nameof(version));
+
+    /// <summary>Windows finds a name in any case, and the container meets the place it names.</summary>
+    public bool HoldsEveryCase => true;
+
+    /// <summary>No scope of Landlock's: it is Linux's.</summary>
+    public bool Scoped => false;
+
+    /// <inheritdoc/>
+    public string? Leaves => null;
+
+    /// <inheritdoc/>
+    public string? AnchorCost => AnchorReadAlone;
+
+    /// <summary>MXC gives every container a temporary directory of its own, removed with it.</summary>
+    public bool OwnTemp => true;
+
+    /// <summary>
+    /// Nothing on Windows becomes another program in its place, and every command Claude Code runs there is Git Bash's:
+    /// a launch of it runs whole inside the container.
+    /// </summary>
+    public bool TakesHandedCommands => false;
 
     /// <inheritdoc/>
     public (string Program, IReadOnlyList<string> Arguments) Command(IsolationProfile profile, string program, IReadOnlyList<string> arguments)
@@ -71,6 +101,11 @@ public sealed class MxcProcessContainer(string version, (string Program, IReadOn
         foreach (var write in profile.Writes)
         {
             line.AddRange([write.Writable ? WritableOption : SealedOption, write.Path]);
+        }
+
+        foreach (var (name, value) in profile.Environment)
+        {
+            line.AddRange([VariableOption, $"{name}={value}"]);
         }
 
         line.AddRange([Separator, program, .. arguments]);

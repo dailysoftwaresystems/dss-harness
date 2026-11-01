@@ -602,14 +602,14 @@ public sealed class SideTaskServiceTests
 
         Assert.Equal((true, LayoutOf(refusedTemp, "one").Directory), (ground.SideTask, launchDirectory));
 
-        var under = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", new PassThroughMechanism("bubblewrap", "0.9.0"), DssHarness.Core.Processes.IsolationProfile.Nothing, DssHarness.Core.Processes.IsolationProfile.Nothing, null, null);
+        var under = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", new PassThroughMechanism("bubblewrap", "0.9.0"), DssHarness.Core.Processes.IsolationProfile.Nothing, null, null);
         var (harness, temp, service, stored, _) = await RepoAsync(isolation: new TestIsolation((_, _) => under));
         using var tree = temp;
 
         var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "add a search source", Model: "glm-5.3", Name: "one"), Token);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
-        Assert.Same(under, Assert.Single(stored.Runs).Isolation);
+        Assert.Equal(under.Processes, Assert.Single(stored.Runs).Isolation);
         Assert.Equal(
             new DssHarness.Core.Agents.Isolation.AgentIsolationRecord("required") { Mechanism = "bubblewrap", Version = "0.9.0" },
             Assert.Single(RecordOf(harness, temp, LayoutOf(temp, "one").Directory)!.Turns).Isolation);

@@ -23,10 +23,18 @@ internal static class IsolateExecCommand
         var hidden = Places(MxcProcessContainer.HiddenOption, "A place neither read nor written.");
         var sealedPlaces = Places(MxcProcessContainer.SealedOption, "A place written by nobody.");
         var writable = Places(MxcProcessContainer.WritableOption, "A writable root.");
+        var variables = new Option<string[]>(MxcProcessContainer.VariableOption)
+        {
+            Description = "A variable set in the program's environment, as NAME=VALUE.",
+            HelpName = "variable",
+            Arity = ArgumentArity.ZeroOrMore,
+            AllowMultipleArgumentsPerToken = false,
+        };
 
         command.Options.Add(hidden);
         command.Options.Add(sealedPlaces);
         command.Options.Add(writable);
+        command.Options.Add(variables);
 
         // The program and its arguments are everything after '--', handed on as they are given.
         command.TreatUnmatchedTokensAsErrors = false;
@@ -47,13 +55,26 @@ internal static class IsolateExecCommand
                 return ContainExec.Failed;
             }
 
+            var set = new List<KeyValuePair<string, string>>();
+
+            foreach (var variable in parseResult.GetValue(variables) ?? [])
+            {
+                if (variable.IndexOf('=', StringComparison.Ordinal) is not (var cut and > 0))
+                {
+                    Console.Error.WriteLine($"{MxcProcessContainer.CommandName} was given the variable '{variable}', which is no NAME=VALUE.");
+                    return HarnessExit.UsageError;
+                }
+
+                set.Add(new(variable[..cut], variable[(cut + 1)..]));
+            }
+
             var places = new ContainedPlaces(
                 parseResult.GetValue(hidden) ?? [],
                 parseResult.GetValue(sealedPlaces) ?? [],
                 parseResult.GetValue(writable) ?? []);
 
             // Its own failures are said on the error stream alone: the streams it was given belong to the program.
-            return await IsolateExec.RunAsync(places, tokens[0], [.. tokens.Skip(1)], Console.Error, cancellationToken).ConfigureAwait(false);
+            return await IsolateExec.RunAsync(places, tokens[0], [.. tokens.Skip(1)], set, Console.Error, cancellationToken).ConfigureAwait(false);
         });
 
         return command;

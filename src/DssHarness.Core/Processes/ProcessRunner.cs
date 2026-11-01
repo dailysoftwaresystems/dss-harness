@@ -316,6 +316,12 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 startInfo.ArgumentList.Add(ContainExec.GroupOption);
             }
 
+            // The mechanism's own scope where the kernel has it, entered by the step before it becomes the mechanism.
+            if (request.Isolation?.Mechanism.Scoped == true)
+            {
+                startInfo.ArgumentList.Add(ContainExec.ScopeOption);
+            }
+
             startInfo.ArgumentList.Add(ContainExec.StatusOption);
             startInfo.ArgumentList.Add(statusName!);
             startInfo.ArgumentList.Add(ContainExec.Separator);

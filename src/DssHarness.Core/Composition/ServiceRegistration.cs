@@ -126,6 +126,10 @@ public static class ServiceRegistration
         // One answer per command to which variables git reads a repository from, shared by every child
         // that runs git: the git client's and the forge's command line's.
         services.AddSingleton<GitLocalVariables>();
+
+        // The git directories of each tree an isolated agent works over, as git named them before its launch: every later
+        // git of this tool's own in that tree is given them.
+        services.AddSingleton<GitDirectoryPins>();
         services.AddSingleton<IGitClient, GitClient>();
         services.AddSingleton<IRepositoryLocator, RepositoryLocator>();
         services.AddSingleton<IConfigStore, JsonConfigStore>();
@@ -237,7 +241,8 @@ public static class ServiceRegistration
             provider.GetRequiredService<IIsolationPlatform>(),
             provider.GetRequiredService<Git.IGitClient>(),
             provider.GetRequiredService<IFileSystem>(),
-            provider.GetRequiredService<IHostPlatform>()));
+            provider.GetRequiredService<IHostPlatform>(),
+            pins: provider.GetRequiredService<GitDirectoryPins>()));
 
         // A side-task: an agent outside every workflow, a conversation between a person and one agent over the main tree,
         // through the same runner every step is worked by. Its chat is the person's, on this machine, so no host serves

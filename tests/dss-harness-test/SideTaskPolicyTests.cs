@@ -110,12 +110,12 @@ public sealed class SideTaskPolicyTests
             var refused = Assert.IsType<AgentPolicyAnswer.Denied>(side.Run((IReadOnlyList<string>)["dssharness", verb, "x"]));
 
             Assert.Equal(
-                ("the verbs that read a slot or write state", $"'dssharness {verb}' is refused: it reads a credential slot or writes this tool's own state, which no command of an agent may - inside the operating system's isolation every slot is empty and the state read-only - so a person runs it"),
+                ("the verbs that read a slot or write state", $"'dssharness {verb}' is refused: it reads a credential slot or writes this tool's own state or install, which no command of an agent may - and where the agent's commands run inside the operating system's isolation, every slot is hidden there and the state read-only - so a person runs it"),
                 (refused.Rule, refused.Reason));
             Assert.Equal("the verbs that read a slot or write state", Assert.IsType<AgentPolicyAnswer.Denied>(side.Run($"dssharness {verb} x")).Rule);
         }
 
-        foreach (var open in new[] { "list-orchestrator", "list-worktree", "list-side-tasks", "validate-workflow", "read-anchors", "query-codebase-graph", "check-root-litter", "fix-line-endings", "up", "down" })
+        foreach (var open in AgentPolicy.OpenVerbs)
         {
             Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["dssharness", open, "x"]));
         }
@@ -123,6 +123,29 @@ public sealed class SideTaskPolicyTests
         var denied = Assert.IsType<AgentPolicyAnswer.Denied>(step.Run((IReadOnlyList<string>)["dssharness", AgentPolicy.ToolVerbs[0], "x"]));
 
         Assert.Equal("the orchestrator and agent verbs", denied.Rule);
+    }
+
+    /// <summary>
+    /// Every verb the tool lists is decided by name: refused as one that reads a credential slot or writes the tool's state
+    /// or install, open as one that only reads or writes only the tree's own files, or <c>run-side-task</c>, refused
+    /// apart - and no name in either list is one the tool lacks but its hidden steps, which nobody types.
+    /// </summary>
+    [Fact]
+    public async Task EveryVerbTheToolLists_IsRefusedOrOpen_ByName()
+    {
+        var help = await CliRunner.RunAsync(["--help"], TestContext.Current.CancellationToken);
+        var listed = help.StandardOutput.Split('\n')
+            .SkipWhile(line => !line.StartsWith("Commands:", StringComparison.Ordinal))
+            .Skip(1)
+            .Where(line => line.StartsWith("  ", StringComparison.Ordinal) && line.Trim().Length > 0)
+            .Select(line => line.Trim().Split(' ')[0])
+            .ToList();
+        IReadOnlyList<string> hidden = ["host-agent", "sync-serve", "host-hold", "contain-exec", "isolate-exec"];
+
+        Assert.NotEmpty(listed);
+        Assert.Empty(listed.Except([.. AgentPolicy.SlotOrStateVerbs, .. AgentPolicy.OpenVerbs, SideTaskService.RunCommand]));
+        Assert.Empty(AgentPolicy.SlotOrStateVerbs.Concat(AgentPolicy.OpenVerbs).Except(listed).Except(hidden));
+        Assert.Empty(AgentPolicy.SlotOrStateVerbs.Intersect(AgentPolicy.OpenVerbs));
     }
 
     /// <summary>

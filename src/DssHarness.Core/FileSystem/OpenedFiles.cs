@@ -59,6 +59,40 @@ internal static class OpenedFiles
             : throw new IOException($"the open file is named '{named}', which is no whole path");
     }
 
+    /// <summary>
+    /// The whole path of the directory <paramref name="directory"/>, as Windows names it opened - by a handle opened with
+    /// backup semantics, which a directory takes, sharing every access so nothing it holds is kept from anyone.
+    /// </summary>
+    /// <param name="directory">The directory, absolute.</param>
+    /// <exception cref="IOException">The directory could not be opened, or Windows would not name it.</exception>
+    [SupportedOSPlatform("windows")]
+    public static string FinalDirectoryPath(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+
+        using var handle = CreateFileW(directory, 0, ShareAll, IntPtr.Zero, OpenExisting, BackupSemantics, IntPtr.Zero);
+
+        if (handle.IsInvalid)
+        {
+            throw new IOException($"Windows would not open the directory '{directory}'", new Win32Exception(Marshal.GetLastPInvokeError()));
+        }
+
+        return FinalPath(handle);
+    }
+
+    /// <summary>FILE_SHARE_READ, FILE_SHARE_WRITE and FILE_SHARE_DELETE.</summary>
+    private const uint ShareAll = 7;
+
+    /// <summary>OPEN_EXISTING.</summary>
+    private const uint OpenExisting = 3;
+
+    /// <summary>FILE_FLAG_BACKUP_SEMANTICS, which opens a directory.</summary>
+    private const uint BackupSemantics = 0x02000000;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+
     /// <summary>The path Windows names the file by, every link followed, without its device prefix.</summary>
     [SupportedOSPlatform("windows")]
     private static string OnWindows(SafeFileHandle handle)

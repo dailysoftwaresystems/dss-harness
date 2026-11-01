@@ -73,7 +73,7 @@ public sealed class PushStepRunner(
 
         // The push runs the repository's hooks, the agents' work among what they read: inside the isolation, decided before
         // anything is pushed.
-        var hooks = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfHooks(context.Config, context.Layout.MainCheckoutRoot, tree), context.Layout.MainCheckoutRoot, cancellationToken)
+        using var hooks = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfHooks(context.Config, context.Layout.MainCheckoutRoot, tree), context.Layout.MainCheckoutRoot, cancellationToken)
             .ConfigureAwait(false);
 
         if (hooks.Refusal($"'{run.Instance}'") is { } refused)

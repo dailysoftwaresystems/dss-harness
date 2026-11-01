@@ -27,7 +27,9 @@ public sealed class MxcProcessContainerTests
 
     /// <summary>
     /// The contained step is handed this tool again, as <c>isolate-exec</c>, with each hidden place, each place written by
-    /// nobody and each writable root in the profile's order, then the program's own words after '--'.
+    /// nobody and each writable root in the profile's order, each of the profile's variables, then the program's own words
+    /// after '--'. The container meets every case of a name, gives the child a temporary directory of its own, takes no
+    /// command handed to it one by one, and holds an anchor by reading it alone, which its records say.
     /// </summary>
     [Fact]
     public void TheContainer_IsHandedTheProfilesPlaces_AndTheProgramsWords()
@@ -35,7 +37,10 @@ public sealed class MxcProcessContainerTests
         var mechanism = new MxcProcessContainer("1.0.1", (@"C:\tools\dotnet.exe", ["exec", @"C:\tools\dssharness.dll"]));
         var profile = new IsolationProfile(
             [new IsolatedPath(@"C:\r\.harness-config\sshItems", Directory: true), new IsolatedPath(@"C:\r\.harness-config\runner\.env", Directory: false)],
-            [new IsolatedWrite(@"C:\r\.worktrees", Directory: true, Writable: false), new IsolatedWrite(@"C:\r\.worktrees\a1", Directory: true, Writable: true), new IsolatedWrite(@"C:\r\.git\config", Directory: false, Writable: false)]);
+            [new IsolatedWrite(@"C:\r\.worktrees", Directory: true, Writable: false), new IsolatedWrite(@"C:\r\.worktrees\a1", Directory: true, Writable: true), new IsolatedWrite(@"C:\r\.git\config", Directory: false, Writable: false)])
+        {
+            Environment = [new("npm_config_cache", @"C:\c\npm"), new("CARGO_HOME", @"C:\c\cargo")],
+        };
 
         var (program, arguments) = mechanism.Command(profile, @"C:\Program Files\Git\cmd\git.exe", ["add", "a.txt"]);
 
@@ -48,9 +53,14 @@ public sealed class MxcProcessContainerTests
                 "--sealed", @"C:\r\.worktrees",
                 "--writable", @"C:\r\.worktrees\a1",
                 "--sealed", @"C:\r\.git\config",
+                "--variable", @"npm_config_cache=C:\c\npm",
+                "--variable", @"CARGO_HOME=C:\c\cargo",
                 "--", @"C:\Program Files\Git\cmd\git.exe", "add", "a.txt",
             ],
             arguments);
+        Assert.Equal(
+            (true, false, (string?)null, MxcProcessContainer.AnchorReadAlone, true, false),
+            (mechanism.HoldsEveryCase, mechanism.Scoped, mechanism.Leaves, mechanism.AnchorCost, mechanism.OwnTemp, mechanism.TakesHandedCommands));
     }
 
     /// <summary>
@@ -143,21 +153,23 @@ public sealed class MxcProcessContainerTests
     }
 
     /// <summary>
-    /// On Windows the probe proves MXC's container once for the process: the library says the machine has it, the
-    /// interpreter inside reads no hidden canary, writes no place written by nobody and writes the open place - each run
-    /// alone - then node, git and Git Bash's sh found here each start inside it and answer; every later asker gets the same
-    /// mechanism.
+    /// On Windows the probe proves MXC's container once for the process, under the tree's runs directory: the library says
+    /// the machine has it, the interpreter inside reads no hidden canary by its name or another case of it, writes no place
+    /// written by nobody by either, writes no place outside every open one and writes the open place - each run alone -
+    /// then node, git and Git Bash's sh found here each start inside it and answer; every later asker gets the same
+    /// mechanism, and the probe's places are gone.
     /// </summary>
     [Fact]
     public async Task OnWindows_TheProbe_ProvesTheContainer_ThenEachToolFoundHere_OnceForTheProcess()
     {
         using var tools = new TempDirectory();
+        using var tree = new TempDirectory();
         var (path, node, git, sh) = Tools(tools.Path);
         var runner = new WindowsRunner(_ => (0, "answered"));
         var platform = Windows(runner, path);
 
-        var proved = await platform.ProbeAsync(Tree, Token);
-        var again = await platform.ProbeAsync(Tree, Token);
+        var proved = await platform.ProbeAsync(tree.Path, Token);
+        var again = await platform.ProbeAsync(tree.Path, Token);
 
         var container = Assert.IsType<MxcProcessContainer>(proved.Mechanism);
 
@@ -166,6 +178,9 @@ public sealed class MxcProcessContainerTests
         Assert.Equal(
             [
                 ("cmd.exe", "/d /c type canary"),
+                ("cmd.exe", "/d /c type canary"),
+                ("cmd.exe", "/d /c type nul > w"),
+                ("cmd.exe", "/d /c type nul > w"),
                 ("cmd.exe", "/d /c type nul > w"),
                 ("cmd.exe", "/d /c type nul > w"),
                 (Path.GetFileName(node), "--version"),
@@ -174,13 +189,18 @@ public sealed class MxcProcessContainerTests
             ],
             runner.Asked.Select(asked => (Path.GetFileName(asked.FileName), string.Join(' ', asked.Arguments.Select(word => word.Length > 2 && word.Contains(Path.DirectorySeparatorChar) ? Path.GetFileName(word) : word)))));
         Assert.All(runner.Asked, asked => Assert.Equal((true, (IIsolationMechanism)container), (asked.Contained, asked.Isolation!.Mechanism)));
-        Assert.All(runner.Asked.Take(3), asked =>
+        Assert.All(runner.Asked.Take(6), asked =>
         {
             Assert.Equal(["hidden"], asked.Isolation!.Profile.Hidden.Select(place => Path.GetFileName(place.Path)));
-            Assert.Equal([("sealed", false), ("open", true)], asked.Isolation.Profile.Writes.Select(write => (Path.GetFileName(write.Path), write.Writable)));
+            Assert.Equal([("open", true), ("sealed", false)], asked.Isolation.Profile.Writes.Select(write => (Path.GetFileName(write.Path), write.Writable)));
+            Assert.StartsWith(Path.Combine(tree.Path, HarnessLayout.DirectoryName, HarnessLayout.RunsDirectoryName, "isolation-probe-"), asked.WorkingDirectory, StringComparison.Ordinal);
         });
-        Assert.All(runner.Asked.Skip(3), asked => Assert.Same(IsolationProfile.Nothing, asked.Isolation!.Profile));
-        Assert.Equal([node, git, sh], runner.Asked.Skip(3).Select(asked => asked.FileName));
+        Assert.Equal(
+            [@"hidden\canary", @"HIDDEN\canary", @"open\sealed\w", @"open\SEALED\w", "w", @"open\w"],
+            runner.Asked.Take(6).Select(asked => Path.GetRelativePath(asked.WorkingDirectory!, asked.Arguments[^1])));
+        Assert.All(runner.Asked.Skip(6), asked => Assert.Same(IsolationProfile.Nothing, asked.Isolation!.Profile));
+        Assert.Equal([node, git, sh], runner.Asked.Skip(6).Select(asked => asked.FileName));
+        Assert.Empty(Directory.GetFileSystemEntries(Path.Combine(tree.Path, HarnessLayout.DirectoryName, HarnessLayout.RunsDirectoryName)));
     }
 
     /// <summary>On Windows there is no mechanism where MXC's library says the machine has no container - its words, then the remedy - and nothing is started.</summary>
@@ -195,7 +215,7 @@ public sealed class MxcProcessContainerTests
             windows: new WindowsContainerHost(() => WindowsContainerSupport.None("MXC's process container is not available on this Windows: the build is too old")),
             self: Self);
 
-        var found = await platform.ProbeAsync(Tree, Token);
+        var found = await platform.ProbeAsync(Path.Combine(Path.GetTempPath(), "dssharness-mxc-tree"), Token);
 
         Assert.Equal(
             ((IIsolationMechanism?)null, "MXC's process container is not available on this Windows: the build is too old", "MXC's process container needs Windows 11 24H2 build 26100.9278 or later, or 26H2 build 26300.9550 or later; or run the agents from WSL 2, where bubblewrap isolates them" + OrPreferred),
@@ -204,20 +224,25 @@ public sealed class MxcProcessContainerTests
     }
 
     /// <summary>
-    /// On Windows a trial that does not hold is no mechanism, saying how: the hidden canary read, the place written by
-    /// nobody written, or the open place not written - with how the interpreter ended - and no tool is asked after it.
+    /// On Windows a trial that does not hold is no mechanism, saying how: the hidden canary read by its name or another case
+    /// of it, the place written by nobody written by either, a place outside every open one written, or the open place not
+    /// written - with how the interpreter ended - and no tool is asked after it.
     /// </summary>
     [Theory]
     [InlineData("read", "MXC 1.0.1's process container did not prove itself: its probe read the hidden canary")]
+    [InlineData("case-read", "MXC 1.0.1's process container did not prove itself: its probe read the hidden canary by another case of its name")]
     [InlineData("sealed", "MXC 1.0.1's process container did not prove itself: its probe wrote the place written by nobody")]
+    [InlineData("case-sealed", "MXC 1.0.1's process container did not prove itself: its probe wrote the place written by nobody by another case of its name")]
+    [InlineData("outside", "MXC 1.0.1's process container did not prove itself: its probe wrote a place outside every open one")]
     [InlineData("open", "MXC 1.0.1's process container did not prove itself: its probe did not write the open place: it ended 1: 'Access is denied.'")]
     public async Task OnWindows_ATrialThatDoesNotHold_IsNoMechanism_SayingHow(string broken, string why)
     {
         using var tools = new TempDirectory();
+        using var tree = new TempDirectory();
         var (path, _, _, _) = Tools(tools.Path);
         var runner = new WindowsRunner(_ => (0, "answered"), broken);
 
-        var found = await Windows(runner, path).ProbeAsync(Tree, Token);
+        var found = await Windows(runner, path).ProbeAsync(tree.Path, Token);
 
         Assert.Equal(
             ((IIsolationMechanism?)null, why, "MXC's process container needs Windows 11 24H2 build 26100.9278 or later, or 26H2 build 26300.9550 or later; or run the agents from WSL 2, where bubblewrap isolates them" + OrPreferred),
@@ -238,14 +263,16 @@ public sealed class MxcProcessContainerTests
         var runner = new WindowsRunner(request => Path.GetFileName(request.FileName) == "sh.exe" ? (-1073741502, string.Empty) : (0, "answered"));
         var withoutNode = string.Join(Path.PathSeparator, Path.GetDirectoryName(git)!);
 
-        var found = await Windows(runner, withoutNode).ProbeAsync(Tree, Token);
+        using var tree = new TempDirectory();
+
+        var found = await Windows(runner, withoutNode).ProbeAsync(tree.Path, Token);
 
         Assert.Equal(
             ((IIsolationMechanism?)null,
                 $"MXC 1.0.1's process container does not run Git Bash's sh ('{sh}') on this Windows: inside it, Git Bash's sh ended 0xC0000142 saying nothing",
                 "update Windows and this tool, for a later MXC or Windows may run it, or run the agents from WSL 2, where bubblewrap isolates them" + OrPreferred),
             (found.Mechanism, found.Unavailable, found.Remedy));
-        Assert.Equal([git, sh], runner.Asked.Skip(3).Select(asked => asked.FileName));
+        Assert.Equal([git, sh], runner.Asked.Skip(6).Select(asked => asked.FileName));
         Assert.DoesNotContain(runner.Asked, asked => asked.FileName == node);
     }
 
@@ -429,9 +456,6 @@ public sealed class MxcProcessContainerTests
         }
     }
 
-    /// <summary>The tree every probe is asked for: a place no tool of the test's stands in.</summary>
-    private static string Tree { get; } = Path.Combine(Path.GetTempPath(), "dssharness-mxc-tree");
-
     /// <summary>The system's command interpreter.</summary>
     private static string Interpreter => Path.Combine(Environment.SystemDirectory, "cmd.exe");
 
@@ -501,8 +525,9 @@ public sealed class MxcProcessContainerTests
 
     /// <summary>
     /// A process runner standing in for Windows inside MXC's container: the interpreter's trial runs as the container
-    /// keeps them - the canary unread, the place written by nobody unwritten, the open place written - but the one
-    /// <paramref name="broken"/> names, and every other program answering as <paramref name="answer"/> says.
+    /// keeps them - the canary unread by either name, the place written by nobody unwritten by either, the place outside
+    /// unwritten, the open place written - but the one <paramref name="broken"/> names, and every other program answering
+    /// as <paramref name="answer"/> says.
     /// </summary>
     private sealed class WindowsRunner(Func<ProcessRequest, (int Code, string Said)> answer, string? broken = null) : IProcessRunner
     {
@@ -518,16 +543,26 @@ public sealed class MxcProcessContainerTests
                 return Task.FromResult(new ProcessResult(code, said, string.Empty, TimeSpan.Zero, TimedOut: false));
             }
 
-            if (request.Arguments is [_, _, "type", _])
+            if (request.Arguments is [_, _, "type", var read])
             {
-                return Task.FromResult(broken == "read" ? Ended(0, string.Empty) : Ended(1, "Access is denied."));
+                var otherCase = Path.GetFileName(Path.GetDirectoryName(read)) == "HIDDEN";
+
+                return Task.FromResult(broken == (otherCase ? "case-read" : "read") ? Ended(0, string.Empty) : Ended(1, "Access is denied."));
             }
 
             var target = request.Arguments[^1];
             var place = Path.GetFileName(Path.GetDirectoryName(target));
 
-            if ((place == "open" && broken != "open") || (place == "sealed" && broken == "sealed"))
+            if ((place == "open" && broken != "open")
+                || (place == "sealed" && broken == "sealed")
+                || (place == "SEALED" && broken == "case-sealed")
+                || (place!.StartsWith("isolation-probe-", StringComparison.Ordinal) && broken == "outside"))
             {
+                if (place == "SEALED")
+                {
+                    return Task.FromResult(Ended(0, string.Empty));
+                }
+
                 File.WriteAllText(target, string.Empty);
                 return Task.FromResult(Ended(0, string.Empty));
             }

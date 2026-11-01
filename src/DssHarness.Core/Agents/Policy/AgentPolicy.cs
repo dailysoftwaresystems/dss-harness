@@ -227,11 +227,12 @@ public sealed partial class AgentPolicy
     ];
 
     /// <summary>
-    /// This tool's verbs that read a credential slot or write the tool's own state, refused to every agent by name - a
-    /// side-task's as well as a step's: run as an agent's command, inside the operating system's isolation that hides every
-    /// slot and writes no state, each would fail part way or answer from what it could not read. The verbs that only read,
-    /// and those that write only the tree's own files, stay open. Each is the command's own name, as the service that
-    /// serves it declares it.
+    /// This tool's verbs that read a credential slot or write the tool's own state or install, refused to every agent by
+    /// name - a side-task's as well as a step's: each would read what no agent may, or change what the tool runs by, and
+    /// inside the operating system's isolation it would fail part way or answer from what it could not read. The verbs
+    /// that only read, and those that write only the tree's own files, stay open (<see cref="OpenVerbs"/>); every verb of
+    /// the tool's is one or the other, its tests holding the two lists to the tool's own commands. Each is the command's
+    /// own name, as the service that serves it declares it.
     /// </summary>
     public static IReadOnlyList<string> SlotOrStateVerbs { get; } =
     [
@@ -241,9 +242,23 @@ public sealed partial class AgentPolicy
         FlowService.PauseCommand, FlowService.StopCommand, FlowService.AskStatusCommand, FlowService.AskCommand,
         AgentService.CreateCommand, AgentService.SeedCommand, AgentService.RefreshCommand, AgentService.RebaseCommand,
         AgentService.FoldCommand, AgentService.DeleteCommand, Legs.LegsService.CommandName, Tools.ToolProvisionService.CommandName,
-        Sync.SyncService.CommandName, Build.BuildService.CommandName, Testing.TestService.CommandName,
+        Hosts.ToolUpdateService.CommandName, Sync.SyncService.CommandName, Build.BuildService.CommandName, Testing.TestService.CommandName,
         Runners.RunnerRunService.CommandName, Mutations.MutationService.CommandName, RunStopService.CommandName,
-        CleanService.CommandName, HostExecService.CommandName,
+        CleanService.CommandName, HostExecService.CommandName, SetUps.SetUpService.UpCommand, SetUps.SetUpService.DownCommand,
+        Hosts.HostAgentProtocol.CommandName, Sync.SyncServe.CommandName, Execution.HoldAwakeService.CommandName, Processes.ContainExec.CommandName,
+        Processes.MxcProcessContainer.CommandName,
+    ];
+
+    /// <summary>
+    /// This tool's verbs open to an agent: each only reads, or writes only the tree's own files - never a slot, the tool's
+    /// state or its install. With <see cref="SlotOrStateVerbs"/> and <c>run-side-task</c>, every verb the tool has.
+    /// </summary>
+    public static IReadOnlyList<string> OpenVerbs { get; } =
+    [
+        "help", "verify-git", Worktrees.WorktreeService.ListCommand, OrchestratorService.ListCommand, SideTasks.SideTaskService.ListCommand,
+        WorkflowValidationService.CommandName, WorkflowExportService.CommandName, "write-anchor", "set-anchor",
+        "read-anchor", "read-anchors", "check-anchor-balance", "check-anchor-citations", Worktrees.RootLitterService.CommandName,
+        "fix-line-endings", "check-ci-legs", Codebase.CodebaseGraphQueryService.CommandName,
     ];
 
     /// <summary>
@@ -2297,7 +2312,7 @@ public sealed partial class AgentPolicy
         => new(
             "the verbs that read a slot or write state",
             AgentPolicySource.Builtin,
-            $"{opening}: it reads a credential slot or writes this tool's own state, which no command of an agent may - inside the operating system's isolation every slot is empty and the state read-only - so a person runs it");
+            $"{opening}: it reads a credential slot or writes this tool's own state or install, which no command of an agent may - and where the agent's commands run inside the operating system's isolation, every slot is hidden there and the state read-only - so a person runs it");
 
     /// <summary>
     /// The verb this tool is handed where <paramref name="program"/>, at <paramref name="start"/>, is this tool - its first

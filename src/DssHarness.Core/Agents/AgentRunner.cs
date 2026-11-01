@@ -1390,7 +1390,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             step.Compaction is { BeforeItsTask: false } whole ? whole.Record : null)
         {
             Ground = step.Ground,
-            Isolation = step.Isolation,
+            Isolation = step.Isolation?.Processes,
             Credential = step.Credential,
             Program = step.Program,
             ProgramVersion = step.ProgramVersion,
@@ -1450,7 +1450,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             step.Compaction is { BeforeItsTask: false } whole ? whole.Record : null)
         {
             Ground = step.Ground,
-            Isolation = step.Isolation,
+            Isolation = step.Isolation?.Processes,
             Credential = credential,
             Program = step.Program,
             ProgramVersion = step.ProgramVersion,

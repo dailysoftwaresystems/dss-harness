@@ -690,7 +690,7 @@ public sealed class CodebaseGraphTool(
         edited.ReplaceLines(card.Start, card.End, text);
         var moved = edited.LineCount - was;
         // Where it lands decided again before a byte is written, as the runtime's own writes are (AgentFiles.Write).
-        if (_files.Write(Full(card.Path), edited.Bytes(), landing => _paths.Write(landing).Denied) is { } landed)
+        if (_files.Write(Full(card.Path), edited.Bytes(), landing => _paths.Opened(landing, write: true).Denied) is { } landed)
         {
             return new GraphToolAnswer(landed.Reason, GraphToolOutcome.Refused, card.Path, landed);
         }
@@ -816,7 +816,7 @@ public sealed class CodebaseGraphTool(
             return (null, $"'{path}' holds {DiskSpace.Size(standing.Length)}, past the {DiskSpace.Size(AgentTools.MostViewedBytes)} a body or an edit reads whole: read a range of it");
         }
 
-        var read = await _files.ReadAsync(full, opened => _paths.Read(opened).Denied, cancellationToken).ConfigureAwait(false);
+        var read = await _files.ReadAsync(full, opened => _paths.Opened(opened, write: false).Denied, cancellationToken).ConfigureAwait(false);
 
         if (read.Denied is { } moved)
         {

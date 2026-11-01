@@ -904,84 +904,99 @@ public sealed partial class HelpTests
         Assert.Contains("This is policy, not a sandbox", prose, StringComparison.Ordinal);
         Assert.Contains("Where this tool cannot decide a call it denies it, never allows", prose, StringComparison.Ordinal);
 
-        // Beneath the policy, the operating system's isolation: the mechanism, what it denies, the mode and its codes, the
-        // records, and the verbs refused for it - named from the one list the policy refuses by.
+        // Beneath the policy, the operating system's isolation: the mechanism, the read-only machine and what is written,
+        // what it hides and seals, the anchors and their cost, Claude Code inside or out, the probe, the mode and its codes,
+        // the records, where it ends, and the verbs refused for it - named from the one lists the code holds.
         Assert.Contains(
             "On Linux, WSL 2's included, the mechanism is the system's bubblewrap 0.8.0 or newer - the first bwrap in an absolute "
-                + "directory of the PATH outside the tree - on macOS the system's own sandbox, /usr/bin/sandbox-exec, and on Windows "
-                + "Microsoft's MXC process container, made through MXC's own library; each is what the contained step becomes in the "
-                + "child's place - on Windows this tool again (isolate-exec), inside the step's job, which starts the program inside a "
-                + "container of its own and hands back its streams and its exit code - so no child runs outside it for an instant. "
-                + "Inside it every credential slot of the main checkout and every Claude Code directory is hidden - an empty place "
-                + "under bubblewrap, refused by macOS's sandbox, denied by MXC's container;",
+                + "directory of the PATH outside the tree, none where the user could write it or a directory above it, for the tool "
+                + "runs it outside - on macOS the system's own sandbox, /usr/bin/sandbox-exec, and on Windows Microsoft's MXC process "
+                + "container, made through MXC's own library; each is what the contained step becomes in the child's place - on "
+                + "Windows this tool again (isolate-exec), inside the step's job, which starts the program inside a container of its "
+                + "own and hands back its streams and its exit code - so no child runs outside it for an instant. Inside it the "
+                + "machine is read-only.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "under bubblewrap and macOS's sandbox git's objects, index and refs stay writable, so git add, fetch, rm and status work.",
+            "Written are the agent's writable roots - its worktree, its work directory - the git directories of a tree it writes, "
+                + "its own and the common one, so git add, commit, fetch, rm and status write the objects, the index and the refs; a "
+                + "temporary directory of the launch's own, named by TMPDIR - on Linux the system's /tmp inside, so nothing another "
+                + "process keeps there is reached, on Windows MXC's own; and the declared tool caches,",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "No directory above any of those places, and no writable root itself, is renamed or removed - a place moved away would "
-                + "take its rule with it and leave its name free to be made again, and a root put back as a link would lead the next "
-                + "launch's rules elsewhere.",
+            string.Join(", ", DssHarness.Core.Agents.Isolation.IsolationCaches.Declared.Select(cache => $"{cache.Variable} ({cache.Tool})"))
+                + ". The user's own caches stay read-only, for a cache is code a later build runs as it lies;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Hidden - an empty place under bubblewrap, refused by macOS's sandbox, denied by MXC's container - are every credential "
+                + "slot of the main checkout and every Claude Code directory with ~/.claude.json beside it - the shell snapshots Claude "
+                + "Code sources read again, and on Windows a claude-code launch's own read, below. Written by nobody, inside what is "
+                + "written, are git's code-running files and its pointers to its own directories",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "No directory above a guarded place whose own directory is written, and no writable root itself, is renamed or removed - "
+                + "a place moved away would take its rule with it and leave its name free to be made again, and a root put back as a "
+                + "link would lead the next launch's rules elsewhere. A launch has no isolation - which the mode below turns into a "
+                + "refusal or a notice - where its places cannot be held: git cannot say where a tree keeps its files (git 2.31 or "
+                + "newer answers), a link stands where the agent writes on the way to a guarded place, or, under bubblewrap, a guarded "
+                + "place stands on a file system that finds a name in any case - a Windows drive under /mnt - where a mount holds one "
+                + "spelling alone. Every git of this tool's own runs with no file-system monitor",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the user's runtime directory whole - their service manager, message bus and agents' sockets - and the container "
+                + "engines' sockets are hidden; where the kernel has Landlock's scope (Linux 6.12 or newer) the contained step enters "
+                + "it first, so no abstract Unix socket outside is reached and no process outside signalled, and where it has not, the "
+                + "record says so.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
             "macOS's sandbox denies every operation it does not allow - never allowing all but a list, which would leave "
                 + "LaunchServices free to start a program outside it - and allows what a build, a test and a shell do as the user: its "
-                + "own processes, the system's settings, a terminal, the services that resolve names and trust certificates, and every "
-                + "file but the rules' places, each ruled at its real spelling (/var is /private/var there); it is no mechanism where "
-                + "this tool already runs inside a sandbox, for macOS starts none inside another.",
-            prose,
-            StringComparison.Ordinal);
-        // The tool's own executions of the agents' work inside the same isolation, the codes the mode turns into its own.
-        Assert.Contains(
-            "Every other git command of this tool's runs none of the repository's hooks - core.hooksPath pointed at the null device - "
-                + "so a fold, a refresh, a rebase, a sync or a question of the tool's never runs the agents' work as a side effect of a "
-                + "checkout, an index written or a ref moved;",
-            prose,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "agentPolicy.isolation decides each as it decides a launch: where this machine has none, "
-                + $"{DssHarness.Core.Agents.Isolation.AgentIsolationMode.Required} fails the step ({HarnessExit.ToolMissing}) with nothing run - a leg whose own cannot "
-                + $"be had, its tree one git does not answer for, is skipped-unavailable - and {DssHarness.Core.Agents.Isolation.AgentIsolationMode.Preferred} runs it "
-                + "outside, each leg's line saying so.",
-            prose,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "A claude-code launch runs whole inside it, the Claude Code directories open to it - it reads its own login there, and on "
-                + "macOS from the login keychain, which every agent's command reaches as the user does - guarded for it by the words policy alone, "
-                + "and Claude Code's own sandbox is turned off in its settings, for none nests in this one;",
+                + "own processes, the system's settings by the names a build asks - never another process's arguments or environment "
+                + "- a terminal, the network, the services that resolve names and trust certificates, every file read and no Unix "
+                + "socket but the name resolver's and those under the launch's temporary directory, each place ruled at its real "
+                + "spelling (/var is /private/var there); it is no mechanism where this tool already runs inside a sandbox, for macOS "
+                + "starts none inside another.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
             "MXC's container grants nothing it is not told to: every fixed drive is read, each writable root written, each place "
-                + "written by nobody read, each hidden place denied outright - so git's objects, index and refs are written only "
-                + "inside a writable root, and git add in a worktree, whose index and objects the main checkout's .git holds, fails "
-                + "there. It meets a place by its path alone, so each directory above a guarded place whose own holder is written is "
-                + "read alone, every entry it holds written again as the profile has it - nothing is made or removed directly inside "
-                + @"it, so git add over a side-task's main tree, which makes .git\index.lock, fails there too. The child has the "
-                + "environment the step was given, a temporary directory of MXC's own and the container's own user interface - no "
-                + "clipboard, no input sent to another window - which a program that loads Windows' user interface library needs to "
-                + "start at all. On each, the network is the user's, the loopback both ways.",
+                + "written by nobody read, each hidden place denied outright. It meets a place by its path alone and refuses no rename "
+                + "alone, so each directory above a guarded place whose own holder is written is read alone, every entry it holds "
+                + "written again as the profile has it - nothing is made or removed directly inside it, so git makes no lock file in a "
+                + ".git, or a linked worktree's directory under it, that holds a sealed place: git add, commit, fetch and push fail "
+                + "there - in a worktree, over a side-task's main tree, and in a run's commit and push steps - which each record says "
+                + "as the anchors' cost.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "under MXC it reads them but writes none, so a login whose token has run out is not renewed inside it until a claude "
-                + "run outside renews it.",
+            "On Linux and macOS a claude-code launch's own process runs outside the isolation, reading its login and the key it is "
+                + "handed there, and every shell command it starts is handed to the isolation through its shell prefix "
+                + "(CLAUDE_CODE_SHELL_PREFIX: this tool and --isolated-shell, which becomes the mechanism with /bin/bash inside, the "
+                + "launch's isolation read from the file DSSHARNESS_ISOLATED_SHELL names) - so no command it runs reaches its "
+                + "directories, its login or its environment - and Claude Code's own sandbox is turned off in its settings, for none "
+                + "nests in this one;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "a canary in a hidden place unread, a place written by nobody unwritten, an open place written - on Windows after MXC's "
-                + "library says this Windows has the container (Windows 11 24H2 build 26100.9278 or later, or 26H2 build 26300.9550 "
-                + "or later), and followed by each of node, git and Git Bash's sh found on this machine started inside it and asked "
-                + "to answer, one that does not making none, said with how it ended. MXC 1.0.1 ends every program of Git Bash's with "
-                + "0xC0000142, a library that would not start, so where Git Bash is installed Windows has none yet; from WSL 2, "
-                + "bubblewrap isolates.",
+            "On Windows, where nothing becomes another program and every command Claude Code runs is Git Bash's, the launch runs "
+                + "whole inside MXC's container with its directories read alone: its commands read its login there, and a login whose "
+                + "token has run out is not renewed inside until a claude run outside renews it - written, they would let a command "
+                + "plant what Claude Code runs outside later.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "the mechanism and its version - macOS's own for its sandbox, MXC's library's for its container - or why there was none.",
+            "on the tree's own file system under its runs directory: a canary in a hidden place unread, by its name and by another "
+                + "case of it, a place written by nobody unwritten by either, a place outside every open one unwritten, an open place "
+                + "written - on Windows after MXC's library says this Windows has the container (Windows 11 24H2 build 26100.9278 or "
+                + "later, or 26H2 build 26300.9550 or later), and followed by each of node, git and Git Bash's sh found on this machine "
+                + "started inside it and asked to answer, one that does not making none, said with how it ended. MXC 1.0.1 ends every "
+                + "program of Git Bash's with 0xC0000142, a library that would not start, so where Git Bash is installed Windows has "
+                + "none yet; from WSL 2, bubblewrap isolates.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -995,9 +1010,43 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
+            "the mechanism and its version - macOS's own for its sandbox, MXC's library's for its container - what it leaves reached "
+                + "and what its anchors cost, or why there was none. Where it ends: the machine stays readable as the user reads it - "
+                + "their ssh keys and every credential outside the slots among it, and on macOS the login keychain through the "
+                + "system's security service - the network is theirs, and what no rule at a path reaches - a hard link made before the "
+                + "launch, another path bound to the same files - is reached.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "so each is refused to every agent by name, a side-task's as well as a step's: "
                 + $"{string.Join(", ", DssHarness.Core.Agents.Policy.AgentPolicy.SlotOrStateVerbs)}; those that only read, and those "
                 + "that write only the tree's own files, stay open.",
+            prose,
+            StringComparison.Ordinal);
+
+        // The tool's own executions of the agents' work inside the same isolation, the codes the mode turns into its own.
+        Assert.Contains(
+            "is held inside it, its own profile from the leg's ground, built as a launch's is: the machine read-only; every "
+                + "credential slot of the main checkout and the tool's own Claude Code directory hidden; the tree the leg works in - "
+                + "the step's tree or its copy under .legs - the run's records, a sweep's workers under .mutations, a temporary "
+                + "directory of its own and the declared tool caches written,",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "one over ssh reads the user's keys as the read-only machine shows them, and under bubblewrap and macOS's sandbox a "
+                + "commit's or a push's hooks reach the one Unix socket outside that is the user's SSH agent's (SSH_AUTH_SOCK), "
+                + "wherever it stands, and no other; MXC's container is handed none. Every other git command of this tool's runs none "
+                + "of the repository's hooks - core.hooksPath pointed at the null device, set as every git of the tool's sets its own "
+                + "settings, through GIT_CONFIG_PARAMETERS - so a fold, a refresh, a rebase, a sync or a question of the tool's never "
+                + "runs the agents' work as a side effect of a checkout, an index written or a ref moved;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "agentPolicy.isolation decides each as it decides a launch: where this machine has none, "
+                + $"{DssHarness.Core.Agents.Isolation.AgentIsolationMode.Required} fails the step ({HarnessExit.ToolMissing}) with nothing run - a leg whose own cannot "
+                + $"be had, its tree one git does not answer for, is skipped-unavailable - and {DssHarness.Core.Agents.Isolation.AgentIsolationMode.Preferred} runs it "
+                + "outside, each leg's line saying so. The step answers isolation: the mode, with the mechanism and its version, what "
+                + "it leaves reached and what its anchors cost, or why there was none.",
             prose,
             StringComparison.Ordinal);
 
@@ -1010,11 +1059,23 @@ public sealed partial class HelpTests
             nameof(DssHarness.Core.Processes.SandboxExec),
             $"{nameof(DssHarness.Core.Processes.SandboxExec)}.{nameof(DssHarness.Core.Processes.SandboxExec.Policy)}",
             $"{nameof(DssHarness.Core.Processes.IsolationProfile)}.{nameof(DssHarness.Core.Processes.IsolationProfile.Anchors)}",
+            nameof(DssHarness.Core.Processes.IsolationProfile),
+            nameof(DssHarness.Core.Processes.IIsolationMechanism),
+            nameof(DssHarness.Core.Processes.Landlock),
             nameof(DssHarness.Core.Platform.MacSandboxHost),
             nameof(DssHarness.Core.Processes.MxcProcessContainer),
+            $"{nameof(DssHarness.Core.Processes.MxcProcessContainer)}.{nameof(DssHarness.Core.Processes.MxcProcessContainer.AnchorReadAlone)}",
             nameof(DssHarness.Core.Processes.IsolateExec),
             nameof(DssHarness.Core.Platform.WindowsContainerHost),
             nameof(DssHarness.Core.Platform.IsolationPlatform),
+            $"{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches)}.{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches.Declared)}",
+            nameof(DssHarness.Core.Agents.Isolation.IsolationDecision),
+            $"{nameof(DssHarness.Core.Agents.Isolation.LaunchIsolation)}.{nameof(DssHarness.Core.Agents.Isolation.LaunchIsolation.ForClaudeCode)}",
+            nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeShell),
+            $"{nameof(DssHarness.Core.Processes.IsolatedShell)}.{nameof(DssHarness.Core.Processes.IsolatedShell.Run)}",
+            $"{nameof(DssHarness.Core.Git.GitOwnSettings)}.{nameof(DssHarness.Core.Git.GitOwnSettings.Apply)}",
+            nameof(DssHarness.Core.Git.GitDirectoryPins),
+            nameof(DssHarness.Core.Git.GitHooks),
         })
         {
             Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);

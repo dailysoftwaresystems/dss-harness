@@ -60,6 +60,8 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
 
     public virtual string FinalPathOf(Stream opened) => inner.FinalPathOf(opened);
 
+    public virtual string FinalPathOfDirectory(string directory) => inner.FinalPathOfDirectory(directory);
+
     public virtual IAppendFile OpenForAppend(string path) => inner.OpenForAppend(path);
 
     public virtual DateTime LastWriteTimeUtc(string path) => inner.LastWriteTimeUtc(path);

@@ -46,6 +46,7 @@ internal static class Containment
     /// </summary>
     /// <param name="job">The Windows job object to join, for full containment there.</param>
     /// <param name="group">Whether the group alone is asked for, apart from the terminal within the session.</param>
+    /// <param name="scope">Whether the program is become inside Landlock's scope of abstract sockets and signals (<see cref="Landlock.Scope"/>), on Linux.</param>
     /// <param name="program">The program, by its resolved path.</param>
     /// <param name="arguments">The program's arguments.</param>
     /// <param name="status">The channel the process runner reads the start from.</param>
@@ -54,10 +55,37 @@ internal static class Containment
     /// The program's own exit code on Windows; on Linux and macOS no return where the program was
     /// become. <see cref="ContainExec.Failed"/> where the step failed, the failure said on the channel.
     /// </returns>
-    public static int Place(string? job, bool group, string program, IReadOnlyList<string> arguments, ContainExec.StartStatus status, TextWriter error)
+    public static int Place(string? job, bool group, bool scope, string program, IReadOnlyList<string> arguments, ContainExec.StartStatus status, TextWriter error)
         => OperatingSystem.IsWindows()
             ? PlaceOnWindows(job, program, arguments, status, error)
-            : PlaceOnPosix(group, program, arguments, status);
+            : PlaceOnPosix(group, scope, program, arguments, status);
+
+    /// <summary>
+    /// Becomes <paramref name="program"/> under this process's id, on Linux and macOS, Landlock's scope entered first where
+    /// <paramref name="scope"/> asks it - tried again while the file is busy, as any start is.
+    /// </summary>
+    /// <param name="scope">Whether the program is become inside Landlock's scope of abstract sockets and signals.</param>
+    /// <param name="program">The program, by its whole path.</param>
+    /// <param name="arguments">Its arguments.</param>
+    /// <returns>No return where the program was become; else the error number that kept it from being.</returns>
+    internal static int Become(bool scope, string program, IReadOnlyList<string> arguments)
+    {
+        if (scope && Landlock.Scope() is var refused and not 0)
+        {
+            return refused;
+        }
+
+        try
+        {
+            ProcessRunner.StartWhileBusy(() => throw new Win32Exception(Posix.Calls().Become(program, [program, .. arguments])));
+        }
+        catch (Win32Exception ex)
+        {
+            return ex.NativeErrorCode;
+        }
+
+        return 0;
+    }
 
     /// <summary>
     /// Ends a contained child's whole session on Linux and macOS - or, where <paramref name="group"/>, the whole process
@@ -263,16 +291,23 @@ internal static class Containment
 
     /// <summary>
     /// The Linux and macOS half of the step: a session and group of its own, or the group alone,
-    /// then the program become under the same process id - tried again while the file is busy, as
-    /// any start is - and the failure said where it could not be.
+    /// then Landlock's scope where it is asked, then the program become under the same process id - tried again while the
+    /// file is busy, as any start is - and the failure said where it could not be.
     /// </summary>
-    private static int PlaceOnPosix(bool group, string program, IReadOnlyList<string> arguments, ContainExec.StartStatus status)
+    private static int PlaceOnPosix(bool group, bool scope, string program, IReadOnlyList<string> arguments, ContainExec.StartStatus status)
     {
         var calls = Posix.Calls();
 
         if (group ? calls.JoinGroup() != 0 : calls.StartSession() == -1)
         {
             status.Failed(group ? ContainExec.Stage.Group : ContainExec.Stage.Session, Marshal.GetLastPInvokeError());
+            return ContainExec.Failed;
+        }
+
+        // Entered on this thread, the one the program is become from, so the program and all it starts are inside the domain.
+        if (scope && Landlock.Scope() is var refused and not 0)
+        {
+            status.Failed(ContainExec.Stage.Scope, refused);
             return ContainExec.Failed;
         }
 

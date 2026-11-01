@@ -706,11 +706,12 @@ public sealed record AgentRun(
     public Policy.AgentPolicyGround? Ground { get; init; }
 
     /// <summary>
-    /// The operating system's isolation the run's children are started under: a command of the API clients' runtime with
-    /// <see cref="Agents.Isolation.LaunchIsolation.ForCommands"/>, a Claude Code launch's whole process with
-    /// <see cref="Agents.Isolation.LaunchIsolation.ForClaudeCode"/>; null where none was decided.
+    /// The operating system's isolation the run's processes are started under (<see cref="Agents.Isolation.LaunchIsolation.Processes"/>):
+    /// a command of the API clients' runtime, and each shell command a Claude Code launch hands over through its shell
+    /// prefix, Claude Code's own process outside it - or that whole process inside, where the mechanism takes no command
+    /// handed to it; null where none was decided.
     /// </summary>
-    public Isolation.LaunchIsolation? Isolation { get; init; }
+    public Isolation.LaunchProcesses? Isolation { get; init; }
 
     /// <summary>
     /// The credential the run signs in with, where its client signs in; null for the machine's login. Its keys are the

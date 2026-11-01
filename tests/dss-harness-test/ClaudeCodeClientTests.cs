@@ -2419,31 +2419,97 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// A launch whose run was given an isolation starts the whole Claude Code process inside it, with the profile that keeps
-    /// the Claude Code directories open - its own login is read there - never the one a command of the API clients gets;
-    /// and its settings turn Claude Code's own sandbox off, which would fail every command inside, while a launch with
-    /// none leaves that sandbox to the user's own settings.
+    /// A launch whose run was given an isolation starts Claude Code's own process outside it - where it reads its login and
+    /// key, which no command it runs reaches - and hands every shell command it starts to the isolation through its shell
+    /// prefix: this tool's own program and its isolated shell's option, the launch's isolation written beside its settings
+    /// and named by a variable, the one shell, and the launch's temporary directory as Claude Code's own - each in its
+    /// environment and in its settings' env, where Claude Code's own sandbox is turned off. A launch with none sets none of
+    /// it and leaves that sandbox to the user's own settings.
     /// </summary>
     [Fact]
-    public async Task ALaunch_StartsTheWholeClaudeCodeInsideTheRunsIsolation_ItsDirectoriesOpen_ItsOwnSandboxOff()
+    public async Task ALaunch_RunsClaudeCodeOutside_HandingEachShellCommandToTheIsolation_ItsOwnSandboxOff()
     {
         using var kit = new Kit();
         kit.Script([new JsonObject()]);
         var mechanism = new PassThroughMechanism();
-        var whole = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath("/r/.harness-config/sshItems", Directory: true)], []);
-        var commands = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath("/home/me/.claude", Directory: true)], []);
+        var commands = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath("/home/me/.claude", Directory: true)], []) { Temp = "/home/me/.cache/dssharness-isolation/tmp/abc" };
 
-        await kit.Client().RunAsync(kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, whole, null, null) }, new Sink(), Token);
+        await kit.Client().RunAsync(kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, null, null).Processes }, new Sink(), Token);
 
-        Assert.Equal(new DssHarness.Core.Processes.ProcessIsolation(mechanism, whole), Assert.Single(kit.Runner.Requests).Isolation);
-        Assert.Equal("""{"enabled":false}""", JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["sandbox"]!.ToJsonString());
+        var file = Path.Combine(kit.StepDirectory, ClaudeShell.FileName);
+        IReadOnlyList<KeyValuePair<string, string>> handed =
+        [
+            new("CLAUDE_CODE_SHELL_PREFIX", "/opt/tools/dssharness --isolated-shell"),
+            new("DSSHARNESS_ISOLATED_SHELL", file),
+            new("CLAUDE_CODE_SHELL", "/bin/bash"),
+            new("CLAUDE_CODE_TMPDIR", "/home/me/.cache/dssharness-isolation/tmp/abc"),
+        ];
+        var request = Assert.Single(kit.Runner.Requests);
+        var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!;
+
+        Assert.Null(request.Isolation);
+        Assert.True(request.Contained);
+        Assert.All(handed, variable => Assert.Equal(variable.Value, request.Environment[variable.Key]));
+        Assert.All(handed, variable => Assert.Equal(variable.Value, settings["env"]![variable.Key]!.GetValue<string>()));
+        Assert.Equal("""{"enabled":false}""", settings["sandbox"]!.ToJsonString());
+        Assert.Equal(IsolatedShell.Written(new DssHarness.Core.Processes.ProcessIsolation(mechanism, commands)), File.ReadAllText(file));
 
         using var bare = new Kit();
         bare.Script([new JsonObject()]);
 
         await bare.Client().RunAsync(bare.Run(), new Sink(), Token);
 
+        var unisolated = Assert.Single(bare.Runner.Requests);
+
         Assert.Null(JsonNode.Parse(File.ReadAllText(Path.Combine(bare.StepDirectory, ClaudeLaunch.SettingsFileName)))!["sandbox"]);
+        Assert.All(handed, variable => Assert.False(unisolated.Environment.ContainsKey(variable.Key), variable.Key));
+        Assert.False(File.Exists(Path.Combine(bare.StepDirectory, ClaudeShell.FileName)));
+    }
+
+    /// <summary>
+    /// Under a mechanism that takes no command handed to it one by one - MXC's on Windows - a launch runs Claude Code's whole
+    /// process inside, with the profile that reads its directories, its own sandbox turned off and nothing handed over: no
+    /// prefix, no isolation file - however this tool runs, for no prefix names it.
+    /// </summary>
+    [Fact]
+    public async Task UnderAMechanismTakingNoHandedCommand_ALaunchRunsWholeInside_HandingNothingOver()
+    {
+        using var kit = new Kit { Self = ("/usr/bin/dotnet", ["exec", "/src/dssharness.dll"]) };
+        kit.Script([new JsonObject()]);
+        var mechanism = new PassThroughMechanism { TakesHandedCommands = false, OwnTemp = true };
+        var commands = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath("/home/me/.claude", Directory: true)], []);
+        var whole = new DssHarness.Core.Processes.IsolationProfile([], []);
+
+        await kit.Client().RunAsync(kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, null, null) { ClaudeCode = whole }.Processes }, new Sink(), Token);
+
+        var request = Assert.Single(kit.Runner.Requests);
+        var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!;
+
+        Assert.Equal((mechanism, whole), (request.Isolation!.Mechanism, request.Isolation.Profile));
+        Assert.Equal("""{"enabled":false}""", settings["sandbox"]!.ToJsonString());
+        Assert.False(request.Environment.ContainsKey(ClaudeShell.PrefixVariable));
+        Assert.Null(settings["env"]![ClaudeShell.PrefixVariable]);
+        Assert.False(File.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.FileName)));
+    }
+
+    /// <summary>
+    /// Where this tool runs with its assembly handed to a runtime, Claude Code's shell prefix cannot name it, so a launch
+    /// with an isolation starts nothing - never one whose commands would run outside it - and says why.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchWhoseCommandsCannotBeHandedOver_StartsNothing_SayingWhy()
+    {
+        using var kit = new Kit { Self = ("/usr/bin/dotnet", ["exec", "/src/dssharness.dll"]) };
+        kit.Script([new JsonObject()]);
+        var commands = new DssHarness.Core.Processes.IsolationProfile([], []) { Temp = "/t" };
+
+        var result = await kit.Client().RunAsync(kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", new PassThroughMechanism(), commands, null, null).Processes }, new Sink(), Token);
+
+        Assert.Empty(kit.Runner.Requests);
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (result.Status, result.NotStartedBecause));
+        Assert.Equal(
+            "client 'claude-code' was not started: Claude Code's commands could not be handed to the isolation: this tool runs as '/usr/bin/dotnet' with its assembly handed to it, which Claude Code's shell prefix cannot name: run the installed tool",
+            result.Error);
     }
 
     /// <summary>
@@ -3276,7 +3342,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
         /// none is given - and every result it answers held together as the runner holds it.
         /// </summary>
         public IAgentClient Client(IProcessRunner? processes = null)
-            => new HeldTogether(new ClaudeCodeClient(processes ?? Runner, FileSystem ?? Harness.FileSystem, Harness.Platform, Harness.ChildSessions, Clock, () => Own, Tools()));
+            => new HeldTogether(new ClaudeCodeClient(processes ?? Runner, FileSystem ?? Harness.FileSystem, Harness.Platform, Harness.ChildSessions, Clock, () => Own, Tools(), () => Self));
+
+        /// <summary>This tool's own program as a launch's shell prefix names it: the installed tool's, unless a test gives another.</summary>
+        public (string Program, IReadOnlyList<string> Leading) Self { get; set; } = ("/opt/tools/dssharness", []);
 
         /// <summary>What the web answers the harness's own fetch with: one page of text, unless a test gives another.</summary>
         public HttpMessageHandler Endpoint { get; set; } = new WebEndpoint(_ => WebEndpoint.Page("the page's text", "text/plain"));

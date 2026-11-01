@@ -500,6 +500,12 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// <summary>A place a write reaches, decided: held to the writable roots and through no link, then asked of the policy.</summary>
     private Decided WritePlace(string path) => Decide(_paths.Write(path), full => _policy.Write(full));
 
+    /// <summary>
+    /// The place an open file stands at, decided: held to the roots by their own names as the system gives an open file's
+    /// (<see cref="ConfinedPaths.Opened"/>), then asked of the policy as a write where it is written, else as a read.
+    /// </summary>
+    private Decided OpenedPlace(string final, bool write) => Decide(_paths.Opened(final, write), full => write ? _policy.Write(full) : _policy.Read(full));
+
     /// <summary>A place decided: refused where it is not confined to the roots, else as <paramref name="policy"/> answers it - reached only where it allows.</summary>
     private static Decided Decide(ConfinedPath confined, Func<string, AgentPolicyAnswer> policy)
         => confined.Full is not { } full ? new Decided(null, confined.Denied)

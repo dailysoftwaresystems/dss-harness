@@ -233,7 +233,7 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal([kit.Layout.WorkDirectory("a9")], ground.WritableRoots);
         Assert.Equal(kit.Layout.InstanceDirectory("think", "a9"), launchDirectory);
 
-        var preferred = new TestIsolation((_, _) => new DssHarness.Core.Agents.Isolation.LaunchIsolation("preferred", null, null, null, "bubblewrap is not here", "install it"));
+        var preferred = new TestIsolation((_, _) => new DssHarness.Core.Agents.Isolation.LaunchIsolation("preferred", null, null, "bubblewrap is not here", "install it"));
         var ran = await Runner(kit, agents, isolation: preferred).RunAsync(Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")) with { WorksIn = "a9" }, Token);
 
         Assert.True(ran.Passed, ran.Error);

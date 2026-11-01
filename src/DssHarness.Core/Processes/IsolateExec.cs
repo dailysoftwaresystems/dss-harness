@@ -7,8 +7,8 @@ namespace DssHarness.Core.Processes;
 /// <summary>
 /// The step that starts a program inside MXC's process container (<see cref="MxcProcessContainer"/>): the contained step
 /// starts this tool as <c>isolate-exec</c> in the child's place, inside the step's job, and this starts the program inside
-/// a container of its own - its places as the step was handed them, its working directory and environment this process's
-/// own - hands it this process's input, hands its output and errors back as they come, and ends with its exit code.
+/// a container of its own - its places as the step was handed them, its working directory this process's own, its
+/// environment this process's own with the profile's variables set over it - hands it this process's input, hands its output and errors back as they come, and ends with its exit code.
 /// </summary>
 /// <remarks>
 /// Not a command anyone uses: nobody types it, help does not list it, and no host is ever asked to run it. Where the
@@ -24,14 +24,16 @@ public static class IsolateExec
     /// <param name="places">The profile's places.</param>
     /// <param name="program">The program, by its whole path.</param>
     /// <param name="arguments">Its arguments.</param>
+    /// <param name="variables">The profile's variables, set over this process's environment in the container's.</param>
     /// <param name="error">Where a failure of the step's own is said.</param>
     /// <param name="cancellationToken">Stops the wait; the job the step is in ends the program.</param>
     /// <returns>The program's own exit code, or <see cref="ContainExec.Failed"/> where no container was made.</returns>
-    public static async Task<int> RunAsync(ContainedPlaces places, string program, IReadOnlyList<string> arguments, TextWriter error, CancellationToken cancellationToken)
+    public static async Task<int> RunAsync(ContainedPlaces places, string program, IReadOnlyList<string> arguments, IReadOnlyList<KeyValuePair<string, string>> variables, TextWriter error, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(places);
         ArgumentNullException.ThrowIfNull(program);
         ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentNullException.ThrowIfNull(variables);
         ArgumentNullException.ThrowIfNull(error);
 
         if (!Path.IsPathFullyQualified(program))
@@ -44,7 +46,7 @@ public static class IsolateExec
 
         try
         {
-            var request = MxcProcessContainer.Request(places, program, arguments, Environment.CurrentDirectory, Variables(), Drives(), Entries);
+            var request = MxcProcessContainer.Request(places, program, arguments, Environment.CurrentDirectory, Variables(variables), Drives(), Entries);
             process = await MxcContainer.SpawnAsync(request, new SpawnOptions { Telemetry = new TelemetryConfig { Enabled = false } }, cancellationToken).ConfigureAwait(false);
         }
         catch (MxcException ex)
@@ -108,8 +110,8 @@ public static class IsolateExec
         }
     }
 
-    /// <summary>This process's environment, whole: the child's, as the step was given it.</summary>
-    private static Dictionary<string, string> Variables()
+    /// <summary>This process's environment, whole - the child's, as the step was given it - with <paramref name="set"/> set over it.</summary>
+    private static Dictionary<string, string> Variables(IReadOnlyList<KeyValuePair<string, string>> set)
     {
         var variables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -119,6 +121,11 @@ public static class IsolateExec
             {
                 variables[name] = value;
             }
+        }
+
+        foreach (var (name, value) in set)
+        {
+            variables[name] = value;
         }
 
         return variables;

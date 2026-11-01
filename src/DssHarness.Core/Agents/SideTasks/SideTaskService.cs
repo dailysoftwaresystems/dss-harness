@@ -511,6 +511,9 @@ public sealed class SideTaskService(
         }
         finally
         {
+            // Every launch of the side-task shares the one temporary directory its records' directory names: taken away
+            // once its work is over.
+            setUp.Isolation.Dispose();
             owner.Release(layout);
         }
     }

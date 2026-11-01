@@ -1,6 +1,9 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
 
 namespace DssHarness.Core.Platform;
 
@@ -27,15 +30,16 @@ public sealed record IsolationAvailability(IIsolationMechanism? Mechanism, strin
 
 /// <summary>
 /// The platform's seam for the operating system's isolation of an agent's commands: the mechanism this machine has,
-/// found and proved by a probe once per process - a canary in a hidden place unread, a canary in a place written by
-/// nobody unwritten, and a write in an open place done, through the real mechanism - or why there is none.
+/// found and proved by a probe once per process - through the real mechanism, on the tree's own file system: a canary in a
+/// hidden place unread, by its own name and by another case of it, a place written by nobody unwritten by either, a write
+/// in an open place done and one outside every open place refused - or why there is none.
 /// </summary>
 public interface IIsolationPlatform
 {
     /// <summary>
     /// The mechanism, proved, or why there is none: the first call probes, and every later one answers what it found.
     /// </summary>
-    /// <param name="tree">The tree the process works over: a program found on the PATH inside it is never the mechanism.</param>
+    /// <param name="tree">The tree the process works over: the probe's places stand on its file system, and a program found on the PATH inside it is never the mechanism.</param>
     /// <param name="cancellationToken">Stops the probe.</param>
     Task<IsolationAvailability> ProbeAsync(string tree, CancellationToken cancellationToken);
 }
@@ -43,8 +47,9 @@ public interface IIsolationPlatform
 /// <summary>
 /// The isolation this machine has, proved by the probe through the process runner's contained step, as every isolated
 /// child is started. On Linux, WSL's included, the system's bubblewrap 0.8 or newer - the first <c>bwrap</c> in an
-/// absolute directory of the PATH outside the tree, where Ubuntu's AppArmor profile for it attaches. On macOS the
-/// system's own sandbox, <c>/usr/bin/sandbox-exec</c>, where this process is not already inside a sandbox, which macOS
+/// absolute directory of the PATH outside the tree, where Ubuntu's AppArmor profile for it attaches, refused where the user
+/// could write the program or a directory above it, for the tool runs it outside before anything is isolated - with
+/// Landlock's scope of abstract sockets and signals where the kernel has it. On macOS the system's own sandbox, <c>/usr/bin/sandbox-exec</c>, where this process is not already inside a sandbox, which macOS
 /// would not start another inside. On Windows MXC's process container, where MXC's library says the machine has one that
 /// denies a place outright, proved by the same canary trial and then by each of node, git and Git Bash's sh found here
 /// started inside it and answering - the programs an agent's commands are made of, which a container that cannot run
@@ -56,17 +61,23 @@ public interface IIsolationPlatform
 /// <param name="mac">What finds macOS's sandbox on this machine; this machine's own where left out.</param>
 /// <param name="windows">What finds MXC's process container on this machine; this machine's own where left out.</param>
 /// <param name="self">The program that is this tool, as Windows' mechanism starts it again; this process's own where left out.</param>
+/// <param name="userWrites">Whether this user may write a place - a file, or a directory's entries; the system's own answer where left out.</param>
+/// <param name="landlock">The kernel's version of Landlock; the kernel's own answer where left out.</param>
 public sealed partial class IsolationPlatform(
     IHostPlatform platform,
     IProcessRunner runner,
     Func<string?>? path = null,
     MacSandboxHost? mac = null,
     WindowsContainerHost? windows = null,
-    Func<(string Program, IReadOnlyList<string> Prefix)>? self = null) : IIsolationPlatform
+    Func<(string Program, IReadOnlyList<string> Prefix)>? self = null,
+    Func<string, bool>? userWrites = null,
+    Func<int>? landlock = null) : IIsolationPlatform
 {
     private readonly MacSandboxHost _mac = mac ?? MacSandboxHost.ThisMachine;
     private readonly WindowsContainerHost _windows = windows ?? WindowsContainerHost.ThisMachine;
     private readonly Func<(string Program, IReadOnlyList<string> Prefix)> _self = self ?? DetachedProcessLauncher.Self;
+    private readonly Func<string, bool> _userWrites = userWrites ?? UserWrites;
+    private readonly Func<int> _landlock = landlock ?? Landlock.Version;
 
     /// <summary>The program's name.</summary>
     public const string BubblewrapProgram = "bwrap";
@@ -74,11 +85,34 @@ public sealed partial class IsolationPlatform(
     /// <summary>The sysctl Ubuntu restricts unprivileged user namespaces by, which bubblewrap needs.</summary>
     public const string RestrictedUserNamespaces = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
 
-    /// <summary>What the probe's command says and ends with where everything was as it must be.</summary>
+    /// <summary>
+    /// The container engines' sockets, each of which starts a container with the machine bound into it outside every
+    /// mount: hidden from every child where they are there, by their real place.
+    /// </summary>
+    public static IReadOnlyList<string> ContainerSockets { get; } =
+    [
+        "/run/docker.sock", "/var/run/docker.sock", "/run/podman/podman.sock", "/run/containerd/containerd.sock",
+        "/run/buildkit/buildkitd.sock", "/run/crio/crio.sock",
+    ];
+
+    /// <summary>The directories of the machine's own escapes, hidden whole where they are there: WSL's interoperation sockets and its shared directory, and screen's sessions.</summary>
+    public static IReadOnlyList<string> EscapeDirectories { get; } = ["/run/WSL", "/mnt/wsl", "/run/screen"];
+
+    /// <summary>
+    /// What the probe's command says and ends with where everything was as it must be: <c>$1</c> the canary, <c>$2</c> it
+    /// by another case of its directory's name, <c>$3</c> the place written by nobody, <c>$4</c> it by another case,
+    /// <c>$5</c> the open place, <c>$6</c> a file outside every open place.
+    /// </summary>
     private const string ProbeScript =
         "if cat \"$1\" >/dev/null 2>&1; then echo 'the hidden canary was read'; exit 3; fi; "
-        + "if : > \"$2/w\" 2>/dev/null; then echo 'the sealed place was written'; exit 4; fi; "
-        + ": > \"$3/w\" || { echo 'the open place was not written'; exit 5; }";
+        + "if cat \"$2\" >/dev/null 2>&1; then echo 'the hidden canary was read by another case of its name'; exit 4; fi; "
+        + "if : > \"$3/w\" 2>/dev/null; then echo 'the sealed place was written'; exit 5; fi; "
+        + "if : > \"$4/w\" 2>/dev/null; then echo 'the sealed place was written by another case of its name'; exit 6; fi; "
+        + "if : > \"$6\" 2>/dev/null; then echo 'a place outside every open one was written'; exit 7; fi; "
+        + ": > \"$5/w\" || { echo 'the open place was not written'; exit 8; }";
+
+    /// <summary>What a probe that failed by another case of a name says, which its remedy is told by.</summary>
+    private const string AnotherCase = "another case";
 
     /// <summary>How long the version's question and the probe may take.</summary>
     private static readonly TimeSpan ProbeBound = TimeSpan.FromSeconds(30);
@@ -119,7 +153,7 @@ public sealed partial class IsolationPlatform(
                 return await WindowsAsync(tree, cancellationToken).ConfigureAwait(false);
 
             case PlatformId.MacOs:
-                return await MacOsAsync(cancellationToken).ConfigureAwait(false);
+                return await MacOsAsync(tree, cancellationToken).ConfigureAwait(false);
         }
 
         if (OnPath(tree, BubblewrapProgram) is not { } program)
@@ -129,6 +163,15 @@ public sealed partial class IsolationPlatform(
                 $"install bubblewrap {Bubblewrap.Oldest} or newer (sudo apt-get install bubblewrap)" + OrPreferred);
         }
 
+        // Run outside before anything is isolated - its version asked, every isolated child started through it - so one a
+        // command of an agent's could replace is no mechanism.
+        if (Writable(program) is { } writable)
+        {
+            return IsolationAvailability.None(
+                $"bubblewrap '{program}' is one this user may replace ('{writable}' is writable to them), and the tool runs it outside every isolation",
+                "install bubblewrap where only the system writes it (sudo apt-get install bubblewrap puts it in /usr/bin) and put that directory first on the PATH" + OrPreferred);
+        }
+
         var version = await VersionAsync(program, cancellationToken).ConfigureAwait(false);
 
         if (version.Problem is { } problem)
@@ -136,16 +179,16 @@ public sealed partial class IsolationPlatform(
             return IsolationAvailability.None(problem, $"install bubblewrap {Bubblewrap.Oldest} or newer (sudo apt-get install bubblewrap)" + OrPreferred);
         }
 
-        var mechanism = new Bubblewrap(program, version.Said!, Masked());
+        var mechanism = new Bubblewrap(program, version.Said!, Masked()) { Scoped = _landlock() >= Landlock.ScopedVersion };
 
-        return await ProvedAsync(mechanism, how => Unproved(mechanism, how), cancellationToken).ConfigureAwait(false);
+        return await ProvedAsync(mechanism, tree, LinkPaths.Resolve, how => Unproved(mechanism, how), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// macOS's sandbox: its program at the one path it is taken from, this process inside no sandbox already - macOS starts
     /// none inside another - and the probe through it.
     /// </summary>
-    private async Task<IsolationAvailability> MacOsAsync(CancellationToken cancellationToken)
+    private async Task<IsolationAvailability> MacOsAsync(string tree, CancellationToken cancellationToken)
     {
         if (!_mac.FileThere(SandboxExec.ProgramPath))
         {
@@ -163,6 +206,8 @@ public sealed partial class IsolationPlatform(
 
         return await ProvedAsync(
             mechanism,
+            tree,
+            _mac.RealPath,
             how => IsolationAvailability.None(
                 $"macOS {mechanism.Version}'s sandbox ('{SandboxExec.ProgramPath}') did not prove itself: its probe {how}",
                 $"check that the sandbox runs here ('{SandboxExec.ProgramPath} -p \"(version 1)(allow default)\" /usr/bin/true')" + OrPreferred),
@@ -185,6 +230,8 @@ public sealed partial class IsolationPlatform(
         var mechanism = new MxcProcessContainer(support.Version!, _self());
         var proved = await ProvedAsync(
             mechanism,
+            tree,
+            LinkPaths.Resolve,
             how => IsolationAvailability.None($"MXC {mechanism.Version}'s process container did not prove itself: its probe {how}", WindowsRemedy),
             cancellationToken).ConfigureAwait(false);
 
@@ -334,33 +381,46 @@ public sealed partial class IsolationPlatform(
             : (version.ToString(), null);
     }
 
-    /// <summary>The machine's escapes there are here: WSL's interoperation sockets, the user's service manager and message bus.</summary>
+    /// <summary>The program, or the first directory above it, that this user may write; null where none is.</summary>
+    private string? Writable(string program)
+    {
+        for (var at = program; !string.IsNullOrEmpty(at); at = Path.GetDirectoryName(at))
+        {
+            if (_userWrites(at))
+            {
+                return at;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The machine's escapes there are here, each at its real place: WSL's interoperation sockets and shared directory,
+    /// screen's sessions, the user's runtime directory whole - their service manager, message bus and agents' sockets - and
+    /// the container engines' sockets.
+    /// </summary>
     private static IReadOnlyList<IsolatedPath> Masked()
     {
         var masked = new List<IsolatedPath>();
 
-        if (Directory.Exists("/run/WSL"))
+        foreach (var directory in EscapeDirectories.Append(RuntimeDirectory()).OfType<string>())
         {
-            masked.Add(new IsolatedPath("/run/WSL", Directory: true));
-        }
-
-        if (RuntimeDirectory() is { } runtime)
-        {
-            var manager = Path.Combine(runtime, "systemd");
-            var bus = Path.Combine(runtime, "bus");
-
-            if (Directory.Exists(manager))
+            if (Directory.Exists(directory))
             {
-                masked.Add(new IsolatedPath(manager, Directory: true));
-            }
-
-            if (File.Exists(bus) || Path.Exists(bus))
-            {
-                masked.Add(new IsolatedPath(bus, Directory: false));
+                masked.Add(new IsolatedPath(LinkPaths.Resolve(directory), Directory: true));
             }
         }
 
-        return masked;
+        foreach (var socket in ContainerSockets)
+        {
+            if (Path.Exists(socket) && LinkPaths.Resolve(socket) is var real && !masked.Any(place => IsolationProfile.Covers(place.Path, real)))
+            {
+                masked.Add(new IsolatedPath(real, Directory: false));
+            }
+        }
+
+        return [.. masked.DistinctBy(place => place.Path, StringComparer.Ordinal)];
     }
 
     /// <summary>The user's runtime directory: <c>XDG_RUNTIME_DIR</c>, else <c>/run/user/&lt;uid&gt;</c>; null where neither is there.</summary>
@@ -386,69 +446,85 @@ public sealed partial class IsolationPlatform(
     }
 
     /// <summary>
-    /// The probe through the real mechanism, started as every isolated child is: a canary in a hidden place unread, a
-    /// place written by nobody unwritten, an open place written - each said by the command inside and checked outside -
-    /// or what <paramref name="unproved"/> makes of how it failed.
+    /// The probe through the real mechanism, started as every isolated child is, on <paramref name="tree"/>'s own file
+    /// system - under its runs directory, which no child writes: a canary in a hidden place unread by its name and by another
+    /// case of it, a place written by nobody inside an open one unwritten by either, a place outside every open one
+    /// unwritten, the open place written - each said by the command inside and checked outside - or what
+    /// <paramref name="unproved"/> makes of how it failed.
     /// </summary>
-    private async Task<IsolationAvailability> ProvedAsync(IIsolationMechanism mechanism, Func<string, IsolationAvailability> unproved, CancellationToken cancellationToken)
+    /// <param name="mechanism">The mechanism.</param>
+    /// <param name="tree">The tree whose file system the probe stands on.</param>
+    /// <param name="real">A place's real spelling, as the mechanism meets it.</param>
+    /// <param name="unproved">The answer of a probe that failed, from how it failed.</param>
+    /// <param name="cancellationToken">Stops the probe.</param>
+    private async Task<IsolationAvailability> ProvedAsync(IIsolationMechanism mechanism, string tree, Func<string, string> real, Func<string, IsolationAvailability> unproved, CancellationToken cancellationToken)
     {
-        var probe = Directory.CreateTempSubdirectory("dssharness-isolation-").FullName;
+        var runs = Path.Combine(tree, HarnessLayout.RunsDirectoryRelative.Replace('/', Path.DirectorySeparatorChar));
+        var probe = Path.Combine(runs, "isolation-probe-" + Guid.NewGuid().ToString("N")[..12]);
 
         try
         {
+            Directory.CreateDirectory(probe);
             var hidden = Directory.CreateDirectory(Path.Combine(probe, "hidden")).FullName;
-            var sealedPlace = Directory.CreateDirectory(Path.Combine(probe, "sealed")).FullName;
             var open = Directory.CreateDirectory(Path.Combine(probe, "open")).FullName;
+            var sealedPlace = Directory.CreateDirectory(Path.Combine(open, "sealed")).FullName;
             var canary = Path.Combine(hidden, "canary");
+            var outside = Path.Combine(probe, "w");
             await File.WriteAllTextAsync(canary, "canary", cancellationToken).ConfigureAwait(false);
 
-            // The open place a writable root of its own, as every place a child writes is under a mechanism that grants
-            // nothing it is not told to.
+            // The open place a writable root of its own and the place written by nobody inside it, as every guarded place a
+            // child could otherwise write stands; the probe's own directory, like the machine, written by none.
             var isolation = new ProcessIsolation(
                 mechanism,
                 new IsolationProfile(
-                    [new IsolatedPath(hidden, Directory: true)],
-                    [new IsolatedWrite(sealedPlace, Directory: true, Writable: false), new IsolatedWrite(open, Directory: true, Writable: true)]));
+                    [new IsolatedPath(real(hidden), Directory: true)],
+                    [new IsolatedWrite(real(open), Directory: true, Writable: true), new IsolatedWrite(real(sealedPlace), Directory: true, Writable: false)]));
+            var places = new ProbePlaces(probe, canary, Path.Combine(probe, "HIDDEN", "canary"), sealedPlace, Path.Combine(open, "SEALED"), open, outside);
             var how = platform.Current == PlatformId.Windows
-                ? await WindowsTrialAsync(isolation, probe, canary, sealedPlace, open, cancellationToken).ConfigureAwait(false)
-                : await PosixTrialAsync(isolation, probe, canary, sealedPlace, open, cancellationToken).ConfigureAwait(false);
+                ? await WindowsTrialAsync(isolation, places, cancellationToken).ConfigureAwait(false)
+                : await PosixTrialAsync(isolation, places, cancellationToken).ConfigureAwait(false);
 
             if (how is not null)
             {
                 return unproved(how);
             }
 
-            if (File.ReadAllText(canary) != "canary" || File.Exists(Path.Combine(sealedPlace, "w")) || !File.Exists(Path.Combine(open, "w")))
+            if (File.ReadAllText(canary) != "canary" || File.Exists(Path.Combine(sealedPlace, "w")) || File.Exists(outside) || !File.Exists(Path.Combine(open, "w")))
             {
                 return unproved("ended 0, and the places outside do not hold what it said");
             }
 
             return IsolationAvailability.Of(mechanism);
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return unproved($"could not make its places under '{runs}': {ex.Message.TrimEnd('.')}");
+        }
         finally
         {
-            try
-            {
-                Directory.Delete(probe, recursive: true);
-            }
-            catch (IOException)
-            {
-                // A probe directory left behind in the temporary directory is harmless.
-            }
-            catch (UnauthorizedAccessException)
-            {
-                // As above.
-            }
+            Removed(probe);
         }
     }
 
     /// <summary>
-    /// The trial on Linux and macOS: one shell inside, which reads the canary, writes the place written by nobody and the
-    /// open place, and ends saying the first that went as it must not; null where it ended 0.
+    /// The probe's places: its own directory, the canary and it by another case of its directory's name, the place written
+    /// by nobody and it by another case, the open place, and a file outside every open place.
     /// </summary>
-    private async Task<string?> PosixTrialAsync(ProcessIsolation isolation, string probe, string canary, string sealedPlace, string open, CancellationToken cancellationToken)
+    private sealed record ProbePlaces(string Probe, string Canary, string CanaryOtherCase, string Sealed, string SealedOtherCase, string Open, string Outside);
+
+    /// <summary>
+    /// The trial on Linux and macOS: one shell inside, which reads the canary by both names, writes the place written by
+    /// nobody by both, the place outside and the open place, and ends saying the first that went as it must not; null where
+    /// it ended 0.
+    /// </summary>
+    private async Task<string?> PosixTrialAsync(ProcessIsolation isolation, ProbePlaces places, CancellationToken cancellationToken)
     {
-        var (result, failed) = await TrialRunAsync(isolation, probe, "/bin/sh", ["-c", ProbeScript, "sh", canary, sealedPlace, open], cancellationToken).ConfigureAwait(false);
+        var (result, failed) = await TrialRunAsync(
+            isolation,
+            places.Probe,
+            "/bin/sh",
+            ["-c", ProbeScript, "sh", places.Canary, places.CanaryOtherCase, places.Sealed, places.SealedOtherCase, places.Open, places.Outside],
+            cancellationToken).ConfigureAwait(false);
 
         return failed
             ?? (result!.ExitCode != 0
@@ -457,28 +533,33 @@ public sealed partial class IsolationPlatform(
     }
 
     /// <summary>
-    /// The trial on Windows: the system's command interpreter inside, once for each of the three - the canary read, the
-    /// place written by nobody written, the open place written - each run asked alone, for the interpreter takes no words
-    /// of a script the way a shell does; null where each went as it must.
+    /// The trial on Windows: the system's command interpreter inside, once for each - the canary read by both names, the
+    /// place written by nobody written by both, the place outside written, the open place written - each run asked alone,
+    /// for the interpreter takes no words of a script the way a shell does; null where each went as it must.
     /// </summary>
-    private async Task<string?> WindowsTrialAsync(ProcessIsolation isolation, string probe, string canary, string sealedPlace, string open, CancellationToken cancellationToken)
+    private async Task<string?> WindowsTrialAsync(ProcessIsolation isolation, ProbePlaces places, CancellationToken cancellationToken)
     {
         var interpreter = Path.Combine(Environment.SystemDirectory, "cmd.exe");
-        var (read, readFailed) = await TrialRunAsync(isolation, probe, interpreter, ["/d", "/c", "type", canary], cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<(IReadOnlyList<string> Arguments, string Refused)> refusals =
+        [
+            (["/d", "/c", "type", places.Canary], "read the hidden canary"),
+            (["/d", "/c", "type", places.CanaryOtherCase], $"read the hidden canary by {AnotherCase} of its name"),
+            (["/d", "/c", "type", "nul", ">", Path.Combine(places.Sealed, "w")], "wrote the place written by nobody"),
+            (["/d", "/c", "type", "nul", ">", Path.Combine(places.SealedOtherCase, "w")], $"wrote the place written by nobody by {AnotherCase} of its name"),
+            (["/d", "/c", "type", "nul", ">", places.Outside], "wrote a place outside every open one"),
+        ];
 
-        if (readFailed is not null || read!.ExitCode == 0)
+        foreach (var (arguments, refused) in refusals)
         {
-            return readFailed ?? "read the hidden canary";
+            var (result, failed) = await TrialRunAsync(isolation, places.Probe, interpreter, arguments, cancellationToken).ConfigureAwait(false);
+
+            if (failed is not null || result!.ExitCode == 0)
+            {
+                return failed ?? refused;
+            }
         }
 
-        var (sealedWrite, sealedFailed) = await TrialRunAsync(isolation, probe, interpreter, ["/d", "/c", "type", "nul", ">", Path.Combine(sealedPlace, "w")], cancellationToken).ConfigureAwait(false);
-
-        if (sealedFailed is not null || sealedWrite!.ExitCode == 0)
-        {
-            return sealedFailed ?? "wrote the place written by nobody";
-        }
-
-        var (openWrite, openFailed) = await TrialRunAsync(isolation, probe, interpreter, ["/d", "/c", "type", "nul", ">", Path.Combine(open, "w")], cancellationToken).ConfigureAwait(false);
+        var (openWrite, openFailed) = await TrialRunAsync(isolation, places.Probe, interpreter, ["/d", "/c", "type", "nul", ">", Path.Combine(places.Open, "w")], cancellationToken).ConfigureAwait(false);
 
         return openFailed
             ?? (openWrite!.ExitCode != 0
@@ -513,6 +594,26 @@ public sealed partial class IsolationPlatform(
         }
     }
 
+    /// <summary>Removes the probe's places; any left behind under the tree's runs are harmless.</summary>
+    private static void Removed(string probe)
+    {
+        try
+        {
+            if (Directory.Exists(probe))
+            {
+                Directory.Delete(probe, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+            // Left behind: harmless.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // As above.
+        }
+    }
+
     /// <summary>A probe that did not prove the mechanism, said with the remedy this machine needs.</summary>
     private static IsolationAvailability Unproved(Bubblewrap mechanism, string how)
     {
@@ -520,14 +621,36 @@ public sealed partial class IsolationPlatform(
 
         return IsolationAvailability.None(
             $"bubblewrap {mechanism.Version} ('{mechanism.Program}') did not prove itself: its probe {how}",
-            restricted
-                ? $"Ubuntu restricts unprivileged user namespaces here ({RestrictedUserNamespaces} = 1): load the bwrap-userns-restrict AppArmor profile for '{mechanism.Program}' (on Ubuntu 24.04 from the apparmor-profiles package: sudo cp /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/ and sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict)" + OrPreferred
-                : "check that unprivileged user namespaces are allowed on this machine and that bubblewrap runs ('bwrap --bind / / true')" + OrPreferred);
+            how.Contains(AnotherCase, StringComparison.Ordinal)
+                ? "keep the tree on a file system that tells letter case apart - WSL's own, not a Windows drive under /mnt" + OrPreferred
+                : restricted
+                    ? $"Ubuntu restricts unprivileged user namespaces here ({RestrictedUserNamespaces} = 1): load the bwrap-userns-restrict AppArmor profile for '{mechanism.Program}' (on Ubuntu 24.04 from the apparmor-profiles package: sudo cp /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/ and sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict)" + OrPreferred
+                    : "check that unprivileged user namespaces are allowed on this machine and that bubblewrap runs ('bwrap --ro-bind / / true')" + OrPreferred);
+    }
+
+    /// <summary>Whether this user may write <paramref name="place"/>, as the system answers <c>access(W_OK)</c>.</summary>
+    private static bool UserWrites(string place)
+    {
+        try
+        {
+            return Access(place, WriteAccess) == 0;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return false;
+        }
     }
 
     /// <summary>The first line of <paramref name="text"/>, trimmed.</summary>
     private static string FirstLine(string text)
         => text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? string.Empty;
+
+    /// <summary>W_OK.</summary>
+    private const int WriteAccess = 2;
+
+    [DllImport("libc", EntryPoint = "access", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    private static extern int Access([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int mode);
 
     /// <summary>What <c>bwrap --version</c> answers: <c>bubblewrap 0.9.0</c>.</summary>
     [GeneratedRegex(@"^bubblewrap\s+(\d+\.\d+(?:\.\d+)?)", RegexOptions.CultureInvariant)]

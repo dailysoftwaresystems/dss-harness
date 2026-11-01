@@ -41,7 +41,7 @@ public sealed partial class AgentToolRuntime
         // The directories on its way are made by the write itself.
         var bytes = Utf8Text.Encode(Text(input, "content")!);
 
-        if (_host.Files.Write(full, bytes, landing => WritePlace(landing).Denied) is { } moved)
+        if (_host.Files.Write(full, bytes, landing => OpenedPlace(landing, write: true).Denied) is { } moved)
         {
             return Answer.Refused(path, moved);
         }
@@ -135,7 +135,7 @@ public sealed partial class AgentToolRuntime
             return Answer.Failed(large);
         }
 
-        var read = await _host.Files.ReadAsync(full, opened => WritePlace(opened).Denied, cancellationToken).ConfigureAwait(false);
+        var read = await _host.Files.ReadAsync(full, opened => OpenedPlace(opened, write: true).Denied, cancellationToken).ConfigureAwait(false);
 
         if (read.Denied is { } moved)
         {
@@ -170,7 +170,7 @@ public sealed partial class AgentToolRuntime
 
         var written = edited.Bytes();
 
-        if (_host.Files.Write(full, written, landing => WritePlace(landing).Denied) is { } landed)
+        if (_host.Files.Write(full, written, landing => OpenedPlace(landing, write: true).Denied) is { } landed)
         {
             return Answer.Refused(path, landed);
         }

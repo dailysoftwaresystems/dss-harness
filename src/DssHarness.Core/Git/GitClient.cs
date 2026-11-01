@@ -25,13 +25,18 @@ namespace DssHarness.Core.Git;
 /// given.
 /// </param>
 /// <param name="platform">Says which system git runs on, for the place that holds no hook (<see cref="GitHooks"/>); this machine where none is given.</param>
+/// <param name="pins">
+/// The git directories of each tree an isolated agent works over, as git named them before its launch, which every git of
+/// this tool's in that tree's root is given; none where left out.
+/// </param>
 public sealed partial class GitClient(
     IProcessRunner processRunner,
     IHarnessOutput output,
     IFilePermissions? filePermissions = null,
     GitLocalVariables? localVariables = null,
     IFileSystem? fileSystem = null,
-    IHostPlatform? platform = null) : IGitClient
+    IHostPlatform? platform = null,
+    GitDirectoryPins? pins = null) : IGitClient
 {
     private const string GitExecutable = "git";
 
@@ -1952,13 +1957,6 @@ public sealed partial class GitClient(
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
-        // None of the repository's hooks runs under the tool's own git but where a command runs them on purpose: a hook is
-        // the repository's code, which every other command would run outside the isolation as a side effect (GitHooks).
-        if (hooks is null)
-        {
-            arguments = GitHooks.Off(_system, arguments);
-        }
-
         // Without these, an operation that decides to ask for credentials - git's own prompt, or a credential manager's
         // window - blocks forever with no output. A hang is the one failure this tool cannot report, so git is told up
         // front that nobody is watching.
@@ -1971,6 +1969,12 @@ public sealed partial class GitClient(
         // read one tree's status and act on another's. A caller that genuinely wants a different index
         // passes it below, after the inherited one is gone.
         await _localVariables.ClearAsync(environment, cancellationToken).ConfigureAwait(false);
+
+        // Set once the inherited ones are gone, by their one owner (GitOwnSettings): no file-system monitor; none of the
+        // repository's hooks but where a command runs them on purpose - a hook is the repository's code, which every other
+        // command would run outside the isolation as a side effect (GitHooks); and a tree an isolated agent works over read
+        // through the git directories git named before its launch, whatever its own files say now.
+        GitOwnSettings.Apply(environment, _system, arguments, hooksRun: hooks is not null, directory, pins);
 
         if (untranslated)
         {

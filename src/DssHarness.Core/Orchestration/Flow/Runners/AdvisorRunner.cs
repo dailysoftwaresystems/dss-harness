@@ -159,7 +159,7 @@ public sealed class AdvisorRunner(
 
         // The advice's agent may run commands that only read: where agentPolicy.isolation is required and this machine has
         // no isolation of them, no advice is obtained, and why is said.
-        var isolated = await launch.IsolationAsync(context.Config, ground, context.Layout, directory, cancellationToken).ConfigureAwait(false);
+        using var isolated = await launch.IsolationAsync(context.Config, ground, context.Layout, directory, cancellationToken).ConfigureAwait(false);
 
         if (isolated.Refusal("the advisor") is { } unisolated)
         {

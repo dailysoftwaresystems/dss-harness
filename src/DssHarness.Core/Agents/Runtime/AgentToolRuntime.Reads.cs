@@ -60,7 +60,7 @@ public sealed partial class AgentToolRuntime
         }
 
         // Read through the file as it was opened, where it stands decided again before a byte is read.
-        var read = await _host.Files.ReadAsync(full, opened => ReadPlace(opened).Denied, cancellationToken).ConfigureAwait(false);
+        var read = await _host.Files.ReadAsync(full, opened => OpenedPlace(opened, write: false).Denied, cancellationToken).ConfigureAwait(false);
 
         if (read.Denied is { } moved)
         {

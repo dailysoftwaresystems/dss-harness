@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
+using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Repository;
 using Xunit;
@@ -84,13 +85,25 @@ public sealed class ClaudeSettingsTests
     }
 
     /// <summary>
-    /// A launch that runs whole inside this tool's isolation turns Claude Code's own sandbox off, written after the output
-    /// style and before the environment, so the user's own settings cannot start one that no command inside could run in.
+    /// A launch whose shell commands run inside this tool's isolation turns Claude Code's own sandbox off, written after the
+    /// output style and before the environment, so the user's own settings cannot start one that no command inside could
+    /// run in; and writes the variables that hand each command over after the engine's own, so the user's settings cannot
+    /// turn them back. A launch whole inside the isolation turns the sandbox off and hands nothing over.
     /// </summary>
     [Fact]
-    public void AnIsolatedLaunch_TurnsClaudeCodesOwnSandboxOff()
+    public void AnIsolatedLaunch_TurnsClaudeCodesOwnSandboxOff_AndHandsItsCommandsOver()
     {
-        var rendered = ClaudeSettings.Render(["Bash"], SettingsGround(Posix, []), AgentCommandSettings.Default, StringComparison.Ordinal, isolated: true);
+        var rendered = ClaudeSettings.Render(
+            ["Bash"],
+            SettingsGround(Posix, []),
+            AgentCommandSettings.Default,
+            StringComparison.Ordinal,
+            isolated: true,
+            ClaudeShell.Variables("/opt/dssharness --isolated-shell", "/r/steps/s1/claude-isolation.json", "/t/abc"));
+        var whole = JsonNode.Parse(ClaudeSettings.Render(["Bash"], SettingsGround(Posix, []), AgentCommandSettings.Default, StringComparison.Ordinal, isolated: true))!;
+
+        Assert.False(whole["sandbox"]!["enabled"]!.GetValue<bool>());
+        Assert.Equal(ClaudeSettings.Launched(AgentCommandSettings.Default).Select(variable => variable.Key), whole["env"]!.AsObject().Select(variable => variable.Key));
 
         Assert.Equal(
             """
@@ -109,7 +122,11 @@ public sealed class ClaudeSettingsTests
                 "CLAUDE_CODE_RETRY_WATCHDOG": "0",
                 "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
                 "BASH_DEFAULT_TIMEOUT_MS": "120000",
-                "BASH_MAX_TIMEOUT_MS": "3600000"
+                "BASH_MAX_TIMEOUT_MS": "3600000",
+                "CLAUDE_CODE_SHELL_PREFIX": "/opt/dssharness --isolated-shell",
+                "DSSHARNESS_ISOLATED_SHELL": "/r/steps/s1/claude-isolation.json",
+                "CLAUDE_CODE_SHELL": "/bin/bash",
+                "CLAUDE_CODE_TMPDIR": "/t/abc"
               },
               "permissions": {
                 "ask": [

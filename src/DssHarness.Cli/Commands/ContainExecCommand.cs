@@ -30,6 +30,10 @@ internal static class ContainExecCommand
         {
             Description = "Start the program in a process group of its own, apart from the terminal.",
         };
+        var scope = new Option<bool>(ContainExec.ScopeOption)
+        {
+            Description = "Become the program inside Landlock's scope of abstract sockets and signals, on Linux.",
+        };
         var status = new Option<string>(ContainExec.StatusOption)
         {
             Description = "The channel the process runner reads whether the program started from.",
@@ -38,6 +42,7 @@ internal static class ContainExecCommand
 
         command.Options.Add(job);
         command.Options.Add(group);
+        command.Options.Add(scope);
         command.Options.Add(status);
 
         // The program and its arguments are everything after '--', handed on as they are given:
@@ -59,6 +64,7 @@ internal static class ContainExecCommand
             return Task.FromResult(ContainExec.Run(
                 parseResult.GetValue(job),
                 parseResult.GetValue(group),
+                parseResult.GetValue(scope),
                 parseResult.GetValue(status),
                 tokens[0],
                 tokens.Skip(1).ToArray(),

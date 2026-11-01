@@ -171,7 +171,7 @@ public sealed class CommitStepRunner(
 
         // The commit runs the repository's hooks, the agents' work among what they read: inside the isolation, decided
         // before anything is staged, so a step refused for want of it leaves the index as it found it.
-        var hooks = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfHooks(context.Config, context.Layout.MainCheckoutRoot, main), context.Layout.MainCheckoutRoot, cancellationToken)
+        using var hooks = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfHooks(context.Config, context.Layout.MainCheckoutRoot, main), context.Layout.MainCheckoutRoot, cancellationToken)
             .ConfigureAwait(false);
 
         if (hooks.Refusal($"'{run.Instance}'") is { } unisolated)

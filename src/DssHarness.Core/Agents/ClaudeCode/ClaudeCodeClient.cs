@@ -44,6 +44,10 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// <param name="clock">When each thing happened, and the bounds of a handoff.</param>
 /// <param name="environment">The tool's own environment, which a launch would otherwise inherit; the process's where none is given.</param>
 /// <param name="tools">The host of the tool runtime the engine's tool server answers from; none for a client whose steps have no web.</param>
+/// <param name="self">
+/// This tool's own program and what it is given before its command line, which a launch's shell prefix names to hand each
+/// command to the isolation (<see cref="ClaudeShell.PrefixOf"/>); the running process's own where none is given.
+/// </param>
 public sealed class ClaudeCodeClient(
     IProcessRunner processes,
     IFileSystem fileSystem,
@@ -51,8 +55,10 @@ public sealed class ClaudeCodeClient(
     ChildSessions sessions,
     TimeProvider clock,
     Func<IReadOnlyDictionary<string, string>>? environment = null,
-    AgentToolHost? tools = null) : IAgentClient
+    AgentToolHost? tools = null,
+    Func<(string Program, IReadOnlyList<string> Leading)>? self = null) : IAgentClient
 {
+    private readonly Func<(string Program, IReadOnlyList<string> Leading)> _self = self ?? DetachedProcessLauncher.Self;
     /// <summary>The client's key under <c>agentClients</c>.</summary>
     public const string ClientName = "claude-code";
 
@@ -155,6 +161,13 @@ public sealed class ClaudeCodeClient(
             return NotStarted(AgentNotStartedBecause.ConfigurationWrong, refusal, run);
         }
 
+        // A launch whose commands are handed to the isolation one by one goes through Claude Code's shell prefix, which names
+        // this tool's own executable: where it cannot, no launch runs a command outside.
+        if (HandedTo(run) is not null && ClaudeShell.PrefixOf(_self().Program, _self().Leading).Problem is { } unprefixed)
+        {
+            return NotStarted(AgentNotStartedBecause.ConfigurationWrong, $"Claude Code's commands could not be handed to the isolation: {unprefixed}", run);
+        }
+
         var totals = new Totals();
         var tools = ClaudeCodeTools.Of(ground.Given, ground.SideTask);
         var policy = new AgentPolicy(_fileSystem, _platform, ground);
@@ -190,6 +203,32 @@ public sealed class ClaudeCodeClient(
 
             return Finished(outcome.Result, run, totals, _clock.GetElapsedTime(began));
         }
+    }
+
+    /// <summary>
+    /// The isolation a launch hands each of its shell commands to, Claude Code's own process outside it - where its
+    /// mechanism takes commands handed to it (<see cref="IIsolationMechanism.TakesHandedCommands"/>); null where the launch
+    /// has none, or runs whole inside it (<see cref="Isolation.LaunchIsolation.ForClaudeCode"/>).
+    /// </summary>
+    private static ProcessIsolation? HandedTo(AgentRun run)
+        => run.Isolation?.Commands is { Mechanism.TakesHandedCommands: true } isolation ? isolation : null;
+
+    /// <summary>The launch's environment, with the variables that hand its shell commands to the isolation set after it, where it has one.</summary>
+    private static IReadOnlyDictionary<string, string?> Handed(IReadOnlyDictionary<string, string?> environment, IReadOnlyList<KeyValuePair<string, string>>? shell)
+    {
+        if (shell is null)
+        {
+            return environment;
+        }
+
+        var handed = new Dictionary<string, string?>(environment, StringComparer.Ordinal);
+
+        foreach (var (name, value) in shell)
+        {
+            handed[name] = value;
+        }
+
+        return handed;
     }
 
     /// <summary>A run that never began, and why.</summary>
@@ -403,7 +442,23 @@ public sealed class ClaudeCodeClient(
 
             var settings = Path.Combine(directory, ClaudeLaunch.SettingsFileName);
             var system = Path.Combine(directory, ClaudeLaunch.SystemFileName);
-            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(_given, run.Ground!, run.Commands, client._platform.PathComparison, isolated: run.Isolation?.ForClaudeCode is not null));
+
+            // Claude Code's own process outside the isolation, every shell command it starts handed to it through its shell
+            // prefix, the launch's isolation written where the handed command reads it - or, where the mechanism takes no
+            // command handed to it, the whole process inside.
+            IReadOnlyList<KeyValuePair<string, string>>? shell = null;
+            var whole = run.Isolation?.ClaudeCode;
+
+            if (HandedTo(run) is { } isolation)
+            {
+                var (self, leading) = client._self();
+                var prefix = ClaudeShell.PrefixOf(self, leading).Prefix!;
+                var isolationFile = Path.Combine(directory, ClaudeShell.FileName);
+                files.WriteAllTextAtomic(isolationFile, IsolatedShell.Written(isolation));
+                shell = ClaudeShell.Variables(prefix, isolationFile, isolation.Profile.Temp ?? directory);
+            }
+
+            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(_given, run.Ground!, run.Commands, client._platform.PathComparison, isolated: shell is not null || whole is not null, shell));
             files.WriteAllTextAtomic(system, run.Mask.Redact(run.SystemPrompt));
 
             // The engine's tool server, named where the launch takes its tools and nowhere else.
@@ -433,7 +488,7 @@ public sealed class ClaudeCodeClient(
                 FileName = program,
                 Arguments = ClaudeLaunch.Arguments(run, model, _session, tools, roots, settings, system, mcp),
                 WorkingDirectory = working,
-                Environment = ClaudeLaunch.Environment(run, key, client._environment().Keys),
+                Environment = Handed(ClaudeLaunch.Environment(run, key, client._environment().Keys), shell),
                 StandardInput = ChildInput.WrittenBy((stream, exited) => Pump(_input.Reader, stream, exited)),
                 OnOutputLine = line => _arrivals.Writer.TryWrite(new Arrival.Line(line)),
                 OutputKept = StreamKept.TailOfWholeLines,
@@ -441,10 +496,7 @@ public sealed class ClaudeCodeClient(
                 ErrorKept = StreamKept.Tail,
                 CutLine = run.Mask.Cut,
                 Contained = true,
-
-                // The whole Claude Code process inside the operating system's isolation, its own directories open to it: it
-                // runs every command itself, so its commands run inside with it.
-                Isolation = run.Isolation?.ForClaudeCode,
+                Isolation = whole,
                 SessionRecord = client._sessions.For(directory),
                 Timeout = run.Limits.MaxDuration,
             };

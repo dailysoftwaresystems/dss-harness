@@ -1315,7 +1315,7 @@ public sealed class ContainExecTests
         using var error = new StringWriter();
         var waited = Stopwatch.StartNew();
 
-        var code = ContainExec.Run(job: null, group: true, channel, CliRunner.CliProgram, ["--version"], error, bound);
+        var code = ContainExec.Run(job: null, group: true, scope: false, channel, CliRunner.CliProgram, ["--version"], error, bound);
 
         waited.Stop();
 

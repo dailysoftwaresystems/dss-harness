@@ -220,6 +220,38 @@ public sealed class ConfinedPathsTests : IDisposable
     }
 
     /// <summary>A file system that cannot follow the links of three paths: one a cycle, one it may not search, one too long.</summary>
+    /// <summary>
+    /// The place an open file stands at is held to the roots by each root's name as the system names one opened - a drive
+    /// substituted for a root's directory among such names - and read back to the root's own spelling, a write only to a
+    /// writable root; a place under no root's such name is refused, saying where the open file stands.
+    /// </summary>
+    [Fact]
+    public void AnOpenFilesPlace_IsHeldToTheRoots_ByTheirNamesAsTheSystemGivesThem()
+    {
+        var substituted = new Substituted(new PhysicalFileSystem(FilePermissionsFactory.Create()), _worktree, Path.Combine(Path.GetPathRoot(_worktree)!, "S"));
+        var paths = Paths(fileSystem: substituted);
+        var opened = Path.Combine(substituted.Named, "src", "a.cs");
+
+        Assert.Equal(Path.Combine(_worktree, "src", "a.cs"), paths.Opened(opened, write: true).Full);
+        Assert.Equal(Path.Combine(_main, "b.cs"), paths.Opened(Path.Combine(_main, "b.cs"), write: false).Full);
+        Assert.Equal(ConfinedPaths.RootsRule, paths.Opened(Path.Combine(_main, "b.cs"), write: true).Denied?.Rule);
+
+        var away = paths.Opened(Path.Combine(_outside, "c.cs"), write: false).Denied;
+
+        Assert.Equal(ConfinedPaths.RootsRule, away?.Rule);
+        Assert.StartsWith($"'{Path.Combine(_outside, "c.cs")}' is where the open file stands, outside the roots of this agent: ", away!.Reason, StringComparison.Ordinal);
+    }
+
+    /// <summary>A file system that names one directory, opened, by another name - as a substituted drive is named on Windows.</summary>
+    private sealed class Substituted(IFileSystem inner, string directory, string named) : PassThroughFileSystem(inner)
+    {
+        /// <summary>The other name.</summary>
+        public string Named => named;
+
+        public override string FinalPathOfDirectory(string path)
+            => Path.TrimEndingDirectorySeparator(path) == directory ? named : base.FinalPathOfDirectory(path);
+    }
+
     private sealed class Unfollowed(IFileSystem inner) : PassThroughFileSystem(inner)
     {
         public override string ResolveLinks(string path)

@@ -21,10 +21,11 @@ public sealed class ExecutionIsolationTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
-    /// A leg's work in its copy inside an agent's worktree is denied, by its profile: every credential slot of the main
-    /// checkout and the tool's own Claude Code directory, hidden; git's code-running files of every tree it works over,
-    /// the user's own git configuration and the tool's state under each tree, sealed; the copy it works in, the run's
-    /// records and what else it writes beside them written again. The probe is asked for the main checkout.
+    /// A leg's work in its copy inside an agent's worktree is given, by its profile, the machine read-only: hidden every
+    /// credential slot of the main checkout there is; written the copy it works in, the run's records, what else it writes
+    /// beside them and the isolation's tool caches, with a temporary directory of its own; inside the copy - no repository
+    /// of its own, so the worktree's git stays read-only - its configuration directory and the tool's state written by
+    /// nobody. The probe is asked for the main checkout, and the temporary directory goes with the decision.
     /// </summary>
     [Fact]
     public async Task ALegsWork_IsDeniedTheSlotsGitsCodeAndTheState_ItsCopyItsRecordsAndItsWorkersWrittenAgain()
@@ -44,26 +45,18 @@ public sealed class ExecutionIsolationTests
 
         var isolated = await isolation.ForExecutionAsync(config, ground, kit.Main, Token);
 
-        var git = Path.Combine(kit.Main, ".git");
-        var linked = Assert.Single(Directory.GetDirectories(Path.Combine(git, "worktrees")));
+        var caches = Path.Combine(IsolationCaches.Root(home.Path, new HostPlatform().Current, _ => null), IsolationCaches.Directory);
         IReadOnlyList<IsolatedWrite> writes =
         [
-            new(Path.Combine(git, "hooks"), Directory: true, Writable: false),
-            new(Path.Combine(git, "config"), Directory: false, Writable: false),
-            new(Path.Combine(git, "config.worktree"), Directory: false, Writable: false),
-            new(Path.Combine(git, "info"), Directory: true, Writable: false),
-            new(Path.Combine(linked, "config.worktree"), Directory: false, Writable: false),
-            new(Path.Combine(home.Path, ".gitconfig"), Directory: false, Writable: false),
-            new(Path.Combine(home.Path, ".config", "git"), Directory: true, Writable: false),
-            .. ground.StateDirectories
-                .Where(state => !HarnessLayout.StateFileNames.Contains(Path.GetFileName(state)))
-                .Select(state => new IsolatedWrite(state, Directory: true, Writable: false)),
-            .. ground.StateDirectories
-                .Where(state => HarnessLayout.StateFileNames.Contains(Path.GetFileName(state)) && File.Exists(state))
-                .Select(state => new IsolatedWrite(state, Directory: false, Writable: false)),
             new(copy, Directory: true, Writable: true),
             new(records, Directory: true, Writable: true),
             new(workers, Directory: true, Writable: true),
+            new(caches, Directory: true, Writable: true),
+            new(Path.Combine(copy, HarnessLayout.DirectoryName), Directory: true, Writable: false),
+            .. ground.StateDirectories
+                .Select(Path.GetFullPath)
+                .Where(state => IsolationProfile.Covers(copy, state) && !IsolationProfile.Covers(Path.Combine(copy, HarnessLayout.DirectoryName), state) && !HarnessLayout.StateFileNames.Contains(Path.GetFileName(state)))
+                .Select(state => new IsolatedWrite(state, Directory: true, Writable: false)),
         ];
 
         Assert.Equal(IsolatedExecution.Legs, ground.Kind);
@@ -76,11 +69,45 @@ public sealed class ExecutionIsolationTests
         Assert.Equal((false, null, null), (isolated.Refused, isolated.Notice, isolated.Refusal("'build'")));
         Assert.Equal([kit.Main], platform.Probed);
         Assert.Equal(
-            [.. HarnessLayout.SecretSlotDirectoriesUnder(kit.Main).Select(slot => new IsolatedPath(slot, Directory: true)), new IsolatedPath(Path.Combine(home.Path, ".claude"), Directory: true)],
+            [.. HarnessLayout.SecretSlotDirectoriesUnder(kit.Main).Where(Directory.Exists).Select(slot => new IsolatedPath(slot, Directory: true))],
             isolated.Profile!.Hidden);
         Assert.Equal(writes.OrderBy(write => write.Path, StringComparer.Ordinal), isolated.Profile.Writes.OrderBy(write => write.Path, StringComparer.Ordinal));
+        Assert.Equal([new("TMPDIR", isolated.Profile.Temp!), .. IsolationCaches.Environment(caches)], isolated.Profile.Environment);
+        Assert.Empty(isolated.Profile.Sockets);
         Assert.Same(isolated.Profile, isolated.ForProcess!.Profile);
         Assert.Equal(new AgentIsolationRecord(AgentIsolationMode.Required) { Mechanism = "test", Version = "1.0" }, isolated.Record);
+        Assert.True(Directory.Exists(isolated.Profile.Temp));
+
+        isolated.Dispose();
+
+        Assert.False(Directory.Exists(isolated.Profile.Temp));
+    }
+
+    /// <summary>
+    /// A commit's or a push's hooks reach the user's SSH agent's socket alone, at its real place - the one a push over ssh
+    /// signs with - while a leg's work reaches none; no agent's own command is given one.
+    /// </summary>
+    [Fact]
+    public async Task AHooksExecution_ReachesTheUsersSshAgentAlone_ALegsWorkNone()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var socket = Path.Combine(home.Path, "agent.sock");
+        await File.WriteAllTextAsync(socket, string.Empty, Token);
+        var isolation = new AgentIsolation(
+            new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())),
+            kit.Harness.GitClient,
+            kit.Harness.FileSystem,
+            new HomedPlatform(home.Path),
+            name => name == AgentIsolation.SshAgentSocketVariable ? socket : null);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+
+        using var hooks = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfHooks(config, kit.Main, kit.Main), kit.Main, Token);
+        using var legs = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfLegs(config, kit.Main, kit.Main), kit.Main, Token);
+
+        Assert.Equal([socket], hooks.Profile!.Sockets);
+        Assert.Empty(legs.Profile!.Sockets);
     }
 
     /// <summary>

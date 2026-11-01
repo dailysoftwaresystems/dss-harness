@@ -70,30 +70,32 @@ public sealed class AgentRunnerTests
 
     /// <summary>
     /// A launch the engine decided runs on the words policy alone says so at its start, in its own stream, right after the
-    /// run starts; the client is handed the isolation; and the result records the isolation the launch ran under - one
-    /// that runs under a mechanism says no notice and records the mechanism.
+    /// run starts; the client is handed what its processes run under, never the decision its asker releases; and the result
+    /// records the isolation the launch ran under - one that runs under a mechanism says no notice and records the mechanism.
     /// </summary>
     [Fact]
     public async Task ALaunchWithoutIsolation_SaysSoAtItsStart_AndItsResultRecordsWhatItRanUnder()
     {
         using var temp = new TempDirectory();
         var client = new FakeClient { Script = (run, _, _) => Task.FromResult(Completed(run)) };
-        var without = new DssHarness.Core.Agents.Isolation.LaunchIsolation("preferred", null, null, null, "bubblewrap is not here", "install it");
+        var without = new DssHarness.Core.Agents.Isolation.LaunchIsolation("preferred", null, null, "bubblewrap is not here", "install it");
         var seen = new List<AgentEvent>();
 
         var result = await Runner(client).RunAsync(Step(temp) with { Isolation = without }, new Collecting(seen), TestContext.Current.CancellationToken);
 
         Assert.Equal(["runStarted", "notice", "runFinished"], seen.Select(Kind));
         Assert.Equal(new Notice(without.Notice!) { At = seen[1].At, Seq = 2 }, seen[1]);
-        Assert.Same(without, client.Run!.Isolation);
+        Assert.Equal(without.Processes, client.Run!.Isolation);
         Assert.Equal(new DssHarness.Core.Agents.Isolation.AgentIsolationRecord("preferred") { None = "bubblewrap is not here" }, result.Isolation);
         Assert.Contains("\"isolation\": {\n    \"mode\": \"preferred\",\n    \"none\": \"bubblewrap is not here\"\n  }", File.ReadAllText(ResultFile(temp)), StringComparison.Ordinal);
 
         seen.Clear();
-        var under = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", new PassThroughMechanism("bubblewrap", "0.9.0"), DssHarness.Core.Processes.IsolationProfile.Nothing, DssHarness.Core.Processes.IsolationProfile.Nothing, null, null);
+        var under = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", new PassThroughMechanism("bubblewrap", "0.9.0"), DssHarness.Core.Processes.IsolationProfile.Nothing, null, null);
         var isolated = await Runner(client).RunAsync(Step(temp) with { Isolation = under, Attempt = 2 }, new Collecting(seen), TestContext.Current.CancellationToken);
 
         Assert.Equal(["runStarted", "runFinished"], seen.Select(Kind));
+        Assert.Equal(new DssHarness.Core.Agents.Isolation.LaunchProcesses(under.ForCommands, null), client.Run!.Isolation);
+        Assert.Same(under.Mechanism, client.Run.Isolation!.Commands!.Mechanism);
         Assert.Equal(new DssHarness.Core.Agents.Isolation.AgentIsolationRecord("required") { Mechanism = "bubblewrap", Version = "0.9.0" }, isolated.Isolation);
     }
 

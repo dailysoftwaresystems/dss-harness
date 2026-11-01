@@ -8,6 +8,13 @@ using DssHarness.Core.Repository;
 
 // Command selection and dependency wiring only. Every behaviour lives in a service
 // in DssHarness.Core, which is a library precisely so that nothing can accumulate here.
+// A shell command a program outside the isolation hands over - Claude Code's, through its shell prefix, which names this
+// tool and the option alone before the command - becomes the isolation at once, the console untouched.
+if (args is [IsolatedShell.Option, var handed])
+{
+    return IsolatedShell.Run(Environment.GetEnvironmentVariable(IsolatedShell.FileVariable), handed, Console.Error);
+}
+
 // The step that places a contained child, and the one that starts it inside MXC's container,
 // leave the console as they found it: on Windows the program each starts shares that console,
 // and a code page set here would change how the program writes its output from how it writes

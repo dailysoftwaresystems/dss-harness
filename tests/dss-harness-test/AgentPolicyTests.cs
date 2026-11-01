@@ -708,7 +708,7 @@ public sealed class AgentPolicyTests
         Assert.Equal("run-side-task", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("run-side-task")).Rule);
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run((IReadOnlyList<string>)["dssharness", "validate-workflow", "implementation"]));
         Assert.Equal(
-            ("the verbs that read a slot or write state", "'dssharness build' is refused: it reads a credential slot or writes this tool's own state, which no command of an agent may - inside the operating system's isolation every slot is empty and the state read-only - so a person runs it"),
+            ("the verbs that read a slot or write state", "'dssharness build' is refused: it reads a credential slot or writes this tool's own state or install, which no command of an agent may - and where the agent's commands run inside the operating system's isolation, every slot is hidden there and the state read-only - so a person runs it"),
             Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run((IReadOnlyList<string>)["dssharness", "build", "--legs", "windows"])) is var built ? (built.Rule, built.Reason) : default);
 
         // Run by another program, from a response file, or by its path: the same verbs.
@@ -730,8 +730,9 @@ public sealed class AgentPolicyTests
                 "init", "create-worktree", "delete-worktree", "create-orchestrator", "delete-orchestrator", "list-agent-providers",
                 "run-orchestrator", "resume-orchestrator", "answer-orchestrator", "amend-orchestrator-request", "pause-orchestrator",
                 "stop-orchestrator", "ask-orchestrator-status", "ask-orchestrator", "create-agent", "seed-agent", "refresh-agent",
-                "rebase-agent", "fold-agent", "delete-agent", "legs", "install-missing-tools", "sync", "build", "test", "run",
-                "check-mutations", "stop-run", "clean", "host-exec",
+                "rebase-agent", "fold-agent", "delete-agent", "legs", "install-missing-tools", "update-tool", "sync", "build", "test",
+                "run", "check-mutations", "stop-run", "clean", "host-exec", "up", "down", "host-agent", "sync-serve", "host-hold",
+                "contain-exec", "isolate-exec",
             ],
             AgentPolicy.SlotOrStateVerbs);
     }

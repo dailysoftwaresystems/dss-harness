@@ -206,72 +206,100 @@ not - one that is not is placed as any other, in a group of its own on Linux and
 `contain-exec` is what places it: the runner hands `contain-exec`, after its separator, the mechanism's own command
 line (`IIsolationMechanism.Command`) in the program's place - the program resolved by its whole
 path first, its words after the mechanism's - so `contain-exec` becomes the mechanism, and the
-mechanism the program, and no child runs outside it for an instant. On Linux the mechanism is the
-system's bubblewrap (`Bubblewrap`): the machine bound whole (`--bind / /`, `--dev-bind /dev /dev`),
-a user namespace of its own allowing no further one (`--unshare-user --disable-userns`), a process
-namespace with its own `/proc` (`--unshare-pid --proc /proc`, so `/proc/<id>/root` reaches no
-process outside), `--die-with-parent`; then the profile's writes in its order, parent first and the
-last mount at a place winning (`--ro-bind` where denied, `--bind` where written again), each anchor
-among them by its depth (`IsolationProfile.Anchors`: every directory above a place the profile
-names, and each writable root itself) bound onto itself as the nearest rule above it leaves it -
-read-only inside a sealed place, written elsewhere - so it is a mount point inside, which the kernel
-keeps from being renamed or removed, and no rule beneath it is covered by it, a bind taking the
-machine's own view of its place; then each hidden place (an empty read-only `tmpfs` over a
-directory, `/dev/null` read-only over a file), then the machine's own escapes the same way - WSL's
-`/run/WSL`, the user's `systemd` and `bus` under `XDG_RUNTIME_DIR` - and `WSL_INTEROP` unset. No
+mechanism the program, and no child runs outside it for an instant. Every mechanism is told the
+same profile (`IsolationProfile`): the places hidden; the write rules in their order, parent first -
+each writable root written, each place inside it written by nobody; the places read again inside a
+hidden one (`Reopened`); a temporary directory of the child's own (`Temp`); the variables set inside
+(`Environment`: `TMPDIR` and each declared tool cache's); the Unix sockets outside it reaches
+(`Sockets`); and, of the places it names, the anchors (`IsolationProfile.Anchors`: every directory
+above a guarded place and each writable root itself, `AnchorsOf`, each whose own holder is written).
+The machine is read-only under each. What a mechanism holds of its own it says on its type
+(`IIsolationMechanism`): whether a rule holds a place under every spelling a file system that
+ignores letter case reaches it by (`HoldsEveryCase`), whether abstract sockets and signals are
+scoped (`Scoped`) and what is left reached where not (`Leaves`), what its anchors cost
+(`AnchorCost`), whether it gives the child a temporary directory of its own (`OwnTemp`), and whether
+it takes a command handed to it from a process outside (`TakesHandedCommands`). On Linux the
+mechanism is the system's bubblewrap (`Bubblewrap`): the machine bound read-only (`--ro-bind / /`,
+`--dev /dev`), a user namespace of its own allowing no further one (`--unshare-user
+--disable-userns`), a process namespace with its own `/proc` (`--unshare-pid --proc /proc`, so
+`/proc/<id>/root` and `/proc/<id>/environ` reach no process outside), never `--die-with-parent`,
+whose parent would be the thread that started the step; the launch's temporary directory bound at
+`/tmp` and any read root under `/tmp` bound again read-only; then the profile's writes in its order,
+the last mount at a place winning (`--bind-try` where written, `--ro-bind-try` where written by
+nobody), each anchor among them by its depth bound onto itself as the nearest rule above it leaves
+it, so it is a mount point inside, which the kernel keeps from being renamed or removed; then each
+hidden place (an empty `tmpfs` over a directory, made read-only after any socket it holds is bound
+into it; `/dev/null` read-only over a file), then the machine's own escapes the same way
+(`IsolationPlatform.EscapeDirectories`: WSL's `/run/WSL` and `/mnt/wsl`, screen's `/run/screen`; the
+user's runtime directory whole, `XDG_RUNTIME_DIR` or `/run/user/<uid>`; each container engine's
+socket, `IsolationPlatform.ContainerSockets`), every other socket of the profile's bound last at its
+own path, and `WSL_INTEROP` unset. Where the kernel has Landlock's scope of abstract sockets and
+signals (`Landlock`, its sixth version, Linux 6.12), `contain-exec --scope` enters it before it
+becomes bubblewrap, so no process inside reaches an abstract socket outside or signals a process
+outside; where it has not, the record's `leaves` says so (`Bubblewrap.Unscoped`). No
 `--new-session`: `contain-exec`'s `setsid` made the child's session already, and a second would
 take it out of the session a stop ends; the process tree the stop reads from outside sees every
 process inside by its outside id. On macOS the mechanism is the system's own sandbox
-(`SandboxExec`): `/usr/bin/sandbox-exec -p <profile> -D<NAME>=<path>... -- <program>`, its profile
-written for the child (`SandboxExec.Policy`) - `(deny default)`, never `(allow default)`, which
-would leave LaunchServices free to start a program outside every sandbox; then what a build, a test
-and a shell do as the user (its own processes forked, run and signalled, the system's settings read,
-a terminal, the whole network, the services that resolve names and trust certificates, every file
-read and written); then the profile's own rules last, for the last rule an operation meets holds -
-each write rule in its order (`deny file-write*`, `allow file-write*` at a writable root), each
-hidden place (`deny file-read* file-write*`), each anchor (`deny file-write-unlink` of a directory),
-and the two file controls that write through a descriptor opened only to read
-(`F_MAKECOMPRESSED`, `F_TRANSFEREXTENTS`). The sandbox meets a path as the file system names it,
-so each place is ruled at its real spelling (`/var` is `/private/var`) and, where it is itself a
-link, at its own entry too, and the anchors are those of the spellings; each spelling is handed
-over as a parameter, never written into the profile's text. On Windows the mechanism is Microsoft's
-MXC process container (`MxcProcessContainer`), made through MXC's own library (`Microsoft.Mxc.Sdk`,
-MIT, named in `THIRD-PARTY-NOTICES` with every other package the tool carries): its command line is
-this tool again - `isolate-exec --hidden <p>... --sealed|--writable <p>... -- <program> <words>`,
-a step nobody types (`IsolateExec`) - so `contain-exec` starts it in the step's job, and it starts
-the program inside a container of its own, handing on its input and handing back its output, its
-error and its exit code; a container that cannot be made ends it with `contain-exec`'s own failure
-code. The container grants nothing it is not told to (`MxcProcessContainer.Files`): every fixed
-drive read, each writable root written, each place written by nobody read, each hidden place denied
-outright (MXC's denied paths, which the machine's container must support). It meets a place by its
-path alone, and a rename leaves no mount behind it, so each anchor whose own holder the profile
-writes is read alone, and each entry it holds that no rule of its own names written again as the
-profile has it: nothing is made or removed directly inside such an anchor, so git makes no
-`index.lock` in a `.git` that holds a sealed place, and a worktree's index and objects, which the
-main checkout's `.git` holds, are only read. The child has the environment the step was given,
-never the machine's, in which MXC sets a temporary directory of its own, removed with the
-container; the container's own user interface, with no clipboard and no input sent to another
-window - with the interface turned off, every program that loads Windows' user interface library
-ends `0xC0000142` before its first line; and the user's network, in and out, the host's loopback
-among it. Which mechanism the machine has is the platform's (`IIsolationPlatform`,
-`IsolationPlatform`): on Linux the first `bwrap` in an absolute directory of the PATH outside the
-tree, 0.8 or newer; on macOS `/usr/bin/sandbox-exec` alone, never one the PATH names, where this
-process runs inside no sandbox already (`sandbox_check`), for macOS starts none inside another - its
+(`SandboxExec`): `/usr/bin/sandbox-exec -p <profile> -D<NAME>=<path>... -- /usr/bin/env
+<variables>... <program>`, its profile written for the child (`SandboxExec.Policy`) -
+`(deny default)`, never `(allow default)`, which would leave LaunchServices free to start a program
+outside every sandbox; then what a build, a test and a shell do as the user (its own processes
+forked, run and signalled, the system's settings read by the names a build asks, never another
+process's arguments or environment, a terminal, the network by address, the name resolver's socket,
+the services that resolve names and trust certificates, every file read, and written only the
+devices a shell writes); then the profile's own rules last, for the last rule an operation meets
+holds - the temporary directory written, its Unix sockets bound and reached, each write rule in its
+order (`allow file-write*` at a writable root, `deny file-write*` inside it), each hidden place
+(`deny file-read* file-write*`), each reopened place read, each anchor (`deny file-write-unlink` of a
+directory), each socket of the profile's reached (`network-outbound` to its `unix-socket`), and the
+two file controls that write through a descriptor opened only to read (`F_MAKECOMPRESSED`,
+`F_TRANSFEREXTENTS`). The sandbox meets a path as the file system names it, so each place is ruled
+at its real spelling (`/var` is `/private/var`) and, where it is itself a link, at its own entry
+too, and the anchors are those of the spellings; each spelling is handed over as a parameter, never
+written into the profile's text. On Windows the mechanism is Microsoft's MXC process container
+(`MxcProcessContainer`), made through MXC's own library (`Microsoft.Mxc.Sdk`, MIT, named in
+`THIRD-PARTY-NOTICES` with every other package the tool carries): its command line is this tool
+again - `isolate-exec --hidden <p>... --sealed|--writable <p>... --variable <NAME=value>... --
+<program> <words>`, a step nobody types (`IsolateExec`) - so `contain-exec` starts it in the step's
+job, and it starts the program inside a container of its own, handing on its input and handing back
+its output, its error and its exit code; a container that cannot be made ends it with
+`contain-exec`'s own failure code. The container grants nothing it is not told to
+(`MxcProcessContainer.Files`): every fixed drive read, each writable root written, each place
+written by nobody read, each hidden place denied outright (MXC's denied paths, which the machine's
+container must support). It meets a place by its path alone, and refuses no rename alone, so each
+anchor whose own holder the profile writes is read alone, and each entry it holds that no rule of
+its own names written again as the profile has it: nothing is made or removed directly inside such
+an anchor, so git makes no lock file in a `.git` that holds a sealed place, nor in a linked
+worktree's directory under it - git add, commit, fetch and push fail there, in a worktree, over a
+side-task's main tree and in a run's commit and push steps, which the record's `anchorCost` says
+(`MxcProcessContainer.AnchorReadAlone`). The child has the environment the step was given and the
+profile's variables, never the machine's, in which MXC sets a temporary directory of its own,
+removed with the container (`OwnTemp`); the container's own user interface, with no clipboard and no
+input sent to another window - with the interface turned off, every program that loads Windows'
+user interface library ends `0xC0000142` before its first line; and the user's network, in and out,
+the host's loopback among it. MXC is handed no socket: Windows' SSH agent is a named pipe. Which
+mechanism the machine has is the platform's (`IIsolationPlatform`, `IsolationPlatform`): on Linux
+the first `bwrap` in an absolute directory of the PATH outside the tree, 0.8 or newer, and none
+where the user may write it or a directory above it, for the tool runs it outside before anything
+is isolated; on macOS `/usr/bin/sandbox-exec` alone, never one the PATH names, where this process
+runs inside no sandbox already (`sandbox_check`), for macOS starts none inside another - its
 questions of the machine one seam a test answers anywhere (`MacSandboxHost`: the file there, the
 sandbox already, the version of macOS a record names, each path's real spelling from `realpath`);
 on Windows the container, where MXC's library says the machine has it and can deny a place
 outright - its question one seam a test answers anywhere too (`WindowsContainerHost`: the library's
-backends, and its version, which a record names). Each is proved once per process by a probe started exactly
-as every isolated child is - a canary in a hidden place unread, a place written by nobody unwritten,
-an open place written, each checked from outside, through `sh` on Linux and macOS and through
-`cmd.exe` on Windows, a run for each - and why not with the remedy where it fails (Ubuntu's
-`apparmor_restrict_unprivileged_userns` named with the `bwrap-userns-restrict` profile; on Windows
-the builds MXC needs, or WSL 2). On Windows each of node, git and Git Bash's `sh` - on the PATH
-outside the tree, `sh` else beside the git found - is then started inside the container and must
-end 0 having said something; one that does not is no mechanism, named with its path and how it
-ended, a status the system ended it with written in hexadecimal, and one not on the machine is not
-asked. MXC 1.0.1 ends every program of Git Bash's with `0xC0000142`, so a Windows with Git for
-Windows has none yet. What a launch's profile holds is the agents' isolation's, below.
+backends, and its version, which a record names). Each is proved once per process, on the tree's
+own file system under its runs directory (`isolation-probe-<id>`, removed after), by a probe started
+exactly as every isolated child is - a canary in a hidden place unread, by its name and by another
+case of its directory's; a place written by nobody unwritten, by either spelling; a place outside
+every open one unwritten; an open place written - each checked from outside, through `sh` on Linux
+and macOS and through `cmd.exe` on Windows, a run for each, and why not with the remedy where it
+fails (Ubuntu's `apparmor_restrict_unprivileged_userns` named with the `bwrap-userns-restrict`
+profile; on Windows the builds MXC needs, or WSL 2). On Windows each of node, git and Git Bash's
+`sh` - on the PATH outside the tree, `sh` else beside the git found - is then started inside the
+container and must end 0 having said something; one that does not is no mechanism, named with its
+path and how it ended, a status the system ended it with written in hexadecimal, and one not on the
+machine is not asked. MXC 1.0.1 ends every program of Git Bash's with `0xC0000142`, so a Windows
+with Git for Windows has none yet. What a launch's profile holds is the agents' isolation's, below.
 
 A request can ask instead for a child **bound** to the harness's life (`ProcessRequest.Bound`):
 on Windows it is placed through `contain-exec` too, in the one job object the process holds for its
@@ -2303,76 +2331,114 @@ step's stream is read by the store's one reader of it (`OrchestrationStore.ReadS
 not read refuses the attempt that goes on with it.
 
 Before its agent is launched, a step, the advisor, the reporter and a side-task each ask the operating system's
-isolation of the launch (`IAgentIsolation`, `AgentIsolation.ForLaunchAsync`, through `ReasonLaunch.IsolationAsync`
-for the three of a run), whose one builder of a profile (`IsolationProfiles.Of`) reads the ground and keeps no list
-of its own. An agent that may run no command - the reporter - needs none (`LaunchIsolation.Unneeded`), and nothing is
-probed. Otherwise the platform's mechanism, proved once per process (`IIsolationPlatform`), and two profiles of the
-ground: hidden, every credential slot (`AgentPolicyGround.SlotDirectories`) and, for a command, every Claude Code
-directory (`ClaudeCodeDirectories`) - open to a Claude Code launch's whole process, which reads its own login there,
-and guarded for it by the words policy alone; sealed, git's code-running files of each of the ground's trees as git
-names them (`AgentIsolation.GitPlacesAsync`: `rev-parse --path-format=absolute --git-common-dir --git-path hooks`,
-then the common directory's `config`, `config.worktree` and `info/`, each linked worktree's `config.worktree`, every
-submodule's `hooks/` and `config` under `modules/`), the user's own git configuration, which the tool's own git reads
-outside, each state path (`StateDirectories`) and the launch's own directory; written again, the ground's writable
-roots - laid parent first, a place both sealed and writable staying sealed; anchored, every directory above any of
-those places and each writable root itself, which no command renames or removes (`IsolationProfile.Anchors`, a
-property of the profile, so no mechanism keeps a list of its own): a rule stands at a path, so a directory above a
-guarded place moved away would take the place out from under its rule and leave its name free to make again - a
-`.git` moved aside and a new one with hooks of the agent's, run by the tool's own git outside. Objects, the index and the refs are left
-writable under bubblewrap and macOS's sandbox, so `git add` and `fetch` work inside, and the words policy still refuses a
-step the verbs that move a tree; MXC's container, which writes only what it is told, writes them only inside a writable
-root, and holds a `.git` that holds a sealed place read alone, so `git add` fails inside it over a worktree and over a
-side-task's main tree.
-A place not there is made empty first, so no command makes it inside and has it read or run outside later; a state
-file never is (`HarnessLayout.StateFileNames`), for the tool reads one as meaning something, and the words policy
-alone guards it. A git that cannot say where a tree keeps its files is a launch without the isolation, said.
-`agentPolicy.isolation` (`AgentIsolationMode`: `required` where nothing is said, any other word than the two a
+isolation of the launch (`IAgentIsolation`, `AgentIsolation.ForLaunchAsync`, through `ReasonLaunch.IsolationAsync` for
+the three of a run). A launch and an execution of the tool's own reach one builder (`AgentIsolation`'s held decision,
+over an `IsolationGround` made of either's ground), which keeps no list of its own beside the ground's and the
+declared caches. An agent that may run no command - the reporter - needs none (`LaunchIsolation.Unneeded`), and
+nothing is probed. Otherwise the platform's mechanism, proved once per process (`IIsolationPlatform`), and a profile
+of the ground, the machine read-only: written, the ground's writable roots, the git directories of each of its trees
+that is itself one of them and its repository's top level (`AgentIsolation.GitPlacesAsync`: `rev-parse
+--path-format=absolute --git-dir --git-common-dir --git-path hooks --show-toplevel`, git 2.31 or newer, so a leg's
+copy that is no repository of its own writes nothing of the repository above it) - so `git add`, commit and fetch
+write the objects, the index and the refs - the launch's own temporary directory under the isolation's own
+(`IsolationCaches.Root`, then `tmp/`; none where the mechanism gives one, `OwnTemp`) and the declared tool caches
+(`IsolationCaches.Declared`, each variable pointed into `caches/`; a cache is code a later build runs, so the user's
+own stay read-only); hidden, every credential slot (`AgentPolicyGround.SlotDirectories`) and every Claude Code
+directory (`ClaudeCodeDirectories`) with `~/.claude.json` beside `~/.claude`, the shell snapshots Claude Code sources
+read again (`Reopened`); written by nobody, git's code-running files and its pointers to its own directories as git
+names them (the hooks, the common directory's `config`, `config.worktree` and `info/`, each linked worktree's
+`config.worktree`, `commondir` and `gitdir`, a worktree's `.git` file, every submodule's `hooks/` and `config` under
+`modules/`), every configuration file git reads there (`git config --list --show-origin`), each tree's
+`.harness-config`, each state path (`StateDirectories`) and the launch's own directory - laid parent first, a place
+both sealed and writable staying sealed (`IsolationProfiles.Ordered`); anchored, every directory above a guarded place
+whose holder is written and each writable root itself, which no command renames or removes
+(`IsolationProfile.Anchors`, a property of the profile, so no mechanism keeps a list of its own): a rule stands at a
+path, so a directory above a guarded place moved away would take the place out from under its rule and leave its name
+free to make again - a `.git` moved aside and a new one with hooks of the agent's, run by the tool's own git outside.
+Every place is ruled at its real spelling. A place not there inside a written place and under no guarded one is made
+empty first, so no command makes it inside and has it read or run outside later; a state file never is
+(`HarnessLayout.StateFileNames`), for the tool reads one as meaning something, and the words policy alone guards it. A
+launch has no isolation, said, where its places cannot be held: a git that cannot say where a tree keeps its files
+(`AgentIsolation.Unwhole`), a link inside a written place on the way to a guarded one (`AgentIsolation.LinkOnTheWay`),
+which a command could replace with one leading elsewhere, or, under a mechanism whose rules hold the one spelling
+(`HoldsEveryCase` false: bubblewrap), a guarded place on a file system that ignores letter case
+(`AgentIsolation.FoldsCase`). The anchors cost each mechanism what its type says (`AnchorCost`): nothing under
+bubblewrap, whose mount points keep `.git`'s own files writable, nor under macOS's sandbox, which refuses a
+directory's removal alone; under MXC's container, which refuses no rename alone, an anchor is read alone, so git makes
+no lock file in a `.git` that holds a sealed place, nor in a linked worktree's directory under it - git add, commit,
+fetch and push fail there, a side-task's git over the main tree and a run's commit and push steps among them. A linked
+worktree's git directories, as git named them before the launch, are pinned for every later git of the tool's in it
+(`GitDirectoryPins`), so a `.git` file a command rewrote leads none of them elsewhere; and every git of the tool's
+runs with its own settings (`GitOwnSettings.Apply`, through `GIT_CONFIG_PARAMETERS`, so no argument list changes): no
+file-system monitor (`core.fsmonitor=false`), whose command a repository's configuration names, and no hooks but where
+it runs them on purpose (`GitHooks`), with `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` from the pin where there is
+one. `agentPolicy.isolation` (`AgentIsolationMode`: `required` where nothing is said, any other word than the two a
 problem of the configuration) turns no mechanism into the launch's refusal (`LaunchIsolation.Refusal`: a step ends
-failed, 14; the advisor's advice is not obtained; `run-side-task` exits 14 having started nothing) or, under
-`preferred`, its notice (`LaunchIsolation.Notice`), a `Notice` the runner says at the launch's start. Every launch's
-result carries what it ran under (`AgentRunResult.Isolation`, `result.json`'s `isolation`, an
-`AgentIsolationRecord`: the mode, and the mechanism with its version or why there was none), and each side-task turn
-its own (`SideTaskTurn.Isolation`). The request carries the launch's isolation (`AgentStepRequest.Isolation`, on to
-`AgentRun.Isolation`): the tool runtime starts each `run_command` inside the commands' profile
-(`LaunchIsolation.ForCommands`, through `PhaseRequest.Isolation`), and the claude-code client the whole `claude`
-inside the one that leaves the Claude Code directories open (`ForClaudeCode`). Claude Code's own Bash sandbox is not
-used: the whole process held by the tool's own mechanism holds every command it starts, one mechanism for every
-client, and nothing rests on how that sandbox treats the network in print mode or weighs its own write rules against
-the profile - and the launch's settings turn it off (`ClaudeSettings.Render`'s `isolated`, `"sandbox": {"enabled":
-false}`) over any the user's own settings ask for, for no mechanism of the tool's nests another (macOS no sandbox inside
-a sandbox, bubblewrap no namespace inside its own) and each command would fail in it; on Windows Claude Code has none of
-its own. MXC's container reads the Claude Code directories to a Claude Code launch but writes none of them, so a login
-whose token has run out is not renewed inside it until a `claude` run outside renews it. On macOS Claude Code keeps its
-login in the login keychain, which every agent's command reaches as the user does - the sandbox lets the services that
-trust certificates be reached, and they are the keychain's: the words policy alone guards it, as it guards the Claude
-Code directories for a Claude Code launch. Inside the isolation a verb of this tool's that reads a slot or writes state would fail part way, so
-the words policy refuses each to every agent by name (`AgentPolicy.SlotOrStateVerbs`, after `ToolVerbs` for a step
-and the side-task's own refusal for a side-task); the verbs that only read, and those that write only the tree's own
-files, stay open.
+failed, 14; the advisor's advice is not obtained; `run-side-task` exits 14 having started nothing) - every mode but
+`preferred` refuses - or, under `preferred`, its notice (`LaunchIsolation.Notice`), a `Notice` the runner says at the
+launch's start. Every launch's result carries what it ran under (`AgentRunResult.Isolation`, `result.json`'s
+`isolation`, an `AgentIsolationRecord`: the mode, and the mechanism with its version, what it leaves reached and what
+its anchors cost, or why there was none), and each side-task turn its own (`SideTaskTurn.Isolation`). The request
+carries the launch's isolation (`AgentStepRequest.Isolation`, on to `AgentRun.Isolation`, what its processes run under
+- `LaunchIsolation.Processes`, `LaunchProcesses` - so a client is handed nothing it could end, the decision released
+by its asker once the launch has run): the tool runtime starts each `run_command` inside the commands' profile
+(`LaunchIsolation.ForCommands`, through `PhaseRequest.Isolation`). The claude-code client keeps Claude Code's own
+process outside where the mechanism takes a command handed to it (`TakesHandedCommands`: bubblewrap and macOS's
+sandbox): Claude Code reads its login and the key it is handed in its own process, and starts each shell command
+through its shell prefix (`ClaudeShell`, `CLAUDE_CODE_SHELL_PREFIX` naming this tool and `--isolated-shell`), which
+`Program` dispatches before anything else to `IsolatedShell.Run`, which reads the launch's isolation from the file
+`DSSHARNESS_ISOLATED_SHELL` names (`claude-isolation.json` in the step's directory) and becomes the mechanism with
+`/bin/bash` inside - so no command reaches Claude Code's directories, its login or its environment
+(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` among the controlled variables, a process namespace of the command's own), and a
+login whose token has run out is renewed by Claude Code outside, which writes its directories. A tool run as a runtime
+handed its assembly, or from a path holding ` -`, has no prefix Claude Code can split (`ClaudeShell.PrefixOf`), and
+the launch is not started. Where the mechanism takes no handed command (MXC's container, on Windows, where every
+command Claude Code runs is Git Bash's), the whole `claude` runs inside the profile that leaves the Claude Code
+directories and `~/.claude.json` read alone (`LaunchIsolation.ForClaudeCode`): written, they would let a command plant
+what Claude Code runs outside later - its settings' hooks, its own file's servers - so a login whose token has run out
+is not renewed inside until a `claude` run outside renews it, and the launch's commands read its login there. Claude
+Code's own Bash sandbox is not used: the tool's own mechanism holds every command, one mechanism for every client, and
+nothing rests on how that sandbox treats the network in print mode or weighs its own write rules against the profile -
+and the launch's settings turn it off (`ClaudeSettings.Render`'s `isolated`, `"sandbox": {"enabled": false}`) over any
+the user's own settings ask for, for no mechanism of the tool's nests another (macOS no sandbox inside a sandbox,
+bubblewrap no namespace inside its own) and each command would fail in it; on Windows Claude Code has none of its own.
+The machine stays readable as the user reads it: their `~/.ssh`, every credential outside the slots, and on macOS the
+login keychain, reached through the services that trust certificates, which are the keychain's; the network is theirs;
+and what no rule at a path reaches - a hard link made before the launch, another path bound to the same files - is
+reached. Inside the isolation a verb of this tool's that reads a slot or writes state or its install would fail part
+way, so the words policy refuses each to every agent by name (`AgentPolicy.SlotOrStateVerbs`, after `ToolVerbs` for a
+step and the side-task's own refusal for a side-task); the verbs that only read, and those that write only the tree's
+own files, stay open (`AgentPolicy.OpenVerbs`), every verb the tool lists in one or the other.
 
 The same owner decides the isolation of the tool's own executions of what the agents wrote
 (`IAgentIsolation.ForExecutionAsync`, an `ExecutionIsolation`, from an `ExecutionGround` that `ExecutionGrounds` alone
-builds): the slots and the tool's own Claude Code directory hidden, git's code-running files of each tree, the user's
-git configuration and the tool's state under each sealed, the ground's own places written again - a state place the
-execution writes whole, a sweep's workers' slot, left unsealed, for the profile keeps a place both sealed and written
-sealed. Its refusal, notice and record are a launch's, from one base (`IsolationDecision`), with words of their own.
-A run's leg step (`LegStepRunner`) asks it for its tree before anything starts - none here under `required` ends the
-step 14, nothing run - and hands the leg service an `ILegIsolation` (`LegRunRequest.Isolation`, carried by each leg
-command's request) that asks it again for each leg this machine runs, of its own ground (`ExecutionGrounds.OfLeg`: the
-tree it works in, the run's records, and what `LegStepRunner.WritesBeside` names - a sweep's workers); `LegRunService`
-skips a leg whose own is refused (`skipped-unavailable`), says the notice on its line, and holds the rest for its
-work alone (`PhaseIsolation`, an ambient value each leg's flow holds), which `PhaseRunner` gives every phase that names
-none of its own and is not left running - a set-up's lines, run around the work, are never inside it. A leg another
-machine runs is that machine's, outside this one's isolation: the request never sends it. The step answers
-`isolation` (`AgentIsolationRecord.ToOutput`, in `WorkflowStepTypes`' output of each leg step). The tool's own git runs
-none of the repository's hooks (`GitHooks`: every command `GitClient` runs is given `core.hooksPath` at the null device,
-`/dev/null`, `\\.\NUL` on Windows, but the subcommands that only read, `GitHooks.Questions`, which answer where the hooks
-are as git runs them) but a commit's and a push's (`IGitClient.RunWithHooksAsync`), which `GitPublisher` runs inside the
-isolation `CommitStepRunner` and `PushStepRunner` ask of the main checkout's ground (`ExecutionGrounds.OfHooks`) before
-anything is staged or pushed; a push inside one, to a remote over http or https, is handed the credential git's helpers
-give for its address, asked outside (`IGitClient.CredentialAsync`, `git credential fill`), as values its environment
-holds and the one helper its command line names reads (`GitCredentialValues`). Both answer `isolation` beside what they
-answered.
+builds, `IsolationGround.Of` making the builder's ground of it): the profile a launch's is - the machine read-only,
+the slots and the tool's own Claude Code directory hidden, git's code-running files of each tree, the configuration
+directory and the tool's state under each written by nobody, the ground's own places, a temporary directory of its own
+and the declared tool caches written - a state place the execution writes whole, a sweep's workers' slot, left
+unsealed, for the profile keeps a place both sealed and written sealed. The hooks' ground alone reaches a socket
+outside: the user's SSH agent's (`SSH_AUTH_SOCK`, taken at its real path where it is there), bound alone under
+bubblewrap - inside the hidden runtime directory or the launch's own `/tmp` among them - and reached alone under
+macOS's sandbox (`IsolationProfile.Sockets`), so a push over ssh signs with the user's agent and nothing else outside
+is reached; MXC is handed none. Its refusal, notice and record are a launch's, from one base (`IsolationDecision`),
+with words of their own. A run's leg step (`LegStepRunner`) asks it for its tree before anything starts - none here
+under `required` ends the step 14, nothing run - and hands the leg service an `ILegIsolation`
+(`LegRunRequest.Isolation`, carried by each leg command's request) that asks it again for each leg this machine runs,
+of its own ground (`ExecutionGrounds.OfLeg`: the tree it works in, the run's records, and what
+`LegStepRunner.WritesBeside` names - a sweep's workers); `LegRunService` skips a leg whose own is refused
+(`skipped-unavailable`), says the notice on its line, and holds the rest for its work alone (`PhaseIsolation`, an
+ambient value each leg's flow holds), which `PhaseRunner` gives every phase that names none of its own and is not left
+running - a set-up's lines, run around the work, are never inside it. A leg another machine runs is that machine's,
+outside this one's isolation: the request never sends it. The step answers `isolation`
+(`AgentIsolationRecord.ToOutput`, in `WorkflowStepTypes`' output of each leg step). The tool's own git runs none of
+the repository's hooks (`GitHooks`: every command `GitClient` runs is given `core.hooksPath` at the null device,
+`/dev/null`, `\\.\NUL` on Windows, through `GitOwnSettings.Apply` with the tool's other settings, but the subcommands
+that only read, `GitHooks.Questions`, which answer where the hooks are as git runs them) but a commit's and a push's
+(`IGitClient.RunWithHooksAsync`), which `GitPublisher` runs inside the isolation `CommitStepRunner` and
+`PushStepRunner` ask of the main checkout's ground (`ExecutionGrounds.OfHooks`) before anything is staged or pushed; a
+push inside one, to a remote over http or https, is handed the credential git's helpers give for its address, asked
+outside (`IGitClient.CredentialAsync`, `git credential fill`), as values its environment holds and the one helper its
+command line names reads (`GitCredentialValues`). Both answer `isolation` beside what they answered.
 A step's records are kept where the one owner of a step instance's
 directory spells it (`OrchestratorLayout.InstanceDirectory`, a work item's brackets as `FlowInstanceId.DirectoryOf`
 writes them), named on the request (`AgentStepRequest.RecordDirectory`) for the runner, the advisor and the handoff's

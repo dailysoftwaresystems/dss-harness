@@ -69,7 +69,7 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         // The isolation the legs' work is held inside, decided before anything of the step starts: where it is required and
         // this machine has none, no leg runs.
         var mainCheckout = context.Layout.MainCheckoutRoot;
-        var held = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfLegs(context.Config, mainCheckout, tree), mainCheckout, cancellationToken).ConfigureAwait(false);
+        using var held = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfLegs(context.Config, mainCheckout, tree), mainCheckout, cancellationToken).ConfigureAwait(false);
 
         if (held.Refusal($"'{run.Instance}'") is { } refused)
         {

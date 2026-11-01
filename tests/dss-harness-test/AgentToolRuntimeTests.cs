@@ -524,11 +524,11 @@ public sealed class AgentToolRuntimeTests : IDisposable
         string Unread(string asked, string opened, string why) => $"'{asked}' was opened as '{opened}', where a link put on its way after it was decided leads; nothing was read: {why}";
 
         Assert.Equal(
-            (false, Unread(a, secret, $"'{secret}' is outside the roots of this agent: {_worktree}, {_main}")),
+            (false, Unread(a, secret, $"'{secret}' is where the open file stands, outside the roots of this agent: {_worktree}, {_main}")),
             Said(await View(runtime, "a.txt")));
         Assert.Equal((false, Unread(b, credential, policy.Read(credential).Refusal()!.Reason)), Said(await View(runtime, "b.txt")));
         Assert.Equal(
-            (false, Unread(a, secret, $"'{secret}' is outside the writable roots of this agent: {_worktree}")),
+            (false, Unread(a, secret, $"'{secret}' is where the open file stands, outside the writable roots of this agent: {_worktree}")),
             Said(await Replace(runtime, "a.txt", "BEGIN", "END")));
         Assert.Equal(
             (true, $"no line matches, in {ReportText.Counted(0, "file")} read\n{AgentListing.Refused(2)}"),
@@ -536,7 +536,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         var landing = Path.Combine(_outside, "c.txt");
         Assert.Equal(
-            (false, $"'{c}' would be written as '{landing}', where a link put on its way after it was decided leads; nothing was written: '{landing}' is outside the writable roots of this agent: {_worktree}"),
+            (false, $"'{c}' would be written as '{landing}', where a link put on its way after it was decided leads; nothing was written: '{landing}' is where the open file stands, outside the writable roots of this agent: {_worktree}"),
             Said(await Call(runtime, AgentTools.CreateFile, ("path", "c.txt"), ("content", "x"))));
 
         Assert.Equal(["a.txt", "b.txt"], Directory.GetFiles(_worktree).Select(Path.GetFileName).Order(StringComparer.Ordinal));
@@ -564,7 +564,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var view = await View(runtime, "docs/a.txt");
 
         Assert.Equal(
-            (false, $"'{Path.Combine(docs, "a.txt")}' was opened as '{opened}', where a link put on its way after it was decided leads; nothing was read: '{opened}' is outside the roots of this agent: {_worktree}, {_main}"),
+            (false, $"'{Path.Combine(docs, "a.txt")}' was opened as '{opened}', where a link put on its way after it was decided leads; nothing was read: '{opened}' is where the open file stands, outside the roots of this agent: {_worktree}, {_main}"),
             (view.Ok, view.Text));
 
         // The link is back to the directory it was: a write under it is begun where the link leads at its open.
@@ -575,7 +575,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var written = await Call(runtime, AgentTools.CreateFile, ("path", "docs/b.txt"), ("content", "x"));
 
         Assert.Equal(
-            (false, $"'{Path.Combine(docs, "b.txt")}' would be written as '{landing}', where a link put on its way after it was decided leads; nothing was written: '{landing}' is outside the writable roots of this agent: {_worktree}"),
+            (false, $"'{Path.Combine(docs, "b.txt")}' would be written as '{landing}', where a link put on its way after it was decided leads; nothing was written: '{landing}' is where the open file stands, outside the writable roots of this agent: {_worktree}"),
             (written.Ok, written.Text));
         Assert.Equal(["a.txt"], Directory.GetFiles(_outside).Select(Path.GetFileName));
         Assert.Equal("SECRET", File.ReadAllText(opened));
@@ -1131,7 +1131,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var processes = new Uncontaining();
         var mechanism = new PassThroughMechanism();
         var commands = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath("/home/me/.claude", Directory: true)], []);
-        var launch = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, DssHarness.Core.Processes.IsolationProfile.Nothing, null, null);
+        var launch = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, null, null);
         var runtime = Open(processes: processes, isolation: launch);
 
         var ran = await Call(runtime, AgentTools.RunCommand, ("program", "tool"), ("args", new[] { "go" }));
@@ -1738,7 +1738,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var files = fileSystem ?? _harness.FileSystem;
         var search = webSearch is null ? null : Search(fetch, clock ?? TimeProvider.System);
         var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), clock ?? TimeProvider.System, search: search);
-        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch) with { NativeSearch = native is null ? null : new NoWire(), Isolation = isolation }, _events, native);
+        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch) with { NativeSearch = native is null ? null : new NoWire(), Isolation = isolation?.Processes }, _events, native);
 
         _opened.Add(fetch);
         _opened.Add(runtime);
