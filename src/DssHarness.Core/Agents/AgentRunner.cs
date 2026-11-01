@@ -309,9 +309,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 null);
         }
 
-        // A run begun from the engine's compaction says so as the first client given the compacted conversation is
-        // launched, and counts it once: a run that ends before any client is given it - one never started, or held at the
-        // gate - compacted nothing.
+        // A run begun from the engine's compaction says so as the first launch given the compacted conversation begins it,
+        // and counts it once, the event and the count one fact: a run that ends before any launch began it - one never
+        // started, by the runner, its client or the provider, or held at the gate - compacted nothing.
         var compaction = new CompactionToSay(step.Compaction);
         var (worked, thrown) = await ClientsAsync(step, directory, mask, pump, compaction, cancellationToken).ConfigureAwait(false);
 
@@ -319,20 +319,25 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     }
 
     /// <summary>
-    /// The engine's compaction a step's run begins from, said once: as the first launch given the compacted conversation
-    /// begins - the conversation it leaves, the one it begins, and what the record kept and reduced - and never by a launch
-    /// after it, which is given the same conversation.
+    /// The engine's compaction a step's run begins from, said once - the conversation it leaves, the one it begins, and
+    /// what the record kept and reduced - by the first launch given the compacted conversation that begins it: as its
+    /// client tells its sink the conversation began (<see cref="IAgentEventSink.ConversationBegunAsync"/>), or as it ends
+    /// any way but <see cref="AgentRunStatus.NotStarted"/> having told none; never by a launch that never began it, nor by
+    /// one after the launch that said it, which is given the same conversation.
     /// </summary>
     /// <param name="compaction">The step's compaction; null where it has none, and nothing is said.</param>
     private sealed class CompactionToSay(AgentCompacted? compaction)
     {
-        /// <summary>Whether a launch was given the compacted conversation: the step's run counts the compaction.</summary>
+        /// <summary>Whether a launch began the compacted conversation: the step's run counts the compaction.</summary>
         public bool Said { get; private set; }
 
-        /// <summary>Says the compaction where <paramref name="run"/> is the first launch given it.</summary>
-        /// <param name="run">The launch about to begin.</param>
+        /// <summary>The sink a launch of <paramref name="run"/> is handed: <paramref name="events"/>, told the compaction as the launch begins it.</summary>
+        /// <param name="run">The launch's run.</param>
         /// <param name="events">Where the launch's events go.</param>
-        public async ValueTask SayAsync(AgentRun run, IAgentEventSink events)
+        public LaunchSink Launching(AgentRun run, IAgentEventSink events) => new(this, run, events);
+
+        /// <summary>Says the compaction, where it is still to say, as the launch's <paramref name="events"/> stand.</summary>
+        private async ValueTask SayAsync(AgentRun run, string? began, IAgentEventSink events)
         {
             if (compaction is null || Said)
             {
@@ -344,11 +349,36 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             await events.EmitAsync(new Compacted(
                 compaction.Why,
                 compaction.Left ?? string.Empty,
-                run.SessionId ?? string.Empty,
+                began ?? run.SessionId ?? string.Empty,
                 compaction.KeptWordForWord,
                 compaction.Reduced,
                 compaction.SizeBefore,
                 compaction.SizeAfter)).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// One launch's sink: its events passed on as they come - the session it begins kept for the compaction to name -
+        /// and the compaction said as the client tells the conversation began, or as the launch ends begun.
+        /// </summary>
+        public sealed class LaunchSink(CompactionToSay said, AgentRun run, IAgentEventSink events) : IAgentEventSink
+        {
+            private string? _began;
+
+            public ValueTask EmitAsync(AgentEvent @event)
+            {
+                if (@event is SessionStarted { SessionId: { Length: > 0 } session })
+                {
+                    _began ??= session;
+                }
+
+                return events.EmitAsync(@event);
+            }
+
+            public ValueTask ConversationBegunAsync() => said.SayAsync(run, _began, events);
+
+            /// <summary>The launch ended with <paramref name="result"/>: one that ended any way but never started began the conversation.</summary>
+            public ValueTask EndedAsync(AgentRunResult result)
+                => result.Status == AgentRunStatus.NotStarted ? ValueTask.CompletedTask : said.SayAsync(run, _began, events);
         }
     }
 
@@ -888,7 +918,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// key for the whole run - a Claude Code launch, whose requests the runner cannot see one by one - its wait said as it
     /// waits and ended by the run's pause, which leaves a run that never began with no handoff to give; the answer's
     /// tokens are charged once they are had, and an account limit the run met holds the lane until it lifts. The step's
-    /// compaction is said as the client is given the run, never before.
+    /// compaction is said as the launch begins the conversation (<see cref="CompactionToSay"/>), never before.
     /// </summary>
     /// <param name="client">The client.</param>
     /// <param name="run">The run, resolved.</param>
@@ -977,12 +1007,14 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
         return result;
 
-        // The client given the run, the step's compaction said as it is.
+        // The client given the run, the step's compaction said as the launch begins the conversation, never before.
         async Task<AgentRunResult> LaunchedAsync(AgentRun given)
         {
-            await compaction.SayAsync(given, events).ConfigureAwait(false);
+            var launch = compaction.Launching(given, events);
+            var ended = await client.RunAsync(given, launch, pump.Stopping).ConfigureAwait(false);
+            await launch.EndedAsync(ended).ConfigureAwait(false);
 
-            return await client.RunAsync(given, events, pump.Stopping).ConfigureAwait(false);
+            return ended;
         }
     }
 

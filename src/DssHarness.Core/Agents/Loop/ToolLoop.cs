@@ -334,6 +334,9 @@ public sealed class ToolLoop(
         private int _nudges;
         private int _pauses;
         private bool _inTurn;
+
+        // Whether the provider began an answer of the model asked, or answered a request: the conversation is begun, and a
+        // model it does not serve, met after, fails the run, which began.
         private bool _answered;
         private AgentUsage _turnUsage = AgentUsage.None;
         private long _maxTokens = FirstMaxTokens(terms.Model.MaxOutputTokens);
@@ -879,6 +882,12 @@ public sealed class ToolLoop(
                                     case ChatPart.Began began:
                                         wrote = began.Model;
                                         other = AgentModelIds.Same(Now.Model, began.Model) ? null : WrongModel(began.Model);
+
+                                        if (other is null)
+                                        {
+                                            await BegunAsync().ConfigureAwait(false);
+                                        }
+
                                         break;
                                     case ChatPart.Notice notice:
                                         await Emit(new Notice(Masked(notice.Message))).ConfigureAwait(false);
@@ -957,7 +966,7 @@ public sealed class ToolLoop(
 
                 if (answered is not null)
                 {
-                    _answered = true;
+                    await BegunAsync().ConfigureAwait(false);
                     return new Sent(Turn: answered, Held: HeldToSchema(request));
                 }
 
@@ -1737,6 +1746,21 @@ public sealed class ToolLoop(
         private AgentRunResult WrongModel(string named) => AgentEndings.WrongModel(Now.Model, named, $"its turn {_turns}", run.Mask);
 
         private ValueTask Emit(AgentEvent @event) => events.EmitAsync(@event);
+
+        /// <summary>
+        /// The provider began an answer of the model asked - or answered a request, where it named no model first: the
+        /// conversation is begun, and the run never ends NotStarted from here. Its sink is told so, once.
+        /// </summary>
+        private async ValueTask BegunAsync()
+        {
+            if (_answered)
+            {
+                return;
+            }
+
+            _answered = true;
+            await events.ConversationBegunAsync().ConfigureAwait(false);
+        }
 
         private string Masked(string text) => run.Mask.Redact(text);
 

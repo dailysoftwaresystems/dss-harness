@@ -1662,6 +1662,48 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// A launch tells its sink the conversation began once, as something it did first stands - a call that ran, or a turn
+    /// that ended - the moment it can no longer end never started; one that ends never started, though its session began,
+    /// tells none.
+    /// </summary>
+    [Theory]
+    [InlineData("aCallRan")]
+    [InlineData("aTurnEnded")]
+    [InlineData("neverStarted")]
+    public async Task ALaunch_TellsTheConversationBegan_AsSomethingItDidFirstStands(string how)
+    {
+        using var kit = new Kit();
+        var read = new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } };
+        kit.Script(how switch
+        {
+            "aCallRan" => [new JsonObject { ["calls"] = new JsonArray(read) }],
+            "aTurnEnded" => [new JsonObject { ["answer"] = "done" }],
+            _ => [new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["refusedByClaude"] = true }) }],
+        });
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
+
+        Assert.Single(sink.Of<SessionStarted>());
+
+        if (how == "neverStarted")
+        {
+            Assert.Equal((AgentRunStatus.NotStarted, 0), (result.Status, sink.BegunAt.Count));
+            return;
+        }
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        var at = Assert.Single(sink.BegunAt);
+        string[] before = how == "aCallRan"
+            ? ["MessageSent", "SessionStarted", "TurnStarted", "MessageTaken", "ToolCallStarted", "ToolCallInputDelta", "AssistantMessage", "ToolCallFinished"]
+            : ["MessageSent", "SessionStarted", "TurnStarted", "MessageTaken", "AssistantMessage"];
+        string[] after = how == "aCallRan" ? ["AssistantMessage", "TurnFinished", "UsageReported"] : ["TurnFinished", "UsageReported"];
+
+        Assert.Equal(before, sink.Events.Take(at).Select(one => one.GetType().Name));
+        Assert.Equal(after, sink.Events.Skip(at).Select(one => one.GetType().Name));
+    }
+
+    /// <summary>
     /// A launch found not to be the engine's child once something it did stands - a call that ran, a turn that ended -
     /// fails the step rather than never starting it: what it did is there.
     /// </summary>
@@ -2849,6 +2891,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         public List<AgentEvent> Events { get; } = [];
 
+        /// <summary>Where among the events the sink was told the conversation began, each time it was.</summary>
+        public List<int> BegunAt { get; } = [];
+
         public ValueTask EmitAsync(AgentEvent @event)
         {
             lock (_gate)
@@ -2857,6 +2902,16 @@ public sealed class ClaudeCodeClientTests : IDisposable
             }
 
             reaction?.Invoke(@event);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ConversationBegunAsync()
+        {
+            lock (_gate)
+            {
+                BegunAt.Add(Events.Count);
+            }
+
             return ValueTask.CompletedTask;
         }
 

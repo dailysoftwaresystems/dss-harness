@@ -2039,9 +2039,17 @@ to their first 2,000 characters each where the reduced part is over), what it ke
 `AgentCompacted`. It begins a new conversation, on every client (`AgentRun.Compaction` - the record is the first
 message of one, the old kept whole; the loop and the claude-code client ask it before any parts), the step's stream
 saying it as a `Compacted` event - why, the session left and the one begun, what was kept and reduced, the sizes - and
-its result counting it (`AgentRunResult.Compactions`), once: the runner's one `CompactionToSay` says it as the first
-launch given the compacted conversation begins (`InLaneAsync`, just before the client is taken), so a run that ends
-not started or held at the gate compacted nothing, and a retry or a move given the same record counts no other. A
+its result counting it (`AgentRunResult.Compactions`), once, the event and the count one fact: the runner's one
+`CompactionToSay` hands each launch a sink of its own (`LaunchSink`, in `InLaneAsync`) and says it as the first launch
+given the compacted conversation begins it - its client telling the sink so (`IAgentEventSink.ConversationBegunAsync`,
+told once where the client's own rule of a run never started stops holding: the loop as the provider begins its first
+answer with the model asked - `ChatPart.Began`, else the first answer had - claude-code as a call of it runs or a turn
+of it ends), or the launch ending any way but `NotStarted` having told none - naming the session the launch began. A run
+that ends not started - by the runner, by its client (no model, program, policy or key, a refusal, the web unserved) or
+by the provider before any answer began (a model the plan does not serve, Z.AI's 1311; met once one began, it fails the
+run) - or held at the gate compacted nothing, and a retry or a move given the same record counts no other. A side-task
+whose run given the compaction never started is left outgrown (`SideTaskWorking.Outgrown` reads a run ended
+`NotStarted` as one that never worked), so its next message is given the compaction again and says it then. A
 compaction carried before a task of its own (`AgentCompacted.BeforeItsTask`, a side-task's, whose why is
 `AgentCompaction.OutgrewItsContext`) is the run's continuation in place of the request's (`AgentRunner.ContinuationOf`),
 said and counted the same way. What each client is sent: `--json-schema` the

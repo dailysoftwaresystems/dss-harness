@@ -492,32 +492,98 @@ public sealed class AgentCompactionTests : IDisposable
     }
 
     /// <summary>
-    /// A compacted run that is never started - its client not registered, or its model without the price its budget
-    /// needs - was given to no client: it says no compaction and counts none, so the attempt after it counts its own once.
+    /// A compacted run that is never started - its client not registered, its model without the price its budget needs,
+    /// its client refusing it, or its provider not serving the model before any answer, once the launch's session began -
+    /// began no conversation: it says no compaction and counts none, so the attempt after it counts its own once.
     /// </summary>
     [Theory]
     [InlineData("no client")]
     [InlineData("no price")]
+    [InlineData("the client refuses it")]
+    [InlineData("the provider does not serve it")]
     public async Task ACompactedRunNeverStarted_SaysAndCountsNoCompaction(string why)
     {
         var seen = new RecordedEvents();
-        var request = new AgentStepRequest(
-            "r1", "a7", "s1", 1, null, null, why == "no client" ? "nobody" : null, null, "a-model", null, null, "be terse", "do the work", null,
-            new AgentWorkspace(null, _temp.Combine("work"), _temp.Path, [], _temp.Combine("work"), _temp.Path),
-            null, null, new AgentLimits(10, why == "no price" ? 1m : null, null, null), null)
+        var client = new Launching(async (run, events) =>
         {
-            Compaction = new AgentCompacted("the compaction record", KeptWordForWord: 2, Reduced: 3, SizeBefore: 400, SizeAfter: 21),
+            if (why == "the provider does not serve it")
+            {
+                await events.EmitAsync(Session("the-new-session"));
+            }
+
+            return AgentEndings.NotStarted("launching", AgentNotStartedBecause.ConfigurationWrong, "the plan does not serve the model", run.Model, run.Mask);
+        });
+
+        var ran = await new AgentRunner([client], _harness.FileSystem, Elevation.User, TimeProvider.System).RunAsync(
+            CompactedStep(client: why == "no client" ? "nobody" : null, budget: why == "no price" ? 1m : null),
+            seen,
+            Token);
+
+        Assert.Equal((AgentRunStatus.NotStarted, 0), (ran.Status, ran.Compactions));
+        Assert.Empty(seen.All.OfType<Compacted>());
+        Assert.Equal(why is "no client" or "no price" ? 0 : 1, client.Launches);
+    }
+
+    /// <summary>
+    /// A compacted run says the compaction as its client tells the conversation began - in order with its events, naming
+    /// the session the launch began - or, where it told none, as it ends any way but never started; once, and counted
+    /// once, the event and the count one fact.
+    /// </summary>
+    [Theory]
+    [InlineData("told")]
+    [InlineData("ended")]
+    public async Task ACompactedRun_SaysItsCompaction_AsItsLaunchBeginsTheConversation(string how)
+    {
+        var seen = new RecordedEvents();
+        var client = new Launching(async (run, events) =>
+        {
+            await events.EmitAsync(Session("the-new-session"));
+            await events.EmitAsync(new Notice("before"));
+
+            if (how == "told")
+            {
+                await events.ConversationBegunAsync();
+                await events.ConversationBegunAsync();
+            }
+
+            await events.EmitAsync(new Notice("after"));
+
+            return new AgentRunResult(AgentRunStatus.Failed, Model: run.Model, Error: "it broke");
+        });
+
+        var ran = await new AgentRunner([client], _harness.FileSystem, Elevation.User, TimeProvider.System).RunAsync(CompactedStep(), seen, Token);
+        var said = new Compacted(AgentCompaction.AnsweredCompact, "the-old-session", "the-new-session", 2, 3, 400, 21);
+
+        Assert.Equal((AgentRunStatus.Failed, 1), (ran.Status, ran.Compactions));
+        Assert.Equal(
+            how == "told" ? new[] { "session", "before", said.ToString(), "after" } : new[] { "session", "before", "after", said.ToString() },
+            seen.All
+                .Where(one => one is SessionStarted or Notice or Compacted)
+                .Select(one => one switch
+                {
+                    SessionStarted => "session",
+                    Notice notice => notice.Text,
+                    _ => (one with { Seq = 0, At = default }).ToString(),
+                }));
+    }
+
+    /// <summary>A compacted step's request, on the one client registered or the one named.</summary>
+    private AgentStepRequest CompactedStep(string? client = null, decimal? budget = null)
+        => new(
+            "r1", "a7", "s1", 1, null, null, client, null, "a-model", null, null, "be terse", "do the work", null,
+            new AgentWorkspace(null, _temp.Combine("work"), _temp.Path, [], _temp.Combine("work"), _temp.Path),
+            null, null, new AgentLimits(10, budget, null, null), null)
+        {
+            Compaction = new AgentCompacted("the compaction record", KeptWordForWord: 2, Reduced: 3, SizeBefore: 400, SizeAfter: 21) { Left = "the-old-session" },
             Entries = new AgentEntries(
                 new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Currency = "USD" },
                 new AgentModelConfig { Code = "a-model", MaxOutputTokens = 64000 },
                 null),
         };
 
-        var ran = await new AgentRunner([new Scripted()], _harness.FileSystem, Elevation.User, TimeProvider.System).RunAsync(request, seen, Token);
-
-        Assert.Equal((AgentRunStatus.NotStarted, 0), (ran.Status, ran.Compactions));
-        Assert.Empty(seen.All.OfType<Compacted>());
-    }
+    /// <summary>A session begun by a launch, named <paramref name="id"/>.</summary>
+    private static SessionStarted Session(string id)
+        => new("launching", "a-model", "digest", [], [], HandedConversation: false, SessionId: id);
 
     /// <summary>The stream a compacted conversation is reduced from: one attempt, a first message, two reduced iterations with calls, an engine message, and the last two.</summary>
     private static AgentEvent[] Stream()
@@ -551,5 +617,23 @@ public sealed class AgentCompactionTests : IDisposable
 
         public Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken)
             => Task.FromResult(new AgentRunResult(AgentRunStatus.Completed, FinalText: "done", Model: run.Model));
+    }
+
+    /// <summary>A client whose launch does what its script says with the sink it is handed, each launch counted.</summary>
+    private sealed class Launching(Func<AgentRun, IAgentEventSink, Task<AgentRunResult>> script) : IAgentClient
+    {
+        public string Name => "launching";
+
+        public int Launches { get; private set; }
+
+        public AgentClientCapabilities Capabilities { get; } = new(
+            Streaming: true, Thinking: false, WritableWhileWorking: false, AgentConversationHandling.Handed, SchemaEnforcedOutput: false,
+            AgentToolsOwner.Harness, AgentToolsOwner.Harness, ReportsCost: false, ["low"], ProviderType: "none", ToldModelBy: "the test");
+
+        public Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken)
+        {
+            Launches++;
+            return script(run, events);
+        }
     }
 }

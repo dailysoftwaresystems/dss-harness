@@ -992,8 +992,8 @@ failing the step. An answer gone on from, cut off or paused, is every piece of i
 is asked again up to 6 times after a wait that doubles from 2 s to 60 s, or the one the provider
 names; a service failing past them, or naming such a wait, fails the step, and one
 silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it;
-a model the provider does not serve the key never starts the
-step before its first answer and fails it after. The engine's fallback works inside the one
+a model the provider does not serve the key never starts the step before the provider begins an
+answer with the model asked and fails it once one began. The engine's fallback works inside the one
 conversation: a key the provider refuses - said, and passed over for the rest of the run - an
 account at its limit (a rate limit past those tries, or naming a wait past 300 s: the model's on
 the key it was sent with, or the key's whole where its balance is spent, each named) and a request
@@ -1073,7 +1073,9 @@ oldest messages of the agent are cut to their first 2000 characters each, oldest
 fits, and the record says how many were. It begins a new conversation, on every client - the
 record is the first message of one and the old is kept whole, never edited or sent again - said in
 the step's stream as `Compacted` and counted in its result once, as the first launch given it
-begins, so a run never started (its client missing, its model unpriced) or held at the gate
+begins the conversation - an API client's first answer begun, a `claude-code` call run or turn
+ended, or the launch ending any way but `NotStarted` - so a run never started (its client missing,
+its model unpriced, the client refusing it, a model the plan does not serve) or held at the gate
 compacted nothing, and a retry or a move is given the same record and counts no other; a
 side-task's compaction is said and counted the same way, its record carried before the person's
 next message; an attempt compacted again is reduced

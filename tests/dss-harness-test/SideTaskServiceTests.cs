@@ -63,6 +63,9 @@ public sealed class SideTaskServiceTests
             await events.EmitAsync(new MessageSent(AgentPromptParts.FirstMessage(run, newConversation: run.Conversation is null), AgentMessageKind.FirstPrompt));
             await events.EmitAsync(new SessionStarted(run.Conversation?.Client ?? ClientName, run.Model ?? "glm-5.3", "hash", [], [], HandedConversation: run.Conversation is not null, Provider: run.Provider ?? "zai", SessionId: session));
             await events.EmitAsync(new TurnStarted(1));
+
+            // The provider began its answer: the conversation is begun, as the API clients tell it.
+            await events.ConversationBegunAsync();
             await events.EmitAsync(new TextDelta(text));
             await events.EmitAsync(new AssistantMessage(text, []));
             await events.EmitAsync(new TurnFinished(1, run.Model ?? "glm-5.3", new AgentUsage(10, 5, 0, 0, 0, 0), "end_turn"));
@@ -180,6 +183,8 @@ public sealed class SideTaskServiceTests
 
                     if (!(turns == FailsOnTurn && FailsWithoutAResult))
                     {
+                        // A turn that ended stands: the conversation is begun, as Claude Code tells it.
+                        await events.ConversationBegunAsync();
                         await events.EmitAsync(new TurnFinished(turns, run.Model ?? "m", new AgentUsage(7, 3, 0, 0, 0, 0), "error"));
                     }
 
@@ -247,6 +252,9 @@ public sealed class SideTaskServiceTests
             }
 
             await events.EmitAsync(new AssistantMessage(about, []));
+
+            // A turn that ended stands: the conversation is begun, as Claude Code tells it.
+            await events.ConversationBegunAsync();
             await events.EmitAsync(new TurnFinished(turn, run.Model ?? "m", new AgentUsage(7, 3, 0, 0, 0, 0), "end_turn"));
         }
     }
@@ -701,8 +709,9 @@ public sealed class SideTaskServiceTests
     /// A launch held open that ends by itself - its context outgrown - leaves no line of the person's unanswered: the
     /// line it was given and never answered - written to it, said as written, and taken by the turn that outgrew the
     /// context, as the real client does - begins a new launch, going on from the conversation compacted, and the person
-    /// is told, and told again the conversation was compacted as the new launch is given it. What is unanswered is the
-    /// client's own count of what its turns answered, never what was written.
+    /// is told, and told the conversation was compacted as the new launch begins it - as its first turn ends, where a
+    /// client that renders its conversations can no longer end never started. What is unanswered is the client's own
+    /// count of what its turns answered, never what was written.
     /// </summary>
     [Fact]
     public async Task ALaunchThatEndsByItself_LosesNoLine_ANewLaunchGoesOnFromTheConversation()
@@ -739,8 +748,8 @@ public sealed class SideTaskServiceTests
             [
                 "about: first",
                 "the agent's launch ended ContextExhausted: the context is full; the next message begins a new launch, going on from the conversation so far",
-                $"compacted: {AgentCompaction.OutgrewItsContext}; this turn begins a new conversation from what it holds",
                 "about: second",
+                $"compacted: {AgentCompaction.OutgrewItsContext}; this turn begins a new conversation from what it holds",
             ],
             typed.Said);
 
@@ -1482,7 +1491,7 @@ public sealed class SideTaskServiceTests
         var said = Assert.Single(stream.OfType<Compacted>());
 
         Assert.Equal(
-            (AgentCompaction.OutgrewItsContext, left, string.Empty, 1, 0, (long)stored.Runs[1].Continuation!.Length),
+            (AgentCompaction.OutgrewItsContext, left, stream.OfType<SessionStarted>().Last().SessionId, 1, 0, (long)stored.Runs[1].Continuation!.Length),
             (said.Why, said.Left, said.Began, said.KeptWordForWord, said.Reduced, said.SizeAfter));
         Assert.True(stream.FindLastIndex(one => one is RunStarted) < stream.IndexOf(said), "said by the second turn's run, which is given it");
         Assert.Equal(
@@ -1543,6 +1552,44 @@ public sealed class SideTaskServiceTests
 
         var began = stream.OfType<SessionStarted>().Last();
         Assert.Equal(new AgentSessionRef(StoredClient.ClientName, "zai", began.SessionId!), RecordOf(harness, temp, directory)!.Conversation);
+    }
+
+    /// <summary>
+    /// A turn given the compaction that never starts - its provider not serving the model before any answer, though its
+    /// session began - says and counts none, and leaves the conversation outgrown: the next message is given the
+    /// compaction again, and it is said and counted once, then.
+    /// </summary>
+    [Fact]
+    public async Task ACompactedTurnThatNeverStarted_LeavesTheConversationOutgrown_ForTheNextMessage()
+    {
+        var (_, temp, service, stored, _) = await RepoAsync();
+        using var tree = temp;
+        var typed = new Typed(["a long one", "go on", "again"]);
+        var outgrows = OutgrowsItsContextOn("a long one");
+        stored.Script = async (run, events, token) =>
+        {
+            if (run.UserPrompt != "go on")
+            {
+                return await outgrows(run, events, token);
+            }
+
+            await events.EmitAsync(new SessionStarted(StoredClient.ClientName, run.Model ?? "glm-5.3", "hash", [], [], HandedConversation: false, Provider: "zai", SessionId: $"c{Guid.NewGuid():N}"));
+            return AgentEndings.NotStarted(StoredClient.ClientName, AgentNotStartedBecause.ConfigurationWrong, "the plan does not serve the model", run.Model, run.Mask);
+        };
+
+        await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "unserved", Chat: typed.Chat()), Token);
+
+        Assert.Equal(["a long one", "go on", "again"], stored.Runs.Select(run => run.UserPrompt));
+        Assert.Equal(((AgentSessionRef?)null, (AgentSessionRef?)null), (stored.Runs[1].Conversation, stored.Runs[2].Conversation));
+        Assert.Equal(stored.Runs[1].Continuation, stored.Runs[2].Continuation);
+
+        var stream = (await File.ReadAllLinesAsync(Path.Combine(LayoutOf(temp, "unserved").Directory, StoredStream.FileName), Token))
+            .Select(line => System.Text.Json.JsonSerializer.Deserialize<AgentEvent>(line, JsonStateFile.LineOptions)!)
+            .ToList();
+        var said = Assert.Single(stream.OfType<Compacted>());
+
+        Assert.Equal((AgentCompaction.OutgrewItsContext, stream.OfType<SessionStarted>().Last().SessionId), (said.Why, said.Began));
+        Assert.True(stream.FindLastIndex(one => one is RunStarted) < stream.IndexOf(said), "said by the third message's run, which began the conversation");
     }
 
     /// <summary>A stored client's script whose turn on <paramref name="prompt"/> outgrows the model's context, every other answered.</summary>

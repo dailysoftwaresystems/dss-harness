@@ -265,6 +265,54 @@ public sealed class ZaiApiClientTests : IDisposable
         Assert.Single(_endpoint.Asked);
     }
 
+    /// <summary>
+    /// A compacted step worked through Z.AI by the runner: on a model the plan does not serve - 1311, before any answer -
+    /// it never starts, and says and counts no compaction though its session began; served, it says the compaction once,
+    /// as its first request is answered, naming the session it began, and counts it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACompactedStep_SaysItsCompaction_OnlyWhereZaiBeginsItsConversation(bool served)
+    {
+        _endpoint.Then(served
+            ? ZaiApiFixtures.Reply("reasoned.sse", chunk: 3)
+            : Coded(429, "1311", "Your current subscription plan does not yet include access to glm-5.3"));
+        var seen = new RecordedEvents();
+        var run = Run();
+        var step = new AgentStepRequest(
+            "r1", "a1", "s1", 1, null, "zai", ZaiApiClient.ClientName, null, Model, null, null, "be terse", "do the work", null,
+            new AgentWorkspace(null, _worktree, _worktree, [], _worktree, _harness.FileSystem.ResolveLinks(_temp.Combine("run"))),
+            null, null, new AgentLimits(10, null, null, null), null)
+        {
+            RecordDirectory = _step,
+            SessionsDirectory = _sessions,
+            Ground = run.Ground,
+            Credential = run.Credential,
+            Entries = run.Entries,
+            Compaction = new AgentCompacted("the compaction record", KeptWordForWord: 2, Reduced: 3, SizeBefore: 400, SizeAfter: 21) { Left = "the-old-session" },
+        };
+
+        var ran = await new AgentRunner([Client()], _harness.FileSystem, Elevation.User, TimeProvider.System).RunAsync(step, seen, TestContext.Current.CancellationToken);
+
+        Assert.Single(seen.All.OfType<SessionStarted>());
+
+        if (!served)
+        {
+            Assert.Equal((AgentRunStatus.NotStarted, 0), (ran.Status, ran.Compactions));
+            Assert.Empty(seen.All.OfType<Compacted>());
+            return;
+        }
+
+        Assert.Equal((AgentRunStatus.Completed, 1), (ran.Status, ran.Compactions));
+        Assert.Equal(
+            new Compacted(AgentCompaction.AnsweredCompact, "the-old-session", ran.Session!, 2, 3, 400, 21),
+            Assert.Single(seen.All.OfType<Compacted>()) with { Seq = 0, At = default });
+        Assert.Equal(
+            ["RunStarted", "SessionStarted", "MessageSent", "TurnStarted", "Compacted", "UsageReported", "AssistantMessage", "TurnFinished", "RunFinished"],
+            seen.All.Where(one => one is not (TextDelta or ThinkingDelta)).Select(one => one.GetType().Name));
+    }
+
     /// <summary>The client says what it can do: streamed, thinking shown, written to while it works, the stored conversation handed, the harness's tools, the five levels.</summary>
     [Fact]
     public void TheClient_SaysWhatItCanDo()

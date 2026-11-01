@@ -659,7 +659,8 @@ internal sealed class Working
     /// its model's context (<see cref="Outgrown"/>), no stored conversation is handed and the engine's compaction of the
     /// conversation is carried in the next conversation's first message, before the person's next message as its task
     /// (<see cref="AgentCompacted.BeforeItsTask"/>), said by the runner as a <see cref="DssHarness.Core.Agents.Compacted"/>
-    /// event and counted as the client is given it - as a step's answer <c>compact</c> is, and said once. Otherwise the
+    /// event and counted as a launch given it begins the conversation - as a step's answer <c>compact</c> is, and said once,
+    /// never by a launch that never started, which leaves the conversation outgrown for the next. Otherwise the
     /// stored conversation goes on where there is one, and where the next turn begins a conversation of its own - a new
     /// launch, another provider's model, a fallback - the conversation so far is carried in its first message, reduced
     /// as the engine's compaction reduces it; where the stored conversation is handed, the client sends none of it.
@@ -678,9 +679,10 @@ internal sealed class Working
 
     /// <summary>
     /// Whether the conversation outgrew its model's context: the last run of the stream that worked - one that began a
-    /// session - ended <see cref="AgentRunStatus.ContextExhausted"/>. A run given the compaction of it begins a session of
-    /// its own, so once one has worked the conversation goes on as any does; a run that never began one leaves it as it
-    /// stood.
+    /// session and ended any way but <see cref="AgentRunStatus.NotStarted"/> - ended
+    /// <see cref="AgentRunStatus.ContextExhausted"/>. A run given the compaction of it begins a session of its own, so once
+    /// one has worked the conversation goes on as any does; a run that never began one, or never started all the same,
+    /// leaves it as it stood.
     /// </summary>
     /// <param name="stream">The side-task's stream, read as one conversation.</param>
     private static bool Outgrown(IReadOnlyList<AgentEvent> stream)
@@ -697,7 +699,13 @@ internal sealed class Working
                     break;
 
                 case RunFinished finished when worked:
-                    outgrown = finished.Status == AgentRunStatus.ContextExhausted;
+                    // A run that began a session and still never started - its provider not serving the model before
+                    // any answer - leaves it as it stood, as one that began none does.
+                    if (finished.Status != AgentRunStatus.NotStarted)
+                    {
+                        outgrown = finished.Status == AgentRunStatus.ContextExhausted;
+                    }
+
                     worked = false;
                     break;
             }

@@ -58,6 +58,15 @@ public interface IAgentEventSink
     /// <summary>Takes one event, in order.</summary>
     /// <param name="event">The event, numbered and stamped.</param>
     ValueTask EmitAsync(AgentEvent @event);
+
+    /// <summary>
+    /// The run a client works has begun its conversation: from now on it never ends
+    /// <see cref="AgentRunStatus.NotStarted"/>. A client tells it once, where its own rule of a run never started stops
+    /// holding - the loop as the provider begins its first answer with the model asked, Claude Code as a call of it runs
+    /// or a turn of it ends - in order with its events; the runner says the step's compaction then. A sink that keeps
+    /// nothing of it does nothing.
+    /// </summary>
+    ValueTask ConversationBegunAsync() => ValueTask.CompletedTask;
 }
 
 /// <summary>

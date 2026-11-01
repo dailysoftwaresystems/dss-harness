@@ -751,7 +751,7 @@ public sealed class ClaudeCodeClient(
                     continue;
                 }
 
-                totals.Acted = true;
+                await ActedAsync().ConfigureAwait(false);
 
                 if (!_decided.TryGetValue(result.CallId, out var decided))
                 {
@@ -1183,7 +1183,7 @@ public sealed class ClaudeCodeClient(
         private async Task<LaunchOutcome?> OnResultAsync(ClaudeLine.Result result)
         {
             _inTurn = false;
-            totals.Acted = true;
+            await ActedAsync().ConfigureAwait(false);
             var served = _held ?? model;
 
             AgentCost? part = null;
@@ -1505,6 +1505,21 @@ public sealed class ClaudeCodeClient(
         private void Record(JsonNode message) => _control?.Append(Masked(message.ToJsonString()));
 
         private ValueTask Emit(AgentEvent @event) => events.EmitAsync(@event);
+
+        /// <summary>
+        /// The run did something that stands - a call ran, or a turn ended - so it never ends NotStarted from here
+        /// (<see cref="NotHost"/>): the sink is told the conversation began, once.
+        /// </summary>
+        private async ValueTask ActedAsync()
+        {
+            if (totals.Acted)
+            {
+                return;
+            }
+
+            totals.Acted = true;
+            await events.ConversationBegunAsync().ConfigureAwait(false);
+        }
 
         private string Masked(string text) => run.Mask.Redact(text);
 

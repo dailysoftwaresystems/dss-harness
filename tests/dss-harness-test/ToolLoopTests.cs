@@ -403,6 +403,53 @@ public sealed class ToolLoopTests : IDisposable
     }
 
     /// <summary>
+    /// A model the provider will not serve, met after it began an answer with the model asked - one cut part way and
+    /// asked again - fails the step: the provider served the model, so the run began.
+    /// </summary>
+    [Fact]
+    public async Task AModelUnservedAfterAnAnswerBegan_FailsTheStep()
+    {
+        _chat.Fail(new ChatFailure(ChatFailureKind.Transient, "the stream broke"), written: "half")
+            .Fail(new ChatFailure(ChatFailureKind.Unserved, "the model is not given this organization"));
+
+        var result = await Ran(Run(), Terms(maxRetries: 2));
+
+        Assert.Equal((AgentRunStatus.Failed, null, "the model is not given this organization", 2), (result.Status, result.NotStartedBecause, result.Error, _chat.Requests.Count));
+    }
+
+    /// <summary>
+    /// The run tells its sink the conversation began once, as the provider begins its first answer with the model asked -
+    /// after the session and the first message, before anything the answer wrote - and never where the provider does not
+    /// serve the model before any answer, the run never started though its session began.
+    /// </summary>
+    [Fact]
+    public async Task TheConversation_IsBegunAsItsFirstAnswerBegins_NeverByAModelUnservedBeforeAnyAnswer()
+    {
+        Write("a.txt", "alpha");
+        _chat.Answer(FakeChat.Calling(View("c1", "a.txt"))).Answer(FakeChat.Said("done"));
+        var begun = new Begun();
+
+        var answered = await Ran(Run(), sink: begun);
+
+        Assert.Equal(AgentRunStatus.Completed, answered.Status);
+        var at = Assert.Single(begun.At);
+        Assert.Equal(["SessionStarted", "MessageSent", "TurnStarted"], begun.Events.Take(at).Select(one => one.GetType().Name));
+        Assert.Equal(
+            ["ToolCallStarted", "UsageReported", "AssistantMessage", "TurnFinished", "ToolCallFinished", "TurnStarted", "TextDelta", "UsageReported", "AssistantMessage", "TurnFinished"],
+            begun.Events.Skip(at).Select(one => one.GetType().Name));
+
+        var unserved = new FakeChat();
+        unserved.Fail(new ChatFailure(ChatFailureKind.Unserved, "the model is not given this organization"));
+        var refused = new Begun();
+
+        var never = await Ran(Run(), chat: unserved, sink: refused);
+
+        Assert.Equal(AgentRunStatus.NotStarted, never.Status);
+        Assert.Single(refused.Events.OfType<SessionStarted>());
+        Assert.Empty(refused.At);
+    }
+
+    /// <summary>
     /// A request of a step with a model after its own asks that a decline leave it a credit, and the decline's credit
     /// is sent back with the same request on that model; a step with no model after its own asks none, and neither does
     /// one whose every later entry cannot be used here.
@@ -2348,6 +2395,26 @@ public sealed class ToolLoopTests : IDisposable
 
     /// <summary>A part no provider streams.</summary>
     private sealed record Strange : ChatPart;
+
+    /// <summary>A sink that records every event, and where among them it was told the conversation began.</summary>
+    private sealed class Begun : IAgentEventSink
+    {
+        public List<AgentEvent> Events { get; } = [];
+
+        public List<int> At { get; } = [];
+
+        public ValueTask EmitAsync(AgentEvent @event)
+        {
+            Events.Add(@event);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ConversationBegunAsync()
+        {
+            At.Add(Events.Count);
+            return ValueTask.CompletedTask;
+        }
+    }
 
     /// <summary>A sink that records every event and, at the first that <paramref name="when"/> picks, does <paramref name="then"/>.</summary>
     private sealed class Reacting(RecordedEvents inner, Func<AgentEvent, bool> when, Action then) : IAgentEventSink
