@@ -287,7 +287,8 @@ public sealed partial class HelpTests
                 + "address); worktreeRules (true where nothing is said) and protectedPaths (true too), the switches of the rule sets "
                 + "'help agent-clients' names; keepEnvironment, the secret-shaped names a command an agent runs keeps; "
                 + "commandTimeoutSeconds (120) and maxCommandTimeoutSeconds (3600), how long one runs where its call names no time, "
-                + "and the most it may name, 2147483 at most ('help agent-clients')",
+                + "and the most it may name, 2147483 at most; isolation, required or preferred (required where nothing is said), whether "
+                + "an agent that may run a command starts where this machine cannot isolate its commands ('help agent-clients')",
             config,
             StringComparison.Ordinal);
 
@@ -445,7 +446,8 @@ public sealed partial class HelpTests
         var prose = Prose.Words(HelpText.Of("side-tasks").StandardOutput);
 
         Assert.Contains(
-            $"{HarnessExit.ToolMissing} a client that cannot start - no claude, no npm; {HarnessExit.Incomplete} the install of "
+            $"{HarnessExit.ToolMissing} a client that cannot start - no claude, no npm - or, under agentPolicy.isolation \"required\", a "
+                + $"machine that cannot isolate the agent's commands; {HarnessExit.Incomplete} the install of "
                 + $"Claude Code timed out or could not reach the registry; and in one shot besides, {HarnessExit.CommandFailed} "
                 + "the model failed past its retries and fallback, "
                 + $"{HarnessExit.Incomplete} cut short by the account's limit, a stall or the clock, {HarnessExit.Cancelled} interrupted.",
@@ -869,6 +871,31 @@ public sealed partial class HelpTests
         Assert.Contains("This is policy, not a sandbox", prose, StringComparison.Ordinal);
         Assert.Contains("Where this tool cannot decide a call it denies it, never allows", prose, StringComparison.Ordinal);
 
+        // Beneath the policy, the operating system's isolation: the mechanism, what it denies, the mode and its codes, the
+        // records, and the verbs refused for it - named from the one list the policy refuses by.
+        Assert.Contains(
+            "On Linux, WSL 2's included, the mechanism is the system's bubblewrap 0.8.0 or newer - the first bwrap in an absolute "
+                + "directory of the PATH outside the tree - which the contained step becomes in the child's place, so no child runs "
+                + "outside it for an instant. Inside it every credential slot of the main checkout and every Claude Code directory is "
+                + "an empty place;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "agentPolicy.isolation says what happens where this machine has none: required, where nothing is said, starts no agent "
+                + $"that may run a command - its step ends failed ({HarnessExit.ToolMissing}), the advisor gives no advice, run-side-task "
+                + $"exits {HarnessExit.ToolMissing}, each saying why and the remedy (on Ubuntu, where "
+                + "/proc/sys/kernel/apparmor_restrict_unprivileged_userns is 1, the bwrap-userns-restrict AppArmor profile); preferred "
+                + "runs it on the words policy alone, said at every launch. An agent that may run no command - the reporter - needs "
+                + "none, and none is probed.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "so each is refused to every agent by name, a side-task's as well as a step's: "
+                + $"{string.Join(", ", DssHarness.Core.Agents.Policy.AgentPolicy.SlotOrStateVerbs)}; those that only read, and those "
+                + "that write only the tree's own files, stay open.",
+            prose,
+            StringComparison.Ordinal);
+
         // The side-tasks topic says the same of what a side-task's words are held to, and where that reading ends.
         Assert.Contains(
             "and run-side-task itself, refused to every agent where a word of a command or of a script the policy reads names it or a verb the "
@@ -882,7 +909,9 @@ public sealed partial class HelpTests
                 + "main tree is the side-task's working directory and holds the credential slots: a command over it whole - named . or given no "
                 + "path, an archive of it or a search - is not told from one over its sources, and reaches their files; and code an interpreter "
                 + "runs (python -c, perl -e, awk's system) or a process apart from the agent's tree does what no word the policy reads says. This "
-                + "is a policy of what a command names, not a sandbox.",
+                + "is a policy of what a command names, not a sandbox; beneath it, where this machine has one, the operating system's isolation "
+                + "('help agent-clients') hides every credential slot from each command - one over the main tree whole finds each slot empty - "
+                + "and keeps it from git's code-running files and the tool's state.",
             Prose.Words(HelpText.Of("side-tasks").StandardOutput),
             StringComparison.Ordinal);
     }

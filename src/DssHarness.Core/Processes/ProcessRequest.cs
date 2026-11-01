@@ -128,6 +128,14 @@ public sealed record ProcessRequest
     public bool Contained { get; init; }
 
     /// <summary>
+    /// The operating system's isolation a <see cref="Contained"/> child runs inside - what the child is denied beyond what
+    /// its user may do, and the mechanism that denies it - or <see langword="null"/> for none. The contained step becomes
+    /// the mechanism in the child's place, which starts the program inside it: the child is never outside for an instant.
+    /// Given only with <see cref="Contained"/>, for it is the contained step that places it.
+    /// </summary>
+    public ProcessIsolation? Isolation { get; init; }
+
+    /// <summary>
     /// Whether the child is bound to this process's life: on Windows it is placed, before it runs a line of its own, in the
     /// one job object this process holds for its whole life, whichever operation's runner starts it, which ends every
     /// member when its last handle closes. So this process ending in any way, a hard

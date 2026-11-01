@@ -2419,6 +2419,24 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// A launch whose run was given an isolation starts the whole Claude Code process inside it, with the profile that keeps
+    /// the Claude Code directories open - its own login is read there - never the one a command of the API clients gets.
+    /// </summary>
+    [Fact]
+    public async Task ALaunch_StartsTheWholeClaudeCodeInsideTheRunsIsolation_ItsDirectoriesOpen()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        var mechanism = new PassThroughMechanism();
+        var whole = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath("/r/.harness-config/sshItems", Directory: true)], []);
+        var commands = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath("/home/me/.claude", Directory: true)], []);
+
+        await kit.Client().RunAsync(kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, whole, null, null) }, new Sink(), Token);
+
+        Assert.Equal(new DssHarness.Core.Processes.ProcessIsolation(mechanism, whole), Assert.Single(kit.Runner.Requests).Isolation);
+    }
+
+    /// <summary>
     /// A launch asks, on every system, to be contained with its session recorded under its own step: the record its request
     /// carries, once placed, is the step's own, and is taken back at the launch's end. Where the runner writes one - Linux
     /// and macOS, not Windows - ALaunch_IsContained_AndRecordsItsSessionUnderItsStep holds it for a launch that runs.

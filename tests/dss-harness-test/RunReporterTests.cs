@@ -137,6 +137,7 @@ public sealed class RunReporterTests
             harness.AgentService,
             reporterRunner,
             new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform),
+            new TestIsolation(),
             updates: claudeCode is null
                 ? null
                 : new DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService(
@@ -507,7 +508,8 @@ public sealed class RunReporterTests
             harness.GitClient,
             harness.AgentService,
             new Agents(),
-            new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform));
+            new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform),
+            new TestIsolation());
 
         var status = await service.AskStatusAsync(temp.Path, "o1", json: false, Token).WaitAsync(Bound, Token);
 

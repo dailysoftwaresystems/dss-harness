@@ -141,6 +141,12 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
                 await pump.PostOwnAsync(new RunStarted(step.Attempt)).ConfigureAwait(false);
 
+                // A launch that runs on the words policy alone says so at its start, every time, in its own stream.
+                if (step.Isolation?.Notice is { } unisolated)
+                {
+                    await pump.PostOwnAsync(new Notice(unisolated)).ConfigureAwait(false);
+                }
+
                 (var worked, thrown) = await WorkAsync(step, directory, mask, pump, cancellationToken).ConfigureAwait(false);
                 result = worked;
 
@@ -188,8 +194,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         }
 
         // The record is whole, closed, and the run has ended: the result is written after the stream that says how it
-        // went, so the two cannot disagree. Then the client's own failure is raised, and else what a listener or a
-        // callback on the run's stop raised.
+        // went, so the two cannot disagree - with the isolation the launch ran under, as the engine decided it. Then the
+        // client's own failure is raised, and else what a listener or a callback on the run's stop raised.
+        result = result with { Isolation = step.Isolation?.Record };
         Ended(directory, result);
 
         if (thrown is not null)
@@ -1383,6 +1390,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             step.Compaction is { BeforeItsTask: false } whole ? whole.Record : null)
         {
             Ground = step.Ground,
+            Isolation = step.Isolation,
             Credential = step.Credential,
             Program = step.Program,
             ProgramVersion = step.ProgramVersion,
@@ -1442,6 +1450,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             step.Compaction is { BeforeItsTask: false } whole ? whole.Record : null)
         {
             Ground = step.Ground,
+            Isolation = step.Isolation,
             Credential = credential,
             Program = step.Program,
             ProgramVersion = step.ProgramVersion,

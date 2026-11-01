@@ -2466,7 +2466,8 @@ public static class HelpTopics
             + "git does not ignore, a side-task started under an agent or whose starting processes could not be read, an "
             + "update of Claude Code refused - a session of "
             + "it running, or the machine's processes unread - and in one shot a key missing or the tool running "
-            + $"elevated; {HarnessExit.ToolMissing} a client that cannot start - no claude, no npm; "
+            + $"elevated; {HarnessExit.ToolMissing} a client that cannot start - no claude, no npm - or, under "
+            + $"agentPolicy.isolation \"{Agents.Isolation.AgentIsolationMode.Required}\", a machine that cannot isolate the agent's commands; "
             + $"{HarnessExit.Incomplete} the install of Claude Code timed out or could not reach the registry; and in one "
             + $"shot besides, {HarnessExit.CommandFailed} the model failed past its retries and fallback, "
             + $"{HarnessExit.Incomplete} cut short by the account's limit, a stall or the clock, {HarnessExit.Cancelled} "
@@ -2493,8 +2494,8 @@ public static class HelpTopics
             + "dropped - no restriction list (Web(...), Run(...), Write(...), Read(...)), no allow list of pages, the web "
             + "search over every configured source turned on with no maxPerStep, no cap on money, turns or time, all four "
             + "capabilities, the main tree its writable root, the worktree rules and the protected paths off - so it can "
-            + "edit .harness-config/config.json to add a search source, commit, branch, and run this tool's own verbs as "
-            + "the person could. Its web_search asks one more source beside the configured ones: native, the provider's "
+            + "edit .harness-config/config.json to add a search source, commit, branch, and run this tool's own verbs that "
+            + "read no credential slot and write none of its state as the person could. Its web_search asks one more source beside the configured ones: native, the provider's "
             + "own search - on the Claude API a request of the harness's own whose only tool is the provider's search, asked "
             + "with the model and key serving the side-task when the agent asks and through that key's gate as every request "
             + "is, what it costs counted then to that model and key, a failure of it - a gate held past the longest wait "
@@ -2503,7 +2504,8 @@ public static class HelpTopics
             + "stays, and why: the built-in refusals - no root action, no agent while the tool runs elevated, no file "
             + "tool's read or write of a credential slot or a Claude Code directory, no command whose words name one or a "
             + $"directory that holds one to a program that may read it, other than its working directory and those above it ('{ToolPackage.Command} help agent-clients' says how a word is read), no "
-            + "command that prints a credential, no git or gh command called by a name none of their own commands is - "
+            + "command that prints a credential, no git or gh command called by a name none of their own commands is, no "
+            + "verb of this tool's that reads a credential slot or writes its state ('help agent-clients' names them) - "
             + "each refused to the agent and said in the chat for the person to do by hand; git's own files "
             + "(Write(.git/**)), written by git's verbs and this tool's, never by an agent's file tool or a command's "
             + "write; the tool's own state, written only by its verbs; each search source's own pace and rate limits; and "
@@ -2520,7 +2522,10 @@ public static class HelpTopics
             + "working directory and holds the credential slots: a command over it whole - named . or given no path, an "
             + "archive of it or a search - is not told from one over its sources, and reaches their files; and code an "
             + "interpreter runs (python -c, perl -e, awk's system) or a process apart from the agent's tree does what no "
-            + "word the policy reads says. This is a policy of what a command names, not a sandbox.");
+            + "word the policy reads says. This is a policy of what a command names, not a sandbox; beneath it, where this "
+            + "machine has one, the operating system's isolation ('help agent-clients') hides every credential slot from "
+            + "each command - one over the main tree whole finds each slot empty - and keeps it from git's code-running "
+            + "files and the tool's state.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -3022,6 +3027,8 @@ public static class HelpTopics
         builder.AppendLine("command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a");
         builder.AppendLine("side-task.");
         builder.AppendLine();
+        AppendWrapped(builder, IsolationProse());
+        builder.AppendLine();
         AppendWrapped(builder, ClaudeCodeClientProse());
         builder.AppendLine();
         AppendWrapped(builder, ToolRuntimeProse());
@@ -3036,6 +3043,48 @@ public static class HelpTopics
 
         return builder.ToString();
     }
+
+    /// <summary>
+    /// The operating system's isolation of an agent's commands beneath the policy: the mechanism, what a launch's profile
+    /// denies, the mode and its refusal, the records, and the verbs refused for it - named from
+    /// <see cref="Agents.Policy.AgentPolicy.SlotOrStateVerbs"/>, so the list said is the list refused.
+    /// </summary>
+    private static string IsolationProse()
+        => "Beneath the policy, the operating system isolates every command an agent runs, so a command spelt past a "
+            + "reader of words still reads no credential slot and writes neither git's code-running files nor the tool's "
+            + $"state. On Linux, WSL 2's included, the mechanism is the system's bubblewrap {Bubblewrap.Oldest} or newer - "
+            + $"the first {IsolationPlatform.BubblewrapProgram} in an absolute directory of the PATH outside the tree - "
+            + "which the contained step becomes in the child's place, so no child runs outside it for an instant. Inside it "
+            + "every credential slot of the main checkout and every Claude Code directory is an empty place; git's "
+            + "code-running files of every tree the agent touches (the hooks git runs, the common directory's config, "
+            + "config.worktree and info/, each linked worktree's config.worktree, every submodule's hooks and config), the "
+            + "user's own git configuration (~/.gitconfig, and git/ under XDG_CONFIG_HOME or ~/.config), the tool's state "
+            + "under each tree and the launch's own directory are read-only, the agent's writable roots - its worktree, its "
+            + "work directory - written again inside them; git's objects, index and refs stay writable, so git add, fetch, "
+            + "rm and status work. Each place not there is made, empty, before the launch, so no command makes it inside "
+            + "and has it read or run outside later - but a state file, which the tool reads as meaning something, is never "
+            + "made, and the words policy alone guards it. The child has a user namespace of its own that allows no further "
+            + "one, and a process namespace with its own /proc; WSL's interoperation sockets (/run/WSL, and "
+            + $"{Bubblewrap.WslInteropVariable} taken from its environment), the user's service manager and message bus are "
+            + "hidden; the network is the user's. A claude-code launch runs whole inside it, the Claude Code directories "
+            + "open to it - it reads its own login there - and guarded for it by the words policy alone; the API clients' "
+            + "run_command starts each command inside it. The mechanism is proved once per process, before the first "
+            + "launch whose agent may run a command: a canary in a hidden place unread, a place written by nobody "
+            + "unwritten, an open place written. agentPolicy.isolation says what happens where this machine has none: "
+            + $"{Agents.Isolation.AgentIsolationMode.Required}, where nothing is said, starts no agent that may run a "
+            + $"command - its step ends failed ({HarnessExit.ToolMissing}), the advisor gives no advice, run-side-task "
+            + $"exits {HarnessExit.ToolMissing}, each saying why and the remedy (on Ubuntu, where "
+            + $"{IsolationPlatform.RestrictedUserNamespaces} is 1, the bwrap-userns-restrict AppArmor profile); "
+            + $"{Agents.Isolation.AgentIsolationMode.Preferred} runs it on the words policy alone, said at every launch. "
+            + "An agent that may run no command - the reporter - needs none, and none is probed. Each launch's records say "
+            + "what it ran under - isolation in result.json and in each turn of a side-task's task.json: the mode, with "
+            + "the mechanism and its version or why there was none. Windows and macOS have no mechanism of this tool's "
+            + "yet: on each, required refuses and preferred runs on the words alone; from WSL 2, bubblewrap isolates. What "
+            + "no mount reaches - a hard link made before the launch, another path bound to the same files - is where it "
+            + "ends. This tool's verbs that read a credential slot or write its state would fail inside it, so each is "
+            + "refused to every agent by name, a side-task's as well as a step's: "
+            + $"{string.Join(", ", Agents.Policy.AgentPolicy.SlotOrStateVerbs)}; those that only read, and those that "
+            + "write only the tree's own files, stay open.";
 
     /// <summary>
     /// How the agents' policy reads a shell command, what it refuses as undecided, and the worktree rules - git's
@@ -5280,8 +5329,10 @@ public static class HelpTopics
         builder.AppendLine("                 agent-clients' names; keepEnvironment, the secret-shaped names a");
         builder.AppendLine($"                 command an agent runs keeps; commandTimeoutSeconds ({Agents.AgentCommandSettings.DefaultTimeoutSeconds}) and");
         builder.AppendLine($"                 maxCommandTimeoutSeconds ({Agents.AgentCommandSettings.DefaultMaxTimeoutSeconds}), how long one runs where its call");
-        builder.AppendLine($"                 names no time, and the most it may name, {Agents.AgentCommandSettings.MostTimeoutSeconds} at most");
-        builder.AppendLine("                 ('help agent-clients')");
+        builder.AppendLine($"                 names no time, and the most it may name, {Agents.AgentCommandSettings.MostTimeoutSeconds} at most;");
+        builder.AppendLine($"                 isolation, {string.Join(" or ", Agents.Isolation.AgentIsolationMode.Modes)} ({Agents.Isolation.AgentIsolationMode.Required} where nothing is");
+        builder.AppendLine("                 said), whether an agent that may run a command starts where this");
+        builder.AppendLine("                 machine cannot isolate its commands ('help agent-clients')");
         AppendWrapped(
             builder,
             $"the harness's own web search: sources, each by its name - its {string.Join(", ", Web.Search.WebSearchSource.OwnKeys.Select(key => key.Name))} "

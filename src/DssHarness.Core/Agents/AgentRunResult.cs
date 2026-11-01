@@ -329,6 +329,13 @@ public sealed record AgentRunResult(
     public IReadOnlyList<string> Uncontained { get; init; } = [];
 
     /// <summary>
+    /// The operating system's isolation the launch's agent ran under, as the engine decided it: the mode, and the mechanism
+    /// and its version, or why there was none. Null where none was decided, and not written then.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Isolation.AgentIsolationRecord? Isolation { get; init; }
+
+    /// <summary>
     /// The provider's service failed past the client's own tries - unreachable, down, or refusing the account - which is
     /// the provider's state and no model's answer: the run is neither retried on its model nor moved to another, for
     /// every model of the step is reached through the same service. False for every other failure, and written only

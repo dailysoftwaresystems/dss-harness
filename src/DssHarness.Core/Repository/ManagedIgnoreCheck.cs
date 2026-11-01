@@ -127,7 +127,7 @@ public sealed class ManagedIgnoreCheck(IGitClient git, IFileSystem fileSystem, I
     private const string GitIgnoreFileName = ".gitignore";
 
     /// <summary>What a scratch repository it cannot remove is warned about under: the command it serves.</summary>
-    private const string CommandName = "init";
+    private const string CommandName = Commands.InitService.CommandName;
 
     private readonly IGitClient _git = git;
     private readonly IFileSystem _fileSystem = fileSystem;

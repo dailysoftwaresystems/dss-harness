@@ -706,7 +706,10 @@ public sealed class AgentPolicyTests
 
         Assert.Equal("the orchestrator and agent verbs", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("dssharness delete-agent a1")).Rule);
         Assert.Equal("run-side-task", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("run-side-task")).Rule);
-        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run((IReadOnlyList<string>)["dssharness", "build", "--legs", "windows"]));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run((IReadOnlyList<string>)["dssharness", "validate-workflow", "implementation"]));
+        Assert.Equal(
+            ("the verbs that read a slot or write state", "'dssharness build' is refused: it reads a credential slot or writes this tool's own state, which no command of an agent may - inside the operating system's isolation every slot is empty and the state read-only - so a person runs it"),
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run((IReadOnlyList<string>)["dssharness", "build", "--legs", "windows"])) is var built ? (built.Rule, built.Reason) : default);
 
         // Run by another program, from a response file, or by its path: the same verbs.
         foreach (var command in new[] { "dotnet dssharness fold-agent a1", "dotnet tool run dssharness create-agent", "/opt/tools/dssharness.exe delete-agent a1" })
@@ -719,6 +722,18 @@ public sealed class AgentPolicyTests
         Assert.Equal(
             [OrchestratorService.CreateCommand, OrchestratorService.DeleteCommand, FlowService.RunCommand, FlowService.ResumeCommand, FlowService.AnswerCommand, FlowService.PauseCommand, FlowService.StopCommand, AgentService.CreateCommand, AgentService.SeedCommand, AgentService.RefreshCommand, AgentService.RebaseCommand, AgentService.FoldCommand, AgentService.DeleteCommand, RunStopService.CommandName],
             AgentPolicy.ToolVerbs);
+
+        // The verbs that read a credential slot or write the tool's own state, refused to every agent: what each reads and
+        // writes, spelt out here so a verb that joins or leaves the list is a decision this test is changed for.
+        Assert.Equal(
+            [
+                "init", "create-worktree", "delete-worktree", "create-orchestrator", "delete-orchestrator", "list-agent-providers",
+                "run-orchestrator", "resume-orchestrator", "answer-orchestrator", "amend-orchestrator-request", "pause-orchestrator",
+                "stop-orchestrator", "ask-orchestrator-status", "ask-orchestrator", "create-agent", "seed-agent", "refresh-agent",
+                "rebase-agent", "fold-agent", "delete-agent", "legs", "install-missing-tools", "sync", "build", "test", "run",
+                "check-mutations", "stop-run", "clean", "host-exec",
+            ],
+            AgentPolicy.SlotOrStateVerbs);
     }
 
     [Fact]

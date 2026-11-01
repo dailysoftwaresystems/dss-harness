@@ -39,6 +39,13 @@ public sealed record SideTaskTurn(
     /// <inheritdoc cref="SideTaskTurn" path="/param[@name='Served']"/>
     public IReadOnlyList<AgentServedModel> Served { get; init => field = value ?? []; } = Served ?? [];
 
+    /// <summary>
+    /// The operating system's isolation the agent's commands ran under in this turn: the mode, and the mechanism and its
+    /// version, or why there was none. Null in a record written before the isolation was decided.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public Isolation.AgentIsolationRecord? Isolation { get; init; }
+
     /// <summary>What is wrong with this record, as a strict read refuses it; null where nothing is.</summary>
     public string? Problem()
         => string.IsNullOrWhiteSpace(Client) ? "client says nothing"

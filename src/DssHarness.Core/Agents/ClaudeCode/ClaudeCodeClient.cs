@@ -441,6 +441,10 @@ public sealed class ClaudeCodeClient(
                 ErrorKept = StreamKept.Tail,
                 CutLine = run.Mask.Cut,
                 Contained = true,
+
+                // The whole Claude Code process inside the operating system's isolation, its own directories open to it: it
+                // runs every command itself, so its commands run inside with it.
+                Isolation = run.Isolation?.ForClaudeCode,
                 SessionRecord = client._sessions.For(directory),
                 Timeout = run.Limits.MaxDuration,
             };

@@ -287,6 +287,12 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     }
 
     /// <summary>
+    /// The state paths (<see cref="StatePaths"/>) that are files, by their names: the run lock and a synced copy's
+    /// marker. Every other state path is a directory.
+    /// </summary>
+    public static IReadOnlyList<string> StateFileNames { get; } = [LockFileName, SyncedCopyMarkerName];
+
+    /// <summary>
     /// The tool's own state (<see cref="StatePaths"/>) under one tree an agent works over: each place joined to
     /// <paramref name="tree"/> - a worktrees root configured outside it standing as configured - each once. The one list a
     /// step's ground and a side-task's guard, so neither reads the tree itself as state.

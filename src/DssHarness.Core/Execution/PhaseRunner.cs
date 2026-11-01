@@ -144,6 +144,12 @@ public sealed record PhaseRequest
     /// this process was killed and left it (<see cref="ProcessRequest.SessionRecord"/>); null where it is recorded nowhere.
     /// </summary>
     public IContainedSessionRecord? SessionRecord { get; init; }
+
+    /// <summary>
+    /// The operating system's isolation a <see cref="Contained"/> phase runs inside (<see cref="ProcessRequest.Isolation"/>);
+    /// null for none.
+    /// </summary>
+    public ProcessIsolation? Isolation { get; init; }
 }
 
 /// <summary>
@@ -317,6 +323,7 @@ public sealed class PhaseRunner(
             Bound = !request.LeftRunning,
             Contained = request.Contained,
             SessionRecord = request.SessionRecord,
+            Isolation = request.Isolation,
         };
 
         var startedUtc = _wallClock.GetUtcNow();

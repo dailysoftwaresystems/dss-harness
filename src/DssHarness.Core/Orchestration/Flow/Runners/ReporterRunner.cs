@@ -24,6 +24,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="runner">Works the reporter, whatever the client is.</param>
 /// <param name="fileSystem">The file system the workflow's files are read on.</param>
 /// <param name="keys">The slot the entry's keys are read from.</param>
+/// <param name="isolation">Decides the operating system's isolation the reporter runs under: none, for it runs no command.</param>
 /// <param name="updates">Finds the Claude Code the reporter's order starts, where it holds the client that starts one; null where nothing does.</param>
 public sealed class ReporterRunner(
     IHarnessContextLoader contextLoader,
@@ -31,13 +32,14 @@ public sealed class ReporterRunner(
     IAgentRunner runner,
     IFileSystem fileSystem,
     Secrets.AgentKeyStore keys,
+    Agents.Isolation.IAgentIsolation isolation,
     ClaudeCodeUpdateService? updates = null) : IFlowReporterRunner
 {
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IHostPlatform _platform = platform;
     private readonly IAgentRunner _runner = runner;
     private readonly IFileSystem _fileSystem = fileSystem;
-    private readonly ReasonLaunch _launch = new(fileSystem, platform, keys, updates);
+    private readonly ReasonLaunch _launch = new(fileSystem, platform, keys, updates, isolation);
 
     /// <inheritdoc/>
     public async Task<FlowReported> ReportAsync(FlowReporterCall call, CancellationToken cancellationToken)
@@ -138,6 +140,14 @@ public sealed class ReporterRunner(
         };
         var mask = _launch.Mask(context.Layout, providers);
 
+        // The reporter runs no command, so it needs no isolation of the operating system's; its records say so.
+        var isolated = await _launch.IsolationAsync(context.Config, ground, context.Layout, asks, cancellationToken).ConfigureAwait(false);
+
+        if (isolated.Refusal("the reporter") is { } unisolated)
+        {
+            return Wordless(unisolated, HarnessExit.ToolMissing);
+        }
+
         var request = new AgentStepRequest(
             call.Run,
             call.Reporter.Agent,
@@ -160,6 +170,7 @@ public sealed class ReporterRunner(
             mask)
         {
             Ground = ground,
+            Isolation = isolated,
             Credential = order.FirstOrDefault(entry => entry.Usable)?.Credential,
             Withheld = [.. providers.Appointed().Select(appointed => appointed.Name)],
             Order = order,

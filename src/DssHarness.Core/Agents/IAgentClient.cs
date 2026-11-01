@@ -522,6 +522,13 @@ public sealed record AgentStepRequest(
     /// </summary>
     public Policy.AgentPolicyGround? Ground { get; init; }
 
+    /// <summary>
+    /// The operating system's isolation the launch's agent runs under - the mechanism and what it denies each command, or
+    /// why there is none - as the engine decided it from the ground; null where none was decided, and every command then
+    /// runs on the words policy alone.
+    /// </summary>
+    public Isolation.LaunchIsolation? Isolation { get; init; }
+
     /// <summary>The credential the run signs in with, where its client signs in; null for the machine's login.</summary>
     public AgentCredential? Credential { get; init; }
 
@@ -697,6 +704,13 @@ public sealed record AgentRun(
     /// where the step was given none, and a client that asks it runs nothing.
     /// </summary>
     public Policy.AgentPolicyGround? Ground { get; init; }
+
+    /// <summary>
+    /// The operating system's isolation the run's children are started under: a command of the API clients' runtime with
+    /// <see cref="Agents.Isolation.LaunchIsolation.ForCommands"/>, a Claude Code launch's whole process with
+    /// <see cref="Agents.Isolation.LaunchIsolation.ForClaudeCode"/>; null where none was decided.
+    /// </summary>
+    public Isolation.LaunchIsolation? Isolation { get; init; }
 
     /// <summary>
     /// The credential the run signs in with, where its client signs in; null for the machine's login. Its keys are the

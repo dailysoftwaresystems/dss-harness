@@ -28,6 +28,9 @@ public sealed class InitService(
     ManagedIgnoreCheck managedIgnoreCheck,
     IHostPlatform platform) : IUseCase
 {
+    /// <summary>The command's name, as it is typed.</summary>
+    public const string CommandName = "init";
+
     /// <summary>
     /// Builds the ignore rules the harness owns, from the layout constants rather than by repeating
     /// the literals. A renamed directory would otherwise leave the rules pointing at the old path,

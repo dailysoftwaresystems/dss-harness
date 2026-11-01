@@ -227,6 +227,26 @@ public sealed partial class AgentPolicy
     ];
 
     /// <summary>
+    /// This tool's verbs that read a credential slot or write the tool's own state, refused to every agent by name - a
+    /// side-task's as well as a step's: run as an agent's command, inside the operating system's isolation that hides every
+    /// slot and writes no state, each would fail part way or answer from what it could not read. The verbs that only read,
+    /// and those that write only the tree's own files, stay open. Each is the command's own name, as the service that
+    /// serves it declares it.
+    /// </summary>
+    public static IReadOnlyList<string> SlotOrStateVerbs { get; } =
+    [
+        Commands.InitService.CommandName, Worktrees.WorktreeService.CreateCommand, Worktrees.WorktreeService.DeleteCommand,
+        OrchestratorService.CreateCommand, OrchestratorService.DeleteCommand, Agents.AgentProvidersService.ListCommand,
+        FlowService.RunCommand, FlowService.ResumeCommand, FlowService.AnswerCommand, FlowService.AmendCommand,
+        FlowService.PauseCommand, FlowService.StopCommand, FlowService.AskStatusCommand, FlowService.AskCommand,
+        AgentService.CreateCommand, AgentService.SeedCommand, AgentService.RefreshCommand, AgentService.RebaseCommand,
+        AgentService.FoldCommand, AgentService.DeleteCommand, Legs.LegsService.CommandName, Tools.ToolProvisionService.CommandName,
+        Sync.SyncService.CommandName, Build.BuildService.CommandName, Testing.TestService.CommandName,
+        Runners.RunnerRunService.CommandName, Mutations.MutationService.CommandName, RunStopService.CommandName,
+        CleanService.CommandName, HostExecService.CommandName,
+    ];
+
+    /// <summary>
     /// The rule git's own files are refused by as writes under the worktree rules, whatever
     /// <c>protectedPaths</c> says: a <c>.git</c>, file or directory, at any depth beneath a root and
     /// in any case - a nested repository's and a submodule's as well as the root's own.
@@ -393,6 +413,7 @@ public sealed partial class AgentPolicy
             .. AgentChildEnvironment.Problems(
                 config.AgentPolicy,
                 AgentProviders.Resolve(config).Providers?.Appointed().Select(key => key.Name).ToList() ?? []),
+            .. Isolation.AgentIsolationMode.Problem(config.AgentPolicy) is { } isolation ? (IReadOnlyList<string>)[isolation] : [],
         ];
     }
 
@@ -1531,6 +1552,14 @@ public sealed partial class AgentPolicy
         };
     }
 
+    /// <summary>The refusal of a verb that reads a credential slot or writes the tool's own state (<see cref="SlotOrStateVerbs"/>), after <paramref name="opening"/>.</summary>
+    /// <param name="opening">What is refused, as the sentence opens.</param>
+    private static AgentPolicyAnswer.Denied SlotOrStateRefusal(string opening)
+        => new(
+            "the verbs that read a slot or write state",
+            AgentPolicySource.Builtin,
+            $"{opening}: it reads a credential slot or writes this tool's own state, which no command of an agent may - inside the operating system's isolation every slot is empty and the state read-only - so a person runs it");
+
     /// <summary>
     /// The verb this tool is handed where <paramref name="program"/>, at <paramref name="start"/>, is this tool - its first
     /// word, for the tool takes no option before its verb (<c>--help</c> and <c>--version</c> alone stand there, and run
@@ -1652,6 +1681,14 @@ public sealed partial class AgentPolicy
             return sideTask;
         }
 
+        // A verb that reads a credential slot or writes the tool's own state is refused to every agent, a side-task's too,
+        // after a step's own verbs are: inside the operating system's isolation it would fail part way, and the words say
+        // so first. One the shell expands is refused to a side-task above, for it may be run-side-task.
+        if (_ground.SideTask && ToolVerbOf(program, analyzed, start) is var (sideVerb, _) && SlotOrStateVerbs.Contains(sideVerb, roots))
+        {
+            return SlotOrStateRefusal($"'{ToolPackage.Command} {sideVerb}' is refused");
+        }
+
         if (!_ground.SideTask && ToolVerbOf(program, analyzed, start) is var (verb, expansion))
         {
             if (ToolVerbs.Contains(verb, roots))
@@ -1660,6 +1697,11 @@ public sealed partial class AgentPolicy
                     "the orchestrator and agent verbs",
                     AgentPolicySource.Builtin,
                     $"'{ToolPackage.Command} {verb}' is refused: an agent does not move its own run");
+            }
+
+            if (SlotOrStateVerbs.Contains(verb, roots))
+            {
+                return SlotOrStateRefusal($"'{ToolPackage.Command} {verb}' is refused");
             }
 
             // A verb the shell expands may be any of them (dssharness $V).

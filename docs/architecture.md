@@ -200,6 +200,31 @@ stopped, so a leftover may die of that hangup with the engine, and is then not s
 record that does not read as one is said and left, and a starter on another machine is never taken
 to have gone. Windows records nothing: its job already ends a killed starter's children.
 
+A contained request can also carry an **isolation** (`ProcessRequest.Isolation`, a
+`ProcessIsolation`: a mechanism and a profile), refused without containment, for `contain-exec` is
+what places it: the runner hands `contain-exec`, after its separator, the mechanism's own command
+line (`IIsolationMechanism.Command`) in the program's place - the program resolved by its whole
+path first, its words after the mechanism's - so `contain-exec` becomes the mechanism, and the
+mechanism the program, and no child runs outside it for an instant. On Linux the mechanism is the
+system's bubblewrap (`Bubblewrap`): the machine bound whole (`--bind / /`, `--dev-bind /dev /dev`),
+a user namespace of its own allowing no further one (`--unshare-user --disable-userns`), a process
+namespace with its own `/proc` (`--unshare-pid --proc /proc`, so `/proc/<id>/root` reaches no
+process outside), `--die-with-parent`; then the profile's writes in its order, parent first and the
+last mount at a place winning (`--ro-bind` where denied, `--bind` where written again), then each
+hidden place (an empty read-only `tmpfs` over a directory, `/dev/null` read-only over a file), then
+the machine's own escapes the same way - WSL's `/run/WSL`, the user's `systemd` and `bus` under
+`XDG_RUNTIME_DIR` - and `WSL_INTEROP` unset. No `--new-session`: `contain-exec`'s `setsid` made
+the child's session already, and a second would take it out of the session a stop ends; the
+process tree the stop reads from outside sees every process inside by its outside id. Which
+mechanism the machine has is the platform's (`IIsolationPlatform`, `IsolationPlatform`): on Linux
+the first `bwrap` in an absolute directory of the PATH outside the tree, 0.8 or newer, proved once
+per process by a probe started exactly as every isolated child is - a canary in a hidden place
+unread, a place written by nobody unwritten, an open place written, each checked from outside -
+and why not with the remedy where it fails (Ubuntu's `apparmor_restrict_unprivileged_userns` named
+with the `bwrap-userns-restrict` profile); on Windows and macOS none is built yet, each saying so
+through the same seam, so the mode already behaves there. What a launch's profile holds is the
+agents' isolation's, below.
+
 A request can ask instead for a child **bound** to the harness's life (`ProcessRequest.Bound`):
 on Windows it is placed through `contain-exec` too, in the one job object the process holds for its
 whole life - whichever operation's runner starts it, though each operation is given services of its
@@ -2177,6 +2202,40 @@ through `IAgentRunner`, its ending mapped to the step's own (`FlowStepResult.AtL
 incomplete for a stop, the schema-validated output the step's, with the issues it reports under `preExisting`). The
 step's stream is read by the store's one reader of it (`OrchestrationStore.ReadStepStream`): a whole line that does
 not read refuses the attempt that goes on with it.
+
+Before its agent is launched, a step, the advisor, the reporter and a side-task each ask the operating system's
+isolation of the launch (`IAgentIsolation`, `AgentIsolation.ForLaunchAsync`, through `ReasonLaunch.IsolationAsync`
+for the three of a run), whose one builder of a profile (`IsolationProfiles.Of`) reads the ground and keeps no list
+of its own. An agent that may run no command - the reporter - needs none (`LaunchIsolation.Unneeded`), and nothing is
+probed. Otherwise the platform's mechanism, proved once per process (`IIsolationPlatform`), and two profiles of the
+ground: hidden, every credential slot (`AgentPolicyGround.SlotDirectories`) and, for a command, every Claude Code
+directory (`ClaudeCodeDirectories`) - open to a Claude Code launch's whole process, which reads its own login there,
+and guarded for it by the words policy alone; sealed, git's code-running files of each of the ground's trees as git
+names them (`AgentIsolation.GitPlacesAsync`: `rev-parse --path-format=absolute --git-common-dir --git-path hooks`,
+then the common directory's `config`, `config.worktree` and `info/`, each linked worktree's `config.worktree`, every
+submodule's `hooks/` and `config` under `modules/`), the user's own git configuration, which the tool's own git reads
+outside, each state path (`StateDirectories`) and the launch's own directory; written again, the ground's writable
+roots - laid parent first, a place both sealed and writable staying sealed. Objects, the index and the refs are left
+writable, so `git add` and `fetch` work inside, and the words policy still refuses a step the verbs that move a tree.
+A place not there is made empty first, so no command makes it inside and has it read or run outside later; a state
+file never is (`HarnessLayout.StateFileNames`), for the tool reads one as meaning something, and the words policy
+alone guards it. A git that cannot say where a tree keeps its files is a launch without the isolation, said.
+`agentPolicy.isolation` (`AgentIsolationMode`: `required` where nothing is said, any other word than the two a
+problem of the configuration) turns no mechanism into the launch's refusal (`LaunchIsolation.Refusal`: a step ends
+failed, 14; the advisor's advice is not obtained; `run-side-task` exits 14 having started nothing) or, under
+`preferred`, its notice (`LaunchIsolation.Notice`), a `Notice` the runner says at the launch's start. Every launch's
+result carries what it ran under (`AgentRunResult.Isolation`, `result.json`'s `isolation`, an
+`AgentIsolationRecord`: the mode, and the mechanism with its version or why there was none), and each side-task turn
+its own (`SideTaskTurn.Isolation`). The request carries the launch's isolation (`AgentStepRequest.Isolation`, on to
+`AgentRun.Isolation`): the tool runtime starts each `run_command` inside the commands' profile
+(`LaunchIsolation.ForCommands`, through `PhaseRequest.Isolation`), and the claude-code client the whole `claude`
+inside the one that leaves the Claude Code directories open (`ForClaudeCode`). Claude Code's own Bash sandbox is not
+used: the whole process held by the tool's own mechanism holds every command it starts, one mechanism for every
+client, and nothing rests on how that sandbox treats the network in print mode or weighs its own write rules against
+the profile. Inside the isolation a verb of this tool's that reads a slot or writes state would fail part way, so
+the words policy refuses each to every agent by name (`AgentPolicy.SlotOrStateVerbs`, after `ToolVerbs` for a step
+and the side-task's own refusal for a side-task); the verbs that only read, and those that write only the tree's own
+files, stay open.
 A step's records are kept where the one owner of a step instance's
 directory spells it (`OrchestratorLayout.InstanceDirectory`, a work item's brackets as `FlowInstanceId.DirectoryOf`
 writes them), named on the request (`AgentStepRequest.RecordDirectory`) for the runner, the advisor and the handoff's
@@ -2796,10 +2855,12 @@ from, the mask its records and answers are held to - every secret the configurat
 slot answers, each provider's keys and each client's token, beside every form of each search key -
 and the Claude Code it starts, made ready as a step's is and refused on the finder's own code and
 words (12 the configuration, 13 an update refused, 14 the program missing, 21 the install of Claude
-Code timed out or could not reach the registry). What differs is what it is given: its
+Code timed out or could not reach the registry) - and refused, 14, where `agentPolicy.isolation` is
+`required` and the machine cannot isolate its commands (`AgentIsolation`, below). What differs is what it is given: its
 ground (`SideTaskPolicy`) - no restriction list, no allow list of pages, all four capabilities, the
 main checkout the writable root, the worktree rules and the protected paths off, this tool's own
-verbs open to it as the person's own session's are - with the built-in refusals kept (root
+verbs open to it as the person's own session's are, but those that read a credential slot or write
+its state (`AgentPolicy.SlotOrStateVerbs`) - with the built-in refusals kept (root
 actions, every credential slot of the main checkout and every Claude Code directory its clients
 use, to its file tools and to every path a word of its commands names (`CommandAnalysis.PathsNamed`),
 a directory that holds one given whole to a program that may read it among them but the main tree

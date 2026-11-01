@@ -400,7 +400,8 @@ public sealed class SideTaskServiceTests
         Func<int, ProcessTableReading>? tree = null,
         Dictionary<string, AgentClientConfig>? clients = null,
         ClientGates? gates = null,
-        Func<HarnessFactory, IReadOnlyList<IAgentClient>>? apis = null)
+        Func<HarnessFactory, IReadOnlyList<IAgentClient>>? apis = null,
+        DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null)
     {
         var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -465,6 +466,7 @@ public sealed class SideTaskServiceTests
             harness.Output,
             harness.GitClient,
             new AgentAncestry(new AgentAncestryTests.FixedTable(tree?.Invoke(harness.Identity.CurrentId) ?? AgentAncestryTests.UnderAShell(harness.Identity.CurrentId)), harness.Identity, new AgentAncestryTests.OwnProgramAt(null), harness.Platform, harness.FileSystem),
+            isolation ?? new TestIsolation(),
             clock,
             environment ?? (_ => null));
 
@@ -574,6 +576,43 @@ public sealed class SideTaskServiceTests
         Assert.Equal(
             ["person:", "    add a search source", string.Empty, "agent:", "    the answer"],
             (await File.ReadAllLinesAsync(Path.Combine(directory, "transcript.md"), Token)).SkipWhile(line => line.Length == 0));
+    }
+
+    /// <summary>
+    /// Where agentPolicy.isolation is required and the machine has no isolation of an agent's commands, the side-task is
+    /// refused with the code for what could not be started, saying why and what would give it one, and nothing is started;
+    /// where its isolation was decided, each turn's record says what its commands ran under, and the client is handed it.
+    /// The isolation is asked of the side-task's own ground and its records' directory.
+    /// </summary>
+    [Fact]
+    public async Task ASideTaskWithNoIsolationWhereItIsRequired_IsRefused_AndEachTurnRecordsItsIsolation()
+    {
+        var unavailable = TestIsolation.Unavailable("bubblewrap is not here", "install it");
+        var (_, refusedTemp, refusedService, refusedStored, _) = await RepoAsync(isolation: unavailable);
+        using var refusedTree = refusedTemp;
+
+        var refused = await refusedService.RunAsync(new SideTaskCall(refusedTemp.Path, Prompt: "add a search source", Model: "glm-5.3", Name: "one"), Token);
+
+        Assert.Equal(
+            (HarnessExit.ToolMissing, "'run-side-task' is refused: agentPolicy.isolation is \"required\" and bubblewrap is not here, so no agent that may run a command starts here; install it. Nothing was started."),
+            (refused.ExitCode, refused.Message));
+        Assert.Empty(refusedStored.Runs);
+
+        var (ground, launchDirectory) = Assert.Single(unavailable.Asked);
+
+        Assert.Equal((true, LayoutOf(refusedTemp, "one").Directory), (ground.SideTask, launchDirectory));
+
+        var under = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", new PassThroughMechanism("bubblewrap", "0.9.0"), DssHarness.Core.Processes.IsolationProfile.Nothing, DssHarness.Core.Processes.IsolationProfile.Nothing, null, null);
+        var (harness, temp, service, stored, _) = await RepoAsync(isolation: new TestIsolation((_, _) => under));
+        using var tree = temp;
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "add a search source", Model: "glm-5.3", Name: "one"), Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Same(under, Assert.Single(stored.Runs).Isolation);
+        Assert.Equal(
+            new DssHarness.Core.Agents.Isolation.AgentIsolationRecord("required") { Mechanism = "bubblewrap", Version = "0.9.0" },
+            Assert.Single(RecordOf(harness, temp, LayoutOf(temp, "one").Directory)!.Turns).Isolation);
     }
 
     /// <summary>The one shot's document: the exit code and its line first, the task, its records, how the turn stood, what it used and cost, its denials and its text.</summary>

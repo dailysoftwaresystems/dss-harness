@@ -545,7 +545,10 @@ internal sealed class Working
                 turn.Usage,
                 turn.Served.Count,
                 Status: null,
-                SideTaskPolicy.Said));
+                SideTaskPolicy.Said)
+            {
+                Isolation = _now.Isolation.Record,
+            });
         }
 
         launch.Recorded += ended.Count;
@@ -590,6 +593,7 @@ internal sealed class Working
             _common.Mask ?? NoMask.One)
         {
             Ground = _now.Ground,
+            Isolation = _now.Isolation,
             Credential = _now.Order.FirstOrDefault(entry => entry.Usable)?.Credential,
             Withheld = _common.Withheld,
             Order = _now.Order,
@@ -625,7 +629,10 @@ internal sealed class Working
             result.Usage,
             result.Turns,
             result.Status,
-            SideTaskPolicy.Said);
+            SideTaskPolicy.Said)
+        {
+            Isolation = _now.Isolation.Record,
+        };
 
     /// <summary>
     /// Keeps the side-task's record whole, as it stands: what it runs on as the person last set it, the conversation its

@@ -93,19 +93,31 @@ public sealed class SideTaskPolicyTests
     }
 
     /// <summary>
-    /// The tool's own verbs, refused to every step's agent whatever the worktree rules say, are open to the side-task's
-    /// as the person's own session's are - it can edit the configuration, commit, branch, and run the tool itself.
+    /// The tool's verbs that read a credential slot or write its own state are refused to the side-task's agent as to a
+    /// step's - inside the operating system's isolation each would fail part way - the step's own verbs among them; the
+    /// verbs that only read, or write only the tree's own files, stay open to it as to the person's own session.
     /// </summary>
     [Fact]
-    public void TheToolsOwnVerbsRefusedToAStep_AreOpenToASideTask()
+    public void TheToolsVerbsThatReadASlotOrWriteState_AreRefusedToASideTask_TheRestOpen()
     {
         var (side, main, _) = Policy();
         var step = StepPolicy(main: main);
 
-        foreach (var verb in AgentPolicy.ToolVerbs)
+        Assert.Equal([], AgentPolicy.ToolVerbs.Except(AgentPolicy.SlotOrStateVerbs));
+
+        foreach (var verb in AgentPolicy.SlotOrStateVerbs)
         {
-            Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["dssharness", verb, "x"]));
-            Assert.Equal(AgentPolicyAnswer.Allow, side.Run($"dssharness {verb} x"));
+            var refused = Assert.IsType<AgentPolicyAnswer.Denied>(side.Run((IReadOnlyList<string>)["dssharness", verb, "x"]));
+
+            Assert.Equal(
+                ("the verbs that read a slot or write state", $"'dssharness {verb}' is refused: it reads a credential slot or writes this tool's own state, which no command of an agent may - inside the operating system's isolation every slot is empty and the state read-only - so a person runs it"),
+                (refused.Rule, refused.Reason));
+            Assert.Equal("the verbs that read a slot or write state", Assert.IsType<AgentPolicyAnswer.Denied>(side.Run($"dssharness {verb} x")).Rule);
+        }
+
+        foreach (var open in new[] { "list-orchestrator", "list-worktree", "list-side-tasks", "validate-workflow", "read-anchors", "query-codebase-graph", "check-root-litter", "fix-line-endings", "up", "down" })
+        {
+            Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["dssharness", open, "x"]));
         }
 
         var denied = Assert.IsType<AgentPolicyAnswer.Denied>(step.Run((IReadOnlyList<string>)["dssharness", AgentPolicy.ToolVerbs[0], "x"]));

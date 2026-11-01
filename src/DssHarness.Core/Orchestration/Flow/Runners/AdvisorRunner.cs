@@ -27,6 +27,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="fileSystem">The file system the workflow's files are read on.</param>
 /// <param name="keys">The slot the entry's keys are read from.</param>
 /// <param name="harnessOutput">Writes output the copies of a continuation record name.</param>
+/// <param name="isolation">Decides the operating system's isolation the advice's agent runs under.</param>
 /// <param name="updates">Finds the Claude Code the advice's order starts, where it holds the client that starts one; null where nothing does.</param>
 public sealed class AdvisorRunner(
     IHarnessContextLoader contextLoader,
@@ -36,6 +37,7 @@ public sealed class AdvisorRunner(
     IFileSystem fileSystem,
     AgentKeyStore keys,
     Output.IHarnessOutput harnessOutput,
+    Agents.Isolation.IAgentIsolation isolation,
     Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null) : IFlowAdvisorRunner
 {
     /// <summary>The directory under the asking step's own that holds its advices, one numbered directory for each.</summary>
@@ -125,7 +127,7 @@ public sealed class AdvisorRunner(
             return Unasked("the advisor has no model to run on: name a tier or a model on it, or a tier under defaults.agentTier");
         }
 
-        var launch = new ReasonLaunch(fileSystem, platform, keys, updates);
+        var launch = new ReasonLaunch(fileSystem, platform, keys, updates, isolation);
         var order = launch.Order(providers, resolution, context.Layout);
 
         // The advisor only reads, so a Claude Code its order starts is only found: one that is not there, or is too old,
@@ -154,6 +156,15 @@ public sealed class AdvisorRunner(
             webSearchGiven: false,
             launch.ClaudeDirectories(order),
             readsOnly: true);
+
+        // The advice's agent may run commands that only read: where agentPolicy.isolation is required and this machine has
+        // no isolation of them, no advice is obtained, and why is said.
+        var isolated = await launch.IsolationAsync(context.Config, ground, context.Layout, directory, cancellationToken).ConfigureAwait(false);
+
+        if (isolated.Refusal("the advisor") is { } unisolated)
+        {
+            return Unasked(unisolated);
+        }
 
         // What the run stored of the asking step, rendered as a continuation record renders a step and within the
         // same bounds - the question's own record, read by {question.record}.
@@ -191,6 +202,7 @@ public sealed class AdvisorRunner(
             Mask: launch.Mask(context.Layout, providers))
         {
             Ground = ground,
+            Isolation = isolated,
             Credential = order.FirstOrDefault(entry => entry.Usable)?.Credential,
             Withheld = [.. providers.Appointed().Select(appointed => appointed.Name)],
             Order = order,

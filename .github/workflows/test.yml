@@ -90,6 +90,23 @@ jobs:
             Windows) choco install ninja --yes --no-progress ;;
           esac
 
+      - name: Isolation
+        # The tests of an agent's isolation run the system's bubblewrap for real, and here a runner lacking it fails them
+        # (see the variable the Test step sets) rather than skipping them green. No Linux image carries it, and where
+        # Ubuntu restricts unprivileged user namespaces the AppArmor profile for it is loaded - the remedy the tool names.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -eo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+
+          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
+            sudo apt-get install --yes apparmor-profiles
+            sudo cp /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/
+            sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          fi
+
       - name: Test
         # The suite's own executable, which exits non-zero when any test fails: never through
         # dotnet, which the suite then finds running it and starts its children with by path.

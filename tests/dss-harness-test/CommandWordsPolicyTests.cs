@@ -311,7 +311,7 @@ public sealed class CommandWordsPolicyTests
 
             foreach (var command in new[]
             {
-                "env A=1 dssharness build", $"grep -rn {marker} src", $"git log -S {marker}", $"echo \"${marker}\"", "unset OTHER",
+                "env A=1 dssharness list-worktree", $"grep -rn {marker} src", $"git log -S {marker}", $"echo \"${marker}\"", "unset OTHER",
                 "export -n OTHER", "pwsh -c 'Remove-Item build -Recurse'", "pwsh -c 'Set-Content -Path out.txt -Value $content'",
                 "pwsh -c 'Get-ChildItem Env:'",
             })

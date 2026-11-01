@@ -1,5 +1,6 @@
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.ClaudeCode;
+using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
@@ -11,15 +12,16 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// What an agent's run is launched with beyond its model - a reason step's, the advisor's, the reporter's and a
 /// side-task's alike: where a run of the engine's works, the order its model is reached by with each entry's credential,
-/// the Claude Code directories no action of the agent's reaches, the mask its records and its answer are held to, and the
-/// program a client that starts one starts. The one builder of each for every launch of an agent, so a rule of where an
+/// the Claude Code directories no action of the agent's reaches, the mask its records and its answer are held to, the
+/// program a client that starts one starts, and the operating system's isolation its agent's commands run under. The one builder of each for every launch of an agent, so a rule of where an
 /// agent works or what it may not reach is written once.
 /// </summary>
 /// <param name="fileSystem">Makes a run's work directory and finds the tool's own Claude Code directory.</param>
 /// <param name="platform">This machine, whose home holds that directory.</param>
 /// <param name="keys">The slot every key and secret is read from.</param>
 /// <param name="updates">Makes ready, or only finds, the Claude Code a run starts; null where nothing starts one.</param>
-public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform, AgentKeyStore keys, ClaudeCodeUpdateService? updates)
+/// <param name="isolation">Decides the operating system's isolation each launch's agent runs under.</param>
+public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform, AgentKeyStore keys, ClaudeCodeUpdateService? updates, IAgentIsolation isolation)
 {
     /// <summary>
     /// Where an agent's run works: its agent's worktree where it has one - at the path its record resolves under the
@@ -105,6 +107,23 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
             ({ } held, null) => held,
             (null, var more) => more,
         };
+    }
+
+    /// <summary>
+    /// The operating system's isolation the launch over <paramref name="ground"/> runs under (<see cref="AgentIsolation.ForLaunchAsync"/>):
+    /// the mechanism and its profiles, or why there is none - a refusal under <c>agentPolicy.isolation: required</c>, a notice
+    /// under <c>preferred</c> - and none needed where its agent may run no command.
+    /// </summary>
+    /// <param name="config">The configuration, whose <c>agentPolicy.isolation</c> is the mode.</param>
+    /// <param name="ground">The agent's ground.</param>
+    /// <param name="layout">The repository, whose main checkout no program the mechanism is found as is inside.</param>
+    /// <param name="launchDirectory">The launch's own directory, which holds its settings and records.</param>
+    /// <param name="cancellationToken">Stops the probe and git.</param>
+    public Task<LaunchIsolation> IsolationAsync(Configuration.HarnessConfig config, Agents.Policy.AgentPolicyGround ground, HarnessLayout layout, string launchDirectory, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
+        return isolation.ForLaunchAsync(config, ground, layout.MainCheckoutRoot, launchDirectory, cancellationToken);
     }
 
     /// <summary>

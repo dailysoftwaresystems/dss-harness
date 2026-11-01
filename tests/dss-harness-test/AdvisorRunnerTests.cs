@@ -105,7 +105,7 @@ public sealed class AdvisorRunnerTests
         return (kit, runner);
     }
 
-    private AdvisorRunner Runner(OrchestrationKit kit, Agents agents, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null)
+    private AdvisorRunner Runner(OrchestrationKit kit, Agents agents, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null, DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null)
         => new(
             kit.Harness.ContextLoader,
             kit.Harness.Platform,
@@ -114,6 +114,7 @@ public sealed class AdvisorRunnerTests
             kit.Harness.FileSystem,
             new AgentKeyStore(kit.Harness.FileSystem, kit.Harness.FilePermissions, kit.Harness.Platform),
             kit.Harness.Output,
+            isolation ?? new TestIsolation(),
             updates);
 
     /// <summary>The two answers a turn limit's question takes, neither with a text.</summary>
@@ -425,6 +426,31 @@ public sealed class AdvisorRunnerTests
         Assert.Equal<(string?, long?, FlowDollars)>(
             ("retry", 1200L, new FlowDollars(0, AgentPrices.UnknownOf(priced.Provider, priced.Model, turn))),
             (advice.Answer, advice.Tokens, advice.Dollars));
+    }
+
+    /// <summary>
+    /// The advice's agent may run commands that only read, so it is isolated as a step's is: asked over its own ground and
+    /// directory, and where agentPolicy.isolation is required and this machine has no isolation, no advice is obtained -
+    /// the refusal its reason - and the advisor's run is never asked.
+    /// </summary>
+    [Fact]
+    public async Task WithNoIsolationWhereItIsRequired_NoAdviceIsObtained_AndNoRunAsked()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var isolation = TestIsolation.Unavailable("bubblewrap is not here", "install it");
+
+        var advice = await Runner(kit, agents, isolation: isolation).AdviseAsync(Call(kit), Token);
+
+        var directory = Path.Combine(kit.Layout.InstanceDirectory("think", "reader"), "advice", "1");
+
+        Assert.Equal(
+            ((string?)null, "the advisor is refused: agentPolicy.isolation is \"required\" and bubblewrap is not here, so no agent that may run a command starts here; install it"),
+            (advice.Answer, advice.NotObtained));
+        Assert.Empty(agents.Asked);
+        Assert.Equal(directory, Assert.Single(isolation.Asked).LaunchDirectory);
+        Assert.Contains(AgentCapability.Run, Assert.Single(isolation.Asked).Ground.Given);
     }
 
     /// <summary>

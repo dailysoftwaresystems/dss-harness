@@ -114,6 +114,7 @@ public sealed class FlowServiceTests
             agents ?? harness.AgentService,
             agentRunner ?? new OfNoStep(),
             keyStore ?? new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform),
+            new TestIsolation(),
             clock,
             timings ?? Quick);
     }

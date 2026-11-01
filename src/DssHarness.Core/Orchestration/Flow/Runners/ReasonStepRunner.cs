@@ -34,6 +34,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="gh">Runs <c>gh</c>, for a web-search source the machine's login reads.</param>
 /// <param name="harnessOutput">Writes output the copies of a continuation record name.</param>
 /// <param name="clock">Tells the week a balanced key's spend is counted for.</param>
+/// <param name="isolation">Decides the operating system's isolation the step's agent runs under.</param>
 /// <param name="gitClient">Asks git, for the paths an agent's worktree holds that no fold has taken.</param>
 /// <param name="configStore">Reads the repository's configuration, for the bounds of the engine's own account of a stream.</param>
 /// <param name="updates">Makes the Claude Code a run needs ready, where the step's order holds the client that starts one.</param>
@@ -48,6 +49,7 @@ public sealed class ReasonStepRunner(
     GhProcess gh,
     Output.IHarnessOutput harnessOutput,
     TimeProvider clock,
+    Agents.Isolation.IAgentIsolation isolation,
     Git.IGitClient? gitClient = null,
     Configuration.IConfigStore? configStore = null,
     ClaudeCodeUpdateService? updates = null) : IFlowStepTypeRunner, IFlowHandoffRunner
@@ -69,7 +71,7 @@ public sealed class ReasonStepRunner(
         var (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
         var layout = OrchestratorLayout.Of(context.Layout, place.Run);
         var files = new WorkflowNamedFiles(fileSystem, platform.PathComparison);
-        var launch = new ReasonLaunch(fileSystem, platform, keys, updates);
+        var launch = new ReasonLaunch(fileSystem, platform, keys, updates, isolation);
 
         var promptFile = run.Step.Prompt;
 
@@ -160,6 +162,16 @@ public sealed class ReasonStepRunner(
             workspace,
             webSearch is not null,
             launch.ClaudeDirectories(order));
+
+        // The operating system's isolation the agent's commands run under, decided before anything of the step is handed
+        // over: where agentPolicy.isolation is required and this machine has none, the step does not start, saying why and
+        // what would give it one.
+        var isolated = await launch.IsolationAsync(context.Config, ground, context.Layout, StepDirectoryOf(layout, run.Instance, agent), cancellationToken).ConfigureAwait(false);
+
+        if (isolated.Refusal($"'{run.Instance}'") is { } unisolated)
+        {
+            return FlowStepResult.Ended(passed: false, HarnessExit.ToolMissing, unisolated);
+        }
 
         // The prompt with each skill it names handed over: the folder copied into the agent's own work directory, the
         // block put in the prompt's place, and what cannot be handed refused here - the step-start half of the skill's
@@ -259,6 +271,7 @@ public sealed class ReasonStepRunner(
         {
             RecordDirectory = StepDirectoryOf(layout, run.Instance, agent),
             Ground = ground,
+            Isolation = isolated,
             Credential = order.FirstOrDefault(entry => entry.Usable)?.Credential,
             Withheld = [.. providers.Appointed().Select(appointed => appointed.Name)],
             Order = order,

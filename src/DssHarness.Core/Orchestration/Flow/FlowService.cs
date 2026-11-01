@@ -127,6 +127,7 @@ public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSp
 /// <param name="agents">Makes and deletes agents: the engine's own read-only agents among them.</param>
 /// <param name="agentRunner">Works the run's advisor, whatever the client is.</param>
 /// <param name="keyStore">The slot the advisor's model reads its key from.</param>
+/// <param name="isolation">Decides the operating system's isolation the advisor's and the reporter's agents run under.</param>
 /// <param name="clock">When the run's records are written, and how every wait of these commands is timed.</param>
 /// <param name="timings">How often the commands look; <see cref="FlowTimings.Default"/> where not given.</param>
 /// <param name="updates">Finds the Claude Code the advisor's and the reporter's orders start, never changing it; null where nothing starts one.</param>
@@ -147,6 +148,7 @@ public sealed class FlowService(
     IAgentService agents,
     Agents.IAgentRunner agentRunner,
     Secrets.AgentKeyStore keyStore,
+    Agents.Isolation.IAgentIsolation isolation,
     TimeProvider? clock = null,
     FlowTimings? timings = null,
     Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null) : IFlowService
@@ -861,7 +863,7 @@ public sealed class FlowService(
                     [$"record: {Path.Combine(asks, AskFileName)}"]);
         }
 
-        var reported = await new ReporterRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore, updates).ReportAsync(
+        var reported = await new ReporterRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore, isolation, updates).ReportAsync(
             new FlowReporterCall(
                 run,
                 definition.Name,
@@ -1210,7 +1212,7 @@ public sealed class FlowService(
 
                     return outcome;
                 },
-                new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output, updates),
+                new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output, isolation, updates),
                 updates: () => _store.ReadFlowUpdates(layout),
                 workflowFileIfThere: named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"));
             var before = _store.ReadFlowQuestions(layout);

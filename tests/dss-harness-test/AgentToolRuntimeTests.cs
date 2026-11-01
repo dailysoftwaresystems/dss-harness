@@ -1025,6 +1025,31 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal(["tool go: a process outside the job"], runtime.Tally.Uncontained);
     }
 
+    /// <summary>
+    /// A command runs inside the isolation its launch was given for commands - the profile that hides the Claude Code
+    /// directories, never the one a whole Claude Code runs in - and with none where the launch was given none.
+    /// </summary>
+    [Fact]
+    public async Task RunCommand_RunsInsideTheLaunchsIsolationForCommands()
+    {
+        var processes = new Uncontaining();
+        var mechanism = new PassThroughMechanism();
+        var commands = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath("/home/me/.claude", Directory: true)], []);
+        var launch = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, DssHarness.Core.Processes.IsolationProfile.Nothing, null, null);
+        var runtime = Open(processes: processes, isolation: launch);
+
+        var ran = await Call(runtime, AgentTools.RunCommand, ("program", "tool"), ("args", new[] { "go" }));
+
+        Assert.True(ran.Ok, ran.Text);
+        Assert.Equal(new DssHarness.Core.Processes.ProcessIsolation(mechanism, commands), Assert.Single(processes.Started).Isolation);
+
+        var bare = new Uncontaining();
+        var plain = Open(processes: bare);
+
+        Assert.True((await Call(plain, AgentTools.RunCommand, ("program", "tool"), ("args", new[] { "go" }))).Ok);
+        Assert.Null(Assert.Single(bare.Started).Isolation);
+    }
+
     /// <summary>A command the run's own stop ends still keeps what its container could not reach, and the stop goes on.</summary>
     [Fact]
     public async Task ACommandTheRunsStopEnds_StillKeepsWhatItsContainerCouldNotReach()
@@ -1598,7 +1623,8 @@ public sealed class AgentToolRuntimeTests : IDisposable
         IProcessRunner? processes = null,
         TimeProvider? clock = null,
         AgentWebSearch? webSearch = null,
-        AgentNativeAsk? native = null)
+        AgentNativeAsk? native = null,
+        DssHarness.Core.Agents.Isolation.LaunchIsolation? isolation = null)
     {
         var ground = PolicyGrounds.Of(
             _worktree,
@@ -1616,7 +1642,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var files = fileSystem ?? _harness.FileSystem;
         var search = webSearch is null ? null : Search(fetch, clock ?? TimeProvider.System);
         var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), clock ?? TimeProvider.System, search: search);
-        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch) with { NativeSearch = native is null ? null : new NoWire() }, _events, native);
+        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch) with { NativeSearch = native is null ? null : new NoWire(), Isolation = isolation }, _events, native);
 
         _opened.Add(fetch);
         _opened.Add(runtime);

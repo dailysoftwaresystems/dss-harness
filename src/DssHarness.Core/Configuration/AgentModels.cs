@@ -169,6 +169,14 @@ public sealed class AgentPolicyConfig
     /// <see cref="Agents.AgentCommandSettings.MostTimeoutSeconds"/>, as the time without a call's is.
     /// </summary>
     public int? MaxCommandTimeoutSeconds { get; init; }
+
+    /// <summary>
+    /// Whether an agent may start where this machine has no operating-system isolation of its commands
+    /// (<see cref="Agents.Isolation.AgentIsolationMode"/>): <c>required</c> where nothing is said, so no agent that may run
+    /// a command starts without it, or <c>preferred</c>, which runs one on the words policy alone, said at every launch and
+    /// in its records.
+    /// </summary>
+    public string? Isolation { get; init; }
 }
 
 /// <summary>

@@ -109,7 +109,7 @@ public sealed class ReasonStepRunnerTests
         return (kit, runner);
     }
 
-    private static ReasonStepRunner Runner(OrchestrationKit kit, IAgentRunner agents, ClaudeCodeUpdateService? updates = null)
+    private static ReasonStepRunner Runner(OrchestrationKit kit, IAgentRunner agents, ClaudeCodeUpdateService? updates = null, DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null)
         => new(
             kit.Harness.ContextLoader,
             kit.Harness.Platform,
@@ -121,6 +121,7 @@ public sealed class ReasonStepRunnerTests
             new GhProcess(kit.Harness.ProcessRunner),
             kit.Harness.Output,
             TimeProvider.System,
+            isolation ?? new TestIsolation(),
             kit.Harness.GitClient,
             kit.Harness.ConfigStore,
             updates);
@@ -205,6 +206,40 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(again.Passed, again.Error);
         Assert.Equal("a9", agents.Asked[1].Agent);
+    }
+
+    /// <summary>
+    /// Where agentPolicy.isolation is required and the machine has no isolation of an agent's commands, the step does not
+    /// start: it ends failed with the code for what could not be started, saying why and what would give it one, and no
+    /// agent is asked. The isolation is asked of the step's own ground and its own directory. Where it is preferred, the
+    /// step starts, its request carrying why it runs on the words policy alone.
+    /// </summary>
+    [Fact]
+    public async Task AStepWithNoIsolationWhereItIsRequired_DoesNotStart_AndWherePreferredCarriesWhy()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        var isolation = TestIsolation.Unavailable("bubblewrap is not here", "install it");
+
+        var refused = await Runner(kit, agents, isolation: isolation).RunAsync(Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")) with { WorksIn = "a9" }, Token);
+
+        Assert.Equal(
+            (false, HarnessExit.ToolMissing, "'think' is refused: agentPolicy.isolation is \"required\" and bubblewrap is not here, so no agent that may run a command starts here; install it"),
+            (refused.Passed, refused.Exit, refused.Error));
+        Assert.Empty(agents.Asked);
+
+        var (ground, launchDirectory) = Assert.Single(isolation.Asked);
+
+        Assert.Equal([kit.Layout.WorkDirectory("a9")], ground.WritableRoots);
+        Assert.Equal(kit.Layout.InstanceDirectory("think", "a9"), launchDirectory);
+
+        var preferred = new TestIsolation((_, _) => new DssHarness.Core.Agents.Isolation.LaunchIsolation("preferred", null, null, null, "bubblewrap is not here", "install it"));
+        var ran = await Runner(kit, agents, isolation: preferred).RunAsync(Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")) with { WorksIn = "a9" }, Token);
+
+        Assert.True(ran.Passed, ran.Error);
+        Assert.Equal(
+            "agentPolicy.isolation is \"preferred\" and bubblewrap is not here, so the agent's commands run on the words policy alone, with no isolation of the operating system's; install it",
+            agents.Asked.Single().Isolation!.Notice);
     }
 
     /// <summary>

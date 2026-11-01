@@ -228,6 +228,17 @@ public static class ServiceRegistration
             provider.GetRequiredService<Agents.Http.ApiConnection>()));
         services.AddSingleton<IAgentRunner, AgentRunner>();
 
+        // The operating system's isolation of agents' commands: this machine's mechanism, proved once per process by its
+        // probe, and the owner that builds each launch's profiles from its ground and decides by agentPolicy.isolation.
+        services.AddSingleton<IIsolationPlatform>(provider => new IsolationPlatform(
+            provider.GetRequiredService<IHostPlatform>(),
+            provider.GetRequiredService<IProcessRunner>()));
+        services.AddSingleton<Agents.Isolation.IAgentIsolation>(provider => new Agents.Isolation.AgentIsolation(
+            provider.GetRequiredService<IIsolationPlatform>(),
+            provider.GetRequiredService<Git.IGitClient>(),
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<IHostPlatform>()));
+
         // A side-task: an agent outside every workflow, a conversation between a person and one agent over the main tree,
         // through the same runner every step is worked by. Its chat is the person's, on this machine, so no host serves
         // its verbs (HostAgentProtocol.NotForwardable).
@@ -250,6 +261,7 @@ public static class ServiceRegistration
                 provider.GetRequiredService<IOwnProgram>(),
                 provider.GetRequiredService<IHostPlatform>(),
                 provider.GetRequiredService<IFileSystem>()),
+            provider.GetRequiredService<Agents.Isolation.IAgentIsolation>(),
             provider.GetRequiredService<TimeProvider>()));
 
         // The harness's own tools, built for the API clients to give their agents and served to Claude Code's through the

@@ -78,13 +78,15 @@ public sealed record SideTaskCall(
 /// <param name="ProgramVersion">Its version, where it was made ready.</param>
 /// <param name="Ground">What the agent works under.</param>
 /// <param name="RunsOn">What the person asked, which a <c>--resume</c> goes on with.</param>
+/// <param name="Isolation">The operating system's isolation the agent's commands run under, or why none.</param>
 internal sealed record SideTaskSetUp(
     AgentResolution Resolution,
     IReadOnlyList<AgentRunEntry> Order,
     string? Program,
     string? ProgramVersion,
     AgentPolicyGround Ground,
-    SideTaskRunsOn RunsOn);
+    SideTaskRunsOn RunsOn,
+    Isolation.LaunchIsolation Isolation);
 
 /// <summary>
 /// Runs and lists the side-tasks of a repository: an agent outside every workflow, a conversation between a person and one
@@ -106,6 +108,7 @@ internal sealed record SideTaskSetUp(
 /// <param name="output">Says what each side-task's turns and refusals say.</param>
 /// <param name="git">Asks git whether the side-tasks' directory is ignored before anything is written there.</param>
 /// <param name="ancestry">Tells, by the process tree, whether a process of this tool's started this one - the engine an agent's child runs under.</param>
+/// <param name="isolation">Decides the operating system's isolation the side-task's agent runs under.</param>
 /// <param name="clock">Tells when each turn began and what the balancing of keys reads.</param>
 /// <param name="environment">Reads this process's environment, where the mark of an agent's child is looked for.</param>
 public sealed class SideTaskService(
@@ -122,6 +125,7 @@ public sealed class SideTaskService(
     Output.IHarnessOutput output,
     IGitClient git,
     AgentAncestry ancestry,
+    Isolation.IAgentIsolation isolation,
     TimeProvider? clock = null,
     Func<string, string?>? environment = null) : ISideTaskService
 {
@@ -183,7 +187,8 @@ public sealed class SideTaskService(
         fileSystem ?? throw new ArgumentNullException(nameof(fileSystem)),
         platform ?? throw new ArgumentNullException(nameof(platform)),
         keys ?? throw new ArgumentNullException(nameof(keys)),
-        updates);
+        updates,
+        isolation ?? throw new ArgumentNullException(nameof(isolation)));
     private readonly Output.IHarnessOutput _output = output ?? throw new ArgumentNullException(nameof(output));
     private readonly IGitClient _git = git ?? throw new ArgumentNullException(nameof(git));
     private readonly AgentAncestry _ancestry = ancestry ?? throw new ArgumentNullException(nameof(ancestry));
@@ -521,7 +526,7 @@ public sealed class SideTaskService(
     /// <param name="task">The side-task's name, as Claude Code's readiness names what needs it.</param>
     /// <param name="form">How the person gives a level of a model's own, as a refusal's remedy says it: <c>--effort</c>, or the chat's <c>/effort</c>.</param>
     /// <param name="cancellationToken">Stops the setting up.</param>
-    /// <returns>The set-up, or why there is none: a usage error (10), the configuration (12), an update of the program refused (13), the program missing (14).</returns>
+    /// <returns>The set-up, or why there is none: a usage error (10), the configuration (12), an update of the program refused (13), the program missing or no isolation where it is required (14).</returns>
     private async Task<(SideTaskSetUp? SetUp, CommandOutcome? Refused)> SetUpAsync(SideTaskCommon common, SideTaskRunsOn runsOn, string task, string form, CancellationToken cancellationToken)
     {
         try
@@ -585,7 +590,16 @@ public sealed class SideTaskService(
 
         var ground = SideTaskPolicy.Ground(layout, common.Context.Config, _launch.ClaudeDirectories(order));
 
-        return (new SideTaskSetUp(resolution, order, program?.Program, program?.Version, ground, runsOn), null);
+        // The operating system's isolation the agent's commands run under: where agentPolicy.isolation is required and this
+        // machine has none, the side-task is refused (14), saying why and what would give it one.
+        var isolated = await _launch.IsolationAsync(common.Context.Config, ground, layout, SideTaskLayout.Of(layout, task).Directory, cancellationToken).ConfigureAwait(false);
+
+        if (isolated.Refusal($"'{RunCommand}'") is { } unisolated)
+        {
+            return (null, CommandOutcome.Failed(HarnessExit.ToolMissing, $"{unisolated}. Nothing was started."));
+        }
+
+        return (new SideTaskSetUp(resolution, order, program?.Program, program?.Version, ground, runsOn, isolated), null);
     }
 
     /// <summary>Says what a claim said of a dead owner's record reclaimed, where it said anything.</summary>

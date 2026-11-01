@@ -263,6 +263,17 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             throw StartFailure(request.FileName, resolved, new Win32Exception(ErrorFileNotFound));
         }
 
+        // An isolated child is started by the mechanism the step becomes in its place, the program and its arguments handed
+        // to it whole: the step's own placing stands as for any contained child, and the program starts inside.
+        if (request.Isolation is not null && !request.Contained)
+        {
+            throw new ArgumentException("An isolated child is placed by the contained step: give Isolation only with Contained.", nameof(request));
+        }
+
+        var (startedProgram, startedArguments) = request.Isolation is { } isolation
+            ? isolation.Mechanism.Command(isolation.Profile, resolved, request.Arguments)
+            : (resolved, request.Arguments);
+
         // The job a contained run on Windows is held in, kept for as long as the run: terminated as
         // the child ends, it ends whatever the child left behind, and closed by this process's own
         // end it ends the child with it.
@@ -312,9 +323,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             startInfo.ArgumentList.Add(ContainExec.StatusOption);
             startInfo.ArgumentList.Add(statusName!);
             startInfo.ArgumentList.Add(ContainExec.Separator);
-            startInfo.ArgumentList.Add(resolved);
+            startInfo.ArgumentList.Add(startedProgram);
 
-            foreach (var argument in request.Arguments)
+            foreach (var argument in startedArguments)
             {
                 startInfo.ArgumentList.Add(argument);
             }
