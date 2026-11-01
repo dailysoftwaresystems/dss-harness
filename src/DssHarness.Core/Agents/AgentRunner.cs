@@ -71,6 +71,12 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <summary>Why a chat's run ended with no launch begun: the person left - its messages ended - before a client was given it.</summary>
     public const string LeftBeforeItBegan = "the person left the chat before its launch began";
 
+    /// <summary>
+    /// Why a run that is no chat's - a side-task's one shot - ended with no launch begun: the person interrupted its turn
+    /// before a client was given it.
+    /// </summary>
+    public const string CutBeforeItBegan = "the turn was interrupted before its launch began";
+
     /// <summary>Why a step paused while its failed agent waited to be tried again has no handoff: no launch was running to give one.</summary>
     public const string PausedWhileItWaited = "the run was paused while it waited to be tried again, before its next launch began";
 
@@ -693,11 +699,15 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                             _clock.GetUtcNow() + wait)).ConfigureAwait(false);
 
                         // The wait ends with the run's own stop - a record lost while it waits stops the run as it would
-                        // stop the client's - and with its pause: the step ends handed off as its last launch left it,
-                        // and no launch is begun once the pause is asked.
-                        if (!await WaitedAsync(wait, step.Handoff, pump).ConfigureAwait(false))
+                        // stop the client's - with its pause: the step ends handed off as its last launch left it, and no
+                        // launch is begun once the pause is asked; and with what ends a run before its launch begins.
+                        switch (await WaitedAsync(wait, step.Handoff, Unbegun(step.Chat, step.Messages, step.Interrupt), pump).ConfigureAwait(false))
                         {
-                            return (Paused(totals, step, $"{PausedWhileItWaited}: {result.Error ?? "it ended failed"}", mask), null);
+                            case Waited.Paused:
+                                return (Paused(totals, step, $"{PausedWhileItWaited}: {result.Error ?? "it ended failed"}", mask), null);
+                            case Waited.Unbegun:
+                                totals.Add(EndedUnbegun(step.Chat, step.Model));
+                                return (totals.Finished(step), null);
                         }
 
                         at = again;
@@ -793,26 +803,24 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
     /// <summary>
     /// Waits <paramref name="wait"/> out on the run's own clock, ended by the run's stop - which throws, as it stops a
-    /// client - and by its pause: true where the wait passed, false where the pause was asked first.
+    /// client - by its pause, and by what ends a run before its launch begins (<see cref="Unbegun"/>): which of them
+    /// ended it.
     /// </summary>
     /// <param name="wait">How long to wait.</param>
     /// <param name="handoff">The run's pause; null where none can be asked.</param>
+    /// <param name="unbegun">What ends the run before its launch begins.</param>
     /// <param name="pump">The run's pump, whose stop ends the wait.</param>
-    private async Task<bool> WaitedAsync(TimeSpan wait, AgentHandoffSignal? handoff, AgentEventPump pump)
+    private async Task<Waited> WaitedAsync(TimeSpan wait, AgentHandoffSignal? handoff, Task unbegun, AgentEventPump pump)
     {
-        if (handoff is null)
-        {
-            await Task.Delay(wait, _clock, pump.Stopping).ConfigureAwait(false);
-            return true;
-        }
-
         using var paused = CancellationTokenSource.CreateLinkedTokenSource(pump.Stopping);
         var waited = Task.Delay(wait, _clock, paused.Token);
+        var asked = handoff?.WhenAsked ?? Never;
+        var first = await Task.WhenAny(waited, asked, unbegun).ConfigureAwait(false);
 
-        if (await Task.WhenAny(waited, handoff.WhenAsked).ConfigureAwait(false) == waited)
+        if (first == waited)
         {
             await waited.ConfigureAwait(false);
-            return true;
+            return Waited.Passed;
         }
 
         await paused.CancelAsync().ConfigureAwait(false);
@@ -827,7 +835,20 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         }
 
         pump.Stopping.ThrowIfCancellationRequested();
-        return false;
+        return first == asked ? Waited.Paused : Waited.Unbegun;
+    }
+
+    /// <summary>What ended a wait before a launch.</summary>
+    private enum Waited
+    {
+        /// <summary>The wait passed: the launch begins.</summary>
+        Passed,
+
+        /// <summary>The run's pause was asked.</summary>
+        Paused,
+
+        /// <summary>The run was ended before its launch began (<see cref="Unbegun"/>).</summary>
+        Unbegun,
     }
 
     /// <summary>
@@ -929,7 +950,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// Works <paramref name="run"/> on <paramref name="client"/> through the gate: a client that paces its own requests is
     /// handed the gate's lanes and enters one for each request; any other is held in the lane of its provider and first
     /// key for the whole run - a Claude Code launch, whose requests the runner cannot see one by one - its wait said as it
-    /// waits and ended by the run's pause, which leaves a run that never began with no handoff to give; the answer's
+    /// waits and ended by the run's pause, which leaves a run that never began with no handoff to give, and by what ends
+    /// a run before its launch begins (<see cref="Unbegun"/>), which begins none; the answer's
     /// tokens are charged once they are had, and an account limit the run met holds the lane until it lifts. The step's
     /// compaction is said as the launch begins the conversation (<see cref="CompactionToSay"/>), never before.
     /// </summary>
@@ -940,10 +962,13 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <param name="compaction">The step's compaction, said as the first launch given it begins.</param>
     private async Task<AgentRunResult> InLaneAsync(IAgentClient client, AgentRun run, IAgentEventSink events, AgentEventPump pump, CompactionToSay compaction)
     {
-        // A chat the person left before its client was given it begins no launch, here or after the gate's wait.
-        if (run.Chat && run.Messages.Ended.IsCompleted)
+        // A run the person ended before its client was given it - a chat left, a one shot's turn interrupted - begins no
+        // launch, here or after the gate's wait.
+        var unbegun = Unbegun(run.Chat, run.Messages, run.Interrupt);
+
+        if (unbegun.IsCompleted)
         {
-            return LeftBefore(run);
+            return EndedUnbegun(run.Chat, run.Model);
         }
 
         if (_gates is null)
@@ -987,11 +1012,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 (wait, why) => events.EmitAsync(new WaitingToRetry($"the run waits for {why}", 1, 1, wait, _clock.GetUtcNow() + wait)),
                 paused.Token);
 
-            // The run's pause ends the wait - a run that never began has nothing to hand off, and says why - and so does a
-            // chat's person leaving, before any launch begins.
-            var left = run.Chat ? run.Messages.Ended : NeverLeft;
-
-            if (await Task.WhenAny(entering, run.Handoff.WhenAsked, left).ConfigureAwait(false) is var first && first != entering)
+            // The run's pause ends the wait - a run that never began has nothing to hand off, and says why - and so does
+            // what ends a run before its launch begins.
+            if (await Task.WhenAny(entering, run.Handoff.WhenAsked, unbegun).ConfigureAwait(false) is var first && first != entering)
             {
                 await paused.CancelAsync().ConfigureAwait(false);
 
@@ -1004,7 +1027,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                     // The wait the pause ended, as it was asked to.
                 }
 
-                return first == left ? LeftBefore(run) : AgentEndings.HandedOff(null, PausedAtTheGate, run.Mask);
+                return first == unbegun ? EndedUnbegun(run.Chat, run.Model) : AgentEndings.HandedOff(null, PausedAtTheGate, run.Mask);
             }
 
             slot = await entering.ConfigureAwait(false);
@@ -1029,9 +1052,12 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
         return result;
 
-        // The client given the run, the step's compaction said as the launch begins the conversation, never before.
+        // The client given the run, the step's compaction said as the launch begins the conversation, never before. A chat's
+        // interrupt raised before then cut nothing - no turn of it was under way - and is spent: the launch is handed none,
+        // so it never cuts the turn the launch begins.
         async Task<AgentRunResult> LaunchedAsync(AgentRun given)
         {
+            given = given.Chat && given.Interrupt is { Asked.IsCompleted: true } ? given with { Interrupt = null } : given;
             var launch = compaction.Launching(given, events);
             var ended = await client.RunAsync(given, launch, pump.Stopping).ConfigureAwait(false);
             await launch.EndedAsync(ended).ConfigureAwait(false);
@@ -1040,12 +1066,26 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         }
     }
 
-    /// <summary>What a run that is no chat's is left by: never.</summary>
-    private static readonly Task NeverLeft = new TaskCompletionSource().Task;
+    /// <summary>A wait's end that never comes.</summary>
+    private static readonly Task Never = new TaskCompletionSource().Task;
 
-    /// <summary>A chat's run the person left before a client was given it: no launch, nothing answered.</summary>
-    private static AgentRunResult LeftBefore(AgentRun run)
-        => new(AgentRunStatus.Cancelled, Model: run.Model, Error: LeftBeforeItBegan) { MessagesAnswered = 0 };
+    /// <summary>
+    /// What ends a run before its launch begins - before its client is given it, and every wait before that, the gate's
+    /// and a retry's - besides its pause: a chat's messages ending, the person left; and the person's interrupt of a run
+    /// that is no chat's, a one shot's turn cut before it began. A chat's own interrupt there cuts nothing - no turn of it
+    /// is under way - and ends no wait.
+    /// </summary>
+    /// <param name="chat">Whether the run is a chat's.</param>
+    /// <param name="messages">The chat's messages.</param>
+    /// <param name="interrupt">The run's interrupt, where it was given one.</param>
+    private static Task Unbegun(bool chat, AgentMessages? messages, AgentTurnInterrupt? interrupt)
+        => (chat ? messages?.Ended : interrupt?.Asked) ?? Never;
+
+    /// <summary>A run <see cref="Unbegun"/> ended before a client was given it: no launch, nothing answered.</summary>
+    /// <param name="chat">Whether the run is a chat's.</param>
+    /// <param name="model">The model it would have run on.</param>
+    private static AgentRunResult EndedUnbegun(bool chat, string? model)
+        => new(AgentRunStatus.Cancelled, Model: model, Error: chat ? LeftBeforeItBegan : CutBeforeItBegan) { MessagesAnswered = chat ? 0 : null };
 
     /// <summary>
     /// The result a client answered, or - where it does not hold together, no ending the engine could read - the run

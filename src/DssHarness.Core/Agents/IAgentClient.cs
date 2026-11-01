@@ -447,7 +447,9 @@ public sealed class AgentMessages
 /// reads its result - a chat's launch held open after it, a one shot's run ended <see cref="AgentRunStatus.Cancelled"/>
 /// at it - and the loop of the API clients leaves its request where it stands and cuts the calls running, its run ended
 /// Cancelled with what its provider said the request used counted and a cost it said nothing of unknown, its
-/// conversation stored whole up to its last whole turn and the cut answer thrown away.
+/// conversation stored whole up to its last whole turn and the cut answer thrown away. Raised before a client is given
+/// the run - while it waits at the gate or to be tried again - it ends a run that is no chat's there, no launch begun,
+/// and cuts nothing of a chat's, whose launch is never handed it (<see cref="AgentRunner"/>).
 /// </remarks>
 public sealed class AgentTurnInterrupt
 {

@@ -192,6 +192,22 @@ public sealed class SideTaskServiceTests
             var written = new Queue<string>();
             await using var later = run.Messages.ReadAllAsync(cancellationToken).GetAsyncEnumerator(cancellationToken);
 
+            // A chat's interrupt the launch is begun with, raised already, cuts what is under way as it begins - its first
+            // message, written and not taken yet - as the real client's does: dropped, settled, and no turn answers it.
+            if (run.Chat && run.Interrupt is { Asked.IsCompleted: true })
+            {
+                answered++;
+                await events.EmitAsync(new MessagesDropped(1, 0));
+
+                if (!await later.MoveNextAsync())
+                {
+                    return Ended(AgentRunStatus.Completed, null);
+                }
+
+                message = later.Current;
+                await events.EmitAsync(new MessageSent(message, AgentMessageKind.ChatMessage));
+            }
+
             while (true)
             {
                 turns++;
@@ -1244,6 +1260,124 @@ public sealed class SideTaskServiceTests
                 $"the run waits for {ClientGate.CoolDown}: waiting 25 s",
             ],
             said);
+    }
+
+    /// <summary>
+    /// A chat's first interrupt while its next launch waits its turn at the gate cuts nothing - no turn of the agent's is
+    /// under way - and says so: the launch is begun once the wait passes, never handed the interrupt the person spent
+    /// there, so the line it carries is answered rather than dropped as it begins.
+    /// </summary>
+    [Fact]
+    public async Task AChatsFirstInterruptWhileItsLaunchWaitsAtTheGate_CutsNothing_AndTheLaunchBeginsAfterTheWait()
+    {
+        var gates = new ClientGates(TimeProvider.System, (wait, token) => Task.Delay(wait, TimeProvider.System, token));
+        var (harness, temp, service, _, rendered) = await RepoAsync(gates: gates);
+        using var tree = temp;
+        rendered.EndsWith = (launch, turn) => launch == 1 && turn == 1
+            ? new AgentRunResult(AgentRunStatus.RateLimited, Model: "claude-sonnet-5-5", Error: "limit") { Limit = new AgentAccountLimit(false, DateTimeOffset.UtcNow.AddSeconds(2), null, "claude-sonnet-5-5") }
+            : null;
+        var terminal = new SideTaskTerminal(harness.Output, chat: true);
+        var lines = new Queue<string>(["first"]);
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var said = new List<string>();
+        var chat = new SideTaskChat(
+            async token =>
+            {
+                if (lines.TryDequeue(out var line))
+                {
+                    return line;
+                }
+
+                // The next launch waits at the gate: the person presses Ctrl+C once, and leaves once the line is answered.
+                await waiting.Task.WaitAsync(TimeSpan.FromMinutes(1), token);
+                terminal.Interrupted();
+                await answered.Task.WaitAsync(TimeSpan.FromMinutes(1), token);
+                return null;
+            },
+            line =>
+            {
+                lock (said)
+                {
+                    said.Add(line);
+                }
+
+                (line.StartsWith("the run waits for ", StringComparison.Ordinal) ? waiting : line == "about: first" ? answered : null)?.TrySetResult();
+            });
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "claude-sonnet-5-5", Name: "gate-press", Chat: chat) { Interrupts = terminal.Interrupts }, Token);
+
+        Assert.Equal((HarnessExit.Success, "side-task 'gate-press' ended, 1 turn(s) in all"), (outcome.ExitCode, outcome.Message));
+        Assert.Equal(["first", "first"], rendered.Runs.Select(run => run.UserPrompt));
+        Assert.Equal(
+            [
+                "the agent's launch ended RateLimited: limit; the next message begins a new launch, going on from the conversation so far",
+                $"the run waits for {ClientGate.CoolDown}: waiting 2 s",
+                "about: first",
+            ],
+            said);
+        Assert.Equal(
+            [$"{SideTaskService.RunCommand}: WARN - {SideTaskTerminal.ChatIdle}"],
+            harness.StandardError.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    /// <summary>
+    /// A one shot's interrupt while its launch waits its turn at the gate - a cool-down within the longest wait - stops it
+    /// there: no launch is begun, nothing is spent, and it ends interrupted with its records named.
+    /// </summary>
+    [Fact]
+    public async Task AOneShotsInterruptWhileItsLaunchWaitsAtTheGate_BeginsNoLaunch()
+    {
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gates = new ClientGates(
+            TimeProvider.System,
+            (wait, token) =>
+            {
+                waiting.TrySetResult();
+                return Task.Delay(wait, TimeProvider.System, token);
+            });
+        var (harness, temp, service, _, rendered) = await RepoAsync(gates: gates);
+        using var tree = temp;
+
+        // The lane is held by a cool-down a 429 set, for the launch to wait out.
+        gates.LaneOf("anthropic", "claude-code", null, null).RateLimited(TimeSpan.FromSeconds(25));
+        var interrupts = new SideTaskInterrupts();
+        _ = waiting.Task.ContinueWith(_ => interrupts.Pressed(), TaskScheduler.Default);
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "slow", Model: "claude-sonnet-5-5", Name: "gate-once") { Interrupts = interrupts }, Token).WaitAsync(TimeSpan.FromSeconds(20), Token);
+
+        var directory = LayoutOf(temp, "gate-once").Directory;
+        Assert.Equal(
+            (HarnessExit.Cancelled, $"side-task 'gate-once' ended Cancelled: {AgentRunner.CutBeforeItBegan}"),
+            (outcome.ExitCode, outcome.Message));
+        Assert.Equal([$"Records: {directory}"], outcome.Details);
+        Assert.Empty(rendered.Runs);
+        Assert.Equal([(AgentRunStatus?)AgentRunStatus.Cancelled], RecordOf(harness, temp, directory)!.Turns.Select(turn => turn.Status));
+        Assert.Empty(new AgentKeySpend(harness.FileSystem, harness.OrchestrationStore, TimeProvider.System).Spent(new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path)));
+    }
+
+    /// <summary>
+    /// A one shot interrupted as its launch fails is never tried again: the retry's wait ends at the interrupt, no launch
+    /// is begun after it, and it ends interrupted - never waiting out the retry's backoff first.
+    /// </summary>
+    [Fact]
+    public async Task AOneShotInterruptedAsItsLaunchFails_IsNeverTriedAgain()
+    {
+        var (_, temp, service, _, rendered) = await RepoAsync();
+        using var tree = temp;
+        var interrupts = new SideTaskInterrupts();
+        rendered.EndsWith = (_, _) =>
+        {
+            interrupts.Pressed();
+            return new AgentRunResult(AgentRunStatus.Failed, Model: "claude-sonnet-5-5", Error: "the API failed");
+        };
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "slow", Model: "claude-sonnet-5-5", Name: "fail-once") { Interrupts = interrupts }, Token).WaitAsync(TimeSpan.FromSeconds(20), Token);
+
+        Assert.Equal(
+            (HarnessExit.Cancelled, $"side-task 'fail-once' ended Cancelled: {AgentRunner.CutBeforeItBegan}"),
+            (outcome.ExitCode, outcome.Message));
+        Assert.Single(rendered.Runs);
     }
 
     /// <summary>

@@ -456,7 +456,8 @@ public sealed partial class HelpTests
                 + $"{DssHarness.Core.Agents.ClaudeCode.ClaudeCodeClient.InterruptBound.TotalSeconds:0} s - and the lines the agent had not "
                 + "taken are dropped, so what the turn used, cost and spent is kept; a launch still waiting its turn at the gate - a "
                 + "limit not lifted, its wait said in the chat - is never begun. Each interrupt says whether a turn of the agent's was "
-                + "under way to cut, or none was and nothing is cut.",
+                + "under way to cut, or none was and nothing is cut - the first while a launch waits at the gate among them, the launch "
+                + "begun once the wait passes.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -466,7 +467,8 @@ public sealed partial class HelpTests
         Assert.Contains(
             "Ctrl+C there cuts its turn - a Claude Code launch's at that turn's result, an API client's request left where it "
                 + "stands, what the provider had said it used counted and a cost it had said nothing of unknown - what it used "
-                + $"kept, and it ends interrupted ({HarnessExit.Cancelled});",
+                + $"kept, and it ends interrupted ({HarnessExit.Cancelled}), a launch still waiting its turn at the gate or to be "
+                + "tried again never begun;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(

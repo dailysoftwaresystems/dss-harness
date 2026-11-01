@@ -2853,11 +2853,16 @@ entry handed back where there is one, as one request per line where that entry's
 conversations - and its next request carries that move (`AgentStepRequest.Moved`, cleared once the
 person sets the model or effort again), so the walk passes a first entry that cannot be started over
 as one a move of its own reached and, the run being a chat's, hands back the entry after it with the
-same move, never asking the one that cannot start again. A chat's run whose messages have ended - the
-person left - before a client took it is never launched: the runner returns it before its turn of the
-lane and races the gate's wait against the messages' end (`AgentMessages.Ended`) as it races a
-handoff, ending it `Cancelled` with no message answered (`AgentRunner.LeftBeforeItBegan`); the gate's
-wait is said in the chat as it begins (`WaitingToRetry`). A chat's run is begun only on a client that renders its
+same move, never asking the one that cannot start again. A run the person ended before a client
+took it is never launched, by one owner of what ends a run before its launch begins
+(`AgentRunner.Unbegun`): a chat's messages ending - the person left (`AgentMessages.Ended`) - and the
+interrupt of a run that is no chat's, a one shot's turn (`AgentTurnInterrupt.Asked`). The runner
+returns such a run before its turn of the lane and races the gate's wait and a retry's against it as
+it races a handoff, ending it `Cancelled` with nothing launched (`AgentRunner.LeftBeforeItBegan`,
+`AgentRunner.CutBeforeItBegan`). A chat's own interrupt there cuts nothing - no turn of it is under
+way, and it is said so - and ends no wait; spent before a client was given the run, it is never handed
+to the launch (`LaunchedAsync`), so it never cuts the turn the launch begins. The gate's wait is said
+in the chat as it begins (`WaitingToRetry`). A chat's run is begun only on a client that renders its
 conversations - the runner refuses it, never started, on any other - and Claude Code moves to no
 other key inside it, so `MessagesAnswered` is always its one launch's own count; the run's end says
 it (`RunFinished.MessagesAnswered`), and a line given to a launch that never answered it is read once
@@ -2911,7 +2916,7 @@ cut short, 130 interrupted: a one shot's interrupt cuts its turn by the turn's i
 (`AgentTurnInterrupt`) on every client, never by cancelling the run - Claude Code ending the launch
 at the cut turn's result, the loop of the two APIs leaving its request where it stands and cutting
 the calls running - each ending `Cancelled` (`AgentTurnInterrupt.Cut`) with what it used, cost and
-spent kept - and, on any client, 12, 13, 14 or 21 where it could not start; a chat's are 0 however the
+spent kept, and a launch still waiting at the gate or to be tried again never begun - and, on any client, 12, 13, 14 or 21 where it could not start; a chat's are 0 however the
 person leaves it once it has begun, 130 where two interrupts stop it while it is still being set up
 or opened again. Its interrupts are its own
 (`SideTaskTerminal` over `TerminalSignals`, the one registration of Ctrl+C, SIGTERM and a hang-up,
