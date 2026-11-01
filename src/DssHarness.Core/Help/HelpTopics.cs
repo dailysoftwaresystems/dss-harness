@@ -2937,8 +2937,16 @@ public static class HelpTopics
         builder.AppendLine("an extension - on any ground, as the reading of a command below says.");
         builder.AppendLine("No agent starts while this tool itself runs elevated: its step is recorded never started,");
         builder.AppendLine("saying so, before any client is taken. A path is decided as asked and as resolved, and a");
-        builder.AppendLine("refusal's places compare in any case on every system, a Windows short name read as its long");
-        builder.AppendLine("one. On Windows a device prefix (\\\\?\\, \\\\.\\, \\??\\) is dropped from a path and from what");
+        builder.AppendLine("refusal's places compare in any case on every system. On Windows each segment of a path is");
+        builder.AppendLine("read as the name Windows reaches by it before any refusal compares it - in a command's words,");
+        builder.AppendLine("its moves, its writes and its removals and in a file tool's path alike: its trailing dots and");
+        builder.AppendLine("spaces dropped (.git., k. .), an NTFS stream's or attribute's suffix dropped");
+        builder.AppendLine("(.git::$INDEX_ALLOCATION, k::$DATA), and a short name (GIT~1, harnes~1, in any case) read as");
+        builder.AppendLine("its long name where the path is there - the system's own answer, whatever short names the");
+        builder.AppendLine("volume gives - and, where it is not, as each guarded name it could shorten as well, for a");
+        builder.AppendLine("command may make the place before the word is read (git init sub and then sub/GIT~1/hooks);");
+        builder.AppendLine("HEAD~1 and their kind, which shorten no guarded name, are the words they are.");
+        builder.AppendLine("On Windows a device prefix (\\\\?\\, \\\\.\\, \\??\\) is dropped from a path and from what");
         builder.AppendLine("the runtime makes of it - one naming no drive and no share, a volume by its id or a pipe, is");
         builder.AppendLine("a place it cannot tell, and denied - and a shell's spelling of a drive (/c/x, /cygdrive/c/x,");
         builder.AppendLine("/mnt/c/x) is read both as the drive (C:\\x) and as the directory it names on the current");

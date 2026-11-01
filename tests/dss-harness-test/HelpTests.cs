@@ -686,7 +686,16 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains("every read and write of a credential slot or a Claude Code directory of the run's and every search over one", prose, StringComparison.Ordinal);
-        Assert.Contains("a refusal's places compare in any case on every system, a Windows short name read as its long one", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "a refusal's places compare in any case on every system. On Windows each segment of a path is read as the name Windows reaches by it "
+                + "before any refusal compares it - in a command's words, its moves, its writes and its removals and in a file tool's path alike: its "
+                + "trailing dots and spaces dropped (.git., k. .), an NTFS stream's or attribute's suffix dropped (.git::$INDEX_ALLOCATION, k::$DATA), "
+                + "and a short name (GIT~1, harnes~1, in any case) read as its long name where the path is there - the system's own answer, whatever "
+                + "short names the volume gives - and, where it is not, as each guarded name it could shorten as well, for a command may make the "
+                + "place before the word is read (git init sub and then sub/GIT~1/hooks); HEAD~1 and their kind, which shorten no guarded name, are "
+                + "the words they are.",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains(
             @"On Windows a device prefix (\\?\, \\.\, \??\) is dropped from a path and from what the runtime makes of it - one naming no "
                 + "drive and no share, a volume by its id or a pipe, is a place it cannot tell, and denied - and a shell's "

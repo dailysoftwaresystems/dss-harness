@@ -290,6 +290,7 @@ public sealed partial class AgentPolicy
     private readonly string? _programPath;
     private readonly IReadOnlyList<string> _gitTrees;
     private readonly string? _cdPath;
+    private readonly IReadOnlyCollection<string> _guardedNames;
 
     /// <summary>
     /// Reads the ground once: its roots and the places no action reaches resolved, its restrictions
@@ -345,6 +346,16 @@ public sealed partial class AgentPolicy
 
         // The directories a cd of the agent's shell looks a relative name up in, which every agent's child inherits.
         _cdPath = Environment.GetEnvironmentVariable("CDPATH");
+
+        // Every name a guard holds - each segment of a place no command reaches and of git's own directory of each tree,
+        // and each literal segment of a path rule - which a short name may stand for on Windows.
+        _guardedNames = [.. _slots.Concat(_claudeDirectories).Concat(_state).Concat(_gitTrees.Select(tree => Path.Combine(tree, ".git")))
+            .Concat(_rules.Where(pair => pair.Rule.Verb is AgentRuleVerb.Read or AgentRuleVerb.Write).Select(pair => pair.Rule.Pattern))
+            .Concat(_protectedPaths.Select(pair => pair.Text))
+            .Concat(_worktreePolicyWrites.Select(pair => pair.Text))
+            .SelectMany(place => place.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries))
+            .Where(name => !name.EndsWith(':') && name.IndexOfAny(['*', '?', '[']) < 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
     }
 
     /// <summary>
@@ -2779,15 +2790,24 @@ public sealed partial class AgentPolicy
     /// shell's spelling of a drive - <c>/c/x</c> as Git Bash spells <c>C:\x</c>, <c>/cygdrive/c/x</c>,
     /// <c>/mnt/c/x</c> - reaches the drive in the shell that spells it so and <c>\c\x</c> on the
     /// current drive in one that does not: both places are given, the drive's first, and a refusal
-    /// holds where it holds for either.
+    /// holds where it holds for either. On Windows a segment spelled as a short name the system gave no
+    /// long name - its path is not there when this reads it, and a command may make it before the word
+    /// is read - is read as each name of a guarded place it could shorten as well
+    /// (<see cref="WindowsNames.Lengthened"/>).
     /// </summary>
     private IReadOnlyList<string> Spelled(string path, string directory)
     {
         var text = HomeExpanded(path.Trim());
         IReadOnlyList<string> readings = OnWindows && DriveSpelled(text) is { } drive ? [drive, text] : [text];
 
-        return [.. readings.Select(reading => Plain(reading, directory)).Distinct(StringComparer.OrdinalIgnoreCase)];
+        // A short name the system gave no long one - its path is not there yet - may be any guarded name it could shorten.
+        return [.. readings.Select(reading => Plain(reading, directory))
+            .SelectMany(whole => OnWindows ? WindowsNames.Lengthened(whole, _guardedNames, MaxShortNameReadings) : [whole])
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
     }
+
+    /// <summary>The most readings a path's short names the system cannot lengthen spell; past them it is not decided, and so denied.</summary>
+    public const int MaxShortNameReadings = 64;
 
     /// <summary>
     /// Every place <paramref name="path"/> may reach as a word of a command (<see cref="Spelled"/>), and where
@@ -2851,7 +2871,9 @@ public sealed partial class AgentPolicy
 
     /// <summary>
     /// <paramref name="path"/> made absolute against <paramref name="directory"/> as the runtime makes
-    /// it - on Windows each short name along it given as its long name, as far as it exists - and on
+    /// it - on Windows each segment read as Windows reads it, its trailing dots and spaces and an NTFS
+    /// stream's or attribute's suffix gone (<see cref="WindowsNames.Trimmed"/>), and each short name along
+    /// it given as its long name, as far as it exists - and on
     /// Windows with no device prefix left (<see cref="Undeviced"/>): dropped from the text, and from
     /// what the runtime makes of it, which turns a prefix spelled with mixed separators
     /// (<c>\/?/C:/x</c>) into one of its own (<c>\\?\C:\x</c>). The one spelling of every place this
@@ -2860,11 +2882,14 @@ public sealed partial class AgentPolicy
     private string Plain(string path, string directory)
     {
         // A name one Windows reads as its device (NUL, COM1.txt) is to another Windows, and to the shells on it, the
-        // file of that name: read as that file - the device reaches nothing to decide, the file may lie anywhere.
+        // file of that name: read as that file - the device reaches nothing to decide, the file may lie anywhere. Each
+        // segment is read as Windows reads it, its trailing dots and spaces and a stream's suffix gone (WindowsNames).
         var prefixless = Undeviced(path);
-        var whole = OnWindows && ReferenceEquals(prefixless, path) && IsDevice(path)
-            ? Path.Join(Path.GetFullPath(Path.GetDirectoryName(path) is { Length: > 0 } parent ? parent : ".", directory), Path.GetFileName(path))
-            : Path.GetFullPath(prefixless, directory);
+        var device = OnWindows && ReferenceEquals(prefixless, path) && IsDevice(path);
+        var named = OnWindows ? WindowsNames.Trimmed(prefixless) : prefixless;
+        var whole = device
+            ? Path.Join(Path.GetFullPath(Path.GetDirectoryName(named) is { Length: > 0 } parent ? parent : ".", directory), Path.GetFileName(named))
+            : Path.GetFullPath(named, directory);
 
         // Each prefix dropped shortens the path, so the runtime's spelling of it is plain in a few turns.
         for (var undeviced = Undeviced(whole); !ReferenceEquals(undeviced, whole); undeviced = Undeviced(whole))

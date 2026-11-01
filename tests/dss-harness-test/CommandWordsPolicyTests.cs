@@ -837,6 +837,118 @@ public sealed class CommandWordsPolicyTests
     }
 
     /// <summary>
+    /// On Windows a path's segment is read as the name Windows reaches by it - its trailing dots and spaces dropped, an
+    /// NTFS stream's or attribute's suffix dropped, a short name its long name where the path is there and, where it is
+    /// not, each guarded name it could shorten - in words, moves, writes and removals alike, on both grounds; another
+    /// system reads those spellings as the names they are, and the everyday words that hold a tilde or a trailing dot run.
+    /// </summary>
+    [Fact]
+    public void AWindowsSpelling_IsReadAsTheNameWindowsReaches()
+    {
+        using var tree = new MainTree();
+        var main = tree.Slash;
+        var gits = new[]
+        {
+            $"'{main}/.git /hooks/pre-commit'", $"{main}/.git./hooks/pre-commit", $"'{main}/.git. ./hooks/pre-commit'",
+            $"'{main}/.git::$INDEX_ALLOCATION/hooks/pre-commit'", $"'{main}/.git:$I30:$INDEX_ALLOCATION/hooks/pre-commit'",
+            $"{main}/sub/GIT~1/hooks/pre-commit", $"{main}/sub/git~1/hooks/pre-commit", $"{main}/sub/GI3F2A~1/hooks/pre-commit",
+        };
+
+        foreach (var policy in new[] { tree.Side(PlatformId.Windows), tree.Step(PlatformId.Windows) })
+        {
+            foreach (var target in gits)
+            {
+                var spelled = target.Trim('\'');
+
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied(AgentPolicy.GitsOwnRule, AgentPolicySource.Builtin, $"'echo x >{spelled}' writes '{spelled}', git's own: written by git's verbs and this tool's, never by an agent's command"),
+                    policy.Run($"echo x > {target}"));
+            }
+
+            foreach (var word in new[]
+            {
+                $"{main}/.harness-config::$INDEX_ALLOCATION/runner/.secrets/k", $"{main}/.harness-config/runner/.secrets/k::$DATA",
+                $"{main}/.harness-config/runner/.secrets/k. . .", $"{main}/HARNES~1/runner/.secrets/k", $"{main}/harnes~1/runner/.secrets/k",
+            })
+            {
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied("the credential slots", AgentPolicySource.Builtin, $"'{word}' names a credential slot of this tool: no command of an agent touches one"),
+                    policy.Run($"cat '{word}'"));
+            }
+
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied("the credential slots", AgentPolicySource.Builtin, "'runner/.secrets/k' names a credential slot of this tool: no command of an agent touches one"),
+                policy.Run($"cd '{main}/.harness-config::$INDEX_ALLOCATION' && cat runner/.secrets/k"));
+            Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"tar cz {main}/.harness-config.")).Rule);
+            Assert.Equal(AgentPolicy.GitsOwnRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"rm -rf '{main}/.git::$INDEX_ALLOCATION'")).Rule);
+
+            foreach (var command in new[] { "git diff HEAD~1", "git show HEAD~3:src/x.cs", "git log main~2..HEAD", "cat notes.txt.", "ls build~1", "echo x > out~1.txt" })
+            {
+                Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(policy.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
+            }
+        }
+
+        // A short name may stand for a name a protected path or a restriction holds as well as for a place no command reaches:
+        // a file tool's write by one is held to them as the long name's is.
+        Assert.Equal("Write(.vscode/**)", Assert.IsType<AgentPolicyAnswer.Denied>(tree.Step(PlatformId.Windows).Write("VSCODE~1/settings.json")).Rule);
+        Assert.Equal("Write(secrets/**)", Assert.IsType<AgentPolicyAnswer.Denied>(tree.Step(PlatformId.Windows, restrictions: ["Write(secrets/**)"]).Write("SECRET~1/key")).Rule);
+        Assert.Equal("Write(.harness-config/config.json)", Assert.IsType<AgentPolicyAnswer.Denied>(tree.Step(PlatformId.Windows).Write(".harness-config/CONFIG~1.JSO")).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, tree.Step(PlatformId.Windows).Write("NOTES~1.TXT"));
+
+        // Another system reads each such spelling as the name it is.
+        foreach (var target in new[] { $"'{main}/.git /hooks/pre-commit'", $"'{main}/.git::$INDEX_ALLOCATION/hooks/pre-commit'", $"{main}/sub/GIT~1/hooks/pre-commit" })
+        {
+            Assert.True(tree.Side().Run($"echo x > {target}") == AgentPolicyAnswer.Allow, $"'{target}' was refused: {(tree.Side().Run($"echo x > {target}") as AgentPolicyAnswer.Denied)?.Reason}");
+        }
+    }
+
+    /// <summary>
+    /// Each segment as Windows reads it: a stream's or an attribute's suffix and the trailing dots and spaces gone, a drive
+    /// and a relative step kept, a step spelled with a trailing space the step; a short name may be each long name whose
+    /// short name it could be, in any case, the hashed form among them, and is read so as every guarded name it may be.
+    /// </summary>
+    [Fact]
+    public void WindowsNames_ReadEachSegmentAsWindowsDoes()
+    {
+        foreach (var (path, read) in new[]
+        {
+            (@"C:\r\.git::$INDEX_ALLOCATION\hooks\x", @"C:\r\.git\hooks\x"),
+            ("C:/r/.git:$I30:$INDEX_ALLOCATION/hooks/x", "C:/r/.git/hooks/x"),
+            ("r/k::$DATA", "r/k"),
+            ("r/k:alt", "r/k"),
+            ("r/.git. ./k. . .", "r/.git/k"),
+            ("r/.git /k", "r/.git/k"),
+            ("C:x.", "C:x"),
+            ("x:$DATA", "x:$DATA"),
+            ("../.. /./x", "../.././x"),
+            ("r/.../x", "r/.../x"),
+            ("r/:x", "r/:x"),
+            ("plain/path", "plain/path"),
+        })
+        {
+            Assert.Equal(read, WindowsNames.Trimmed(path));
+        }
+
+        foreach (var (segment, name) in new[]
+        {
+            ("GIT~1", ".git"), ("git~2", ".git"), ("HARNES~1", ".harness-config"), ("GI3F2A~1", ".git"), ("CONFIG~1.JSO", "config.json"),
+            ("PACKAG~1.JSO", "package.json"), ("SECRET~1", ".secrets"),
+        })
+        {
+            Assert.True(WindowsNames.MayShorten(segment, name), $"'{segment}' was not read as '{name}'");
+        }
+
+        foreach (var (segment, name) in new[] { ("HEAD~1", ".harness-config"), ("GIT~1", ".github-x.txt"), ("GIT~1.TXT", ".git"), ("HEADER~1", ".git"), ("GIT~X", ".git"), ("GIT", ".git") })
+        {
+            Assert.False(WindowsNames.MayShorten(segment, name), $"'{segment}' was read as '{name}'");
+        }
+
+        Assert.Equal(["/r/GIT~1/x", "/r/.git/x", "/r/.github/x"], WindowsNames.Lengthened("/r/GIT~1/x", [".git", ".github", "runner"], 64));
+        Assert.Equal(["/r/HEAD~1"], WindowsNames.Lengthened("/r/HEAD~1", [".git", ".harness-config"], 64));
+        Assert.Throws<NotSupportedException>(() => WindowsNames.Lengthened("/A~1/B~1/C~1", ["a1", "a2", "a3", "a4", "b1", "b2", "b3", "b4", "c1", "c2", "c3"], 64));
+    }
+
+    /// <summary>
     /// Every path a word names, each once and said whole or not: the word, the value after its <c>=</c> or a PowerShell
     /// parameter's <c>:</c>, each with curl's <c>@</c> or <c>&lt;</c> off and a <c>-F</c> field's <c>;</c> fields cut, a
     /// short option's glued value, a message's words, the words its braces spell, a file URL's path.
@@ -961,14 +1073,17 @@ public sealed class CommandWordsPolicyTests
                     [_claude.Path]),
                 programPath: null);
 
-        /// <summary>A writing reason step's policy in the worktree, given the web, its programs found on <paramref name="programPath"/> where one is given.</summary>
-        public AgentPolicy Step(PlatformId platform = PlatformId.Linux, string? programPath = null)
+        /// <summary>
+        /// A writing reason step's policy in the worktree, given the web, its programs found on <paramref name="programPath"/>
+        /// where one is given, and the step's own <paramref name="restrictions"/>.
+        /// </summary>
+        public AgentPolicy Step(PlatformId platform = PlatformId.Linux, string? programPath = null, IReadOnlyList<string>? restrictions = null)
             => Policy(
                 platform,
                 AgentStepGround.Of(
                     new HarnessConfig { Worktrees = new WorktreeSettings() },
                     null,
-                    new WorkflowStep { Name = "s", Type = "reason" },
+                    new WorkflowStep { Name = "s", Type = "reason", Restrictions = restrictions ?? [] },
                     new AgentWorkspace(Worktree, Work, Main, [], Worktree, Path.Combine(Main, ".orchestrators", "r1")),
                     webSearchGiven: true,
                     [_claude.Path]),

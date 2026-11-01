@@ -1597,7 +1597,18 @@ command or the string sets, `cd -` going back to the string's `OLDPWD` or a plac
 string's left, and one whose place is not known undecided)
 from every place the command reached before it, up to `AgentPolicy.MaxPlaces`, past which the
 command is undecided - and a refusal's places compare in any
-case on every system, each Windows short name read as its long one (as `Path.GetFullPath` spells it); what a
+case on every system; on Windows each segment is read as the name Windows reaches by it, by one owner
+(`WindowsNames`) every guard's spelling of a path passes through (`AgentPolicy.Plain` and
+`AgentPolicy.Spelled`, so a command's words, moves, writes and removals and a file tool's path
+alike): its trailing dots and spaces and an NTFS stream's or attribute's suffix dropped
+(`WindowsNames.Trimmed`: `.git.`, `k. .`, `.git::$INDEX_ALLOCATION`, `k::$DATA`), and a short name
+read as its long one where the path is there, as `Path.GetFullPath` gives it - the system's own
+answer, exact whatever short names the volume gives, hashed ones among them - and where it is not,
+for a command may make the place before the word is read, as each guarded name it could shorten
+as well (`WindowsNames.MayShorten` and `WindowsNames.Lengthened`, at most
+`AgentPolicy.MaxShortNameReadings` readings): each segment of the places no command reaches and of
+git's own directory of each tree, and each literal segment of a path rule - a restriction, a
+protected path, the worktree rules' own; what a
 refusal allows - a writable root, the step's `writes` - compares as the platform does. A command is
 read whole before it is matched, `Agents\Policy\CommandAnalysis`: a shell string read once, front to
 back, by a recursive-descent reader as the shell's own parser reads it (`CommandAnalysis.Shell.cs`,
