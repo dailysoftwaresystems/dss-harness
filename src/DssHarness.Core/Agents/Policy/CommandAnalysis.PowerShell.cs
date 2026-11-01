@@ -392,7 +392,7 @@ public static partial class CommandAnalysis
                     throw CodeSetting();
                 }
 
-                if (EnvironmentName(variable) is { } name)
+                if ((EnvironmentName(variable) ?? PlainName(variable)) is { } name)
                 {
                     lines.Add(name + "=" + Value);
                 }
@@ -1423,8 +1423,9 @@ public static partial class CommandAnalysis
                         var variable = new StringBuilder(named);
                         Members(variable);
 
-                        // An environment variable, an assignment's target where one follows: each target is set.
-                        if (EnvironmentName(named) is { } name)
+                        // A variable - the environment's, or the script's own by a plain name - an assignment's target where one
+                        // follows: each target is set, so a later word that names it is read by what it holds.
+                        if ((EnvironmentName(named) ?? PlainName(named)) is { } name)
                         {
                             environments.Add(name);
                         }
@@ -1469,6 +1470,15 @@ public static partial class CommandAnalysis
                 ? name
                 : null;
 
+        /// <summary>
+        /// The name of a variable of the script's own a variable's expansion names whole - <c>$name</c>, <c>${name}</c> -
+        /// where the shell spells the name alike; else null. A scope's or a drive's variable is none.
+        /// </summary>
+        private static string? PlainName(string variable)
+            => variable.StartsWith("\"${", StringComparison.Ordinal) && variable.EndsWith("}\"", StringComparison.Ordinal) && variable[3..^2] is var name && IsAssignment(name + "=x")
+                ? name
+                : null;
+
         private static NotSupportedException CodeSetting() => new("PowerShell's setting of a function's or an alias's text, which this does not read");
 
         /// <summary>A variable of PowerShell's function: or alias: drive: what is set to it is code.</summary>
@@ -1494,8 +1504,9 @@ public static partial class CommandAnalysis
         }
 
         /// <summary>
-        /// An assignment's right side, read as a statement; each environment variable among its <paramref name="targets"/>
-        /// written as the setting it is too - a lone target's one word's value, else a value this cannot know.
+        /// An assignment's right side, read as a statement; each variable among its <paramref name="targets"/> - the
+        /// environment's, or the script's own by a plain name - written as the setting it is too: a lone target's one
+        /// word's value, else a value this cannot know.
         /// </summary>
         private void Assigned(List<string> targets, bool alone, string assignment, List<string> lines, char close)
         {

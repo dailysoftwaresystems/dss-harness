@@ -84,7 +84,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `stop-orchestrator <run> [--now] [--json]` | Ask the engine running a run to stop where it stands, and wait 30 s; `--now` ends the engine's process - only on this machine, and only the process its owner names by its start |
 | `ask-orchestrator-status <run> [--json]` | The tool's own question of a run - what is happening now, what is done, what is left, what it waits for, and when it may finish - answered with the engine's facts (computed from the run's records, stamped with the moment they were read) and, where the workflow's `reporter` names one, its words: the facts first, then the model's, then what the answer cost - the person's, never the run's. Reads only: nothing of the run is written or locked but the command's own record under the run's `asks/`; where no model words the facts, they are still the answer, the command says why no model did, and it exits 0. `--json` gives the facts and the answer apart; an orchestrator that holds no run is answered with `list-orchestrator`'s facts of it, said to be such |
 | `ask-orchestrator <run> "<question>" [--json]` | A person's question about a run, answered from its records by the workflow's `reporter` over the engine's facts; reads only, as `ask-orchestrator-status` does. Refused where no model can answer: 12 where the workflow names no reporter or the reporter's own files do not read, 13 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model failed, 21 where it could not be reached or its account is at its limit; neither command installs Claude Code or brings one up to date |
-| `run-side-task [--prompt <text> \| --prompt-file <path>] [--resume <task>] [--name <task>] [--model <code> \| --tier <tier>] [--client <client>] [--effort <level> \| --effort <code>=<level>]... [--json]` | An agent outside every workflow: a conversation with a person over the repository's main tree, with no step and no limit of a run's - every action still decided by the engine before it runs and recorded, the built-in refusals kept (root actions, every credential slot and Claude Code directory - to its file tools, and to every word of its commands, a directory that holds one but the main tree it works in among them - git's own files, the tool's state, a git or `gh` command called by an alias or an extension, `run-side-task` itself by any name or a verb the shell expands, which also refuses itself started under any agent, its mark taken away by no command - told by that mark and by the process tree, a process of this tool's among the ones that started it, parent by parent, a process that took a freed id never read as a parent; one detached from the agent's tree (`at`, a `tmux` server, a double fork) told by the mark alone, and a tree that could not be read refused saying why), the tool's own verbs open to it as the person's are - a policy of what a command names, not a sandbox: a command over the whole main tree, `.` or no path, reaches the slots' files beneath it; its `web_search` asks every configured source turned on and one more - `native`, the provider's own search: a request of the harness's own on the Claude API, asked with the model and key serving the side-task when the agent asks and through that key's gate as every request is, its cost counted then to that model and key and a failure of it - a gate held past the longest wait among them - one failed part saying why, Claude Code's own `WebSearch` kept in its tools, none on Z.AI. A chat in the terminal by default - the agent's text streamed, each action one line as it is decided, Ctrl+C interrupting a turn and a second ending the chat as `/exit` does, what its launch used, cost and spent kept, each interrupt saying whether a turn of the agent's was under way to cut, or none was and nothing is cut, a move to a later model of its tier going on from the conversation so far - and where no turn runs, while it is set up or a model made ready, an interrupt stopping it, a one shot's first and a chat's second - a line ending in `\` going on to the next, `/exit`, `/model`, `/effort` (a level, `<code>=<level>`, or `default`) - a new model keeping only the levels that name it and the one for the rest - `/records`, `/help` - or one message with `--prompt`/`--prompt-file`, answered once with the agent's final text (`--json` its one document, and a usage error without a prompt). Named by when it began - with its first words in one shot; a chat, named before its first message is typed, by the time alone - unless `--name` names it, a name another side-task holds refused (13) and that one's records named as its. `--resume` opens one again, going on with its stored conversation - or from the conversation so far where its model's client is handed none - on what the person last set it to run on, its tier with the tier's later models or the model named outright, unless `--model` or `--tier` names another; refused (13) where it names no side-task or another process holds it open, and `--name` beside it a usage error; what it spends is counted against its key. Exits 0 ended as asked - a chat 0 however the person leaves it once it has begun, 130 where interrupts stop it before it began, while it is set up or opened again - 10 usage (an effort a model does not take among them), 12 the configuration (in one shot an agent the configuration keeps from starting among it), 13 refused (a name taken, an unignored `.side-tasks`, started under an agent or its starting processes unread, an update of Claude Code refused, and in one shot a key missing or the tool running elevated), 14 a client that cannot start, 21 the install of Claude Code timed out or could not reach the registry; in one shot besides, 20 the model failed past its retries and fallback, 21 cut short by the account's limit, a stall or the clock, 130 interrupted; the records under `.side-tasks/<task>/` are named on every exit - or said to be none where it stopped before any were written - and kept until a person removes them (`help side-tasks`) |
+| `run-side-task [--prompt <text> \| --prompt-file <path>] [--resume <task>] [--name <task>] [--model <code> \| --tier <tier>] [--client <client>] [--effort <level> \| --effort <code>=<level>]... [--json]` | An agent outside every workflow: a conversation with a person over the repository's main tree, with no step and no limit of a run's - every action still decided by the engine before it runs and recorded, the built-in refusals kept (root actions, every credential slot and Claude Code directory - to its file tools, and to every word of its commands, a directory that holds one but the main tree it works in among them - git's own files, the tool's state, a git or `gh` command called by an alias or an extension, `run-side-task` itself where a word of a command or of a script the policy reads names it or a verb the shell expands may, which also refuses itself started under any agent - told by its mark and by the process tree, a process of this tool's among the ones that started it, parent by parent, a process that took a freed id never read as a parent; one detached from the agent's tree (`at`, a `tmux` server, a double fork) told by the mark alone, and a tree that could not be read refused saying why - and a command that sets the mark, takes it away or may take it away), the tool's own verbs open to it as the person's are - a policy of what a command names, not a sandbox: a command over the whole main tree, `.` or no path, reaches the slots' files beneath it, and code an interpreter runs (`python -c`, `perl -e`, awk's `system`) or a process apart from the agent's tree does what no word the policy reads says; its `web_search` asks every configured source turned on and one more - `native`, the provider's own search: a request of the harness's own on the Claude API, asked with the model and key serving the side-task when the agent asks and through that key's gate as every request is, its cost counted then to that model and key and a failure of it - a gate held past the longest wait among them - one failed part saying why, Claude Code's own `WebSearch` kept in its tools, none on Z.AI. A chat in the terminal by default - the agent's text streamed, each action one line as it is decided, Ctrl+C interrupting a turn and a second ending the chat as `/exit` does, what its launch used, cost and spent kept, each interrupt saying whether a turn of the agent's was under way to cut, or none was and nothing is cut, a move to a later model of its tier going on from the conversation so far - and where no turn runs, while it is set up or a model made ready, an interrupt stopping it, a one shot's first and a chat's second - a line ending in `\` going on to the next, `/exit`, `/model`, `/effort` (a level, `<code>=<level>`, or `default`) - a new model keeping only the levels that name it and the one for the rest - `/records`, `/help` - or one message with `--prompt`/`--prompt-file`, answered once with the agent's final text (`--json` its one document, and a usage error without a prompt). Named by when it began - with its first words in one shot; a chat, named before its first message is typed, by the time alone - unless `--name` names it, a name another side-task holds refused (13) and that one's records named as its. `--resume` opens one again, going on with its stored conversation - or from the conversation so far where its model's client is handed none - on what the person last set it to run on, its tier with the tier's later models or the model named outright, unless `--model` or `--tier` names another; refused (13) where it names no side-task or another process holds it open, and `--name` beside it a usage error; what it spends is counted against its key. Exits 0 ended as asked - a chat 0 however the person leaves it once it has begun, 130 where interrupts stop it before it began, while it is set up or opened again - 10 usage (an effort a model does not take among them), 12 the configuration (in one shot an agent the configuration keeps from starting among it), 13 refused (a name taken, an unignored `.side-tasks`, started under an agent or its starting processes unread, an update of Claude Code refused, and in one shot a key missing or the tool running elevated), 14 a client that cannot start, 21 the install of Claude Code timed out or could not reach the registry; in one shot besides, 20 the model failed past its retries and fallback, 21 cut short by the account's limit, a stall or the clock, 130 interrupted; the records under `.side-tasks/<task>/` are named on every exit - or said to be none where it stopped before any were written - and kept until a person removes them (`help side-tasks`) |
 | `list-side-tasks [--json]` | The repository's side-tasks, newest first: each by its name, when it began and last spoke, its model, its turns and cost, and whether it is open now |
 | `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there, each step's schema one the engine reads (`help workflows`). Nothing is run |
 | `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there; a file that cannot be written takes back what was written |
@@ -675,12 +675,29 @@ names one), writes outside an agent's writable roots, every read and write of a 
 a Claude Code directory of the run's and every search over one, any command naming one - by `~` or
 `$HOME`, as a redirect's file, an option's value after an `=` or a `:`, a value glued to a short
 option (`ssh -i./key`), the file an `@` or a `<` makes curl, httpie or gh read (`-d @x`,
-`-F f=@x;type=y`), a word of a script - or naming a directory that holds one whole (`.harness-config`,
-`..`, `~`, `/`, a pattern that may match one), but the agent's working directory (`.`) and a `cd`'s
-own word; this tool's own verbs and `run-side-task`, run by any program or from a response file, or by
-a verb the shell expands (`run-side-$T`, `dssharness $V`) past the tool's own options; a command that
-takes away `DSSHARNESS_UNDER_AGENT`, the mark of every program an agent starts (a word naming it,
-`env -i`, `env -`, `exec -c`); and a `git` or `gh` command called by a name none of its own commands
+`-F f=@x;type=y`), a word of a script, a variable the command string sets read with each value it
+gives it (`p=../..; cat $p/x`), a pattern's segment that may match `..` (`.?`, `.[.]`, `.*`) read as
+`..` too - or naming a directory that holds one whole (`.harness-config`, `..`, `~`, `/`, a pattern
+that may match one) to a program that may read what it holds: not to one that only names, tests or
+lists the paths it is given (`echo`, `printf`, `test`, `ls`, `du`, `df`, `stat`, `realpath`,
+`mkdir`, `which`, a `find` that runs, deletes and writes nothing, and their kind), not in a word that
+moves a command (a `cd`'s, `git -C`'s, `tar -C`'s, `make -C`'s) or names where it writes, which the
+write rules decide, and not where it is the agent's working directory or one above it, which reaches
+the slots only through that working directory (`.`, and `..` over a side-task's main tree); a
+recursive removal or a move of a directory that holds a tree's `.git`, the tool's state, a slot or a
+Claude Code directory (`rm -rf .`, `find . -delete`, `Remove-Item -Recurse`, `mv`, `rsync --delete`,
+`git clean -dx`),
+the working directory among them; this tool's own verbs and `run-side-task`, run by any program the
+policy reads or from a response file, or by a verb the shell expands (`run-side-$T`,
+`dssharness $V`), its verb the first word after its name, for it takes no option before one; a command that sets
+or takes away `DSSHARNESS_UNDER_AGENT`, the mark of every program an agent starts - its assignment,
+empty or not, `unset`, `env -u`, `export -n` and `declare` and their kind, a name reference to it,
+cmd's `set`, csh's `setenv`, `setx`, a PowerShell item cmdlet's `env:` item, or a start with no
+environment (`env -i`, `env -`, `exec -c`) - and one that may: any of those places given a name the
+shell expands (`unset ${v}AGENT`, `env -u "$v"`, `unset $(env | grep ...)`, zsh's `unset -m`
+pattern), a PowerShell item cmdlet given a path it computes or none where the string names `env:`;
+a word that only mentions the name (`grep -rn DSSHARNESS_UNDER_AGENT src`) takes nothing away; and a
+`git` or `gh` command called by a name none of its own commands
 is - an alias or an extension (`gh extension exec` too), whose command line a configuration file holds - whatever any switch
 says (a program `git` finds as `git-<name>`, `git lfs`, is its own) - and so are the `gh`
 commands that hand an agent's work to another agent or install what the next launch loads (`gh copilot`,
@@ -699,10 +716,15 @@ any case on every system, a Windows short name read as its long one. On Windows 
 no drive and no share, a volume by its id or a pipe, is a place it cannot tell, and denied - and a
 shell's spelling of a drive (`/c/x`, `/cygdrive/c/x`, `/mnt/c/x`) is read both as the drive (`C:\x`)
 and as the directory it names on the current drive, an action allowed only where both are; a `cd`
-is followed the same way - `pushd`, PowerShell's `Set-Location` and `Push-Location`, and the
-directory `env -C` or `pwsh -WorkingDirectory` starts its command in, each word it may go to -
-from every place the command reached before it, up to 64 places, past which the command is
-denied. A
+is followed the same way - `pushd`, PowerShell's `Set-Location` and `Push-Location`, the directory
+`env -C` or `pwsh -WorkingDirectory` starts its command in, and the one `git -C`, `tar -C` or
+`--directory`, `make -C`, `ninja -C` and `patch -d` work in, in every spelling, glued or apart, each
+word it may go to; a `cd` to a name under a `CDPATH` - the one the agent's commands start with or
+the one the string sets - read in each of its directories too, a `cd` given no directory going to the
+`HOME` the command or the string sets, `cd -` back to the `OLDPWD` the string sets or a place a move
+of the string's left, and one whose place this does not know - `cd -` with neither, a `CDPATH`,
+`OLDPWD` or `HOME` the string computes - denied - from every place the command reached
+before it, up to 64 places, past which the command is denied. A
 shell command is read whole before it is matched, as the shell's own parser reads it - split on
 `;`, `&&`, `||`, `|`, `&` and line ends, a comment and a here-document's lines never commands, the
 bodies of `$(...)`, backticks, `<(...)`, subshells, functions, loops and branches read as commands
@@ -718,8 +740,11 @@ wrappers (`env`, `nohup`, `time`, `timeout`, `nice`, `xargs`, `command`, `builti
 `eval`, `busybox`) stripped, and it goes into `sh -c` and every other
 shell's (fish's `-C` scripts too, its options read as fish reads them), the here-string, here-document or file a shell reads as the last input its descriptor 0
 is given (`/dev/stdin` and PowerShell's `-` among its names), `cmd /c`, `powershell -Command` and a
-decoded `-EncodedCommand`, and what `trap`, `watch`, `script` and `flock` run, by each shell's own
-quoting - PowerShell by a reader of its own grammar: its commands, pipelines, strings, here-strings,
+decoded `-EncodedCommand`, and what `trap`, `watch`, `script` and `flock` run, the command sed's
+`e` command and flag run, `ssh`'s and `wsl`'s command - its input, where it is given none, read as a
+shell's is - and the job `at` and `batch` take from a here-document or a here-string, a script the
+string writes to a file before it runs it read as the here-document that wrote it, by each shell's
+own quoting - PowerShell by a reader of its own grammar: its commands, pipelines, strings, here-strings,
 variables, `$(...)`, `@(...)`, `(...)`, script blocks, hashtables, assignments and keywords'
 conditions and blocks, each statement a block holds read as one that may run, `Invoke-Expression`'s
 one string - by whatever name it is called, the call operator's string or a module's name before
@@ -739,11 +764,22 @@ expansion is read only where the shell would make it: the reader keeps, for each
 parts were quoted, so `git 'p*sh'` is a word no rule meets and `gh api 'repos/o/r/pulls?state=open'`
 an endpoint that names no merge, while a double-quoted `$x` is a variable still and an unquoted `*`
 a glob - each word's quoting taken by where it stands, never lent to it by another word spelled
-alike, and a PowerShell bareword's wildcards open as pwsh on Linux and macOS expands them; a `*`, a
-`?` or a bracket matches a name that begins with a dot only where its shell would - a segment that
-begins with a dot, or a string that turns on `dotglob` or `globdots`, sets `GLOBIGNORE`, carries
-zsh's `D` qualifier, is read by PowerShell or cmd, or gives `-Force` - so `rm -rf *` runs and `.g*`
-is git's own; an argument list crosses no shell, so a variable in one is the text it spells - but on
+alike, and a PowerShell bareword's wildcards open as pwsh on Linux and macOS expands them, a
+cmdlet's quoted ones too, which the cmdlet expands itself; a variable the string sets
+(`p=../..`) read in each later word with each value it gives it, up to 16
+readings, `$PWD` as each place the command stands in, and a `~` as each `HOME` the string, the
+command or a command that runs it sets, while a variable it does not set and a
+substitution are read as the text they spell, for their value is the agent's environment's or a
+program's, which no word of the string gives; a `*`, a `?` or a bracket matches a name that begins
+with a dot only where its shell would - a segment that begins with a dot; any word of a string that
+names `dotglob` or `globdots` as bash and zsh read an option's name, in any case, with or without
+its underscores and its `no` (`shopt -s dotglob`, `BASHOPTS=dotglob`, `setopt GLOB_DOTS`,
+`unsetopt NO_GLOB_DOTS`), or names `GLOBIGNORE` or `BASHOPTS` at all; a command PowerShell or cmd
+reads, whose wildcards list every name, or one given `-Force` - so `rm -rf *` and `build/*` run,
+`.g*` is git's own, and a segment that may match `..` is read as `..` as well, as a shell whose
+`globskipdots` is off expands it; a parenthesis after a command's word, which bash refuses and zsh
+reads as a pattern's group or a glob qualifier (`rm -rf (.git|x)`, `*(D)`), is denied; an argument
+list crosses no shell, so a variable in one is the text it spells - but on
 Windows, where a program splits its own command line and a Cygwin or MSYS program - told by the
 `cygwin1.dll` or `msys-2.0.dll` beside it - expands a pattern or a brace in it, those are read as the
 expansions they may be for such a program and one that cannot be found, `gh`, `git` and the rest
@@ -762,8 +798,15 @@ text, a class, `using`, its stop-parsing `--%`, a script `Invoke-Expression` is 
 string, and a command line `Start-Process`, WMI, the task
 scheduler or `Add-Type` is handed), a
 program named by a variable, a substitution, a
-pattern or a brace, and an option of git's, gh's, fish's or Windows PowerShell's own before its command that it does not know;
-what it does not see is the inside of a script file a command runs. The worktree rules
+pattern or a brace, an option of git's, gh's, fish's or Windows PowerShell's own before its command that it does not know,
+sed running what it reads or a script the shell fills in, `at` given its job by a file or its input,
+a script file the string writes and runs whose text no here-document gave, a terminal session's
+program given what to run or type (`tmux`, `screen`, `zellij`, `byobu`), and `crontab`, `launchctl`
+or `systemctl` installing or starting a job, each running what it is given apart from the agent;
+what it does not see, a policy of words and not a sandbox, is the inside of a script file a command
+runs, the code an interpreter is given (`python -c`, `perl -e`, `node -e`, awk's `system`), a build
+file `make`, `ninja` or `cmake` runs, what an archive or a patch holds, a path a command computes
+(`$(printf ...)`), and what a process apart from the agent's tree does. The worktree rules
 (`agentPolicy.worktreeRules`, on unless turned off) keep an agent's worktree a thing the engine
 can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
 `help agent-clients`) - a git configured where it runs, by `-c` or `--config-env` of any key but
@@ -781,8 +824,14 @@ git stays allowed), git's own
 files - a `.git`, file or directory, at any depth beneath a root and in any case, a nested
 repository's and a submodule's too (`Write(**/.git/**)`), beneath the worktree and the main checkout
 it was made from - are not written by a tool or a command (a redirect, a writer's file, a copy's
-destination however an option names it: `cp -t`, `--target-directory`, `Copy-Item -Destination`)
-whatever `protectedPaths` says, and an agent does not edit its own policy
+destination however an option names it - `cp -t`, `--target-directory`, `Copy-Item -Destination`,
+each writer's options that take a value known to it, so `cp x dst --suffix y` writes `dst`, and an
+option it does not know making every word but its first a destination - and the output a
+program's option or word names: `curl -o`, `wget -O`, `tar`'s archive and the directory it extracts
+into, `unzip -d`, `sort -o`, `patch -o`, sed's `w`, robocopy's and xcopy's destination, `dotnet -o`,
+a compiler's `-o`, `ssh-keygen -f`, `Invoke-WebRequest -OutFile`,
+`Expand-Archive -DestinationPath`, `Tee-Object` and their kind), nor removed or moved whole by a command that
+removes or moves a directory holding them, whatever `protectedPaths` says, and an agent does not edit its own policy
 or what the next launch loads (`.harness-config/config.json`, `.harness-config/orchestrators/**`,
 `.harness-config/skills/**` - but for a step whose `writes` names one skill's own directory by
 name, `.harness-config/skills/<name>/...`, which opens that skill alone -
@@ -805,8 +854,11 @@ a sandbox: it decides what a call names, never what a program reads by itself - 
 runs opens files as the user it runs as, and one that walks its working directory unnamed (an
 archive of `.`, a search given no path) reaches a credential slot's files where that directory holds
 one, as a side-task's main tree does; what it is never given is a key in its environment, and what
-no file tool and no command's word of an agent names is the slot itself, in any root, or a directory
-that holds one but that working directory. Where this tool cannot decide a call it denies it, never allows: nothing
+no file tool and no command's word the policy reads names is the slot itself, in any root, or a
+directory that holds one to a program that may read it, but that working directory and those above
+it. The words it does not read - a path a command computes, the code an interpreter is given, a
+script file's inside, what a process apart from the agent's tree does - are where a policy of words
+ends. Where this tool cannot decide a call it denies it, never allows: nothing
 runs while the host that would answer is silent or gone. The policy is built and holds every
 action behind it; the `claude-code` client asks it of every call, the tool runtime below decides
 by it each call it runs - the web's of the `claude-code` client, served through the engine's tool

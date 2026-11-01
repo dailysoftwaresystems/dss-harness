@@ -40,7 +40,7 @@ namespace DssHarness.Core.Agents.Policy;
 /// itself, in any root.
 /// </para>
 /// </remarks>
-public sealed class AgentPolicy
+public sealed partial class AgentPolicy
 {
     /// <summary>
     /// The programs that would act as root, refused wherever a command names one, at any position
@@ -54,15 +54,16 @@ public sealed class AgentPolicy
     /// <summary>
     /// Git's state-writing verbs, refused as commands by the worktree rules: a fold refuses an
     /// agent whose HEAD left its base, and these are the verbs that move it or write what the
-    /// repository holds beside it - its refs, objects, configuration, remotes and worktrees.
-    /// Reading git - status, diff, log, show, blame, grep - stays allowed.
+    /// repository holds beside it - its refs, objects, configuration, remotes and worktrees, its experimental history
+    /// rewriters (<c>history</c>, <c>replay</c>) among them. Reading git - status, diff, log, show, blame, grep - stays allowed.
     /// </summary>
     public static IReadOnlyList<string> GitStateVerbs { get; } =
         ["commit", "stash", "reset", "clean", "checkout", "switch", "restore", "rebase", "merge", "cherry-pick", "revert", "pull", "push", "am", "worktree", "branch", "tag", "update-ref", "config", "gc",
-         "bisect", "symbolic-ref", "filter-branch", "fast-import", "replace", "notes", "reflog", "remote", "submodule", "sparse-checkout", "read-tree", "prune", "repack", "pack-refs", "maintenance"];
+         "bisect", "symbolic-ref", "filter-branch", "fast-import", "replace", "notes", "reflog", "remote", "submodule", "sparse-checkout", "read-tree", "prune", "repack", "pack-refs", "maintenance",
+         "history", "replay"];
 
     /// <summary>
-    /// gh's own commands and help topics, as gh 2.89 lists them and gh's manual of 2026-10-26 (<c>discussion</c>,
+    /// gh's own commands and help topics, as gh 2.89 lists them and gh's manual names them (<c>discussion</c>,
     /// <c>skill</c>, <c>telemetry</c>), each read by its own name where gh gives it another
     /// (<see cref="CommandAnalysis.GhAliases"/>): the first word of a gh command that is none of them is an alias - the
     /// <c>co</c> gh's configuration holds for <c>pr checkout</c> among them - or an extension, which gh runs as a command
@@ -78,12 +79,15 @@ public sealed class AgentPolicy
     ];
 
     /// <summary>
-    /// git's own commands, as <c>git help -a</c> lists them for git 2.51 - its porcelain, its ancillary and interacting
-    /// commands, its plumbing and its internal helpers - with the helpers git runs under its own name: a name git runs as
-    /// itself, which no alias can stand for (git passes over an alias of one of its own names). A first word that is none
-    /// of them is a program <c>git-&lt;name&gt;</c> this machine has - <c>git lfs</c> - or an alias, which git runs from
-    /// a configuration file no rule reads: the policy tells the two apart by looking for the program (<see cref="GitProgram"/>),
-    /// and refuses the alias on every ground. A command a later git adds is refused until it is named here.
+    /// git's own commands, as git 2.55 lists its builtins and its main commands (<c>git --list-cmds=builtins,main</c>) -
+    /// its porcelain, its ancillary and interacting commands, its plumbing, its internal helpers and its experimental
+    /// commands - with the helpers git runs under its own name: a name git runs as itself, which no alias can stand for
+    /// (git passes over an alias of one of its own names). A first word that is none of them is a program
+    /// <c>git-&lt;name&gt;</c> this machine has - <c>git lfs</c> - or an alias, which git runs from a configuration file no
+    /// rule reads: the policy tells the two apart by looking for the program (<see cref="GitProgram"/>), and refuses the
+    /// alias on every ground. The list is this tool's own rather than asked of the git the agent runs: git's listing of
+    /// its commands is internal to git and no stable interface, and the policy decides a command by reading its words
+    /// alone, starting no program to do it. A command a later git adds is refused until it is named here.
     /// </summary>
     public static IReadOnlyList<string> GitCommands { get; } =
     [
@@ -91,22 +95,22 @@ public sealed class AgentPolicy
         "cat-file", "check-attr", "check-ignore", "check-mailmap", "check-ref-format", "checkout", "checkout--worker", "checkout-index",
         "cherry", "cherry-pick", "citool", "clean", "clone", "column", "commit", "commit-graph", "commit-tree", "config",
         "count-objects", "credential", "credential-cache", "credential-cache--daemon", "credential-store", "cvsexportcommit",
-        "cvsimport", "cvsserver", "daemon", "describe", "diagnose", "diff", "diff-files", "diff-index", "diff-pairs", "diff-tree",
+        "credential-wincred", "cvsimport", "cvsserver", "daemon", "describe", "diagnose", "diff", "diff-files", "diff-index", "diff-pairs", "diff-tree",
         "difftool", "difftool--helper", "fast-export", "fast-import", "fetch", "fetch-pack", "filter-branch", "fmt-merge-msg",
-        "for-each-ref", "for-each-repo", "format-patch", "fsck", "fsck-objects", "fsmonitor--daemon", "gc", "get-tar-commit-id",
-        "gitk", "gitweb", "grep", "gui", "gui--askpass", "hash-object", "help", "hook", "http-backend", "http-fetch", "http-push",
+        "for-each-ref", "for-each-repo", "format-patch", "format-rev", "fsck", "fsck-objects", "fsmonitor--daemon", "gc", "get-tar-commit-id",
+        "gitk", "gitweb", "grep", "gui", "gui--askpass", "gui--askyesno", "hash-object", "help", "history", "hook", "http-backend", "http-fetch", "http-push",
         "imap-send", "index-pack", "init", "init-db", "instaweb", "interpret-trailers", "last-modified", "log", "ls-files",
         "ls-remote", "ls-tree", "mailinfo", "mailsplit", "maintenance", "merge", "merge-base", "merge-file", "merge-index",
         "merge-octopus", "merge-one-file", "merge-ours", "merge-recursive", "merge-recursive-ours", "merge-recursive-theirs",
         "merge-resolve", "merge-subtree", "merge-tree", "mergetool", "mergetool--lib", "mktag", "mktree", "multi-pack-index", "mv",
-        "name-rev", "notes", "p4", "pack-objects", "pack-redundant", "pack-refs", "patch-id", "prune", "prune-packed", "pull",
+        "name-rev", "notes", "p4", "pack-objects", "pack-redundant", "pack-refs", "patch-id", "pickaxe", "prune", "prune-packed", "pull",
         "push", "quiltimport", "range-diff", "read-tree", "rebase", "receive-pack", "reflog", "refs", "remote", "remote-ext",
         "remote-fd", "remote-ftp", "remote-ftps", "remote-http", "remote-https", "repack", "replace", "replay", "repo",
         "request-pull", "rerere", "reset", "restore", "rev-list", "rev-parse", "revert", "rm", "scalar", "send-email", "send-pack",
         "sh-i18n", "sh-i18n--envsubst", "sh-setup", "shell", "shortlog", "show", "show-branch", "show-index", "show-ref",
-        "sparse-checkout", "stage", "stash", "status", "stripspace", "submodule", "submodule--helper", "subtree", "svn",
+        "sparse-checkout", "stage", "stash", "status", "stripspace", "submodule", "submodule--helper", "subtree", "survey", "svn",
         "switch", "symbolic-ref", "tag", "unpack-file", "unpack-objects", "update-index", "update-ref", "update-server-info",
-        "upload-archive", "upload-archive--writer", "upload-pack", "var", "verify-commit", "verify-pack", "verify-tag", "version",
+        "upload-archive", "upload-archive--writer", "upload-pack", "url-parse", "var", "verify-commit", "verify-pack", "verify-tag", "version",
         "web--browse", "whatchanged", "worktree", "write-tree",
     ];
 
@@ -285,6 +289,7 @@ public sealed class AgentPolicy
     private readonly string? _resolvedReporterRoot;
     private readonly string? _programPath;
     private readonly IReadOnlyList<string> _gitTrees;
+    private readonly string? _cdPath;
 
     /// <summary>
     /// Reads the ground once: its roots and the places no action reaches resolved, its restrictions
@@ -337,6 +342,9 @@ public sealed class AgentPolicy
 
         // Every tree whose git's own files no write reaches: the agent's roots, and the trees it touches beyond them.
         _gitTrees = [.. _allRoots.Concat(Resolve(ground.Trees ?? [])).Distinct(StringComparer.OrdinalIgnoreCase)];
+
+        // The directories a cd of the agent's shell looks a relative name up in, which every agent's child inherits.
+        _cdPath = Environment.GetEnvironmentVariable("CDPATH");
     }
 
     /// <summary>
@@ -530,7 +538,7 @@ public sealed class AgentPolicy
 
         try
         {
-            return RunDecided(CommandAnalysis.Commands(shell), startsIn: null, qualifiedDots: DotsQualifier.IsMatch(shell));
+            return RunDecided(CommandAnalysis.Commands(shell), startsIn: null);
         }
         catch (Exception exception) when (Undecidable(exception))
         {
@@ -874,7 +882,7 @@ public sealed class AgentPolicy
 
             try
             {
-                readings = Spelled(target, place);
+                readings = CommandSpelled(target, place, pattern: true);
             }
             catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
             {
@@ -914,6 +922,91 @@ public sealed class AgentPolicy
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The refusal of a command that removes or moves whole (<see cref="CommandAnalysis.RemovalTargets"/>) a directory that
+    /// holds a place no command reaches or writes - git's own directory of every tree the agent touches where the worktree
+    /// rules or a side-task's ground keep it, the tool's own state, a credential slot, a Claude Code directory - or is one:
+    /// each target spelled against every place the command may stand in, a pattern by every path it may match, the
+    /// agent's working directory among them, for removing it removes all it holds.
+    /// </summary>
+    /// <param name="targets">What the command removes or moves, as it spells each.</param>
+    /// <param name="places">Every directory a path of the command may be read against.</param>
+    /// <param name="whole">The command whole, as the denial names it.</param>
+    /// <param name="dotNames">Whether the command's patterns match a dot-name.</param>
+    private AgentPolicyAnswer.Denied? RemovalRefusal(IReadOnlyList<string> targets, IReadOnlyList<string> places, string whole, bool dotNames)
+    {
+        foreach (var (target, place) in targets
+            .Where(target => target.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .SelectMany(target => places.Distinct(StringComparer.Ordinal).Select(place => (target, place))))
+        {
+            IReadOnlyList<string> readings;
+
+            try
+            {
+                readings = CommandSpelled(target, place, pattern: true);
+            }
+            catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
+            {
+                continue;
+            }
+
+            foreach (var reading in readings)
+            {
+                foreach (var (guarded, rule, what) in Removed())
+                {
+                    var holds = reading.IndexOfAny(['*', '?', '[']) >= 0
+                        ? Ancestry(guarded).Any(directory => GlobReaches(reading, directory, dotNames, exactly: true))
+                        : new[] { reading, Resolved(reading) }.Any(form => PathContainment.IsInsideOrSame(form, guarded, Refusals));
+
+                    if (holds)
+                    {
+                        return new AgentPolicyAnswer.Denied(
+                            rule,
+                            AgentPolicySource.Builtin,
+                            $"'{whole}' removes or moves '{target}', which holds {what}, '{guarded}': no command of an agent removes or moves one");
+                    }
+                }
+            }
+        }
+
+        return null;
+
+        IEnumerable<(string Place, string Rule, string What)> Removed()
+        {
+            if (_ground.WorktreeRules || _ground.SideTask)
+            {
+                foreach (var tree in _gitTrees)
+                {
+                    yield return (Path.Combine(tree, ".git"), GitsOwnRule, "git's own");
+                }
+            }
+
+            foreach (var state in _state)
+            {
+                yield return (state, "the tool's own state", "the tool's own state");
+            }
+
+            foreach (var slot in _slots)
+            {
+                yield return (slot, "the credential slots", "a credential slot of this tool");
+            }
+
+            foreach (var directory in _claudeDirectories)
+            {
+                yield return (directory, "the Claude Code directories", "a Claude Code directory this run reads");
+            }
+        }
+
+        static IEnumerable<string> Ancestry(string place)
+        {
+            for (string? directory = place; directory is not null; directory = Path.GetDirectoryName(directory))
+            {
+                yield return directory;
+            }
+        }
     }
 
     /// <summary>
@@ -1005,13 +1098,8 @@ public sealed class AgentPolicy
     /// <summary>Each flattened command, refused by the first thing it runs that may not run.</summary>
     /// <param name="commands">The commands, flattened.</param>
     /// <param name="startsIn">Where the first starts, spelled whole; null for the working directory.</param>
-    /// <param name="qualifiedDots">Whether the string's text carries zsh's <c>D</c> qualifier (<see cref="DotsQualifier"/>), which makes its patterns match dot-names.</param>
-    private AgentPolicyAnswer RunDecided(IReadOnlyList<AnalyzedCommand> commands, string? startsIn, bool qualifiedDots = false)
+    private AgentPolicyAnswer RunDecided(IReadOnlyList<AnalyzedCommand> commands, string? startsIn)
     {
-        // Everything of a command compares as this platform compares names, but for the root
-        // actions and the places no agent reaches, which fold case everywhere.
-        var comparison = _platform.PathComparison;
-
         if (_reporterRoot is not null)
         {
             return new AgentPolicyAnswer.Denied(
@@ -1022,42 +1110,80 @@ public sealed class AgentPolicy
 
         // Every directory a path may be read against: the working directory, and each a cd of the
         // string moved to - a path is tried against all of them, for a subshell's cd ends with it.
-        var places = new List<string> { startsIn ?? _ground.WorkingDirectory };
+        return RunDecided(commands, [startsIn ?? _ground.WorkingDirectory], scripts: 0);
+    }
 
-        // Whether a pattern of the string may match a dot-name: read once, of every command of it.
-        var dotNames = qualifiedDots || PatternsMatchDotNames(commands);
+    /// <summary>
+    /// Each flattened command, refused by the first thing it runs that may not run, read against <paramref name="places"/>
+    /// and every place a move of theirs reaches.
+    /// </summary>
+    /// <param name="commands">The commands, flattened.</param>
+    /// <param name="places">Every directory a path of the first may be read against, added to as the commands move.</param>
+    /// <param name="scripts">How many script files this string's text stands in, each one its string wrote and then ran (<see cref="WrittenScripts"/>).</param>
+    private AgentPolicyAnswer RunDecided(IReadOnlyList<AnalyzedCommand> commands, List<string> places, int scripts)
+    {
+        // Everything of a command compares as this platform compares names, but for the root
+        // actions and the places no agent reaches, which fold case everywhere.
+        var comparison = _platform.PathComparison;
+
+        // Whether a setting of the string's makes the shell's patterns match dot-names, read once of every command of it.
+        var dotSettings = PatternsMatchDotNames(commands);
+
+        // Whether a word of the string names PowerShell's env: drive, whose items a cmdlet given no path may be piped.
+        var environmentDrive = commands.Any(command => command.Wrappers.Append(command.Words).Any(words => words.Any(CommandAnalysis.NamesEnvironmentDrive)));
+
+        // What the string's own assignments set, and what its commands write, as each command after them reads it.
+        var state = new StringState();
 
         foreach (var analyzed in commands)
         {
             var command = analyzed.Words;
+            var environment = CommandAnalysis.EnvironmentOf(command);
+            var powerShell = ReadBy(analyzed) is Reader.PowerShell;
 
-            // A move's words read nothing where they go - a cd's, and env's -C or pwsh's -WorkingDirectory among a command's
-            // words - each path after it is read there.
-            var moves = CommandAnalysis.EnvironmentOf(command) is var first && first < command.Count && Movers.Contains(CommandAnalysis.Name(command[first]), StringComparer.OrdinalIgnoreCase);
-            var moving = CommandAnalysis.MoveWords(command);
+            // A pattern of this command's matches dot-names where a setting of the string's makes it, or where the shell
+            // that expands it does: PowerShell's, cmd.exe's, or a -Force of the command's own.
+            var dotNames = dotSettings || MatchesDotNames(analyzed);
 
-            // Each word, and the file each redirect names or the text it gives: a redirect is decided by its file, and a
-            // here-document's or here-string's text is none the shell expands braces in.
-            foreach (var (word, braces, holds) in command.Select((word, at) => (word, true, !moves && !moving.Contains(at)))
-                .Concat(analyzed.Redirects.Select(redirect => (redirect.Target, redirect.Operator != "<<<", true))))
+            // The command as it is spelled, and with each variable the string set before it given each value it set.
+            var readings = Readings(analyzed, state, places);
+
+            foreach (var reading in readings)
             {
-                // The sentence says the action it matched, in the one spelling the list holds, so a
-                // word named in either case is refused in the same words.
-                if (RootActionOf(word, braces) is { } action)
-                {
-                    return new AgentPolicyAnswer.Denied(
-                        "the root actions",
-                        AgentPolicySource.Builtin,
-                        $"'{action}' is a root action: no agent of this tool acts as root");
-                }
+                var exempt = HoldsExempt(reading, environment);
 
-                if (Named(word, places, braces, dotNames, holds) is { } named)
+                // Each word, and the file each redirect names or the text it gives: a redirect is decided by its file, and a
+                // here-document's or here-string's text is none the shell expands braces in. A pattern is read where the
+                // shell expands it: a quoted star is a star - but where PowerShell, whose cmdlets expand their own, reads it.
+                foreach (var (word, braces, holds, pattern) in reading.Words.Select((word, at) => (word, true, !exempt.Contains(at), powerShell || CommandAnalysis.HasOpenPattern(word, reading.QuotedWord(at))))
+                    .Concat(reading.Redirects.Select(redirect => (redirect.Target, redirect.Operator != "<<<", true, true))))
                 {
-                    return named;
+                    // The sentence says the action it matched, in the one spelling the list holds, so a
+                    // word named in either case is refused in the same words.
+                    if (RootActionOf(word, braces) is { } action)
+                    {
+                        return new AgentPolicyAnswer.Denied(
+                            "the root actions",
+                            AgentPolicySource.Builtin,
+                            $"'{action}' is a root action: no agent of this tool acts as root");
+                    }
+
+                    if (Named(word, places, braces, dotNames, holds, pattern) is { } named)
+                    {
+                        return named;
+                    }
                 }
             }
 
-            places.AddRange(MovedTo(command, places));
+            var moved = readings.SelectMany(reading => MovedTo(reading.Words, places, state)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+            places.AddRange(moved.Where(place => !places.Contains(place, StringComparer.OrdinalIgnoreCase)));
+            state.Moved |= environment < command.Count && Movers.Contains(CommandAnalysis.Name(command[environment]), StringComparer.OrdinalIgnoreCase);
+
+            if (places.Count > MaxPlaces)
+            {
+                throw new NotSupportedException($"its moves reach more than {MaxPlaces} places, which this does not follow");
+            }
 
             // wsl starting a root user, and schtasks running a task as another account: neither is
             // a word the list above holds, and both are as root.
@@ -1069,16 +1195,26 @@ public sealed class AgentPolicy
                     $"'{asRoot}' would run as the root user: no agent of this tool acts as root");
             }
 
-            // The mark run-side-task refuses itself under goes with every program an agent starts, and no command takes it away.
-            if (MarkerTouched(analyzed) is { } marker)
+            // The mark run-side-task refuses itself under goes with every program an agent starts: a command that sets it or
+            // takes it away, by any form this reads, is refused.
+            if (MarkerTouched(analyzed, readings, powerShell, environmentDrive) is { } marker)
             {
-                return new AgentPolicyAnswer.Denied(
-                    AgentChildEnvironment.AgentMarker,
-                    AgentPolicySource.Builtin,
-                    $"'{string.Join(' ', analyzed.Wrappers.Count > 0 ? analyzed.Wrappers[0] : analyzed.Whole)}' is refused: {marker}, which marks every program an agent of this tool starts, and no command of an agent takes it away");
+                return marker;
             }
 
-            var environment = CommandAnalysis.EnvironmentOf(command);
+            // A script file the string wrote and now runs holds what it wrote: read where its text is known, refused where not.
+            if (WrittenScripts(analyzed, environment, state) is { } run)
+            {
+                if (run.Text is null || scripts >= CommandAnalysis.Depth)
+                {
+                    return Undecided(string.Join(' ', analyzed.Whole), new NotSupportedException($"'{run.File}' is a script file this command wrote before it runs it, whose text this does not read"));
+                }
+
+                if (RunDecided(CommandAnalysis.Commands(run.Text), [.. places], scripts + 1).Refusal() is { } inScript)
+                {
+                    return inScript;
+                }
+            }
 
             // Every word is tried as the program of the words after it, the command's environment
             // before them: a command another program runs - find -exec, ssh, a wrapper this does
@@ -1090,11 +1226,22 @@ public sealed class AgentPolicy
 
             for (var start = environment; start < starts; start++)
             {
-                // What the program there writes - its output redirects, and the files a writer's words name - meets the
-                // refusals every ground keeps on a write, as a file tool's write does: a side-task has no fold after it.
-                if (CommandWriteRefusal(CommandAnalysis.WriteTargets(analyzed, start), places, string.Join(' ', analyzed.Whole), dotNames) is { } written)
+                foreach (var reading in readings)
                 {
-                    return written;
+                    var whole = string.Join(' ', analyzed.Whole);
+
+                    // What the program there writes - its output redirects, and the files a writer's words name - meets the
+                    // refusals every ground keeps on a write, as a file tool's write does: a side-task has no fold after it.
+                    if (CommandWriteRefusal(CommandAnalysis.WriteTargets(reading, start), places, whole, dotNames) is { } written)
+                    {
+                        return written;
+                    }
+
+                    // What it removes or moves whole holds no place a refusal keeps: git's own, the tool's state, a slot.
+                    if (RemovalRefusal(CommandAnalysis.RemovalTargets(reading, start, powerShell), places, whole, dotNames) is { } removed)
+                    {
+                        return removed;
+                    }
                 }
 
                 IReadOnlyList<string> words = [.. command.Take(environment), .. command.Skip(start)];
@@ -1104,9 +1251,239 @@ public sealed class AgentPolicy
                     return denied;
                 }
             }
+
+            state.Record(analyzed, environment, places);
         }
 
         return AgentPolicyAnswer.Allow;
+    }
+
+    /// <summary>
+    /// What a string's commands set and write, as each command after them reads it: the values its own assignments give
+    /// each variable, the variables it sets to a value it computes, the files it writes and the text a here-document gives
+    /// one, and whether a command of it moved.
+    /// </summary>
+    private sealed class StringState
+    {
+        /// <summary>The values each variable the string set to text it spells may hold, by its name.</summary>
+        public Dictionary<string, List<string>> Values { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The variables the string set to a value it computes, which this cannot know.</summary>
+        public HashSet<string> Unknown { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The files the string wrote content into, by name, each with the text a here-document or here-string gave it where one did.</summary>
+        public Dictionary<string, string?> Written { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Whether a command of the string wrote content into a file named by what the shell expands.</summary>
+        public bool WroteUnread { get; set; }
+
+        /// <summary>Whether a command of the string moved, so a <c>cd -</c> goes back to a place already reached.</summary>
+        public bool Moved { get; set; }
+
+        /// <summary>The values <paramref name="name"/> may hold: the string's own, or for <c>PWD</c> every place the command may stand in; null where none is known.</summary>
+        public IReadOnlyList<string>? ValuesOf(string name, IReadOnlyList<string> places)
+            => name == "PWD" ? places : Values.TryGetValue(name, out var values) ? values : null;
+
+        /// <summary>
+        /// What <paramref name="analyzed"/> leaves for the commands after it: each variable it sets - assignments alone,
+        /// or a declaration's - to the text it spells, every variable the string knows given its values in it, or to a
+        /// value it computes; and each file it writes content into - an output redirect's, tee's, a download's, sed's, a
+        /// PowerShell content cmdlet's - with the text a here-document or here-string gives cat or tee for it.
+        /// </summary>
+        public void Record(AnalyzedCommand analyzed, int environment, IReadOnlyList<string> places)
+        {
+            var words = analyzed.Words;
+            var program = environment < words.Count ? CommandAnalysis.Name(words[environment]) : string.Empty;
+            var declares = program is "export" or "declare" or "typeset" or "local" or "readonly";
+            var settings = environment == words.Count ? Enumerable.Range(0, environment)
+                : declares ? Enumerable.Range(environment + 1, words.Count - environment - 1).Where(at => CommandAnalysis.IsAssignment(words[at]))
+                : [];
+
+            foreach (var at in settings)
+            {
+                var name = CommandAnalysis.AssignedName(words[at]);
+                var equals = words[at].IndexOf('=', StringComparison.Ordinal);
+                var mask = analyzed.QuotedWord(at);
+                var value = words[at][(equals + 1)..];
+                var readings = CommandAnalysis.Substituted(value, mask.Length == words[at].Length ? mask[(equals + 1)..] : null, known => ValuesOf(known, places));
+
+                // The value as each known variable spells it, where one does; else as it is spelled.
+                var spelled = readings.Count > 1 ? readings.Skip(1).ToList() : readings;
+
+                if (spelled.Any(reading => CommandAnalysis.Expansion(reading.Word, reading.Quoted) is "a variable" or "a substitution"))
+                {
+                    Values.Remove(name);
+                    Unknown.Add(name);
+                    continue;
+                }
+
+                List<string> given = words[at][..equals].EndsWith('+')
+                    ? [.. (Values.TryGetValue(name, out var before) ? before : [string.Empty]).SelectMany(old => spelled.Select(reading => old + reading.Word))]
+                    : [.. spelled.Select(reading => reading.Word)];
+
+                Values[name] = [.. given.Distinct(StringComparer.Ordinal).Take(CommandAnalysis.MaxReadings)];
+                Unknown.Remove(name);
+            }
+
+            var contentWriters = new[] { "tee", "dd", "curl", "wget", "sed", "gsed", "Out-File", "Set-Content", "Add-Content", "sc", "ac", "Invoke-WebRequest", "iwr", "Invoke-RestMethod", "irm" };
+            var targets = analyzed.Redirects.Where(redirect => redirect.Operator is ">" or ">>" or "<>").Select(redirect => redirect.Target)
+                .Concat(contentWriters.Contains(program, StringComparer.OrdinalIgnoreCase) ? CommandAnalysis.WriteTargets(analyzed with { Redirects = [] }, environment) : []);
+            var text = analyzed.Redirects.LastOrDefault(redirect => redirect.Descriptor == 0) is { Operator: "<<<" } input
+                && (program == "cat" || program == "tee")
+                && words.Skip(environment + 1).All(word => word.StartsWith('-') || program == "tee")
+                    ? input.Target
+                    : null;
+
+            foreach (var target in targets)
+            {
+                if (CommandAnalysis.Expansion(target) is "a variable" or "a substitution")
+                {
+                    WroteUnread = true;
+                    continue;
+                }
+
+                var appended = analyzed.Redirects.Any(redirect => redirect.Operator == ">>" && redirect.Target == target) || words.Skip(environment + 1).Any(word => word is "-a" or "--append");
+
+                Written[Path.GetFileName(target.Replace('\\', '/'))] = appended ? null : text;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The readings of <paramref name="analyzed"/> a path is decided on: the command as it is spelled, then - where a word
+    /// or a redirect's file names a variable the string set to text it spells, or <c>$PWD</c> - the command with each such
+    /// variable given each value it may hold (<see cref="CommandAnalysis.Substituted"/>), a leading <c>~</c> among them
+    /// where the string, or a command that runs this one, sets <c>HOME</c>. A variable the string does not set, or sets to
+    /// a value it computes, is read as the text it spells.
+    /// </summary>
+    /// <exception cref="NotSupportedException">The command spells more readings than <see cref="CommandAnalysis.MaxReadings"/>.</exception>
+    private static IReadOnlyList<AnalyzedCommand> Readings(AnalyzedCommand analyzed, StringState state, IReadOnlyList<string> places)
+    {
+        // A shell a command runs with HOME set reads its tilde as that HOME: the command's own environment carries the HOME
+        // of each command that runs it (HOME=x bash -c '...'), read beside the string's own.
+        var carriedHomes = analyzed.Words.Take(CommandAnalysis.EnvironmentOf(analyzed.Words))
+            .Where(word => CommandAnalysis.IsAssignment(word) && CommandAnalysis.AssignedName(word) == "HOME")
+            .Select(word => word.Split('=', 2)[1])
+            .ToList();
+
+        IReadOnlyList<string>? Values(string name)
+            => name == "HOME" && carriedHomes.Count > 0
+                ? [.. (state.ValuesOf(name, places) ?? []).Concat(carriedHomes).Distinct(StringComparer.Ordinal)]
+                : state.ValuesOf(name, places);
+
+        var words = analyzed.Words.Select((word, at) => CommandAnalysis.Substituted(word, analyzed.QuotedWord(at), Values)).ToList();
+        var targets = analyzed.Redirects.Select(redirect => redirect.Operator == "<<<" ? [(redirect.Target, string.Empty)] : CommandAnalysis.Substituted(redirect.Target, null, Values)).ToList();
+
+        if (words.All(each => each.Count == 1) && targets.All(each => each.Count == 1))
+        {
+            return [analyzed];
+        }
+
+        IEnumerable<(IEnumerable<(string Word, string Quoted)> Words, IEnumerable<string> Targets)> readings = [([], [])];
+
+        foreach (var choices in words)
+        {
+            readings = [.. readings.SelectMany(reading => choices.Select(choice => (reading.Words.Append(choice), reading.Targets)))];
+        }
+
+        foreach (var choices in targets)
+        {
+            readings = [.. readings.SelectMany(reading => choices.Select(choice => (reading.Words, reading.Targets.Append(choice.Word))))];
+        }
+
+        var all = readings.ToList();
+
+        if (all.Count > CommandAnalysis.MaxReadings)
+        {
+            throw new NotSupportedException($"its variables spell more than {CommandAnalysis.MaxReadings} readings of '{string.Join(' ', analyzed.Whole)}', which this does not follow");
+        }
+
+        return [analyzed, .. all.Skip(1).Select(reading => new AnalyzedCommand(
+            [.. reading.Words.Select(each => each.Word)],
+            [.. analyzed.Redirects.Zip(reading.Targets, (redirect, target) => redirect with { Target = target })],
+            [.. reading.Words.Select(each => each.Quoted)])
+        {
+            Wrappers = analyzed.Wrappers,
+        })];
+    }
+
+    /// <summary>
+    /// The words of a command, by where each stands, that are never refused for what a directory they name holds: a word
+    /// that reads nothing there - a move's own targets (<see cref="Movers"/>) and the words a program moves by
+    /// (<see cref="CommandAnalysis.MoveWords"/>), every word of a program that names, tests or lists what it is given
+    /// (<see cref="CommandAnalysis.NamesOnly"/>), and each word that gives where the program writes
+    /// (<see cref="CommandAnalysis.WriteTargets"/>). The command's environment is never one: its values are read.
+    /// </summary>
+    private static HashSet<int> HoldsExempt(AnalyzedCommand reading, int environment)
+    {
+        var words = reading.Words;
+        var exempt = new HashSet<int>(CommandAnalysis.MoveWords(words));
+
+        if (environment >= words.Count)
+        {
+            return exempt;
+        }
+
+        if (Movers.Contains(CommandAnalysis.Name(words[environment]), StringComparer.OrdinalIgnoreCase) || CommandAnalysis.NamesOnly(words, environment))
+        {
+            exempt.UnionWith(Enumerable.Range(environment + 1, words.Count - environment - 1));
+            return exempt;
+        }
+
+        var written = CommandAnalysis.WriteTargets(reading with { Redirects = [] }, environment);
+
+        for (var at = environment + 1; at < words.Count; at++)
+        {
+            if (written.Contains(words[at], StringComparer.Ordinal) || CommandAnalysis.PathsNamed(words[at]).Any(path => path.Whole && path.Path != words[at] && written.Contains(path.Path, StringComparer.Ordinal)))
+            {
+                exempt.Add(at);
+            }
+        }
+
+        return exempt;
+    }
+
+    /// <summary>
+    /// The script file <paramref name="analyzed"/> runs that a command of its string wrote before it, with the text a
+    /// here-document or here-string gave it where one did: the program itself, or a word of a shell's, <c>source</c>'s,
+    /// PowerShell's, cmd.exe's, sed's or at's - each where a program runs (<see cref="CommandAnalysis.RunsAt"/>) - by its
+    /// name; any such file where the string wrote one it named by what the shell expands. Null where it runs none.
+    /// </summary>
+    private static (string File, string? Text)? WrittenScripts(AnalyzedCommand analyzed, int environment, StringState state)
+    {
+        if (state.Written.Count == 0 && !state.WroteUnread)
+        {
+            return null;
+        }
+
+        var words = analyzed.Words;
+
+        for (var at = environment; at < words.Count && CommandAnalysis.RunsAt(words, at); at++)
+        {
+            var name = CommandAnalysis.Name(words[at]);
+            var runner = CommandAnalysis.IsShell(name) || name is "source" or "." or "pwsh" or "powershell" or "cmd" or "sed" or "gsed" or "at" or "batch";
+            var posix = CommandAnalysis.IsShell(name) || name is "source" or ".";
+
+            foreach (var word in runner ? words.Skip(at) : [words[at]])
+            {
+                if (word.StartsWith('-') && word != words[at])
+                {
+                    continue;
+                }
+
+                if (state.Written.TryGetValue(Path.GetFileName(word.Replace('\\', '/')), out var text))
+                {
+                    return (word, word == words[at] || posix ? text : null);
+                }
+
+                if (state.WroteUnread && (word.IndexOfAny(['/', '\\']) >= 0 || (runner && word != words[at])))
+                {
+                    return (word, null);
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -1145,68 +1522,51 @@ public sealed class AgentPolicy
 
     /// <summary>
     /// The verb this tool is handed where <paramref name="program"/>, at <paramref name="start"/>, is this tool - its first
-    /// word past the global options (<c>-v</c>, <c>--verbose</c>, <c>--no-prompt</c>, <c>-C</c> and <c>--directory</c>
-    /// with their value) - with the expansion the shell makes of it where it makes one; null where the program is not this
-    /// tool, or names no verb.
+    /// word, for the tool takes no option before its verb (<c>--help</c> and <c>--version</c> alone stand there, and run
+    /// none) - with the expansion the shell makes of it where it makes one; null where the program is not this tool, or
+    /// names no verb.
     /// </summary>
     private static (string Verb, string? Expansion)? ToolVerbOf(string program, AnalyzedCommand analyzed, int start)
-    {
-        if (!program.Equals(ToolPackage.Command, StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        var command = analyzed.Words;
-
-        for (var at = start + 1; at < command.Count; at++)
-        {
-            var word = command[at];
-
-            if (word is "-C" or "--directory")
-            {
-                at++;
-                continue;
-            }
-
-            if (word is "-v" or "--verbose" or "--no-prompt" || word.StartsWith("--directory=", StringComparison.Ordinal) || (word.StartsWith("-C", StringComparison.Ordinal) && word.Length > 2))
-            {
-                continue;
-            }
-
-            return (word, CommandAnalysis.Expansion(word, analyzed.QuotedWord(at)));
-        }
-
-        return null;
-    }
+        => program.Equals(ToolPackage.Command, StringComparison.OrdinalIgnoreCase) && start + 1 < analyzed.Words.Count
+            ? (analyzed.Words[start + 1], CommandAnalysis.Expansion(analyzed.Words[start + 1], analyzed.QuotedWord(start + 1)))
+            : null;
 
     /// <summary>
-    /// What a command does to <see cref="AgentChildEnvironment.AgentMarker"/>, the mark every program an agent of this tool
-    /// starts carries and <c>run-side-task</c> refuses itself under: a word that names it - an assignment, empty or not, an
-    /// <c>unset</c>, <c>env -u</c>, PowerShell's <c>env:</c> drive, cmd.exe's <c>set</c> - or a start with no environment
-    /// at all (<c>env -i</c>, <c>env -</c>, <c>exec -c</c>), which takes it away with the rest - read in the command's
-    /// words and in each wrapper's stripped before its program (<see cref="AnalyzedCommand.Wrappers"/>); null where it
-    /// does none.
+    /// The refusal of a command that sets or takes away <see cref="AgentChildEnvironment.AgentMarker"/>, the mark every
+    /// program an agent of this tool starts carries and <c>run-side-task</c> refuses itself under, by any form
+    /// <see cref="CommandAnalysis.VariableTouched"/> reads - an assignment, an unset, env's <c>-u</c>, a declaration that
+    /// takes its export away, a set, PowerShell's <c>env:</c> item - or may take it away by one of those forms given what
+    /// the shell expands, or starts what it runs with no environment at all: read in the command's words and in each
+    /// wrapper's stripped before its program (<see cref="AnalyzedCommand.Wrappers"/>). A word that only mentions the name -
+    /// a search, a message, its value read - is no such form. Null where the command does none of these.
     /// </summary>
-    private static string? MarkerTouched(AnalyzedCommand analyzed)
+    /// <param name="analyzed">The command.</param>
+    /// <param name="readings">Its readings (<see cref="Readings"/>): a variable the string set to text it spells is read as that text, never as one that may be the mark.</param>
+    /// <param name="powerShell">Whether PowerShell reads it, whose <c>rm</c> and its kind are its item cmdlets.</param>
+    /// <param name="environmentDrive">Whether a word of the string names PowerShell's <c>env:</c> drive.</param>
+    private static AgentPolicyAnswer.Denied? MarkerTouched(AnalyzedCommand analyzed, IReadOnlyList<AnalyzedCommand> readings, bool powerShell, bool environmentDrive)
     {
-        foreach (var words in analyzed.Wrappers.Append(analyzed.Words))
+        var marker = AgentChildEnvironment.AgentMarker;
+        var read = readings.Count > 1 ? readings.Skip(1) : readings;
+
+        foreach (var (words, quoted) in analyzed.Wrappers.Select(wrapper => (wrapper, (IReadOnlyList<string>?)null)).Concat(read.Select(reading => (reading.Words, reading.Quoted))))
         {
-            if (words.FirstOrDefault(word => word.Contains(AgentChildEnvironment.AgentMarker, StringComparison.OrdinalIgnoreCase)) is { } naming)
+            if (CommandAnalysis.VariableTouched(words, quoted, marker, powerShell, environmentDrive) is not var (word, touch))
             {
-                return $"'{naming}' names {AgentChildEnvironment.AgentMarker}";
+                continue;
             }
 
-            for (var at = 0; at + 1 < words.Count; at++)
+            var how = touch switch
             {
-                var program = CommandAnalysis.Name(words[at]);
-                var options = words.Skip(at + 1).TakeWhile(word => word.StartsWith('-')).ToList();
+                VariableTouch.Named => $"'{word}' sets or takes away {marker}",
+                VariableTouch.MayBe => $"'{word}' may take away {marker}: it names a variable by what the shell expands, which this does not read",
+                _ => $"'{word}' starts what it runs with no environment, {marker} gone with the rest",
+            };
 
-                if ((program.Equals("env", StringComparison.Ordinal) && options.Any(word => word is "-" or "--ignore-environment" || (word.Length > 1 && word[1] != '-' && word.Contains('i', StringComparison.Ordinal))))
-                    || (program.Equals("exec", StringComparison.Ordinal) && options.Any(word => word.Length > 1 && word[1] != '-' && word.Contains('c', StringComparison.Ordinal))))
-                {
-                    return $"'{words[at]}' starts what it runs with no environment, {AgentChildEnvironment.AgentMarker} gone with the rest";
-                }
-            }
+            return new AgentPolicyAnswer.Denied(
+                marker,
+                AgentPolicySource.Builtin,
+                $"'{string.Join(' ', analyzed.Wrappers.Count > 0 ? analyzed.Wrappers[0] : analyzed.Whole)}' is refused: {how}, which marks every program an agent of this tool starts");
         }
 
         return null;
@@ -1235,8 +1595,9 @@ public sealed class AgentPolicy
         var whole = string.Join(' ', analyzed.Whole);
 
         // A program that runs a command line it composes - Start-Process's arguments, WMI's, the task scheduler's, code
-        // Add-Type compiles - runs what no word here spells: the command's own program, past the root actions.
-        if (start == CommandAnalysis.EnvironmentOf(command) && CommandAnalysis.ComposesCommandLine([.. command.Skip(start)]) is { } composed)
+        // Add-Type compiles, a terminal session's, cron's, launchd's and systemd's - runs what no word here spells: the
+        // command's own program, or one a program that runs its words starts, past the root actions.
+        if (CommandAnalysis.RunsAt(command, start) && CommandAnalysis.ComposesCommandLine([.. command.Skip(start)]) is { } composed)
         {
             return Undecided(whole, new NotSupportedException($"'{command[start]}' {composed}, which this does not read"));
         }
@@ -1445,36 +1806,86 @@ public sealed class AgentPolicy
         => dotNames || segment.StartsWith('.') || !name.StartsWith('.');
 
     /// <summary>
-    /// Whether the patterns of <paramref name="commands"/> match a name beginning with a dot by a star, a question mark or
-    /// a bracket: where a word of the string names the setting that makes a shell do so - bash's <c>dotglob</c>
-    /// (<c>shopt -s dotglob</c>, <c>bash -O dotglob</c>), zsh's <c>globdots</c> or <c>GLOB_DOTS</c> in any case - or sets
-    /// a <c>GLOBIGNORE</c>, which bash reads as dotglob; where PowerShell or cmd.exe reads any of them, whose wildcards match every name a directory lists that it does not
-    /// hide (on Windows a dot-name is hidden only by its attribute); or where a command is given PowerShell's
-    /// <c>-Force</c>, which matches a hidden name too. Read of the whole string, wherever in it the setting stands - in a
-    /// command's own words or those of a command that runs it (<see cref="AnalyzedCommand.Wrappers"/>) - and
-    /// whether it turns the setting on or off: a pattern this cannot tell from one that matches is read as one. A Cygwin or
-    /// MSYS program that expands its own argument list on Windows matches as sh does. zsh's <c>D</c> qualifier is read from
-    /// a shell string's text (<see cref="DotsQualifier"/>).
+    /// Whether a setting of <paramref name="commands"/>' makes a shell's patterns match a name beginning with a dot by a
+    /// star, a question mark or a bracket: a word that names bash's <c>dotglob</c> or zsh's <c>globdots</c> - as a token of
+    /// it, split at a blank, an <c>=</c>, a <c>:</c> or a <c>,</c>, read in any case, its underscores and dashes aside and
+    /// a <c>no</c> before it read as the setting (<c>shopt -s dotglob</c>, <c>BASHOPTS=dotglob</c>, <c>unsetopt
+    /// NO_GLOB_DOTS</c>, <c>zsh -o globdots</c>) - or that names <c>GLOBIGNORE</c> or <c>BASHOPTS</c> at all, which a
+    /// command may set by any means (<c>read</c>, <c>printf -v</c>). Read of the whole string, wherever the setting stands
+    /// - in a command's own words or those of a command that runs it (<see cref="AnalyzedCommand.Wrappers"/>) - and whether
+    /// it turns the setting on or off: a pattern this cannot tell from one that matches is read as one. The shells that
+    /// match dot-names of their own are read per command (<see cref="MatchesDotNames"/>); a zsh glob qualifier
+    /// (<c>*(D)</c>) is refused where it is read, as every parenthesis after a command's word is.
     /// </summary>
     /// <param name="commands">The commands of one string or one argument list, flattened.</param>
     private static bool PatternsMatchDotNames(IReadOnlyList<AnalyzedCommand> commands)
-        => commands.SelectMany(command => command.Wrappers.Append(command.Words)).Any(words =>
-        {
-            var environment = CommandAnalysis.EnvironmentOf(words);
-            var program = environment < words.Count ? CommandAnalysis.Name(words[environment]) : string.Empty;
-
-            return words.Any(word => word.Replace("_", string.Empty, StringComparison.Ordinal).ToLowerInvariant() is "dotglob" or "globdots"
-                    || (word.StartsWith("GLOBIGNORE=", StringComparison.Ordinal) && word.Length > "GLOBIGNORE=".Length)
-                    || (word.Length >= 3 && "-force".StartsWith(word.Split(':', 2)[0], StringComparison.OrdinalIgnoreCase) && word.StartsWith("-fo", StringComparison.OrdinalIgnoreCase)))
-                || program.Equals("powershell", StringComparison.OrdinalIgnoreCase) || program.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || program.Equals("cmd", StringComparison.OrdinalIgnoreCase);
-        });
+        => commands.SelectMany(command => command.Wrappers.Append(command.Words)).SelectMany(words => words).Any(word =>
+            word.Contains("GLOBIGNORE", StringComparison.OrdinalIgnoreCase)
+            || word.Contains("BASHOPTS", StringComparison.OrdinalIgnoreCase)
+            || word.Split([' ', '\t', '\n', '=', ':', ','], StringSplitOptions.RemoveEmptyEntries).Any(token =>
+                token.Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).TrimStart('+').ToLowerInvariant() is var read
+                && (read.StartsWith("no", StringComparison.Ordinal) ? read[2..] : read) is "dotglob" or "globdots"));
 
     /// <summary>
-    /// zsh's glob qualifiers that hold <c>D</c>, glued after a wildcard - <c>*(D)</c>, <c>**/*(.D)</c>, <c>*(#qD)</c> -
-    /// which make the pattern before them match dot-names: sought in a shell string's text, for the shell reader here
-    /// reads bash's syntax, where the group is a subshell of its own, and never sees it as part of the word.
+    /// Whether the shell that expands <paramref name="analyzed"/>'s patterns matches a name beginning with a dot by a star,
+    /// a question mark or a bracket of its own: PowerShell and cmd.exe, whose wildcards match every name a directory lists
+    /// that it does not hide (on Windows a dot-name is hidden only by its attribute) - read by the shell that reads this
+    /// command (<see cref="ReadBy"/>) - or a command given PowerShell's <c>-Force</c>, which matches a hidden name too.
+    /// Read of this command alone: another command of the string is read by its own shell.
     /// </summary>
-    private static readonly System.Text.RegularExpressions.Regex DotsQualifier = new(@"[*?\]]\((?:#q)?[^()|\s]*D[^()|\s]*\)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static bool MatchesDotNames(AnalyzedCommand analyzed)
+        => ReadBy(analyzed) is Reader.PowerShell or Reader.Cmd
+            || analyzed.Words.Any(word => word.Length >= 3 && word.StartsWith("-fo", StringComparison.OrdinalIgnoreCase) && "-force".StartsWith(word.Split(':', 2)[0], StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The shells a command may be read by, each expanding its words in its own way.</summary>
+    private enum Reader
+    {
+        /// <summary>A POSIX shell, or fish: the string's own, or one a command runs.</summary>
+        Shell,
+
+        /// <summary>PowerShell, whose cmdlets expand their wildcards themselves, quoted or not.</summary>
+        PowerShell,
+
+        /// <summary>cmd.exe.</summary>
+        Cmd,
+    }
+
+    /// <summary>
+    /// The shell that reads <paramref name="analyzed"/>: the innermost of the commands that run it that is a shell
+    /// (<see cref="AnalyzedCommand.Wrappers"/>) - <c>pwsh -c</c>'s PowerShell, <c>cmd /c</c>'s cmd.exe, <c>bash -c</c>'s
+    /// shell - else the shell the string was given to.
+    /// </summary>
+    private static Reader ReadBy(AnalyzedCommand analyzed)
+    {
+        foreach (var words in analyzed.Wrappers.Reverse())
+        {
+            var at = CommandAnalysis.EnvironmentOf(words);
+
+            if (at >= words.Count)
+            {
+                continue;
+            }
+
+            var name = CommandAnalysis.Name(words[at]);
+
+            if (name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase))
+            {
+                return Reader.PowerShell;
+            }
+
+            if (name.Equals("cmd", StringComparison.OrdinalIgnoreCase))
+            {
+                return Reader.Cmd;
+            }
+
+            if (CommandAnalysis.IsShell(name))
+            {
+                return Reader.Shell;
+            }
+        }
+
+        return Reader.Shell;
+    }
 
     /// <summary>Whether <paramref name="word"/>'s last name is one a Windows may read as its device's, with any extension (<see cref="Runtime.ConfinedPaths.DeviceNames"/>).</summary>
     private static bool IsDevice(string word)
@@ -2024,11 +2435,20 @@ public sealed class AgentPolicy
     /// every place already reached, for a subshell's <c>cd</c> ends with it and a drive's two readings are both places a
     /// <c>cd</c> may have gone: each place a spelling of each word it may go to may reach - every word no option, every
     /// word after a <c>--</c>, and a PowerShell parameter's value glued after its <c>:</c> (<c>-Path:x</c>), so a
-    /// <c>-StackName</c>'s value is one more place rather than its target none - the home where it names none, and none
-    /// where it is no such command, goes back (<c>-</c>), or names a place this cannot tell.
+    /// <c>-StackName</c>'s value is one more place rather than its target none - the home where it names none, a shell's
+    /// <c>cd</c> going to the <c>HOME</c> the command or the string sets where one does - and none where it is no such
+    /// command. The shell's <c>cd</c> looks a relative name up in each directory <c>CDPATH</c> holds
+    /// too - the string's own, the command's, or the one the agent inherits - and <c>cd -</c> goes back to
+    /// <c>OLDPWD</c>'s: the string's own, or a place already reached where a move of the string's went before it.
     /// </summary>
-    /// <exception cref="NotSupportedException">The command's moves reach more places than <see cref="MaxPlaces"/>, which this does not follow, so no decision is made on it.</exception>
-    private IReadOnlyList<string> MovedTo(IReadOnlyList<string> command, IReadOnlyList<string> places)
+    /// <param name="command">The command's words, as one reading of it spells them.</param>
+    /// <param name="places">Every place reached so far.</param>
+    /// <param name="state">What the string set before this command.</param>
+    /// <exception cref="NotSupportedException">
+    /// Its <c>CDPATH</c>, <c>OLDPWD</c> or <c>HOME</c> is one the string sets to a value it computes, or <c>cd -</c> goes back to a place
+    /// the shell stood in before the string, which this cannot tell.
+    /// </exception>
+    private IReadOnlyList<string> MovedTo(IReadOnlyList<string> command, IReadOnlyList<string> places, StringState state)
     {
         var environment = CommandAnalysis.EnvironmentOf(command);
 
@@ -2056,16 +2476,57 @@ public sealed class AgentPolicy
             }
         }
 
-        var moved = new List<string>();
+        // A variable the move reads: the command's own assignment of it, else the string's.
+        IReadOnlyList<string>? Value(string name)
+        {
+            if (command.Take(environment).LastOrDefault(word => CommandAnalysis.AssignedName(word) == name) is { } own)
+            {
+                var value = own.Split('=', 2)[1];
 
-        // '-' goes back to a place reached before, which is one already.
-        IEnumerable<string> going = targets.Count == 0 ? ["~"] : targets.Where(target => target != "-");
+                return CommandAnalysis.Expansion(value) is null ? [value] : throw new NotSupportedException($"'{own}' sets {name} to a value it computes, which this does not read");
+            }
+
+            return state.Unknown.Contains(name)
+                ? throw new NotSupportedException($"{name} is set by the string to a value it computes, which this does not read")
+                : state.Values.TryGetValue(name, out var values) ? values : null;
+        }
+
+        var going = new List<string>();
+        var shells = CommandAnalysis.Name(command[environment]) is var mover && (mover.Equals("cd", StringComparison.OrdinalIgnoreCase) || mover.Equals("pushd", StringComparison.OrdinalIgnoreCase) || mover.Equals("chdir", StringComparison.OrdinalIgnoreCase));
+
+        // A shell's cd given no directory goes to HOME: the command's own or the string's, where either sets it.
+        foreach (var target in targets.Count == 0 ? (shells && Value("HOME") is { } home ? home : ["~"]) : targets)
+        {
+            if (target == "-")
+            {
+                // Back where the shell stood before: OLDPWD's, or a place a move of the string's already reached.
+                if (Value("OLDPWD") is { } back)
+                {
+                    going.AddRange(back);
+                }
+                else if (!state.Moved)
+                {
+                    throw new NotSupportedException("'cd -' goes back to where the shell stood before this command, which this does not know");
+                }
+
+                continue;
+            }
+
+            going.Add(target);
+
+            if (shells && LooksUp(target) && (Value("CDPATH") ?? (_cdPath is { Length: > 0 } inherited ? [inherited] : null)) is { } searched)
+            {
+                going.AddRange(searched.SelectMany(CdPathEntries).Select(entry => Path.Join(entry, target)));
+            }
+        }
+
+        var moved = new List<string>();
 
         foreach (var target in going)
         {
             try
             {
-                moved.AddRange(places.SelectMany(place => Spelled(target, place)));
+                moved.AddRange(places.SelectMany(place => CommandSpelled(target, place, pattern: true)));
             }
             catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
             {
@@ -2073,11 +2534,28 @@ public sealed class AgentPolicy
             }
         }
 
-        IReadOnlyList<string> reached = [.. moved.Except(places, StringComparer.OrdinalIgnoreCase).Distinct(StringComparer.OrdinalIgnoreCase)];
+        return [.. moved.Except(places, StringComparer.OrdinalIgnoreCase).Distinct(StringComparer.OrdinalIgnoreCase)];
 
-        return places.Count + reached.Count <= MaxPlaces
-            ? reached
-            : throw new NotSupportedException($"its moves reach more than {MaxPlaces} places, which this does not follow");
+        // A name cd looks up in CDPATH: one that begins with no root, no home, no expansion and no '.' or '..' of its own.
+        static bool LooksUp(string target)
+            => target.Length > 0 && target[0] is not '/' and not '\\' and not '~' and not '$' && !(target.Length > 1 && target[1] == ':')
+                && target.Split(['/', '\\'])[0] is not "." and not "..";
+
+        // CDPATH's directories, split at its colons - a drive's letter kept with its path - or its semicolons.
+        static IEnumerable<string> CdPathEntries(string value)
+        {
+            var parts = value.Split(value.Contains(';', StringComparison.Ordinal) ? ';' : ':');
+
+            for (var at = 0; at < parts.Length; at++)
+            {
+                var part = parts[at].Length == 1 && char.IsAsciiLetter(parts[at][0]) && at + 1 < parts.Length ? parts[at] + ":" + parts[++at] : parts[at];
+
+                if (part.Length > 0)
+                {
+                    yield return part;
+                }
+            }
+        }
     }
 
     /// <summary>The most places a command's moves are followed to; past them it is not decided, and so denied.</summary>
@@ -2092,29 +2570,35 @@ public sealed class AgentPolicy
     /// says the shell expands them, a file URL's path - a home expanded in each, and a pattern by every path it may
     /// match (<paramref name="dotNames"/> saying whether it matches a dot-name). A directory that holds one is refused
     /// where the word gives it whole and <paramref name="holds"/> says the command may read what it names, for a program
-    /// handed a directory may walk it, the slot's files and all - an archiver, a copy, a search - but where it is the
-    /// agent's working directory, which every command over the tree names (<c>.</c>) and every program given no path
-    /// works over (<see cref="IsRoot"/>); a value glued to a short option or a word of a script's text is refused only
-    /// where it is a slot or a path in one.
+    /// handed a directory may walk it, the slot's files and all - an archiver, a copy, a search - but for what it holds
+    /// through the agent's working directory, where it is that directory or one above it: every command over the tree
+    /// names it (<c>.</c>) and every program given no path works over it (<see cref="ThroughWorkingDirectory"/>); a value
+    /// glued to a short option or a word of a script's text is refused only where it is a slot or a path in one.
     /// </summary>
     /// <param name="word">The word, or a redirect's file or text.</param>
     /// <param name="places">Every directory the word may be read against.</param>
     /// <param name="braces">Whether the shell expands the word's braces.</param>
     /// <param name="dotNames">Whether the command's patterns match a dot-name (<see cref="PatternsMatchDotNames"/>).</param>
     /// <param name="holds">
-    /// Whether a directory the word names whole is refused for what it holds: false for a move's own word
-    /// (<see cref="Movers"/>), which reads nothing there - each path after it is read where it goes.
+    /// Whether a directory the word names whole is refused for what it holds: false for a word that reads nothing there -
+    /// a move's own (<see cref="Movers"/>, <see cref="CommandAnalysis.MoveWords"/>), each path after it read where it goes;
+    /// a program's that names, tests or lists what it is given (<see cref="CommandAnalysis.NamesOnly"/>); where the program
+    /// writes (<see cref="CommandAnalysis.WriteTargets"/>).
     /// </param>
-    private AgentPolicyAnswer.Denied? Named(string word, IReadOnlyList<string> places, bool braces, bool dotNames, bool holds)
+    /// <param name="pattern">Whether the shell that reads the word expands its pattern: a quoted star is a star.</param>
+    private AgentPolicyAnswer.Denied? Named(string word, IReadOnlyList<string> places, bool braces, bool dotNames, bool holds, bool pattern)
     {
         foreach (var (named, place) in CommandAnalysis.PathsNamed(word, braces)
             .SelectMany(named => places.Distinct().Select(place => (named, place))))
         {
             IReadOnlyList<string> readings;
 
+            // A place a pattern of a move reached is a pattern itself, whatever the word's own quotes.
+            var globbed = pattern || place.IndexOfAny(['*', '?', '[']) >= 0;
+
             try
             {
-                readings = Spelled(named.Path, place);
+                readings = CommandSpelled(named.Path, place, globbed);
             }
             catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
             {
@@ -2124,7 +2608,7 @@ public sealed class AgentPolicy
 
             // A pattern the shell expands names every path it may match: refused where one of them may be a slot or a
             // Claude Code directory, lie beneath one, or - given whole - be a directory that holds one.
-            foreach (var asked in readings.Where(reading => reading.IndexOfAny(['*', '?', '[']) >= 0))
+            foreach (var asked in readings.Where(reading => globbed && reading.IndexOfAny(['*', '?', '[']) >= 0))
             {
                 foreach (var (unreachable, rule, what) in Unreachable())
                 {
@@ -2161,14 +2645,14 @@ public sealed class AgentPolicy
                         $"'{word}' lies in a Claude Code directory this run reads: no command of an agent touches one");
                 }
 
-                if (!holds || !named.Whole || IsRoot(form))
+                if (!holds || !named.Whole)
                 {
                     continue;
                 }
 
                 foreach (var (unreachable, rule, what) in Unreachable())
                 {
-                    if (unreachable.FirstOrDefault(unreached => PathContainment.IsStrictlyInside(form, unreached, Refusals)) is { } held)
+                    if (unreachable.FirstOrDefault(unreached => PathContainment.IsStrictlyInside(form, unreached, Refusals) && !ThroughWorkingDirectory(form, unreached)) is { } held)
                     {
                         return new AgentPolicyAnswer.Denied(
                             rule,
@@ -2189,16 +2673,19 @@ public sealed class AgentPolicy
     }
 
     /// <summary>
-    /// Whether <paramref name="path"/> is the agent's working directory, as given or as it resolves: the directory every
-    /// command over the tree names (<c>.</c>) and every program given no path works over, so naming it whole is never
-    /// refused for what it holds - a refusal of it would hold back no program that reads it by no word at all.
+    /// Whether <paramref name="directory"/> holds <paramref name="held"/> only through the agent's working directory: it is
+    /// that directory or one above it, as given or as it resolves, and <paramref name="held"/> lies within the working
+    /// directory. Every command over the tree names the working directory (<c>.</c>) and every program given no path works
+    /// over it, and a directory above it reaches what it holds through it alone - so naming one whole is never refused for
+    /// that: a refusal of it would hold back no program that reads it by no word at all.
     /// </summary>
-    private bool IsRoot(string path)
-        => new[] { Whole(_ground.WorkingDirectory), _workingRoot }.Any(root => PathContainment.IsInsideOrSame(root, path, Refusals) && PathContainment.IsInsideOrSame(path, root, Refusals));
+    private bool ThroughWorkingDirectory(string directory, string held)
+        => new[] { Whole(_ground.WorkingDirectory), _workingRoot }.Any(root
+            => PathContainment.IsInsideOrSame(directory, root, Refusals) && PathContainment.IsInsideOrSame(root, held, Refusals));
 
     /// <summary>
     /// Whether the pattern <paramref name="pattern"/> may match a directory that holds <paramref name="place"/> - one of its
-    /// parents - which is not the agent's working directory (<see cref="IsRoot"/>).
+    /// parents - but through the agent's working directory (<see cref="ThroughWorkingDirectory"/>).
     /// </summary>
     private bool GlobHolds(string pattern, string place, bool dotNames)
     {
@@ -2206,7 +2693,7 @@ public sealed class AgentPolicy
 
         for (; parent is not null && Path.GetDirectoryName(parent) is not null; parent = Path.GetDirectoryName(parent))
         {
-            if (!IsRoot(parent) && GlobReaches(pattern, parent, dotNames, exactly: true))
+            if (!ThroughWorkingDirectory(parent, place) && GlobReaches(pattern, parent, dotNames, exactly: true))
             {
                 return true;
             }
@@ -2300,6 +2787,66 @@ public sealed class AgentPolicy
         IReadOnlyList<string> readings = OnWindows && DriveSpelled(text) is { } drive ? [drive, text] : [text];
 
         return [.. readings.Select(reading => Plain(reading, directory)).Distinct(StringComparer.OrdinalIgnoreCase)];
+    }
+
+    /// <summary>
+    /// Every place <paramref name="path"/> may reach as a word of a command (<see cref="Spelled"/>), and where
+    /// <paramref name="pattern"/> says the shell expands its pattern, each place it reaches with a segment that begins with
+    /// a dot and may match <c>..</c> or <c>.</c> (<c>.?</c>, <c>.[.]</c>, <c>.*</c>) read as that name - for a shell that
+    /// does not skip them (sh, bash before 5.2 or with <c>globskipdots</c> off) matches them so - each folded away as the
+    /// system walks it.
+    /// </summary>
+    /// <exception cref="NotSupportedException">The pattern spells more readings than <see cref="MaxDotReadings"/>, which this does not follow.</exception>
+    private IReadOnlyList<string> CommandSpelled(string path, string directory, bool pattern)
+    {
+        var spelled = Spelled(path, directory);
+
+        return pattern && spelled.Any(reading => reading.IndexOfAny(['*', '?', '[']) >= 0)
+            ? [.. spelled.SelectMany(DotReadings).Distinct(StringComparer.OrdinalIgnoreCase)]
+            : spelled;
+    }
+
+    /// <summary>The most readings a pattern's segments that may match <c>..</c> or <c>.</c> spell; past them it is not decided, and so denied.</summary>
+    public const int MaxDotReadings = 64;
+
+    /// <summary>
+    /// <paramref name="reading"/>, and the place it reaches with each of its segments that begins with a dot and may match
+    /// <c>..</c> or <c>.</c> read as each name it may match, in every combination, made whole as <see cref="Plain"/> makes
+    /// a path.
+    /// </summary>
+    private IEnumerable<string> DotReadings(string reading)
+    {
+        var segments = reading.Split(['/', '\\']);
+        var separator = reading.Contains('\\', StringComparison.Ordinal) ? '\\' : '/';
+        var choices = segments.Select(segment => segment.Length > 1 && segment[0] == '.' && segment.IndexOfAny(['*', '?', '[']) > 0
+                ? new[] { segment, "..", "." }.Where(name => name == segment || SegmentPattern(segment).IsMatch(name)).ToArray()
+                : [segment])
+            .ToList();
+        var count = choices.Aggregate(1L, (product, choice) => product * choice.Length);
+
+        if (count > MaxDotReadings)
+        {
+            throw new NotSupportedException($"'{reading}' may name more than {MaxDotReadings} places by its segments that may match '..' or '.', which this does not follow");
+        }
+
+        yield return reading;
+
+        if (count == 1)
+        {
+            yield break;
+        }
+
+        IEnumerable<IEnumerable<string>> combinations = [[]];
+
+        foreach (var choice in choices)
+        {
+            combinations = [.. combinations.SelectMany(combination => choice.Select(name => combination.Append(name)))];
+        }
+
+        foreach (var combination in combinations.Skip(1))
+        {
+            yield return Plain(string.Join(separator, combination), _ground.WorkingDirectory);
+        }
     }
 
     /// <summary>
@@ -2405,12 +2952,37 @@ public sealed class AgentPolicy
     /// <summary>Whether <paramref name="character"/> separates a path on Windows, either way it is written.</summary>
     private static bool IsSeparator(char character) => character is '\\' or '/';
 
-    /// <summary>The path with a home at its start expanded to the user's own: <c>~</c>, <c>$HOME</c>, <c>${HOME}</c>, <c>$env:HOME</c>, <c>$USERPROFILE</c>, <c>${USERPROFILE}</c>, <c>$env:USERPROFILE</c> and <c>%USERPROFILE%</c>.</summary>
+    /// <summary>A tilde's prefix the shell expands, before a separator or the path's end: <c>~+</c>, <c>~-</c>, or <c>~name</c>.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^~(?<name>[+-]|[A-Za-z0-9._][A-Za-z0-9._-]*)(?=$|[/\\])")]
+    private static partial System.Text.RegularExpressions.Regex TildeName();
+
+    /// <summary>
+    /// The path with a home at its start expanded to the user's own: <c>~</c>, <c>$HOME</c>, <c>${HOME}</c>,
+    /// <c>$env:HOME</c>, <c>$USERPROFILE</c>, <c>${USERPROFILE}</c>, <c>$env:USERPROFILE</c> and <c>%USERPROFILE%</c> -
+    /// and the shell's other tildes: <c>~+</c> where it stands, <c>~name</c> that user's home beside the user's own.
+    /// </summary>
+    /// <exception cref="NotSupportedException">It begins with <c>~-</c>, where the shell stood before, which this does not know.</exception>
     private string HomeExpanded(string path)
     {
         if (path == "~" || path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith(@"~\", StringComparison.Ordinal))
         {
             return _platform.HomeDirectory + path[1..];
+        }
+
+        // bash's ~+ is where the shell stands, the path after it read there; its ~- is where the shell stood before, which
+        // this does not know; and ~name is that user's home, read beside the user's own, where homes stand together.
+        if (TildeName().Match(path) is { Success: true } tilde)
+        {
+            var name = tilde.Groups["name"].Value;
+            var rest = path[tilde.Length..];
+
+            return name switch
+            {
+                "+" => rest.Length > 0 ? rest[1..] : ".",
+                "-" => throw new NotSupportedException($"'{path}' names where the shell stood before this command, which this does not know"),
+                _ when Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(_platform.HomeDirectory)) is { } homes => Path.Join(homes, name) + rest,
+                _ => path,
+            };
         }
 
         foreach (var home in new[] { "${HOME}", "$HOME", "$env:HOME", "${USERPROFILE}", "$USERPROFILE", "$env:USERPROFILE", "%USERPROFILE%" })

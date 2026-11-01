@@ -93,7 +93,7 @@ public sealed class CommandAnalysisTests
         Assert.Equal([["A=1", "sudo", "x"]], Commands((IReadOnlyList<string>)["env", "A=1", "--split-string=sudo x"]));
 
         // The words after the string are the same command's: env -S 'git -C x' push runs git push.
-        Assert.Equal([["git", "-C", "x", "push"]], Commands((IReadOnlyList<string>)["env", "-S", "git -C x", "push"]));
+        Assert.Equal([["cd", "--", "x"], ["git", "-C", "x", "push"]], Commands((IReadOnlyList<string>)["env", "-S", "git -C x", "push"]));
     }
 
     [Fact]
@@ -173,7 +173,7 @@ public sealed class CommandAnalysisTests
     [Fact]
     public void AnArgumentListIsFlattenedAsTheCommandItNames()
     {
-        Assert.Equal([["git", "-C", "x", "push"]], Commands((IReadOnlyList<string>)["git", "-C", "x", "push"]));
+        Assert.Equal([["cd", "--", "x"], ["git", "-C", "x", "push"]], Commands((IReadOnlyList<string>)["git", "-C", "x", "push"]));
         Assert.Equal([["sudo", "b"]], Commands((IReadOnlyList<string>)["bash", "-c", "sudo b"]));
         Assert.Equal([["A=1", "git", "push"]], Commands((IReadOnlyList<string>)["env", "A=1", "git", "push"]));
     }
@@ -1088,7 +1088,7 @@ public sealed class CommandAnalysisTests
     {
         Assert.Equal([["git", "config", "alias.cf", "credential fill"], ["git", "credential", "fill"]], Commands("git config alias.cf 'credential fill'"));
         Assert.Equal([["git", "config", "set", "--global", "alias.x", "!id"], ["id"]], Commands("git config set --global alias.x '!id'"));
-        Assert.Equal([["git", "-C", "r", "config", "-f", "f", "--add", "core.pager", "less -R"], ["less", "-R"]], Commands("git -C r config -f f --add core.pager 'less -R'"));
+        Assert.Equal([["cd", "--", "r"], ["git", "-C", "r", "config", "-f", "f", "--add", "core.pager", "less -R"], ["less", "-R"]], Commands("git -C r config -f f --add core.pager 'less -R'"));
         Assert.Equal([["git", "config", "$K", "credential fill"], ["git", "credential", "fill"], ["credential", "fill"]], Commands("git config $K 'credential fill'"));
         Assert.Equal([["gh", "alias", "set", "tk", "auth token"], ["gh", "auth", "token"]], Commands("gh alias set tk 'auth token'"));
         Assert.Equal([["gh", "alias", "set", "-s", "tk", "gh auth token"], ["gh", "auth", "token"]], Commands("gh alias set -s tk 'gh auth token'"));

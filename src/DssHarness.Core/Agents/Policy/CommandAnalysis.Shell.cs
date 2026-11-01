@@ -267,12 +267,20 @@ public static partial class CommandAnalysis
 
                 if (text[_at] == '(')
                 {
-                    // 'name ()' defines a function, whose body is read as the commands it would run; a parenthesis
-                    // anywhere else in a command is read as the subshell it would be.
+                    // 'name ()' defines a function, whose body is read as the commands it would run; a parenthesis where a
+                    // command begins is the subshell it would be.
                     if (command.Words.Count == 1 && command.Redirects.Count == 0 && !IsAssignment(command.Words[0]) && EmptyParentheses())
                     {
                         command.Words.Clear();
                         continue;
+                    }
+
+                    // One after a command's word or redirect is no subshell: bash refuses it, and zsh - the shell an agent's
+                    // command may run in - reads it as a pattern's group or alternation (rm -rf (.git|x), .gi(t)), which
+                    // names what no word here spells.
+                    if (command.Words.Count > 0 || command.Redirects.Count > 0)
+                    {
+                        throw new NotSupportedException("a parenthesis after a command's word, which bash refuses and zsh reads as a pattern's group, which this does not read");
                     }
 
                     ReadSubshell();

@@ -177,7 +177,7 @@ public sealed class AgentPolicyTests
         {
             (IReadOnlyList<string>)["git", "push"],
             ["git", "push", "origin", "main"],
-            ["git", "-C", "sub", "push", "origin"],
+            ["git", "-C", "..", "push", "origin"],
             ["env", "A=1", "git", "push"],
 
             // Configured where it runs, it is the git config it is and still the push it is.
@@ -1084,7 +1084,7 @@ public sealed class AgentPolicyTests
             "pwsh -c 'Get-ChildItem | ForEach-Object -OutVariable names { $_.Name }'",
             "pwsh -c 'Set-Content -Path out.txt -Value $content'",
             "pwsh -c 'Copy-Item -Recurse src/* dest/'",
-            "pwsh -c 'New-Item -ItemType Directory $dir'",
+            "pwsh -c '$dir = \"build\"; New-Item -ItemType Directory $dir'",
             "pwsh -c 'Add-Content -Path build.log -Value \"at $(Get-Date)\"'",
             "pwsh -c '$h = @{ sudo = 1 }'",
             "pwsh -c \"iex 'git status'\"",

@@ -1537,17 +1537,42 @@ may name to its program, read by one owner for the places no command reaches and
 command writes alike (`CommandAnalysis.PathsNamed`: the word, the value after its `=` or a
 PowerShell parameter's `:`, a value glued to a short option, each with the `@` or `<` that makes
 curl, httpie or gh read a file taken off and a `-F` field's `;` fields cut, a script's words, its
-braces' words, a `file://` address's path) - or naming whole a directory that holds one
-(`.harness-config`, `..`, `~`, `/`, a pattern that may match one), for a program handed a directory
-may walk it, but the agent's working directory, which every command over the tree names and every
-program given no path works over, and a move's own word (a `cd`'s, `env -C`'s), which reads
-nothing where it goes (`AgentPolicy.Named`, `CommandAnalysis.MoveWords`); this tool's verbs and
-`run-side-task` by a verb the shell expands, past the tool's own options (`AgentPolicy.ToolVerbOf`),
-and a command that takes `AgentChildEnvironment.AgentMarker` away - a word naming it, or a start
-with no environment (`env -i`, `env -`, `exec -c`), read in the command's words and in those of
-every command that runs it (`AnalyzedCommand.Wrappers`, `AgentPolicy.MarkerTouched`); a git or gh
-command called by a name none of its own commands is (`AgentPolicy.GitCommands`, git 2.51's
-`git help -a`, and `AgentPolicy.GhCommands`) - an alias or an extension, whose command line a
+braces' words, a `file://` address's path), each read as every value a variable the command string
+sets gives it (`AgentPolicy.Readings` over the string's `StringState`, `CommandAnalysis.Substituted`,
+at most `CommandAnalysis.MaxReadings`; `$PWD` as each place the command stands in; a `~` as each
+`HOME` the string, the command or a command that runs it sets; a variable the
+string does not set and a substitution read as the text they spell, for their value is the agent's
+environment's or a program's, which no word of the string gives), and a pattern's segment that may
+match `..` read as `..` too (`AgentPolicy.DotReadings`, at most `AgentPolicy.MaxDotReadings`) - or
+naming whole a directory that holds one (`.harness-config`, `..`, `~`, `/`, a pattern that may match
+one) to a program that may read what it holds, for a program handed a directory may walk it
+(`AgentPolicy.Named`); never refused for what it holds are the words `AgentPolicy.HoldsExempt` names -
+every word of a program that only names, tests or lists the paths it is given
+(`CommandAnalysis.NamesOnly`: `echo`, `test`, `ls`, `du`, `df`, `stat`, `realpath`, `mkdir`, a `find`
+that runs, deletes and writes nothing, and their kind), a move's own word (a `cd`'s, and the words
+`git -C`, `tar -C`, `make -C`, `ninja -C`, `patch -d` and `env -C` move by, `CommandAnalysis.MoveWords`
+over `CommandAnalysis.OwnDirectories`), which reads nothing where it goes, and a word that names where
+the program writes, which the write refusals decide - and a directory that is the agent's working
+directory or one above it, which reaches the slots only through it, every command over the tree naming
+it and every program given no path working over it (`AgentPolicy.ThroughWorkingDirectory`); a
+pattern is read as one only where the shell that reads it expands it, a PowerShell cmdlet's quoted
+wildcard among them (`CommandAnalysis.HasOpenPattern`); a command that removes or moves a directory
+whole (`CommandAnalysis.RemovalTargets`: `rm -r`, `Remove-Item -Recurse`, `rd /s`, `find -delete`, `mv`,
+`Move-Item`, `rsync --delete`, `git clean -dx`) is refused where it holds a tree's `.git`, the state,
+a slot or a Claude Code directory, with no working-directory exception (`AgentPolicy.RemovalRefusal`);
+this tool's verbs and `run-side-task` by a verb the shell expands, the verb the command's first word
+after the tool's name as the CLI takes it, which reads no option before its verb
+(`AgentPolicy.ToolVerbOf`), and a command that sets or takes away
+`AgentChildEnvironment.AgentMarker` - its assignment, an `unset`'s, `env -u`'s, a declaration's (`export -n`, `declare`), a name
+reference's, `set`'s, `setenv`'s or `setx`'s word, a PowerShell item cmdlet's `env:` item, or a start
+with no environment (`env -i`, `env -`, `exec -c`) - or may (any of those places given a name the shell
+expands, zsh's `unset -m` pattern, an item cmdlet given a path it computes or none where the string
+names `env:`), read in each reading of the command's words and in those of every command that runs
+it (`AnalyzedCommand.Wrappers`, `CommandAnalysis.VariableTouched`, `VariableTouch`,
+`AgentPolicy.MarkerTouched`) - a word that only mentions the name touches nothing; a git or gh
+command called by a name none of its own commands is (`AgentPolicy.GitCommands`, git 2.55's
+builtins and main commands, a list of the tool's own because git's listing of them is internal to
+git and the policy starts no program to decide, and `AgentPolicy.GhCommands`) - an alias or an extension, whose command line a
 configuration file or an extension holds, one an agent may have written - on every ground, but a
 program git finds as `git-<name>` on the PATH the agent's commands start with or where git keeps
 its own beside it (`git lfs`, `AgentPolicy.GitProgram`), a word no setting of git's can name, and
@@ -1562,8 +1587,14 @@ read both as the drive and as the directory it names on the current drive, each 
 action allowed only where both are (`AgentPolicy.Spelled`, `AgentPolicy.Plain`); where a link
 resolves, where a `cd` moves to and the ground's own directories are spelled the same way, a `cd`
 (`AgentPolicy.Movers`: `pushd`, `Set-Location` and `Push-Location` too, each word it may go to; and
-the directory `env -C` or `pwsh -WorkingDirectory` starts its command in, which `CommandAnalysis`
-reads as the `cd` before it, so `AgentPolicy.MovedTo` is the one reader of every move)
+the directory `env -C` or `pwsh -WorkingDirectory` starts its command in, and the one `git -C`,
+`tar -C` or `--directory`, `make -C`, `ninja -C` and `patch -d` work in, each in every spelling the
+program's own option table reads (`CommandAnalysis.Getopt`, `CommandAnalysis.OwnDirectories`), which
+`CommandAnalysis` reads as the `cd` before it, so `AgentPolicy.MovedTo` is the one reader of every
+move; a name `cd` looks up in `CDPATH` - the string's own, the command's, or the one the agent
+inherits - read in each of its directories too, a `cd` given no directory going to the `HOME` the
+command or the string sets, `cd -` going back to the string's `OLDPWD` or a place a move of the
+string's left, and one whose place is not known undecided)
 from every place the command reached before it, up to `AgentPolicy.MaxPlaces`, past which the
 command is undecided - and a refusal's places compare in any
 case on every system, each Windows short name read as its long one (as `Path.GetFullPath` spells it); what a
@@ -1598,7 +1629,12 @@ its `-C` scripts among what it runs), the here-string, here-document or file a s
 its descriptor 0 is given (`ShellRedirect.Descriptor`; `/dev/stdin` and PowerShell's `-` among its
 names), `cmd /c` and
 `powershell -Command` and a decoded `-EncodedCommand` - by any prefix PowerShell takes, behind its
-valued options - and the command lines `trap`, `watch`, `script` and `flock` run, each by its own
+valued options - and the command lines `trap`, `watch`, `script` and `flock` run, the commands
+sed's `e` command and flag run (`CommandAnalysis.SedOf`, sed's own script grammar read, its `-i`
+in either dialect), ssh's and wsl's command, their words joined as each hands them on, and the job
+`at` and `batch` take from a here-document or a here-string (`CommandAnalysis.ScriptsItRuns`), and a
+script file the string itself writes before it runs it, read as the text a here-document gave it
+(`AgentPolicy.WrittenScripts`), each by its own
 shell's quoting - PowerShell by a reader of its own (`CommandAnalysis.PowerShellReader`), which
 follows pwsh's tokenizer and grammar and writes each statement on a line and each word whole and
 quoted for the shell reader, so the shell reads no syntax of its own into it: a command's words as
@@ -1644,9 +1680,17 @@ past four levels, parentheses past 32, a shell that reads its script from its in
 an expansion or another open descriptor names (`bash <(curl ...)`, `/dev/fd/3`, `<&3`), an `env -S`
 string holding a backslash or a comment a line end follows, an alias it gives, an `xargs` handing a shell its script, a program named by a
 variable, a substitution, a pattern or a brace, a brace that spells more than 64 words, a word where
-none can stand, and an option of git's, gh's, fish's or Windows PowerShell's own before its command that this does
+none can stand, a parenthesis after a command's word, which bash refuses and zsh reads as a
+pattern's group or a glob qualifier (`rm -rf (.git|x)`, `*(D)`), an option of git's, gh's, fish's or Windows PowerShell's own before its command that this does
 not know (`CommandAnalysis.WindowsPowerShellValued` and `WindowsPowerShellSwitches` the parameters it knows, its command
-read once, from its first word that is neither).
+read once, from its first word that is neither), sed running what it reads or a script the shell
+fills in, `at` given its job by a file or its input, ssh or wsl given no command and no input
+this reads, a script file the string writes and runs whose text no here-document gave, a
+terminal session's program given what to run or type (`tmux`, `screen`, `zellij`, `byobu`), and
+`crontab`, `launchctl` or `systemctl` installing or starting a job (`CommandAnalysis.ComposesCommandLine`),
+each running what it is given apart from the agent; a variable's readings past
+`CommandAnalysis.MaxReadings`, a pattern's `..` readings past `AgentPolicy.MaxDotReadings`, and
+`cd -` or a `CDPATH` or `OLDPWD` whose place is not known are undecided too.
 Every word of a command is tried as the program of the words after it - but a word of a program
 that runs none of its words (`CommandAnalysis.DataPrograms`: grep, rg, echo, cat, which and their
 kind), and a git or gh tried so reads an option it does not know as one word - a program matched by
@@ -1689,13 +1733,23 @@ each reading met by the rules. A word that names a path is read
 as each candidate it may be (`CommandAnalysis.PathsNamed`) - and a pattern the shell expands is
 refused where it may reach a credential slot or a Claude Code directory or match a directory that
 holds one, a `*`, a `?` or a bracket matching a name that begins with a dot only where its shell
-would (`AgentPolicy.DotNamed`: a segment that begins with a dot, or a string that names bash's
-`dotglob` or zsh's `globdots`, sets `GLOBIGNORE`, carries zsh's `D` qualifier, is read by
-PowerShell or cmd, or gives `-Force`, `AgentPolicy.PatternsMatchDotNames`), so `rm -rf *` runs and
-`.g*` is git's own; what a command writes (`CommandAnalysis.WriteTargets`) - its output redirects,
+would (`AgentPolicy.DotNamed`: a segment that begins with a dot; a string any of whose words names
+`dotglob` or `globdots` as bash and zsh read an option's name - split at blanks, `=`, `:` and `,`,
+in any case, its underscores and dashes and its `no` taken off, so `BASHOPTS=dotglob`,
+`setopt GLOB_DOTS` and `unsetopt NO_GLOB_DOTS` are among them - or names `GLOBIGNORE` or `BASHOPTS`
+at all, `AgentPolicy.PatternsMatchDotNames`; a command PowerShell or cmd reads, or one given
+`-Force`, each command by the shell that expands its words, `AgentPolicy.MatchesDotNames`), so
+`rm -rf *` and `build/*` run and `.g*` is git's own; what a command writes (`CommandAnalysis.WriteTargets`) - its output redirects,
 and each path a writer's words name, a copy's destination however an option names it (GNU's `-t`
-and `--target-directory` in every spelling, else the last word; `Copy-Item`'s `-Destination` by
-any prefix or glued, else its second word) - meets the refusals every ground keeps on a write, a
+and `--target-directory` in every spelling, else the last word, each writer's options that take a
+value known by its own table, `CommandAnalysis.Getopt` over `CpOptions`, `InstallOptions`,
+`LnOptions`, `RsyncOptions`, and an option it does not know making every operand but the first a
+destination; `Copy-Item`'s `-Destination` by any prefix or glued, else its second word), and the
+output a program's option or operand names (`CommandAnalysis.OutputsOf`, one owner per program:
+`curl -o`, `wget -O`, `tar`'s archive and the directory it extracts into, `unzip -d`, `zip`, `7z -o`,
+`sort -o`, `patch -o`, sed's `w`, robocopy's and xcopy's destination, `dotnet -o`, a compiler's
+`-o`, `cmake -B`, `git format-patch -o`, `ssh-keygen -f`, `openssl -out`, `Invoke-WebRequest -OutFile`,
+`Expand-Archive -DestinationPath`, `Export-Csv`, `Tee-Object`, `Start-Transcript`) - meets the refusals every ground keeps on a write, a
 pattern within a root of the agent's own that stands inside the state its own place; and a command that runs a program which fetches from the network
 (`curl`, `wget`, `Invoke-WebRequest` and `Invoke-RestMethod` with `iwr` and `irm`, `http`, `https`,
 `gh api`) is decided as a web request too, by each address it names and each host it reaches (a
@@ -1704,7 +1758,10 @@ proxy, curl's `--connect-to` and `--resolve` targets, the proxy of its environme
 results a search gives, a search source's own requests held to the `Web(...)` rules alone -
 refused where the step has no web, and refused where
 the web is held to any rule when it reads what it reaches from a file. What it does not see is said
-in help: the inside of a script file a command runs. The worktree rules
+in help and README - the policy reads words and is no sandbox: the inside of a script file a command
+runs, the code an interpreter is given (`python -c`, `perl -e`, `node -e`, awk's `system`), a build
+file `make`, `ninja` or `cmake` runs, what an archive or a patch holds, a path a command computes
+(`$(printf ...)`), and what a process apart from the agent's tree does. The worktree rules
 (`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs, the `gh` commands that run them
 or write gh's own configuration (`AgentPolicy.GhStateCommands`; gh's own aliases read as the commands they name,
 `CommandAnalysis.GhAliases`, and a place gh reads its configuration from set for a command read as `gh config set`),
@@ -1725,7 +1782,7 @@ policy and what the next launch loads unwritten by any agent; its own state
 whatever any switch says, a writable root standing inside it - the agent's worktree under the worktrees root,
 its work directory under the run's records, and a pattern within either - the one exception; the
 tool's own verbs (`AgentPolicy.ToolVerbs`, each the command's own name as its service declares it)
-and `run-side-task` are refused, run by any program or from a response file, whatever the switch
+and `run-side-task` are refused, run by any program the policy reads or from a response file, whatever the switch
 says, and so are the `gh` commands that hand the work to another agent or install what the next launch loads
 (`AgentPolicy.GhOutOfStepCommands`) and the commands that print a credential
 (`AgentPolicy.CredentialPrintingCommands`, pinned by a test and printed by `help agent-clients`:
@@ -2713,21 +2770,26 @@ main checkout the writable root, the worktree rules and the protected paths off,
 verbs open to it as the person's own session's are - with the built-in refusals kept (root
 actions, every credential slot of the main checkout and every Claude Code directory its clients
 use, to its file tools and to every path a word of its commands names (`CommandAnalysis.PathsNamed`),
-a directory that holds one given whole among them but the main tree it works in - a command over
-that tree whole, `.` or no path, is not told from one over its sources and reaches the slots'
-files: the policy decides what a command names, it is not a sandbox - `Write(.git/**)` and a
-command's write into `.git`, the tool's own state - each state path under the main tree,
+a directory that holds one given whole to a program that may read it among them but the main tree
+it works in and those above it - a command over that tree whole, `.` or no path, is not told from
+one over its sources and reaches the slots' files: the policy decides what a command names, it is
+not a sandbox - `Write(.git/**)` and a command's write into `.git`, a removal or a move of a
+directory that holds the main tree's `.git`, the state, a slot or a Claude Code directory, the main
+tree itself among them
+(`AgentPolicy.RemovalRefusal`), the tool's own state - each state path under the main tree,
 `HarnessLayout.StatePathsUnder`, never the tree itself - the commands that print a credential, a
 git or gh command called by a name none of its own commands is, and `run-side-task` itself,
-refused to every agent by any name of the program and by a verb the shell expands, and refusing
-itself where the agent's mark, `AgentChildEnvironment.AgentMarker`, is in its environment, which
-no command of an agent takes away, or where a process of this tool's is among the ones that started it
+refused to every agent where a word of a command or of a script the policy reads names it or a verb
+the shell expands may, and refusing itself where the agent's mark, `AgentChildEnvironment.AgentMarker`,
+is in its environment, a command that sets it, takes it away or may take it away refused
+(`AgentPolicy.MarkerTouched`), or where a process of this tool's is among the ones that started it
 (`AgentAncestry`, over the process table's seam: the tree walked parent by parent, a process that took a
 freed id - started after the child that names it - never read as a parent, the tool told by its command's name
 (`ToolPackage.IsCommand`, the rule the tool's update finds its running copies by), the file this process runs as, or a runtime
 whose application - the first word past its own options, never an argument of it - is the tool's assembly; one detached from the agent's tree - `at`, a
 `tmux` server, a double fork - told by the mark alone, and a table read by names alone, or one without this
-process, refused saying why, never read as a tree with no agent in it); no limits, no output envelope; the web
+process, refused saying why, never read as a tree with no agent in it); code an interpreter runs and a process apart from the agent's tree
+are where that reading of words ends); no limits, no output envelope; the web
 search of every configured source turned on, with one more asked beside them: `native`, the
 provider's own search - on the Claude API a request of the harness's own whose only tool is the
 provider's web search (`ClaudeApiNativeSearch`, no server tool in any conversation), asked by the
