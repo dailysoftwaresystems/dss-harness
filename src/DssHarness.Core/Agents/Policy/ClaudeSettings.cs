@@ -84,8 +84,9 @@ public static class ClaudeSettings
     /// <param name="isolated">
     /// Whether the launch runs whole inside the operating system's isolation of this tool's: Claude Code's own sandbox is
     /// then turned off (<c>"sandbox": {"enabled": false}</c>), over any the user's settings ask for - the isolation holds
-    /// every command the launch starts, and neither mechanism starts another inside it (macOS no sandbox inside a sandbox,
-    /// bubblewrap no namespace inside its own), so a sandbox of Claude Code's would fail each command.
+    /// every command the launch starts, and no mechanism of this tool's starts another inside it (macOS no sandbox inside a
+    /// sandbox, bubblewrap no namespace inside its own), so a sandbox of Claude Code's would fail each command; on Windows
+    /// Claude Code has none of its own.
     /// </param>
     public static string Render(IReadOnlyList<string> tools, AgentPolicyGround ground, AgentCommandSettings commands, StringComparison comparison, bool isolated = false)
     {

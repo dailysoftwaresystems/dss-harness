@@ -95,13 +95,14 @@ internal sealed class HomedPlatform(string home) : IHostPlatform
     public string ExecutableName(string command) => _machine.ExecutableName(command);
 }
 
-/// <summary>The machine as it is, but said to be a Mac: what the isolation's probe is asked on, whatever runs the test.</summary>
-internal sealed class MacPlatform : IHostPlatform
+/// <summary>The machine as it is, but said to be another system: what the isolation's probe is asked on, whatever runs the test.</summary>
+/// <param name="current">The system it is said to be.</param>
+internal sealed class SaidPlatform(PlatformId current) : IHostPlatform
 {
     private readonly HostPlatform _machine = new();
 
     /// <inheritdoc/>
-    public PlatformId Current => PlatformId.MacOs;
+    public PlatformId Current => current;
 
     /// <inheritdoc/>
     public string PlatformKey => _machine.PlatformKey;

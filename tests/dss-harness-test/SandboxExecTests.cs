@@ -136,7 +136,7 @@ public sealed class SandboxExecTests
     public async Task OnMacOs_TheProbe_ProvesTheSystemsSandbox_OnceForTheProcess()
     {
         var runner = new ProbeRunner(Holding);
-        var platform = new IsolationPlatform(new MacPlatform(), runner, mac: Mac());
+        var platform = new IsolationPlatform(new SaidPlatform(PlatformId.MacOs), runner, mac: Mac());
 
         var proved = await platform.ProbeAsync("/r", Token);
         var again = await platform.ProbeAsync("/r", Token);
@@ -149,7 +149,7 @@ public sealed class SandboxExecTests
         Assert.Equal(("/bin/sh", true), (asked.FileName, asked.Contained));
         Assert.Same(sandbox, asked.Isolation!.Mechanism);
         Assert.Equal(["hidden"], asked.Isolation.Profile.Hidden.Select(place => Path.GetFileName(place.Path)));
-        Assert.Equal([("sealed", false)], asked.Isolation.Profile.Writes.Select(write => (Path.GetFileName(write.Path), write.Writable)));
+        Assert.Equal([("sealed", false), ("open", true)], asked.Isolation.Profile.Writes.Select(write => (Path.GetFileName(write.Path), write.Writable)));
     }
 
     /// <summary>
@@ -162,7 +162,7 @@ public sealed class SandboxExecTests
     public async Task OnMacOs_NoProgramOrASandboxAlready_IsNoMechanism_SayingWhyAndTheRemedy(bool there, bool inside, string why, string remedy)
     {
         var runner = new ProbeRunner(Holding);
-        var platform = new IsolationPlatform(new MacPlatform(), runner, mac: Mac(there, inside));
+        var platform = new IsolationPlatform(new SaidPlatform(PlatformId.MacOs), runner, mac: Mac(there, inside));
 
         var found = await platform.ProbeAsync("/r", Token);
 
@@ -179,9 +179,9 @@ public sealed class SandboxExecTests
     {
         const string Remedy = "check that the sandbox runs here ('/usr/bin/sandbox-exec -p \"(version 1)(allow default)\" /usr/bin/true'), or set agentPolicy.isolation to \"preferred\" to run agents on the words policy alone, said at every launch";
 
-        var read = await new IsolationPlatform(new MacPlatform(), new ProbeRunner(_ => new ProcessResult(3, "the hidden canary was read\n", string.Empty, TimeSpan.Zero, TimedOut: false)), mac: Mac())
+        var read = await new IsolationPlatform(new SaidPlatform(PlatformId.MacOs), new ProbeRunner(_ => new ProcessResult(3, "the hidden canary was read\n", string.Empty, TimeSpan.Zero, TimedOut: false)), mac: Mac())
             .ProbeAsync("/r", Token);
-        var leaked = await new IsolationPlatform(new MacPlatform(), new ProbeRunner(Leaking), mac: Mac())
+        var leaked = await new IsolationPlatform(new SaidPlatform(PlatformId.MacOs), new ProbeRunner(Leaking), mac: Mac())
             .ProbeAsync("/r", Token);
 
         Assert.Equal(

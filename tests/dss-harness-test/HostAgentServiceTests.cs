@@ -951,6 +951,7 @@ public sealed class HostAgentServiceTests
                 DssHarness.Core.Agents.SideTasks.SideTaskService.ListCommand,
                 FlowService.AnswerCommand,
                 DssHarness.Core.Processes.ContainExec.CommandName,
+                DssHarness.Core.Processes.MxcProcessContainer.CommandName,
                 HostAgentProtocol.CommandName,
                 HostExecService.CommandName,
                 DssHarness.Core.Execution.HoldAwakeService.CommandName,
@@ -1223,6 +1224,7 @@ public sealed class HostAgentServiceTests
     [InlineData(HostAgentProtocol.CommandName)]
     [InlineData(HoldAwakeService.CommandName)]
     [InlineData(ContainExec.CommandName)]
+    [InlineData(MxcProcessContainer.CommandName)]
     public async Task Run_RefusesToPassTheWorkOnToAnotherHost(string command)
     {
         using var temp = new TempDirectory();

@@ -35,6 +35,12 @@
     <!-- The harness's own fetch reduces a page's HTML to its text (Web\WebPageText) by a parser that reads HTML as a
          browser does, malformed markup included, with nothing run: no script, no request, no style. -->
     <PackageReference Include="AngleSharp" Version="1.8.5" />
+
+    <!-- Windows' isolation of an agent's commands (Processes\MxcProcessContainer): Microsoft's MXC process container,
+         made through MXC's own library in this process - a container of the operating system's that denies a process
+         every file it is not granted. Its native library ships for every system it builds for; this tool loads it on
+         Windows alone. MIT, its notice in THIRD-PARTY-NOTICES. -->
+    <PackageReference Include="Microsoft.Mxc.Sdk" Version="1.0.1" />
   </ItemGroup>
 
   <ItemGroup>

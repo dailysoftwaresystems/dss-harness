@@ -45,15 +45,28 @@ public interface IIsolationPlatform
 /// child is started. On Linux, WSL's included, the system's bubblewrap 0.8 or newer - the first <c>bwrap</c> in an
 /// absolute directory of the PATH outside the tree, where Ubuntu's AppArmor profile for it attaches. On macOS the
 /// system's own sandbox, <c>/usr/bin/sandbox-exec</c>, where this process is not already inside a sandbox, which macOS
-/// would not start another inside. On Windows the mechanism is not built yet, and it says so.
+/// would not start another inside. On Windows MXC's process container, where MXC's library says the machine has one that
+/// denies a place outright, proved by the same canary trial and then by each of node, git and Git Bash's sh found here
+/// started inside it and answering - the programs an agent's commands are made of, which a container that cannot run
+/// them would leave nothing to run.
 /// </summary>
 /// <param name="platform">This machine.</param>
 /// <param name="runner">Starts the version's question and the probe, the probe as a contained child is started.</param>
-/// <param name="path">Reads the PATH bubblewrap is looked for on; this process's own where left out.</param>
+/// <param name="path">Reads the PATH bubblewrap, and on Windows node, git and Git Bash's sh, are looked for on; this process's own where left out.</param>
 /// <param name="mac">What finds macOS's sandbox on this machine; this machine's own where left out.</param>
-public sealed partial class IsolationPlatform(IHostPlatform platform, IProcessRunner runner, Func<string?>? path = null, MacSandboxHost? mac = null) : IIsolationPlatform
+/// <param name="windows">What finds MXC's process container on this machine; this machine's own where left out.</param>
+/// <param name="self">The program that is this tool, as Windows' mechanism starts it again; this process's own where left out.</param>
+public sealed partial class IsolationPlatform(
+    IHostPlatform platform,
+    IProcessRunner runner,
+    Func<string?>? path = null,
+    MacSandboxHost? mac = null,
+    WindowsContainerHost? windows = null,
+    Func<(string Program, IReadOnlyList<string> Prefix)>? self = null) : IIsolationPlatform
 {
     private readonly MacSandboxHost _mac = mac ?? MacSandboxHost.ThisMachine;
+    private readonly WindowsContainerHost _windows = windows ?? WindowsContainerHost.ThisMachine;
+    private readonly Func<(string Program, IReadOnlyList<string> Prefix)> _self = self ?? DetachedProcessLauncher.Self;
 
     /// <summary>The program's name.</summary>
     public const string BubblewrapProgram = "bwrap";
@@ -103,15 +116,13 @@ public sealed partial class IsolationPlatform(IHostPlatform platform, IProcessRu
         switch (platform.Current)
         {
             case PlatformId.Windows:
-                return IsolationAvailability.None(
-                    "the operating system's isolation of an agent's commands is not built for Windows yet",
-                    "run the agents from WSL 2, where bubblewrap isolates them" + OrPreferred);
+                return await WindowsAsync(tree, cancellationToken).ConfigureAwait(false);
 
             case PlatformId.MacOs:
                 return await MacOsAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        if (Found(tree) is not { } program)
+        if (OnPath(tree, BubblewrapProgram) is not { } program)
         {
             return IsolationAvailability.None(
                 $"bubblewrap ('{BubblewrapProgram}') was found in no absolute directory of the PATH outside the tree",
@@ -158,10 +169,119 @@ public sealed partial class IsolationPlatform(IHostPlatform platform, IProcessRu
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>The first <c>bwrap</c> in an absolute directory of the PATH outside <paramref name="tree"/>; null where none is.</summary>
-    private string? Found(string tree)
+    /// <summary>
+    /// Windows' container: MXC's library says the machine has it, the canary trial holds inside it, and each of node, git
+    /// and Git Bash's sh found here starts inside it and answers.
+    /// </summary>
+    private async Task<IsolationAvailability> WindowsAsync(string tree, CancellationToken cancellationToken)
     {
-        var inside = Path.GetFullPath(tree).TrimEnd('/') + "/";
+        var support = _windows.Support();
+
+        if (support.Unavailable is { } unavailable)
+        {
+            return IsolationAvailability.None(unavailable, WindowsRemedy);
+        }
+
+        var mechanism = new MxcProcessContainer(support.Version!, _self());
+        var proved = await ProvedAsync(
+            mechanism,
+            how => IsolationAvailability.None($"MXC {mechanism.Version}'s process container did not prove itself: its probe {how}", WindowsRemedy),
+            cancellationToken).ConfigureAwait(false);
+
+        if (proved.Mechanism is null)
+        {
+            return proved;
+        }
+
+        foreach (var (name, program, arguments) in WindowsTools(tree))
+        {
+            if (await AnsweredInsideAsync(mechanism, program, arguments, cancellationToken).ConfigureAwait(false) is { } how)
+            {
+                return IsolationAvailability.None(
+                    $"MXC {mechanism.Version}'s process container does not run {name} ('{program}') on this Windows: inside it, {name} {how}",
+                    $"update Windows and this tool, for a later MXC or Windows may run it, or run the agents from WSL 2, where bubblewrap isolates them{OrPreferred}");
+            }
+        }
+
+        return proved;
+    }
+
+    /// <summary>
+    /// The programs an agent's commands are made of on Windows, each found here and asked to answer: node, git and Git
+    /// Bash's sh - one on the PATH outside the tree, else the one beside the git found - each with the words it answers to.
+    /// One not on this machine is not asked: no agent here runs it.
+    /// </summary>
+    private IEnumerable<(string Name, string Program, IReadOnlyList<string> Arguments)> WindowsTools(string tree)
+    {
+        if (OnPath(tree, "node.exe") is { } node)
+        {
+            yield return ("node", node, ["--version"]);
+        }
+
+        var git = OnPath(tree, "git.exe");
+
+        if (git is not null)
+        {
+            yield return ("git", git, ["--version"]);
+        }
+
+        if ((OnPath(tree, "sh.exe") ?? BesideGit(git)) is { } sh)
+        {
+            yield return ("Git Bash's sh", sh, ["-c", "echo answered"]);
+        }
+    }
+
+    /// <summary>
+    /// Git Bash's sh beside <paramref name="git"/>, as Git for Windows lays it out: <c>usr\bin\sh.exe</c>, else
+    /// <c>bin\sh.exe</c>, under the installation's root, which holds git in <c>cmd\</c>, <c>bin\</c> or <c>mingw64\bin\</c>;
+    /// null where there is none.
+    /// </summary>
+    private static string? BesideGit(string? git)
+    {
+        var root = git is null ? null : Path.GetDirectoryName(Path.GetDirectoryName(git));
+
+        if (root is not null && Path.GetFileName(root).Equals("mingw64", StringComparison.OrdinalIgnoreCase))
+        {
+            root = Path.GetDirectoryName(root);
+        }
+
+        return root is null
+            ? null
+            : new[] { Path.Combine(root, "usr", "bin", "sh.exe"), Path.Combine(root, "bin", "sh.exe") }.FirstOrDefault(File.Exists);
+    }
+
+    /// <summary>
+    /// How <paramref name="program"/> failed to answer inside the container - started contained and inside it with nothing
+    /// denied but what the container denies of itself; null where it ended 0 having said something.
+    /// </summary>
+    private async Task<string?> AnsweredInsideAsync(IIsolationMechanism mechanism, string program, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    {
+        var (result, failed) = await TrialRunAsync(
+            new ProcessIsolation(mechanism, IsolationProfile.Nothing),
+            Path.GetDirectoryName(program)!,
+            program,
+            arguments,
+            cancellationToken).ConfigureAwait(false);
+
+        return failed
+            ?? (result!.ExitCode != 0 || result.StandardOutput.Trim().Length == 0
+                ? $"ended {Code(result.ExitCode)}{(FirstLine(result.StandardError.Trim().Length > 0 ? result.StandardError : result.StandardOutput) is { Length: > 0 } said ? $": '{said}'" : " saying nothing")}"
+                : null);
+    }
+
+    /// <summary>An exit code as Windows writes it: a status the system ended the program with in hexadecimal (<c>0xC0000142</c>), any other as it is.</summary>
+    private static string Code(int code)
+        => code < 0 ? $"0x{(uint)code:X8}" : code.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>What every remedy of a Windows with no container of MXC's ends with.</summary>
+    private const string WindowsRemedy =
+        $"MXC's process container needs {WindowsContainerHost.Builds}; or run the agents from WSL 2, where bubblewrap "
+        + "isolates them" + OrPreferred;
+
+    /// <summary>The first file named <paramref name="name"/> in an absolute directory of the PATH outside <paramref name="tree"/>; null where none is.</summary>
+    private string? OnPath(string tree, string name)
+    {
+        var inside = Path.GetFullPath(tree).TrimEnd('/', '\\') + Path.DirectorySeparatorChar;
 
         foreach (var directory in (_path() ?? string.Empty).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
@@ -170,14 +290,14 @@ public sealed partial class IsolationPlatform(IHostPlatform platform, IProcessRu
                 continue;
             }
 
-            var whole = Path.GetFullPath(directory).TrimEnd('/') + "/";
+            var whole = Path.GetFullPath(directory).TrimEnd('/', '\\') + Path.DirectorySeparatorChar;
 
-            if (whole.StartsWith(inside, StringComparison.Ordinal))
+            if (whole.StartsWith(inside, platform.PathComparison))
             {
                 continue;
             }
 
-            var candidate = Path.Combine(whole, BubblewrapProgram);
+            var candidate = Path.Combine(whole, name);
 
             if (File.Exists(candidate))
             {
@@ -282,38 +402,20 @@ public sealed partial class IsolationPlatform(IHostPlatform platform, IProcessRu
             var canary = Path.Combine(hidden, "canary");
             await File.WriteAllTextAsync(canary, "canary", cancellationToken).ConfigureAwait(false);
 
-            var profile = new IsolationProfile(
-                [new IsolatedPath(hidden, Directory: true)],
-                [new IsolatedWrite(sealedPlace, Directory: true, Writable: false)]);
+            // The open place a writable root of its own, as every place a child writes is under a mechanism that grants
+            // nothing it is not told to.
+            var isolation = new ProcessIsolation(
+                mechanism,
+                new IsolationProfile(
+                    [new IsolatedPath(hidden, Directory: true)],
+                    [new IsolatedWrite(sealedPlace, Directory: true, Writable: false), new IsolatedWrite(open, Directory: true, Writable: true)]));
+            var how = platform.Current == PlatformId.Windows
+                ? await WindowsTrialAsync(isolation, probe, canary, sealedPlace, open, cancellationToken).ConfigureAwait(false)
+                : await PosixTrialAsync(isolation, probe, canary, sealedPlace, open, cancellationToken).ConfigureAwait(false);
 
-            ProcessResult result;
-
-            try
+            if (how is not null)
             {
-                result = await runner.RunAsync(
-                    new ProcessRequest
-                    {
-                        FileName = "/bin/sh",
-                        Arguments = ["-c", ProbeScript, "sh", canary, sealedPlace, open],
-                        WorkingDirectory = probe,
-                        Timeout = ProbeBound,
-                        Contained = true,
-                        Isolation = new ProcessIsolation(mechanism, profile),
-                    },
-                    cancellationToken).ConfigureAwait(false);
-            }
-            catch (ProgramStartException ex)
-            {
-                return unproved($"could not be started: {ex.Message.TrimEnd('.')}");
-            }
-
-            if (result.ExitCode != 0 || result.TimedOut)
-            {
-                var said = FirstLine(result.StandardOutput.Trim().Length > 0 ? result.StandardOutput : result.StandardError);
-
-                return unproved(result.TimedOut
-                    ? $"did not end within {ProbeBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s"
-                    : $"ended {result.ExitCode.ToString(CultureInfo.InvariantCulture)}: '{said}'");
+                return unproved(how);
             }
 
             if (File.ReadAllText(canary) != "canary" || File.Exists(Path.Combine(sealedPlace, "w")) || !File.Exists(Path.Combine(open, "w")))
@@ -337,6 +439,77 @@ public sealed partial class IsolationPlatform(IHostPlatform platform, IProcessRu
             {
                 // As above.
             }
+        }
+    }
+
+    /// <summary>
+    /// The trial on Linux and macOS: one shell inside, which reads the canary, writes the place written by nobody and the
+    /// open place, and ends saying the first that went as it must not; null where it ended 0.
+    /// </summary>
+    private async Task<string?> PosixTrialAsync(ProcessIsolation isolation, string probe, string canary, string sealedPlace, string open, CancellationToken cancellationToken)
+    {
+        var (result, failed) = await TrialRunAsync(isolation, probe, "/bin/sh", ["-c", ProbeScript, "sh", canary, sealedPlace, open], cancellationToken).ConfigureAwait(false);
+
+        return failed
+            ?? (result!.ExitCode != 0
+                ? $"ended {Code(result.ExitCode)}: '{FirstLine(result.StandardOutput.Trim().Length > 0 ? result.StandardOutput : result.StandardError)}'"
+                : null);
+    }
+
+    /// <summary>
+    /// The trial on Windows: the system's command interpreter inside, once for each of the three - the canary read, the
+    /// place written by nobody written, the open place written - each run asked alone, for the interpreter takes no words
+    /// of a script the way a shell does; null where each went as it must.
+    /// </summary>
+    private async Task<string?> WindowsTrialAsync(ProcessIsolation isolation, string probe, string canary, string sealedPlace, string open, CancellationToken cancellationToken)
+    {
+        var interpreter = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        var (read, readFailed) = await TrialRunAsync(isolation, probe, interpreter, ["/d", "/c", "type", canary], cancellationToken).ConfigureAwait(false);
+
+        if (readFailed is not null || read!.ExitCode == 0)
+        {
+            return readFailed ?? "read the hidden canary";
+        }
+
+        var (sealedWrite, sealedFailed) = await TrialRunAsync(isolation, probe, interpreter, ["/d", "/c", "type", "nul", ">", Path.Combine(sealedPlace, "w")], cancellationToken).ConfigureAwait(false);
+
+        if (sealedFailed is not null || sealedWrite!.ExitCode == 0)
+        {
+            return sealedFailed ?? "wrote the place written by nobody";
+        }
+
+        var (openWrite, openFailed) = await TrialRunAsync(isolation, probe, interpreter, ["/d", "/c", "type", "nul", ">", Path.Combine(open, "w")], cancellationToken).ConfigureAwait(false);
+
+        return openFailed
+            ?? (openWrite!.ExitCode != 0
+                ? $"did not write the open place: it ended {Code(openWrite.ExitCode)}: '{FirstLine(openWrite.StandardError.Trim().Length > 0 ? openWrite.StandardError : openWrite.StandardOutput)}'"
+                : null);
+    }
+
+    /// <summary>One run of a trial, contained and inside <paramref name="isolation"/>: what it ended with, or how it did not.</summary>
+    private async Task<(ProcessResult? Result, string? Failed)> TrialRunAsync(ProcessIsolation isolation, string probe, string program, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await runner.RunAsync(
+                new ProcessRequest
+                {
+                    FileName = program,
+                    Arguments = arguments,
+                    WorkingDirectory = probe,
+                    Timeout = ProbeBound,
+                    Contained = true,
+                    Isolation = isolation,
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            return result.TimedOut
+                ? (null, $"did not end within {ProbeBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s")
+                : (result, null);
+        }
+        catch (ProgramStartException ex)
+        {
+            return (null, $"could not be started: {ex.Message.TrimEnd('.')}");
         }
     }
 

@@ -233,18 +233,44 @@ and the two file controls that write through a descriptor opened only to read
 (`F_MAKECOMPRESSED`, `F_TRANSFEREXTENTS`). The sandbox meets a path as the file system names it,
 so each place is ruled at its real spelling (`/var` is `/private/var`) and, where it is itself a
 link, at its own entry too, and the anchors are those of the spellings; each spelling is handed
-over as a parameter, never written into the profile's text. Which mechanism the machine has is the
-platform's (`IIsolationPlatform`, `IsolationPlatform`): on Linux the first `bwrap` in an absolute
-directory of the PATH outside the tree, 0.8 or newer; on macOS `/usr/bin/sandbox-exec` alone, never
-one the PATH names, where this process runs inside no sandbox already (`sandbox_check`), for macOS
-starts none inside another - its questions of the machine one seam a test answers anywhere
-(`MacSandboxHost`: the file there, the sandbox already, the version of macOS a record names, each
-path's real spelling from `realpath`). Either is proved once per process by a probe started exactly
+over as a parameter, never written into the profile's text. On Windows the mechanism is Microsoft's
+MXC process container (`MxcProcessContainer`), made through MXC's own library (`Microsoft.Mxc.Sdk`,
+MIT, named in `THIRD-PARTY-NOTICES` with every other package the tool carries): its command line is
+this tool again - `isolate-exec --hidden <p>... --sealed|--writable <p>... -- <program> <words>`,
+a step nobody types (`IsolateExec`) - so `contain-exec` starts it in the step's job, and it starts
+the program inside a container of its own, handing on its input and handing back its output, its
+error and its exit code; a container that cannot be made ends it with `contain-exec`'s own failure
+code. The container grants nothing it is not told to (`MxcProcessContainer.Files`): every fixed
+drive read, each writable root written, each place written by nobody read, each hidden place denied
+outright (MXC's denied paths, which the machine's container must support). It meets a place by its
+path alone, and a rename leaves no mount behind it, so each anchor whose own holder the profile
+writes is read alone, and each entry it holds that no rule of its own names written again as the
+profile has it: nothing is made or removed directly inside such an anchor, so git makes no
+`index.lock` in a `.git` that holds a sealed place, and a worktree's index and objects, which the
+main checkout's `.git` holds, are only read. The child has the environment the step was given,
+never the machine's, in which MXC sets a temporary directory of its own, removed with the
+container; the container's own user interface, with no clipboard and no input sent to another
+window - with the interface turned off, every program that loads Windows' user interface library
+ends `0xC0000142` before its first line; and the user's network, in and out, the host's loopback
+among it. Which mechanism the machine has is the platform's (`IIsolationPlatform`,
+`IsolationPlatform`): on Linux the first `bwrap` in an absolute directory of the PATH outside the
+tree, 0.8 or newer; on macOS `/usr/bin/sandbox-exec` alone, never one the PATH names, where this
+process runs inside no sandbox already (`sandbox_check`), for macOS starts none inside another - its
+questions of the machine one seam a test answers anywhere (`MacSandboxHost`: the file there, the
+sandbox already, the version of macOS a record names, each path's real spelling from `realpath`);
+on Windows the container, where MXC's library says the machine has it and can deny a place
+outright - its question one seam a test answers anywhere too (`WindowsContainerHost`: the library's
+backends, and its version, which a record names). Each is proved once per process by a probe started exactly
 as every isolated child is - a canary in a hidden place unread, a place written by nobody unwritten,
-an open place written, each checked from outside - and why not with the remedy where it fails
-(Ubuntu's `apparmor_restrict_unprivileged_userns` named with the `bwrap-userns-restrict` profile);
-on Windows none is built yet, saying so through the same seam, so the mode already behaves there.
-What a launch's profile holds is the agents' isolation's, below.
+an open place written, each checked from outside, through `sh` on Linux and macOS and through
+`cmd.exe` on Windows, a run for each - and why not with the remedy where it fails (Ubuntu's
+`apparmor_restrict_unprivileged_userns` named with the `bwrap-userns-restrict` profile; on Windows
+the builds MXC needs, or WSL 2). On Windows each of node, git and Git Bash's `sh` - on the PATH
+outside the tree, `sh` else beside the git found - is then started inside the container and must
+end 0 having said something; one that does not is no mechanism, named with its path and how it
+ended, a status the system ended it with written in hexadecimal, and one not on the machine is not
+asked. MXC 1.0.1 ends every program of Git Bash's with `0xC0000142`, so a Windows with Git for
+Windows has none yet. What a launch's profile holds is the agents' isolation's, below.
 
 A request can ask instead for a child **bound** to the harness's life (`ProcessRequest.Bound`):
 on Windows it is placed through `contain-exec` too, in the one job object the process holds for its
@@ -2292,7 +2318,10 @@ those places and each writable root itself, which no command renames or removes 
 property of the profile, so no mechanism keeps a list of its own): a rule stands at a path, so a directory above a
 guarded place moved away would take the place out from under its rule and leave its name free to make again - a
 `.git` moved aside and a new one with hooks of the agent's, run by the tool's own git outside. Objects, the index and the refs are left
-writable, so `git add` and `fetch` work inside, and the words policy still refuses a step the verbs that move a tree.
+writable under bubblewrap and macOS's sandbox, so `git add` and `fetch` work inside, and the words policy still refuses a
+step the verbs that move a tree; MXC's container, which writes only what it is told, writes them only inside a writable
+root, and holds a `.git` that holds a sealed place read alone, so `git add` fails inside it over a worktree and over a
+side-task's main tree.
 A place not there is made empty first, so no command makes it inside and has it read or run outside later; a state
 file never is (`HarnessLayout.StateFileNames`), for the tool reads one as meaning something, and the words policy
 alone guards it. A git that cannot say where a tree keeps its files is a launch without the isolation, said.
@@ -2309,8 +2338,10 @@ inside the one that leaves the Claude Code directories open (`ForClaudeCode`). C
 used: the whole process held by the tool's own mechanism holds every command it starts, one mechanism for every
 client, and nothing rests on how that sandbox treats the network in print mode or weighs its own write rules against
 the profile - and the launch's settings turn it off (`ClaudeSettings.Render`'s `isolated`, `"sandbox": {"enabled":
-false}`) over any the user's own settings ask for, for neither mechanism nests another (macOS no sandbox inside a
-sandbox, bubblewrap no namespace inside its own) and each command would fail in it. On macOS Claude Code keeps its
+false}`) over any the user's own settings ask for, for no mechanism of the tool's nests another (macOS no sandbox inside
+a sandbox, bubblewrap no namespace inside its own) and each command would fail in it; on Windows Claude Code has none of
+its own. MXC's container reads the Claude Code directories to a Claude Code launch but writes none of them, so a login
+whose token has run out is not renewed inside it until a `claude` run outside renews it. On macOS Claude Code keeps its
 login in the login keychain, which every agent's command reaches as the user does - the sandbox lets the services that
 trust certificates be reached, and they are the keychain's: the words policy alone guards it, as it guards the Claude
 Code directories for a Claude Code launch. Inside the isolation a verb of this tool's that reads a slot or writes state would fail part way, so

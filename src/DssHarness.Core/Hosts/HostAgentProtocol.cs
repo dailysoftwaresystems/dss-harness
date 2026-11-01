@@ -98,8 +98,9 @@ public static class HostAgentProtocol
 
     /// <summary>
     /// Commands a host is never asked to run. A host that passed the work on to another host would leave
-    /// the machine that asked unable to say where anything ran; and the step that places a contained child
-    /// is the process runner's own, which run inside the agent would become the program in its place.
+    /// the machine that asked unable to say where anything ran; and the step that places a contained child,
+    /// and the one that starts it inside Windows' container, are the process runner's own, which run inside
+    /// the agent would become the program in its place.
     ///
     /// The run verbs are no host's either (part 04, "Commands and use cases"): a flow runs where it was typed, and
     /// its machine steps reach hosts as legs do - never the session that drives them. Nor is the stop of a run of legs:
@@ -113,6 +114,7 @@ public static class HostAgentProtocol
             HostExecService.CommandName,
             Execution.HoldAwakeService.CommandName,
             Processes.ContainExec.CommandName,
+            Processes.MxcProcessContainer.CommandName,
             Orchestration.Flow.FlowService.RunCommand,
             Orchestration.Flow.FlowService.ResumeCommand,
             Orchestration.Flow.FlowService.AnswerCommand,

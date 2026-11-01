@@ -8,10 +8,11 @@ using DssHarness.Core.Repository;
 
 // Command selection and dependency wiring only. Every behaviour lives in a service
 // in DssHarness.Core, which is a library precisely so that nothing can accumulate here.
-// The step that places a contained child leaves the console as it found it: on Windows the
-// program it starts shares that console, and a code page set here would change how the
-// program writes its output from how it writes it started as any other child.
-using var consoleEncoding = args is [ContainExec.CommandName, ..] ? null : ConsoleEncoding.UseUtf8();
+// The step that places a contained child, and the one that starts it inside MXC's container,
+// leave the console as they found it: on Windows the program each starts shares that console,
+// and a code page set here would change how the program writes its output from how it writes
+// it started as any other child.
+using var consoleEncoding = args is [ContainExec.CommandName or MxcProcessContainer.CommandName, ..] ? null : ConsoleEncoding.UseUtf8();
 
 var root = new RootCommand(
     $"{ToolPackage.Id} - cross-platform repository harness. Run '{ToolPackage.Command} help' for reference material.");
@@ -81,6 +82,9 @@ root.Subcommands.Add(HostHoldCommand.Create());
 
 // Started by the process runner itself, as the step that places a contained child, and never typed.
 root.Subcommands.Add(ContainExecCommand.Create());
+
+// Started by the contained step in an isolated child's place on Windows, and never typed.
+root.Subcommands.Add(IsolateExecCommand.Create());
 
 return await RunAsync(args, CancellationToken.None).ConfigureAwait(false);
 

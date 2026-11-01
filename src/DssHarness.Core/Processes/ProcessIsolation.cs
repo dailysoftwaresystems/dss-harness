@@ -70,7 +70,8 @@ public sealed record IsolationProfile(IReadOnlyList<IsolatedPath> Hidden, IReadO
 
 /// <summary>
 /// The operating system's mechanism that runs a contained child inside an <see cref="IsolationProfile"/>: on Linux the
-/// system's bubblewrap (<see cref="Bubblewrap"/>), on macOS the system's own sandbox (<see cref="SandboxExec"/>) - each a
+/// system's bubblewrap (<see cref="Bubblewrap"/>), on macOS the system's own sandbox (<see cref="SandboxExec"/>), on
+/// Windows MXC's process container, which this tool starts again to make (<see cref="MxcProcessContainer"/>) - each a
 /// program the child's own command line is handed to. Behind the platform seam that finds and proves it
 /// (<see cref="Platform.IIsolationPlatform"/>).
 /// </summary>

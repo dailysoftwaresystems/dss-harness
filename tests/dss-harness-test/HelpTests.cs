@@ -908,10 +908,16 @@ public sealed partial class HelpTests
         // records, and the verbs refused for it - named from the one list the policy refuses by.
         Assert.Contains(
             "On Linux, WSL 2's included, the mechanism is the system's bubblewrap 0.8.0 or newer - the first bwrap in an absolute "
-                + "directory of the PATH outside the tree - and on macOS the system's own sandbox, /usr/bin/sandbox-exec; either is "
-                + "what the contained step becomes in the child's place, so no child runs outside it for an instant. Inside it every "
-                + "credential slot of the main checkout and every Claude Code directory is hidden - an empty place under bubblewrap, "
-                + "refused by macOS's sandbox;",
+                + "directory of the PATH outside the tree - on macOS the system's own sandbox, /usr/bin/sandbox-exec, and on Windows "
+                + "Microsoft's MXC process container, made through MXC's own library; each is what the contained step becomes in the "
+                + "child's place - on Windows this tool again (isolate-exec), inside the step's job, which starts the program inside a "
+                + "container of its own and hands back its streams and its exit code - so no child runs outside it for an instant. "
+                + "Inside it every credential slot of the main checkout and every Claude Code directory is hidden - an empty place "
+                + "under bubblewrap, refused by macOS's sandbox, denied by MXC's container;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "under bubblewrap and macOS's sandbox git's objects, index and refs stay writable, so git add, fetch, rm and status work.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -935,15 +941,41 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Windows has no mechanism of this tool's yet: there required refuses and preferred runs on the words alone; from WSL 2, "
+            "MXC's container grants nothing it is not told to: every fixed drive is read, each writable root written, each place "
+                + "written by nobody read, each hidden place denied outright - so git's objects, index and refs are written only "
+                + "inside a writable root, and git add in a worktree, whose index and objects the main checkout's .git holds, fails "
+                + "there. It meets a place by its path alone, so each directory above a guarded place whose own holder is written is "
+                + "read alone, every entry it holds written again as the profile has it - nothing is made or removed directly inside "
+                + @"it, so git add over a side-task's main tree, which makes .git\index.lock, fails there too. The child has the "
+                + "environment the step was given, a temporary directory of MXC's own and the container's own user interface - no "
+                + "clipboard, no input sent to another window - which a program that loads Windows' user interface library needs to "
+                + "start at all. On each, the network is the user's, the loopback both ways.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "under MXC it reads them but writes none, so a login whose token has run out is not renewed inside it until a claude "
+                + "run outside renews it.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a canary in a hidden place unread, a place written by nobody unwritten, an open place written - on Windows after MXC's "
+                + "library says this Windows has the container (Windows 11 24H2 build 26100.9278 or later, or 26H2 build 26300.9550 "
+                + "or later), and followed by each of node, git and Git Bash's sh found on this machine started inside it and asked "
+                + "to answer, one that does not making none, said with how it ended. MXC 1.0.1 ends every program of Git Bash's with "
+                + "0xC0000142, a library that would not start, so where Git Bash is installed Windows has none yet; from WSL 2, "
                 + "bubblewrap isolates.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the mechanism and its version - macOS's own for its sandbox, MXC's library's for its container - or why there was none.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
             "agentPolicy.isolation says what happens where this machine has none: required, where nothing is said, starts no agent "
                 + $"that may run a command - its step ends failed ({HarnessExit.ToolMissing}), the advisor gives no advice, run-side-task "
                 + $"exits {HarnessExit.ToolMissing}, each saying why and the remedy (on Ubuntu, where "
-                + "/proc/sys/kernel/apparmor_restrict_unprivileged_userns is 1, the bwrap-userns-restrict AppArmor profile); preferred "
+                + "/proc/sys/kernel/apparmor_restrict_unprivileged_userns is 1, the bwrap-userns-restrict AppArmor profile; on Windows "
+                + "the builds MXC needs, or WSL 2); preferred "
                 + "runs it on the words policy alone, said at every launch. An agent that may run no command - the reporter - needs "
                 + "none, and none is probed.",
             prose,
@@ -965,6 +997,9 @@ public sealed partial class HelpTests
             $"{nameof(DssHarness.Core.Processes.SandboxExec)}.{nameof(DssHarness.Core.Processes.SandboxExec.Policy)}",
             $"{nameof(DssHarness.Core.Processes.IsolationProfile)}.{nameof(DssHarness.Core.Processes.IsolationProfile.Anchors)}",
             nameof(DssHarness.Core.Platform.MacSandboxHost),
+            nameof(DssHarness.Core.Processes.MxcProcessContainer),
+            nameof(DssHarness.Core.Processes.IsolateExec),
+            nameof(DssHarness.Core.Platform.WindowsContainerHost),
             nameof(DssHarness.Core.Platform.IsolationPlatform),
         })
         {

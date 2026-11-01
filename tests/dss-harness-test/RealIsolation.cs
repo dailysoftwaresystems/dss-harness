@@ -19,9 +19,12 @@ internal static class RealIsolation
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
-    /// <summary>This machine's isolation, its probe made through a real process runner as every isolated child is started.</summary>
+    /// <summary>
+    /// This machine's isolation, its probe made through a real process runner as every isolated child is started - this
+    /// build's own program the one Windows' mechanism starts again.
+    /// </summary>
     public static IsolationPlatform Platform()
-        => new(new HostPlatform(), Runner());
+        => new(new HostPlatform(), Runner(), self: () => (CliRunner.CliProgram, []));
 
     /// <summary>A real process runner, its contained step this build's own.</summary>
     public static ProcessRunner Runner()
@@ -59,7 +62,7 @@ internal static class RealIsolation
     /// <param name="temp">Where the repository is made.</param>
     /// <param name="home">The home the user's git configuration is read under.</param>
     /// <param name="platform">This machine's isolation, proved.</param>
-    public static async Task<StepLaunch> StepLaunchAsync(TempDirectory temp, TempDirectory home, IsolationPlatform platform)
+    public static async Task<StepLaunch> StepLaunchAsync(TempDirectory temp, TempDirectory home, IIsolationPlatform platform)
     {
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("a1");
