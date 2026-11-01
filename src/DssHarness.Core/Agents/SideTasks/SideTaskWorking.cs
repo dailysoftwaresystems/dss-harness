@@ -285,7 +285,11 @@ internal sealed class Working
         front.Seen.Take();
 
         // Told inside the interrupts' lock, and unwired before the source is let go: no press reaches it after.
-        Interrupts.WhileTurning(count => { _ = turn.CancelAsync(); });
+        Interrupts.WhileTurning(count =>
+        {
+            _ = turn.CancelAsync();
+            return true;
+        });
 
         try
         {
@@ -360,7 +364,13 @@ internal sealed class Working
             launch.Post(line);
         }
 
-        Interrupts.WhileTurning(_ => launch.Interrupt.Interrupt());
+        // Every press reaches the launch, whose client cuts the turn under way and leaves it be between turns; what is
+        // said of it is whether a turn was under way.
+        Interrupts.WhileTurning(_ =>
+        {
+            launch.Interrupt.Interrupt();
+            return front.Seen.TurnUnderWay;
+        });
 
         return launch;
     }
@@ -1017,6 +1027,16 @@ internal sealed class Working
                     Seen.TurnBegan();
                     break;
 
+                case MessageTaken taken:
+                    Seen.Waiting(taken.Waiting);
+                    break;
+
+                case MessagesDropped dropped:
+                    Seen.Waiting(dropped.Waiting);
+                    Said($"the interrupt dropped {ReportText.Counted(dropped.Count, "message")} the agent had not taken yet; send again what still stands");
+                    Write($"    dropped: {ReportText.Counted(dropped.Count, "message")} not taken");
+                    break;
+
                 case ToolCallStarted:
                     Seen.Called();
                     break;
@@ -1089,8 +1109,9 @@ internal sealed class Working
     /// <summary>
     /// What the turns were seen to do, filled from the run's drain and taken whole by the chat: each turn's denials, the
     /// models that served it with what each used and its calls - for a run that is one turn of the side-task's - and,
-    /// for a launch held open for a chat, each turn of the agent's as it ended, from when it began, and how many of the
-    /// person's messages the launch was given - every touch under one lock, and what is taken handed across as copies.
+    /// for a launch held open for a chat, each turn of the agent's as it ended, from when it began, how many of the
+    /// person's messages the launch was given and how many of them wait, written and not taken, by its client's own
+    /// count - every touch under one lock, and what is taken handed across as copies.
     /// </summary>
     /// <param name="clock">Tells when a turn began and ended.</param>
     internal sealed class SeenTurns(TimeProvider clock)
@@ -1104,7 +1125,7 @@ internal sealed class Working
         private DateTimeOffset? _began;
         private int _calls;
         private int _given;
-        private int _givenSinceATurnEnded;
+        private int _waiting;
         private int _alreadyWritten;
 
         /// <summary>Completes when a turn ended that is not taken yet (<see cref="TakeEnded"/>).</summary>
@@ -1121,7 +1142,8 @@ internal sealed class Working
 
         /// <summary>
         /// Whether the launch's last turn ended with it: no turn of the agent's under way - one began and has not ended - and
-        /// no message of the person's given since the last turn ended, which would have waited for a turn of its own.
+        /// no message written to it waiting to be taken (<see cref="MessageTaken"/>), which would have begun a turn of its
+        /// own: a launch gone between one turn's end and taking the next message ended between turns.
         /// </summary>
         public bool EndedAtATurnsEnd
         {
@@ -1129,7 +1151,19 @@ internal sealed class Working
             {
                 lock (_gate)
                 {
-                    return _began is null && _givenSinceATurnEnded == 0;
+                    return _began is null && _waiting == 0;
+                }
+            }
+        }
+
+        /// <summary>Whether a turn of the agent's is under way: one began and has not ended.</summary>
+        public bool TurnUnderWay
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _began is not null;
                 }
             }
         }
@@ -1188,19 +1222,22 @@ internal sealed class Working
             {
                 _began = null;
                 _given = 0;
-                _givenSinceATurnEnded = 0;
+                _waiting = 0;
                 _alreadyWritten = alreadyWritten;
                 TakeEndedLocked();
             }
         }
 
-        /// <summary>One more of the person's messages was given to the agent: whether the transcript is to write it - not one it holds already.</summary>
+        /// <summary>
+        /// One more of the person's messages was given to the agent - written to it, waiting to be taken: whether the
+        /// transcript is to write it - not one it holds already.
+        /// </summary>
         public bool OneGiven()
         {
             lock (_gate)
             {
                 _given++;
-                _givenSinceATurnEnded++;
+                _waiting++;
 
                 if (_alreadyWritten > 0)
                 {
@@ -1209,6 +1246,19 @@ internal sealed class Working
                 }
 
                 return true;
+            }
+        }
+
+        /// <summary>
+        /// How many of the messages written to the agent wait, not taken, as its client counts them - said as it takes
+        /// one (<see cref="MessageTaken"/>) and as an interrupt drops some (<see cref="MessagesDropped"/>).
+        /// </summary>
+        /// <param name="waiting">The client's own count.</param>
+        public void Waiting(int waiting)
+        {
+            lock (_gate)
+            {
+                _waiting = waiting;
             }
         }
 
@@ -1249,7 +1299,6 @@ internal sealed class Working
 
                 _ended.Add(new EndedTurn(_began ?? clock.GetUtcNow(), [new AgentServedModel(model, 1)], new AgentUsageReport(usage, [new AgentModelUsage(model, usage)])));
                 _began = null;
-                _givenSinceATurnEnded = 0;
                 _turnEnded.TrySetResult();
             }
         }

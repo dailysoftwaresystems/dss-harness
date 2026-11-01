@@ -451,7 +451,8 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "a second, /exit or the end of input ends it, the agent's open launch let end as /exit lets it - its turn cut - so "
-                + "what it used, cost and spent is kept. Each interrupt says whether a turn, or a launch held open, was there to take it.",
+                + "what it used, cost and spent is kept. Each interrupt says whether a turn of the agent's was under way to cut, or none "
+                + "was and nothing is cut.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(

@@ -713,6 +713,10 @@ public sealed class ClaudeCodeClient(
                     await Emit(new TurnStarted(totals.Turns)).ConfigureAwait(false);
                 }
 
+                // Each message taken is said, with how many still wait: a launch that ends with one waiting ended between
+                // turns, never at the end of the turn before it.
+                await Emit(new MessageTaken(_pending.Count)).ConfigureAwait(false);
+
                 return null;
             }
 
@@ -1146,7 +1150,7 @@ public sealed class ClaudeCodeClient(
 
                 if (dropped > 0)
                 {
-                    await Emit(new Notice($"the interrupt dropped {DssHarness.Core.Output.ReportText.Counted(dropped, "message")} the agent had not taken yet; send again what still stands")).ConfigureAwait(false);
+                    await Emit(new MessagesDropped(dropped, _pending.Count)).ConfigureAwait(false);
                 }
 
                 Watch();
@@ -1168,7 +1172,10 @@ public sealed class ClaudeCodeClient(
 
             // The receipt names each waiting message the interrupt dropped, by the id the engine gave it: no turn takes
             // them. One Claude Code had taken for its next turn already is not named, and that turn runs - cut - first.
-            _pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true);
+            if (_pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true) is > 0 and var cancelled)
+            {
+                await Emit(new MessagesDropped(cancelled, _pending.Count)).ConfigureAwait(false);
+            }
 
             return await AskWhenCutAsync().ConfigureAwait(false);
         }

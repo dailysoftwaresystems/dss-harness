@@ -124,13 +124,19 @@ public sealed class SideTaskServiceTests
         /// <summary>Whether the turn that fails ends with no result of its own, as a program gone in the middle of a turn does.</summary>
         public bool FailsWithoutAResult { get; set; }
 
+        /// <summary>
+        /// Where set, each launch is gone before its turn of this number begins - the turn before it ended, the message
+        /// written to it waiting and never taken - as a program gone between two turns is.
+        /// </summary>
+        public int? GoneBeforeTurn { get; set; }
+
         /// <summary>Where set, waited on before each turn of a launch answers, with the turn's number.</summary>
         public Func<int, Task>? BeforeAnswering { get; set; }
 
         /// <summary>
-        /// Where set, waited on inside each turn of a launch, once it began, with the turn's number; the messages written to
-        /// the launch meanwhile are said then - as the real client says each the moment it is written - and each waits for
-        /// a turn of its own.
+        /// Where set, waited on inside each turn of a launch, once it began and its text came, with the turn's number; the
+        /// messages written to the launch meanwhile are said then - as the real client says each the moment it is written -
+        /// and each waits for a turn of its own.
         /// </summary>
         public Func<int, Task>? WhileTurning { get; set; }
 
@@ -160,10 +166,17 @@ public sealed class SideTaskServiceTests
             {
                 turns++;
 
+                if (turns == GoneBeforeTurn)
+                {
+                    // The program is gone with the message written to it and never taken.
+                    return new AgentRunResult(AgentRunStatus.Failed, Model: run.Model, Error: "the program is gone") { Turns = turns - 1, MessagesAnswered = Chat(answered) };
+                }
+
                 if (turns == FailsOnTurn || turns - 1 == EndsAfterTurns)
                 {
                     // The turn takes the message and ends without answering it, and the launch ends with that turn.
                     await events.EmitAsync(new TurnStarted(turns));
+                    await events.EmitAsync(new MessageTaken(written.Count));
 
                     if (!(turns == FailsOnTurn && FailsWithoutAResult))
                     {
@@ -217,7 +230,10 @@ public sealed class SideTaskServiceTests
         {
             var about = "about: " + message[..Math.Min(20, message.Length)];
 
+            // The turn begins taking its message, said as the real client says each message it takes.
             await events.EmitAsync(new TurnStarted(turn));
+            await events.EmitAsync(new MessageTaken(written.Count));
+            await events.EmitAsync(new TextDelta(about));
 
             if (WhileTurning is { } meanwhile)
             {
@@ -229,7 +245,7 @@ public sealed class SideTaskServiceTests
                     await events.EmitAsync(new MessageSent(line, AgentMessageKind.ChatMessage));
                 }
             }
-            await events.EmitAsync(new TextDelta(about));
+
             await events.EmitAsync(new AssistantMessage(about, []));
             await events.EmitAsync(new TurnFinished(turn, run.Model ?? "m", new AgentUsage(7, 3, 0, 0, 0, 0), "end_turn"));
         }
@@ -731,6 +747,141 @@ public sealed class SideTaskServiceTests
         // The line the ended launch never answered is the new launch's own, read and written once.
         var transcript = await File.ReadAllLinesAsync(Path.Combine(LayoutOf(temp, "relaunched").Directory, "transcript.md"), Token);
         Assert.Equal(["    first", "    second"], transcript.Where((line, at) => at > 0 && transcript[at - 1] == "person:"));
+    }
+
+    /// <summary>
+    /// A launch gone between one turn's end and taking the message written to it meanwhile - by the client's own count of
+    /// the messages it took - ended between turns: the turn before it ended well and keeps its own ending, never the
+    /// launch's failure, and the line it never took goes on to the next launch, written to the transcript once.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchGoneBetweenTurns_LeavesTheTurnBeforeItAsItEnded_TheLineItNeverTookGoesOn()
+    {
+        var (harness, temp, service, _, rendered) = await RepoAsync();
+        using var tree = temp;
+        rendered.GoneBeforeTurn = 2;
+        var posted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var heard = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rendered.WhileTurning = _ => posted.Task.WaitAsync(TimeSpan.FromMinutes(1));
+        var lines = new Queue<string>(["first", "second"]);
+        var said = new List<string>();
+        var chat = new SideTaskChat(
+            async token =>
+            {
+                if (lines.TryDequeue(out var line))
+                {
+                    return line;
+                }
+
+                // The second line is written while the first turn runs; the person waits for its answer, then leaves.
+                posted.TrySetResult();
+                await heard.Task.WaitAsync(TimeSpan.FromMinutes(1), token);
+                return null;
+            },
+            line =>
+            {
+                lock (said)
+                {
+                    said.Add(line);
+                }
+
+                if (line == "about: second")
+                {
+                    heard.TrySetResult();
+                }
+            });
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "claude-sonnet-5-5", Name: "between", Chat: chat), Token);
+
+        Assert.Equal((HarnessExit.Success, "side-task 'between' ended, 2 turn(s) in all"), (outcome.ExitCode, outcome.Message));
+        Assert.Equal(["first", "second"], rendered.Runs.Select(run => run.UserPrompt));
+        Assert.Equal(
+            [
+                "about: first",
+                "the agent's launch ended Failed: the program is gone; the next message begins a new launch, going on from the conversation so far",
+                "about: second",
+            ],
+            said);
+
+        var record = RecordOf(harness, temp, LayoutOf(temp, "between").Directory)!;
+        Assert.Equal([(AgentRunStatus?)null, AgentRunStatus.Completed], record.Turns.Select(turn => turn.Status));
+
+        var transcript = await File.ReadAllLinesAsync(Path.Combine(LayoutOf(temp, "between").Directory, "transcript.md"), Token);
+        Assert.Equal(["    first", "    second"], transcript.Where((line, at) => at > 0 && transcript[at - 1] == "person:"));
+    }
+
+    /// <summary>
+    /// The first interrupt of a chat whose launch is held open is said by whether a turn of the agent's is under way - the
+    /// launch's own turns telling it: in a turn, the turn is cut; between turns, the launch idle, nothing is, and it says
+    /// so. Either way it is the one line the command says of it.
+    /// </summary>
+    [Theory]
+    [InlineData(true, SideTaskTerminal.ChatCut)]
+    [InlineData(false, SideTaskTerminal.ChatIdle)]
+    public async Task TheFirstInterrupt_OfALaunchHeldOpen_IsSaidByWhetherATurnIsUnderWay(bool inATurn, string line)
+    {
+        var (harness, temp, service, _, rendered) = await RepoAsync();
+        using var tree = temp;
+        var terminal = new SideTaskTerminal(harness.Output, chat: true);
+        var pressed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lines = new Queue<string>(["first"]);
+        var directory = LayoutOf(temp, "pressed").Directory;
+
+        // In a turn: pressed as the turn's text comes, the turn held until it was.
+        rendered.WhileTurning = _ => inATurn ? pressed.Task.WaitAsync(TimeSpan.FromMinutes(1)) : Task.CompletedTask;
+
+        var chat = new SideTaskChat(
+            async token =>
+            {
+                if (lines.TryDequeue(out var typed))
+                {
+                    return typed;
+                }
+
+                // The turn recorded - so ended - the launch is idle between turns: pressed there, and the person leaves.
+                var until = DateTimeOffset.UtcNow.AddMinutes(1);
+
+                while (Recorded() < 1 && DateTimeOffset.UtcNow < until)
+                {
+                    await Task.Delay(20, token);
+                }
+
+                if (!inATurn)
+                {
+                    terminal.Interrupted();
+                }
+
+                return null;
+            },
+            said =>
+            {
+                if (inATurn && said == "about: first")
+                {
+                    terminal.Interrupted();
+                    pressed.TrySetResult();
+                }
+            });
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "claude-sonnet-5-5", Name: "pressed", Chat: chat) { Interrupts = terminal.Interrupts }, Token);
+
+        Assert.Equal((HarnessExit.Success, "side-task 'pressed' ended, 1 turn(s) in all"), (outcome.ExitCode, outcome.Message));
+        Assert.Equal(1, terminal.Interrupts.Presses);
+        Assert.Equal(
+            [$"{SideTaskService.RunCommand}: WARN - {line}"],
+            harness.StandardError.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+        int Recorded()
+        {
+            try
+            {
+                return RecordOf(harness, temp, directory)?.Turns.Count ?? 0;
+            }
+            catch (IOException)
+            {
+                // Read while it is written: read again.
+                return 0;
+            }
+        }
     }
 
     /// <summary>
@@ -1792,7 +1943,11 @@ public sealed class SideTaskServiceTests
 
         if (turning)
         {
-            terminal.Interrupts.WhileTurning(_ => cut++);
+            terminal.Interrupts.WhileTurning(_ =>
+            {
+                cut++;
+                return true;
+            });
         }
 
         terminal.Interrupted();

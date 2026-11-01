@@ -371,7 +371,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
             .ToList();
         Assert.Equal(
             [
-                "runStarted", "messageSent", "sessionStarted", "turnStarted", "toolCallStarted", "assistantMessage",
+                "runStarted", "messageSent", "sessionStarted", "turnStarted", "messageTaken", "toolCallStarted", "assistantMessage",
                 "toolCallFinished", "assistantMessage", "turnFinished", "usageReported", "runFinished",
             ],
             kinds);
@@ -2007,7 +2007,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var result = await kit.Client().RunAsync(run, sink, Token);
 
         Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
-        Assert.Contains("the interrupt dropped 1 message(s) the agent had not taken yet; send again what still stands", sink.Events.OfType<Notice>().Select(notice => notice.Text));
+        Assert.Equal([(1, 0)], sink.Events.OfType<MessagesDropped>().Select(dropped => (dropped.Count, dropped.Waiting)));
 
         // Settled, in order: the first, cut; the one dropped, the person's to send again; and the one after, answered.
         Assert.Equal(3, result.MessagesAnswered);

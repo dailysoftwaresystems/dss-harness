@@ -2757,7 +2757,10 @@ other key inside it, so `MessagesAnswered` is always its one launch's own count;
 it (`RunFinished.MessagesAnswered`), and a line given to a launch that never answered it is read once
 in the conversation that goes on and written once in `transcript.md`. Whether a turn of the launch is
 under way is the client's own turns' (`TurnStarted`, `TurnFinished`), however many lines were written
-to it meanwhile: the launch's ending is its last turn's only where it ended at that turn's end. One
+to it meanwhile, and whether a line written to it waits untaken is the client's own count, said as it
+takes each (`MessageTaken`) and as an interrupt drops some (`MessagesDropped`): the launch's ending is
+its last turn's only where it ended at that turn's end - no turn under way and no line waiting - so a
+launch gone between one turn's end and taking the next line marks no finished turn with its failure. One
 request per message where the client stores them, each going on with the stored
 one. A side-task whose last run that worked - one that began a session - ended `ContextExhausted`, a
 chat's or a one shot's, has outgrown its context (`Working.Outgrown`, read from its stream): it keeps
@@ -2797,8 +2800,9 @@ or opened again. Its interrupts are its own
 with `PointOfNoReturn.ChatsWithAPerson` turning the command line's own handling off for it): the
 first cuts the agent's turn, the second ends the chat as `/exit` does - a launch held open runs under
 the command's own stop, never the side-task's, so the second cuts its turn, ends its messages and
-waits for its result, what it used, cost and spent kept - each said by whether a turn was wired to
-take it (`SideTaskPress.Turning`); and the side-task's own stop, linked to the
+waits for its result, what it used, cost and spent kept - each said by whether a turn of the agent's
+was under way to take it (`SideTaskPress.Turning`: for a launch held open, its own turns tell it, so a
+press while it is idle between turns says no turn was cut); and the side-task's own stop, linked to the
 command's, is bound to them (`SideTaskInterrupts.StopsOn`) for wherever no turn runs - being set up
 or opened again, its Claude Code or another model made ready: a one shot's first interrupt
 stops it there, a chat's second, and an interrupt taken before the stop was bound is applied once it

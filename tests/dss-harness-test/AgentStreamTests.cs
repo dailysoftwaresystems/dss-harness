@@ -250,7 +250,7 @@ public sealed class AgentStreamTests
             kinds.Select(kind => kind.DerivedType).OrderBy(type => type.Name, StringComparer.Ordinal),
             typeof(AgentEvent).Assembly.GetTypes().Where(type => type.IsSubclassOf(typeof(AgentEvent)) && !type.IsAbstract).OrderBy(type => type.Name, StringComparer.Ordinal));
         Assert.Equal(
-            ["sessionStarted", "messageSent", "turnStarted", "turnFinished", "textDelta", "thinkingDelta", "assistantMessage",
+            ["sessionStarted", "messageSent", "messageTaken", "messagesDropped", "turnStarted", "turnFinished", "textDelta", "thinkingDelta", "assistantMessage",
                 "toolCallStarted", "toolCallInputDelta", "toolCallFinished", "permissionDenied", "webRequested", "usageReported",
                 "waitingToRetry", "turnRestarted", "fallbackStarted", "fallbackPassedOver", "outputRepair", "compacted",
                 "handoffAsked", "handoffAnswered", "personAsked", "personAnswered", "notice", "runStarted", "runFinished"],
@@ -285,7 +285,7 @@ public sealed class AgentStreamTests
         var lines = File.ReadAllLines(StreamFile(temp));
 
         Assert.Equal(stored.Count, lines.Length);
-        Assert.Equal(26 * 3, stored.Count + shown.Count);
+        Assert.Equal(28 * 3, stored.Count + shown.Count);
 
         foreach (var (@event, fill, line) in stored.Zip(lines, (one, line) => (one.Event, one.Fill, line)).Concat(shown))
         {

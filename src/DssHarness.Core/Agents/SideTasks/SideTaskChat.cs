@@ -42,7 +42,7 @@ public sealed class SideTaskInterrupts
     private readonly Lock _gate = new();
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _pressed;
-    private Action<int>? _pressedNow;
+    private Func<int, bool>? _pressedNow;
     private CancellationTokenSource? _stop;
     private bool _chat;
 
@@ -68,9 +68,7 @@ public sealed class SideTaskInterrupts
         lock (_gate)
         {
             var count = ++_pressed;
-            var turning = _pressedNow is not null;
-
-            _pressedNow?.Invoke(count);
+            var turning = _pressedNow?.Invoke(count) ?? false;
 
             if (count >= 2)
             {
@@ -106,11 +104,12 @@ public sealed class SideTaskInterrupts
     }
 
     /// <summary>
-    /// Wires what a press does while a turn runs: told each press, with the count; unwired where no turn runs. What it
-    /// is told must be quick and must not wait - a cut asked, never awaited - for it is told inside the count's lock.
+    /// Wires what a press does while a turn runs - or a launch held open between turns: told each press, with the count,
+    /// it answers whether a turn of the agent's was under way to take it; unwired where none runs. What it is told must be
+    /// quick and must not wait - a cut asked, never awaited - for it is told inside the count's lock.
     /// </summary>
-    /// <param name="what">What a press does; null to unwire.</param>
-    internal void WhileTurning(Action<int>? what)
+    /// <param name="what">What a press does, answering whether a turn took it; null to unwire.</param>
+    internal void WhileTurning(Func<int, bool>? what)
     {
         lock (_gate)
         {
@@ -142,7 +141,7 @@ public sealed class SideTaskInterrupts
 
 /// <summary>One interrupt of a side-task's, as its count took it.</summary>
 /// <param name="Count">Its place in the count.</param>
-/// <param name="Turning">Whether a turn of the agent's - or a launch held open for a chat - was there to take it; false where none was, the side-task being set up or between its turns.</param>
+/// <param name="Turning">Whether a turn of the agent's was under way to take it; false where none was - the side-task being set up, between its turns, or its launch held open idle between two.</param>
 public readonly record struct SideTaskPress(int Count, bool Turning);
 
 /// <summary>
