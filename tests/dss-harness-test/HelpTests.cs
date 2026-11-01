@@ -464,8 +464,14 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Ctrl+C there cuts its turn - a Claude Code launch's at that turn's result, what it used kept - and it ends "
-                + $"interrupted ({HarnessExit.Cancelled});",
+            "Ctrl+C there cuts its turn - a Claude Code launch's at that turn's result, an API client's request left where it "
+                + "stands, what the provider had said it used counted and a cost it had said nothing of unknown - what it used "
+                + $"kept, and it ends interrupted ({HarnessExit.Cancelled});",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Ctrl+C interrupts the agent's turn where it stands and leaves the chat open, what was said kept - on a client that "
+                + "stores its conversations up to its last whole turn, what the cut request used kept as the turn's;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1141,6 +1147,7 @@ public sealed partial class HelpTests
         var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
         var readme = Prose.Document("README.md");
         var interrupted = DssHarness.Core.Agents.Runtime.AgentToolRuntime.Interrupted(DssHarness.Core.Agents.Loop.ToolLoop.Pausing);
+        var cut = DssHarness.Core.Agents.Runtime.AgentToolRuntime.Interrupted(DssHarness.Core.Agents.AgentTurnInterrupt.Cut);
         var nudges = DssHarness.Core.Agents.Loop.ToolLoop.MostNudges;
         var pauses = DssHarness.Core.Agents.Loop.ToolLoop.MostPausesInARow;
         var tries = DssHarness.Core.Agents.Loop.ToolLoopTerms.DefaultMaxRetries;
@@ -1159,7 +1166,9 @@ public sealed partial class HelpTests
                 + "part of an answer it had written; at a limit the same model's next key is tried first and every entry the "
                 + "limit covers is passed over until it lifts, a declined request passes over the model's other keys, and one the "
                 + "provider marks about what the prompt asks (reasoning_extraction) moves no step. "
-                + $"A handoff asked abandons the request under way and cuts the calls running, each answered '{interrupted}', then asks the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn;",
+                + $"A handoff asked abandons the request under way and cuts the calls running, each answered '{interrupted}', then asks the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn; "
+                + $"a side-task's interrupt does the same, each call answered '{cut}', and ends the run Cancelled, the conversation stored to its last whole turn; "
+                + "a request left so - by a handoff, an interrupt, the step's time or the handoff's bound - counts what the provider had said it used, and where it had said nothing yet the run's cost is unknown, never naught;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("A turn is one answer of the agent's - a request the provider paused, or one thrown away and asked again, goes on as the same turn - counted against the step's maxTurns but a handoff turn;", prose, StringComparison.Ordinal);
@@ -1195,7 +1204,9 @@ public sealed partial class HelpTests
                 + "part of an answer it had written; at a limit the same model's next key is tried first and every entry the "
                 + "limit covers is passed over until it lifts, a declined request passes over the model's other keys, and one the "
                 + "provider marks about what the prompt asks (`reasoning_extraction`) moves no step. "
-                + $"A handoff asked abandons the request under way and cuts the calls running, each answered `{interrupted}`, then asks the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn;",
+                + $"A handoff asked abandons the request under way and cuts the calls running, each answered `{interrupted}`, then asks the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn; "
+                + $"a side-task's interrupt does the same, each call answered `{cut}`, and ends the run `Cancelled`, the conversation stored to its last whole turn; "
+                + "a request left so - by a handoff, an interrupt, the step's time or the handoff's bound - counts what the provider had said it used, and where it had said nothing yet the run's cost is unknown, never naught;",
             readme,
             StringComparison.Ordinal);
         Assert.Contains($"under the agent's `{DssHarness.Core.Orchestration.OrchestratorLayout.SessionsDirectoryName}/<id>/`, each message", readme, StringComparison.Ordinal);
@@ -1213,6 +1224,9 @@ public sealed partial class HelpTests
             $"{nameof(DssHarness.Core.Agents.Loop.ChatPart)}.{nameof(DssHarness.Core.Agents.Loop.ChatPart.Used)}",
             nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms),
             nameof(DssHarness.Core.Agents.Runtime.AgentTurnCut),
+            $"{nameof(DssHarness.Core.Agents.AgentRun)}.{nameof(DssHarness.Core.Agents.AgentRun.Interrupt)}",
+            $"{nameof(DssHarness.Core.Agents.AgentTurnInterrupt)}.{nameof(DssHarness.Core.Agents.AgentTurnInterrupt.Cut)}",
+            $"{nameof(DssHarness.Core.Agents.AgentCost)}.{nameof(DssHarness.Core.Agents.AgentCost.MissingPrice)}",
             nameof(DssHarness.Core.Agents.AgentModelIds),
             nameof(DssHarness.Core.Agents.AgentEndings),
             nameof(DssHarness.Core.Agents.AgentUsageTally),

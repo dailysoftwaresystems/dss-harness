@@ -613,6 +613,98 @@ public sealed class ToolLoopTests : IDisposable
     }
 
     /// <summary>
+    /// The person's interrupt leaves the request under way where it stands and ends the run Cancelled with what it used:
+    /// what the provider said the request used counted at the model's prices, the partial answer thrown away so the
+    /// conversation holds nothing of it, and no request sent after it. A request whose provider had said nothing of what
+    /// it used leaves the cost unknown, saying why - never nothing.
+    /// </summary>
+    [Fact]
+    public async Task ThePersonsInterrupt_LeavesTheRequestUnderWay_CountsWhatItsProviderSaid_AndEndsCancelled()
+    {
+        var run = Run() with { Interrupt = new AgentTurnInterrupt() };
+        _chat.Reply((_, cancellationToken) => SaidThenSilent(FakeChat.Used(input: 1000, output: 0), () => run.Interrupt!.Interrupt(), cancellationToken));
+
+        // Bounded, so a cut the loop does not honour fails here rather than waiting on the silent request for good.
+        var result = await Ran(run).WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+        Assert.Equal((AgentRunStatus.Cancelled, AgentTurnInterrupt.Cut, 1), (result.Status, result.Error, result.Turns));
+        Assert.Equal((FakeChat.Used(input: 1000, output: 0), new AgentCost(Counted: 0.005m)), (result.Usage!.Total, result.Usage.Cost));
+        Assert.Equal(AgentTurnInterrupt.Cut, Assert.Single(_events.All.OfType<TurnRestarted>()).Why);
+        Assert.Equal([(1, "the run ended Cancelled")], _events.All.OfType<TurnFinished>().Select(finished => (finished.Turn, finished.StopReason)));
+        Assert.Single(_chat.Requests);
+        Assert.Empty(File.ReadAllLines(Path.Combine(_sessions, result.Session!, StoredConversation.ConversationFileName)));
+
+        var unsaid = Run() with { Interrupt = new AgentTurnInterrupt() };
+        var silent = new FakeChat();
+        silent.Hang("half", whenHanging: () => unsaid.Interrupt!.Interrupt());
+
+        var unknown = await Ran(unsaid, chat: silent).WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+        Assert.Equal((AgentRunStatus.Cancelled, AgentTurnInterrupt.Cut), (unknown.Status, unknown.Error));
+        Assert.Equal(
+            (AgentUsage.None, new AgentCost(MissingPrice: $"a request to '{FakeChat.Model}' on WORK_KEY was left before its provider said what it used")),
+            (unknown.Usage!.Total, unknown.Usage.Cost));
+        Assert.Single(silent.Requests);
+
+        // Begins, says what it used and a piece of its answer, then says nothing more - doing what then says once it has.
+        static async IAsyncEnumerable<ChatPart> SaidThenSilent(AgentUsage usage, Action then, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return new ChatPart.Began(FakeChat.Model);
+            yield return new ChatPart.Used(usage);
+            yield return new ChatPart.Text("half");
+            then();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// The person's interrupt while a turn's calls run cuts them as a handoff does - a command in flight answered as
+    /// interrupted, a call queued behind it as not run, each saying the turn was cut - the turn stored whole with those
+    /// answers, and the run ends Cancelled with no request sent after it.
+    /// </summary>
+    [Fact]
+    public async Task ThePersonsInterrupt_WhileCallsRun_CutsThem_StoresTheTurnWhole_AndEndsCancelled()
+    {
+        Write("a.txt", "alpha");
+        var run = Run() with { Interrupt = new AgentTurnInterrupt() };
+        _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.RunCommand, ("program", "tool"), ("args", new JsonArray("go"))), View("c2", "a.txt")));
+
+        var result = await Ran(run, loop: Loop(processes: new Blocking(() => run.Interrupt!.Interrupt()))).WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+        Assert.Equal((AgentRunStatus.Cancelled, AgentTurnInterrupt.Cut, 2), (result.Status, result.Error, result.ToolCalls));
+        Assert.Single(_chat.Requests);
+
+        var stored = File.ReadAllLines(Path.Combine(_sessions, result.Session!, StoredConversation.ConversationFileName));
+        var messages = JsonNode.Parse(Assert.Single(stored))!.AsArray().Select(message => message!.ToJsonString()).ToList();
+        Assert.Equal((false, AgentToolRuntime.Interrupted(AgentTurnInterrupt.Cut)), Answer(messages, "c1"));
+        Assert.Equal((false, AgentToolRuntime.NotRun(AgentTurnInterrupt.Cut)), Answer(messages, "c2"));
+    }
+
+    /// <summary>
+    /// The person's interrupt during the wait before a retry ends the run Cancelled with nothing more sent - the wait cut
+    /// where it stands, or a wait that ended as the interrupt came seen before the next request: what the failed request
+    /// said it used is counted, and the wait - no request under way - leaves no cost unknown.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ThePersonsInterrupt_InARetrysWait_SendsNothingMore_AndEndsCancelled(bool waitCut)
+    {
+        var run = Run() with { Interrupt = new AgentTurnInterrupt() };
+        _chat.Reply(Using(1000, new ChatPart.Failed(new ChatFailure(ChatFailureKind.Transient, "overloaded")))).Answer(FakeChat.Said("never asked"));
+
+        var result = await Ran(run, loop: Loop(wait: (_, cancellationToken) =>
+        {
+            run.Interrupt!.Interrupt();
+            return waitCut ? Task.Delay(Timeout.Infinite, cancellationToken) : Task.CompletedTask;
+        })).WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+        Assert.Equal((AgentRunStatus.Cancelled, AgentTurnInterrupt.Cut), (result.Status, result.Error));
+        Assert.Equal((FakeChat.Used(input: 1000, output: 0), new AgentCost(Counted: 0.005m)), (result.Usage!.Total, result.Usage.Cost));
+        Assert.Single(_chat.Requests);
+    }
+
+    /// <summary>
     /// No tool runs in a handoff turn: each call is refused with the handoff's rule, recorded as every denial is, and the
     /// agent asked again - three answers at most, then the run hands off with none.
     /// </summary>

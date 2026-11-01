@@ -1,7 +1,12 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
+using DssHarness.Core.Agents.ClaudeApi;
 using DssHarness.Core.Agents.ClaudeCode;
+using DssHarness.Core.Agents.Http;
+using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Agents.SideTasks;
+using DssHarness.Core.Agents.ZaiApi;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
@@ -13,6 +18,7 @@ using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
 using DssHarness.Core.Secrets;
+using DssHarness.Core.Web;
 using DssHarness.Core.Web.Search;
 
 namespace DssHarness.Tests;
@@ -368,7 +374,8 @@ public sealed class SideTaskServiceTests
 
     /// <summary>
     /// A repository with the template's providers - and one model of a narrow effort list - over the two fakes, the Claude
-    /// Code a launch starts made ready by <paramref name="updates"/> where one is given.
+    /// Code a launch starts made ready by <paramref name="updates"/> where one is given; or, where <paramref name="apis"/>
+    /// is given, over the API clients it builds in place of the fake that stores its conversations.
     /// </summary>
     private static async Task<(HarnessFactory Harness, TempDirectory Tree, SideTaskService Service, StoredClient Stored, RenderedClient Rendered)> RepoAsync(
         TimeProvider? clock = null,
@@ -376,7 +383,8 @@ public sealed class SideTaskServiceTests
         DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null,
         Func<int, ProcessTableReading>? tree = null,
         Dictionary<string, AgentClientConfig>? clients = null,
-        ClientGates? gates = null)
+        ClientGates? gates = null,
+        Func<HarnessFactory, IReadOnlyList<IAgentClient>>? apis = null)
     {
         var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -424,12 +432,13 @@ public sealed class SideTaskServiceTests
 
         var stored = new StoredClient();
         var rendered = new RenderedClient();
-        var runner = new AgentRunner([stored, rendered], harness.FileSystem, harness.Platform, TimeProvider.System, gates);
+        IReadOnlyList<IAgentClient> serving = apis is null ? [stored, rendered] : [.. apis(harness), rendered];
+        var runner = new AgentRunner(serving, harness.FileSystem, harness.Platform, TimeProvider.System, gates);
         var keys = new AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform);
         var service = new SideTaskService(
             harness.ContextLoader,
             runner,
-            [stored, rendered],
+            serving,
             harness.Platform,
             harness.Identity,
             harness.OrchestrationStore,
@@ -445,6 +454,29 @@ public sealed class SideTaskServiceTests
 
         return (harness, temp, service, stored, rendered);
     }
+
+    /// <summary>
+    /// The two API clients the tool builds in - claude-api and glm - over <paramref name="endpoint"/> in place of the
+    /// network, their waits taken at once; what they open is let go with <paramref name="opened"/>.
+    /// </summary>
+    private static Func<HarnessFactory, IReadOnlyList<IAgentClient>> ApiClients(ApiEndpoint endpoint, List<IDisposable> opened)
+        => harness =>
+        {
+            var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
+            var connection = new ApiConnection(TimeProvider.System, endpoint);
+            var paced = new TempDirectory();
+            var indexes = new DssHarness.Core.Web.Index.WebIndexes(harness.FileSystem, new DssHarness.Core.Web.Index.SitemapFill(harness.FileSystem, fetch, TimeProvider.System, (_, _) => Task.CompletedTask), TimeProvider.System);
+            var pace = new WebSearchPace(harness.FileSystem, () => Path.Combine(paced.Path, "pace.json"), TimeProvider.System, (_, _) => Task.CompletedTask);
+            var search = new HarnessWebSearch(WebSearchKinds.OfThisBuild, fetch, indexes, pace, harness.FileSystem, TimeProvider.System);
+            var host = new AgentToolHost(harness.FileSystem, harness.Platform, harness.GitClient, new PhaseRunner(harness.ProcessRunner, harness.FileSystem, harness.Output), harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), TimeProvider.System, search: search);
+            opened.AddRange([search, indexes, fetch, connection, paced]);
+
+            return
+            [
+                new ClaudeApiClient(harness.FileSystem, host, TimeProvider.System, connection, (_, _) => Task.CompletedTask, () => 0),
+                new ZaiApiClient(harness.FileSystem, host, TimeProvider.System, connection, (_, _) => Task.CompletedTask, () => 0),
+            ];
+        };
 
     /// <summary>
     /// The conversation so far as a new conversation's first message carries it, where every iteration is kept word for
@@ -1707,17 +1739,17 @@ public sealed class SideTaskServiceTests
 
             await StoredClient.SpeakAsync(run, events, "half an answer");
 
-            // The person presses Ctrl+C while the turn runs; the cancelled request is what the turn ends on.
+            // The person presses Ctrl+C while the turn runs; the client cuts the turn where it stands, as every client does.
             interrupts.Pressed();
-            await Task.Delay(TimeSpan.FromSeconds(30), token);
-            return new AgentRunResult(AgentRunStatus.Completed, FinalText: "never reached", Model: run.Model);
+            await run.Interrupt!.Asked.WaitAsync(TimeSpan.FromSeconds(30), token);
+            return new AgentRunResult(AgentRunStatus.Cancelled, Model: run.Model, Error: AgentTurnInterrupt.Cut);
         };
 
         var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "cut", Chat: typed.Chat()) { Interrupts = interrupts }, Token);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal(
-            ["half an answer", "the turn was interrupted; the conversation keeps what was said - ask again, or /exit to leave", "quickly done"],
+            ["half an answer", "the turn was interrupted; the conversation keeps what was said up to its last whole turn - ask again, or /exit to leave", "quickly done"],
             typed.Said);
         Assert.Equal(2, stored.Runs.Count);
         Assert.Equal([AgentRunStatus.Cancelled, AgentRunStatus.Completed], RecordOf(harness, temp, stored.Runs[0].StepDirectory)!.Turns.Select(turn => turn.Status!.Value));
@@ -1738,8 +1770,8 @@ public sealed class SideTaskServiceTests
         {
             await StoredClient.SpeakAsync(run, events, "half an answer");
             interrupts.Pressed();
-            await Task.Delay(TimeSpan.FromSeconds(30), token);
-            return new AgentRunResult(AgentRunStatus.Completed, FinalText: "never reached", Model: run.Model);
+            await run.Interrupt!.Asked.WaitAsync(TimeSpan.FromSeconds(30), token);
+            return new AgentRunResult(AgentRunStatus.Cancelled, Model: run.Model, Error: AgentTurnInterrupt.Cut);
         };
 
         var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "slow", Model: "glm-5.3", Name: "cut-once") { Interrupts = interrupts }, Token);
@@ -1748,6 +1780,153 @@ public sealed class SideTaskServiceTests
         Assert.Equal([$"Records: {LayoutOf(temp, "cut-once").Directory}"], outcome.Details);
         Assert.Equal(SideTaskStatus.Ended, RecordOf(harness, temp, LayoutOf(temp, "cut-once").Directory)!.Status);
         Assert.False(File.Exists(LayoutOf(temp, "cut-once").OwnerFile), "its owner is released");
+    }
+
+    /// <summary>
+    /// A one shot's interrupt on a client that stores its conversations cuts its turn where it stands, as a Claude Code
+    /// launch's is: the request under way is left, what its provider had said it used is the side-task's - counted at the
+    /// model's prices, its key's spend recorded - and it ends interrupted (130); where the provider had said nothing of it
+    /// yet, as Z.AI says it only at its answer's end, the cost is unknown, saying why, and no spend is recorded - never
+    /// naught.
+    /// </summary>
+    [Theory]
+    [InlineData(ClaudeApiClient.ClientName)]
+    [InlineData(ZaiApiClient.ClientName)]
+    public async Task AOneShotsInterrupt_OnAnApiClient_LeavesItsRequest_ItsUseCostAndSpendKept(string client)
+    {
+        var endpoint = new ApiEndpoint();
+        var opened = new List<IDisposable>();
+
+        try
+        {
+            var (harness, temp, service, _, _) = await RepoAsync(apis: ApiClients(endpoint, opened));
+            using var tree = temp;
+            var interrupts = new SideTaskInterrupts();
+            var api = Api.Of(client);
+            endpoint.Then(api.Cut(() => interrupts.Pressed()));
+
+            // Bounded, so a cut the client does not honour fails here rather than waiting on the silent request for good.
+            var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "slow", Model: api.Model, Client: client, Name: "cut-api") { Interrupts = interrupts }, Token).WaitAsync(TimeSpan.FromMinutes(1), Token);
+
+            Assert.Equal((HarnessExit.Cancelled, $"side-task 'cut-api' ended Cancelled: {AgentTurnInterrupt.Cut}"), (outcome.ExitCode, outcome.Message));
+            Assert.Single(endpoint.Asked);
+            var record = RecordOf(harness, temp, LayoutOf(temp, "cut-api").Directory)!;
+            Assert.Equal((api.CutUsed, api.CutCost), (record.InAll!.Total, record.InAll.Cost));
+            Assert.Equal([(AgentRunStatus?)AgentRunStatus.Cancelled], record.Turns.Select(turn => turn.Status));
+            Assert.Equal(
+                api.CutSpend,
+                new AgentKeySpend(harness.FileSystem, harness.OrchestrationStore, TimeProvider.System).Spent(new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path)));
+        }
+        finally
+        {
+            opened.ForEach(each => each.Dispose());
+        }
+    }
+
+    /// <summary>
+    /// The first interrupt of a chat on a client that stores its conversations cuts the turn where it stands and leaves
+    /// the chat open: the request under way is left - what its provider said it used kept as the turn's, an unknown cost
+    /// unknown - its partial answer thrown away, so the next message goes on from the conversation's last whole turn,
+    /// and what both turns used is the side-task's.
+    /// </summary>
+    [Theory]
+    [InlineData(ClaudeApiClient.ClientName)]
+    [InlineData(ZaiApiClient.ClientName)]
+    public async Task TheFirstInterrupt_OnAnApiClient_CutsTheTurnWhereItStands_AndTheChatGoesOn(string client)
+    {
+        var endpoint = new ApiEndpoint();
+        var opened = new List<IDisposable>();
+
+        try
+        {
+            var (harness, temp, service, _, _) = await RepoAsync(apis: ApiClients(endpoint, opened));
+            using var tree = temp;
+            var interrupts = new SideTaskInterrupts();
+            var typed = new Typed(["slow one", "quick one"]);
+            var api = Api.Of(client);
+            endpoint.Then(api.Cut(() => interrupts.Pressed())).Then(api.Answer("quickly done"));
+
+            var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: api.Model, Client: client, Name: "cut-chat", Chat: typed.Chat()) { Interrupts = interrupts }, Token).WaitAsync(TimeSpan.FromMinutes(1), Token);
+
+            Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+            Assert.Equal(
+                ["half an answer", "the turn was interrupted; the conversation keeps what was said up to its last whole turn - ask again, or /exit to leave", "quickly done"],
+                typed.Said);
+            Assert.Equal(2, endpoint.Asked.Count);
+            Assert.DoesNotContain("half an answer", endpoint.Asked[1].Body, StringComparison.Ordinal);
+            var record = RecordOf(harness, temp, LayoutOf(temp, "cut-chat").Directory)!;
+            Assert.Equal([AgentRunStatus.Cancelled, AgentRunStatus.Completed], record.Turns.Select(turn => turn.Status!.Value));
+            Assert.Equal((api.CutUsed.Plus(api.AnswerUsed), api.ChatCost), (record.InAll!.Total, record.InAll.Cost));
+        }
+        finally
+        {
+            opened.ForEach(each => each.Dispose());
+        }
+    }
+
+    /// <summary>
+    /// What a test of an API client's interrupted turn sends and reads back, by the client: the request cut after its
+    /// provider began a piece of its answer - the Claude API having said what it read, Z.AI nothing yet - and a whole
+    /// answer after it.
+    /// </summary>
+    /// <param name="Model">The model the side-task runs on.</param>
+    /// <param name="Cut">The answer that falls silent after half an answer, doing the given action as it does.</param>
+    /// <param name="Answer">A whole answer of the given text.</param>
+    /// <param name="CutUsed">What the cut request is counted to have used.</param>
+    /// <param name="CutCost">What the cut turn cost.</param>
+    /// <param name="CutSpend">What its key is recorded to have spent.</param>
+    /// <param name="AnswerUsed">What the whole answer used.</param>
+    /// <param name="ChatCost">What the cut turn and the whole answer cost together.</param>
+    private sealed record Api(
+        string Model,
+        Func<Action, ApiReply> Cut,
+        Func<string, ApiReply> Answer,
+        AgentUsage CutUsed,
+        AgentCost CutCost,
+        KeyValuePair<(string Provider, string Key), decimal>[] CutSpend,
+        AgentUsage AnswerUsed,
+        AgentCost ChatCost)
+    {
+        public static Api Of(string client)
+        {
+            if (client == ClaudeApiClient.ClientName)
+            {
+                // Sonnet at 2 a million in and 10 out: the cut request's 1000 in and 1 out cost 0.00201, the answer's 10 in
+                // and 5 out 0.00007.
+                return new Api(
+                    "claude-sonnet-5-5",
+                    held => ApiReply.Silent(ClaudeApiFixtures.Events(Begun(1000), TextBegun, Text("half an answer")), held),
+                    text => ApiReply.Stream(ClaudeApiFixtures.Events([Begun(10), TextBegun, Text(text), ("content_block_stop", """{"type":"content_block_stop","index":0}"""), .. ClaudeApiFixtures.End("end_turn")])),
+                    new AgentUsage(1000, 1, 0, 0, 0, 0),
+                    new AgentCost(Counted: 0.00201m),
+                    [new(("anthropic", "ANTHROPIC_API_KEY"), 0.00201m)],
+                    new AgentUsage(10, 5, 0, 0, 0, 0),
+                    new AgentCost(Counted: 0.00208m));
+            }
+
+            var unsaid = new AgentCost(MissingPrice: "a request to 'glm-5.3' on ZAI_API_KEY was left before its provider said what it used");
+
+            return new Api(
+                "glm-5.3",
+                held => ApiReply.Silent(Chunk("half an answer"), held),
+                ZaiApiFixtures.Answer,
+                AgentUsage.None,
+                unsaid,
+                [],
+                new AgentUsage(20, 8, 0, 0, 0, 0),
+                unsaid);
+
+            static (string, string) Begun(long input)
+                => ("message_start", """{"type":"message_start","message":{"id":"msg_000000000000000000000099","type":"message","role":"assistant","model":"claude-sonnet-5-5","content":[],"stop_reason":null,"usage":{"input_tokens":""" + input.ToString(System.Globalization.CultureInfo.InvariantCulture) + ""","output_tokens":1}}}""");
+
+            static (string, string) Text(string text)
+                => ("content_block_delta", """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""" + JsonSerializer.Serialize(text) + "}}");
+
+            static string Chunk(string text)
+                => "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":" + JsonSerializer.Serialize(text) + "}}]}\n\n";
+        }
+
+        private static (string, string) TextBegun => ("content_block_start", """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""");
     }
 
     /// <summary>

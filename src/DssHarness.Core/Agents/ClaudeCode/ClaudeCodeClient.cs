@@ -68,8 +68,8 @@ public sealed class ClaudeCodeClient(
     /// <summary>The id of the host's <c>initialize</c> request, which its answer names.</summary>
     public const string InitializeId = "initialize";
 
-    /// <summary>What a run that is no chat's - a one shot - ends with where its interrupt cut its turn.</summary>
-    public const string TurnCut = "the turn was interrupted where it stood";
+    /// <summary>What a run that is no chat's - a one shot - ends with where its interrupt cut its turn: every client's words for it.</summary>
+    public const string TurnCut = AgentTurnInterrupt.Cut;
 
     /// <summary>The id of the interrupt a launch asks of itself where the person left the chat while a turn ran or a line waited.</summary>
     private const string LeaveInterruptId = "chat-leave";

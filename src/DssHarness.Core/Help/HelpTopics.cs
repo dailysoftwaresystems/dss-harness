@@ -2423,8 +2423,9 @@ public static class HelpTopics
             builder,
             $"In the terminal, by default, {Agents.SideTasks.SideTaskService.RunCommand} holds a chat: the person types a message "
             + "(a line ending in \\ goes on to the next); the agent's text streams as it comes and each action it takes is one "
-            + "line as it is decided, a denial with its rule. Ctrl+C interrupts the agent's turn and leaves the chat open, "
-            + "what was said kept; a second, /exit or the end of input ends it: a turn under way is cut and its result "
+            + "line as it is decided, a denial with its rule. Ctrl+C interrupts the agent's turn where it stands and leaves "
+            + "the chat open, what was said kept - on a client that stores its conversations up to its last whole turn, what the "
+            + "cut request used kept as the turn's; a second, /exit or the end of input ends it: a turn under way is cut and its result "
             + $"read - within {Agents.ClaudeCode.ClaudeCodeClient.InterruptBound.TotalSeconds:0} s - and the lines the agent had not taken are "
             + "dropped, so what the turn used, cost and spent is kept; a launch still waiting its turn at the gate - a limit "
             + "not lifted, its wait said in the chat - is never begun. Each interrupt says whether a turn of the agent's was "
@@ -2434,7 +2435,9 @@ public static class HelpTopics
             + "the rest; a launch at work gives way as the person leaving does, and the lines it never took go on to the "
             + "new one; /records prints where this side-task's records are; /help lists "
             + "these. With --prompt or --prompt-file it answers one message once, prints the agent's final text and exits; "
-            + "Ctrl+C there cuts its turn - a Claude Code launch's at that turn's result, what it used kept - and it ends "
+            + "Ctrl+C there cuts its turn - a Claude Code launch's at that turn's result, an API client's request left where it "
+            + "stands, what the provider had said it used counted and a cost it had said nothing of unknown - what it used "
+            + "kept, and it ends "
             + $"interrupted ({HarnessExit.Cancelled}); "
             + "--json answers with one document instead - and --json without a prompt is a usage error "
             + $"({HarnessExit.UsageError}), for a chat is no document. Where no turn runs - the side-task being set up, its "
@@ -3347,7 +3350,12 @@ public static class HelpTopics
             + "provider marks about what the prompt asks (reasoning_extraction) moves no step. A handoff asked abandons the request under way and cuts the calls "
             + $"running, each answered '{Agents.Runtime.AgentToolRuntime.Interrupted(Agents.Loop.ToolLoop.Pausing)}', then asks "
             + "the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn; "
-            + "a message the engine gives an agent at work is given after "
+            + "a side-task's interrupt does the same, each call answered "
+            + $"'{Agents.Runtime.AgentToolRuntime.Interrupted(Agents.AgentTurnInterrupt.Cut)}', and ends the run Cancelled, the "
+            + "conversation stored to its last whole turn; a request left so - by a handoff, an interrupt, the step's time or "
+            + "the handoff's bound - "
+            + "counts what the provider had said it used, and where it had said nothing yet the run's cost is unknown, "
+            + "never naught; a message the engine gives an agent at work is given after "
             + "the results of the calls it is running, and an answer written while it was is not the step's.";
 
     /// <summary>

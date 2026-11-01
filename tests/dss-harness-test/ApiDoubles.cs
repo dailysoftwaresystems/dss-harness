@@ -23,8 +23,11 @@ internal abstract record ApiReply
     /// <summary>A stream of <paramref name="events"/> whose connection is then reset.</summary>
     public static ApiReply Cut(string events) => new Streamed(events, 5, After.Resets);
 
-    /// <summary>A stream of <paramref name="events"/> that then says nothing more until the request is left.</summary>
-    public static ApiReply Silent(string events) => new Streamed(events, 5, After.Hangs);
+    /// <summary>
+    /// A stream of <paramref name="events"/> that then says nothing more until the request is left - doing
+    /// <paramref name="held"/> once, as it falls silent, where one is given.
+    /// </summary>
+    public static ApiReply Silent(string events, Action? held = null) => new Streamed(events, 5, After.Hangs, held);
 
     /// <summary>
     /// A refusal: <paramref name="status"/> with <paramref name="body"/>, naming its wait by <paramref name="retryAfter"/> or
@@ -54,8 +57,8 @@ internal abstract record ApiReply
         Hangs,
     }
 
-    /// <summary>A streamed answer.</summary>
-    public sealed record Streamed(string Events, int Chunk, After Then) : ApiReply;
+    /// <summary>A streamed answer, and what is done as it falls silent, where it does.</summary>
+    public sealed record Streamed(string Events, int Chunk, After Then, Action? Held = null) : ApiReply;
 
     /// <summary>A refused request, its body cut part way where <paramref name="BodyCut"/> says so.</summary>
     public sealed record Refusing(int Code, string Body, TimeSpan? RetryAfter, string Type, DateTimeOffset? RetryAt, bool BodyCut = false) : ApiReply;
@@ -131,7 +134,7 @@ internal sealed class ApiEndpoint : HttpMessageHandler
 
                 return refused;
             case ApiReply.Streamed streamed:
-                var content = new StreamContent(new Chunked(Encoding.UTF8.GetBytes(streamed.Events), streamed.Chunk, streamed.Then));
+                var content = new StreamContent(new Chunked(Encoding.UTF8.GetBytes(streamed.Events), streamed.Chunk, streamed.Then, streamed.Held));
                 content.Headers.ContentType = new MediaTypeHeaderValue("text/event-stream");
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = content, RequestMessage = request };
             default:
@@ -139,10 +142,11 @@ internal sealed class ApiEndpoint : HttpMessageHandler
         }
     }
 
-    /// <summary>A body read a few bytes at a time, then ended, reset or silent.</summary>
-    private sealed class Chunked(byte[] bytes, int chunk, ApiReply.After then) : Stream
+    /// <summary>A body read a few bytes at a time, then ended, reset or silent - <paramref name="held"/> done once as it falls silent.</summary>
+    private sealed class Chunked(byte[] bytes, int chunk, ApiReply.After then, Action? held = null) : Stream
     {
         private int _at;
+        private Action? _held = held;
 
         public override bool CanRead => true;
 
@@ -171,6 +175,7 @@ internal sealed class ApiEndpoint : HttpMessageHandler
                 case ApiReply.After.Resets:
                     throw new IOException("the connection was reset");
                 case ApiReply.After.Hangs:
+                    Interlocked.Exchange(ref _held, null)?.Invoke();
                     await Task.Delay(Timeout.Infinite, cancellationToken);
                     return 0;
                 default:

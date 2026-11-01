@@ -98,7 +98,8 @@ internal sealed class Working
 
     /// <summary>
     /// Whether <paramref name="client"/> holds a launch open - one that renders its conversations, Claude Code: a chat's
-    /// launch is held open between the person's messages, and an interrupt cuts the turn under way alone.
+    /// launch is held open between the person's messages, an interrupt cutting the turn under way and leaving the launch
+    /// open.
     /// </summary>
     private bool HoldsALaunch(string client)
         => _clients.FirstOrDefault(one => string.Equals(one.Name, client, StringComparison.Ordinal))?.Capabilities.GoesOnWith == AgentConversationHandling.Rendered;
@@ -287,8 +288,9 @@ internal sealed class Working
 
     /// <summary>
     /// One turn of a client that stores its conversations, or of the one shot: one request, the first interrupt cutting
-    /// it where it stands and the turn ending Cancelled - on a client that holds a launch, the launch's turn interrupted
-    /// and its result read, so what it used, cost and spent is the turn's; on any other, the request cancelled.
+    /// it where it stands and the turn ending Cancelled - the run's turn interrupted on every client, never the run
+    /// cancelled, so what it used, cost and spent is the turn's: a launch's turn cut and its result read, the loop's
+    /// request left with what its provider said it used.
     /// </summary>
     private async Task<AgentRunResult> TurnAsync(string message, TurnFront front, CancellationToken cancellationToken)
     {
@@ -296,19 +298,11 @@ internal sealed class Working
         var cut = new AgentTurnInterrupt();
         front.Seen.Take();
 
-        // Told inside the interrupts' lock, and unwired before the source is let go: no press reaches it after. The client
-        // serving the turn now - the walk may have moved it - is the one the press reaches.
+        // Told inside the interrupts' lock, and unwired before the source is let go: no press reaches it after. Whichever
+        // client serves the turn now - the walk may have moved it - the press reaches it as the run's interrupt.
         Interrupts.WhileTurning(count =>
         {
-            if (HoldsALaunch(front.Seen.Client ?? Serving.Client))
-            {
-                cut.Interrupt();
-            }
-            else
-            {
-                _ = turn.CancelAsync();
-            }
-
+            cut.Interrupt();
             return true;
         });
 
@@ -354,14 +348,14 @@ internal sealed class Working
         // from is said once, as it is given (the Compacted event).
         if (result.Status == AgentRunStatus.Cancelled && !cancellationToken.IsCancellationRequested && !Interrupts.Ended.IsCompleted)
         {
-            chat.Say("the turn was interrupted; the conversation keeps what was said - ask again, or /exit to leave");
+            chat.Say($"the turn was interrupted; {KeptWhole} - ask again, or /exit to leave");
         }
         else if (result.Status is not (AgentRunStatus.Completed or AgentRunStatus.Cancelled))
         {
             chat.Say($"the turn ended {result.Status}{(result.Error is null ? string.Empty : ": " + result.Error)}; "
                 + (result.Status == AgentRunStatus.ContextExhausted
                     ? "the next message begins a new conversation, going on from the conversation so far"
-                    : "the conversation keeps what was said"));
+                    : KeptWhole));
         }
     }
 
@@ -928,6 +922,12 @@ internal sealed class Working
 
     /// <summary>What <c>/effort</c> takes to give each model its own default effort again.</summary>
     public const string DefaultEffort = "default";
+
+    /// <summary>
+    /// What a chat on a client that stores its conversations keeps of a turn that did not end as answered: every turn it
+    /// stored whole, and nothing of the request left part way - the message cut there is asked again.
+    /// </summary>
+    public const string KeptWhole = "the conversation keeps what was said up to its last whole turn";
 
     /// <summary>What <c>/help</c> says the chat takes.</summary>
     public const string HelpLine = "/exit leaves the chat; /model <model> and /effort <level>, <code>=<level> ... or default change what the next message is sent with; /records says where this side-task's records are; a line ending in \\ goes on to the next; Ctrl+C interrupts the agent's turn, and a second ends the chat";

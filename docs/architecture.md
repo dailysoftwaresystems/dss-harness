@@ -1893,11 +1893,16 @@ write or a run alone between them.
 The loop the API clients share is `Agents\Loop\ToolLoop`, driven in its own tests by a fake provider: one request
 after another over an `IChatProvider` - the provider's own wire, its form of a conversation's messages and tools, what
 each of its failures is (`ChatFailure`), what a request has used so far (`ChatPart.Used`, counted where it ends
-without its turn), what is heard of an answer that is none of its parts (`ChatPart.Heard`, which keeps the stall bound
+without its turn - and a request the run left once it was sent, by its pause, the person's interrupt, its time or the
+handoff's bound, with nothing of it said yet leaves the run's cost unknown, saying so in `AgentCost.MissingPrice`,
+never naught), what is heard of an answer that is none of its parts (`ChatPart.Heard`, which keeps the stall bound
 from a stream that is alive) - each turn's calls run by the run's
 `AgentToolRuntime` (`AgentToolHost.Open`) through `AgentToolRuntime.RunTurnAsync`, which an `AgentTurnCut` cuts when
-the run pauses or the step runs past its time, every call it cut still answered (`AgentToolRuntime.Interrupted`,
-`AgentToolRuntime.NotRun`); a host that cannot serve the tools a run is offered says why before it starts
+the run pauses, the person interrupts its turn or the step runs past its time, every call it cut still answered
+(`AgentToolRuntime.Interrupted`, `AgentToolRuntime.NotRun`). The person's interrupt (`AgentRun.Interrupt`, an
+`AgentTurnInterrupt`) leaves the request under way as the pause does - its partial answer thrown away, so the
+conversation is stored whole to its last whole turn - and ends the run `Cancelled` (`AgentTurnInterrupt.Cut`) with
+what it used, at the top of the loop or wherever it waits: a gate, a retry's wait, a request, the calls; a host that cannot serve the tools a run is offered says why before it starts
 (`AgentToolHost.Unserved`). The loop owns the bounds - `maxTurns` but the handoff turn's, the budget checked before every
 request against the cost `AgentPrices` counts (a start without the prices it needs refused by the runner, below),
 the duration, the stall - the run's order of entries of its provider and client (the serving model's
@@ -2902,15 +2907,18 @@ the transcript as a person reads it `transcript.md`, `denials.jsonl` and `web.js
 the stored conversation under `sessions/` where its client stores one - named on every exit,
 in text and in `--json`, or said to be none where the command stopped before any were written.
 Its exits are its turn's (`AgentRunResult.ToOutcome`, the one mapping) in one shot - 20 failed, 21
-cut short, 130 interrupted: a one shot's interrupt cuts its turn by the turn's interrupt where its
-client renders its conversations, Claude Code ending the launch at the cut turn's result,
-`Cancelled` (`ClaudeCodeClient.TurnCut`), with what it used, cost and spent kept, and cancels the
-turn's request on any other client - and, in either, 12, 13, 14 or 21 where it could not start; a chat's are 0 however the
+cut short, 130 interrupted: a one shot's interrupt cuts its turn by the turn's interrupt
+(`AgentTurnInterrupt`) on every client, never by cancelling the run - Claude Code ending the launch
+at the cut turn's result, the loop of the two APIs leaving its request where it stands and cutting
+the calls running - each ending `Cancelled` (`AgentTurnInterrupt.Cut`) with what it used, cost and
+spent kept - and, on any client, 12, 13, 14 or 21 where it could not start; a chat's are 0 however the
 person leaves it once it has begun, 130 where two interrupts stop it while it is still being set up
 or opened again. Its interrupts are its own
 (`SideTaskTerminal` over `TerminalSignals`, the one registration of Ctrl+C, SIGTERM and a hang-up,
 with `PointOfNoReturn.ChatsWithAPerson` turning the command line's own handling off for it): the
-first cuts the agent's turn, the second ends the chat as `/exit` does - a launch held open runs under
+first cuts the agent's turn by the run's `AgentTurnInterrupt` on every client - a message to a client
+that stores its conversations ending `Cancelled` with what its request used, the conversation kept to
+its last whole turn (`Working.KeptWhole`, as the chat says it) - the second ends the chat as `/exit` does - a launch held open runs under
 the command's own stop, never the side-task's, so the second cuts its turn, ends its messages and
 waits for its result, what it used, cost and spent kept - each said by whether a turn of the agent's
 was under way to take it (`SideTaskPress.Turning`: for a launch held open, its own turns tell it, so a

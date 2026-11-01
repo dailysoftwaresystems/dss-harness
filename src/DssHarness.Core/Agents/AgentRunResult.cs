@@ -88,12 +88,16 @@ public sealed record AgentServedModel(string Model, int FromTurn);
 /// <summary>
 /// What a run's usage cost, in United States dollars, with where each number is from, kept side by side as
 /// <c>cost.reported</c> and <c>cost.counted</c>: what the client said the launch cost, where it says (Claude Code's
-/// <c>total_cost_usd</c>), and what this tool counted at the configuration's prices - or, where a price was missing,
-/// which one, for a cost no price was there for is unknown and never zero.
+/// <c>total_cost_usd</c>), and what this tool counted at the configuration's prices - or, where it could not count it,
+/// why: the price that was missing, or a request left before its provider said what it used, for a cost nothing counted
+/// is unknown and never zero.
 /// </summary>
 /// <param name="Reported">What the client said the run cost; null where the client says nothing of it, as the two APIs do.</param>
 /// <param name="Counted">What this tool counted at the configuration's prices; null where a price it needed was missing.</param>
-/// <param name="MissingPrice">The price that was missing, where the cost could not be counted: the model and the key to fill; null where it was counted.</param>
+/// <param name="MissingPrice">
+/// Why the cost could not be counted: the price that was missing - the model and the key to fill - or a request left
+/// before its provider said what it used; null where it was counted.
+/// </param>
 public sealed record AgentCost(decimal? Reported = null, decimal? Counted = null, string? MissingPrice = null)
 {
     /// <summary>
@@ -108,7 +112,8 @@ public sealed record AgentCost(decimal? Reported = null, decimal? Counted = null
     /// key and model: the counted cost summed where both parts were counted, else unknown, for a part this tool could not
     /// count leaves the whole uncounted - a missed price or a client that only reports alike; the reported one summed
     /// where either part reports, a part that reports none adding what this tool counted of it, and unknown where a
-    /// part's own is known by neither; the first price missed kept. Null where neither part says or counts anything.
+    /// part's own is known by neither; the first reason a cost could not be counted kept. Null where neither part says or
+    /// counts anything.
     /// </summary>
     /// <param name="first">The first part's cost; null where nothing said or counted it.</param>
     /// <param name="second">The second part's cost; null where nothing said or counted it.</param>
@@ -163,10 +168,11 @@ public sealed record AgentUsageReport(AgentUsage Total, IReadOnlyList<AgentModel
     /// <summary>
     /// A part's cost as the fold reads it: its own, unknown where it used something and nothing said or counted it, and
     /// nothing where it used nothing and no number was said or counted of it - a launch that never began its work leaves
-    /// no cost to know, so it never makes the whole's unknown.
+    /// no cost to know, so it never makes the whole's unknown. A part that says why its cost could not be counted - a
+    /// price missing, a request left before its provider said what it used - is unknown, whatever it was seen to use.
     /// </summary>
     private static AgentCost? CostOf(AgentUsageReport part)
-        => part.Total == AgentUsage.None && part.Cost is not { Reported: not null } and not { Counted: not null }
+        => part.Total == AgentUsage.None && part.Cost is not { Reported: not null } and not { Counted: not null } and not { MissingPrice: not null }
             ? null
             : part.Cost ?? AgentCost.Unknown;
 }

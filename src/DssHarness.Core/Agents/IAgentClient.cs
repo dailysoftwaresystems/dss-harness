@@ -437,17 +437,23 @@ public sealed class AgentMessages
 }
 
 /// <summary>
-/// The signal the engine raises to interrupt the agent's current turn alone, leaving the run - the conversation, the
-/// launch - open: what a person's Ctrl+C asks of a side-task's chat. The turn is cut where it stands; what it had said
-/// stands, and the next message goes on from there.
+/// The signal the engine raises to interrupt the agent's current turn alone, leaving the conversation open: what a
+/// person's Ctrl+C asks of a side-task. The turn is cut where it stands, and the next message goes on from the
+/// conversation as its client keeps it.
 /// </summary>
 /// <remarks>
 /// No bound is kept and nothing is asked of the agent: an interrupt is not a handoff, which asks what the agent leaves.
-/// Where a client cannot interrupt one turn alone, the engine's cancellation of the run is what an interrupt falls back
-/// to.
+/// Every client the tool builds in honours it, what the cut turn used kept: Claude Code interrupts its launch's turn and
+/// reads its result - a chat's launch held open after it, a one shot's run ended <see cref="AgentRunStatus.Cancelled"/>
+/// at it - and the loop of the API clients leaves its request where it stands and cuts the calls running, its run ended
+/// Cancelled with what its provider said the request used counted and a cost it said nothing of unknown, its
+/// conversation stored whole up to its last whole turn and the cut answer thrown away.
 /// </remarks>
 public sealed class AgentTurnInterrupt
 {
+    /// <summary>How a run whose turn the interrupt cut ends, as its error says it.</summary>
+    public const string Cut = "the turn was interrupted where it stood";
+
     private readonly TaskCompletionSource _asked = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Interrupts the agent's current turn.</summary>
@@ -744,7 +750,9 @@ public sealed record AgentRun(
     public bool Chat { get; init; }
 
     /// <summary>
-    /// The signal that interrupts the agent's current turn alone, leaving the run open; null where the engine gave none.
+    /// The signal that interrupts the agent's current turn alone: a chat's launch held open stays open for the next
+    /// message, and any other run ends <see cref="AgentRunStatus.Cancelled"/> with what it used
+    /// (<see cref="AgentTurnInterrupt.Cut"/>); null where the engine gave none.
     /// </summary>
     public AgentTurnInterrupt? Interrupt { get; init; }
 

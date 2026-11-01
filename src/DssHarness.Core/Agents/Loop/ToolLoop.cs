@@ -306,6 +306,10 @@ public sealed class ToolLoop(
         private readonly AgentUsageTally _used = new();
         private readonly List<string> _keysRefused = [];
         private readonly CancellationTokenSource _pause = new();
+
+        // The person's cut of the turn under way (the run's AgentTurnInterrupt): the request under way left where it
+        // stands, the calls running cut, and the run ended Cancelled at the loop's top, with what it used.
+        private readonly CancellationTokenSource _cut = new();
         private readonly string _session = run.Conversation?.Id ?? run.SessionId ?? Guid.NewGuid().ToString("D");
 
         // The run's order on this provider and client: the serving model's keys in the credential's order, then each
@@ -390,10 +394,18 @@ public sealed class ToolLoop(
                 tools);
             using var deadline = _deadline = new ClockLimit(run.Limits.MaxDuration, loop._clock);
             using var pause = _pause;
+            using var interrupted = _cut;
 
             // The run's pause abandons the request under way and cuts the calls running: the handoff is asked at once.
             _ = run.Handoff.WhenAsked.ContinueWith(
                 _ => _pause.TryCancel(),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
+            // The person's interrupt does the same, and the run ends Cancelled: its turn cut where it stands.
+            _ = run.Interrupt?.Asked.ContinueWith(
+                _ => _cut.TryCancel(),
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
@@ -458,6 +470,13 @@ public sealed class ToolLoop(
                 if (PauseAsked())
                 {
                     return await HandOffAsync(stop).ConfigureAwait(false);
+                }
+
+                // The turn cut by the person's interrupt ends the run where it stands: what the conversation holds whole
+                // is stored, what the run used is counted, and the next message goes on from there.
+                if (CutAsked())
+                {
+                    return Ended(AgentRunStatus.Cancelled, AgentTurnInterrupt.Cut);
                 }
 
                 if (_deadline!.HasPassed())
@@ -808,7 +827,7 @@ public sealed class ToolLoop(
 
             for (var tried = 1; ;)
             {
-                if (!_handing && PauseAsked())
+                if (!_handing && (PauseAsked() || CutAsked()))
                 {
                     return new Sent(Left: true);
                 }
@@ -819,7 +838,7 @@ public sealed class ToolLoop(
                 // turns, budget or time.
                 using var left = _handing
                     ? CancellationTokenSource.CreateLinkedTokenSource(stop, limit.Token)
-                    : CancellationTokenSource.CreateLinkedTokenSource(stop, limit.Token, _pause.Token);
+                    : CancellationTokenSource.CreateLinkedTokenSource(stop, limit.Token, _pause.Token, _cut.Token);
                 using var stall = new CancellationTokenSource(Timeout.InfiniteTimeSpan, loop._clock);
                 using var asking = CancellationTokenSource.CreateLinkedTokenSource(left.Token, stall.Token);
                 var parts = 0;
@@ -845,7 +864,7 @@ public sealed class ToolLoop(
                 }
                 catch (OperationCanceledException) when (!stop.IsCancellationRequested && left.IsCancellationRequested)
                 {
-                    return await LeftAsync(0, null).ConfigureAwait(false);
+                    return await LeftAsync(0, null, sent: false).ConfigureAwait(false);
                 }
 
                 using var held = slot;
@@ -930,7 +949,7 @@ public sealed class ToolLoop(
                     }
                     catch (OperationCanceledException) when (!stop.IsCancellationRequested && left.IsCancellationRequested)
                     {
-                        return await LeftAsync(parts, soFar).ConfigureAwait(false);
+                        return await LeftAsync(parts, soFar, sent: true).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) when (!stop.IsCancellationRequested && stall.IsCancellationRequested)
                     {
@@ -1059,13 +1078,13 @@ public sealed class ToolLoop(
                 }
                 catch (OperationCanceledException) when (!stop.IsCancellationRequested && left.IsCancellationRequested)
                 {
-                    return await LeftAsync(0, null).ConfigureAwait(false);
+                    return await LeftAsync(0, null, sent: false).ConfigureAwait(false);
                 }
 
                 // A wait that outlasted the time - its timer's callback late - sends nothing more.
                 if (limit.HasPassed())
                 {
-                    return await LeftAsync(0, null).ConfigureAwait(false);
+                    return await LeftAsync(0, null, sent: false).ConfigureAwait(false);
                 }
 
                 tried++;
@@ -1073,22 +1092,35 @@ public sealed class ToolLoop(
         }
 
         /// <summary>
-        /// The request abandoned by the run itself - its pause, its time, the handoff's bound - what it used counted and
-        /// what it wrote thrown away. The pause outranks the time: the engine asked for the handoff.
+        /// The request abandoned by the run itself - its pause, the person's cut, its time, the handoff's bound - what it
+        /// used counted as far as the provider said it and what it wrote thrown away, so the conversation stays whole up to
+        /// its last whole turn. A request sent whose provider said nothing of what it used leaves the run's cost unknown,
+        /// never nothing: what it read and wrote before it was left is billed all the same. The pause outranks the cut, and
+        /// the cut the time: the engine asked for the handoff, the person for the cut.
         /// </summary>
-        private async Task<Sent> LeftAsync(int parts, AgentUsage? soFar)
+        /// <param name="parts">How many parts of the answer had come.</param>
+        /// <param name="soFar">What the provider said the request used, as far as it said it; null where it said nothing.</param>
+        /// <param name="sent">Whether the request was sent: left at the gate or in a wait, it was not.</param>
+        private async Task<Sent> LeftAsync(int parts, AgentUsage? soFar, bool sent)
         {
             // Left is left: a cost that cannot be counted is said where the run ends, never in place of how.
             if (soFar is { } used)
             {
                 await CountedAsync(used).ConfigureAwait(false);
             }
+            else if (sent)
+            {
+                var unsaid = $"a request to '{Now.Model}' on {Now.Key!.Name} was left before its provider said what it used";
+                await TalliedAsync(Now.Model, AgentUsage.None, new AgentCost(MissingPrice: unsaid)).ConfigureAwait(false);
+                _unknown ??= unsaid;
+            }
 
-            var timedOut = !PauseAsked() && _deadline!.HasPassed();
+            var cut = !PauseAsked() && CutAsked();
+            var timedOut = !PauseAsked() && !cut && _deadline!.HasPassed();
 
             if (parts > 0)
             {
-                await Emit(new TurnRestarted(_handing ? AgentHandoffSignal.BoundPassed : timedOut ? PastItsTime : Pausing)).ConfigureAwait(false);
+                await Emit(new TurnRestarted(_handing ? AgentHandoffSignal.BoundPassed : cut ? AgentTurnInterrupt.Cut : timedOut ? PastItsTime : Pausing)).ConfigureAwait(false);
             }
 
             return timedOut ? new Sent(Ending: TimedOut()) : new Sent(Left: true);
@@ -1386,6 +1418,7 @@ public sealed class ToolLoop(
             }
 
             using var paused = _pause.Token.Register(() => cut.Cut(Pausing));
+            using var interrupted = _cut.Token.Register(() => cut.Cut(AgentTurnInterrupt.Cut));
             using var late = Deadline.Register(() => cut.Cut(PastItsTime));
 
             var results = await Runtime.RunTurnAsync([.. turn.Calls.Select(call => new AgentToolCallRequest(call.Id, call.Name, call.Input))], stop, cut).ConfigureAwait(false);
@@ -1711,6 +1744,17 @@ public sealed class ToolLoop(
             }
 
             return _pause.IsCancellationRequested;
+        }
+
+        /// <summary>Whether the person cut the turn under way: the run's interrupt raised - seen at once - and the cut then set.</summary>
+        private bool CutAsked()
+        {
+            if (run.Interrupt?.Asked.IsCompleted == true)
+            {
+                _cut.TryCancel();
+            }
+
+            return _cut.IsCancellationRequested;
         }
 
         /// <summary>The result with what the whole run used, did and left.</summary>
