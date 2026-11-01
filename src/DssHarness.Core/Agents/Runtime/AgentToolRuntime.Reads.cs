@@ -59,7 +59,15 @@ public sealed partial class AgentToolRuntime
             return Answer.Failed(large);
         }
 
-        var bytes = await files.ReadAllBytesAsync(full, cancellationToken).ConfigureAwait(false);
+        // Read through the file as it was opened, where it stands decided again before a byte is read.
+        var read = await _host.Files.ReadAsync(full, opened => ReadPlace(opened).Denied, cancellationToken).ConfigureAwait(false);
+
+        if (read.Denied is { } moved)
+        {
+            return Answer.Refused(path, moved);
+        }
+
+        var bytes = read.Bytes!;
         var reading = EncodedText.Read(bytes);
 
         if (!reading.IsRead)

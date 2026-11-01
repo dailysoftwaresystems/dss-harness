@@ -501,6 +501,87 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
+    /// A file whose open stands somewhere its path did not lead when it was decided - a link put on its way between the
+    /// check and the open - is decided again where the open file stands before a byte passes: a view, an edit and a search
+    /// read nothing outside the roots or in a Claude Code directory, and a write lands nothing outside the writable roots,
+    /// the file it began removed and the target as it was. Each refusal is recorded as every denial is.
+    /// </summary>
+    [Fact]
+    public async Task AFileWhoseOpenStandsElsewhere_IsDecidedAgain_BeforeAByte()
+    {
+        var claude = Path.Combine(_main, "cc");
+        var secret = Path.Combine(_outside, "id_rsa");
+        var credential = Path.Combine(claude, ".credentials.json");
+        Write("a.txt", "BEGIN plain\n");
+        Write("b.txt", "BEGIN kept\n");
+        var files = new OpenedElsewhere(_harness.FileSystem, new Dictionary<string, string>(StringComparer.Ordinal) { ["a.txt"] = secret, ["b.txt"] = credential }, _outside);
+        var runtime = Open(fileSystem: files, claudeCodeDirectories: [claude]);
+        var a = Path.Combine(_worktree, "a.txt");
+        var b = Path.Combine(_worktree, "b.txt");
+        var c = Path.Combine(_worktree, "c.txt");
+        var policy = new AgentPolicy(_harness.FileSystem, _harness.Platform, PolicyGrounds.Of(_worktree, [_main], [_worktree], [], [claude], [], null, null, null, null));
+
+        string Unread(string asked, string opened, string why) => $"'{asked}' was opened as '{opened}', where a link put on its way after it was decided leads; nothing was read: {why}";
+
+        Assert.Equal(
+            (false, Unread(a, secret, $"'{secret}' is outside the roots of this agent: {_worktree}, {_main}")),
+            Said(await View(runtime, "a.txt")));
+        Assert.Equal((false, Unread(b, credential, policy.Read(credential).Refusal()!.Reason)), Said(await View(runtime, "b.txt")));
+        Assert.Equal(
+            (false, Unread(a, secret, $"'{secret}' is outside the writable roots of this agent: {_worktree}")),
+            Said(await Replace(runtime, "a.txt", "BEGIN", "END")));
+        Assert.Equal(
+            (true, $"no line matches, in {ReportText.Counted(0, "file")} read\n{AgentListing.Refused(2)}"),
+            Said(await Call(runtime, AgentTools.SearchFiles, ("pattern", "BEGIN"))));
+
+        var landing = Path.Combine(_outside, "c.txt");
+        Assert.Equal(
+            (false, $"'{c}' would be written as '{landing}', where a link put on its way after it was decided leads; nothing was written: '{landing}' is outside the writable roots of this agent: {_worktree}"),
+            Said(await Call(runtime, AgentTools.CreateFile, ("path", "c.txt"), ("content", "x"))));
+
+        Assert.Equal(["a.txt", "b.txt"], Directory.GetFiles(_worktree).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+        Assert.Equal(["BEGIN plain\n", "BEGIN kept\n"], [this.Read("a.txt"), this.Read("b.txt")]);
+        Assert.Empty(Directory.GetFiles(_outside));
+        Assert.Equal(4, _events.All.OfType<PermissionDenied>().Count());
+
+        static (bool, string) Said(AgentToolCallResult result) => (result.Ok, result.Text);
+    }
+
+    /// <summary>
+    /// A directory made a real link at the moment a file under it is opened - after the file's path was decided - is met
+    /// by where the open file stands, as the system names it: a view of the file reads nothing from where the link leads,
+    /// and a file written under it lands nothing there, the file it began removed.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryMadeALink_AtAFilesOpen_LeadsNoReadOrWriteOutOfTheRoots()
+    {
+        Write("docs/a.txt", "plain");
+        File.WriteAllText(Path.Combine(_outside, "a.txt"), "SECRET");
+        var docs = Path.Combine(_worktree, "docs");
+        var runtime = Open(fileSystem: new LinkedAtOpen(_harness.FileSystem, docs, _outside));
+        var opened = Path.Combine(_outside, "a.txt");
+
+        var view = await View(runtime, "docs/a.txt");
+
+        Assert.Equal(
+            (false, $"'{Path.Combine(docs, "a.txt")}' was opened as '{opened}', where a link put on its way after it was decided leads; nothing was read: '{opened}' is outside the roots of this agent: {_worktree}, {_main}"),
+            (view.Ok, view.Text));
+
+        // The link is back to the directory it was: a write under it is begun where the link leads at its open.
+        Directory.Delete(docs);
+        Directory.Move(docs + "-was", docs);
+        var landing = Path.Combine(_outside, "b.txt");
+
+        var written = await Call(runtime, AgentTools.CreateFile, ("path", "docs/b.txt"), ("content", "x"));
+
+        Assert.Equal(
+            (false, $"'{Path.Combine(docs, "b.txt")}' would be written as '{landing}', where a link put on its way after it was decided leads; nothing was written: '{landing}' is outside the writable roots of this agent: {_worktree}"),
+            (written.Ok, written.Text));
+        Assert.Equal(["a.txt"], Directory.GetFiles(_outside).Select(Path.GetFileName));
+        Assert.Equal("SECRET", File.ReadAllText(opened));
+    }
+
+    /// <summary>
     /// A recursive delete is refused for one of the agent's roots, for a directory that holds a link - whatever it leads
     /// to left whole - for one that holds a path a rule keeps, and for one past the bound of entries.
     /// </summary>
@@ -1785,6 +1866,52 @@ public sealed class AgentToolRuntimeTests : IDisposable
             => unread.Contains(Path.GetFileName(path)) ? throw new IOException("it is held by another process.") : base.OpenRead(path);
     }
 
+    /// <summary>
+    /// A file system whose open files stand elsewhere than their paths led, as a link put on their way after the check
+    /// would make them: a file named in <paramref name="opened"/> stands at the place it maps it to, and a file an atomic
+    /// write begins stands in <paramref name="begun"/>.
+    /// </summary>
+    private sealed class OpenedElsewhere(IFileSystem inner, IReadOnlyDictionary<string, string> opened, string begun) : PassThroughFileSystem(inner)
+    {
+        public override string FinalPathOf(Stream stream)
+        {
+            var real = base.FinalPathOf(stream);
+            var name = Path.GetFileName(real);
+
+            return opened.TryGetValue(name, out var elsewhere) ? elsewhere
+                : name.Contains(".tmp-", StringComparison.Ordinal) ? Path.Combine(begun, name)
+                : real;
+        }
+    }
+
+    /// <summary>
+    /// A file system that makes <paramref name="directory"/> a real link to <paramref name="target"/> - the directory moved
+    /// aside - the moment a file under it is opened to be read or written, after its path was decided.
+    /// </summary>
+    private sealed class LinkedAtOpen(IFileSystem inner, string directory, string target) : PassThroughFileSystem(inner)
+    {
+        public override Stream OpenRead(string path)
+        {
+            Link(path);
+            return base.OpenRead(path);
+        }
+
+        public override void WriteAtomic(string path, Action<Stream> write)
+        {
+            Link(path);
+            base.WriteAtomic(path, write);
+        }
+
+        private void Link(string path)
+        {
+            if (path.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.Ordinal) && !IsLink(directory))
+            {
+                Directory.Move(directory, directory + "-was");
+                TestLinks.DirectoryLink(directory, target);
+            }
+        }
+    }
+
     /// <summary>A file system whose reads of files under a directory take a while, which counts how many are under way at once.</summary>
     private sealed class SlowReads(IFileSystem inner, string under) : PassThroughFileSystem(inner)
     {
@@ -1811,9 +1938,15 @@ public sealed class AgentToolRuntimeTests : IDisposable
             return new Slow(base.OpenRead(path), () => Interlocked.Decrement(ref _open));
         }
 
+        /// <summary>Where the file a slowed stream wraps stands, as the file system names the stream it opened.</summary>
+        public override string FinalPathOf(Stream opened) => base.FinalPathOf(opened is Slow slow ? slow.Inner : opened);
+
         /// <summary>A stream each read of which waits a little first, and says when it is closed.</summary>
         private sealed class Slow(Stream inner, Action closed) : Stream
         {
+            /// <summary>The stream the file system opened, which this one slows.</summary>
+            public Stream Inner => inner;
+
             public override bool CanRead => true;
 
             public override bool CanSeek => false;

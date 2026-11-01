@@ -178,6 +178,18 @@ public interface IFileSystem
     Stream OpenRead(string path);
 
     /// <summary>
+    /// Where the file <paramref name="opened"/> is open on stands, as the system names the open file itself: its whole path,
+    /// every link on its way followed as they stood when it was opened - whatever was put in place of the file, or of a
+    /// directory above it, after its path was looked at. The one way a caller that decided a path before opening it decides
+    /// again what it holds, before a byte passes. A file the system marks as removed since its open is named where it was
+    /// opened, the mark taken off.
+    /// </summary>
+    /// <param name="opened">A stream this file system opened on a file: one <see cref="OpenRead"/> gave, or the one <see cref="WriteAtomic"/> hands its writer.</param>
+    /// <exception cref="IOException">The system would not name it, or named no file.</exception>
+    /// <exception cref="NotSupportedException">The stream is open on no file this file system opened.</exception>
+    string FinalPathOf(Stream opened);
+
+    /// <summary>
     /// Opens a file of lines that only grows, made where it is not there: read back from any place and cut to a length
     /// while its writer recovers it, and appended to with each write on the disk before the next is taken. Others may
     /// read it while it is open, and no one else may write it, on every system: a second writer, in this process or

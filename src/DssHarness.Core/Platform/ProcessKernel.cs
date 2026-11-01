@@ -49,8 +49,21 @@ public interface IProcessKernel
 /// <inheritdoc cref="IProcessKernel"/>
 public sealed class ProcessKernel : IProcessKernel
 {
-    /// <summary>What Linux writes after a program's path where its file was replaced or removed since it started.</summary>
+    /// <summary>What Linux writes after a link's path under <c>/proc</c> where the file it names was replaced or removed since it was opened or started.</summary>
     private const string DeletedMark = " (deleted)";
+
+    /// <summary>
+    /// <paramref name="target"/>, a link's target under <c>/proc</c> - a program's, an open file's - with the mark Linux
+    /// writes after a file replaced or removed since taken off: the place it was opened or started from, which is what
+    /// every reader of such a link asks.
+    /// </summary>
+    /// <param name="target">The link's target, as the system wrote it.</param>
+    internal static string Unmarked(string target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        return target.EndsWith(DeletedMark, StringComparison.Ordinal) ? target[..^DeletedMark.Length] : target;
+    }
 
     /// <summary>The most <c>proc_pidpath</c> writes: libproc's <c>PROC_PIDPATHINFO_MAXSIZE</c>, four times a path's longest.</summary>
     private const int PathInfoSize = 4 * 1024;
@@ -130,9 +143,7 @@ public sealed class ProcessKernel : IProcessKernel
         // that ended, a zombie or a kernel thread (measured in WSL) -; one that throws for them instead is answered the same.
         try
         {
-            return new FileInfo(Path.Combine(Of(id), "exe")).LinkTarget is { Length: > 0 } target
-                ? target.EndsWith(DeletedMark, StringComparison.Ordinal) ? target[..^DeletedMark.Length] : target
-                : null;
+            return new FileInfo(Path.Combine(Of(id), "exe")).LinkTarget is { Length: > 0 } target ? Unmarked(target) : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -1903,6 +1903,12 @@ table `AgentTools` holds (what a step is offered, what help prints and what runs
 held to its tool's schema (`JsonSchemaSubset`), each path to the agent's roots by `ConfinedPaths` -
 its spelling, its links followed, a write through no link below its root - before the policy is
 asked; reads and searches go through `AgentFiles` (git's listing in a work tree, a walk elsewhere),
+which reads and writes every file's bytes through the file as it was opened (`AgentFiles.ReadAsync`,
+`AgentFiles.Write`), where the open file stands - `IFileSystem.FinalPathOf`, over `OpenedFiles`:
+`GetFinalPathNameByHandleW` on Windows, `/proc/self/fd` on Linux, libproc's `proc_pidfdinfo` on macOS -
+decided again by the same rule before a byte passes, so a link put in place after the check reaches
+nothing refused (what goes by a path alone - a directory listed, made, moved or deleted, a file moved
+or deleted, the rename that puts a written file in place - still meets one, the known limit),
 edits through `EditedText` over `EncodedText` (the encoding rule the graph's `CodeFileText` reads
 by too, its lines cut by `CodeFileText.Spans`), a command through `PhaseRunner` as a contained
 phase - its environment `AgentChildEnvironment`'s, every name the configuration appoints and every
@@ -3333,7 +3339,7 @@ one at a time, writes a node's lines through `EditedText.ReplaceLines` only wher
 handed, keeping the file's encoding, endings and final newline, and answers the card the file's new extract gives. Every
 file `body` reads and `edit` writes is reached through the `ConfinedPaths` the tool is handed (`ConfinedPaths.Within` the
 tree where query-codebase-graph runs it), which resolves each link, so a link out of the tree is neither read nor written
-through. The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
+through - and read and written through `AgentFiles`, where the open file stands decided again by it. The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
 `wholeFile` with `narrow`), and a call given a member its operation does not read, one of the wrong type, or missing one
 it needs, is a usage line (`CodebaseGraphTool.Misused`). No step is given the tool: the tool
 runtime's table does not hold it. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.

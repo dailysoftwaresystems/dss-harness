@@ -14,8 +14,12 @@ namespace DssHarness.Core.Agents.Runtime;
 /// </summary>
 /// <remarks>
 /// Each root is compared as its own file system names it (<see cref="PathCase.In"/>), by its real path - the place a link
-/// to it, or a link along the path asked, leads - so no spelling reaches past a root. Known limit, said in help: a link
-/// put in place between this check and the tool's own act.
+/// to it, or a link along the path asked, leads - so no spelling reaches past a root. A link put in place between this
+/// check and the tool's own act is met at the act where a file's bytes pass: a file is read and written through the
+/// file as it was opened, where the open file stands decided again before a byte is read or written
+/// (<see cref="AgentFiles.ReadAsync"/>, <see cref="AgentFiles.Write"/>). What goes by a path alone still meets such a
+/// link, said in help: a directory listed, made, moved or deleted, a file moved or deleted, and the rename that puts a
+/// written file in place.
 /// </remarks>
 public sealed class ConfinedPaths
 {

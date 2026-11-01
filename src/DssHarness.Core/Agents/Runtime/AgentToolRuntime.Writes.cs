@@ -13,8 +13,11 @@ namespace DssHarness.Core.Agents.Runtime;
 /// </summary>
 public sealed partial class AgentToolRuntime
 {
-    /// <summary><c>create_file</c>: a new file holding the content as given, in UTF-8 with no mark, the directories on its way made.</summary>
-    private async Task<Answer> CreateAsync(JsonObject input, CancellationToken cancellationToken)
+    /// <summary>
+    /// <c>create_file</c>: a new file holding the content as given, in UTF-8 with no mark, the directories on its way made,
+    /// where it lands decided again before a byte is written (<see cref="AgentFiles.Write"/>).
+    /// </summary>
+    private Answer Create(JsonObject input)
     {
         var path = Text(input, "path")!;
         var place = WritePlace(path);
@@ -37,7 +40,11 @@ public sealed partial class AgentToolRuntime
 
         // The directories on its way are made by the write itself.
         var bytes = Utf8Text.Encode(Text(input, "content")!);
-        await files.WriteAllBytesAtomicAsync(full, bytes, cancellationToken).ConfigureAwait(false);
+
+        if (_host.Files.Write(full, bytes, landing => WritePlace(landing).Denied) is { } moved)
+        {
+            return Answer.Refused(path, moved);
+        }
 
         // The agent wrote what it holds, and knows it as well as one it viewed.
         _viewed[full] = Hash(bytes);
@@ -102,7 +109,8 @@ public sealed partial class AgentToolRuntime
     /// <summary>
     /// An edit of the file <c>path</c> names: decided as a write, refused where the file was not viewed or changed since,
     /// read in its encoding, changed by <paramref name="edit"/> - which says why it would not, where it would not - and
-    /// written back whole, in one write.
+    /// written back whole, in one write; read and written through the file as each was opened, where it stands decided
+    /// again as a write before a byte passes (<see cref="AgentFiles.ReadAsync"/>, <see cref="AgentFiles.Write"/>).
     /// </summary>
     private async Task<Answer> EditAsync(JsonObject input, Func<EditedText, string?> edit, CancellationToken cancellationToken)
     {
@@ -127,7 +135,14 @@ public sealed partial class AgentToolRuntime
             return Answer.Failed(large);
         }
 
-        var bytes = await files.ReadAllBytesAsync(full, cancellationToken).ConfigureAwait(false);
+        var read = await _host.Files.ReadAsync(full, opened => WritePlace(opened).Denied, cancellationToken).ConfigureAwait(false);
+
+        if (read.Denied is { } moved)
+        {
+            return Answer.Refused(path, moved);
+        }
+
+        var bytes = read.Bytes!;
 
         if (!_viewed.TryGetValue(full, out var seen))
         {
@@ -154,7 +169,11 @@ public sealed partial class AgentToolRuntime
         }
 
         var written = edited.Bytes();
-        await files.WriteAllBytesAtomicAsync(full, written, cancellationToken).ConfigureAwait(false);
+
+        if (_host.Files.Write(full, written, landing => WritePlace(landing).Denied) is { } landed)
+        {
+            return Answer.Refused(path, landed);
+        }
 
         _viewed[full] = Hash(written);
         Tally.Wrote(full);

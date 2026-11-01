@@ -428,7 +428,7 @@ public sealed partial class AgentToolRuntime : IDisposable
             AgentTools.ViewFile => await ViewAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.FindFiles => await FindAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.SearchFiles => await SearchAsync(input, cancellationToken).ConfigureAwait(false),
-            AgentTools.CreateFile => await CreateAsync(input, cancellationToken).ConfigureAwait(false),
+            AgentTools.CreateFile => Create(input),
             AgentTools.ReplaceInFile => await ReplaceAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.InsertInFile => await InsertAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.CreateDirectory => CreateDirectory(input),

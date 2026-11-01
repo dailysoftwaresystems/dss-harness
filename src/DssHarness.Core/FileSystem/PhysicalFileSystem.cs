@@ -539,6 +539,15 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
         File.SetLastWriteTimeUtc(path, writtenUtc);
     }
 
+    public string FinalPathOf(Stream opened)
+    {
+        ArgumentNullException.ThrowIfNull(opened);
+
+        return opened is FileStream { SafeFileHandle: var handle }
+            ? OpenedFiles.FinalPath(handle)
+            : throw new NotSupportedException($"a {opened.GetType().Name} is open on no file this file system opened, so where it stands cannot be named");
+    }
+
     public Stream OpenRead(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Output;
@@ -12,9 +13,13 @@ namespace DssHarness.Core.Agents.Runtime;
 /// lists nothing - a directory git ignores, or none of git's - the files the directory holds, walked without following a
 /// link. A search reads text alone: a binary file, one past <see cref="MostSearchedBytes"/> and one that is no text this
 /// tool reads are passed over and counted, and one that could not be read is counted apart, with why the first was not.
+/// The one way the tools read and write a file's bytes besides (<see cref="ReadAsync"/>, <see cref="Write"/>): through
+/// the file as it was opened, where it stands decided again before a byte passes. A directory is listed by its path, so
+/// what a link put in place of one since leads to is what it lists - names, never a byte of a file, each file read through
+/// its own open.
 /// </summary>
 /// <param name="git">Lists a work tree's files.</param>
-/// <param name="fileSystem">Walks a directory git does not list, and reads each file searched.</param>
+/// <param name="fileSystem">Walks a directory git does not list, and reads and writes each file.</param>
 /// <param name="clock">Times a pattern on each file's text.</param>
 public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvider clock)
 {
@@ -23,6 +28,9 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
 
     /// <summary>How long a search's pattern may take on one file's text, its lines together, before the search is refused; each line's match bounded by it too.</summary>
     public static readonly TimeSpan PatternBound = TimeSpan.FromSeconds(2);
+
+    /// <summary>The refusal a search's own decision stands for, where it only says whether a place may be read: counted, never said.</summary>
+    private static readonly AgentPolicyAnswer.Denied NotToBeRead = new(ConfinedPaths.RootsRule, AgentPolicySource.Builtin, "a place the reader may not read");
 
     private readonly IGitClient _git = git ?? throw new ArgumentNullException(nameof(git));
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
@@ -166,7 +174,17 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
                     continue;
                 }
 
-                bytes = await _fileSystem.ReadAllBytesAsync(file, cancellationToken).ConfigureAwait(false);
+                // Read through the file as it was opened, where it stands decided again as it was before the open: one a
+                // link put on its way since leads to a place the reader may not read is left out as one it may not.
+                var read = await ReadAsync(file, place => mayRead(place) ? null : NotToBeRead, cancellationToken).ConfigureAwait(false);
+
+                if (read.Bytes is not { } held)
+                {
+                    refused++;
+                    continue;
+                }
+
+                bytes = held;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -221,7 +239,102 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
 
         return new AgentSearch(hits, more, refused, passed, searched, listing, unread, firstUnread);
     }
+
+    /// <summary>
+    /// The bytes of the file at <paramref name="file"/>, read through the file as it was opened - never by its path again -
+    /// once the place the open file stands at (<see cref="IFileSystem.FinalPathOf"/>) is decided again by
+    /// <paramref name="refusal"/>, as the path was decided before the open: a link put in place of the file, or of a
+    /// directory on its way, after that decision reaches nothing the decision refuses. The one way an agent's file tools
+    /// read a file's bytes. A second name of the same file - a hard link - is a place of its own, and decided as one.
+    /// </summary>
+    /// <param name="file">The file, absolute, as it was decided.</param>
+    /// <param name="refusal">Why a place may not be read, by its absolute path; null where it may.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    /// <returns>The bytes; or, where the open file stands at a place <paramref name="refusal"/> refuses, why - nothing read.</returns>
+    /// <exception cref="IOException">The file could not be opened, named or read.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not read it.</exception>
+    public async Task<AgentFileRead> ReadAsync(string file, Func<string, AgentPolicyAnswer.Denied?> refusal, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        ArgumentNullException.ThrowIfNull(refusal);
+
+        var stream = _fileSystem.OpenRead(file);
+
+        await using (stream.ConfigureAwait(false))
+        {
+            var opened = _fileSystem.FinalPathOf(stream);
+
+            if (refusal(opened) is { } denied)
+            {
+                return new AgentFileRead(null, denied with
+                {
+                    Reason = $"'{file}' was opened as '{opened}', where a link put on its way after it was decided leads; nothing was read: {denied.Reason}",
+                });
+            }
+
+            using var copy = new MemoryStream();
+            await stream.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
+
+            return new AgentFileRead(copy.ToArray(), null);
+        }
+    }
+
+    /// <summary>
+    /// Writes <paramref name="bytes"/> to <paramref name="file"/> whole and atomically (<see cref="IFileSystem.WriteAtomic"/>),
+    /// once the place it lands at - the file's name in the directory the file it is written in was opened in, read from
+    /// that open file (<see cref="IFileSystem.FinalPathOf"/>) before a byte is written - is decided again by
+    /// <paramref name="refusal"/>, as the path was decided before: a link put in place of a directory on its way after that
+    /// decision reaches nothing the decision refuses, and the file begun there is removed with nothing in it. The rename
+    /// that then puts the written file in place goes by the path, the one step a link put on the way in the instant after
+    /// the check still reaches. The one way an agent's file tools write a file's bytes.
+    /// </summary>
+    /// <param name="file">The file, absolute, as it was decided.</param>
+    /// <param name="bytes">What it is to hold.</param>
+    /// <param name="refusal">Why a place may not be written, by its absolute path; null where it may.</param>
+    /// <returns>Null where it was written; else why not, the file as it was.</returns>
+    /// <exception cref="IOException">The file could not be written.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not write it.</exception>
+    public AgentPolicyAnswer.Denied? Write(string file, byte[] bytes, Func<string, AgentPolicyAnswer.Denied?> refusal)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        ArgumentNullException.ThrowIfNull(bytes);
+        ArgumentNullException.ThrowIfNull(refusal);
+
+        AgentPolicyAnswer.Denied? refused = null;
+
+        try
+        {
+            _fileSystem.WriteAtomic(file, stream =>
+            {
+                var begun = _fileSystem.FinalPathOf(stream);
+                var landing = Path.Join(Path.GetDirectoryName(begun), Path.GetFileName(file));
+
+                if (refusal(landing) is { } denied)
+                {
+                    refused = denied with
+                    {
+                        Reason = $"'{file}' would be written as '{landing}', where a link put on its way after it was decided leads; nothing was written: {denied.Reason}",
+                    };
+
+                    // Called off before a byte is written: the atomic write removes the file it began, and the target stays as it was.
+                    throw new OperationCanceledException(refused.Reason);
+                }
+
+                stream.Write(bytes);
+            });
+        }
+        catch (OperationCanceledException) when (refused is not null)
+        {
+        }
+
+        return refused;
+    }
 }
+
+/// <summary>A file read for an agent's tool, or why it was not: one or the other.</summary>
+/// <param name="Bytes">What the file holds; null where it was refused.</param>
+/// <param name="Denied">Why it was refused; null where it was read.</param>
+public sealed record AgentFileRead(byte[]? Bytes, AgentPolicyAnswer.Denied? Denied);
 
 /// <summary>The files under a directory, as a listing gives them, and how many it left out by their names.</summary>
 /// <param name="Files">Every file, relative to the directory with forward separators, in ordinal order.</param>

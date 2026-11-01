@@ -45,6 +45,48 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
+    /// An open file is named where it stands, every link on its way followed as they stood at its open: a file opened
+    /// through a directory link is named under the link's target, one written by an atomic write is named in its own
+    /// directory, and one moved while open is named where it went, never by the path another file now holds. A stream on
+    /// no file names nothing.
+    /// </summary>
+    [Fact]
+    public void FinalPathOf_NamesWhereTheOpenFileStands()
+    {
+        using var temp = new TempDirectory();
+        var files = Create();
+        var real = files.ResolveLinks(temp.Path);
+        temp.WriteFile(Path.Combine("target", "a.txt"), "a");
+        temp.WriteFile(Path.Combine("plain", "b.txt"), "b");
+        TestLinks.DirectoryLink(temp.Combine("linked"), temp.Combine("target"));
+
+        using (var opened = files.OpenRead(temp.Combine("linked", "a.txt")))
+        {
+            Assert.Equal(Path.Combine(real, "target", "a.txt"), files.FinalPathOf(opened));
+        }
+
+        using (var opened = files.OpenRead(temp.Combine("plain", "b.txt")))
+        {
+            // The open file moved, and another put at its name: the open file is named where it is, never by its old path.
+            File.Move(temp.Combine("plain", "b.txt"), temp.Combine("plain", "moved.txt"));
+            File.WriteAllText(temp.Combine("plain", "b.txt"), "another");
+
+            Assert.Equal(Path.Combine(real, "plain", "moved.txt"), files.FinalPathOf(opened));
+        }
+
+        string? begun = null;
+        files.WriteAtomic(temp.Combine("target", "c.txt"), stream => begun = files.FinalPathOf(stream));
+
+        Assert.Equal(Path.Combine(real, "target"), Path.GetDirectoryName(begun));
+        Assert.StartsWith("c.txt.tmp-", Path.GetFileName(begun), StringComparison.Ordinal);
+
+        using var memory = new MemoryStream();
+        Assert.Equal(
+            "a MemoryStream is open on no file this file system opened, so where it stands cannot be named",
+            Assert.Throws<NotSupportedException>(() => files.FinalPathOf(memory)).Message);
+    }
+
+    /// <summary>
     /// A file read whole - as bytes or as text - is read while another program holds it open for writing, as a stream read
     /// of it is: a log being appended to among them.
     /// </summary>

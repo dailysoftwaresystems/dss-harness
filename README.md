@@ -976,8 +976,11 @@ device's prefix, a device's name (`CON`, `NUL`, `COM1` and the rest), a drive's 
 (`C:x`) or an alternate data stream -
 its links followed (one whose links cannot be followed refused as undecided) and held to the
 agent's roots: a read inside one of them, a write inside a
-writable one and through no link below it (a link put in place between the check and the act is
-the known limit); then the policy is asked of it, a deleting or moving tool a write to every path it
+writable one and through no link below it (a file is read and written through the file as it was
+opened, where the open file stands decided again before a byte passes, so a link put in place
+between the check and the act reaches nothing refused; what goes by a path alone - a directory
+listed, made, moved or deleted, a file moved or deleted, and the rename that puts a written file in
+place - is where such a link is the known limit); then the policy is asked of it, a deleting or moving tool a write to every path it
 touches, at both ends of a move. A directory deleted or moved is refused where it is a root, holds a link,
 holds a path that may not be written or holds more than 2,000 entries. A file past 16 MiB is
 neither viewed nor edited, and one past 2 MiB is passed over by search_files - a command reads or searches it. A replace or an insert needs
