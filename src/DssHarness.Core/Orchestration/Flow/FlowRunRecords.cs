@@ -563,16 +563,14 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             _context.DefinitionDigest,
             _context.Inputs,
             snapshot.Status.ToString(),
-            new FlowBudgetRecord(snapshot.Spent.Usd, snapshot.Spent.Tokens, snapshot.Spent.Minutes, snapshot.Spent.Uncounted, snapshot.Spent.ReserveMetAt),
+            snapshot.Spent,
             snapshot.BudgetGranted,
             [.. snapshot.Steps.Select(StepRecordOf)],
             [.. snapshot.Next],
             _context.StartedAt,
             _context.StartCommit,
             _context.Branch,
-            snapshot.Pause is { } pause
-                ? new FlowPauseRecord(pause.Cause, pause.All, pause.BeganAt, [.. pause.Handoffs], pause.CompletedAt)
-                : null,
+            snapshot.Pause,
             snapshot.Redirects,
             snapshot.Hold);
     }

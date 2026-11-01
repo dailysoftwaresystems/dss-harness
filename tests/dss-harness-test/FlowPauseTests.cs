@@ -2263,7 +2263,7 @@ public sealed class FlowPauseTests
         var runner = new FakeRunner();
         var thinking = runner.Hold("think", hearsTheStop: false);
         var limitStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        FlowBudgetSpent? spent = null;
+        FlowBudgetRecord? spent = null;
         var records = new RecordsWatch(
             (_, snapshot, _, _) => spent = snapshot.Spent,
             (_, detail) => { if (detail == "passed its timeoutMinutes (5): stopped") { limitStopped.TrySetResult(); } });

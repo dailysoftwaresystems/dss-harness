@@ -2634,7 +2634,10 @@ to be withdrawn. A triage's answer is
 listed and counted before its end is recorded, so the end's one write carries the run's file of
 issues (`FlowSnapshot.Issues`) in the one order; a crash before that file leaves the end written, and
 the resume lists the issue from the triage's answer - once, for one the list already holds the same in
-all but its id and time is not listed again. Each record is written before what follows from it - a question before the record of the
+all but its id and time is not listed again. A change's snapshot holds the run by value - what was spent
+(`FlowBudgetSpent.Recorded`) and the pause (`FlowPauseState.Recorded`) taken as they stood, never the engine's own
+objects - so a write a session's start holds, made once the session goes on, says the run as it stood when the change
+was taken, never paired with a grant or a mark that came since. Each record is written before what follows from it - a question before the record of the
 step that waits on it, an answer before what it changes, a visit with what raised it, a failure
 owed until it is decided, every visit a redirect leaves marked `leftBy` before the redirect leaves
 the run's records, and a handler a redirect leaves before it ended marked `left` in its source's

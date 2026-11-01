@@ -801,13 +801,15 @@ public enum FlowChangeKind
 /// <summary>
 /// The run whole, as the coordinator holds it, handed to the records at every change: everything <c>flow.json</c> and
 /// <c>workflow.json</c> say, and each step's own record. The records own nothing of the graph; this is the whole of
-/// what they are told, and they are written from it, in the one order the run's law names.
+/// what they are told, and they are written from it, in the one order the run's law names. It holds the run by value -
+/// nothing the engine changes after - so a write held while a session's start is, and made later, says the run exactly
+/// as it stood when the change was taken.
 /// </summary>
 /// <param name="Status">How the run stands.</param>
 /// <param name="EndedAt">When the run ended, where a session ended it; null while it runs.</param>
-/// <param name="Spent">What the run's reasoning has spent against its budget.</param>
+/// <param name="Spent">What the run's reasoning had spent against its budget when the change was taken.</param>
 /// <param name="BudgetGranted">How many times the budget was answered more.</param>
-/// <param name="Pause">The safe pause the run is under or was ended by; null where none.</param>
+/// <param name="Pause">The safe pause the run was under or was ended by when the change was taken; null where none.</param>
 /// <param name="Steps">Every step instance, in the order the run made them.</param>
 /// <param name="Next">The steps that would start now, in the order they would start.</param>
 /// <param name="WaitingOn">The questions the run holds open, in the order they were raised.</param>
@@ -822,9 +824,9 @@ public enum FlowChangeKind
 public sealed record FlowSnapshot(
     FlowRunStatus Status,
     DateTimeOffset? EndedAt,
-    FlowBudgetSpent Spent,
+    FlowBudgetRecord Spent,
     int BudgetGranted,
-    FlowPauseState? Pause,
+    FlowPauseRecord? Pause,
     IReadOnlyList<FlowSnapshotStep> Steps,
     IReadOnlyList<string> Next,
     IReadOnlyList<string> WaitingOn,

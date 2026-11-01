@@ -71,6 +71,12 @@ public sealed class FlowBudgetSpent
     /// </summary>
     public int? ReserveMetAt { get; internal set; }
 
+    /// <summary>
+    /// What was spent as it stands now, as <c>flow.json</c> holds it: a value, so a snapshot taken now and written later -
+    /// held while a session's start is - says the run as it stood when it was taken, never what was spent since.
+    /// </summary>
+    public FlowBudgetRecord Recorded() => new(Usd, Tokens, Minutes, Uncounted, ReserveMetAt);
+
     /// <summary>Charges one part of the run's reasoning - a turn of a reason step, an advice - by the one fold of its dollars.</summary>
     /// <param name="tokens">The tokens it used.</param>
     /// <param name="dollars">What it cost, or why that could not be counted.</param>
@@ -139,4 +145,10 @@ public sealed class FlowPauseState
         All = all;
         BeganAt = beganAt;
     }
+
+    /// <summary>
+    /// The pause as it stands now, as <c>flow.json</c> holds it: a value, so a snapshot taken now and written later says
+    /// the pause as it stood when it was taken, never a handoff written or a completion since.
+    /// </summary>
+    public FlowPauseRecord Recorded() => new(Cause, All, BeganAt, [.. _handoffs], CompletedAt);
 }

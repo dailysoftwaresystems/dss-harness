@@ -10221,12 +10221,14 @@ public sealed class FlowCoordinator
         var walk = AdmissionWalk();
         var decided = walk.ToDictionary(decision => decision.Instance);
 
+        // Every member taken by value - what was spent and the pause among them - so a write held while a session's start
+        // is says the run as it stood here, never paired with what changed before it was made.
         return new FlowSnapshot(
             Status,
             _endedAt,
-            _spent,
+            _spent.Recorded(),
             _budgetGranted,
-            _pause,
+            _pause?.Recorded(),
             [.. _created.Select(instance => SnapshotStepOf(instance, decided))],
             [.. walk.Where(decision => decision.Starts).Select(decision => decision.Instance.Id)],
             waiting,

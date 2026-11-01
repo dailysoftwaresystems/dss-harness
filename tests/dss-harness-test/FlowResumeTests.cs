@@ -3168,6 +3168,74 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// A write a session's start holds says the run exactly as it stood when its change was taken: what was spent, and the
+    /// pause, held by value beside the grants of that moment, never what changed before the write was made. A run paused
+    /// on its budget's question is offered more between sessions, and a runner that outlived its attempt then reports a
+    /// turn with no cost: the next session's start holds its writes, the answer raises the grant, the late turn meets the
+    /// reserve under the new grant - and the held writes are made as they stood, the session going on to ask again, never
+    /// refused as a record whose reserve was met past the grants it holds.
+    /// </summary>
+    [Fact]
+    public async Task AWriteHeldAtASessionsStart_SaysTheRunAsItStood_NeverWhatWasSpentSince()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 50
+              reservePercent: 10
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: after
+                type: orient
+                dependsOn: [think]
+            """);
+        IFlowRunEvents? kept = null;
+        var runner = new Runner().On("think", run =>
+        {
+            if (kept is null)
+            {
+                kept = run.Events;
+                run.Events.Used(tokens: 500, usd: null, uncounted: "no price for the first turn");
+            }
+
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var written = new List<FlowSnapshot>();
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: new Intercepted(records, (_, _, _, snapshot) => written.Add(snapshot)));
+            var first = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            var asked = Assert.Single(coordinator.OpenQuestions);
+
+            Assert.Equal((FlowRunStatus.Paused, "runBudget"), (first.Status, asked.Kind));
+
+            // An answer offered between sessions, then a turn a runner that outlived its attempt reports with no cost.
+            var offered = coordinator.OfferAnswerAsync(asked.Id, "more");
+            kept!.Used(10, null, "a late turn came with no cost");
+            written.Clear();
+
+            var second = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowHandedOver.Taken, await offered.WaitAsync(Bound, Token));
+            Assert.Equal(FlowRunStatus.Paused, second.Status);
+            Assert.Equal(["q1 runBudget answered more", "q2 runBudget open "], coordinator.Questions.Select(question => $"{question.Id} {question.Kind} {question.State} {string.Join("/", question.Given.Select(given => given.Answer))}"));
+        }
+
+        // The session's first write, held at its start, keeps the run as it stood then: no reserve met past the grant it holds.
+        Assert.Equal((500L, "no price for the first turn", (int?)0, 0), (written[0].Spent.Tokens, written[0].Spent.Uncounted, written[0].Spent.ReserveMetAt, written[0].BudgetGranted));
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+
+        Assert.Equal((1, 1, "no price for the first turn", 510L), (flow.Spent.ReserveMetAt, flow.BudgetGranted, flow.Spent.Uncounted, flow.Spent.Tokens));
+    }
+
+    /// <summary>
     /// The grant a run's reserve was met under is read strictly: one below the first grant, or past the grants the run
     /// was given, is no record; none at all is a run whose reserve nothing met past its count, as every record written
     /// before the mark was kept is read.

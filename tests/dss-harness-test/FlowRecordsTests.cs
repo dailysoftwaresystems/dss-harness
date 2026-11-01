@@ -634,7 +634,7 @@ public sealed class FlowRecordsTests
 
     /// <summary>A snapshot of a run holding <paramref name="steps"/>, as the coordinator hands one to its records.</summary>
     private static FlowSnapshot Snapshot(IReadOnlyList<FlowSnapshotStep> steps)
-        => new(FlowRunStatus.Running, null, new FlowBudgetSpent(), 0, null, steps, [], []);
+        => new(FlowRunStatus.Running, null, new FlowBudgetRecord(0, 0, 0), 0, null, steps, [], []);
 
     /// <summary>One step of a snapshot, as little as a record of it needs.</summary>
     private static FlowSnapshotStep StepOf(string instance, FlowInstanceState state, FlowHandoff? handoff = null)
