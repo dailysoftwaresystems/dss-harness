@@ -243,9 +243,10 @@ public sealed record FlowNotDelivered(string For, string Why);
 /// </param>
 /// <param name="AskedAtBound">
 /// The loop whose bound question carries the work the update owes it, where the run had been given every iteration
-/// <c>amend.maxAddedIterations</c> allows when the work was owed: no iteration is added for it, the loop asks at its
-/// bound as it would without it, and the person's answer decides whether the loop runs on to carry it. Written once, as
-/// the loop is found at its bound, so no later session carries the work again; null where no loop was asked for it.
+/// <c>amend.maxAddedIterations</c> allows when the work was owed: no iteration is added for it, the loop reaches its
+/// bound and asks whatever its until says, and the person's answer decides whether the loop runs on to carry it.
+/// Written once that question is asked, never before, so no later session runs again a loop its answer ended; null
+/// where no loop was asked for it.
 /// </param>
 public sealed record FlowUpdateEntry(
     string Id,
@@ -489,6 +490,13 @@ public static class FlowUpdateGates
                 return null;
             }
 
+            if (RoundNotOpened(group, steps, updates) is { } checkedRound && updates.First(update => update.AddedIteration == checkedRound) is var adding)
+            {
+                // A round added whose check has run opens with the work that check was handed: the change joins it once
+                // it has opened.
+                return $"run '{run}' has checked the work of {FlowReports.IterationSaidOf(checkedRound)}, which update {adding.Id} added, and that round opens with that work alone: nothing would carry the change out before it has opened. Give the {what} again once it has opened, and it joins it";
+            }
+
             return $"run '{run}' is past the work items of '{group}', with no loop around it: its last round has ended, and {why} - nothing would carry the change out. Start a run for the {what} once this one has ended";
         }
 
@@ -517,8 +525,10 @@ public static class FlowUpdateGates
     /// counted by the rounds the updates' entries name, never by the group's visits, which a redirect adds to as well -
     /// and only where every group around it draws again: one still open, or one that ended done, which is in progress
     /// again for the round. One that ended failed, skipped or never run draws nothing more (<see cref="AroundEnded"/>).
-    /// A round an update added that has not opened yet runs for every change given before it opens, which joins it
-    /// (<see cref="PendingRound"/>): the work owed to the group is handed whole to the check that opens it.
+    /// A round an update added that has not opened yet runs for every change given before the check that opens it has
+    /// started, which joins it (<see cref="PendingRound"/>): the work owed to the group is handed whole to that check.
+    /// Once the check has started, the round opens with the work it was handed alone, and no round more is run for a
+    /// change before it has opened.
     /// </summary>
     /// <param name="definition">The definition as the run began with it, whose <c>amend</c> block bounds the rounds.</param>
     /// <param name="group">The path of the work-item group.</param>
@@ -534,9 +544,11 @@ public static class FlowUpdateGates
             return ended;
         }
 
-        if (PendingRound(group, steps, updates) is not null)
+        if (RoundNotOpened(group, steps, updates) is { } added)
         {
-            return null;
+            return PendingRound(definition, group, steps, updates) is not null
+                ? null
+                : $"{FlowReports.IterationSaidOf(added)}, which an update added, has been checked with the work it carries, and opens with that alone";
         }
 
         var allowed = definition.Amend?.AddedIterationsAllowed ?? 0;
@@ -550,14 +562,14 @@ public static class FlowUpdateGates
     /// The round a plan update added to the work-item group at <paramref name="group"/>, which has no loop around it,
     /// that has not opened yet, by the id of the group's visit it will be - the visit an update's entry names
     /// (<see cref="FlowUpdateEntry.AddedIteration"/>) and the run's steps do not hold yet; null where none waits. None
-    /// waits where a group around it draws nothing more, for that round never opens (<see cref="AroundEnded"/>). The one
-    /// owner of that rule: the gates and <see cref="NoRoundMore"/> read it, so a change given while such a round waits
-    /// joins it, and the engine reads it where it adds a round, adding none while one waits.
+    /// waits where a group around it draws nothing more, for that round never opens (<see cref="AroundEnded"/>). The
+    /// engine reads it where it adds a round, adding none while one waits, and where a resume draws the group again for
+    /// the round an update's entry names.
     /// </summary>
     /// <param name="group">The path of the work-item group.</param>
     /// <param name="steps">Every step instance the run holds, each by its instance's id.</param>
     /// <param name="updates">Every plan update the run has taken.</param>
-    public static string? PendingRound(string group, IReadOnlyList<FlowStepAt> steps, IReadOnlyList<FlowUpdateEntry> updates)
+    public static string? RoundNotOpened(string group, IReadOnlyList<FlowStepAt> steps, IReadOnlyList<FlowUpdateEntry> updates)
     {
         ArgumentNullException.ThrowIfNull(group);
         ArgumentNullException.ThrowIfNull(steps);
@@ -568,6 +580,68 @@ public static class FlowUpdateGates
             : updates.Select(update => update.AddedIteration).FirstOrDefault(added => added is not null
                 && string.Equals(FlowInstanceId.PathOf(added), group, StringComparison.Ordinal)
                 && !steps.Any(step => string.Equals(step.Instance, added, StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// The round a plan update added to the work-item group at <paramref name="group"/> that a change given now joins:
+    /// one that has not opened yet (<see cref="RoundNotOpened"/>) and whose opening check - the visit of the check that
+    /// opens the group's rounds drawn after the group's newest visit, which the steps hold in the order the run made
+    /// them - has not started, so it is still to be handed the work owed to the group, this change's among it; null
+    /// where none is. The one owner of that rule: the gates, <see cref="NoRoundMore"/> and so the engine read it.
+    /// </summary>
+    /// <param name="definition">The definition, whose declarations say which check opens the group's rounds.</param>
+    /// <param name="group">The path of the work-item group.</param>
+    /// <param name="steps">Every step instance the run holds, in the order the run made them.</param>
+    /// <param name="updates">Every plan update the run has taken.</param>
+    public static string? PendingRound(WorkflowDefinition definition, string group, IReadOnlyList<FlowStepAt> steps, IReadOnlyList<FlowUpdateEntry> updates)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        if (RoundNotOpened(group, steps, updates) is not { } added)
+        {
+            return null;
+        }
+
+        var parent = ParentOf(group);
+
+        if (StepOf(definition, group) is not { } declared
+            || OpeningCheckOf(parent is null ? definition.Steps : StepOf(definition, parent)?.Steps ?? [], declared) is not { } check)
+        {
+            return added;
+        }
+
+        var checkPath = parent is null ? check.Name : $"{parent}.{check.Name}";
+        var newest = -1;
+
+        for (var at = 0; at < steps.Count; at++)
+        {
+            if (steps[at] is { Group: true, Index: null } visit && string.Equals(visit.Step, group, StringComparison.Ordinal))
+            {
+                newest = at;
+            }
+        }
+
+        return steps.Skip(newest + 1).Any(step => string.Equals(step.Step, checkPath, StringComparison.Ordinal) && step.State != nameof(FlowInstanceState.NotStarted))
+            ? null
+            : added;
+    }
+
+    /// <summary>
+    /// The <c>validate-plan</c> step among <paramref name="siblings"/> whose output the <c>forEach</c> of the work-item group
+    /// <paramref name="group"/> reads - the check that opens its rounds, which is handed the work plan updates owe them;
+    /// null where the group expands from anything else. The one owner of that rule, for the engine and the gates.
+    /// </summary>
+    /// <param name="siblings">The declarations beside the group.</param>
+    /// <param name="group">The work-item group's declaration.</param>
+    public static WorkflowStep? OpeningCheckOf(IReadOnlyList<WorkflowStep> siblings, WorkflowStep group)
+    {
+        ArgumentNullException.ThrowIfNull(siblings);
+        ArgumentNullException.ThrowIfNull(group);
+
+        return group.ForEach is { } items
+            ? siblings.FirstOrDefault(step => step.Type == "validate-plan"
+                && WorkflowExpressions.ReadsOf(items).Any(read => string.Equals(read.Root, step.Name, StringComparison.Ordinal)))
+            : null;
     }
 
     /// <summary>

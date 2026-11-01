@@ -326,7 +326,11 @@ public sealed class FlowUpdatesTests
             steps:
               - name: rounds
                 steps:
+                  - name: check
+                    type: validate-plan
+                    items: 'plan.items'
                   - name: items
+                    dependsOn: [check]
                     forEach: 'check.items'
                     steps:
                       - name: build
@@ -348,11 +352,25 @@ public sealed class FlowUpdatesTests
         Assert.Null(FlowUpdateGates.Refused(one, Rounds("Running", "Done", "Done"), Added(0), FlowUpdateCauses.Amendment));
 
         // The round an update added that has not opened yet - its entry names a visit the run does not hold - takes the
-        // change, which joins it, though it is the one round the allowance lets updates add.
+        // change, which joins it, though it is the one round the allowance lets updates add: until the check that opens
+        // it - the check's visit drawn after the group's newest - has started, for that check is handed the work.
         Assert.Null(FlowUpdateGates.Refused(one, Rounds("Running", "Done"), Added(1), FlowUpdateCauses.Amendment));
-        Assert.Equal("rounds.items+2", FlowUpdateGates.PendingRound("rounds.items", Steps(Rounds("Running", "Done")), Added(1).Updates));
-        Assert.Null(FlowUpdateGates.PendingRound("rounds.items", Steps(Rounds("Running", "Done", "Running")), Added(1).Updates));
-        Assert.Null(FlowUpdateGates.PendingRound("rounds.items", Steps(Rounds("Failed", "Done")), Added(1).Updates));
+        Assert.Null(FlowUpdateGates.Refused(one, Checked(Rounds("Running", "Done"), "NotStarted"), Added(1), FlowUpdateCauses.Amendment));
+        Assert.Equal("rounds.items+2", FlowUpdateGates.PendingRound(one, "rounds.items", Steps(Rounds("Running", "Done")), Added(1).Updates));
+        Assert.Equal("rounds.items+2", FlowUpdateGates.PendingRound(one, "rounds.items", Steps(Checked(Rounds("Running", "Done"), "NotStarted")), Added(1).Updates));
+        Assert.Null(FlowUpdateGates.PendingRound(one, "rounds.items", Steps(Checked(Rounds("Running", "Done"), "Done")), Added(1).Updates));
+        Assert.Null(FlowUpdateGates.PendingRound(one, "rounds.items", Steps(Rounds("Running", "Done", "Running")), Added(1).Updates));
+        Assert.Null(FlowUpdateGates.PendingRound(one, "rounds.items", Steps(Rounds("Failed", "Done")), Added(1).Updates));
+
+        // Once that check has started, the round opens with the work it was handed alone: a change is refused until the
+        // round has opened, whatever the allowance leaves.
+        Assert.Equal("rounds.items+2", FlowUpdateGates.RoundNotOpened("rounds.items", Steps(Checked(Rounds("Running", "Done"), "Done")), Added(1).Updates));
+        Assert.Equal(
+            "run 'r1' has checked the work of round 2 of 'rounds.items', which update u1 added, and that round opens with that work alone: nothing would carry the change out before it has opened. Give the request again once it has opened, and it joins it",
+            FlowUpdateGates.Refused(one with { Amend = one.Amend! with { MaxAddedIterations = 2 } }, Checked(Rounds("Running", "Done"), "Running"), Added(1), FlowUpdateCauses.Amendment));
+        Assert.Equal(
+            "round 2 of 'rounds.items', which an update added, has been checked with the work it carries, and opens with that alone",
+            FlowUpdateGates.NoRoundMore(one, "rounds.items", Steps(Checked(Rounds("Running", "Done"), "Done")), Added(1).Updates));
 
         // The newest round has ended and no round more is run - the one added, or its own where none may be added.
         Assert.Equal(
@@ -367,6 +385,10 @@ public sealed class FlowUpdatesTests
             "run 'r1' is past the work items of 'rounds.items', with no loop around it: its last round has ended, and 'rounds', the group around it, ended failed and draws nothing more - nothing would carry the change out. Start a run for the request once this one has ended",
             FlowUpdateGates.Refused(one, Rounds("Failed", "Failed"), Added(0), FlowUpdateCauses.Amendment));
     }
+
+    /// <summary>The run's state of <paramref name="flow"/> with the check that opens a round drawn once more after its rounds, standing as <paramref name="state"/> says.</summary>
+    private static FlowFile Checked(FlowFile flow, string state)
+        => flow with { Steps = [.. flow.Steps, new FlowStepRecord("rounds.check+2", "rounds.check", false, state, 1, 2, [], [])] };
 
     /// <summary>The steps of <paramref name="flow"/> as the gates read them, each by its instance's id.</summary>
     private static IReadOnlyList<FlowStepAt> Steps(FlowFile flow)

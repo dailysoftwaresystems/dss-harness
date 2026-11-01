@@ -1383,7 +1383,7 @@ public sealed class FlowCoordinator
         // from its entry, as the update's end carries it: a crash between the update's done entry and its carry leaves
         // it to this session - a loop that ended runs again, and the group is given its round - and what was carried
         // already is left as it stands, by what its entry says: the iteration or round it added, or that its loop's bound
-        // was asked for it (IterationOwedBy), whose answer may have ended the loop for good.
+        // was asked for it (ReopensFor), whose answer may have ended the loop for good.
         CarryWhatTheLoopsOwe();
 
         foreach (var done in _updates.Updates.Where(update => update is { State: FlowUpdateStates.Done, AddedIteration: null } && update.ThePieces.Any(piece => piece.IsOwed)).ToList())
@@ -4933,6 +4933,10 @@ public sealed class FlowCoordinator
                 "loopBound",
                 $"'{instance.Id}' has run {iteration - 1} iterations and its until still reads false; {said}{(instance.ExtraIterations > 0 ? $", and {instance.ExtraIterations.ToString(System.Globalization.CultureInfo.InvariantCulture)} more were given by its answers" : string.Empty)}",
                 WorkflowValidator.AnswersOf["loopBound"]);
+
+            // The work plan updates owe the loop is the question's to carry from here: each owing entry says so once the
+            // question is written.
+            LeaveToTheBound(instance);
             return false;
         }
 
@@ -5052,14 +5056,45 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Whether <paramref name="update"/> owes <paramref name="loop"/> its next iteration: it is done, it placed work
     /// owed to the loop, a piece of it is owed still - by the piece's own state (<see cref="FlowUpdatePiece.IsOwed"/>),
-    /// for a changed piece against an item that ended is owed though the instance that ended bears its name - and its
-    /// entry does not say the loop's bound was asked for it already (<see cref="FlowUpdateEntry.AskedAtBound"/>): that
-    /// work is the bound question's to carry, and a loop that ended on its answer is never run again for it.
+    /// for a changed piece against an item that ended is owed though the instance that ended bears its name. Work left to
+    /// the loop's bound (<see cref="FlowUpdateEntry.AskedAtBound"/>) is owed still: a loop that goes on - an answer gave
+    /// it more - carries it whatever its until says; only a loop that ended is not run again for it
+    /// (<see cref="CarryWhatTheLoopsOwe"/>).
     /// </summary>
     private bool IterationOwedBy(string update, FlowInstance loop)
         => loop.OwedIterationBy.Contains(update)
-            && _updates.Updates.FirstOrDefault(held => held.Id == update) is { State: FlowUpdateStates.Done, AskedAtBound: null } entry
+            && _updates.Updates.FirstOrDefault(held => held.Id == update) is { State: FlowUpdateStates.Done } entry
             && entry.ThePieces.Any(piece => piece.IsOwed);
+
+    /// <summary>
+    /// Whether <paramref name="update"/> owes <paramref name="loop"/> work its bound was never asked for: what reopens a
+    /// loop that ended. Work the bound's question was asked for is that question's to carry - the answer ended the loop,
+    /// or it goes on - and never reopens it.
+    /// </summary>
+    private bool ReopensFor(string update, FlowInstance loop)
+        => IterationOwedBy(update, loop) && _updates.Updates.First(held => held.Id == update).AskedAtBound is null;
+
+    /// <summary>
+    /// Says, in the entry of each update that owes <paramref name="loop"/> work and has added no iteration for it, that the
+    /// question the loop's bound asks carries that work - the run has been given every iteration
+    /// <c>amend.maxAddedIterations</c> allows - published once for each: written as the question is asked, or found
+    /// standing at a session's start, never before it, so a loop whose until or blocking would end it still reaches its
+    /// bound and asks.
+    /// </summary>
+    /// <param name="loop">The repeat standing on its bound's question.</param>
+    private void LeaveToTheBound(FlowInstance loop)
+    {
+        var allowed = _definition.Amend?.AddedIterationsAllowed ?? 0;
+
+        foreach (var asked in _updates.Updates.Where(entry => entry is { AddedIteration: null, AskedAtBound: null } && IterationOwedBy(entry.Id, loop)).ToList())
+        {
+            PutUpdate(asked with { AskedAtBound = loop.Id });
+            Record(
+                FlowChangeKind.Answer,
+                instance: loop,
+                detail: $"update {asked.Id} is owed work of '{loop.Id}' and the run has been given the {allowed.ToString(System.Globalization.CultureInfo.InvariantCulture)} iteration(s) amend.maxAddedIterations allows: its loop asks at its bound");
+        }
+    }
 
     /// <summary>Where work owed to a work-item group with no loop around it goes, as a piece's entry says it: the round added to the group for it.</summary>
     /// <param name="group">The work-item group's name.</param>
@@ -5068,10 +5103,10 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The round an update added to the work-item group, with no loop around it, that has not opened yet, by the id of
     /// the group's visit it will be; null where none waits - read of this engine's own state by the rule the gates read
-    /// (<see cref="FlowUpdateGates.PendingRound"/>).
+    /// (<see cref="FlowUpdateGates.RoundNotOpened"/>).
     /// </summary>
     private string? PendingAddedRound()
-        => CurrentRound() is { } round ? FlowUpdateGates.PendingRound(round.Path, StepsAt(), _updates.Updates) : null;
+        => CurrentRound() is { } round ? FlowUpdateGates.RoundNotOpened(round.Path, StepsAt(), _updates.Updates) : null;
 
     /// <summary>
     /// Why the plan of <paramref name="update"/> cannot be carried out where it now stands, or null where it can: its work
@@ -5228,16 +5263,14 @@ public sealed class FlowCoordinator
     /// the group expands from anything else.
     /// </summary>
     private WorkflowStep? OpeningCheckOf(Scope scope, WorkflowStep group)
-        => group.ForEach is { } items
-            ? DeclarationsOf(scope).FirstOrDefault(step => step.Type == "validate-plan"
-                && WorkflowExpressions.ReadsOf(items).Any(read => string.Equals(read.Root, step.Name, StringComparison.Ordinal)))
-            : null;
+        => FlowUpdateGates.OpeningCheckOf(DeclarationsOf(scope), group);
 
     /// <summary>
     /// Carries what the updates done owe their loops, whatever their <c>until</c> says: a loop that ended - done, or
-    /// left by a stop - stands to run again; one paused on the question its bound asked has that question withdrawn,
-    /// for the update's work is carried there by an iteration added for it; and where the loop is at its bound the
-    /// iteration is added (<see cref="AddIterationsOwedTo"/>).
+    /// left by a stop - stands to run again, save for work its bound's question was asked for, which that question's
+    /// answer carried or let go (<see cref="ReopensFor"/>); one paused on the question its bound asked has that question
+    /// withdrawn, for the update's work is carried there by an iteration added for it, where one is left to add; and where
+    /// the loop is at its bound the iteration is added (<see cref="AddIterationsOwedTo"/>).
     /// </summary>
     private void CarryWhatTheLoopsOwe()
     {
@@ -5260,11 +5293,17 @@ public sealed class FlowCoordinator
             else if (loop.State is FlowInstanceState.Done or FlowInstanceState.Stopped)
             {
                 // A loop that ended - its until read true, or a stop left it - runs again: what an update owes it
-                // carries, whatever its until says.
+                // carries, whatever its until says. Work its bound was asked for is left as the answer left it: a loop
+                // the answer ended stays ended for it, at every session after.
+                if (loop.OwedIterationBy.FirstOrDefault(update => ReopensFor(update, loop)) is not { } reopening)
+                {
+                    continue;
+                }
+
                 var was = loop.State;
                 loop.State = FlowInstanceState.Running;
                 loop.FinishedAt = null;
-                Record(FlowChangeKind.Step, loop, from: was, to: FlowInstanceState.Running, detail: $"the loop runs again: update {owing} owes its next iteration work");
+                Record(FlowChangeKind.Step, loop, from: was, to: FlowInstanceState.Running, detail: $"the loop runs again: update {reopening} owes its next iteration work");
             }
 
             if (loop.State is FlowInstanceState.Running or FlowInstanceState.Paused)
@@ -5285,8 +5324,8 @@ public sealed class FlowCoordinator
     /// at most <c>amend.maxAddedIterations</c> over the run. The iteration is published, with the loop, the update and
     /// how many the run has now been given, and written into the update's entry, which a resume counts back into the
     /// loop's bound; an added iteration is an iteration like any other. Where the run has been given every one allowed,
-    /// the work is left to the question the loop's bound asks, each owing entry saying so
-    /// (<see cref="FlowUpdateEntry.AskedAtBound"/>).
+    /// the work is left to the question the loop's bound asks, each owing entry saying so once that question stands
+    /// (<see cref="LeaveToTheBound"/>).
     /// </summary>
     /// <param name="loop">The repeat that plan updates owe work to.</param>
     private void AddIterationsOwedTo(FlowInstance loop)
@@ -5305,16 +5344,13 @@ public sealed class FlowCoordinator
 
         if (given >= allowed)
         {
-            // Every iteration amend.maxAddedIterations allows is given: the work each update owes the loop is left to the
-            // question its bound asks, and each such entry says so before it is published - once, so no later session
-            // carries that work again, reopening a loop that ended on the bound's answer (IterationOwedBy).
-            foreach (var asked in _updates.Updates.Where(entry => entry.AddedIteration is null && IterationOwedBy(entry.Id, loop)).ToList())
+            // Every iteration amend.maxAddedIterations allows is given: the work is left to the question the loop's bound
+            // asks. A loop still going on asks it as it iterates (NextIteration), whatever its until says; one standing
+            // on that question already - asked before the work was owed, or before a crash let its entry say so - has
+            // its owing entries say it now.
+            if (loop is { State: FlowInstanceState.Paused, WaitingQuestion: { } waiting } && _questions.Any(asked => asked.Id == waiting && asked.Kind == "loopBound"))
             {
-                PutUpdate(asked with { AskedAtBound = loop.Id });
-                Record(
-                    FlowChangeKind.Answer,
-                    instance: loop,
-                    detail: $"update {asked.Id} is owed work of '{loop.Id}' and the run has been given the {allowed.ToString(System.Globalization.CultureInfo.InvariantCulture)} iteration(s) amend.maxAddedIterations allows: its loop asks at its bound");
+                LeaveToTheBound(loop);
             }
 
             return;

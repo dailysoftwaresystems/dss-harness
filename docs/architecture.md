@@ -2339,8 +2339,10 @@ is done, one past the step its `amend.before` names, one past the work items of 
 or a work-item group with no loop around it whose newest round has ended and that runs no round more - updates have
 added every round `amend.maxAddedIterations` allows, counted by the rounds their entries name, and none of them waits
 to open, or a group around it ended otherwise than done and draws nothing more, `FlowUpdateGates.NoRoundMore`, the one
-rule the engine reads too; a round an update added that the run's steps do not hold yet takes a change given
-meanwhile, which joins it, `FlowUpdateGates.PendingRound`),
+rule the engine reads too; a round an update added that the run's steps do not hold yet (`FlowUpdateGates.RoundNotOpened`)
+takes a change given before the check that opens it has started - the check's visit drawn after the group's newest,
+read of the steps in the order the run made them - which joins it, `FlowUpdateGates.PendingRound`, and once that check
+has started opens with the work it was handed alone, a change refused until the round has opened, which it then joins),
 a definition whose `amend` names no such change. The command records nothing for a change it refuses; the engine
 records an amendment handed over through the inbox, or a queued change it can no longer take at its turn, `refused`
 with why, under its own id. The report lists every update, and `list-orchestrator` says where each stands.
@@ -2426,11 +2428,14 @@ not yet drawn); the check is handed the owed work with its own items as one list
 alone (`FlowCoordinator.OpenGroup`), never the items the round before built. An iteration or a round is added once per
 update, at most `amend.maxAddedIterations` over the run, published as an `iterationAdded` event and kept in the entry
 (`FlowUpdateEntry.AddedIteration`, said by `FlowReports.IterationSaidOf` as round n of the loop or of the group); a
-loop at its bound where the run has been given every iteration allowed asks its bound for the owed work, each owing
-entry saying so once (`FlowUpdateEntry.AskedAtBound`), and the answer decides whether the loop runs on to carry it. What
+loop at its bound where the run has been given every iteration allowed asks its bound for the owed work - it reaches
+that question whatever its `until` or its `blocking` says, for owed work ends no loop - and each owing entry says so
+once the question is asked, or is found standing at a session's start (`FlowCoordinator.LeaveToTheBound`,
+`FlowUpdateEntry.AskedAtBound`); the answer decides whether the loop runs on to carry it. What
 an update done owes is carried from its entry at every session's start too, so a crash between the update's end and
 its carry loses nothing, and an entry that says its carry was made - the iteration or round added, or its loop's bound
-asked - is carried no second time, so a loop the bound's answer ended is never run again for it. Where the group runs no round more - the run has none left to add, or a group around it
+asked - is carried no second time, so a loop the bound's answer ended is never run again for it
+(`FlowCoordinator.ReopensFor`). Where the group runs no round more - the run has none left to add, or a group around it
 ended otherwise than done and draws nothing more (`FlowUpdateGates.NoRoundMore`, the gates' rule) - an update whose
 work only an added round would carry is given up with why before anything is placed, its pieces never carried out
 (`FlowCoordinator.NoRoundForTheWork`). The report and
