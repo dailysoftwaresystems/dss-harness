@@ -1500,6 +1500,24 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         return inner.RunWithinAsync(directory, arguments, limit, cancellationToken);
     }
 
+    public Task<GitCommandResult> RunWithHooksAsync(
+        string directory,
+        IReadOnlyList<string> arguments,
+        TimeSpan limit,
+        ProcessIsolation? isolation,
+        IReadOnlyDictionary<string, string>? values,
+        CancellationToken cancellationToken = default)
+    {
+        BeforeEveryCall?.Invoke();
+        return inner.RunWithHooksAsync(directory, arguments, limit, isolation, values, cancellationToken);
+    }
+
+    public Task<GitCredential?> CredentialAsync(string directory, string url, CancellationToken cancellationToken = default)
+    {
+        BeforeEveryCall?.Invoke();
+        return inner.CredentialAsync(directory, url, cancellationToken);
+    }
+
     public async Task<GitCommandResult> RunAsync(
         string directory,
         IReadOnlyList<string> arguments,

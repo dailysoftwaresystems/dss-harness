@@ -982,6 +982,39 @@ step's (`AgentPolicy.SlotOrStateVerbs`, listed by `help agent-clients`): `init`,
 `check-mutations`, `stop-run`, `clean` and `host-exec`; those that only read, and those that write
 only the tree's own files, stay open.
 
+What the agents wrote runs inside the same isolation when this tool runs it. The work of each leg of a
+run's `build`, `test`, `run` and `check-mutations` step that this machine runs - every phase it starts:
+configure, build and test commands, a runner's steps, a sweep's arms - is held inside it, its own
+profile from the leg's ground (`ExecutionGrounds.OfLeg`): every credential slot of the main checkout and
+the tool's own Claude Code directory hidden; git's code-running files of the step's tree and the leg's,
+the user's own git configuration and the tool's state under each, written by nobody; the tree the leg
+works in - the step's tree or its copy under `.legs` - the run's records and a sweep's workers under
+`.mutations` written again. A runner's values and secrets reach its steps as values in their
+environment, read by this tool, never as the slot's files, which they cannot read. A set-up's lines are
+the configuration's and bring up what outlives the leg, and run as it gives them. A leg another machine
+runs - an ssh host, a WSL distribution - runs there as that machine's tool runs any leg, outside this
+machine's isolation: an ssh host holds none of this machine's slots, state or git's files, which a sync
+never carries; a WSL distribution reaches this machine's drives under `/mnt`, its slots among them, so
+where that matters keep an agents' run's legs on this machine or an ssh host. A run's `commit` and
+`push` run git and the repository's hooks - those git's directory holds, and those `core.hooksPath`
+points into the tree for, a husky directory, a pre-commit or lefthook configuration they read - inside
+it too, over the main checkout, which they write: its work tree, index, objects and refs, but git's
+code-running files and the tool's state - under MXC, which makes nothing directly inside `.git`, git's
+commit cannot make `.git\index.lock` and fails there. A push to a remote over http or https is handed
+the credential git's own helpers give for its address, asked outside (`git credential fill`), as values
+in its environment read by a helper its command line names in place of every helper the configuration
+names - so it needs no keyring behind the user's message bus, which the isolation hides - and whatever
+runs inside the push, its pre-push hook among it, can read them, as in any push; one over ssh reads the
+user's keys and agent as the user does. Every other git command of this tool's runs none of the
+repository's hooks - `core.hooksPath` pointed at the null device (`GitHooks`) - so a fold, a refresh, a
+rebase, a sync or a question of the tool's never runs the agents' work as a side effect of a checkout,
+an index written or a ref moved; those that only read (`rev-parse`, `config` and the like) are left as
+they are, and answer where the hooks are as git runs them. `agentPolicy.isolation` decides each as it
+decides a launch: where this machine has none, `required` fails the step (14) with nothing run - a leg
+whose own cannot be had, its tree one git does not answer for, is `skipped-unavailable` - and
+`preferred` runs it outside, each leg's line saying so. The step answers `isolation`: the mode, with the
+mechanism and its version, or why there was none.
+
 The `claude-code` client starts Claude Code once for each launch, a new session every time -
 never resumed or continued, keeping no session file (one a launch leaves all the same is removed
 once it has ended, however it ended, and said) - streamed both ways: the step's prompt is the first
@@ -1457,7 +1490,8 @@ steps `build`, `test`, `run` and `check-mutations`, which run their legs as the 
 they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
 that failed with the phase that did not pass and its last lines, a sweep's arm with its arm - a leg in a copy letting the
 tree go once its copy is made, and keep the ledger, and in an agent's worktree each red leg's failing log, in the step's
-directory; the checks `anchor-balance` and `anchor-citations`, each held to the rows or files a step names; `ci-read`,
+directory, the work of each leg this machine runs held inside the isolation of the agents' work and answered as
+`isolation` (none here and `agentPolicy.isolation: required` fails the step, 14, nothing run); the checks `anchor-balance` and `anchor-citations`, each held to the rows or files a step names; `ci-read`,
 the legs `check-ci-legs` reads; and `ci-wait`, which waits for every check the forge runs on a commit - the one the run
 last pushed where it names none - ends at the first red one with its job's failing step and whole log, and asks where
 none appeared, some are still running, or one ended neither green nor red; and the fold family - `fold`, `delete-agent`,
@@ -1470,11 +1504,15 @@ its fold left there (a path edited or restored since, a path the index marks ass
 main checkout off the branch the run started on, or a fold upstream whose intent nobody settled, fails it, and nothing
 is staged), on an empty index, by explicit path, with the configuration's `commit.template` filled or the step's own
 message, the commit held to that set (one a hook made take more, or less, fails it, 20, left for a person) - answers the
-paths git ignores, which it never commits, and with nothing owed is done and runs no git; any template reads what the run checked (`{run.ran}`, `{run.notRun}`, `{run.red}`), and a commit's message what
+paths git ignores, which it never commits, and with nothing owed is done and runs no git - its commit and the
+repository's commit hooks run inside the isolation of the agents' work, answered as `isolation` (none here and `required`
+fails it, 14, nothing staged); any template reads what the run checked (`{run.ran}`, `{run.notRun}`, `{run.red}`), and a commit's message what
 checked what it carries (`{carried.ran}`, `{carried.notRun}`, `{carried.red}`); `push`, which pushes the main checkout's
 HEAD to its branch on the remote the run's branch goes to (or the step's), a fast-forward never forced, and answers
-whether the branch moved (a detached HEAD, the main checkout off the branch the run started on, or no remote it can name
-refuses it, 13; the remote refusing fails it, 20; push steps that name two remotes are refused); and
+whether the branch moved, its push and the repository's push hooks inside the isolation of the agents' work, answered
+as `isolation` (a detached HEAD, the main checkout off the branch the run started on, or no remote it can name refuses
+it, 13; no isolation here under `required` fails it, 14; the remote refusing fails it, 20; push steps that name two
+remotes are refused); and
 `pull-request`, which opens the run's branch's pull request against its base - the step's, else the remote's default -
 on the repository the remote's address names, its body the workflow's file filled where the step starts, and answers an
 open one as it is (`created` false) so a step run again opens no second, and never one from a fork's branch of the same

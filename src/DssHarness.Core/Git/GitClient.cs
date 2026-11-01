@@ -24,12 +24,14 @@ namespace DssHarness.Core.Git;
 /// Says whether a tree's file system finds a name in any case, which git status is told; this platform's own where none is
 /// given.
 /// </param>
+/// <param name="platform">Says which system git runs on, for the place that holds no hook (<see cref="GitHooks"/>); this machine where none is given.</param>
 public sealed partial class GitClient(
     IProcessRunner processRunner,
     IHarnessOutput output,
     IFilePermissions? filePermissions = null,
     GitLocalVariables? localVariables = null,
-    IFileSystem? fileSystem = null) : IGitClient
+    IFileSystem? fileSystem = null,
+    IHostPlatform? platform = null) : IGitClient
 {
     private const string GitExecutable = "git";
 
@@ -50,6 +52,7 @@ public sealed partial class GitClient(
     private readonly IFilePermissions _filePermissions = filePermissions ?? FilePermissionsFactory.Create();
     private readonly GitLocalVariables _localVariables = localVariables ?? new GitLocalVariables(processRunner);
     private readonly IFileSystem _fileSystem = fileSystem ?? new PhysicalFileSystem(filePermissions ?? FilePermissionsFactory.Create());
+    private readonly PlatformId _system = (platform ?? new HostPlatform()).Current;
 
     /// <summary>The version the git this client runs names itself by, once read (<see cref="InstalledVersionAsync"/>).</summary>
     private string? _installed;
@@ -1852,6 +1855,51 @@ public sealed partial class GitClient(
         CancellationToken cancellationToken = default)
         => RunCoreAsync(directory, arguments, echoOutput: false, untranslated: false, indexFile: null, standardInput: null, cancellationToken, limit: limit);
 
+    /// <inheritdoc/>
+    public Task<GitCommandResult> RunWithHooksAsync(
+        string directory,
+        IReadOnlyList<string> arguments,
+        TimeSpan limit,
+        ProcessIsolation? isolation,
+        IReadOnlyDictionary<string, string>? values,
+        CancellationToken cancellationToken = default)
+        => RunCoreAsync(
+            directory,
+            arguments,
+            echoOutput: false,
+            untranslated: false,
+            indexFile: null,
+            standardInput: null,
+            cancellationToken,
+            limit: limit,
+            hooks: new HookRun(isolation, values ?? new Dictionary<string, string>(StringComparer.Ordinal)));
+
+    /// <inheritdoc/>
+    public async Task<GitCredential?> CredentialAsync(string directory, string url, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(url);
+
+        // Asked as git asks it before it connects, of the helpers the configuration names: one that has none to give
+        // answers nothing, for nobody is there to type one.
+        var result = await RunCoreAsync(directory, ["credential", "fill"], echoOutput: false, untranslated: true, indexFile: null, ChildInput.Of($"url={url}\n\n"), cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!result.Succeeded)
+        {
+            return null;
+        }
+
+        var said = result.OutputLines
+            .Select(line => line.Split('=', 2))
+            .Where(pair => pair.Length == 2)
+            .GroupBy(pair => pair[0], StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Last()[1], StringComparer.Ordinal);
+
+        return said.TryGetValue("username", out var username) && said.TryGetValue("password", out var password) && password.Length > 0
+            ? new GitCredential(username, password)
+            : null;
+    }
+
     /// <summary>
     /// Runs a read-only query whose failure message is inspected, with git's messages
     /// untranslated.
@@ -1899,9 +1947,17 @@ public sealed partial class GitClient(
         CancellationToken cancellationToken,
         Encoding? outputEncoding = null,
         ObjectStore? objects = null,
-        TimeSpan? limit = null)
+        TimeSpan? limit = null,
+        HookRun? hooks = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
+
+        // None of the repository's hooks runs under the tool's own git but where a command runs them on purpose: a hook is
+        // the repository's code, which every other command would run outside the isolation as a side effect (GitHooks).
+        if (hooks is null)
+        {
+            arguments = GitHooks.Off(_system, arguments);
+        }
 
         // Without these, an operation that decides to ask for credentials - git's own prompt, or a credential manager's
         // window - blocks forever with no output. A hang is the one failure this tool cannot report, so git is told up
@@ -1937,6 +1993,13 @@ public sealed partial class GitClient(
             environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = objects.AlternateList;
         }
 
+        // What a command that runs the hooks is handed as values - a push's credential - set last, so nothing above
+        // clears it.
+        foreach (var (name, value) in hooks?.Values ?? new Dictionary<string, string>())
+        {
+            environment[name] = value;
+        }
+
         var request = new ProcessRequest
         {
             FileName = GitExecutable,
@@ -1948,6 +2011,7 @@ public sealed partial class GitClient(
             StandardInput = standardInput,
             StandardOutputEncoding = outputEncoding,
             Timeout = limit,
+            Isolation = hooks?.Isolation,
         };
 
         var result = await _processRunner.RunAsync(request, cancellationToken).ConfigureAwait(false);
@@ -2171,4 +2235,9 @@ public sealed partial class GitClient(
     /// </summary>
     private static string NormalizeDirectory(string path)
         => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+
+    /// <summary>How a command that runs the repository's hooks on purpose runs: inside an isolation or none, and the values its environment is given.</summary>
+    /// <param name="Isolation">The operating system's isolation it runs inside; null for none.</param>
+    /// <param name="Values">Variables set in its environment, by name.</param>
+    private sealed record HookRun(ProcessIsolation? Isolation, IReadOnlyDictionary<string, string> Values);
 }

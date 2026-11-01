@@ -113,6 +113,7 @@ public sealed class MutationLegs(MutationService sweeps) : IMutationLegs
             Held(request))
         {
             Watch = request.Watch,
+            Isolation = request.Isolation,
         };
 
     /// <summary>

@@ -3039,6 +3039,8 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(builder, IsolationProse());
         builder.AppendLine();
+        AppendWrapped(builder, ExecutionIsolationProse());
+        builder.AppendLine();
         AppendWrapped(builder, ClaudeCodeClientProse());
         builder.AppendLine();
         AppendWrapped(builder, ToolRuntimeProse());
@@ -3125,6 +3127,43 @@ public static class HelpTopics
             + "refused to every agent by name, a side-task's as well as a step's: "
             + $"{string.Join(", ", Agents.Policy.AgentPolicy.SlotOrStateVerbs)}; those that only read, and those that "
             + "write only the tree's own files, stay open.";
+
+    /// <summary>
+    /// The operating system's isolation of the tool's own executions of the agents' work: a run's machine steps' legs on
+    /// this machine, and a run's commit and push with the repository's hooks; the tool's other git, which runs no hook;
+    /// a push's credential handed in as values; and the legs another machine runs.
+    /// </summary>
+    private static string ExecutionIsolationProse()
+        => "What the agents wrote runs inside the same isolation when this tool runs it. The work of each leg of a run's "
+            + "build, test, run and check-mutations step that this machine runs - every phase it starts: configure, build and "
+            + "test commands, a runner's steps, a sweep's arms - is held inside it, its own profile from the leg's ground: "
+            + "every credential slot of the main checkout and the tool's own Claude Code directory hidden; git's code-running "
+            + "files of the step's tree and the leg's, the user's own git configuration and the tool's state under each, "
+            + "written by nobody; the tree the leg works in - the step's tree or its copy under .legs - the run's records "
+            + "and a sweep's workers under .mutations written again. A runner's values and secrets reach its steps as values "
+            + "in their environment, read by this tool, never as the slot's files, which they cannot read. A set-up's lines "
+            + "are the configuration's and bring up what outlives the leg, and run as it gives them. A leg another machine "
+            + "runs - an ssh host, a WSL distribution - runs there as that machine's tool runs any leg, outside this machine's "
+            + "isolation: an ssh host holds none of this machine's slots, state or git's files, which a sync never carries; a "
+            + "WSL distribution reaches this machine's drives under /mnt, its slots among them, so where that matters keep "
+            + "an agents' run's legs on this machine or an ssh host. A run's commit and push run git and the repository's "
+            + "hooks - those git's directory holds, and those core.hooksPath points into the tree for, a husky directory, a "
+            + "pre-commit or lefthook configuration they read - inside it too, over the main checkout, which they write: its "
+            + "work tree, index, objects and refs, but git's code-running files and the tool's state - under MXC, which makes "
+            + @"nothing directly inside .git, git's commit cannot make .git\index.lock and fails there. A push to a remote over "
+            + "http or https is handed the credential git's own helpers give for its address, asked outside (git credential "
+            + "fill), as values in its environment read by a helper its command line names in place of every helper the "
+            + "configuration names - so it needs no keyring behind the user's message bus, which the isolation hides - and "
+            + "whatever runs inside the push, its pre-push hook among it, can read them, as in any push; one over ssh reads "
+            + "the user's keys and agent as the user does. Every other git command of this tool's runs none of the "
+            + "repository's hooks - core.hooksPath pointed at the null device - so a fold, a refresh, a rebase, a sync or a "
+            + "question of the tool's never runs the agents' work as a side effect of a checkout, an index written or a ref "
+            + "moved; those that only read (rev-parse, config and the like) are left as they are, and answer where the hooks "
+            + "are as git runs them. agentPolicy.isolation decides each as it decides a launch: where this machine has none, "
+            + $"{Agents.Isolation.AgentIsolationMode.Required} fails the step ({HarnessExit.ToolMissing}) with nothing run - a "
+            + $"leg whose own cannot be had, its tree one git does not answer for, is skipped-unavailable - and "
+            + $"{Agents.Isolation.AgentIsolationMode.Preferred} runs it outside, each leg's line saying so. The step answers "
+            + "isolation: the mode, with the mechanism and its version, or why there was none.";
 
     /// <summary>
     /// How the agents' policy reads a shell command, what it refuses as undecided, and the worktree rules - git's
@@ -4930,7 +4969,12 @@ public static class HelpTopics
             + "every arm the registry declares where it names none, and pending. Each answers passed, true where every leg passed; "
             + "exitCode, the command's; verdicts, each leg's own; red, the red legs alone - a leg that failed, with the phase that "
             + "did not pass, the ledger's line and the last lines it printed, and of a sweep each arm that violated, survived or "
-            + "was unattributed, with its arm and its line; and runDirectory, null where the run made none. A leg that works in a "
+            + "was unattributed, with its arm and its line; runDirectory, null where the run made none; and isolation, what the "
+            + "work of its legs ran under. What its legs build, test and run is what the run's agents wrote, so the work of each "
+            + "leg this machine runs - every phase it starts, a set-up's lines apart - runs inside the operating system's "
+            + "isolation of the agents' work ('help agent-clients'); where this machine has none, agentPolicy.isolation "
+            + $"required fails the step ({HarnessExit.ToolMissing}) with nothing run, and preferred runs its legs outside, each "
+            + "leg's line saying so. A leg that works in a "
             + "copy - its own under .legs, or a host's - lets the step's hold on its tree go once its copy is made, or once it ends "
             + "without one, and a leg in the tree itself once it ends: the step's record then says copied. A run whose runner, or "
             + "a runner its run checks name, writes the tree holds write on it, and its legs work in the tree itself. A leg run "
@@ -5034,7 +5078,10 @@ public static class HelpTopics
             + "ledger beside it. A set an attempt before left staged is settled first: committed where HEAD moved and holds each "
             + "of its paths as the set staged it, else unstaged and staged again whole. It answers committed, sha, paths and "
             + "ignored - each path its folds changed that git ignores, folded and never committed, which what the run's end "
-            + "leaves for a person names too - run again once it has committed, the commit it made. What a run checked "
+            + "leaves for a person names too - run again once it has committed, the commit it made - and, where it ran git's "
+            + "commit, isolation: git's commit and the repository's commit hooks run inside the operating system's isolation "
+            + "of the agents' work ('help agent-clients'), and where this machine has none agentPolicy.isolation required fails "
+            + $"it ({HarnessExit.ToolMissing}) before anything is staged, preferred runs them outside. What a run checked "
             + "is text any template reads: {run.ran}, every check that ended so far, a line each with where it ran and its "
             + "verdict, each leg's for a step that runs legs; {run.notRun}, each check not run yet, by its step's name, and each "
             + "skipped or never reached, with why; and {run.red}, each red result not seen green since by a later visit of the "
@@ -5052,7 +5099,10 @@ public static class HelpTopics
             "push pushes the commit the main checkout's HEAD names to the branch of its name on a remote - the step's remote, "
             + "else the one the run's branch goes to (the push step's, else the one the branch tracks, else origin, else the only "
             + "one) - as a fast-forward and never forced, and answers pushed - false where the remote's branch named that commit "
-            + "already, so a push run again is done - remote, branch and sha, the commit a ci-wait that names none waits for. Every "
+            + "already, so a push run again is done - remote, branch and sha, the commit a ci-wait that names none waits for - "
+            + "and isolation: git's push and the repository's push hooks run inside the operating system's isolation of the "
+            + "agents' work ('help agent-clients'), and where this machine has none agentPolicy.isolation required fails it "
+            + $"({HarnessExit.ToolMissing}) with nothing pushed, preferred runs them outside. Every "
             + "push step that names a remote names the same one, the remote the run's branch goes to: a definition whose push "
             + "steps name two is refused. HEAD detached, the main checkout on another branch than the run started on, a branch "
             + "with no commit yet, no remote it can name and one the repository does not have each refuse it "

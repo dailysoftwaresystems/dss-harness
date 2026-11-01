@@ -1,3 +1,4 @@
+using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Git;
@@ -678,4 +679,43 @@ public interface IGitClient
         IReadOnlyList<string> arguments,
         TimeSpan limit,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs a git subcommand whose hooks are part of what it does - a run's commit, a run's push - with the repository's
+    /// hooks run as git runs them: inside <paramref name="isolation"/> where one is given, with <paramref name="values"/>
+    /// set in its environment, ended where it has not finished within <paramref name="limit"/>. Every other command this
+    /// client runs runs none of the repository's hooks (<see cref="GitHooks"/>).
+    /// </summary>
+    /// <param name="directory">The directory git runs in.</param>
+    /// <param name="arguments">Its arguments.</param>
+    /// <param name="limit">How long it may take.</param>
+    /// <param name="isolation">The operating system's isolation it runs inside; null for none.</param>
+    /// <param name="values">Variables set in its environment, by name; null for none.</param>
+    /// <param name="cancellationToken">Stops git.</param>
+    Task<GitCommandResult> RunWithHooksAsync(
+        string directory,
+        IReadOnlyList<string> arguments,
+        TimeSpan limit,
+        ProcessIsolation? isolation,
+        IReadOnlyDictionary<string, string>? values,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The credential the helpers git's configuration names give for <paramref name="url"/>, asked as git asks before it
+    /// connects (<c>git credential fill</c>) with nobody there to type one; null where none gives one.
+    /// </summary>
+    /// <param name="directory">The directory whose configuration names the helpers.</param>
+    /// <param name="url">The address the credential is for.</param>
+    /// <param name="cancellationToken">Stops git.</param>
+    Task<GitCredential?> CredentialAsync(string directory, string url, CancellationToken cancellationToken = default);
+}
+
+/// <summary>A credential git's helpers gave: the user's name and the password, or the token that stands for it.</summary>
+/// <param name="Username">The user's name.</param>
+/// <param name="Password">The password or token.</param>
+public sealed record GitCredential(string Username, string Password)
+{
+    /// <summary>The credential written as nothing: a record's text never holds the password.</summary>
+    /// <returns>The user's name alone.</returns>
+    public override string ToString() => $"GitCredential {{ Username = {Username} }}";
 }

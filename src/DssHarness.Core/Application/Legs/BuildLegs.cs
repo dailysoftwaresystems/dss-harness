@@ -41,6 +41,13 @@ public abstract record LegCommandRequest
     /// nobody is: no command line gives one, and a step of an orchestrator run lets its tree go by it.
     /// </summary>
     public ILegRunWatch? Watch { get; init; }
+
+    /// <summary>
+    /// What holds the work of each leg this machine runs inside the operating system's isolation
+    /// (<see cref="LegRunRequest.Isolation"/>), or <see langword="null"/> where none does: no command line gives one, and a
+    /// step of an orchestrator run holds what its agents wrote in it.
+    /// </summary>
+    public ILegIsolation? Isolation { get; init; }
 }
 
 /// <summary>
@@ -120,6 +127,7 @@ public sealed class BuildLegs(IBuildService builds, LegRunService runs) : IBuild
                 Workload = LegWorkload.BuildOnly,
                 LocalTrees = LegTrees.Asked(request.LocalCopy, request.InPlace),
                 Watch = request.Watch,
+                Isolation = request.Isolation,
             },
             (work, token) => BuildLegAsync(_builds, work, token),
             cancellationToken).ConfigureAwait(false);

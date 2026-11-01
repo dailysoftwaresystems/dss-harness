@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
@@ -28,6 +29,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// is left as it is for a person, the set left staged with it in the ledger, and fails the step 20. A staged set an attempt
 /// before left is settled first: committed where HEAD moved and holds each of its paths as the set staged it, else
 /// unstaged, its paths owed still. The folds upstream are those the engine read where the step started (<c>folds</c>).
+/// The commit runs the repository's commit hooks inside the operating system's isolation of the agents' work
+/// (<see cref="ExecutionGrounds.OfHooks"/>), as <c>isolation</c> in its output says; where this machine has none,
+/// <c>agentPolicy.isolation: required</c> fails it 14 before anything is staged, and <c>preferred</c> runs them outside.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
@@ -36,6 +40,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="git">Reads the main tree's branch, status, index, HEAD, what it holds and what git ignores, and what a commit took.</param>
 /// <param name="publisher">Stages, commits and unstages.</param>
 /// <param name="fileSystem">Reads what the main tree holds at each path, and writes the message the commit is given.</param>
+/// <param name="isolation">Decides the isolation the commit's hooks run inside.</param>
 public sealed class CommitStepRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -43,7 +48,8 @@ public sealed class CommitStepRunner(
     FoldLedger ledger,
     IGitClient git,
     IGitPublisher publisher,
-    IFileSystem fileSystem) : IFlowStepTypeRunner
+    IFileSystem fileSystem,
+    IAgentIsolation isolation) : IFlowStepTypeRunner
 {
     /// <inheritdoc/>
     public string Type => "commit";
@@ -163,6 +169,16 @@ public sealed class CommitStepRunner(
             return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, $"'{run.Instance}' {unwritten}. Nothing was staged.");
         }
 
+        // The commit runs the repository's hooks, the agents' work among what they read: inside the isolation, decided
+        // before anything is staged, so a step refused for want of it leaves the index as it found it.
+        var hooks = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfHooks(context.Config, context.Layout.MainCheckoutRoot, main), context.Layout.MainCheckoutRoot, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (hooks.Refusal($"'{run.Instance}'") is { } unisolated)
+        {
+            return FlowStepResult.Ended(passed: false, HarnessExit.ToolMissing, $"{unisolated}. Nothing was staged.");
+        }
+
         var messageFile = layout.InstanceCommitMessageFile(run.Instance);
         fileSystem.CreateDirectory(Path.GetDirectoryName(messageFile)!);
         fileSystem.WriteAllTextAtomic(messageFile, message);
@@ -176,7 +192,7 @@ public sealed class CommitStepRunner(
         try
         {
             await publisher.StageAsync(main, [.. staging.Where(path => path.Holds is not null).Select(path => path.Path.Path)], [.. staging.Where(path => path.Holds is null).Select(path => path.Path.Path)], limit, cancellationToken).ConfigureAwait(false);
-            sha = await publisher.CommitAsync(main, messageFile, context.Config.Commit.SignOff, limit, cancellationToken).ConfigureAwait(false);
+            sha = await publisher.CommitAsync(main, messageFile, context.Config.Commit.SignOff, limit, hooks.ForProcess, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException refused) when (refused.ExitCode == HarnessExit.CommandFailed)
         {
@@ -192,11 +208,12 @@ public sealed class CommitStepRunner(
                 return FlowStepResult.Ended(
                     passed: false,
                     HarnessExit.CommandFailed,
-                    $"'{run.Instance}': {refused.Message}; and what it staged could not be unstaged ({unstaging.Message}): fix what git reported, then resume, which settles it.");
+                    $"'{run.Instance}': {refused.Message}; and what it staged could not be unstaged ({unstaging.Message}): fix what git reported, then resume, which settles it.",
+                    Isolated(hooks));
             }
 
             ledger.Unstaged(layout, id);
-            return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, $"'{run.Instance}': {refused.Message}; what it staged was unstaged: fix what git reported, then resume.");
+            return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, $"'{run.Instance}': {refused.Message}; what it staged was unstaged: fix what git reported, then resume.", Isolated(hooks));
         }
 
         // The commit is held to the set: a hook may stage more into it, and git may leave a path of it out. One that is not
@@ -215,11 +232,12 @@ public sealed class CommitStepRunner(
                 HarnessExit.CommandFailed,
                 $"'{run.Instance}' made {ReportText.Commit(sha)}, and it is not what its folds left alone: "
                 + string.Join(", and ", [.. besides.Count > 0 ? [$"it took {Quoted(besides)} besides"] : Array.Empty<string>(), .. without.Count > 0 ? [$"it left {Quoted(without)} out"] : Array.Empty<string>()])
-                + " - a hook, or git, made it so. The commit is left as it is: keep it, or undo it with git reset --soft HEAD^, then resume, which settles it.");
+                + " - a hook, or git, made it so. The commit is left as it is: keep it, or undo it with git reset --soft HEAD^, then resume, which settles it.",
+                Isolated(hooks));
         }
 
         ledger.Committed(layout, id, sha);
-        return Done(committed: true, sha, paths, FoldLedger.IgnoredOf(store.ReadFolds(layout), upstream));
+        return Done(committed: true, sha, paths, FoldLedger.IgnoredOf(store.ReadFolds(layout), upstream), hooks);
     }
 
     /// <summary>
@@ -332,16 +350,28 @@ public sealed class CommitStepRunner(
     /// <summary>Paths as a refusal names them: each in single quotes, as many as a line names.</summary>
     private static string Quoted(IReadOnlyList<string> paths) => ReportText.Listed([.. paths.Select(path => $"'{path}'")]);
 
-    /// <summary>The step done: whether it committed, the commit, the paths it took, and those its folds changed that git ignores.</summary>
-    private static FlowStepResult Done(bool committed, string? sha, IReadOnlyList<string> paths, IReadOnlyList<string> ignored)
-        => FlowStepResult.Ended(
-            passed: true,
-            HarnessExit.Success,
-            output: new JsonObject
-            {
-                ["committed"] = committed,
-                ["sha"] = sha,
-                ["paths"] = new JsonArray([.. paths.Select(path => (JsonNode?)path)]),
-                ["ignored"] = new JsonArray([.. ignored.Select(path => (JsonNode?)path)]),
-            });
+    /// <summary>
+    /// The step done: whether it committed, the commit, the paths it took, those its folds changed that git ignores, and,
+    /// where it ran git's commit, the isolation the repository's hooks ran under.
+    /// </summary>
+    private static FlowStepResult Done(bool committed, string? sha, IReadOnlyList<string> paths, IReadOnlyList<string> ignored, ExecutionIsolation? hooks = null)
+    {
+        var output = new JsonObject
+        {
+            ["committed"] = committed,
+            ["sha"] = sha,
+            ["paths"] = new JsonArray([.. paths.Select(path => (JsonNode?)path)]),
+            ["ignored"] = new JsonArray([.. ignored.Select(path => (JsonNode?)path)]),
+        };
+
+        if (hooks is not null)
+        {
+            output["isolation"] = hooks.Record.ToOutput();
+        }
+
+        return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: output);
+    }
+
+    /// <summary>What a step that ran git's commit and failed answers: the isolation the repository's hooks ran under.</summary>
+    private static JsonObject Isolated(ExecutionIsolation hooks) => new() { ["isolation"] = hooks.Record.ToOutput() };
 }

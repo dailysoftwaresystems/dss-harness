@@ -296,23 +296,21 @@ public sealed class AgentIsolationTests
     }
 
     /// <summary>
-    /// A contained child given an isolation is started by the mechanism's command line in its place - here one that adds a
-    /// word - and an isolation without containment is refused, for the contained step places it.
+    /// A child given an isolation is started by the mechanism's command line in its place - here one that adds a word -
+    /// contained or not: one that is not starts through the step all the same, which becomes the mechanism.
     /// </summary>
     [Fact]
-    public async Task AnIsolatedChild_IsStartedByTheMechanismsCommandLine_AndOnlyContained()
+    public async Task AnIsolatedChild_IsStartedByTheMechanismsCommandLine_ContainedOrNot()
     {
         var runner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram);
         var mechanism = new AddingMechanism();
         var request = TestHost.ChildRequest("echo-args", "a") with { Contained = true, Isolation = new ProcessIsolation(mechanism, IsolationProfile.Nothing) };
 
-        var result = await runner.RunAsync(request, Token);
+        var contained = await runner.RunAsync(request, Token);
+        var notContained = await runner.RunAsync(request with { Contained = false }, Token);
 
-        Assert.Equal((0, "[a]\n[inside]\n"), (result.ExitCode, result.StandardOutput.ReplaceLineEndings("\n")));
-
-        var refused = await Assert.ThrowsAsync<ArgumentException>(() => runner.RunAsync(request with { Contained = false }, Token));
-
-        Assert.Equal("An isolated child is placed by the contained step: give Isolation only with Contained. (Parameter 'request')", refused.Message);
+        Assert.Equal((0, "[a]\n[inside]\n"), (contained.ExitCode, contained.StandardOutput.ReplaceLineEndings("\n")));
+        Assert.Equal((0, "[a]\n[inside]\n"), (notContained.ExitCode, notContained.StandardOutput.ReplaceLineEndings("\n")));
     }
 
     /// <summary>A mechanism that hands the program its own words and one more.</summary>

@@ -98,6 +98,46 @@ public sealed class BubblewrapTests
         }
     }
 
+    /// <summary>
+    /// A run's commit runs the repository's hooks inside the isolation of the agents' work: the hook runs and reads no file
+    /// of a credential slot - the slot is an empty place there - and git commits from inside, writing its index, its
+    /// objects and its refs.
+    /// </summary>
+    [Fact]
+    public async Task ACommitsHooks_RunInside_ReadingNoSlot_AndGitCommitsFromThere()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var platform = RealIsolation.Platform();
+        await ProvedAsync(platform, temp.Path);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var slot = HarnessLayout.SecretSlotDirectoriesUnder(kit.Main)[0];
+        Directory.CreateDirectory(slot);
+        var canary = Path.Combine(slot, "canary");
+        await File.WriteAllTextAsync(canary, "secret", Token);
+        var config = new Core.Configuration.HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var isolated = await new Core.Agents.Isolation.AgentIsolation(platform, kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path))
+            .ForExecutionAsync(config, Core.Agents.Isolation.ExecutionGrounds.OfHooks(config, kit.Main, kit.Main), kit.Main, Token);
+        var hook = Path.Combine(kit.Main, ".git", "hooks", "pre-commit");
+        await File.WriteAllTextAsync(hook, $"#!/bin/sh\ncat '{canary}' > hook-read.txt 2>&1\nexit 0\n", Token);
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(hook, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await File.WriteAllTextAsync(Path.Combine(kit.Main, "made.txt"), "made", Token);
+        await kit.Harness.RunGitAsync(kit.Main, ["add", "made.txt"], Token);
+        var before = await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token);
+
+        var committed = await kit.Harness.GitClient.RunWithHooksAsync(kit.Main, ["commit", "--quiet", "-m", "inside"], TimeSpan.FromMinutes(1), isolated.ForProcess, null, Token);
+
+        Assert.True(committed.Succeeded, committed.FailureMessage);
+        Assert.NotEqual(before, await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token));
+        Assert.Contains("No such file or directory", await File.ReadAllTextAsync(Path.Combine(kit.Main, "hook-read.txt"), Token), StringComparison.Ordinal);
+        Assert.Equal("secret", await File.ReadAllTextAsync(canary, Token));
+    }
+
     /// <summary>The bubblewrap the probe proved: the test skipped where this is not Linux.</summary>
     private static Task<IIsolationMechanism> ProvedAsync(Core.Platform.IsolationPlatform platform, string tree)
         => RealIsolation.ProvedAsync(platform, tree, OperatingSystem.IsLinux(), "Bubblewrap isolates an agent's commands on Linux alone.", "bubblewrap");

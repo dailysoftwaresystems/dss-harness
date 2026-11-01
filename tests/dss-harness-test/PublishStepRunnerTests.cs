@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Git;
 using DssHarness.Core.Orchestration;
@@ -34,6 +35,33 @@ public sealed class PublishStepRunnerTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
+    /// A push runs the repository's push hooks inside the isolation of the agents' work - its git started by the mechanism -
+    /// and answers it; where this machine has none, required fails it 14 with nothing pushed, saying why and the remedy.
+    /// </summary>
+    [Fact]
+    public async Task APush_RunsItsHooksInsideTheIsolation_AndIsRefusedWhereThereIsNone()
+    {
+        using var temp = new TempDirectory();
+        using var remote = new TempDirectory();
+        var kit = await PushingToAsync(temp, remote);
+
+        var refused = await Push(kit, isolation: TestIsolation.UnavailableToExecutions("bubblewrap is not here", "install it")).RunAsync(Run(kit, PushStep()), Token);
+
+        Assert.Equal(
+            (false, HarnessExit.ToolMissing, "'push' is refused: agentPolicy.isolation is \"required\" and bubblewrap is not here, so no hook of the repository's runs over the agents' work here; install it. Nothing was pushed."),
+            (refused.Passed, refused.Exit, refused.Error));
+        Assert.Equal(string.Empty, (await kit.Harness.RunGitAsync(remote.Path, ["for-each-ref", "refs/heads/work"], Token)).StandardOutput.Trim());
+
+        var mechanism = new PassThroughMechanism();
+        var pushed = await Push(kit, isolation: TestIsolation.Under(mechanism)).RunAsync(Run(kit, PushStep()), Token);
+
+        Assert.True(pushed.Passed, pushed.Error);
+        Assert.Single(mechanism.Profiles);
+        Assert.Equal("""{"mode":"required","mechanism":"test","version":"1.0"}""", pushed.Output!["isolation"]!.ToJsonString());
+        Assert.Equal(await HeadAsync(kit), (await kit.Harness.RunGitAsync(remote.Path, ["rev-parse", "refs/heads/work"], Token)).StandardOutput.Trim());
+    }
+
+    /// <summary>
     /// A push sends the commit HEAD names to the branch of its name on the remote the run's branch goes to and answers
     /// that it moved it; run again, it pushes what is pushed already and answers that it did not.
     /// </summary>
@@ -49,8 +77,8 @@ public sealed class PublishStepRunnerTests
 
         var head = await HeadAsync(kit);
         Assert.True(first.Passed, first.Error);
-        Assert.Equal($$"""{"pushed":true,"remote":"origin","branch":"work","sha":"{{head}}"}""", first.Output!.ToJsonString());
-        Assert.Equal($$"""{"pushed":false,"remote":"origin","branch":"work","sha":"{{head}}"}""", again.Output!.ToJsonString());
+        Assert.Equal($$$"""{"pushed":true,"remote":"origin","branch":"work","sha":"{{{head}}}","isolation":{"mode":"required","none":"the test asked none"}}""", first.Output!.ToJsonString());
+        Assert.Equal($$$"""{"pushed":false,"remote":"origin","branch":"work","sha":"{{{head}}}","isolation":{"mode":"required","none":"the test asked none"}}""", again.Output!.ToJsonString());
         Assert.Equal(head, (await kit.Harness.RunGitAsync(remote.Path, ["rev-parse", "refs/heads/work"], Token)).StandardOutput.Trim());
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("push")!.Output!)!, first.Output));
 
@@ -58,7 +86,7 @@ public sealed class PublishStepRunnerTests
         await kit.Harness.RunGitAsync(kit.Main, ["commit", "--quiet", "--allow-empty", "-m", "more"], Token);
         var onward = await Push(kit).RunAsync(Run(kit, PushStep()), Token);
 
-        Assert.Equal($$"""{"pushed":true,"remote":"origin","branch":"work","sha":"{{await HeadAsync(kit)}}"}""", onward.Output!.ToJsonString());
+        Assert.Equal($$$"""{"pushed":true,"remote":"origin","branch":"work","sha":"{{{await HeadAsync(kit)}}}","isolation":{"mode":"required","none":"the test asked none"}}""", onward.Output!.ToJsonString());
     }
 
     /// <summary>A push goes to the remote the step names, where it names one, not to the one the run's branch goes to.</summary>
@@ -155,8 +183,8 @@ public sealed class PublishStepRunnerTests
         _ = await Push(kit, publisher).RunAsync(Run(kit, PushStep()), Token);
 
         var head = await HeadAsync(kit);
-        await publisher.Received(1).PushAsync(kit.Main, "origin", head, "work", TimeSpan.FromMinutes(3), Arg.Any<CancellationToken>());
-        await publisher.Received(1).PushAsync(kit.Main, "origin", head, "work", null, Arg.Any<CancellationToken>());
+        await publisher.Received(1).PushAsync(kit.Main, "origin", head, "work", TimeSpan.FromMinutes(3), null, Arg.Any<CancellationToken>());
+        await publisher.Received(1).PushAsync(kit.Main, "origin", head, "work", null, null, Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -374,8 +402,8 @@ public sealed class PublishStepRunnerTests
 
     private static WorkflowStep PullRequestStep() => new() { Name = "pr", Type = "pull-request", Title = "the run's work", Body = "body.md" };
 
-    private static PushStepRunner Push(OrchestrationKit kit, IGitPublisher? publisher = null)
-        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.GitClient, publisher ?? kit.Harness.GitPublisher);
+    private static PushStepRunner Push(OrchestrationKit kit, IGitPublisher? publisher = null, IAgentIsolation? isolation = null)
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.GitClient, publisher ?? kit.Harness.GitPublisher, isolation ?? new TestIsolation());
 
     /// <summary>
     /// A pull-request step whose forge's tool answers each call with the next of <paramref name="answers"/>, the last again

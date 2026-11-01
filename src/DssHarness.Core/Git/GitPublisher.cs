@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Output;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Git;
@@ -32,19 +33,21 @@ public interface IGitPublisher
     /// <summary>
     /// Commits what the index at <paramref name="tree"/> holds, with the message <paramref name="messageFile"/> holds -
     /// blank lines at its ends and trailing blanks dropped and a run of blank lines made one, nothing else - and a sign-off
-    /// where <paramref name="signOff"/> says; the repository's commit hooks run inside it.
+    /// where <paramref name="signOff"/> says; the repository's commit hooks run inside it, and it runs inside
+    /// <paramref name="isolation"/> where one is given.
     /// </summary>
     /// <param name="tree">The work tree's root.</param>
     /// <param name="messageFile">The file that holds the message.</param>
     /// <param name="signOff">Whether to add a sign-off (<c>-s</c>).</param>
     /// <param name="limit">How long the commit may take: the step's limit; null for its own.</param>
+    /// <param name="isolation">The operating system's isolation the commit and its hooks run inside; null for none.</param>
     /// <param name="cancellationToken">Stops git.</param>
     /// <returns>The id of the commit made.</returns>
     /// <exception cref="HarnessException">
     /// git would not commit - a hook among the reasons - (<see cref="HarnessExit.CommandFailed"/>), or did not finish in
     /// time (<see cref="HarnessExit.Incomplete"/>), its index as it left it.
     /// </exception>
-    Task<string> CommitAsync(string tree, string messageFile, bool signOff, TimeSpan? limit, CancellationToken cancellationToken);
+    Task<string> CommitAsync(string tree, string messageFile, bool signOff, TimeSpan? limit, ProcessIsolation? isolation, CancellationToken cancellationToken);
 
     /// <summary>
     /// Puts the index at <paramref name="tree"/> back at each of <paramref name="paths"/> as HEAD holds it - where the
@@ -60,20 +63,23 @@ public interface IGitPublisher
 
     /// <summary>
     /// Pushes <paramref name="commit"/> to <paramref name="remote"/>'s <paramref name="branch"/>, as a fast-forward and
-    /// never forced: a branch the remote moved since is refused there, and the push with it.
+    /// never forced: a branch the remote moved since is refused there, and the push with it. The repository's push hooks
+    /// run inside it, and it runs inside <paramref name="isolation"/> where one is given - handed, for a remote reached over
+    /// http or https, the credential git's helpers give for its address, asked outside it (<see cref="GitCredentialValues"/>).
     /// </summary>
     /// <param name="tree">The work tree's root.</param>
     /// <param name="remote">The remote, by name.</param>
     /// <param name="commit">The commit pushed.</param>
     /// <param name="branch">The branch it is pushed to, on the remote, by its short name.</param>
     /// <param name="limit">How long the push may take: the step's limit; null for its own.</param>
+    /// <param name="isolation">The operating system's isolation the push and its hooks run inside; null for none.</param>
     /// <param name="cancellationToken">Stops git.</param>
     /// <returns>Whether the remote's branch moved; false where it named the commit already.</returns>
     /// <exception cref="HarnessException">
     /// The remote refused it, or git could not reach it (<see cref="HarnessExit.CommandFailed"/>), or it did not finish in
     /// time (<see cref="HarnessExit.Incomplete"/>).
     /// </exception>
-    Task<bool> PushAsync(string tree, string remote, string commit, string branch, TimeSpan? limit, CancellationToken cancellationToken);
+    Task<bool> PushAsync(string tree, string remote, string commit, string branch, TimeSpan? limit, ProcessIsolation? isolation, CancellationToken cancellationToken);
 
     /// <summary>
     /// The pull request open from <paramref name="target"/>'s head to its base, of the target's own repository; null where
@@ -184,11 +190,11 @@ public sealed partial class GitPublisher(IGitClient git, GhProcess gh) : IGitPub
     }
 
     /// <inheritdoc/>
-    public async Task<string> CommitAsync(string tree, string messageFile, bool signOff, TimeSpan? limit, CancellationToken cancellationToken)
+    public async Task<string> CommitAsync(string tree, string messageFile, bool signOff, TimeSpan? limit, ProcessIsolation? isolation, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(messageFile);
 
-        var result = await RunAsync(tree, PublisherCommands.Commit, [messageFile, .. signOff ? ["-s"] : Array.Empty<string>()], limit, "so whether it committed is not known", cancellationToken)
+        var result = await RunAsync(tree, PublisherCommands.Commit, [messageFile, .. signOff ? ["-s"] : Array.Empty<string>()], limit, "so whether it committed is not known", cancellationToken, new Hooked(isolation, null))
             .ConfigureAwait(false);
 
         if (!result.Succeeded)
@@ -209,14 +215,24 @@ public sealed partial class GitPublisher(IGitClient git, GhProcess gh) : IGitPub
     }
 
     /// <inheritdoc/>
-    public async Task<bool> PushAsync(string tree, string remote, string commit, string branch, TimeSpan? limit, CancellationToken cancellationToken)
+    public async Task<bool> PushAsync(string tree, string remote, string commit, string branch, TimeSpan? limit, ProcessIsolation? isolation, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(remote);
         ArgumentException.ThrowIfNullOrWhiteSpace(commit);
         ArgumentException.ThrowIfNullOrWhiteSpace(branch);
 
+        // Inside an isolation the push reaches no helper that keeps its credential where the isolation hides it - a keyring
+        // behind the user's message bus - so the credential is asked here, outside, and handed in as values.
+        var credential = isolation is not null ? await CredentialAsync(tree, remote, cancellationToken).ConfigureAwait(false) : null;
         var destination = $"refs/heads/{branch}";
-        var result = await RunAsync(tree, PublisherCommands.Push, [remote, $"{commit}:{destination}"], limit, $"so whether {commit} reached {remote}'s '{branch}' is not known", cancellationToken)
+        var result = await RunAsync(
+                tree,
+                PublisherCommands.Push,
+                [remote, $"{commit}:{destination}"],
+                limit,
+                $"so whether {commit} reached {remote}'s '{branch}' is not known",
+                cancellationToken,
+                new Hooked(isolation, credential))
             .ConfigureAwait(false);
 
         // One line of the porcelain for the branch: its flag, where from and to, and git's summary; '=' is a branch that
@@ -290,6 +306,23 @@ public sealed partial class GitPublisher(IGitClient git, GhProcess gh) : IGitPub
             : throw new HarnessException(HarnessExit.CommandFailed, $"{GhProcess.Executable} said it opened a pull request from '{target.Head}', and named no address of one: {said.Trim()}");
     }
 
+    /// <summary>
+    /// The credential git's helpers give for <paramref name="remote"/>'s push address, where it is reached over http or
+    /// https; null where it is reached otherwise - ssh reads the user's keys and agent as it does for the user - or no
+    /// helper gives one.
+    /// </summary>
+    private async Task<GitCredential?> CredentialAsync(string tree, string remote, CancellationToken cancellationToken)
+    {
+        var address = await git.RunAsync(tree, ["remote", "get-url", "--push", remote], cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        return address.Succeeded
+            && address.OutputLines is [var url, ..]
+            && Uri.TryCreate(url.Trim(), UriKind.Absolute, out var parsed)
+            && parsed.Scheme is "http" or "https"
+                ? await git.CredentialAsync(tree, url.Trim(), cancellationToken).ConfigureAwait(false)
+                : null;
+    }
+
     /// <summary>The arguments that say which pull request: the repository where the target names one, the base and the head.</summary>
     private static IReadOnlyList<string> Where(GitPullRequestTarget target)
         => [.. target.Repository is { } repository ? ["--repo", repository] : Array.Empty<string>(), "--base", target.Base, "--head", target.Head];
@@ -299,12 +332,24 @@ public sealed partial class GitPublisher(IGitClient git, GhProcess gh) : IGitPub
     /// finished within <paramref name="limit"/>, else its own: one that did not finish is not done, which a caller may ask
     /// again (<see cref="HarnessExit.Incomplete"/>), saying what it may have done (<paramref name="late"/>).
     /// </summary>
-    private async Task<GitCommandResult> RunAsync(string tree, PublisherCommand command, IReadOnlyList<string> rest, TimeSpan? limit, string late, CancellationToken cancellationToken)
+    /// <remarks>
+    /// A commit and a push run the repository's hooks (<paramref name="hooked"/>), inside its isolation where it has one;
+    /// every other command of the list runs none of them.
+    /// </remarks>
+    private async Task<GitCommandResult> RunAsync(string tree, PublisherCommand command, IReadOnlyList<string> rest, TimeSpan? limit, string late, CancellationToken cancellationToken, Hooked? hooked = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tree);
 
         var budget = limit ?? command.Limit;
-        var result = await git.RunWithinAsync(tree, [.. command.Leading, .. rest], budget, cancellationToken).ConfigureAwait(false);
+        var result = hooked is null
+            ? await git.RunWithinAsync(tree, [.. command.Leading, .. rest], budget, cancellationToken).ConfigureAwait(false)
+            : await git.RunWithHooksAsync(
+                tree,
+                [.. GitCredentialValues.Arguments(hooked.Credential), .. command.Leading, .. rest],
+                budget,
+                hooked.Isolation,
+                GitCredentialValues.Values(hooked.Credential),
+                cancellationToken).ConfigureAwait(false);
 
         return result.TimedOut
             ? throw new HarnessException(
@@ -332,4 +377,45 @@ public sealed partial class GitPublisher(IGitClient git, GhProcess gh) : IGitPub
     /// <summary>The address the forge's tool says a pull request it opened is at, its number last.</summary>
     [GeneratedRegex(@"^https?://\S+/pull/(?<number>\d+)/?$", RegexOptions.CultureInvariant)]
     private static partial Regex PullRequestAddress();
+
+    /// <summary>A command of the list that runs the repository's hooks: the isolation it runs inside, and the credential it is handed.</summary>
+    /// <param name="Isolation">The operating system's isolation it runs inside; null for none.</param>
+    /// <param name="Credential">The credential handed to it as values; null for none.</param>
+    private sealed record Hooked(ProcessIsolation? Isolation, GitCredential? Credential);
+}
+
+/// <summary>
+/// How a credential asked outside the isolation is handed to the git inside it: as values in its environment, read by the
+/// one helper its command line names in place of every helper the configuration names - never a file of the tool's slots,
+/// which the isolation hides. Whatever runs inside the push - its pre-push hook among it - can read them, as it can read
+/// the credential of any push it runs in.
+/// </summary>
+public static class GitCredentialValues
+{
+    /// <summary>The variable the user's name is handed in.</summary>
+    public const string UsernameVariable = "DSSHARNESS_GIT_USERNAME";
+
+    /// <summary>The variable the password or token is handed in.</summary>
+    public const string PasswordVariable = "DSSHARNESS_GIT_PASSWORD";
+
+    /// <summary>
+    /// The helper that answers git's question for a credential with the two values, and nothing to its others: a shell
+    /// function, as git runs a helper that begins with an exclamation mark.
+    /// </summary>
+    public const string Helper = "!f() { if test \"$1\" = get; then printf 'username=%s\\npassword=%s\\n' \"$" + UsernameVariable + "\" \"$" + PasswordVariable + "\"; fi; }; f";
+
+    /// <summary>
+    /// The arguments that put <see cref="Helper"/> in place of every helper the configuration names - an empty helper first
+    /// clears them - where there is a credential; none where there is none.
+    /// </summary>
+    /// <param name="credential">The credential; null for none.</param>
+    public static IReadOnlyList<string> Arguments(GitCredential? credential)
+        => credential is null ? [] : ["-c", "credential.helper=", "-c", $"credential.helper={Helper}"];
+
+    /// <summary>The values the helper reads, by name; none where there is no credential.</summary>
+    /// <param name="credential">The credential; null for none.</param>
+    public static IReadOnlyDictionary<string, string>? Values(GitCredential? credential)
+        => credential is null
+            ? null
+            : new Dictionary<string, string>(StringComparer.Ordinal) { [UsernameVariable] = credential.Username, [PasswordVariable] = credential.Password };
 }

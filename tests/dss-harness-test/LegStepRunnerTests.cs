@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Application;
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Configuration;
@@ -9,6 +10,7 @@ using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
 using DssHarness.Core.Runs;
@@ -64,7 +66,7 @@ public sealed class LegStepRunnerTests : IDisposable
     /// One leg this machine runs - in a copy of its own where <paramref name="localCopy"/>, under no limit on its paths -
     /// a runner whose one phase passes, and the <paramref name="workflow"/> declared, where one is named.
     /// </summary>
-    private static HarnessConfig Config(bool localCopy, string? workflow = null)
+    private static HarnessConfig Config(bool localCopy, string? workflow = null, string? isolation = null)
     {
         var platform = new HostPlatform();
 
@@ -78,6 +80,7 @@ public sealed class LegStepRunnerTests : IDisposable
             },
             Workflows = workflow is null ? null : [workflow],
             Worktrees = new WorktreeSettings { PathLimit = 100_000 },
+            AgentPolicy = isolation is null ? null : new AgentPolicyConfig { Isolation = isolation },
         };
     }
 
@@ -147,7 +150,7 @@ public sealed class LegStepRunnerTests : IDisposable
             },
         };
         var said = new Said();
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs);
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
 
         var result = await runner.RunAsync(Run(new WorkflowStep { Name = "checks", Type = "build" }, repository.Path, said), Token);
 
@@ -156,7 +159,7 @@ public sealed class LegStepRunnerTests : IDisposable
         Assert.Equal([new FlowLeg("native", LegVerdict.Passed), new FlowLeg("here", LegVerdict.Passed)], result.Legs);
         Assert.Equal(["placed native in a copy", "placed here in the tree", "every leg placed", "copy of native made", "here ended", "native ended"], said.Events);
         Assert.Equal(
-            """{"passed":true,"exitCode":0,"verdicts":[{"leg":"native","verdict":"passed"},{"leg":"here","verdict":"passed"}],"red":[],"runDirectory":"/runs/r"}""",
+            """{"passed":true,"exitCode":0,"verdicts":[{"leg":"native","verdict":"passed"},{"leg":"here","verdict":"passed"}],"red":[],"runDirectory":"/runs/r","isolation":{"mode":"required","none":"the test asked none"}}""",
             result.Output!.ToJsonString());
 
         var step = (await LayoutAsync(harness, repository)).InstanceDirectory("checks", agent: null);
@@ -178,7 +181,7 @@ public sealed class LegStepRunnerTests : IDisposable
         var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
         var layout = inAnAgent ? (await AgentAsync(harness, repository)).Layout : await LayoutAsync(harness, repository);
         var legs = new FakeLegs();
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs);
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
         var step = new WorkflowStep { Name = "checks", Type = "build", In = inAnAgent ? "make" : null };
 
         var result = await runner.RunAsync(Run(step, repository.Path, worksIn: inAnAgent ? "a1" : null), Token);
@@ -236,7 +239,7 @@ public sealed class LegStepRunnerTests : IDisposable
                 HarnessExit.CommandFailed,
                 "a leg failed"),
         };
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs);
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
         var step = new WorkflowStep { Name = "checks", Type = "build", In = "make" };
 
         var result = await runner.RunAsync(Run(step, repository.Path, worksIn: "a1"), Token);
@@ -278,14 +281,14 @@ public sealed class LegStepRunnerTests : IDisposable
         var step = new WorkflowStep { Name = "shape", Type = "build", In = "make" };
         var kept = Path.Combine(layout.InstanceDirectory("shape", "a1"), OrchestratorLayout.StepLogsDirectoryName);
 
-        var failed = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, red)
+        var failed = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, red, new TestIsolation())
             .RunAsync(Run(step, repository.Path, worksIn: "a1"), Token);
 
         Assert.Equal("step (2/2)", failed.Output!["red"]![0]!["phase"]!.GetValue<string>());
         Assert.Equal(["native.step (2-2).log"], Directory.EnumerateFiles(kept).Select(Path.GetFileName));
         Assert.Equal("the second line failed\n", File.ReadAllText(Path.Combine(kept, "native.step (2-2).log")));
 
-        var passed = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, new FakeLegs())
+        var passed = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, new FakeLegs(), new TestIsolation())
             .RunAsync(Run(step, repository.Path, worksIn: "a1"), Token);
 
         Assert.True(passed.Passed, passed.Error);
@@ -294,12 +297,14 @@ public sealed class LegStepRunnerTests : IDisposable
 
     /// <summary>
     /// A workflow's run step, run by the tool itself: its leg works in a copy of its own and the step's record says the
-    /// tree was let go once the copy was made; its output answers the leg's verdict, and its ledger is kept beside it.
+    /// tree was let go once the copy was made; its output answers the leg's verdict and the isolation its leg's work was
+    /// held to - this machine's, or none where it has none and the configuration prefers it - and its ledger is kept
+    /// beside it.
     /// </summary>
     [Fact]
     public async Task ARunOfAWorkflow_RunsItsLegStep_AndRecordsTheTreeLetGo()
     {
-        var (harness, repository) = await RepositoryAsync(Config(localCopy: true, workflow: "flow"));
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: true, workflow: "flow", isolation: "preferred"));
         repository.WriteFile(".harness-config/workflows/flow/flow.yml", """
             name: flow
             steps:
@@ -320,7 +325,51 @@ public sealed class LegStepRunnerTests : IDisposable
         Assert.Equal("Done", record["state"]!.GetValue<string>());
         Assert.True(record["copied"]!.GetValue<bool>());
         Assert.Equal("""[{"leg":"native","verdict":"passed"}]""", output["verdicts"]!.ToJsonString());
+        Assert.Equal("preferred", output["isolation"]!["mode"]!.GetValue<string>());
         Assert.Equal("passed", ledger["legs"]![0]!["verdict"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// Where this machine has no isolation, a leg step under required runs no leg - refused 14, why, then the remedy - and
+    /// under preferred runs them, answering the isolation it ran under. Each leg's own is asked of the tree it works in, its
+    /// records written, and a sweep's of the workers it makes beside them.
+    /// </summary>
+    [Fact]
+    public async Task WithNoIsolation_ALegStepIsRefusedUnderRequired_AndRunsSayingItUnderPreferred()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        var legs = new FakeLegs();
+        var none = TestIsolation.UnavailableToExecutions("bubblewrap is not here", "install it");
+        var step = new WorkflowStep { Name = "checks", Type = "build" };
+
+        var refused = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, none)
+            .RunAsync(Run(step, repository.Path), Token);
+
+        Assert.Equal(
+            (false, HarnessExit.ToolMissing, "'checks' is refused: agentPolicy.isolation is \"required\" and bubblewrap is not here, so nothing the agents wrote is built, tested or run here; install it. Nothing was run."),
+            (refused.Passed, refused.Exit, refused.Error));
+        Assert.Empty(legs.Asked);
+        Assert.Equal(IsolatedExecution.Legs, Assert.Single(none.Executions).Kind);
+        Assert.Equal([repository.Path], none.Executions[0].WritableRoots);
+
+        var (preferring, preferred) = await RepositoryAsync(Config(localCopy: false, isolation: "preferred"));
+        var ran = await new BuildStepRunner(preferring.ContextLoader, preferring.Platform, preferring.OrchestrationStore, preferring.FileSystem, preferring.ChildSessions, legs, none)
+            .RunAsync(Run(step, preferred.Path), Token);
+
+        Assert.True(ran.Passed, ran.Error);
+        Assert.Equal("""{"mode":"preferred","none":"bubblewrap is not here"}""", ran.Output!["isolation"]!.ToJsonString());
+
+        var sweeping = new TestIsolation();
+        _ = await new SweepStepRunner(preferring.ContextLoader, preferring.Platform, preferring.OrchestrationStore, preferring.FileSystem, preferring.ChildSessions, legs, sweeping)
+            .RunAsync(Run(new WorkflowStep { Name = "arms", Type = "check-mutations" }, preferred.Path), Token);
+        var copy = Path.Combine(preferred.Path, HarnessLayout.LegsDirectoryName, "a-copy");
+        var records = Path.Combine(preferred.Path, HarnessLayout.DirectoryName, "runs", "r");
+        _ = await legs.Asked[^1].Isolation!.ForLegAsync(copy, records, Token);
+        _ = await legs.Asked[^2].Isolation!.ForLegAsync(copy, records, Token);
+
+        Assert.Equal([copy, records, Path.Combine(copy, HarnessLayout.MutationsDirectoryName)], sweeping.Executions[^1].WritableRoots);
+        Assert.Equal([preferred.Path, copy], sweeping.Executions[^1].Trees.Skip(sweeping.Executions[^1].Trees.Count - 2));
+        Assert.Equal([copy, records], none.Executions[^1].WritableRoots);
     }
 
     /// <summary>
@@ -332,7 +381,7 @@ public sealed class LegStepRunnerTests : IDisposable
     {
         var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
         var legs = new FakeLegs();
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs);
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
         var step = new WorkflowStep { Name = "checks", Type = "build", In = "make" };
 
         var unmade = await runner.RunAsync(Run(step, repository.Path), Token);
@@ -361,10 +410,10 @@ public sealed class LegStepRunnerTests : IDisposable
         var legs = new FakeLegs();
         IFlowStepTypeRunner[] runners =
         [
-            new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs),
-            new TestStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs),
-            new RunStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs),
-            new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs),
+            new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
+            new TestStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
+            new RunStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
+            new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
         ];
         WorkflowStep[] steps =
         [
@@ -384,19 +433,20 @@ public sealed class LegStepRunnerTests : IDisposable
 
         Assert.Collection(
             legs.Asked,
-            asked => Assert.Equal(new BuildLegsRequest { Directory = repository.Path, Watch = asked.Watch }, asked),
+            asked => Assert.Equal(new BuildLegsRequest { Directory = repository.Path, Watch = asked.Watch, Isolation = asked.Isolation }, asked),
             asked => Assert.Equivalent(
-                new TestLegsRequest { Directory = repository.Path, LegNames = ["native"], Filter = "fast", Excludes = ["slow"], Labels = ["unit"], SkipBuild = true, Watch = asked.Watch },
+                new TestLegsRequest { Directory = repository.Path, LegNames = ["native"], Filter = "fast", Excludes = ["slow"], Labels = ["unit"], SkipBuild = true, Watch = asked.Watch, Isolation = asked.Isolation },
                 asked,
                 strict: true),
             asked => Assert.Equivalent(
-                new RunnerLegsRequest { Directory = repository.Path, Runner = "probe", Inputs = new Dictionary<string, string> { ["target"] = "all" }, Watch = asked.Watch },
+                new RunnerLegsRequest { Directory = repository.Path, Runner = "probe", Inputs = new Dictionary<string, string> { ["target"] = "all" }, Watch = asked.Watch, Isolation = asked.Isolation },
                 asked,
                 strict: true),
-            asked => Assert.Equivalent(new RunnerLegsRequest { Directory = repository.Path, Runner = "TIDY", InPlace = true, Watch = asked.Watch }, asked, strict: true),
-            asked => Assert.Equal(new MutationLegsRequest { Directory = repository.Path, Watch = asked.Watch }, asked),
-            asked => Assert.Equivalent(new MutationLegsRequest { Directory = repository.Path, ArmNames = ["A-ONE"], Pending = true, Watch = asked.Watch }, asked, strict: true));
+            asked => Assert.Equivalent(new RunnerLegsRequest { Directory = repository.Path, Runner = "TIDY", InPlace = true, Watch = asked.Watch, Isolation = asked.Isolation }, asked, strict: true),
+            asked => Assert.Equal(new MutationLegsRequest { Directory = repository.Path, Watch = asked.Watch, Isolation = asked.Isolation }, asked),
+            asked => Assert.Equivalent(new MutationLegsRequest { Directory = repository.Path, ArmNames = ["A-ONE"], Pending = true, Watch = asked.Watch, Isolation = asked.Isolation }, asked, strict: true));
         Assert.All(legs.Asked, asked => Assert.NotNull(asked.Watch));
+        Assert.All(legs.Asked, asked => Assert.NotNull(asked.Isolation));
     }
 
     /// <summary>
@@ -418,7 +468,7 @@ public sealed class LegStepRunnerTests : IDisposable
                 Cause = OutcomeCause.None,
             },
         };
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs);
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
 
         var result = await runner.RunAsync(Run(new WorkflowStep { Name = "build", Type = "build" }, repository.Path), Token);
 
@@ -454,7 +504,7 @@ public sealed class LegStepRunnerTests : IDisposable
                 }
             },
         };
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs);
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
 
         var result = await runner.RunAsync(Run(new WorkflowStep { Name = "build", Type = "build" }, repository.Path), Token);
 

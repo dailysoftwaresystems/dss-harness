@@ -1,8 +1,10 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 using DssHarness.Core.Schemas;
 using NSubstitute;
@@ -30,6 +32,36 @@ public sealed class CommitStepTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
+    /// A commit runs the repository's commit hooks inside the isolation of the agents' work - its git started by the
+    /// mechanism, given the main checkout's ground - and answers it; where this machine has none, required fails it 14
+    /// before anything is staged, saying why and the remedy.
+    /// </summary>
+    [Fact]
+    public async Task ACommit_RunsItsHooksInsideTheIsolation_AndIsRefusedBeforeStagingWhereThereIsNone()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        _ = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+
+        var none = TestIsolation.UnavailableToExecutions("bubblewrap is not here", "install it");
+        var refused = await Runner(kit, isolation: none).RunAsync(Run(kit, Step(), "fold"), Token);
+
+        Assert.Equal(
+            (false, HarnessExit.ToolMissing, "'commit' is refused: agentPolicy.isolation is \"required\" and bubblewrap is not here, so no hook of the repository's runs over the agents' work here; install it. Nothing was staged."),
+            (refused.Passed, refused.Exit, refused.Error));
+        Assert.Empty((await kit.Harness.RunGitAsync(kit.Main, ["diff", "--cached", "--name-only"], Token)).StandardOutput.Trim());
+
+        var mechanism = new PassThroughMechanism();
+        var under = TestIsolation.Under(mechanism);
+        var ended = await Runner(kit, isolation: under).RunAsync(Run(kit, Step(), "fold", attempt: 2), Token);
+
+        Assert.True(ended.Passed, ended.Error);
+        Assert.Equal(new IsolatedWrite(kit.Main, Directory: true, Writable: true), Assert.Single(Assert.Single(mechanism.Profiles).Writes));
+        Assert.Equal((IsolatedExecution.Hooks, kit.Main), (Assert.Single(under.Executions).Kind, under.Executions[0].WritableRoots[0]));
+        Assert.Equal("""{"mode":"required","mechanism":"test","version":"1.0"}""", ended.Output!["isolation"]!.ToJsonString());
+    }
+
+    /// <summary>
     /// A commit stages the paths the folds upstream of it changed and no sibling's, commits them once with its message
     /// and a sign-off, and marks its staged set committed and each fold path it took; it answers committed, the commit
     /// and the paths.
@@ -46,7 +78,7 @@ public sealed class CommitStepTests
 
         Assert.True(ended.Passed, ended.Error);
         var head = await HeadAsync(kit);
-        Assert.Equal($$"""{"committed":true,"sha":"{{head}}","paths":["a.txt","new/c.txt"],"ignored":[]}""", ended.Output!.ToJsonString());
+        Assert.Equal($$$"""{"committed":true,"sha":"{{{head}}}","paths":["a.txt","new/c.txt"],"ignored":[],"isolation":{"mode":"required","none":"the test asked none"}}""", ended.Output!.ToJsonString());
         Assert.Matches(@"\Acheckpoint\n\nSigned-off-by: ", await MessageAsync(kit));
         Assert.Equal([" M b.txt"], await StatusAsync(kit));
 
@@ -368,7 +400,7 @@ public sealed class CommitStepTests
         var head = await HeadAsync(kit);
         var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
 
-        Assert.Equal($$"""{"committed":true,"sha":"{{await HeadAsync(kit)}}","paths":["b.txt"],"ignored":[]}""", ended.Output!.ToJsonString());
+        Assert.Equal($$$"""{"committed":true,"sha":"{{{await HeadAsync(kit)}}}","paths":["b.txt"],"ignored":[],"isolation":{"mode":"required","none":"the test asked none"}}""", ended.Output!.ToJsonString());
 
         var ledger = kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!;
 
@@ -407,7 +439,8 @@ public sealed class CommitStepTests
 
     /// <summary>
     /// Run again once it has committed - resumed after the commit, before the engine wrote the step done - the step answers
-    /// the commit it made, committed true, and stages nothing.
+    /// the commit it made, committed true, and stages nothing: as the first answered it, but for the isolation the first
+    /// ran the repository's hooks under, for it runs none.
     /// </summary>
     [Fact]
     public async Task RunAgainOnceItHasCommitted_TheStepAnswersTheCommitItMade()
@@ -422,7 +455,7 @@ public sealed class CommitStepTests
 
         Assert.True(again.Passed, again.Error);
         Assert.Equal($$"""{"committed":true,"sha":"{{await HeadAsync(kit)}}","paths":["a.txt"],"ignored":[]}""", again.Output!.ToJsonString());
-        Assert.Equal(first.Output!.ToJsonString(), again.Output.ToJsonString());
+        Assert.Equal($$$"""{"committed":true,"sha":"{{{await HeadAsync(kit)}}}","paths":["a.txt"],"ignored":[],"isolation":{"mode":"required","none":"the test asked none"}}""", first.Output!.ToJsonString());
         Assert.Empty(publisher.ReceivedCalls());
     }
 
@@ -443,7 +476,7 @@ public sealed class CommitStepTests
         var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold", attempt: 2), Token);
 
         Assert.True(ended.Passed, ended.Error);
-        Assert.Equal($$"""{"committed":true,"sha":"{{await HeadAsync(kit)}}","paths":["evidence/run.txt"],"ignored":[]}""", ended.Output!.ToJsonString());
+        Assert.Equal($$$"""{"committed":true,"sha":"{{{await HeadAsync(kit)}}}","paths":["evidence/run.txt"],"ignored":[],"isolation":{"mode":"required","none":"the test asked none"}}""", ended.Output!.ToJsonString());
         Assert.Equal(
             [("evidence/run.txt", "c2", (bool?)null), ("a.txt", "c1", null)],
             kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Of(fold)!.Paths.Select(path => (path.Path, path.Committed, path.Ignored)));
@@ -820,7 +853,7 @@ public sealed class CommitStepTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         _ = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
         var publisher = Substitute.For<IGitPublisher>();
-        publisher.CommitAsync(default!, default!, default, default, Token).ReturnsForAnyArgs(Task.FromException<string>(new HarnessException(HarnessExit.CommandFailed, "git did not commit: the hook says no")));
+        publisher.CommitAsync(default!, default!, default, default, default, Token).ReturnsForAnyArgs(Task.FromException<string>(new HarnessException(HarnessExit.CommandFailed, "git did not commit: the hook says no")));
         publisher.UnstageAsync(default!, default!, default, Token).ReturnsForAnyArgs(Task.FromException(new HarnessException(HarnessExit.Incomplete, "git reset did not finish within 15 minutes")));
 
         var refused = await Runner(kit, publisher: publisher).RunAsync(Run(kit, Step(), "fold"), Token);
@@ -842,10 +875,10 @@ public sealed class CommitStepTests
             return inner.StageAsync(tree, present, deleted, limit, cancellationToken);
         }
 
-        public Task<string> CommitAsync(string tree, string messageFile, bool signOff, TimeSpan? limit, CancellationToken cancellationToken)
+        public Task<string> CommitAsync(string tree, string messageFile, bool signOff, TimeSpan? limit, ProcessIsolation? isolation, CancellationToken cancellationToken)
         {
             limits.Add(limit);
-            return inner.CommitAsync(tree, messageFile, signOff, limit, cancellationToken);
+            return inner.CommitAsync(tree, messageFile, signOff, limit, isolation, cancellationToken);
         }
 
         public Task UnstageAsync(string tree, IReadOnlyList<string> paths, TimeSpan? limit, CancellationToken cancellationToken)
@@ -854,7 +887,7 @@ public sealed class CommitStepTests
             return inner.UnstageAsync(tree, paths, limit, cancellationToken);
         }
 
-        public Task<bool> PushAsync(string tree, string remote, string commit, string branch, TimeSpan? limit, CancellationToken cancellationToken)
+        public Task<bool> PushAsync(string tree, string remote, string commit, string branch, TimeSpan? limit, ProcessIsolation? isolation, CancellationToken cancellationToken)
             => throw new NotSupportedException("a commit pushes nothing");
 
         public Task<GitPullRequest?> FindPullRequestAsync(string tree, GitPullRequestTarget target, TimeSpan? limit, CancellationToken cancellationToken)
@@ -864,7 +897,7 @@ public sealed class CommitStepTests
             => throw new NotSupportedException("a commit opens nothing");
     }
 
-    private static CommitStepRunner Runner(OrchestrationKit kit, IGitClient? git = null, IGitPublisher? publisher = null)
+    private static CommitStepRunner Runner(OrchestrationKit kit, IGitClient? git = null, IGitPublisher? publisher = null, IAgentIsolation? isolation = null)
         => new(
             kit.Harness.ContextLoader,
             kit.Harness.Platform,
@@ -872,7 +905,8 @@ public sealed class CommitStepTests
             Ledger(kit),
             git ?? kit.Harness.GitClient,
             publisher ?? kit.Harness.GitPublisher,
-            kit.Harness.FileSystem);
+            kit.Harness.FileSystem,
+            isolation ?? new TestIsolation());
 
     /// <summary>
     /// One run of <paramref name="step"/> on <paramref name="kit"/>'s orchestrator, the engine having read

@@ -200,9 +200,10 @@ stopped, so a leftover may die of that hangup with the engine, and is then not s
 record that does not read as one is said and left, and a starter on another machine is never taken
 to have gone. Windows records nothing: its job already ends a killed starter's children.
 
-A contained request can also carry an **isolation** (`ProcessRequest.Isolation`, a
-`ProcessIsolation`: a mechanism and a profile), refused without containment, for `contain-exec` is
-what places it: the runner hands `contain-exec`, after its separator, the mechanism's own command
+A request can also carry an **isolation** (`ProcessRequest.Isolation`, a `ProcessIsolation`: a
+mechanism and a profile), and an isolated child always starts through `contain-exec`, contained or
+not - one that is not is placed as any other, in a group of its own on Linux and macOS - for
+`contain-exec` is what places it: the runner hands `contain-exec`, after its separator, the mechanism's own command
 line (`IIsolationMechanism.Command`) in the program's place - the program resolved by its whole
 path first, its words after the mechanism's - so `contain-exec` becomes the mechanism, and the
 mechanism the program, and no child runs outside it for an instant. On Linux the mechanism is the
@@ -2348,6 +2349,30 @@ Code directories for a Claude Code launch. Inside the isolation a verb of this t
 the words policy refuses each to every agent by name (`AgentPolicy.SlotOrStateVerbs`, after `ToolVerbs` for a step
 and the side-task's own refusal for a side-task); the verbs that only read, and those that write only the tree's own
 files, stay open.
+
+The same owner decides the isolation of the tool's own executions of what the agents wrote
+(`IAgentIsolation.ForExecutionAsync`, an `ExecutionIsolation`, from an `ExecutionGround` that `ExecutionGrounds` alone
+builds): the slots and the tool's own Claude Code directory hidden, git's code-running files of each tree, the user's
+git configuration and the tool's state under each sealed, the ground's own places written again - a state place the
+execution writes whole, a sweep's workers' slot, left unsealed, for the profile keeps a place both sealed and written
+sealed. Its refusal, notice and record are a launch's, from one base (`IsolationDecision`), with words of their own.
+A run's leg step (`LegStepRunner`) asks it for its tree before anything starts - none here under `required` ends the
+step 14, nothing run - and hands the leg service an `ILegIsolation` (`LegRunRequest.Isolation`, carried by each leg
+command's request) that asks it again for each leg this machine runs, of its own ground (`ExecutionGrounds.OfLeg`: the
+tree it works in, the run's records, and what `LegStepRunner.WritesBeside` names - a sweep's workers); `LegRunService`
+skips a leg whose own is refused (`skipped-unavailable`), says the notice on its line, and holds the rest for its
+work alone (`PhaseIsolation`, an ambient value each leg's flow holds), which `PhaseRunner` gives every phase that names
+none of its own and is not left running - a set-up's lines, run around the work, are never inside it. A leg another
+machine runs is that machine's, outside this one's isolation: the request never sends it. The step answers
+`isolation` (`AgentIsolationRecord.ToOutput`, in `WorkflowStepTypes`' output of each leg step). The tool's own git runs
+none of the repository's hooks (`GitHooks`: every command `GitClient` runs is given `core.hooksPath` at the null device,
+`/dev/null`, `\\.\NUL` on Windows, but the subcommands that only read, `GitHooks.Questions`, which answer where the hooks
+are as git runs them) but a commit's and a push's (`IGitClient.RunWithHooksAsync`), which `GitPublisher` runs inside the
+isolation `CommitStepRunner` and `PushStepRunner` ask of the main checkout's ground (`ExecutionGrounds.OfHooks`) before
+anything is staged or pushed; a push inside one, to a remote over http or https, is handed the credential git's helpers
+give for its address, asked outside (`IGitClient.CredentialAsync`, `git credential fill`), as values its environment
+holds and the one helper its command line names reads (`GitCredentialValues`). Both answer `isolation` beside what they
+answered.
 A step's records are kept where the one owner of a step instance's
 directory spells it (`OrchestratorLayout.InstanceDirectory`, a work item's brackets as `FlowInstanceId.DirectoryOf`
 writes them), named on the request (`AgentStepRequest.RecordDirectory`) for the runner, the advisor and the handoff's
@@ -2704,8 +2729,9 @@ leaving gh to read the remotes itself, where it cannot be told - against `FlowCh
 started (`WorkflowNamedFiles.ReadText`, the one rule the definition's check holds a named file to) and the runner wrote
 to the step's directory; `FlowReports.LeftForAPerson` names each pull request the run opened or found, and each path
 its folds changed that git ignores, as its commits answered them. Every command a
-publishing step runs is one of `PublisherCommands.All`, over `IGitClient.RunWithinAsync` and `GhProcess`, given the
-step's `timeoutMinutes` else the command's own limit. The other step runners - the agents, the rest of the steps over the services the tool already has - are
+publishing step runs is one of `PublisherCommands.All`, over `IGitClient.RunWithinAsync` and `GhProcess` - the commit
+and the push over `IGitClient.RunWithHooksAsync`, the repository's hooks run inside the isolation their step asked -
+given the step's `timeoutMinutes` else the command's own limit. The other step runners - the agents, the rest of the steps over the services the tool already has - are
 the next thing the tool grows.
 
 A definition is held to the `config.json` it is checked under as well: a `run` step whose runner -

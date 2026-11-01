@@ -188,15 +188,15 @@ public static class WorkflowStepTypes
             "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)",
             ["read main", "write the agent's tree where its access is write"],
             "maxReasoningAgents"),
-        new("build", LegKeys, [], "red", "BuildStepRunner: IBuildLegs over LegRunService", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
-        new("test", [.. LegKeys, .. TestKeys], ["filter", "exclude", "labels"], "red", "TestStepRunner: ITestLegs over LegRunService", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
-        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs], ["inputs"], "red", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("build", LegKeys, [], "red", "BuildStepRunner: IBuildLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("test", [.. LegKeys, .. TestKeys], ["filter", "exclude", "labels"], "red", "TestStepRunner: ITestLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs], ["inputs"], "red", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners, IAgentIsolation.ForExecutionAsync", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses", LegsOutput(arms: false)),
         new(
             "check-mutations",
             [.. LegKeys, new("arms", "the arms it runs, by id; absent, every arm"), new("pending", "drive only the arms with no recorded passed that still holds")],
             [],
             "red",
-            "SweepStepRunner: IMutationLegs through MutationService, over LegRunService",
+            "SweepStepRunner: IMutationLegs through MutationService, over LegRunService, IAgentIsolation.ForExecutionAsync",
             ["run(tree)"],
             "maxParallelProcesses",
             LegsOutput(arms: true)),
@@ -304,19 +304,19 @@ public static class WorkflowStepTypes
             [new("message", "the commit message it writes; required where the config declares no commit.template, and not used where it declares one"), new("variables", "the values the message template reads")],
             ["message", "variables"],
             null,
-            "CommitStepRunner: FoldLedger.Owed, CommitTemplate, IGitPublisher over IGitClient.RunWithinAsync",
+            "CommitStepRunner: FoldLedger.Owed, CommitTemplate, IGitPublisher over IGitClient.RunWithinAsync and RunWithHooksAsync, IAgentIsolation.ForExecutionAsync",
             ["write main"],
             null,
-            ObjectOf(("committed", Flag), ("sha", TextOrNull), ("paths", ListOf(Text)), ("ignored", ListOf(Text)))),
+            ObjectOf(("committed", Flag), ("sha", TextOrNull), ("paths", ListOf(Text)), ("ignored", ListOf(Text)), ("isolation", IsolationOutput))),
         new(
             "push",
             [new("remote", "the remote it pushes to; absent, the one the run's branch goes to"), new("checkpoint", "a push made before the run's end, which runs only where the workflow says pushCheckpoints")],
             [],
             null,
-            "PushStepRunner: FlowCheckout, IGitPublisher.PushAsync over IGitClient.RunWithinAsync",
+            "PushStepRunner: FlowCheckout, IGitPublisher.PushAsync over IGitClient.RunWithHooksAsync, IAgentIsolation.ForExecutionAsync",
             ["the remote resource"],
             null,
-            ObjectOf(("pushed", Flag), ("remote", Text), ("branch", Text), ("sha", Text))),
+            ObjectOf(("pushed", Flag), ("remote", Text), ("branch", Text), ("sha", Text), ("isolation", IsolationOutput))),
         new(
             "pull-request",
             [
@@ -548,7 +548,15 @@ public static class WorkflowStepTypes
         ("exitCode", WholeNumber),
         ("verdicts", ListOf(ObjectOf(("leg", Text), ("verdict", Text)))),
         ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), .. arms ? [("arm", TextOrNull)] : Array.Empty<(string, string)>()]))),
-        ("runDirectory", TextOrNull));
+        ("runDirectory", TextOrNull),
+        ("isolation", IsolationOutput));
+
+    /// <summary>
+    /// What a step that runs the agents' work answers of the operating system's isolation it ran under: the mode, and the
+    /// mechanism and its version, or why none (<see cref="Agents.Isolation.AgentIsolationRecord"/>) - each key left out
+    /// where it holds nothing.
+    /// </summary>
+    private static string IsolationOutput => ObjectOf(("mode", Text), ("mechanism", Text), ("version", Text), ("none", Text));
 
     /// <summary>What a fold and a deletion answer: the paths written and deleted, the registries changed, and the ids of the rows applied.</summary>
     private static string FoldOutput => ObjectOf(("written", ListOf(Text)), ("deleted", ListOf(Text)), ("registries", ListOf(Text)), ("rows", ListOf(Text)));

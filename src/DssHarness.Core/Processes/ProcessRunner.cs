@@ -247,9 +247,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // from the terminal starts as any other: started with no window, it has a console of its own,
         // which an interruption typed at this process's console never reaches. On Linux and macOS a
         // bound child under no scope starts as any other: nothing there ends a child with the process
-        // that started it.
+        // that started it. An isolated child always does, contained or not: the step becomes the mechanism in
+        // its place, so the child never runs outside it for an instant.
         var bound = request.Bound && !request.Contained && windows;
-        var throughStep = request.Contained || (apart && !windows) || bound;
+        var throughStep = request.Contained || (apart && !windows) || bound || request.Isolation is not null;
 
         // A child that leads a group of the step's making, on Linux and macOS: stopped by its group as well as its tree,
         // and its record kept while anything is left in the group.
@@ -264,12 +265,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         }
 
         // An isolated child is started by the mechanism the step becomes in its place, the program and its arguments handed
-        // to it whole: the step's own placing stands as for any contained child, and the program starts inside.
-        if (request.Isolation is not null && !request.Contained)
-        {
-            throw new ArgumentException("An isolated child is placed by the contained step: give Isolation only with Contained.", nameof(request));
-        }
-
+        // to it whole: the step's own placing stands as for any child it starts, and the program starts inside.
         var (startedProgram, startedArguments) = request.Isolation is { } isolation
             ? isolation.Mechanism.Command(isolation.Profile, resolved, request.Arguments)
             : (resolved, request.Arguments);

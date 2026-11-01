@@ -8,6 +8,7 @@ using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.SetUps;
@@ -100,6 +101,28 @@ public sealed record LegRunRequest(
     /// by it. Never sent to a host: the machine that placed a leg says where it works and when its copy is made.
     /// </summary>
     public ILegRunWatch? Watch { get; init; }
+
+    /// <summary>
+    /// What holds the work of each leg this machine runs itself inside the operating system's isolation - a run's machine
+    /// step's, whose legs build, test and run what its agents wrote - or <see langword="null"/> where the work runs as the
+    /// configuration says, outside any. Never sent to a host: a leg another machine runs is that machine's, as its whole
+    /// line is.
+    /// </summary>
+    public ILegIsolation? Isolation { get; init; }
+}
+
+/// <summary>
+/// Decides the operating system's isolation the work of one leg this machine runs is held inside
+/// (<see cref="LegRunRequest.Isolation"/>): each leg's own, for each works in a tree of its own - the step's tree, or its
+/// copy of it - and keeps its records in the run's directory.
+/// </summary>
+public interface ILegIsolation
+{
+    /// <summary>The isolation the phases of the leg that works in <paramref name="legTree"/> run inside, or why none.</summary>
+    /// <param name="legTree">The tree the leg works in.</param>
+    /// <param name="runDirectory">Where the run keeps the leg's records.</param>
+    /// <param name="cancellationToken">Stops the questions of the trees.</param>
+    Task<Agents.Isolation.ExecutionIsolation> ForLegAsync(string legTree, string runDirectory, CancellationToken cancellationToken);
 }
 
 /// <summary>One unit of a leg's work asking its machine to take it: an arm of a sweep.</summary>
@@ -1138,14 +1161,44 @@ public sealed class LegRunService(
             runsIn = _contextLoader.ForCopy(context, working.HostTreeRoot);
         }
 
-        Task<LegEntry> Work(CancellationToken token) => work(
-            new LegWork(runsAs, runsIn, runId, runDirectory, request.Time)
+        // The work of a run's machine step's leg builds, tests and runs what its agents wrote: held inside the operating
+        // system's isolation, the leg's own, decided before anything of it starts. Where the isolation is required and
+        // cannot be had for the leg's tree, the leg is skipped saying why; where it is preferred and there is none, the
+        // leg's line says what runs outside it.
+        ProcessIsolation? isolated = null;
+
+        if (request.Isolation is { } isolation)
+        {
+            var held = await isolation.ForLegAsync(runsAs.HostTreeRoot, runDirectory, cancellationToken).ConfigureAwait(false);
+
+            if (held.Refusal($"leg '{runsAs.Name}'") is { } refused)
             {
-                AdmitUnit = (unit, admitted) => AskAsync(context, runsAs, request, runId, ledger, $"{runsAs.Name}/{unit.Unit}", unit.Room, unit.Settle, admitted),
-                Progress = message => ledger.Transition(runsAs.Name, message),
-                DeveloperEnvironment = setUp?.Fact,
-            },
-            token);
+                return Ended(runsAs, LegVerdict.SkippedUnavailable, refused, started);
+            }
+
+            if (held.Notice is { } outside)
+            {
+                ledger.Transition(runsAs.Name, outside);
+            }
+
+            isolated = held.ForProcess;
+        }
+
+        // Every phase the work starts runs inside the leg's isolation, held for the work alone: a set-up's lines, brought
+        // up around it, run as the configuration gives them.
+        async Task<LegEntry> Work(CancellationToken token)
+        {
+            using var holding = isolated is null ? null : PhaseIsolation.Enter(isolated);
+
+            return await work(
+                new LegWork(runsAs, runsIn, runId, runDirectory, request.Time)
+                {
+                    AdmitUnit = (unit, admitted) => AskAsync(context, runsAs, request, runId, ledger, $"{runsAs.Name}/{unit.Unit}", unit.Room, unit.Settle, admitted),
+                    Progress = message => ledger.Transition(runsAs.Name, message),
+                    DeveloperEnvironment = setUp?.Fact,
+                },
+                token).ConfigureAwait(false);
+        }
 
         // A leg's set-ups come up in the tree its work runs in, on this machine - the copy, the host's copy, the tree -
         // before that work starts, and go down after it, whatever it ended with: as the configuration of the reading its

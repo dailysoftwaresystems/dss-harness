@@ -1,4 +1,6 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents.Isolation;
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -19,12 +21,21 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// the log of each red leg's phase that did not pass, whole, where this machine ran it: that worktree, and the run
 /// directory in it, go when the agent does.
 /// </summary>
+/// <remarks>
+/// What its legs build, test and run is what the run's agents wrote: the work of each leg this machine runs is held inside
+/// the operating system's isolation of the agents' work, the leg's own (<see cref="ExecutionGrounds.OfLeg"/>), and the step
+/// answers the isolation under <c>isolation</c>. Where this machine has none, <c>agentPolicy.isolation: required</c> fails
+/// the step 14 with nothing run, and <c>preferred</c> runs its legs outside, each leg's line saying so. A leg another
+/// machine runs - an ssh host, a WSL distribution - runs there as that machine's tool runs any leg, outside this machine's
+/// isolation.
+/// </remarks>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the record of the agent the step works in.</param>
 /// <param name="fileSystem">Keeps the ledger and the red logs in the step's directory.</param>
 /// <param name="children">Records in its directory the group of what the step's legs start bound, while anything is in it.</param>
-public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children) : IFlowStepTypeRunner
+/// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
+public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IAgentIsolation isolation) : IFlowStepTypeRunner
 {
     /// <inheritdoc/>
     public abstract string Type { get; }
@@ -55,6 +66,17 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
             tree = worktree;
         }
 
+        // The isolation the legs' work is held inside, decided before anything of the step starts: where it is required and
+        // this machine has none, no leg runs.
+        var mainCheckout = context.Layout.MainCheckoutRoot;
+        var held = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfLegs(context.Config, mainCheckout, tree), mainCheckout, cancellationToken).ConfigureAwait(false);
+
+        if (held.Refusal($"'{run.Instance}'") is { } refused)
+        {
+            return FlowStepResult.Ended(passed: false, HarnessExit.ToolMissing, $"{refused}. Nothing was run.");
+        }
+
+        var legIsolation = new StepLegIsolation(isolation, context.Config, mainCheckout, tree, WritesBeside);
         var watch = new StepWatch(run.Events);
         var directory = layout.InstanceDirectory(run.Instance, run.WorksIn);
         LegRunResult result;
@@ -65,12 +87,13 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         // left is ended by the next command over the run, a resume's first among them.
         using (ProcessScope.Enter(new ProcessScope(() => children.For(directory))))
         {
-            result = await RunLegsAsync(run, context, tree, watch, cancellationToken).ConfigureAwait(false);
+            result = await RunLegsAsync(run, context, tree, watch, legIsolation, cancellationToken).ConfigureAwait(false);
         }
 
         Keep(result, directory, redLogs: run.WorksIn is not null);
 
         var output = Output(result, arms: Type == "check-mutations");
+        output["isolation"] = held.Record.ToOutput();
         var lines = result.Report.Lines;
 
         // A run something other than its legs ended - refused, cut off, a leg it placed left with no line - ends the step
@@ -104,8 +127,16 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
     /// <param name="context">The repository and its configuration, as the main checkout reads them.</param>
     /// <param name="tree">The tree the legs work in.</param>
     /// <param name="watch">Told of each leg as the leg service says it.</param>
+    /// <param name="isolation">Holds the work of each leg this machine runs inside the operating system's isolation.</param>
     /// <param name="cancellationToken">Stops the legs.</param>
-    protected abstract Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, CancellationToken cancellationToken);
+    protected abstract Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, ILegIsolation isolation, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// What a leg's work writes inside the tool's state beside its tree and its records, by the tree the leg works in -
+    /// the workers a sweep makes its arms in; nothing for every other step.
+    /// </summary>
+    /// <param name="legTree">The tree the leg works in.</param>
+    protected virtual IReadOnlyList<string> WritesBeside(string legTree) => [];
 
     /// <summary>The legs a step names, or <see langword="null"/> for every leg its use case runs where it names none.</summary>
     /// <param name="step">The step.</param>
@@ -211,6 +242,14 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         }
     }
 
+    /// <summary>The isolation of the work of one leg of the step, from the leg's own ground (<see cref="ExecutionGrounds.OfLeg"/>).</summary>
+    private sealed class StepLegIsolation(IAgentIsolation isolation, HarnessConfig config, string mainCheckout, string tree, Func<string, IReadOnlyList<string>> besides) : ILegIsolation
+    {
+        /// <inheritdoc/>
+        public Task<ExecutionIsolation> ForLegAsync(string legTree, string runDirectory, CancellationToken cancellationToken)
+            => isolation.ForExecutionAsync(config, ExecutionGrounds.OfLeg(config, mainCheckout, tree, legTree, runDirectory, besides(legTree)), mainCheckout, cancellationToken);
+    }
+
     /// <summary>Tells the engine what the leg service says of the step's legs, in the engine's words, and keeps the legs placed.</summary>
     private sealed class StepWatch(IFlowRunEvents events) : ILegRunWatch
     {
@@ -247,15 +286,16 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 /// <param name="fileSystem">Keeps the step's records.</param>
 /// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="builds">Builds the legs.</param>
-public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IBuildLegs builds)
-    : LegStepRunner(contextLoader, platform, store, fileSystem, children)
+/// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
+public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IBuildLegs builds, IAgentIsolation isolation)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation)
 {
     /// <inheritdoc/>
     public override string Type => "build";
 
     /// <inheritdoc/>
-    protected override Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, CancellationToken cancellationToken)
-        => builds.RunAsync(new BuildLegsRequest { Directory = tree, LegNames = LegsOf(run.Step), Watch = watch }, RunId.New(), cancellationToken);
+    protected override Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, ILegIsolation isolation, CancellationToken cancellationToken)
+        => builds.RunAsync(new BuildLegsRequest { Directory = tree, LegNames = LegsOf(run.Step), Watch = watch, Isolation = isolation }, RunId.New(), cancellationToken);
 }
 
 /// <summary>
@@ -269,14 +309,15 @@ public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPl
 /// <param name="fileSystem">Keeps the step's records.</param>
 /// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="tests">Tests the legs.</param>
-public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, ITestLegs tests)
-    : LegStepRunner(contextLoader, platform, store, fileSystem, children)
+/// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
+public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, ITestLegs tests, IAgentIsolation isolation)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation)
 {
     /// <inheritdoc/>
     public override string Type => "test";
 
     /// <inheritdoc/>
-    protected override Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, CancellationToken cancellationToken)
+    protected override Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, ILegIsolation isolation, CancellationToken cancellationToken)
         => tests.RunAsync(
             new TestLegsRequest
             {
@@ -287,6 +328,7 @@ public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPla
                 Labels = run.Step.Labels,
                 SkipBuild = run.Step.SkipBuild == true,
                 Watch = watch,
+                Isolation = isolation,
             },
             RunId.New(),
             cancellationToken);
@@ -304,14 +346,15 @@ public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPla
 /// <param name="fileSystem">Keeps the step's records.</param>
 /// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="runners">Runs the runner on the legs.</param>
-public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IRunnerLegs runners)
-    : LegStepRunner(contextLoader, platform, store, fileSystem, children)
+/// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
+public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IRunnerLegs runners, IAgentIsolation isolation)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation)
 {
     /// <inheritdoc/>
     public override string Type => "run";
 
     /// <inheritdoc/>
-    protected override Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, CancellationToken cancellationToken)
+    protected override Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, ILegIsolation isolation, CancellationToken cancellationToken)
     {
         var runner = run.Step.Runner
             ?? throw new HarnessException(HarnessExit.ConfigInvalid, $"'{run.Instance}' is a run step that names no runner");
@@ -325,6 +368,7 @@ public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlat
                 Inputs = run.Step.Inputs,
                 InPlace = context.Config.WritingRunners(runner).Count > 0,
                 Watch = watch,
+                Isolation = isolation,
             },
             RunId.New(),
             cancellationToken);
@@ -342,14 +386,15 @@ public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlat
 /// <param name="fileSystem">Keeps the step's records.</param>
 /// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="mutations">Sweeps the arms on the legs.</param>
-public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IMutationLegs mutations)
-    : LegStepRunner(contextLoader, platform, store, fileSystem, children)
+/// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
+public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IMutationLegs mutations, IAgentIsolation isolation)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation)
 {
     /// <inheritdoc/>
     public override string Type => "check-mutations";
 
     /// <inheritdoc/>
-    protected override Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, CancellationToken cancellationToken)
+    protected override Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, ILegIsolation isolation, CancellationToken cancellationToken)
         => mutations.RunAsync(
             new MutationLegsRequest
             {
@@ -358,7 +403,12 @@ public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPl
                 ArmNames = run.Step.Arms.Count == 0 ? null : run.Step.Arms,
                 Pending = run.Step.Pending == true,
                 Watch = watch,
+                Isolation = isolation,
             },
             RunId.New(),
             cancellationToken);
+
+    /// <inheritdoc/>
+    /// <remarks>The workers its arms are swept in, kept in the slot for them of the tree the leg works in.</remarks>
+    protected override IReadOnlyList<string> WritesBeside(string legTree) => [Path.Combine(legTree, HarnessLayout.MutationsDirectoryName)];
 }

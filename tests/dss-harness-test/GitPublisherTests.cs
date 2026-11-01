@@ -86,14 +86,14 @@ public sealed class GitPublisherTests
         temp.WriteFile("message.txt", "\nsubject\n\n\n\nthe body  \n\n");
         await publisher.StageAsync(temp.Path, ["a.txt"], [], null, Token);
 
-        var signed = await publisher.CommitAsync(temp.Path, temp.Combine("message.txt"), signOff: true, null, Token);
+        var signed = await publisher.CommitAsync(temp.Path, temp.Combine("message.txt"), signOff: true, null, null, Token);
 
         Assert.Equal(signed, await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", Token));
         Assert.Matches(@"\Asubject\n\nthe body\n\nSigned-off-by: [^\n]+\n\z", await MessageAsync(harness, temp));
 
         temp.WriteFile("a.txt", "again\n");
         await publisher.StageAsync(temp.Path, ["a.txt"], [], null, Token);
-        _ = await publisher.CommitAsync(temp.Path, temp.Combine("message.txt"), signOff: false, null, Token);
+        _ = await publisher.CommitAsync(temp.Path, temp.Combine("message.txt"), signOff: false, null, null, Token);
 
         Assert.DoesNotContain("Signed-off-by", await MessageAsync(harness, temp), StringComparison.Ordinal);
     }
@@ -113,7 +113,7 @@ public sealed class GitPublisherTests
         await publisher.StageAsync(temp.Path, ["a.txt"], [], null, Token);
         _ = await harness.RunGitAsync(temp.Path, ["config", "commit.cleanup", "strip"], Token);
 
-        _ = await publisher.CommitAsync(temp.Path, temp.Combine("message.txt"), signOff: false, null, Token);
+        _ = await publisher.CommitAsync(temp.Path, temp.Combine("message.txt"), signOff: false, null, null, Token);
 
         Assert.Equal("fix: the parser\n\n#42 is closed by it\n", await MessageAsync(harness, temp));
     }
@@ -126,7 +126,7 @@ public sealed class GitPublisherTests
         var harness = await RepositoryAsync(temp);
         temp.WriteFile("message.txt", "subject\n");
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.GitPublisher.CommitAsync(temp.Path, temp.Combine("message.txt"), signOff: false, null, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.GitPublisher.CommitAsync(temp.Path, temp.Combine("message.txt"), signOff: false, null, null, Token));
 
         Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
         Assert.StartsWith("git did not commit: ", refused.Message, StringComparison.Ordinal);
@@ -171,27 +171,36 @@ public sealed class GitPublisherTests
     /// <summary>
     /// Every git command the publisher runs is one of its closed list, begun with that command's own arguments - a push
     /// with one commit to one branch, never forced - and each is given the step's limit where the step says one, else its
-    /// own: fifteen minutes for a commit's commands, five for a push.
+    /// own: fifteen minutes for a commit's commands, five for a push. The commit and the push alone run the repository's
+    /// hooks; staging and unstaging run none.
     /// </summary>
     [Fact]
     public async Task EveryCommand_IsOneOfTheClosedList_GivenTheStepsLimitElseItsOwn()
     {
         var git = Substitute.For<IGitClient>();
         var asked = new List<(IReadOnlyList<string> Arguments, TimeSpan Limit)>();
-        git.RunWithinAsync(default!, default!, default, Token).ReturnsForAnyArgs(call =>
+        var hooked = new List<string>();
+
+        Task<GitCommandResult> Answer(IReadOnlyList<string> arguments, TimeSpan limit)
         {
-            var arguments = call.ArgAt<IReadOnlyList<string>>(1);
-            asked.Add((arguments, call.ArgAt<TimeSpan>(2)));
+            asked.Add((arguments, limit));
             return Task.FromResult(new GitCommandResult(0, arguments.Contains("push") ? "To remote\n*\tabc:refs/heads/work\t[new branch]\nDone\n" : string.Empty, string.Empty));
+        }
+
+        git.RunWithinAsync(default!, default!, default, Token).ReturnsForAnyArgs(call => Answer(call.ArgAt<IReadOnlyList<string>>(1), call.ArgAt<TimeSpan>(2)));
+        git.RunWithHooksAsync(default!, default!, default, default, default, Token).ReturnsForAnyArgs(call =>
+        {
+            hooked.Add(call.ArgAt<IReadOnlyList<string>>(1)[0]);
+            return Answer(call.ArgAt<IReadOnlyList<string>>(1), call.ArgAt<TimeSpan>(2));
         });
         git.ResolveCommitAsync(default!, default!, Token).ReturnsForAnyArgs(Task.FromResult<string?>("abc"));
         var publisher = new GitPublisher(git, new GhProcess(Substitute.For<IProcessRunner>(), GitLocalVariables.Fixed([]), _ => null));
 
         await publisher.StageAsync("/tree", ["a.txt"], ["gone.txt"], null, Token);
         await publisher.UnstageAsync("/tree", ["a.txt"], TimeSpan.FromMinutes(2), Token);
-        _ = await publisher.CommitAsync("/tree", "/message.txt", signOff: true, null, Token);
-        var pushed = await publisher.PushAsync("/tree", "origin", "abc", "work", null, Token);
-        _ = await publisher.PushAsync("/tree", "origin", "abc", "work", TimeSpan.FromMinutes(2), Token);
+        _ = await publisher.CommitAsync("/tree", "/message.txt", signOff: true, null, null, Token);
+        var pushed = await publisher.PushAsync("/tree", "origin", "abc", "work", null, null, Token);
+        _ = await publisher.PushAsync("/tree", "origin", "abc", "work", TimeSpan.FromMinutes(2), null, Token);
 
         Assert.All(asked, call => Assert.Contains(
             PublisherCommands.All,
@@ -204,6 +213,7 @@ public sealed class GitPublisherTests
         Assert.Equal(["/message.txt", "-s"], asked[3].Arguments.Skip(PublisherCommands.Commit.Leading.Count));
         Assert.True(pushed);
         Assert.Equal(7, PublisherCommands.All.Count);
+        Assert.Equal(["commit", "push", "push"], hooked);
     }
 
     /// <summary>
@@ -214,13 +224,13 @@ public sealed class GitPublisherTests
     public async Task APush_ReadsTheLineOfItsBranch_AndOneItDoesNotNameFails()
     {
         var git = Substitute.For<IGitClient>();
-        git.RunWithinAsync(default!, default!, default, Token).ReturnsForAnyArgs(
+        git.RunWithHooksAsync(default!, default!, default, default, default, Token).ReturnsForAnyArgs(
             Task.FromResult(new GitCommandResult(0, "To remote\n*\trefs/tags/v1:refs/tags/v1\t[new tag]\n=\tabc:refs/heads/work\t[up to date]\nDone\n", string.Empty)),
             Task.FromResult(new GitCommandResult(0, "To remote\nDone\n", string.Empty)));
         var publisher = new GitPublisher(git, new GhProcess(Substitute.For<IProcessRunner>(), GitLocalVariables.Fixed([]), _ => null));
 
-        var moved = await publisher.PushAsync("/tree", "origin", "abc", "work", null, Token);
-        var unnamed = await Assert.ThrowsAsync<HarnessException>(() => publisher.PushAsync("/tree", "origin", "abc", "work", null, Token));
+        var moved = await publisher.PushAsync("/tree", "origin", "abc", "work", null, null, Token);
+        var unnamed = await Assert.ThrowsAsync<HarnessException>(() => publisher.PushAsync("/tree", "origin", "abc", "work", null, null, Token));
 
         Assert.False(moved);
         Assert.Equal((HarnessExit.CommandFailed, "git said it pushed abc to origin, and named no line of 'work' in what it pushed: To remote\nDone"), (unnamed.ExitCode, unnamed.Message));
@@ -235,10 +245,11 @@ public sealed class GitPublisherTests
     {
         var git = Substitute.For<IGitClient>();
         git.RunWithinAsync(default!, default!, default, Token).ReturnsForAnyArgs(Task.FromResult(new GitCommandResult(-1, string.Empty, string.Empty, TimedOut: true)));
+        git.RunWithHooksAsync(default!, default!, default, default, default, Token).ReturnsForAnyArgs(Task.FromResult(new GitCommandResult(-1, string.Empty, string.Empty, TimedOut: true)));
         var publisher = new GitPublisher(git, new GhProcess(Substitute.For<IProcessRunner>(), GitLocalVariables.Fixed([]), _ => null));
 
-        var push = await Assert.ThrowsAsync<HarnessException>(() => publisher.PushAsync("/tree", "origin", "abc", "work", TimeSpan.FromSeconds(90), Token));
-        var commit = await Assert.ThrowsAsync<HarnessException>(() => publisher.CommitAsync("/tree", "/message.txt", signOff: false, null, Token));
+        var push = await Assert.ThrowsAsync<HarnessException>(() => publisher.PushAsync("/tree", "origin", "abc", "work", TimeSpan.FromSeconds(90), null, Token));
+        var commit = await Assert.ThrowsAsync<HarnessException>(() => publisher.CommitAsync("/tree", "/message.txt", signOff: false, null, null, Token));
         var stage = await Assert.ThrowsAsync<HarnessException>(() => publisher.StageAsync("/tree", ["a.txt"], [], null, Token));
 
         Assert.Equal((HarnessExit.Incomplete, "git push --porcelain did not finish within 90 s, so whether abc reached origin's 'work' is not known: asked again, it may finish."), (push.ExitCode, push.Message));

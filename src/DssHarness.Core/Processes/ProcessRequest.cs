@@ -128,10 +128,11 @@ public sealed record ProcessRequest
     public bool Contained { get; init; }
 
     /// <summary>
-    /// The operating system's isolation a <see cref="Contained"/> child runs inside - what the child is denied beyond what
-    /// its user may do, and the mechanism that denies it - or <see langword="null"/> for none. The contained step becomes
-    /// the mechanism in the child's place, which starts the program inside it: the child is never outside for an instant.
-    /// Given only with <see cref="Contained"/>, for it is the contained step that places it.
+    /// The operating system's isolation the child runs inside - what the child is denied beyond what its user may do, and
+    /// the mechanism that denies it - or <see langword="null"/> for none. An isolated child always starts through this
+    /// tool's own step, contained or not, and the step becomes the mechanism in the child's place, which starts the program
+    /// inside it: the child is never outside for an instant. A child that is not <see cref="Contained"/> is placed by the
+    /// step as any other is: in a group of its own on Linux and macOS, ended by its tree and its group.
     /// </summary>
     public ProcessIsolation? Isolation { get; init; }
 

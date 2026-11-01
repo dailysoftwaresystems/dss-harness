@@ -146,8 +146,9 @@ public sealed record PhaseRequest
     public IContainedSessionRecord? SessionRecord { get; init; }
 
     /// <summary>
-    /// The operating system's isolation a <see cref="Contained"/> phase runs inside (<see cref="ProcessRequest.Isolation"/>);
-    /// null for none.
+    /// The operating system's isolation the phase runs inside (<see cref="ProcessRequest.Isolation"/>); null for the one
+    /// its leg's work holds (<see cref="PhaseIsolation"/>), and none where that holds none or the phase is
+    /// <see cref="LeftRunning"/>.
     /// </summary>
     public ProcessIsolation? Isolation { get; init; }
 }
@@ -323,7 +324,10 @@ public sealed class PhaseRunner(
             Bound = !request.LeftRunning,
             Contained = request.Contained,
             SessionRecord = request.SessionRecord,
-            Isolation = request.Isolation,
+
+            // Its own where it names one; else the one its leg's work holds - but never for what is left running, which
+            // outlives the isolation's own end of everything inside it.
+            Isolation = request.Isolation ?? (request.LeftRunning ? null : PhaseIsolation.Current),
         };
 
         var startedUtc = _wallClock.GetUtcNow();

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text.Json;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
@@ -1058,6 +1059,86 @@ public sealed class LegRunServiceTests
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.StartsWith(Path.Combine(tree, ".harness-config", "runs") + Path.DirectorySeparatorChar, directory, StringComparison.Ordinal);
         Assert.True(Directory.Exists(directory), $"the run named '{directory}', which it never made");
+    }
+
+    /// <summary>
+    /// The work of a leg this machine runs holds, for every phase it starts, the isolation its run's step decides for it -
+    /// asked of the tree it works in and the run's directory; a leg whose isolation is refused is skipped saying why,
+    /// nothing of its work run; and one that runs with none under preferred says so on its line.
+    /// </summary>
+    [Fact]
+    public async Task ALegsWork_HoldsTheIsolationItsStepDecides_IsSkippedWhereRefused_AndSaysWhereItRunsWithout()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var mechanism = new PassThroughMechanism();
+        var held = new LegIsolationAnswer(new ExecutionIsolation(IsolatedExecution.Legs, AgentIsolationMode.Required, mechanism, IsolationProfile.Nothing, null, null));
+        ProcessIsolation? inside = null;
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy, Isolation = held },
+            work: work =>
+            {
+                inside = PhaseIsolation.Current;
+                return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+            });
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(new ProcessIsolation(mechanism, IsolationProfile.Nothing), inside);
+        Assert.Equal([(temp.Path, RunDirectoryOf(outcome, json: true))], held.Asked);
+        Assert.Null(PhaseIsolation.Current);
+
+        var refused = new LegIsolationAnswer(new ExecutionIsolation(IsolatedExecution.Legs, AgentIsolationMode.Required, null, null, "git could not say where it keeps its own files", "make sure git answers"));
+        var ran = false;
+        var skipped = Verdicts(await OutcomeAsync(
+            temp,
+            harness,
+            OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy, Isolation = refused },
+            work: work =>
+            {
+                ran = true;
+                return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+            }));
+
+        Assert.False(ran);
+        Assert.Equal(
+            ("skipped-unavailable", "leg 'native' is refused: agentPolicy.isolation is \"required\" and git could not say where it keeps its own files, so nothing the agents wrote is built, tested or run here; make sure git answers"),
+            skipped["native"]);
+
+        var sink = new RecordingSink();
+        var without = new LegIsolationAnswer(new ExecutionIsolation(IsolatedExecution.Legs, AgentIsolationMode.Preferred, null, null, "bubblewrap is not here", "install it"));
+
+        using (var output = new EventHarnessOutput(sink, OperationId.New()))
+        {
+            _ = await OutcomeAsync(temp, harness, OneLeg(harness), SshAndLocal(harness), new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy, Isolation = without }, output: output);
+        }
+
+        Assert.Contains(
+            "agentPolicy.isolation is \"preferred\" and bubblewrap is not here, so what the agents wrote is built, tested and run here with no isolation of the operating system's; install it",
+            sink.Seen.OfType<LegProgressed>().Where(@event => @event.Leg == "native").Select(@event => @event.Message));
+    }
+
+    /// <summary>An answer of a test's for the isolation of every leg's work, kept with what each leg asked.</summary>
+    private sealed class LegIsolationAnswer(ExecutionIsolation answer) : ILegIsolation
+    {
+        /// <summary>The tree each leg works in and the run's directory, as each asked.</summary>
+        public List<(string LegTree, string RunDirectory)> Asked { get; } = [];
+
+        public Task<ExecutionIsolation> ForLegAsync(string legTree, string runDirectory, CancellationToken cancellationToken)
+        {
+            lock (Asked)
+            {
+                Asked.Add((legTree, runDirectory));
+            }
+
+            return Task.FromResult(answer);
+        }
     }
 
     /// <summary>

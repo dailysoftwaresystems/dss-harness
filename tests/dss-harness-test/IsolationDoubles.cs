@@ -7,15 +7,41 @@ using DssHarness.Core.Processes;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The isolation of agents' commands as a test gives it: an answer of the test's for every launch, kept with what each
-/// launch asked - by default none needed, as for an agent that runs no command, so a launch runs as it would with no
-/// isolation at all.
+/// The isolation of agents' commands as a test gives it: an answer of the test's for every launch and every execution of
+/// the agents' work, kept with what each asked - by default none needed for a launch, as for an agent that runs no
+/// command, and none asked for an execution (<see cref="NotAsked"/>), so each runs as it would with no isolation at all.
 /// </summary>
 /// <param name="answer">The answer for a launch, from the configuration and the ground it asked with; none needed where left out.</param>
-internal sealed class TestIsolation(Func<HarnessConfig, AgentPolicyGround, LaunchIsolation>? answer = null) : IAgentIsolation
+/// <param name="execution">The answer for an execution, from the configuration and its ground; none asked where left out.</param>
+internal sealed class TestIsolation(
+    Func<HarnessConfig, AgentPolicyGround, LaunchIsolation>? answer = null,
+    Func<HarnessConfig, ExecutionGround, ExecutionIsolation>? execution = null) : IAgentIsolation
 {
+    /// <summary>Why an execution a test gives no answer for runs under no isolation, as its record says it.</summary>
+    public const string NotAsked = "the test asked none";
+
     /// <summary>Every launch that asked, in order: its ground and its own directory.</summary>
     public List<(AgentPolicyGround Ground, string LaunchDirectory)> Asked { get; } = [];
+
+    /// <summary>Every execution that asked, in order: its ground.</summary>
+    public List<ExecutionGround> Executions { get; } = [];
+
+    /// <summary>An execution's answer under a mechanism of the test's: <paramref name="mechanism"/>, and a profile that names each of the ground's writable roots.</summary>
+    /// <param name="mechanism">The mechanism.</param>
+    public static TestIsolation Under(IIsolationMechanism mechanism)
+        => new(execution: (config, ground) => new ExecutionIsolation(
+            ground.Kind,
+            AgentIsolationMode.Of(config),
+            mechanism,
+            new IsolationProfile([], [.. ground.WritableRoots.Select(root => new IsolatedWrite(root, Directory: true, Writable: true))]),
+            null,
+            null));
+
+    /// <summary>An execution's answer where this machine has no mechanism: refused under required, run outside under preferred.</summary>
+    /// <param name="why">Why there is none.</param>
+    /// <param name="remedy">What would give one.</param>
+    public static TestIsolation UnavailableToExecutions(string why, string remedy)
+        => new(execution: (config, ground) => new ExecutionIsolation(ground.Kind, AgentIsolationMode.Of(config), null, null, why, remedy));
 
     /// <summary>A launch's answer that refuses under the configuration's mode, or runs without under preferred: this machine has no mechanism.</summary>
     /// <param name="why">Why there is none.</param>
@@ -32,6 +58,17 @@ internal sealed class TestIsolation(Func<HarnessConfig, AgentPolicyGround, Launc
         }
 
         return Task.FromResult(answer?.Invoke(config, ground) ?? LaunchIsolation.Unneeded(AgentIsolationMode.Of(config)));
+    }
+
+    /// <inheritdoc/>
+    public Task<ExecutionIsolation> ForExecutionAsync(HarnessConfig config, ExecutionGround ground, string mainCheckout, CancellationToken cancellationToken)
+    {
+        lock (Executions)
+        {
+            Executions.Add(ground);
+        }
+
+        return Task.FromResult(execution?.Invoke(config, ground) ?? new ExecutionIsolation(ground.Kind, AgentIsolationMode.Of(config), null, null, NotAsked, null));
     }
 }
 

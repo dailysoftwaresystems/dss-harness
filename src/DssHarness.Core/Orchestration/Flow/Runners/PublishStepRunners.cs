@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Platform;
@@ -17,16 +18,21 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// (<see cref="FlowRunPlace.OffItsBranch"/>), no commit yet or no remote fails it 13 with nothing pushed; a push the remote
 /// refused fails it 20, one that did not finish in time 21. A checkpoint push the switch keeps off never reaches it: the
 /// engine skips it (<c>pushCheckpoints</c>). Run again, it pushes what is pushed already, and answers <c>pushed</c> false.
+/// The push runs the repository's push hooks inside the operating system's isolation of the agents' work
+/// (<see cref="ExecutionGrounds.OfHooks"/>), as <c>isolation</c> in its output says; where this machine has none,
+/// <c>agentPolicy.isolation: required</c> fails it 14 with nothing pushed, and <c>preferred</c> runs them outside.
 /// </summary>
 /// <param name="contextLoader">Finds the repository.</param>
 /// <param name="platform">This machine.</param>
 /// <param name="git">Reads the main checkout: its branch, its HEAD and its remotes.</param>
 /// <param name="publisher">Pushes.</param>
+/// <param name="isolation">Decides the isolation the push's hooks run inside.</param>
 public sealed class PushStepRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
     IGitClient git,
-    IGitPublisher publisher) : IFlowStepTypeRunner
+    IGitPublisher publisher,
+    IAgentIsolation isolation) : IFlowStepTypeRunner
 {
     /// <inheritdoc/>
     public string Type => "push";
@@ -36,7 +42,7 @@ public sealed class PushStepRunner(
     {
         ArgumentNullException.ThrowIfNull(run);
 
-        var (place, _) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
+        var (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
         var tree = place.Repository;
         var checkout = await FlowCheckout.ReadAsync(git, tree, place.Definition, cancellationToken).ConfigureAwait(false);
 
@@ -65,12 +71,22 @@ public sealed class PushStepRunner(
             return Refused($"'{run.Instance}' pushes to {unknown}: name one of them, or add it. Nothing was pushed.");
         }
 
-        var pushed = await publisher.PushAsync(tree, remote, commit, branch, WorkflowStepTypes.CommandLimitOf(run.Step), cancellationToken).ConfigureAwait(false);
+        // The push runs the repository's hooks, the agents' work among what they read: inside the isolation, decided before
+        // anything is pushed.
+        var hooks = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfHooks(context.Config, context.Layout.MainCheckoutRoot, tree), context.Layout.MainCheckoutRoot, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (hooks.Refusal($"'{run.Instance}'") is { } refused)
+        {
+            return FlowStepResult.Ended(passed: false, HarnessExit.ToolMissing, $"{refused}. Nothing was pushed.");
+        }
+
+        var pushed = await publisher.PushAsync(tree, remote, commit, branch, WorkflowStepTypes.CommandLimitOf(run.Step), hooks.ForProcess, cancellationToken).ConfigureAwait(false);
 
         return FlowStepResult.Ended(
             passed: true,
             HarnessExit.Success,
-            output: new JsonObject { ["pushed"] = pushed, ["remote"] = remote, ["branch"] = branch, ["sha"] = commit });
+            output: new JsonObject { ["pushed"] = pushed, ["remote"] = remote, ["branch"] = branch, ["sha"] = commit, ["isolation"] = hooks.Record.ToOutput() });
     }
 
     private static FlowStepResult Refused(string why) => FlowStepResult.Ended(passed: false, HarnessExit.Refused, why);

@@ -57,6 +57,65 @@ public sealed record AgentIsolationRecord(string Mode)
     /// <summary>Why its commands ran inside none; null where they ran inside one.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? None { get; init; }
+
+    /// <summary>The record as a step's output holds it: each key the record file holds, each left out where it holds none.</summary>
+    public System.Text.Json.Nodes.JsonObject ToOutput()
+    {
+        var output = new System.Text.Json.Nodes.JsonObject { ["mode"] = Mode };
+
+        foreach (var (key, value) in new[] { ("mechanism", Mechanism), ("version", Version), ("none", None) })
+        {
+            if (value is not null)
+            {
+                output[key] = value;
+            }
+        }
+
+        return output;
+    }
+}
+
+/// <summary>
+/// The decision of the operating system's isolation for one thing that runs what an agent may have written - a launch of
+/// an agent, or one of the tool's own executions of an agent's work: the configuration's mode, the mechanism proved on
+/// this machine, or why there is none and what would give one. The one place either is refused, said and recorded, so the
+/// two never answer the same mode two ways.
+/// </summary>
+/// <param name="Mode">The configuration's mode (<see cref="AgentIsolationMode"/>).</param>
+/// <param name="Mechanism">The mechanism, proved on this machine; null where there is none.</param>
+/// <param name="Without">Why it runs under no mechanism, as the opening of a sentence; null where it runs under one.</param>
+/// <param name="Remedy">What would give it one, where it has none and needs it; null otherwise.</param>
+public abstract record IsolationDecision(string Mode, IIsolationMechanism? Mechanism, string? Without, string? Remedy)
+{
+    /// <summary>
+    /// Whether it may not run: the mode is <see cref="AgentIsolationMode.Required"/>, it needs the isolation, and there
+    /// is no mechanism to hold it.
+    /// </summary>
+    public bool Refused => Mechanism is null && Remedy is not null && Mode == AgentIsolationMode.Required;
+
+    /// <summary>What its records say of it.</summary>
+    public AgentIsolationRecord Record => new(Mode) { Mechanism = Mechanism?.Name, Version = Mechanism?.Version, None = Mechanism is null ? Without : null };
+
+    /// <summary>
+    /// What is said where it runs with no mechanism though it needs one, under <see cref="AgentIsolationMode.Preferred"/>:
+    /// why there is none, <paramref name="so"/>, and what would give one. Null where it runs under one, or needs none.
+    /// </summary>
+    /// <param name="so">What follows for it, as the sentence's middle says it.</param>
+    protected string? NoticeSaying(string so)
+        => Mechanism is null && Remedy is not null && !Refused
+            ? $"agentPolicy.isolation is \"{AgentIsolationMode.Preferred}\" and {Without}, so {so}; {Remedy}"
+            : null;
+
+    /// <summary>
+    /// The refusal of <paramref name="what"/> where it may not run (<see cref="Refused"/>), as a sentence: what is refused,
+    /// why, <paramref name="so"/>, and what would let it run; null where it may.
+    /// </summary>
+    /// <param name="what">What is refused, as the refusal names it.</param>
+    /// <param name="so">What the mode keeps from running here, as the sentence's middle says it.</param>
+    protected string? RefusalSaying(string what, string so)
+        => Refused
+            ? $"{what} is refused: agentPolicy.isolation is \"{AgentIsolationMode.Required}\" and {Without}, so {so}; {Remedy}"
+            : null;
 }
 
 /// <summary>
@@ -77,7 +136,7 @@ public sealed record LaunchIsolation(
     IsolationProfile? Commands,
     IsolationProfile? ClaudeCode,
     string? Without,
-    string? Remedy)
+    string? Remedy) : IsolationDecision(Mode, Mechanism, Without, Remedy)
 {
     /// <summary>Why a launch whose agent may run no command needs no isolation, as its record says it.</summary>
     public const string NoCommands = "the agent may run no command";
@@ -89,35 +148,152 @@ public sealed record LaunchIsolation(
     public ProcessIsolation? ForClaudeCode => Mechanism is not null && ClaudeCode is not null ? new ProcessIsolation(Mechanism, ClaudeCode) : null;
 
     /// <summary>
-    /// Whether the launch may not start: the mode is <see cref="AgentIsolationMode.Required"/>, its agent may run a
-    /// command, and there is no mechanism to hold it.
-    /// </summary>
-    public bool Refused => Mechanism is null && Remedy is not null && Mode == AgentIsolationMode.Required;
-
-    /// <summary>
     /// What every launch says where it starts on the words policy alone, its agent able to run a command: why there is no
     /// mechanism, and what would give one. Null where it runs under one, or needs none.
     /// </summary>
-    public string? Notice => Mechanism is null && Remedy is not null && !Refused
-        ? $"agentPolicy.isolation is \"{AgentIsolationMode.Preferred}\" and {Without}, so the agent's commands run on the words policy alone, with no isolation of the operating system's; {Remedy}"
-        : null;
-
-    /// <summary>What the launch's records say of it.</summary>
-    public AgentIsolationRecord Record => new(Mode) { Mechanism = Mechanism?.Name, Version = Mechanism?.Version, None = Mechanism is null ? Without : null };
+    public string? Notice => NoticeSaying("the agent's commands run on the words policy alone, with no isolation of the operating system's");
 
     /// <summary>
-    /// The refusal of <paramref name="what"/> where the launch may not start (<see cref="Refused"/>), as a sentence: what
-    /// is refused, why, and what would let it start; null where it may.
+    /// The refusal of <paramref name="what"/> where the launch may not start (<see cref="IsolationDecision.Refused"/>), as a
+    /// sentence: what is refused, why, and what would let it start; null where it may.
     /// </summary>
     /// <param name="what">What is refused, as the refusal names it: <c>'step'</c>, <c>'run-side-task'</c>.</param>
-    public string? Refusal(string what)
-        => Refused
-            ? $"{what} is refused: agentPolicy.isolation is \"{AgentIsolationMode.Required}\" and {Without}, so no agent that may run a command starts here; {Remedy}"
-            : null;
+    public string? Refusal(string what) => RefusalSaying(what, "no agent that may run a command starts here");
 
     /// <summary>A launch whose agent may run no command: no isolation is needed, and none is asked.</summary>
     /// <param name="mode">The configuration's mode.</param>
     public static LaunchIsolation Unneeded(string mode) => new(mode, null, null, null, NoCommands, null);
+}
+
+/// <summary>
+/// Which of the tool's own executions of an agent's work an <see cref="ExecutionGround"/> is of: what decides the
+/// words its refusal and its notice say.
+/// </summary>
+public enum IsolatedExecution
+{
+    /// <summary>The phases of a run's machine step's legs this machine runs itself: what builds, tests and runs the agents' work.</summary>
+    Legs,
+
+    /// <summary>A run's commit or push, which runs the repository's hooks over the agents' work.</summary>
+    Hooks,
+}
+
+/// <summary>
+/// The ground of one of the tool's own executions of an agent's work - a leg's phases, or a commit's or a push's git with
+/// the repository's hooks: the trees whose git's code-running files nothing it runs writes, the places it writes, and the
+/// slots and the tool's state it neither reads nor writes, and writes, as an agent's own commands do not. Built by
+/// <see cref="ExecutionGrounds"/>, never by hand.
+/// </summary>
+/// <param name="Kind">Which execution it is.</param>
+/// <param name="Trees">The trees it works over, each asked of git for where it keeps its own files.</param>
+/// <param name="WritableRoots">The places it writes, written again wherever they stand inside a place written by nobody.</param>
+/// <param name="SlotDirectories">The credential slots of the main checkout, neither read nor written.</param>
+/// <param name="StateDirectories">The tool's own state under each tree, written by nobody.</param>
+public sealed record ExecutionGround(
+    IsolatedExecution Kind,
+    IReadOnlyList<string> Trees,
+    IReadOnlyList<string> WritableRoots,
+    IReadOnlyList<string> SlotDirectories,
+    IReadOnlyList<string> StateDirectories);
+
+/// <summary>The builder of every <see cref="ExecutionGround"/>: the one place each of the tool's executions of an agent's work is given its ground.</summary>
+public static class ExecutionGrounds
+{
+    /// <summary>
+    /// The ground of a run's machine step's legs on this machine, before any is placed: the tree the step works in - an
+    /// agent's worktree, or the main checkout - written, as what its decision is asked of before each leg's own.
+    /// </summary>
+    /// <param name="config">The configuration, whose worktrees root is among the state.</param>
+    /// <param name="mainCheckout">The main checkout, whose slots are hidden.</param>
+    /// <param name="tree">The tree the step works in.</param>
+    public static ExecutionGround OfLegs(HarnessConfig config, string mainCheckout, string tree)
+        => Of(IsolatedExecution.Legs, config, mainCheckout, [tree], [tree]);
+
+    /// <summary>
+    /// The ground of one leg's phases on this machine: the tree it works in - the step's tree itself, or the leg's copy of
+    /// it - and its records written; the step's tree's git files and state, and the leg's own, written by nobody, but what
+    /// the leg writes inside them - its copy, and <paramref name="besides"/>.
+    /// </summary>
+    /// <param name="config">The configuration, whose worktrees root is among the state.</param>
+    /// <param name="mainCheckout">The main checkout, whose slots are hidden.</param>
+    /// <param name="tree">The tree the step works in.</param>
+    /// <param name="legTree">The tree the leg works in: <paramref name="tree"/>, or its copy.</param>
+    /// <param name="runDirectory">Where the run keeps the leg's records, some of which its phases write.</param>
+    /// <param name="besides">What else the leg's work writes inside the tool's state: a sweep's workers.</param>
+    public static ExecutionGround OfLeg(HarnessConfig config, string mainCheckout, string tree, string legTree, string runDirectory, IReadOnlyList<string> besides)
+    {
+        ArgumentNullException.ThrowIfNull(besides);
+
+        return Of(IsolatedExecution.Legs, config, mainCheckout, [tree, legTree], [legTree, runDirectory, .. besides]);
+    }
+
+    /// <summary>
+    /// The ground of a commit's or a push's git in <paramref name="tree"/> with the repository's hooks: the tree written -
+    /// its work tree, and what git keeps of it but its code-running files - its slots hidden and its state sealed.
+    /// </summary>
+    /// <param name="config">The configuration, whose worktrees root is among the state.</param>
+    /// <param name="mainCheckout">The main checkout, whose slots are hidden.</param>
+    /// <param name="tree">The tree git works in.</param>
+    public static ExecutionGround OfHooks(HarnessConfig config, string mainCheckout, string tree)
+        => Of(IsolatedExecution.Hooks, config, mainCheckout, [tree], [tree]);
+
+    private static ExecutionGround Of(IsolatedExecution kind, HarnessConfig config, string mainCheckout, IReadOnlyList<string> trees, IReadOnlyList<string> writable)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentException.ThrowIfNullOrWhiteSpace(mainCheckout);
+
+        var worktreesRoot = config.Worktrees?.Root ?? WorktreeSettings.DefaultRoot;
+        IReadOnlyList<string> over = [.. trees.Prepend(mainCheckout).Distinct(StringComparer.OrdinalIgnoreCase)];
+        IReadOnlyList<string> written = [.. writable.Distinct(StringComparer.OrdinalIgnoreCase)];
+
+        // A place of the tool's state the execution writes as a whole - the slot a sweep keeps its workers in - is its own,
+        // and is not sealed: the profile keeps a place both sealed and written sealed.
+        return new ExecutionGround(
+            kind,
+            over,
+            written,
+            HarnessLayout.SecretSlotDirectoriesUnder(mainCheckout),
+            [.. over.SelectMany(each => HarnessLayout.StatePathsUnder(each, worktreesRoot))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(state => !written.Contains(state, StringComparer.OrdinalIgnoreCase))]);
+    }
+}
+
+/// <summary>
+/// The isolation one of the tool's own executions of an agent's work runs under (<see cref="ExecutionGround"/>): the
+/// mechanism and the profile it is started with, or why it runs under none, and, under
+/// <see cref="AgentIsolationMode.Required"/>, the refusal that keeps it from running.
+/// </summary>
+/// <param name="Kind">Which execution it is.</param>
+/// <param name="Mode">The configuration's mode.</param>
+/// <param name="Mechanism">The mechanism, proved on this machine; null where there is none.</param>
+/// <param name="Profile">What it is denied; null where there is no mechanism.</param>
+/// <param name="Without">Why it runs under no mechanism, as the opening of a sentence; null where it runs under one.</param>
+/// <param name="Remedy">What would give it one, where it has none; null otherwise.</param>
+public sealed record ExecutionIsolation(
+    IsolatedExecution Kind,
+    string Mode,
+    IIsolationMechanism? Mechanism,
+    IsolationProfile? Profile,
+    string? Without,
+    string? Remedy) : IsolationDecision(Mode, Mechanism, Without, Remedy)
+{
+    /// <summary>The isolation its processes are started with; null where there is none.</summary>
+    public ProcessIsolation? ForProcess => Mechanism is not null && Profile is not null ? new ProcessIsolation(Mechanism, Profile) : null;
+
+    /// <summary>
+    /// What is said wherever it runs with no mechanism under <see cref="AgentIsolationMode.Preferred"/>: why there is none,
+    /// what then runs outside, and what would give one. Null where it runs under one.
+    /// </summary>
+    public string? Notice => NoticeSaying(Kind == IsolatedExecution.Legs
+        ? "what the agents wrote is built, tested and run here with no isolation of the operating system's"
+        : "the repository's hooks run over the agents' work with no isolation of the operating system's");
+
+    /// <summary>The refusal of <paramref name="what"/> where it may not run, as a sentence; null where it may.</summary>
+    /// <param name="what">What is refused, as the refusal names it: <c>'step'</c>.</param>
+    public string? Refusal(string what) => RefusalSaying(what, Kind == IsolatedExecution.Legs
+        ? "nothing the agents wrote is built, tested or run here"
+        : "no hook of the repository's runs over the agents' work here");
 }
 
 /// <summary>
@@ -196,6 +372,16 @@ public interface IAgentIsolation
     /// <param name="launchDirectory">The launch's own directory, which holds its settings and records.</param>
     /// <param name="cancellationToken">Stops the probe and the questions of the trees.</param>
     Task<LaunchIsolation> ForLaunchAsync(HarnessConfig config, AgentPolicyGround ground, string mainCheckout, string launchDirectory, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The isolation one of the tool's own executions of an agent's work over <paramref name="ground"/> runs under: the
+    /// mechanism and its profile, or why there is none - which the mode turns into a refusal or a notice.
+    /// </summary>
+    /// <param name="config">The configuration, whose <c>agentPolicy.isolation</c> is the mode.</param>
+    /// <param name="ground">The execution's ground (<see cref="ExecutionGrounds"/>).</param>
+    /// <param name="mainCheckout">The main checkout: no program on the PATH inside it is the mechanism.</param>
+    /// <param name="cancellationToken">Stops the probe and the questions of the trees.</param>
+    Task<ExecutionIsolation> ForExecutionAsync(HarnessConfig config, ExecutionGround ground, string mainCheckout, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -241,17 +427,8 @@ public sealed class AgentIsolation(IIsolationPlatform platform, IGitClient git, 
             return new LaunchIsolation(mode, null, null, null, unread, "make sure git answers in the agent's trees");
         }
 
+        var (hidden, claude, sealedPlaces) = Places(ground.SlotDirectories, ground.ClaudeCodeDirectories, gitPlaces, ground.StateDirectories, launchDirectory);
         var comparison = host.PathComparison;
-        var hidden = ground.SlotDirectories.Select(slot => Made(slot, directory: true)).OfType<IsolatedPath>().ToList();
-        var claude = ground.ClaudeCodeDirectories.Select(directory => Made(directory, directory: true)).OfType<IsolatedPath>().ToList();
-
-        var sealedPlaces = gitPlaces
-            .Concat(UserGitConfiguration())
-            .Concat(ground.StateDirectories.Select(State))
-            .Append(new IsolatedPath(launchDirectory, Directory: true))
-            .Select(place => Made(place.Path, place.Directory))
-            .OfType<IsolatedPath>()
-            .ToList();
 
         return new LaunchIsolation(
             mode,
@@ -260,6 +437,72 @@ public sealed class AgentIsolation(IIsolationPlatform platform, IGitClient git, 
             IsolationProfiles.Of(hidden, claude, sealedPlaces, ground.WritableRoots, hideClaudeCodeDirectories: false, comparison),
             null,
             null);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Its profile is an agent's command's from the same places: the slots and the tool's own Claude Code directory hidden,
+    /// git's code-running files of each tree, the user's git configuration and the tool's state written by nobody, and
+    /// the ground's own places written again inside them. What it runs is the agents' work however it is started, so it is
+    /// denied what their own commands are.
+    /// </remarks>
+    public async Task<ExecutionIsolation> ForExecutionAsync(HarnessConfig config, ExecutionGround ground, string mainCheckout, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(ground);
+        ArgumentException.ThrowIfNullOrWhiteSpace(mainCheckout);
+
+        var mode = AgentIsolationMode.Of(config);
+        var availability = await platform.ProbeAsync(mainCheckout, cancellationToken).ConfigureAwait(false);
+
+        if (availability.Mechanism is not { } mechanism)
+        {
+            return new ExecutionIsolation(ground.Kind, mode, null, null, availability.Unavailable, availability.Remedy);
+        }
+
+        var (gitPlaces, unread) = await GitPlacesAsync(ground.Trees, cancellationToken).ConfigureAwait(false);
+
+        if (unread is not null)
+        {
+            return new ExecutionIsolation(ground.Kind, mode, null, null, unread, "make sure git answers in the trees the run works over");
+        }
+
+        var toolClaudeCode = new Orchestration.ClaudeTranscripts(fileSystem, host, _environment).ConfigDirectory;
+        var (hidden, claude, sealedPlaces) = Places(ground.SlotDirectories, [toolClaudeCode], gitPlaces, ground.StateDirectories, launchDirectory: null);
+
+        return new ExecutionIsolation(
+            ground.Kind,
+            mode,
+            mechanism,
+            IsolationProfiles.Of(hidden, claude, sealedPlaces, ground.WritableRoots, hideClaudeCodeDirectories: true, host.PathComparison),
+            null,
+            null);
+    }
+
+    /// <summary>
+    /// The places a profile is built from, each as it stands and made first where it is not there: the slots and the
+    /// Claude Code directories, hidden; and git's code-running files, the user's git configuration, the tool's state and
+    /// the launch's own directory where there is one, written by nobody.
+    /// </summary>
+    private (List<IsolatedPath> Hidden, List<IsolatedPath> ClaudeCode, List<IsolatedPath> Sealed) Places(
+        IReadOnlyList<string> slots,
+        IReadOnlyList<string> claudeCodeDirectories,
+        IReadOnlyList<IsolatedPath> gitPlaces,
+        IReadOnlyList<string> state,
+        string? launchDirectory)
+    {
+        var hidden = slots.Select(slot => Made(slot, directory: true)).OfType<IsolatedPath>().ToList();
+        var claude = claudeCodeDirectories.Select(directory => Made(directory, directory: true)).OfType<IsolatedPath>().ToList();
+
+        var sealedPlaces = gitPlaces
+            .Concat(UserGitConfiguration())
+            .Concat(state.Select(State))
+            .Concat(launchDirectory is null ? [] : [new IsolatedPath(launchDirectory, Directory: true)])
+            .Select(place => Made(place.Path, place.Directory))
+            .OfType<IsolatedPath>()
+            .ToList();
+
+        return (hidden, claude, sealedPlaces);
     }
 
     /// <summary>

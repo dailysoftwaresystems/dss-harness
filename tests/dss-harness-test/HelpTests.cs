@@ -934,6 +934,20 @@ public sealed partial class HelpTests
                 + "this tool already runs inside a sandbox, for macOS starts none inside another.",
             prose,
             StringComparison.Ordinal);
+        // The tool's own executions of the agents' work inside the same isolation, the codes the mode turns into its own.
+        Assert.Contains(
+            "Every other git command of this tool's runs none of the repository's hooks - core.hooksPath pointed at the null device - "
+                + "so a fold, a refresh, a rebase, a sync or a question of the tool's never runs the agents' work as a side effect of a "
+                + "checkout, an index written or a ref moved;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "agentPolicy.isolation decides each as it decides a launch: where this machine has none, "
+                + $"{DssHarness.Core.Agents.Isolation.AgentIsolationMode.Required} fails the step ({HarnessExit.ToolMissing}) with nothing run - a leg whose own cannot "
+                + $"be had, its tree one git does not answer for, is skipped-unavailable - and {DssHarness.Core.Agents.Isolation.AgentIsolationMode.Preferred} runs it "
+                + "outside, each leg's line saying so.",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains(
             "A claude-code launch runs whole inside it, the Claude Code directories open to it - it reads its own login there, and on "
                 + "macOS from the login keychain, which every agent's command reaches as the user does - guarded for it by the words policy alone, "
@@ -4823,7 +4837,12 @@ public sealed partial class HelpTests
                 + "declares where it names none, and pending. Each answers passed, true where every leg passed; exitCode, the command's; "
                 + "verdicts, each leg's own; red, the red legs alone - a leg that failed, with the phase that did not pass, the ledger's "
                 + "line and the last lines it printed, and of a sweep each arm that violated, survived or was unattributed, with its arm "
-                + "and its line; and runDirectory, null where the run made none. A leg that works in a copy - its own under .legs, or a "
+                + "and its line; runDirectory, null where the run made none; and isolation, what the work of its legs ran under. What "
+                + "its legs build, test and run is what the run's agents wrote, so the work of each leg this machine runs - every phase "
+                + "it starts, a set-up's lines apart - runs inside the operating system's isolation of the agents' work ('help "
+                + "agent-clients'); where this machine has none, agentPolicy.isolation required fails the step "
+                + $"({HarnessExit.ToolMissing}) with nothing run, and preferred runs its legs outside, each leg's line saying so. "
+                + "A leg that works in a copy - its own under .legs, or a "
                 + "host's - lets the step's hold on its tree go once its copy is made, or once it ends without one, and a leg in the tree "
                 + "itself once it ends: the step's record then says copied. A run whose runner, or a runner its run checks name, writes "
                 + "the tree holds write on it, and its legs work in the tree itself. A leg run refused part way, cut off, or ended with a "
