@@ -153,7 +153,7 @@ public sealed class MutationLegsTests
     public void ASweepsRequest_CarriesNothingItsUseCaseWouldIgnore()
     {
         Assert.Equal(
-            ["ArmNames", "Directory", "ForceLock", "Held", "Here", "Json", "LegNames", "List", "Pending", "SelfTest", "UseStaged", "Watch"],
+            ["ArmNames", "Directory", "ForceLock", "Held", "Here", "Isolation", "Json", "LegNames", "List", "Pending", "SelfTest", "UseStaged", "Watch"],
             typeof(MutationLegsRequest).GetProperties().Select(property => property.Name).Order(StringComparer.Ordinal));
     }
 
