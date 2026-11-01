@@ -248,7 +248,8 @@ public static class ServiceRegistration
                 provider.GetRequiredService<IProcessTable>(),
                 provider.GetRequiredService<IProcessIdentity>(),
                 provider.GetRequiredService<IOwnProgram>(),
-                provider.GetRequiredService<IHostPlatform>()),
+                provider.GetRequiredService<IHostPlatform>(),
+                provider.GetRequiredService<IFileSystem>()),
             provider.GetRequiredService<TimeProvider>()));
 
         // The harness's own tools, built for the API clients to give their agents and served to Claude Code's through the

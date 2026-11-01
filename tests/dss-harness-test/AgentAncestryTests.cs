@@ -1,4 +1,5 @@
 using DssHarness.Core.Agents;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Platform;
 
@@ -14,6 +15,9 @@ public sealed class AgentAncestryTests
     private const int Current = 500;
 
     private static readonly DateTimeOffset Early = new(2026, 10, 31, 9, 0, 0, TimeSpan.Zero);
+
+    /// <summary>The machine's own file system, where a host of the tool's package is told from a launcher of its name.</summary>
+    private static readonly IFileSystem Files = new HarnessFactory().FileSystem;
 
     /// <summary>A process table that answers one reading, whatever is asked.</summary>
     /// <param name="reading">The reading it answers.</param>
@@ -48,7 +52,7 @@ public sealed class AgentAncestryTests
     [Fact]
     public void ACommandAPersonsShellStarted_HasNoAncestorOfTheTools()
     {
-        Assert.Equal(new AgentAncestryAnswer(null, null), AgentAncestry.Of(UnderAShell(Current), Current, "/home/me/.dotnet/tools/dssharness", StringComparison.Ordinal));
+        Assert.Equal(new AgentAncestryAnswer(null, null), AgentAncestry.Of(UnderAShell(Current), Current, "/home/me/.dotnet/tools/dssharness", StringComparison.Ordinal, Files));
     }
 
     /// <summary>
@@ -69,7 +73,7 @@ public sealed class AgentAncestryTests
             ],
             null);
 
-        Assert.Equal(new AgentAncestryAnswer(engine, null), AgentAncestry.Of(table, Current, "/home/me/.dotnet/tools/dssharness", StringComparison.Ordinal));
+        Assert.Equal(new AgentAncestryAnswer(engine, null), AgentAncestry.Of(table, Current, "/home/me/.dotnet/tools/dssharness", StringComparison.Ordinal, Files));
     }
 
     /// <summary>
@@ -86,22 +90,69 @@ public sealed class AgentAncestryTests
             ],
             null);
 
-        Assert.Equal(new AgentAncestryAnswer(null, null), AgentAncestry.Of(table, Current, "/home/me/.dotnet/tools/dssharness", StringComparison.Ordinal));
+        Assert.Equal(new AgentAncestryAnswer(null, null), AgentAncestry.Of(table, Current, "/home/me/.dotnet/tools/dssharness", StringComparison.Ordinal, Files));
     }
 
     /// <summary>
-    /// A process of the tool's however it was started: by the tool's command's name, the very file this process runs as
-    /// under any name, or a runtime hosting the tool's assembly - and a runtime hosting anything else, or any other
-    /// program, is not.
+    /// A launcher of the tool's name started the command - a script whose process runs its shell, another program's shim
+    /// kept apart from the package - and starts the tool as its child: it is no process of the tool's, and a person's own
+    /// command is not refused for it. The engine, a host of the package that is not this command's file, still is.
     /// </summary>
     [Fact]
-    public void AProcessOfTheTools_IsToldByItsName_ItsFile_OrTheAssemblyItsRuntimeHosts()
+    public void ALauncherOfTheToolsName_IsNoAncestor_AHostOfThePackageIs()
     {
+        using var temp = new TempDirectory();
+        var command = OperatingSystem.IsWindows() ? ToolPackage.Command + ".exe" : ToolPackage.Command;
+        var shim = temp.Combine("shims", command);
+        var installed = temp.Combine("tools", command);
+        temp.WriteFile(Path.Combine("shims", command + ".shim"), "path = elsewhere");
+        Directory.CreateDirectory(temp.Combine("tools", ".store", ToolPackage.Id.ToLowerInvariant()));
+        const string Runtime = "/usr/share/dotnet/dotnet";
+
+        ProcessTableReading Launched(SampledProcess launcher)
+            => new(
+                [
+                    new SampledProcess(2, null, "bash", Early, "-bash", "/usr/bin/bash"),
+                    launcher,
+                    new SampledProcess(Current, launcher.Id, "dotnet", Early.AddMinutes(2), "dotnet /home/me/src/build/dssharness.dll run-side-task x", Runtime),
+                ],
+                null);
+
+        var wrapper = new SampledProcess(10, 2, ToolPackage.Command, Early.AddMinutes(1), "/bin/bash /home/me/bin/dssharness run-side-task x", "/usr/bin/bash");
+        var shimmed = new SampledProcess(10, 2, ToolPackage.Command, Early.AddMinutes(1), shim + " run-side-task x", shim);
+        var engine = new SampledProcess(10, 2, ToolPackage.Command, Early.AddMinutes(1), installed + " run-orchestrator implementation", installed);
+
+        Assert.Equal(new AgentAncestryAnswer(null, null), AgentAncestry.Of(Launched(wrapper), Current, Runtime, StringComparison.Ordinal, Files));
+        Assert.Equal(new AgentAncestryAnswer(null, null), AgentAncestry.Of(Launched(shimmed), Current, Runtime, StringComparison.Ordinal, Files));
+        Assert.Equal(new AgentAncestryAnswer(engine, null), AgentAncestry.Of(Launched(engine), Current, Runtime, StringComparison.Ordinal, Files));
+    }
+
+    /// <summary>
+    /// A process of the tool's however it was started, told by its file where the table gives one: a host of the tool's
+    /// package - beside the store a tool install keeps it in, or beside the tool's assembly as a build puts it - the very
+    /// file this process runs as under any name, or a runtime running the tool's assembly; a file of the tool's name
+    /// elsewhere, a script's interpreter, a runtime running anything else, or any other program, is not. Only where the
+    /// table gives no file is a process told by its name.
+    /// </summary>
+    [Fact]
+    public void AProcessOfTheTools_IsToldByItsFile_OrByItsNameWhereTheTableGivesNone()
+    {
+        using var temp = new TempDirectory();
+        var command = OperatingSystem.IsWindows() ? ToolPackage.Command + ".exe" : ToolPackage.Command;
+        Directory.CreateDirectory(temp.Combine("tools", ".store", ToolPackage.Id.ToLowerInvariant()));
+        temp.WriteFile(Path.Combine("build", ToolPackage.Assembly));
+        Directory.CreateDirectory(temp.Combine("shims"));
+
         const string Own = @"C:\tools\renamed.exe";
         var cases = new (SampledProcess Process, bool Tool)[]
         {
-            (new(1, null, "dssharness", null, null, @"C:\Users\me\.dotnet\tools\dssharness.exe"), true),
+            (new(1, null, "dssharness", null, null, temp.Combine("tools", command)), true),
+            (new(1, null, "dssharness", null, null, temp.Combine("build", command)), true),
+            (new(1, null, "dssharness", null, null, temp.Combine("shims", command)), false),
+            (new(1, null, "dssharness", null, "/bin/sh /home/me/bin/dssharness run-orchestrator x", "/bin/sh"), false),
             (new(1, null, "DSSHARNESS", null, null, null), true),
+            (new(1, null, "dotnet", null, "dotnet /home/me/build/dssharness.dll run-orchestrator x", null), true),
+            (new(1, null, "dotnet", null, "dotnet build", null), false),
             (new(1, null, "renamed", null, null, Own), true),
             (new(1, null, "dotnet", null, @"dotnet exec C:\src\dss-harness\build\bin\DssHarness.Cli\debug\dssharness.dll run-orchestrator x", @"C:\Program Files\dotnet\dotnet.exe"), true),
             (new(1, null, "dotnet", null, "\"C:\\Program Files\\dotnet\\dotnet.exe\" \"C:\\my tools\\dssharness.dll\" run-orchestrator x", null), true),
@@ -119,11 +170,11 @@ public sealed class AgentAncestryTests
 
         Assert.Equal(
             cases.Select(one => one.Tool),
-            cases.Select(one => AgentAncestry.IsTheTool(one.Process, Own, StringComparison.OrdinalIgnoreCase)));
+            cases.Select(one => AgentAncestry.IsTheTool(one.Process, Own, StringComparison.OrdinalIgnoreCase, Files)));
 
         // A runtime is the program of many things: the file this process runs as names no process of the tool's where it
         // is the runtime itself, as a build from source runs.
-        Assert.False(AgentAncestry.IsTheTool(new SampledProcess(1, null, "dotnet", null, "dotnet build", @"C:\Program Files\dotnet\dotnet.exe"), @"C:\Program Files\dotnet\dotnet.exe", StringComparison.OrdinalIgnoreCase));
+        Assert.False(AgentAncestry.IsTheTool(new SampledProcess(1, null, "dotnet", null, "dotnet build", @"C:\Program Files\dotnet\dotnet.exe"), @"C:\Program Files\dotnet\dotnet.exe", StringComparison.OrdinalIgnoreCase, Files));
     }
 
     /// <summary>
@@ -160,10 +211,10 @@ public sealed class AgentAncestryTests
 
         Assert.Equal(
             new AgentAncestryAnswer(null, "which processes started this one could not be read - the process table could not be read from WMI through PowerShell (it exited 1) -"),
-            AgentAncestry.Of(byNames, Current, null, StringComparison.Ordinal));
+            AgentAncestry.Of(byNames, Current, null, StringComparison.Ordinal, Files));
         Assert.Equal(
             new AgentAncestryAnswer(null, "which processes started this one could not be read - the process table does not hold this process -"),
-            AgentAncestry.Of(UnderAShell(Current + 1), Current, null, StringComparison.Ordinal));
+            AgentAncestry.Of(UnderAShell(Current + 1), Current, null, StringComparison.Ordinal, Files));
     }
 
     /// <summary>What the service reads is the machine's table, walked from this process's own id.</summary>
@@ -175,7 +226,7 @@ public sealed class AgentAncestryTests
         var engine = new SampledProcess(current + 1, null, "dssharness", null, "dssharness run-orchestrator x", null);
         var table = new ProcessTableReading([engine, new SampledProcess(current, engine.Id, "dssharness", null, null)], null);
 
-        var answer = await new AgentAncestry(new FixedTable(table), harness.Identity, new OwnProgramAt(null), harness.Platform).ReadAsync(TestContext.Current.CancellationToken);
+        var answer = await new AgentAncestry(new FixedTable(table), harness.Identity, new OwnProgramAt(null), harness.Platform, harness.FileSystem).ReadAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(new AgentAncestryAnswer(engine, null), answer);
     }

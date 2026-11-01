@@ -2795,9 +2795,13 @@ the shell expands may, and refusing itself where the agent's mark, `AgentChildEn
 is in its environment, a command that sets it, takes it away or may take it away refused
 (`AgentPolicy.MarkerTouched`), or where a process of this tool's is among the ones that started it
 (`AgentAncestry`, over the process table's seam: the tree walked parent by parent, a process that took a
-freed id - started after the child that names it - never read as a parent, the tool told by its command's name
-(`ToolPackage.IsCommand`, the rule the tool's update finds its running copies by), the file this process runs as, or a runtime
-whose application - the first word past its own options, never an argument of it - is the tool's assembly; one detached from the agent's tree - `at`, a
+freed id - started after the child that names it - never read as a parent, the tool - its own runtime, as the engine is -
+told by the file the table gives a process: a runtime whose application - the first word past its own options, never
+an argument of it - is the tool's assembly, the file this process runs as, or a host of the tool's package
+(`ToolPackage.HostsPackage`: a file of the tool's command beside the tool's assembly, as a build puts it, or beside the
+store a dotnet tool install keeps the package in); by its command's name (`ToolPackage.IsCommand`, the rule the tool's
+update finds its running copies by) only where the table gives no file, so a launcher of that name - a script, whose
+process runs its interpreter, or another program's shim - is none; one detached from the agent's tree - `at`, a
 `tmux` server, a double fork - told by the mark alone, and a table read by names alone, or one without this
 process, refused saying why, never read as a tree with no agent in it); code an interpreter runs and a process apart from the agent's tree
 are where that reading of words ends); no limits, no output envelope; the web

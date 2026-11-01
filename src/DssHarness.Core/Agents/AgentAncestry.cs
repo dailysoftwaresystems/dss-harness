@@ -1,4 +1,5 @@
 using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Platform;
 
@@ -16,13 +17,11 @@ namespace DssHarness.Core.Agents;
 /// <param name="identity">This process, whose ancestors are walked.</param>
 /// <param name="program">The file this process runs as.</param>
 /// <param name="platform">This machine, whose paths compare its own way.</param>
-public sealed class AgentAncestry(IProcessTable processes, IProcessIdentity identity, IOwnProgram program, IHostPlatform platform)
+/// <param name="files">The file system, which tells a host of the tool's package from a launcher of its name.</param>
+public sealed class AgentAncestry(IProcessTable processes, IProcessIdentity identity, IOwnProgram program, IHostPlatform platform, IFileSystem files)
 {
     /// <summary>The program a runtime hosting the tool's assembly runs as, as a build from source runs it.</summary>
     private const string RuntimeHost = "dotnet";
-
-    /// <summary>The file of the tool's own assembly, which a runtime hosting it names on its command line.</summary>
-    private static readonly string Assembly = $"{ToolPackage.Command}.dll";
 
     /// <summary>Reads the machine's process table and walks this process's ancestors in it (<see cref="Of"/>).</summary>
     /// <param name="cancellationToken">Stops the reading.</param>
@@ -30,7 +29,7 @@ public sealed class AgentAncestry(IProcessTable processes, IProcessIdentity iden
     {
         var table = await processes.ReadAsync(cancellationToken).ConfigureAwait(false);
 
-        return Of(table, identity.CurrentId, program.Path, platform.PathComparison);
+        return Of(table, identity.CurrentId, program.Path, platform.PathComparison, files);
     }
 
     /// <summary>
@@ -45,9 +44,11 @@ public sealed class AgentAncestry(IProcessTable processes, IProcessIdentity iden
     /// <param name="currentId">The process whose ancestors are walked: this one.</param>
     /// <param name="ownProgram">The file this process runs as; null where the platform would not say.</param>
     /// <param name="pathComparison">How this machine compares paths.</param>
-    public static AgentAncestryAnswer Of(ProcessTableReading table, int currentId, string? ownProgram, StringComparison pathComparison)
+    /// <param name="files">The file system, which tells a host of the tool's package from a launcher of its name.</param>
+    public static AgentAncestryAnswer Of(ProcessTableReading table, int currentId, string? ownProgram, StringComparison pathComparison, IFileSystem files)
     {
         ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(files);
 
         if (Hosts.ProgramUpdate.Unread(table, "which processes started this one") is { } unread)
         {
@@ -70,7 +71,7 @@ public sealed class AgentAncestry(IProcessTable processes, IProcessIdentity iden
                 break;
             }
 
-            if (IsTheTool(parent, ownProgram, pathComparison))
+            if (IsTheTool(parent, ownProgram, pathComparison, files))
             {
                 return new AgentAncestryAnswer(parent, null);
             }
@@ -82,36 +83,46 @@ public sealed class AgentAncestry(IProcessTable processes, IProcessIdentity iden
     }
 
     /// <summary>
-    /// Whether <paramref name="process"/> is a process of this tool's, however it was started: a program of the tool's
-    /// own command (<see cref="ToolPackage.IsCommand"/>) - the installed tool, or one kept elsewhere - the very file
-    /// this process runs as, or a runtime running the tool's assembly, as a build from source runs. The runtime itself
-    /// is the program of many things, so it is told by the application its command line runs (<see cref="HostedApplication"/>),
-    /// never by its file, nor by a word an argument of that application's holds.
+    /// Whether <paramref name="process"/> is a process of this tool's - the tool's own runtime, as the engine is - told by
+    /// the file the table gives it (<see cref="SampledProcess.Executable"/>): a runtime running the tool's assembly, as a
+    /// build from source or a local tool runs, the very file this process runs as, or a host of the tool's package
+    /// (<see cref="ToolPackage.HostsPackage"/>) - the installed tool's shim, or a build's own program. A launcher of the
+    /// tool's name is none of them: a script's process runs its interpreter, and another program's shim of that name is
+    /// kept apart from the package, each starting the tool as a child of its own. The runtime is the program of many
+    /// things, so it is told by the application its command line runs (<see cref="HostedApplication"/>), never by its
+    /// file, nor by a word an argument of that application's holds. Only where the table gives no file is a process told
+    /// by its name - the tool's command (<see cref="ToolPackage.IsCommand"/>), or the runtime's - as nothing else of it
+    /// can be read.
     /// </summary>
     /// <param name="process">One process of the table.</param>
     /// <param name="ownProgram">The file this process runs as; null where the platform would not say.</param>
     /// <param name="pathComparison">How this machine compares paths.</param>
-    public static bool IsTheTool(SampledProcess process, string? ownProgram, StringComparison pathComparison)
+    /// <param name="files">The file system, which tells a host of the tool's package from a launcher of its name.</param>
+    public static bool IsTheTool(SampledProcess process, string? ownProgram, StringComparison pathComparison, IFileSystem files)
     {
         ArgumentNullException.ThrowIfNull(process);
+        ArgumentNullException.ThrowIfNull(files);
 
-        if (ToolPackage.IsCommand(process.Name))
+        if (process.Executable is not { Length: > 0 } file)
         {
-            return true;
+            return string.Equals(process.Name, RuntimeHost, StringComparison.OrdinalIgnoreCase)
+                ? RunsTheAssembly(process.CommandLine)
+                : ToolPackage.IsCommand(process.Name);
         }
 
-        var hosted = string.Equals(process.Name, RuntimeHost, StringComparison.OrdinalIgnoreCase)
-            || (process.Executable is { } file && string.Equals(Path.GetFileNameWithoutExtension(file), RuntimeHost, StringComparison.OrdinalIgnoreCase));
-
-        if (hosted)
+        if (string.Equals(Path.GetFileNameWithoutExtension(file.Replace('\\', '/')), RuntimeHost, StringComparison.OrdinalIgnoreCase))
         {
-            return process.CommandLine is { } line
-                && HostedApplication(line) is { } application
-                && string.Equals(Path.GetFileName(application.Replace('\\', '/')), Assembly, StringComparison.OrdinalIgnoreCase);
+            return RunsTheAssembly(process.CommandLine);
         }
 
-        return ownProgram is { Length: > 0 } own && process.Executable is { } executable && string.Equals(executable, own, pathComparison);
+        return (ownProgram is { Length: > 0 } own && string.Equals(file, own, pathComparison)) || ToolPackage.HostsPackage(file, files);
     }
+
+    /// <summary>Whether a runtime host's <paramref name="commandLine"/> runs the tool's assembly as its application (<see cref="HostedApplication"/>).</summary>
+    private static bool RunsTheAssembly(string? commandLine)
+        => commandLine is not null
+            && HostedApplication(commandLine) is { } application
+            && string.Equals(Path.GetFileName(application.Replace('\\', '/')), ToolPackage.Assembly, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The application a runtime host's <paramref name="commandLine"/> runs: the first word after the host's program, its
