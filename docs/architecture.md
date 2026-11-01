@@ -1603,19 +1603,33 @@ directory or one above it, which reaches the slots only through it, every comman
 it and every program given no path working over it (`AgentPolicy.ThroughWorkingDirectory`); a
 pattern is read as one only where the shell that reads it expands it, a PowerShell cmdlet's quoted
 wildcard among them (`CommandAnalysis.HasOpenPattern`); a command that removes or moves a directory
-whole (`CommandAnalysis.RemovalTargets`: `rm -r`, `Remove-Item -Recurse`, `rd /s`, `find -delete`, `mv`,
+whole (`CommandAnalysis.RemovalTargets`: `rm -r`, `Remove-Item -Recurse`, `rd /s`, `mv`,
 `Move-Item`, `rsync --delete`, `git clean -dx`) is refused where it holds a tree's `.git`, the state,
-a slot or a Claude Code directory, with no working-directory exception (`AgentPolicy.RemovalRefusal`);
-this tool's verbs and `run-side-task` by a verb the shell expands, the verb the command's first word
+a slot or a Claude Code directory, with no working-directory exception (`AgentPolicy.RemovalRefusal`),
+a `git clean`'s or stash's pathspecs read as git reads them; a `find` or an `fd` walk is read once
+(`CommandAnalysis.WalkOf`, `FileWalk`: its start points, its depths, `-depth`, and its expression as a
+tree of tests and actions - names, paths and regexes in either case, kinds, emptiness, prunes, fd's
+pattern, extensions, excludes and hidden files - each action's removal: `-delete`, a remover `-exec`,
+`-execdir`, `-ok` or fd's `-x` and `-X` run on what it finds, `CommandAnalysis.RemovalBy`) and walked
+the way to each guarded place it may reach, its tests read three-valued, a guarded directory's
+contents read as they stand to `AgentPolicy.MaxWalkEntries` (`AgentPolicy.WalkRefusal`): a walk that
+may remove or move a guarded place, or what one holds, is refused, and one whose filters or prunes
+reach none runs; this tool's verbs and `run-side-task` by a verb the shell expands, the verb the command's first word
 after the tool's name as the CLI takes it, which reads no option before its verb
 (`AgentPolicy.ToolVerbOf`), and a command that sets or takes away
 `AgentChildEnvironment.AgentMarker` - its assignment, an `unset`'s, `env -u`'s, a declaration's (`export -n`, `declare`), a name
-reference's, `set`'s, `setenv`'s or `setx`'s word, a PowerShell item cmdlet's `env:` item, or a start
-with no environment (`env -i`, `env -`, `exec -c`) - or may (any of those places given a name the shell
-expands, zsh's `unset -m` pattern, an item cmdlet given a path it computes or none where the string
-names `env:`), read in each reading of the command's words and in those of every command that runs
-it (`AnalyzedCommand.Wrappers`, `CommandAnalysis.VariableTouched`, `VariableTouch`,
-`AgentPolicy.MarkerTouched`) - a word that only mentions the name touches nothing; a git or gh
+reference's, `set`'s, `setenv`'s or `setx`'s word, the name `read`, `mapfile`, `printf -v`,
+`getopts`, `wait -p`, `vared`, a `for` or a `select` sets (`CommandAnalysis.NamesSet`), one an
+arithmetic assigns (`CommandAnalysis.ArithmeticAssigned`, `let` and `((...))`), a PowerShell item
+cmdlet's `env:` item (an `Environment::` path among them), or a start with no environment (`env -i`,
+`env -`, `exec -c`) - or may (any of those places given a name the shell expands, zsh's `unset -m`
+pattern, an item cmdlet given a path it computes, a wildcard that may match it - a relative one where
+the string names `env:` - or none where the string names `env:`), and then one any other word names
+(`CommandAnalysis.NameSpelled`) but a word of data - a program that runs none of its words, `printf`
+but with its `-v`, a git command that reads only what git tracks, a word holding a blank - read in
+each reading of the command's words and in those of every command that runs it
+(`AnalyzedCommand.Wrappers`, `CommandAnalysis.VariableTouched`, `VariableTouch`,
+`AgentPolicy.MarkerTouched`); a git or gh
 command called by a name none of its own commands is (`AgentPolicy.GitCommands`, git 2.55's
 builtins and main commands, a list of the tool's own because git's listing of them is internal to
 git and the policy starts no program to decide, and `AgentPolicy.GhCommands`) - an alias or an extension, whose command line a
@@ -1641,7 +1655,12 @@ move; a name `cd` looks up in `CDPATH` - the string's own, the command's, or the
 inherits - read in each of its directories too, a `cd` given no directory going to the `HOME` the
 command or the string sets, `cd -` going back to the string's `OLDPWD` or a place a move of the
 string's left, and one whose place is not known undecided)
-from every place the command reached before it, up to `AgentPolicy.MaxPlaces`, past which the
+from every place the command reached before it - a command after `&&` from where the one before it
+held, after `||` from where it failed, after any other separator from both, each command's level and
+joining kept by the reader (`AnalyzedCommand.Level`, `AnalyzedCommand.Joined`, followed by
+`AgentPolicy.Standing`), every place reached standing after a move back or to a place the shell
+expands (`popd`, `cd "$D"`) - up to
+`AgentPolicy.MaxPlaces` distinct places, past which the
 command is undecided - and a refusal's places compare in any
 case on every system; on Windows each segment is read as the name Windows reaches by it, by one owner
 (`WindowsNames`) every guard's spelling of a path passes through (`AgentPolicy.Plain` and
@@ -1671,7 +1690,9 @@ program's rules meet the words it is handed and a redirect is decided by its fil
 line joined and `$'...'` decoded. The `NAME=value` (and `NAME+=value`, `CommandAnalysis.AssignedName`)
 words before a program are kept as its environment and carried to what it runs, and a value that is a
 program git or another tool runs (`CommandAnalysis.ProgramValued`: `GIT_SSH_COMMAND`, `GIT_PAGER`,
-`GIT_PROXY_COMMAND`, `EDITOR` and their kind) is read as that program's command line, what a command
+`GIT_PROXY_COMMAND`, `EDITOR`, `PROMPT_COMMAND` and their kind) is read as that program's command
+line, a prompt (`CommandAnalysis.PromptValued`: `PS0`, `PS1`, `PS2`, `PS4`) as a double quote's text
+an interactive shell expands, what a command
 declares too (`CommandAnalysis.Declarations`, the one owner of it: an `export` or a declaration, cmd's
 `set`, fish's `set`, csh's `setenv`, `setx`, PowerShell's `Set-Item` and its kind of an `env:` item), and so is the value of git's own
 setting of a key git runs as a command line (`CommandAnalysis.RunsProgram`: its pager, editors, ssh,
@@ -1688,10 +1709,22 @@ names), `cmd /c` and
 `powershell -Command` and a decoded `-EncodedCommand` - by any prefix PowerShell takes, behind its
 valued options - and the command lines `trap`, `watch`, `script` and `flock` run, the commands
 sed's `e` command and flag run (`CommandAnalysis.SedOf`, sed's own script grammar read, its `-i`
-in either dialect), ssh's and wsl's command, their words joined as each hands them on, and the job
+in either dialect), ssh's and wsl's command and a WSL distribution's own launcher's
+(`CommandAnalysis.DistributionLauncher`: `ubuntu run`, `ubuntu2204.exe -c`), their words joined as
+each hands them on - with none, the script its input gives where the command's input is given
+(`AnalyzedCommand.InputGiven`: a pipe, a redirect of descriptor 0, a group's or a loop's redirect, an
+argument list's command its runtime writes an input), nothing where none is, `ssh -n`, `-f` and `-W`
+among them - the commands ssh's `-o` settings run (`ProxyCommand`, `LocalCommand`,
+`KnownHostsCommand`, `RemoteCommand`, `CommandAnalysis.SshCommandSettings`), a string a program runs
+as a shell's script (`CommandAnalysis.StringRunners`, one table: npx's and `npm exec`'s `-c` and
+`--call`, each of concurrently's, hyperfine's and watchexec's commands, nodemon's `--exec`, entr's
+with `-s`, cargo watch's `-s`), read as `sh -c`'s and as `cmd /c`'s, and the job
 `at` and `batch` take from a here-document or a here-string (`CommandAnalysis.ScriptsItRuns`), and a
 script file the string itself writes before it runs it, read as the text a here-document gave it
-(`AgentPolicy.WrittenScripts`), each by its own
+(`AgentPolicy.WrittenScripts`: each file the string writes kept by the full path it reaches from each
+place its command stands, `StringState.Written`, a target the shell expands kept by its literal end,
+a run word - a program's or a shell's, `source`'s or sed's script file - that file only where it
+reaches that path or that end), each by its own
 shell's quoting - PowerShell by a reader of its own (`CommandAnalysis.PowerShellReader`), which
 follows pwsh's tokenizer and grammar and writes each statement on a line and each word whole and
 quoted for the shell reader, so the shell reads no syntax of its own into it: a command's words as
@@ -1721,28 +1754,39 @@ filter-branch's filters and send-email's commands, each in every form git takes 
 as the program and arguments they are, `submodule foreach`'s as one script the shell evaluates - each word it fills in
 `CommandAnalysis.InputWord` and fd's, rg's and parallel's added one too; `$((...))`, `((...))` and `$[...]` are read as arithmetic, their close found
 as bash finds it, their text read as a double quote's and their substitutions read as commands, so a
-`<<` there shifts and opens no here-document; a single quote inside a double quote's or a
+`<<` there shifts and opens no here-document, and `((...))` is the command `let` given its expression,
+as bash runs it; a single quote inside a double quote's or a
 here-document's `${...}` is a character; a shell's options are read as it reads them before its
 script - an `o` in a short cluster taking the next word (`-eo pipefail`), a help or a version
 running nothing only where it stands before what would run; a redirect's descriptor is read as bash
 reads it (`{name}>`, `<&3-`, digits past an int a word); env's own words are read once
-(`CommandAnalysis.EnvWords`) for both its command and its `-S`; parallel's command is read as the
+(`CommandAnalysis.EnvWords`, GNU env's table `CommandAnalysis.EnvOptions`, a long option by any
+prefix that names it alone through `CommandAnalysis.LongOption`, as every program's table names
+them) for both its command and its `-S`; a git pathspec is read as git reads it
+(`CommandAnalysis.UntrackedPathspecs`, `GitPathspec`: quoted or not, its magic - `:/`, `:(top)` the
+root of the repository the command stands in, `icase`, `glob`, `literal`, an excluding one none) where
+git reaches what it does not track (`add -f`, `grep --no-index` or `--untracked`, `clean`, `stash -u`
+or `-a`, `diff --no-index`), each refused where git's own reading of its pattern may name a slot or
+the state (`AgentPolicy.GitPatternRefusal`), while a directory a git command that reads only what
+git tracks is given (`CommandAnalysis.ReadsTrackedOnly`) and one an `--exclude` or `--exclude-dir`
+gives (`CommandAnalysis.ExcludeWords`) are no read of what they hold; parallel's command is read as the
 script it runs through the shell; a script another program fills in (`find -exec sh -c 'echo {}'`)
 is undecided; and a here-document's or here-string's text is read for root actions and paths with
 no brace expansion, which the shell never makes in it, a name one Windows reads as its device
 (`NUL`, `COM1.txt`) the file of that name another Windows and its shells make, and a bracket the shell
 would not read as one its characters; arithmetic that does not close is read once at each place.
 What it cannot read whole it refuses, and the policy denies as `undecided`: a script nested
-past four levels, parentheses past 32, a shell that reads its script from its input or from a file
-an expansion or another open descriptor names (`bash <(curl ...)`, `/dev/fd/3`, `<&3`), an `env -S`
+past four levels, parentheses past 32, a shell that reads its script from an input it is given or from a file
+an expansion or another open descriptor names (`bash <(curl ...)`, `/dev/fd/3`, `<&3`), an env long
+option that names none of env's or more than one, a configuration file `ssh -F` names but none, an `env -S`
 string holding a backslash or a comment a line end follows, an alias it gives, an `xargs` handing a shell its script, a program named by a
 variable, a substitution, a pattern or a brace, a brace that spells more than 64 words, a word where
 none can stand, a parenthesis after a command's word, which bash refuses and zsh reads as a
 pattern's group or a glob qualifier (`rm -rf (.git|x)`, `*(D)`), an option of git's, gh's, fish's or Windows PowerShell's own before its command that this does
 not know (`CommandAnalysis.WindowsPowerShellValued` and `WindowsPowerShellSwitches` the parameters it knows, its command
 read once, from its first word that is neither), sed running what it reads or a script the shell
-fills in, `at` given its job by a file or its input, ssh or wsl given no command and no input
-this reads, a script file the string writes and runs whose text no here-document gave, a
+fills in, `at` given its job by a file or its input, ssh or wsl given no command and an input
+this does not read, a script file the string writes and runs whose text no here-document gave, a
 terminal session's program given what to run or type (`tmux`, `screen`, `zellij`, `byobu`), and
 `crontab`, `launchctl` or `systemctl` installing or starting a job (`CommandAnalysis.ComposesCommandLine`),
 each running what it is given apart from the agent; a variable's readings past
@@ -1766,7 +1810,7 @@ string's text literal, as pwsh hands it a native program, and a bareword's wildc
 Linux and macOS expands them; a program is never named by a pattern, however its characters are
 quoted (`CommandAnalysis.ProgramPatterns`), for PowerShell's call operator finds
 `& 'C:\Git\cmd\gi?.exe'` by its wildcards; an argument list
-(`Commands(IReadOnlyList<string>, bool)`) crosses no shell, so a variable in it is the text it spells -
+(`Commands(IReadOnlyList<string>, bool, bool)`) crosses no shell, so a variable in it is the text it spells -
 but on Windows a program splits its own command line, and a Cygwin or MSYS program expands the
 patterns and braces in it: told by the runtime library beside it (`cygwin1.dll`, `msys-2.0.dll`),
 the program the list starts and each one a wrapper among its words starts asked, found on the PATH
@@ -1803,8 +1847,9 @@ value known by its own table, `CommandAnalysis.Getopt` over `CpOptions`, `Instal
 `LnOptions`, `RsyncOptions`, and an option it does not know making every operand but the first a
 destination; `Copy-Item`'s `-Destination` by any prefix or glued, else its second word), and the
 output a program's option or operand names (`CommandAnalysis.OutputsOf`, one owner per program:
-`curl -o`, `wget -O`, `tar`'s archive and the directory it extracts into, `unzip -d`, `zip`, `7z -o`,
-`sort -o`, `patch -o`, sed's `w`, robocopy's and xcopy's destination, `dotnet -o`, a compiler's
+`curl -o`, `wget -O`, `tar`'s archive and the directory it extracts into (`-C`, `--one-top-level`),
+`unzip -d`, `zip`, `7z -o`, `sort -o`, `patch -o` and the directory `patch -d` writes in, xxd's
+output file, sed's `w`, robocopy's and xcopy's destination, `dotnet -o`, a compiler's
 `-o`, `cmake -B`, `git format-patch -o`, `ssh-keygen -f`, `openssl -out`, `Invoke-WebRequest -OutFile`,
 `Expand-Archive -DestinationPath`, `Export-Csv`, `Tee-Object`, `Start-Transcript`) - meets the refusals every ground keeps on a write, a
 pattern within a root of the agent's own that stands inside the state its own place; and a command that runs a program which fetches from the network
@@ -2910,7 +2955,7 @@ tree itself among them
 git or gh command called by a name none of its own commands is, and `run-side-task` itself,
 refused to every agent where a word of a command or of a script the policy reads names it or a verb
 the shell expands may, and refusing itself where the agent's mark, `AgentChildEnvironment.AgentMarker`,
-is in its environment, a command that sets it, takes it away or may take it away refused
+is in its environment, a command that sets it, takes it away, may take it away or names it but as data refused
 (`AgentPolicy.MarkerTouched`), or where a process of this tool's is among the ones that started it
 (`AgentAncestry`, over the process table's seam: the tree walked parent by parent, a process that took a
 freed id - started after the child that names it - never read as a parent, the tool - its own runtime, as the engine is -

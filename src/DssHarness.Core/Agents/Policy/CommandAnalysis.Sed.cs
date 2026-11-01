@@ -11,7 +11,8 @@ public static partial class CommandAnalysis
     /// <param name="Executed">The command line each <c>e</c> with one runs through the shell.</param>
     /// <param name="ExecutesInput">Whether it runs as a command the text it reads or a substitution makes, which no word spells.</param>
     /// <param name="Written">The files it writes besides an in-place edit's, as each is spelled.</param>
-    private sealed record SedRead(IReadOnlyList<string> Executed, bool ExecutesInput, IReadOnlyList<string> Written);
+    /// <param name="Files">The script files its <c>-f</c> and <c>--file</c> name, whose commands it runs as a script's.</param>
+    private sealed record SedRead(IReadOnlyList<string> Executed, bool ExecutesInput, IReadOnlyList<string> Written, IReadOnlyList<string> Files);
 
     /// <summary>
     /// The script of a sed command (<paramref name="words"/>, its name first) as GNU sed takes it - every <c>-e</c> and
@@ -30,7 +31,7 @@ public static partial class CommandAnalysis
     {
         var expressions = new List<(string Script, int Word)>();
         var operands = new List<(string Word, int At)>();
-        var files = false;
+        var files = new List<string>();
         var sandbox = false;
         var bsdInPlace = false;
         var ended = false;
@@ -74,7 +75,10 @@ public static partial class CommandAnalysis
                         expressions.Add((value, at));
                     }
 
-                    files |= option == "--file";
+                    if (option == "--file" && value is not null)
+                    {
+                        files.Add(value);
+                    }
                 }
 
                 continue;
@@ -92,7 +96,11 @@ public static partial class CommandAnalysis
                         expressions.Add((value, glued ? -1 : at));
                     }
 
-                    files |= word[letter] == 'f';
+                    if (word[letter] == 'f' && value is not null)
+                    {
+                        files.Add(value);
+                    }
+
                     break;
                 }
 
@@ -119,7 +127,7 @@ public static partial class CommandAnalysis
                 scripts.Add((script, word >= 0 ? At(quoted, word) : null, false));
             }
         }
-        else if (!files && operands.Count > 0)
+        else if (files.Count == 0 && operands.Count > 0)
         {
             scripts.Add((operands[0].Word, At(quoted, operands[0].At), false));
 
@@ -158,7 +166,7 @@ public static partial class CommandAnalysis
             executesInput |= read.ExecutesInput;
         }
 
-        return new SedRead(executed, executesInput, written);
+        return new SedRead(executed, executesInput, written, files);
     }
 
     /// <summary>
@@ -429,6 +437,6 @@ public static partial class CommandAnalysis
             }
         }
 
-        return new SedRead(executed, executesInput, written);
+        return new SedRead(executed, executesInput, written, []);
     }
 }

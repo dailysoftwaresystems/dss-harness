@@ -28,14 +28,15 @@ public static partial class CommandAnalysis
     /// <summary>
     /// The programs that write a file one of their options or words names besides what they print, each read by its own
     /// way of naming it (<see cref="OutputsOf"/>): curl's and wget's downloads, an archive tar, zip or 7-Zip makes and the
-    /// directory tar, unzip and 7-Zip extract into, sort's and patch's output, sed's <c>w</c>, robocopy's and xcopy's
+    /// directory tar (its <c>-C</c> and its <c>--one-top-level</c>), unzip and 7-Zip extract into, sort's and patch's
+    /// output and the directory patch writes in (its <c>-d</c>), xxd's output file, sed's <c>w</c>, robocopy's and xcopy's
     /// destination, a build's output (dotnet, a compiler, cmake), git's <c>--output</c>, a key ssh-keygen and openssl write,
     /// script's typescript, a file a compressor rewrites, and PowerShell's downloads, archives and exports. What an archive
     /// or a patch writes from its own contents - each member's or each file's own name - is not read.
     /// </summary>
     public static IReadOnlyList<string> OutputWriters { get; } =
     [
-        "curl", "wget", "tar", "gtar", "bsdtar", "unzip", "zip", "7z", "7za", "7zr", "sort", "patch", "sed", "gsed", "robocopy",
+        "curl", "wget", "tar", "gtar", "bsdtar", "unzip", "zip", "7z", "7za", "7zr", "sort", "patch", "xxd", "sed", "gsed", "robocopy",
         "xcopy", "dotnet", "gcc", "g++", "cc", "c++", "clang", "clang++", "ld", "rustc", "go", "javac", "cmake", "git", "ssh-keygen",
         "openssl", "script", "gzip", "gunzip", "bzip2", "bunzip2", "xz", "unxz", "lzma", "unlzma", "zstd", "unzstd", "lz4", "unlz4",
         "compress", "uncompress", "pigz", "unpigz", "brotli", "Invoke-WebRequest", "iwr", "Invoke-RestMethod", "irm",
@@ -313,7 +314,11 @@ public static partial class CommandAnalysis
                 var creates = options.Any(option => option.Option is "c" or "r" or "u" or "A" or "create" or "append" or "update" or "catenate" or "concatenate" or "delete");
                 var extracts = options.Any(option => option.Option is "x" or "extract" or "get");
 
-                return [.. creates ? Values(options, "f", "file") : [], .. extracts ? Values(options, "C", "directory") : [],
+                // --one-top-level extracts into the directory it names, under -C's where both are given.
+                var into = extracts ? Values(options, "C", "directory").ToList() : [];
+                var top = extracts ? Values(options, "one-top-level").ToList() : [];
+
+                return [.. creates ? Values(options, "f", "file") : [], .. into, .. top, .. into.SelectMany(directory => top.Select(level => directory + "/" + level)),
                         .. Values(options, "index-file", "volno-file", "listed-incremental", "g")];
             }
 
@@ -335,7 +340,45 @@ public static partial class CommandAnalysis
                 return Values(Getopt(command, SortOptions).Options, "o", "output");
 
             case var _ when Is(program, "patch"):
-                return Values(Getopt(command, PatchOptions).Options, "o", "output", "r", "reject-file");
+            {
+                // The directory it moves to (-d) is where it writes each file the patch names, and its output and rejects
+                // are named from there.
+                var options = Getopt(command, PatchOptions).Options;
+                var into = Values(options, "d", "directory").ToList();
+                var named = Values(options, "o", "output", "r", "reject-file").ToList();
+
+                return [.. into, .. named, .. into.SelectMany(directory => named.Select(file => directory + "/" + file))];
+            }
+
+            case var _ when Is(program, "xxd"):
+            {
+                // Its second operand is the file it writes, the dump or, with -r, the bytes the dump spells. xxd names an
+                // option by its first letter, its long name's rest optional (-c, -cols; -p, -ps): one that takes a value
+                // takes the next word unless its value is glued to its letter.
+                var operands = new List<string>();
+
+                for (var at = 1; at < command.Count; at++)
+                {
+                    var word = command[at];
+
+                    if (word == "--")
+                    {
+                        operands.AddRange(command.Skip(at + 1));
+                        break;
+                    }
+
+                    if (word.Length < 2 || word[0] != '-')
+                    {
+                        operands.Add(word);
+                    }
+                    else if ("cglosnR".Contains(word[1], StringComparison.Ordinal) && word[2..].All(char.IsAsciiLetter))
+                    {
+                        at++;
+                    }
+                }
+
+                return operands.Skip(1).Take(1);
+            }
 
             case var _ when Is(program, "sed", "gsed"):
                 try
@@ -464,8 +507,8 @@ public static partial class CommandAnalysis
     /// <summary>
     /// What a command of <paramref name="analyzed"/>'s removes or moves whole, with all a directory of it holds, as it
     /// spells each: a recursive <c>rm</c>'s words (<c>-r</c>, <c>-R</c>, <c>--recursive</c>), PowerShell's
-    /// <c>Remove-Item</c> and its aliases where PowerShell reads them, cmd.exe's <c>rd /s</c> and <c>del /s</c>, the start
-    /// points of a <c>find</c> that deletes (<c>-delete</c>), what a move or a rename moves (<c>mv</c> but its destination,
+    /// <c>Remove-Item</c> and its aliases where PowerShell reads them, cmd.exe's <c>rd /s</c> and <c>del /s</c>, what a move
+    /// or a rename moves (<c>mv</c> but its destination,
     /// <c>Move-Item</c>, <c>Rename-Item</c>), the destination an <c>rsync</c> deletes from (<c>--delete</c> and its kind)
     /// and the paths a <c>git clean</c> of untracked directories and ignored files cleans (<c>-d</c> with <c>-x</c> or
     /// <c>-X</c>), its working directory where it names none.
@@ -502,17 +545,9 @@ public static partial class CommandAnalysis
 
         if (Is(program, "rm"))
         {
-            var (options, operands, _) = Getopt(command, new OptionTable(string.Empty, string.Empty, [], ["interactive", "preserve-root"], ["force", "recursive", "dir", "verbose", "one-file-system", "no-preserve-root", "help", "version"]));
+            var (options, operands, _) = Getopt(command, RmOptions);
 
             return options.Any(option => option.Option is "r" or "R" or "recursive") ? [.. operands.Select(operand => operand.Word)] : [];
-        }
-
-        if (Is(program, "find"))
-        {
-            // Its start points, the working directory where it names none.
-            var points = arguments.TakeWhile(word => !(word.StartsWith('-') || word is "(" or "!" or ")" or ",")).ToList();
-
-            return arguments.Contains("-delete", StringComparer.Ordinal) ? points.Count > 0 ? points : ["."] : [];
         }
 
         if (Is(program, "mv"))

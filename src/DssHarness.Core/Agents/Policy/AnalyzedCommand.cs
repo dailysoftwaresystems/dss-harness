@@ -28,6 +28,25 @@ public sealed record AnalyzedCommand(IReadOnlyList<string> Words, IReadOnlyList<
     public IReadOnlyList<IReadOnlyList<string>> Wrappers { get; init; } = [];
 
     /// <summary>
+    /// Whether what the command reads as its input is given by what stands around it rather than by its own redirects:
+    /// it stands after a pipe, or in a group, loop, conditional or subshell that does or whose input is redirected, or
+    /// a command that runs it is given its input so. False where only the agent's own command gives it its input.
+    /// </summary>
+    public bool InputGiven { get; init; }
+
+    /// <summary>
+    /// How many subshells and other processes stand between the command and the agent's own shell: a parenthesis, a
+    /// substitution, a script another program runs, a program another starts elsewhere. A move at a level ends with it.
+    /// </summary>
+    public int Level { get; init; }
+
+    /// <summary>
+    /// How the command is joined to the command before it at its level: <c>&amp;&amp;</c>, run only where that one held;
+    /// <c>||</c>, only where it did not; null after any other separator, or where it is the first.
+    /// </summary>
+    public string? Joined { get; init; }
+
+    /// <summary>
     /// How one word's characters stand to the shell, where the word's own spelling was kept: <see cref="WordQuoting"/>
     /// for each of its characters, in step.
     /// </summary>

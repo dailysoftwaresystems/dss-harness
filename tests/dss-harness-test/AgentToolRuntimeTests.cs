@@ -1057,6 +1057,21 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.StartsWith("'dh-no-such-program-7f3' could not be started: ", missing.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A command is decided with the input its call writes it: a program that reads its script from its input is refused
+    /// where the call gives one, and nothing of it runs.
+    /// </summary>
+    [Fact]
+    public async Task RunCommand_GivenAnInput_IsDecidedAsTheProgramReadsIt()
+    {
+        var runtime = Open();
+
+        var given = await Call(runtime, AgentTools.RunCommand, "c1", ("program", "sh"), ("stdin", "echo hi\n"));
+
+        Assert.False(given.Ok);
+        Assert.Equal("this tool could not decide 'sh' ('sh' reads the script it runs from its input, which this does not read): it denies what it cannot decide", given.Text);
+    }
+
     /// <summary>A program named by a relative path is the one where the command starts, never one in this process's directory.</summary>
     [Fact]
     public async Task RunCommand_ReadsARelativeProgramWhereItStarts()

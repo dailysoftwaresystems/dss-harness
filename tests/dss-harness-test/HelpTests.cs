@@ -676,15 +676,21 @@ public sealed partial class HelpTests
                 + "where it goes, a word that names where a program writes, which the write rules decide, and the agent's working directory and those "
                 + "above it, which reach the slots only through it - every command over the tree names it (.) and every program given no path works "
                 + "over it. A recursive removal or a move of a directory that holds a tree's .git, the tool's state, a slot or a Claude Code directory "
-                + "(rm -rf ., find . -delete, Remove-Item -Recurse, mv, rsync --delete, git clean -dx), the working directory among them, is refused. "
+                + "(rm -rf ., Remove-Item -Recurse, mv, rsync --delete, git clean -dx), the working directory among them, is refused, and so is a find "
+                + "or fd walk that may remove or move one or what one holds - its -delete, a remover its -exec, -execdir or -ok runs, fd's -x and -X - "
+                + "read as the walk reaches it: its depth, prunes, excludes and name, path, regex, kind and emptiness filters read, what a guarded "
+                + "directory holds read as it stands, so find . -name '*.pyc' -delete runs. "
                 + "This tool's own verbs and run-side-task, run by any program the policy reads or from a response file, or by a verb the shell expands "
                 + "(run-side-$T, dssharness $V) - its verb the first word after its name, for it takes no option before one - are refused, and so is a "
                 + "command that sets or takes away DSSHARNESS_UNDER_AGENT, the mark of every program an agent starts - its assignment, empty or not, "
-                + "unset, env -u, export -n and declare and their kind, a name reference to it, cmd's set, csh's setenv, setx, a PowerShell item "
-                + "cmdlet's env: item, or a start with no environment (env -i, env -, exec -c) - and one that may: any of those places given a name the "
-                + "shell expands (unset ${v}AGENT, env -u \"$v\", unset $(env | grep ...), zsh's unset -m pattern), a PowerShell item cmdlet given a "
-                + "path it computes or none where the string names env:; a word that only mentions the name (grep -rn DSSHARNESS_UNDER_AGENT src) "
-                + "takes nothing away - whatever any switch says: an agent",
+                + "unset, env -u, export -n and declare and their kind, a name reference to it, cmd's set, csh's setenv, setx, the name read, mapfile, "
+                + "printf -v, getopts, wait -p, vared, a for or a select sets, one an arithmetic assigns (let, ((...))), a PowerShell item cmdlet's env: "
+                + "item, its Environment:: path among them, or a start with no environment (env -i, env -, exec -c) - and one that may: any of those "
+                + "places given a name the shell expands (unset ${v}AGENT, env -u \"$v\", unset $(env | grep ...), zsh's unset -m pattern), a "
+                + "PowerShell item cmdlet given a path it computes, a wildcard that may match it (Env:DSSHARNESS_*, a relative one where the string "
+                + "names env:) or none where the string names env:; and any other word that names it, but a word of data - a program that runs none "
+                + "of its words (grep -rn DSSHARNESS_UNDER_AGENT src, echo \"$DSSHARNESS_UNDER_AGENT\"), a git command that reads only what git "
+                + "tracks (git log -S), a word holding a blank - which takes nothing away - whatever any switch says: an agent",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -732,15 +738,17 @@ public sealed partial class HelpTests
                 + "the one the agent's commands start with or the one the string sets - read in each of its directories too, a cd given no directory "
                 + "going to the HOME the command or the string sets, cd - back to the OLDPWD the string sets or a place a move of the string's left, "
                 + "and one whose place this does not know - cd - with neither, a CDPATH, OLDPWD or HOME the string computes - denied - from every "
-                + "place the command reached before it, up to 64 places, past which the command is denied.",
+                + "place the command reached before it, a command after && standing only where the one before it held and one after || only where "
+                + "it failed, up to 64 distinct places, past which the command is denied.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("No agent starts while this tool itself runs elevated: its step is recorded never started, saying so, before any client is taken.", prose, StringComparison.Ordinal);
         Assert.Contains("a comment and a here-document's lines never read as commands", prose, StringComparison.Ordinal);
         Assert.Contains(
             "wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, busybox) stripped, what "
-                + "xargs reads an expansion among the words it runs; and it goes into sh -c and every other shell's (fish's -C scripts too, "
-                + "its options read as fish reads them)",
+                + "xargs reads an expansion among the words it runs, env's options read by GNU env's own table, a long one by any prefix that "
+                + "names it alone (--spl, --u, --chd), one that names none or more than one denied; and it goes into sh -c and every other "
+                + "shell's (fish's -C scripts too, its options read as fish reads them)",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -752,14 +760,18 @@ public sealed partial class HelpTests
         Assert.Contains("a file:// address is read as the path it names", prose, StringComparison.Ordinal);
         Assert.Contains(
             "What it cannot read whole it denies, said here, not guessed at: a script nested past four levels, a shell that reads its "
-                + "script from its input (curl ... | sh), from a process substitution or from another open descriptor (/dev/fd/3, <&3), "
+                + "script from an input it is given (curl ... | sh), from a process substitution or from another open descriptor (/dev/fd/3, <&3), "
                 + "an env -S string holding a backslash, whose escapes are env's own, an alias it gives, a script another program fills in "
                 + "(find -exec sh -c 'echo {}'), PowerShell's code no word spells (a static method, an instance method "
                 + "but a string's, a collection's or a date's, a function's or an alias's text, a class, using, its stop-parsing --%, "
                 + "a script Invoke-Expression is handed by no one string, and a command line Start-Process, WMI, the task scheduler or Add-Type is handed), and a program named by a variable, a substitution, "
                 + "a pattern or a brace, a brace that spells more than 64 words, an option of git's, gh's, fish's or Windows PowerShell's own before "
                 + "its command that this does not know, sed running what it reads or a script the shell fills in, at given its job by a file or its "
-                + "input, a script file the string writes and runs whose text no here-document gave, a terminal session's program given what to run "
+                + "input, a configuration file ssh -F names (but none, /dev/null), whose settings may run commands, an env long option that names "
+                + "none of env's or more than one, a script file the string writes and runs whose text no here-document gave - a file the string "
+                + "writes known by the path it reaches from each place its command stands, a run word that file only where it reaches that path or "
+                + "where a target the shell expands may be it, its literal end the word's (make > \"$LOG\"; bash scripts/report.sh runs) - a terminal "
+                + "session's program given what to run "
                 + "or type (tmux, screen, zellij, byobu), and crontab, launchctl or systemctl installing or starting a job, each running what it is "
                 + "given apart from the agent; what it does not see, a policy of words and not a sandbox, is the inside of a script file a command "
                 + "runs, the code an interpreter is given (python -c, perl -e, node -e, awk's system), a build file make, ninja or cmake runs, what an "
@@ -768,9 +780,29 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "and the command lines trap, watch, script and flock run, the command sed's e command and flag run, ssh's and wsl's command - its "
-                + "input, where it is given none, read as a shell's is - and the job at and batch take from a here-document or a here-string, a script "
-                + "the string writes to a file before it runs it read as the here-document that wrote it,",
+            "and the command lines trap, watch, script and flock run, the command sed's e command and flag run, ssh's and wsl's command and a "
+                + "WSL distribution's own launcher's (ubuntu run, ubuntu2204.exe -c) - with none, the script its input gives where a pipe, a "
+                + "redirect, a group's input or an argument list's written input gives one, read as a shell's is, and nothing where none is given "
+                + "(the string's first command), ssh -n and -W among them - the commands ssh's -o settings run (ProxyCommand, LocalCommand, "
+                + "KnownHostsCommand, RemoteCommand), a string a program runs as a shell's script (npx's and npm exec's -c and --call, each of "
+                + "concurrently's, hyperfine's and watchexec's commands, nodemon's --exec, entr's with -s, cargo watch's -s), read as sh -c's and as "
+                + "cmd /c's, and the job at and batch take from a here-document or a here-string, a script the string writes to a file before it runs "
+                + "it read as the here-document that wrote it,",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a pathspec git expands itself is read as git reads it, quoted or not - its wildcards matching a dot-name, :/ and :(top) the "
+                + "repository's root, its icase and glob magic - where git reaches what it does not track (add -f, grep --no-index or --untracked, "
+                + "clean, stash -u or -a, diff --no-index), while a directory a git command that reads only what git tracks (status, diff, log, "
+                + "ls-files, grep and their kind) is given is no read of a slot it holds, a quoted pattern of one the text it spells, and a directory "
+                + "an --exclude or --exclude-dir gives is what a program leaves out, never a read of what it holds.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("$((...)), ((...)) and $[...] read as arithmetic, their substitutions as commands, ((...)) the command let given its expression", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "a variable - so set, or declared by export and its kind, cmd's set, fish's set, csh's setenv, setx or PowerShell's env: items - whose "
+                + "value is a program git or another tool runs (GIT_SSH_COMMAND, GIT_PAGER, GIT_EDITOR, EDITOR, PAGER, PROMPT_COMMAND and their kind) "
+                + "read as that program's command line, a prompt (PS0, PS1, PS2, PS4) as the text an interactive shell expands,",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -830,12 +862,13 @@ public sealed partial class HelpTests
                 + "option names it (cp, install and ln's -t and --target-directory, alone, glued or in a cluster, else the last word; Copy-Item's "
                 + "-Destination by any prefix or glued after its :, else its second word), each writer's options that take a value known to it, so cp x "
                 + "dst --suffix y writes dst, and an option it does not know making every word but its first a destination; and the output a program's "
-                + "option or word names: curl -o, wget -O, tar's archive and the directory it extracts into, unzip -d, sort -o, patch -o, sed's w, "
+                + "option or word names: curl -o, wget -O, tar's archive and the directory it extracts into (-C, --one-top-level), unzip -d, sort -o, "
+                + "patch -o and the directory patch -d writes in, xxd's output file, sed's w, "
                 + "robocopy's and xcopy's destination, dotnet -o, a compiler's -o, ssh-keygen -f, Invoke-WebRequest -OutFile, Expand-Archive "
                 + "-DestinationPath, Tee-Object and their kind - and a pattern among them is refused where it may reach git's own files or the state; a "
-                + "command that removes or moves a directory whole - rm -r, Remove-Item -Recurse, rd /s, find -delete, mv, Move-Item, rsync --delete, "
+                + "command that removes or moves a directory whole - rm -r, Remove-Item -Recurse, rd /s, mv, Move-Item, rsync --delete, "
                 + "git clean -dx - is refused where the directory holds a tree's .git, the state, a credential slot or a Claude Code directory, the "
-                + "working directory among them.",
+                + "working directory among them, and a find or fd walk where it may remove or move one or what one holds.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -942,7 +975,7 @@ public sealed partial class HelpTests
         Assert.Contains(
             "and run-side-task itself, refused to every agent where a word of a command or of a script the policy reads names it or a verb the "
                 + "shell expands may, and refusing itself where it is started under one, whose mark (DSSHARNESS_UNDER_AGENT) a command that sets "
-                + "it, takes it away or may take it away is refused, or where a process of this tool's is among the ones that started it - the "
+                + "it, takes it away, may take it away or names it but as data is refused, or where a process of this tool's is among the ones that started it - the "
                 + "process tree, walked parent by parent, a process that took a freed id never read as a parent, the tool's own runtime told by the "
                 + "file it runs where the table gives one (the installed tool, a build's program, the runtime running the tool's assembly) and by "
                 + "its name only where it gives none, so a launcher of the tool's name - a script, another program's shim - is none; one detached from the agent's tree "

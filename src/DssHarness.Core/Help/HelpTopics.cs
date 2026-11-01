@@ -2511,7 +2511,7 @@ public static class HelpTopics
             + "write; the tool's own state, written only by its verbs; each search source's own pace and rate limits; and "
             + "run-side-task itself, refused to every agent where a word of a command or of a script the policy reads "
             + "names it or a verb the shell expands may, and refusing itself where it is started under one, whose mark "
-            + "(DSSHARNESS_UNDER_AGENT) a command that sets it, takes it away or may take it away is refused, or where "
+            + "(DSSHARNESS_UNDER_AGENT) a command that sets it, takes it away, may take it away or names it but as data is refused, or where "
             + "a process of this tool's is among the ones that started it - the process tree, walked parent by parent, a "
             + "process that took a freed id never read as a parent, the tool's own runtime told by the file it runs where the "
             + "table gives one (the installed tool, a build's program, the runtime running the tool's assembly) and by its "
@@ -2936,19 +2936,28 @@ public static class HelpTopics
         builder.AppendLine("which the write rules decide, and the agent's working directory and those above it, which");
         builder.AppendLine("reach the slots only through it - every command over the tree names it (.) and every");
         builder.AppendLine("program given no path works over it. A recursive removal or a move of a directory that");
-        builder.AppendLine("holds a tree's .git, the tool's state, a slot or a Claude Code directory (rm -rf ., find .");
-        builder.AppendLine("-delete, Remove-Item -Recurse, mv, rsync --delete, git clean -dx), the working directory");
-        builder.AppendLine("among them, is refused. This tool's own verbs and run-side-task, run by any program the policy reads or");
+        builder.AppendLine("holds a tree's .git, the tool's state, a slot or a Claude Code directory (rm -rf .,");
+        builder.AppendLine("Remove-Item -Recurse, mv, rsync --delete, git clean -dx), the working directory among");
+        builder.AppendLine("them, is refused, and so is a find or fd walk that may remove or move one or what one");
+        builder.AppendLine("holds - its -delete, a remover its -exec, -execdir or -ok runs, fd's -x and -X - read as");
+        builder.AppendLine("the walk reaches it: its depth, prunes, excludes and name, path, regex, kind and");
+        builder.AppendLine("emptiness filters read, what a guarded directory holds read as it stands, so");
+        builder.AppendLine("find . -name '*.pyc' -delete runs. This tool's own verbs and run-side-task, run by any program the policy reads or");
         builder.AppendLine("from a response file, or by a verb the shell expands (run-side-$T, dssharness $V) - its");
         builder.AppendLine("verb the first word after its name, for it takes no option before one - are refused, and so is a");
         builder.AppendLine("command that sets or takes away DSSHARNESS_UNDER_AGENT, the mark of every program an agent");
         builder.AppendLine("starts - its assignment, empty or not, unset, env -u, export -n and declare and their");
-        builder.AppendLine("kind, a name reference to it, cmd's set, csh's setenv, setx, a PowerShell item cmdlet's");
-        builder.AppendLine("env: item, or a start with no environment (env -i, env -, exec -c) - and one that may: any");
-        builder.AppendLine("of those places given a name the shell expands (unset ${v}AGENT, env -u \"$v\", unset");
+        builder.AppendLine("kind, a name reference to it, cmd's set, csh's setenv, setx, the name read, mapfile,");
+        builder.AppendLine("printf -v, getopts, wait -p, vared, a for or a select sets, one an arithmetic assigns");
+        builder.AppendLine("(let, ((...))), a PowerShell item cmdlet's env: item, its Environment:: path among them,");
+        builder.AppendLine("or a start with no environment (env -i, env -, exec -c) - and one that may: any of those");
+        builder.AppendLine("places given a name the shell expands (unset ${v}AGENT, env -u \"$v\", unset");
         builder.AppendLine("$(env | grep ...), zsh's unset -m pattern), a PowerShell item cmdlet given a path it");
-        builder.AppendLine("computes or none where the string names env:; a word that only mentions the name (grep");
-        builder.AppendLine("-rn DSSHARNESS_UNDER_AGENT src) takes nothing away -");
+        builder.AppendLine("computes, a wildcard that may match it (Env:DSSHARNESS_*, a relative one where the string");
+        builder.AppendLine("names env:) or none where the string names env:; and any other word that names it, but a");
+        builder.AppendLine("word of data - a program that runs none of its words (grep -rn DSSHARNESS_UNDER_AGENT");
+        builder.AppendLine("src, echo \"$DSSHARNESS_UNDER_AGENT\"), a git command that reads only what git tracks");
+        builder.AppendLine("(git log -S), a word holding a blank - which takes nothing away -");
         builder.AppendLine("whatever any switch says: an agent does not move its own run, nor leave its step's limits -");
         builder.AppendLine("nor do the gh commands that hand its work to another agent or install what the next launch");
         builder.AppendLine($"loads ({string.Join(", ", Agents.Policy.AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too -");
@@ -2982,7 +2991,8 @@ public static class HelpTopics
         builder.AppendLine("HOME the command or the string sets, cd - back to the OLDPWD the string sets or a place a");
         builder.AppendLine("move of the string's left, and one whose place this does not know - cd - with neither, a");
         builder.AppendLine("CDPATH, OLDPWD or HOME the string computes - denied - from every place the command");
-        builder.AppendLine($"reached before it, up to {Agents.Policy.AgentPolicy.MaxPlaces} places, past which the command is denied.");
+        builder.AppendLine("reached before it, a command after && standing only where the one before it held and one");
+        builder.AppendLine($"after || only where it failed, up to {Agents.Policy.AgentPolicy.MaxPlaces} distinct places, past which the command is denied.");
         AppendWrapped(builder, ShellReadingProse());
         builder.AppendLine("The protected paths (agentPolicy.protectedPaths, true where nothing is said) are the");
         builder.AppendLine("writes Claude Code guards, refused on every client so a role is not stopped on one where");
@@ -3110,16 +3120,25 @@ public static class HelpTopics
             + "the file it names and never among the words a rule meets - a quoted word spelled as one is a word; the "
             + "NAME=value (and NAME+=value) words before a program kept as its environment, and a variable - so set, or "
             + "declared by export and its kind, cmd's set, fish's set, csh's setenv, setx or PowerShell's env: items - whose value is a program git or "
-            + "another tool runs (GIT_SSH_COMMAND, GIT_PAGER, GIT_EDITOR, EDITOR, PAGER and their kind) read as that "
-            + "program's command line, as is the value of git's own setting of a key git runs as one (core.pager, "
+            + "another tool runs (GIT_SSH_COMMAND, GIT_PAGER, GIT_EDITOR, EDITOR, PAGER, PROMPT_COMMAND and their kind) read "
+            + "as that program's command line, a prompt (PS0, PS1, PS2, PS4) as the text an interactive shell expands, as is "
+            + "the value of git's own setting of a key git runs as one (core.pager, "
             + "core.sshCommand, a diff or merge driver, a filter, an alias and their kind) - a -c, a --config-env's "
             + "variable, GIT_CONFIG_VALUE_n, GIT_CONFIG_PARAMETERS - an alias's '!' taken off; wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, "
-            + "busybox) stripped, what xargs reads an expansion among the words it runs; and it goes "
+            + "busybox) stripped, what xargs reads an expansion among the words it runs, env's options read by GNU env's "
+            + "own table, a long one by any prefix that names it alone (--spl, --u, --chd), one that names none or more "
+            + "than one denied; and it goes "
             + "into sh -c and every other shell's (fish's -C scripts too, its options read as fish reads them), the here-string, here-document or file a shell reads as the last input "
             + "its descriptor 0 is given (/dev/stdin and PowerShell's '-' among its names), cmd /c, "
             + "powershell -Command and a decoded -EncodedCommand, and the command lines trap, watch, script and flock run, "
-            + "the command sed's e command and flag run, ssh's and wsl's command - its input, where it is given none, read "
-            + "as a shell's is - and the job at and batch take from a here-document or a here-string, a script the string "
+            + "the command sed's e command and flag run, ssh's and wsl's command and a WSL distribution's own launcher's "
+            + "(ubuntu run, ubuntu2204.exe -c) - with none, the script its input gives where a pipe, a redirect, a "
+            + "group's input or an argument list's written input gives one, read as a shell's is, and nothing where none "
+            + "is given (the string's first command), ssh -n and -W among them - the commands ssh's -o settings run "
+            + "(ProxyCommand, LocalCommand, KnownHostsCommand, RemoteCommand), a string a program runs as a shell's script "
+            + "(npx's and npm exec's -c and --call, each of concurrently's, hyperfine's and watchexec's commands, nodemon's "
+            + "--exec, entr's with -s, cargo watch's -s), read as sh -c's and as cmd /c's, and the job at and batch take "
+            + "from a here-document or a here-string, a script the string "
             + "writes to a file before it runs it read as the here-document that wrote it, "
             + "by each shell's own quoting - PowerShell by a reader of its own grammar: its commands, pipelines, strings, "
             + "here-strings, variables, $(...), @(...), (...), script blocks, hashtables, assignments and keywords' "
@@ -3130,7 +3149,8 @@ public static class HelpTopics
             + "or an option of a git subcommand runs - a pack program a transport runs (--upload-pack, --receive-pack, --exec, clone's -u), "
             + "difftool's --extcmd, rebase's --exec, grep's --open-files-in-pager, bisect run, submodule foreach, filter-branch's filters and "
             + "send-email's commands - read as its own, each word it fills in an expansion, env -S's string split by env's own rules, and "
-            + "$((...)), ((...)) and $[...] read as arithmetic, their substitutions as commands - so "
+            + "$((...)), ((...)) and $[...] read as arithmetic, their substitutions as commands, ((...)) the command let "
+            + "given its expression - so "
             + "'git -C x push' is git push, and 'env A=1 git push' and 'A=1 /usr/bin/git push' are too. Every word of a command is tried as the program of the words after it - but a word of a program "
             + "that runs none of its words, its data (grep, rg, echo, cat, which and their kind) - a program read by its "
             + "name in any case, its directories and a Windows end (.exe, .cmd, .dll) folded away, a cmd line's '@' dropped, git-push read as git push. A word the shell expands where a "
@@ -3157,18 +3177,29 @@ public static class HelpTopics
             + "expansion - is read as that command where it is given, gh alias import's file refused; the rule a refusal "
             + "names is the one that decided, a rule the command is before one it may be, and of those the person's "
             + "own first; a pattern or a brace that may name a credential slot or a Claude Code directory, or a "
-            + "directory holding one, is refused as naming it, and a file:// address is read as the path it names. What "
+            + "directory holding one, is refused as naming it, and a file:// address is read as the path it names; a "
+            + "pathspec git expands itself is read as git reads it, quoted or not - its wildcards matching a dot-name, :/ "
+            + "and :(top) the repository's root, its icase and glob magic - where git reaches what it does not track (add -f, "
+            + "grep --no-index or --untracked, clean, stash -u or -a, diff --no-index), while a directory a git command "
+            + "that reads only what git tracks (status, diff, log, ls-files, grep and their kind) is given is no read of a "
+            + "slot it holds, a quoted pattern of one the text it spells, and a directory an --exclude or --exclude-dir "
+            + "gives is what a program leaves out, never a read of what it holds. What "
             + "it cannot read whole it "
             + "denies, said here, not guessed at: a script nested past four levels, a shell that reads its script from "
-            + "its input (curl ... | sh), from a process substitution or from another open descriptor (/dev/fd/3, <&3), "
+            + "an input it is given (curl ... | sh), from a process substitution or from another open descriptor (/dev/fd/3, <&3), "
             + "an env -S string holding a backslash, whose escapes are env's own, an alias it gives, a script another program fills in "
             + "(find -exec sh -c 'echo {}'), PowerShell's code no word spells (a static method, an instance method "
             + "but a string's, a collection's or a date's, a function's or an alias's text, a class, using, its stop-parsing --%, "
             + "a script Invoke-Expression is handed by no one string, and a command line Start-Process, WMI, the task scheduler or Add-Type is handed), and a program named by a variable, a "
             + "substitution, a pattern or a brace, a brace that spells more than 64 words, an option of git's, "
             + "gh's, fish's or Windows PowerShell's own before its command that this does not know, sed running what it "
-            + "reads or a script the shell fills in, at given its job by a file or its input, a script file the string "
-            + "writes and runs whose text no here-document gave, a terminal session's program given what to run or type "
+            + "reads or a script the shell fills in, at given its job by a file or its input, a configuration file ssh -F "
+            + "names (but none, /dev/null), whose settings may run commands, an env long option that names none of env's "
+            + "or more than one, a script file the string "
+            + "writes and runs whose text no here-document gave - a file the string writes known by the path it reaches "
+            + "from each place its command stands, a run word that file only where it reaches that path or where a target "
+            + "the shell expands may be it, its literal end the word's (make > \"$LOG\"; bash scripts/report.sh runs) - a "
+            + "terminal session's program given what to run or type "
             + "(tmux, screen, zellij, byobu), and crontab, launchctl or systemctl installing or starting a job, each "
             + "running what it is given apart from the agent; what it does not see, a policy of words and not a sandbox, "
             + "is the inside of a script file a command runs, the code an interpreter is given (python -c, perl -e, "
@@ -3207,13 +3238,14 @@ public static class HelpTopics
             + "word; Copy-Item's -Destination by any prefix or glued after its :, else its second word), each writer's "
             + "options that take a value known to it, so cp x dst --suffix y writes dst, and an option it does not know "
             + "making every word but its first a destination; and the output a program's option or word names: curl -o, "
-            + "wget -O, tar's archive and the directory it extracts into, unzip -d, sort -o, patch -o, sed's w, robocopy's "
+            + "wget -O, tar's archive and the directory it extracts into (-C, --one-top-level), unzip -d, sort -o, patch -o "
+            + "and the directory patch -d writes in, xxd's output file, sed's w, robocopy's "
             + "and xcopy's destination, dotnet -o, a compiler's -o, ssh-keygen -f, Invoke-WebRequest -OutFile, "
             + "Expand-Archive -DestinationPath, Tee-Object and their kind - and a pattern among them is refused where it "
             + "may reach git's own files or the state; a command that removes or moves a directory whole - rm -r, "
-            + "Remove-Item -Recurse, rd /s, find -delete, mv, Move-Item, rsync --delete, git clean -dx - is refused where "
+            + "Remove-Item -Recurse, rd /s, mv, Move-Item, rsync --delete, git clean -dx - is refused where "
             + "the directory holds a tree's .git, the state, a credential slot or a Claude Code directory, the working "
-            + "directory among them. A "
+            + "directory among them, and a find or fd walk where it may remove or move one or what one holds. A "
             + "star, a question mark or a bracket matches a name that begins with a dot only where its shell would: a "
             + "segment that begins with a dot itself; anywhere in a string any of whose words names dotglob or globdots "
             + "as bash and zsh read an option's name, in any case, with or without its underscores and its no "

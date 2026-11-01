@@ -1675,8 +1675,10 @@ public sealed class AgentPolicyTests
 
     /// <summary>
     /// A cd is followed from every place the command reached before it: a relative cd after a subshell's is tried where
-    /// the subshell left it and where the string stands, for the subshell's ended with it. A command whose moves reach
-    /// more places than are followed is not decided, and so denied.
+    /// the subshell left it and where the string stands, for the subshell's ended with it. A command after a <c>&amp;&amp;</c>
+    /// stands only where the one before it held, so a chain of moves reaches one place a hop; a command whose moves reach
+    /// more distinct places than are followed - each move after a <c>;</c> from where the one before held and failed alike
+    /// - is not decided, and so denied.
     /// </summary>
     [Fact]
     public void ACdIsFollowedFromEveryPlaceReached_AndOneMovingPastTheBound_IsDenied()
@@ -1690,11 +1692,13 @@ public sealed class AgentPolicyTests
             "the credential slots",
             Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cd {parent} && (cd /) ; cd {name}/.harness-config/workflows; cat .env/keys.env")).Rule);
 
-        var bounded = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(string.Join(" && ", Enumerable.Range(0, 8).Select(at => $"cd d{at}"))));
+        var bounded = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(string.Join("; ", Enumerable.Range(0, 8).Select(at => $"cd d{at}"))));
 
         Assert.Equal("undecided", bounded.Rule);
         Assert.Contains($"its moves reach more than {AgentPolicy.MaxPlaces} places, which this does not follow", bounded.Reason, StringComparison.Ordinal);
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("cd a && cd b && cd ../c && make"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(string.Join(" && ", Enumerable.Range(0, 8).Select(at => $"cd d{at}"))));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(string.Join(" && ", "abcdef".Select(letter => $"cd {letter} && make && cd .."))));
     }
 
     [Fact]

@@ -70,7 +70,11 @@ public sealed partial class AgentToolRuntime
             return Answer.Failed($"there is no directory at '{Said(directory)}' to start in");
         }
 
-        if (_policy.Run([program, .. arguments], directory).Refusal() is { } denied)
+        // What the command is written as its input is text the policy does not read: a program that reads its script from
+        // its input is refused where it is given one.
+        var stdin = Text(input, "stdin");
+
+        if (_policy.Run([program, .. arguments], directory, inputGiven: stdin is not null).Refusal() is { } denied)
         {
             return Answer.Refused(command, denied);
         }
@@ -86,7 +90,7 @@ public sealed partial class AgentToolRuntime
             LogFile = log,
             WorkingDirectory = directory,
             Environment = AgentChildEnvironment.Of(_host.Environment().Keys, _run.Withheld, commands.KeepEnvironment),
-            StandardInput = Text(input, "stdin") is { } stdin ? ChildInput.Of(stdin) : null,
+            StandardInput = stdin is not null ? ChildInput.Of(stdin) : null,
             Timeout = TimeSpan.FromSeconds(seconds),
             StallSeconds = _run.Limits.StallSeconds ?? 0,
             Mask = _run.Mask,

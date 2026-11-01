@@ -237,9 +237,10 @@ public sealed class CommandWordsPolicyTests
     /// The mark every program an agent starts carries, which <c>run-side-task</c> refuses itself under, is refused where a
     /// command sets it or takes it away by any form the policy reads - an assignment, empty or not, an unset, env's
     /// <c>-u</c> in every spelling, a declaration that takes its export away or a name reference to it, fish's, csh's and
-    /// cmd's set, PowerShell's env: item - and a start with no environment at all, on both grounds; one of those forms
-    /// given what the shell expands may take it away, and is refused as what it may be; a word that only mentions the name
-    /// takes nothing away.
+    /// cmd's set, read's, mapfile's and their kind's name, an arithmetic's, PowerShell's env: item however it is named -
+    /// and a start with no environment at all, on both grounds; one of those forms given what the shell expands, or a
+    /// PowerShell wildcard that may match it, may take it away, and is refused as what it may be; any other word that names
+    /// it is refused too, but a word of data - a search's, a message's, its value read - which takes nothing away.
     /// </summary>
     [Fact]
     public void TheMarkOfAnAgentsPrograms_IsRefusedWhereAFormSetsOrMayTakeItAway()
@@ -269,6 +270,21 @@ public sealed class CommandWordsPolicyTests
                 ($"pwsh -c 'Remove-Item env:{marker}'", $"pwsh -c Remove-Item env:{marker}", $"env:{marker}"),
                 ($"pwsh -c '$env:{marker} = $null'", $"pwsh -c $env:{marker} = $null", $"{marker}=${{null}}"),
                 ($"cmd /c \"set {marker}=\"", $"cmd /c set {marker}=", $"{marker}="),
+                ($"mapfile -t {marker} < /dev/null", $"mapfile -t {marker} </dev/null", marker),
+                ($"readarray {marker} < /dev/null", $"readarray {marker} </dev/null", marker),
+                ($"read -a {marker} <<< x", $"read -a {marker} <<<x", marker),
+                ($"read -r {marker} < /dev/null", $"read -r {marker} </dev/null", marker),
+                ($"printf -v {marker} x", $"printf -v {marker} x", marker),
+                ($"getopts x {marker}", $"getopts x {marker}", marker),
+                ($"wait -n -p {marker}", $"wait -n -p {marker}", marker),
+                ($"for {marker} in a; do true; done", $"for {marker} in a", marker),
+                ($"select {marker} in a; do break; done", $"select {marker} in a", marker),
+                ($"let {marker}=0", $"let {marker}=0", $"{marker}=0"),
+                ($"(( {marker}=0 ))", $"let  {marker}=0 ", $" {marker}=0 "),
+                ($"(( {marker}++ ))", $"let  {marker}++ ", $" {marker}++ "),
+                ($"zsh -c 'read -A {marker} <<< x'", $"zsh -c read -A {marker} <<< x", marker),
+                ($"fish -c 'read {marker}'", $"fish -c read {marker}", marker),
+                ($"pwsh -c 'Remove-Item Environment::{marker}'", $"pwsh -c Remove-Item Environment::{marker}", $"Environment::{marker}"),
             })
             {
                 Assert.Equal(
@@ -299,11 +315,31 @@ public sealed class CommandWordsPolicyTests
                 ("declare -n r=\"$V\"; unset r", "declare -n r=$V", "r=$V"),
                 ("pwsh -c 'Remove-Item (\"Env:\" + $n)'", "pwsh -c Remove-Item (\"Env:\" + $n)", "$(\n'echo' 'Env:' \"${n}\"\n)"),
                 ("pwsh -c 'Get-ChildItem Env: | Remove-Item'", "pwsh -c Get-ChildItem Env: | Remove-Item", "Remove-Item"),
+                ("pwsh -c 'Remove-Item Env:DSSHARNESS_*'", "pwsh -c Remove-Item Env:DSSHARNESS_*", "Env:DSSHARNESS_*"),
+                ("pwsh -c 'Remove-Item Env:*AGENT'", "pwsh -c Remove-Item Env:*AGENT", "Env:*AGENT"),
+                ("pwsh -c 'Set-Location Env:; Remove-Item DSS*'", "pwsh -c Set-Location Env:; Remove-Item DSS*", "DSS*"),
+                ("pwsh -c 'Push-Location Env:; Remove-Item *_AGENT'", "pwsh -c Push-Location Env:; Remove-Item *_AGENT", "*_AGENT"),
+                ("for v in $(compgen -e); do mapfile \"$v\" < /dev/null; done", "mapfile $v </dev/null", "$v"),
+                ("let \"$v = 1\"", "let $v = 1", "$v = 1"),
             })
             {
                 var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
 
                 Assert.Equal((marker, $"'{whole}' is refused: '{word}' may take away {marker}: it names a variable by what the shell expands, which this does not read, which marks every program an agent of this tool starts"), (denied.Rule, denied.Reason));
+            }
+
+            // Past the forms read, any word that names it but a word of data.
+            foreach (var (command, whole) in new[]
+            {
+                ($"zsh -c 'unexport {marker}'", $"zsh -c unexport {marker}"),
+                ($"pwsh -c 'cd env:; ri {marker}'", $"pwsh -c cd env:; ri {marker}"),
+                ($"pwsh -c 'Set-Location Env:; Remove-Item {marker}'", $"pwsh -c Set-Location Env:; Remove-Item {marker}"),
+                ($"some-tool --drop {marker}", $"some-tool --drop {marker}"),
+            })
+            {
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied(marker, AgentPolicySource.Builtin, $"'{whole}' is refused: '{marker}' names {marker}, which no command but one that only reads its words names, for it marks every program an agent of this tool starts"),
+                    policy.Run(command));
             }
 
             // A declaration of a name the shell expands is one this does not read at all.
@@ -313,7 +349,9 @@ public sealed class CommandWordsPolicyTests
             {
                 "env A=1 dssharness list-worktree", $"grep -rn {marker} src", $"git log -S {marker}", $"echo \"${marker}\"", "unset OTHER",
                 "export -n OTHER", "pwsh -c 'Remove-Item build -Recurse'", "pwsh -c 'Set-Content -Path out.txt -Value $content'",
-                "pwsh -c 'Get-ChildItem Env:'",
+                "pwsh -c 'Get-ChildItem Env:'", $"rg {marker}", $"printf '%s' \"${marker}\"", $"(( x == {marker} ))", "(( i < n )) && echo y",
+                "let \"i < $n\"", "(( count += 1 ))", "for f in *.txt; do echo $f; done", "read -r line < f", "printf -v out '%s' x",
+                "mapfile -t lines < f", "pwsh -c 'Remove-Item Env:MY_VAR'", "pwsh -c 'Remove-Item Env:MY_*'",
             })
             {
                 Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(policy.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
@@ -402,7 +440,8 @@ public sealed class CommandWordsPolicyTests
 
     /// <summary>
     /// A command line a program runs besides being run itself is read as the script it is - sed's <c>e</c>, ssh's remote
-    /// command, wsl's, at's job a here-string gives, a script file the string wrote from a here-document - so
+    /// command, wsl's, at's job a here-string gives, a script file the string wrote from a here-document, the command an
+    /// interactive shell runs before its prompt and the substitutions a prompt runs - so
     /// <c>run-side-task</c> in one is refused on both grounds; one this cannot read - sed running what it reads or a script
     /// the shell fills in, at's job read from a file or its input, ssh's with no command, a script file the string wrote
     /// by what it computes, a terminal session's, cron's, launchd's and systemd's - is refused as undecided.
@@ -427,6 +466,9 @@ public sealed class CommandWordsPolicyTests
                 "at now <<< 'dssharness run-side-task'",
                 "cat > s.sh <<'EOF'\ndssharness run-side-task\nEOF\nsh s.sh",
                 "tee run.sh <<< 'dssharness run-side-task'; chmod +x run.sh; ./run.sh",
+                "PROMPT_COMMAND='dssharness run-side-task' bash -i",
+                "PS1='$(dssharness run-side-task)' bash -i",
+                "export PS0='`dssharness run-side-task`'; bash -i",
             })
             {
                 Assert.True(policy.Run(command) == refused, $"'{command}' was answered {policy.Run(command)}");
@@ -676,15 +718,16 @@ public sealed class CommandWordsPolicyTests
 
     /// <summary>
     /// A command that removes or moves whole a directory that holds git's own directory - the working directory among them
-    /// - is refused on both grounds, however it names it: <c>rm -rf .</c>, <c>"$PWD"</c>, a find that deletes, PowerShell's
-    /// recursive Remove-Item, a git clean of ignored files, a move of it; one that removes a directory holding none runs.
+    /// - is refused on both grounds, however it names it: <c>rm -rf .</c>, <c>"$PWD"</c>, a find that deletes what it
+    /// walks to, PowerShell's recursive Remove-Item, a git clean of ignored files, a move of it; one that removes a
+    /// directory holding none runs, and so does a find whose filters reach nothing of git's own.
     /// </summary>
     [Fact]
     public void ARemovalOfADirectoryThatHoldsGitsOwn_IsRefused()
     {
         using var tree = new MainTree();
 
-        foreach (var (policy, root) in new[] { (tree.Side(), tree.Main), (tree.Step(), tree.Worktree) })
+        foreach (var (policy, root, walked) in new[] { (tree.Side(), tree.Main, "'./.git/hooks' lies in"), (tree.Step(), tree.Worktree, "'./.git' is or holds") })
         {
             var git = Path.Combine(root, ".git");
 
@@ -693,8 +736,6 @@ public sealed class CommandWordsPolicyTests
                 ("rm -rf .", "rm -rf .", "."),
                 ("rm -rf ./", "rm -rf ./", "./"),
                 ("rm -rf \"$PWD\"", "rm -rf $PWD", root),
-                ("find . -delete", "find . -delete", "."),
-                ("find -name '*.o' -delete", "find -name *.o -delete", "."),
                 ("pwsh -c 'Remove-Item . -Recurse -Force'", "Remove-Item . -Recurse -Force", "."),
                 ("mv . /tmp/moved", "mv . /tmp/moved", "."),
             })
@@ -704,7 +745,11 @@ public sealed class CommandWordsPolicyTests
                     policy.Run(command));
             }
 
-            foreach (var command in new[] { "rm -rf build", "find src -name '*.o' -delete", "rm -rf *", "mv build out", "rm -f x.txt" })
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied(AgentPolicy.GitsOwnRule, AgentPolicySource.Builtin, $"'find . -delete' may remove {walked.Split(' ')[0]} by its walk of '.', and {walked} git's own, '{git}': no command of an agent removes or moves one"),
+                policy.Run("find . -delete"));
+
+            foreach (var command in new[] { "rm -rf build", "find src -name '*.o' -delete", "find -name '*.o' -delete", "rm -rf *", "mv build out", "rm -f x.txt" })
             {
                 Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(policy.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
             }
@@ -713,6 +758,345 @@ public sealed class CommandWordsPolicyTests
         Assert.Equal(
             new AgentPolicyAnswer.Denied(AgentPolicy.GitsOwnRule, AgentPolicySource.Builtin, $"'git clean -ffdx' removes or moves '.', which holds git's own, '{Path.Combine(tree.Main, ".git")}': no command of an agent removes or moves one"),
             tree.Side().Run("git clean -ffdx"));
+    }
+
+    /// <summary>
+    /// A file the string writes is known by the path it reaches from where its command stands: a script run after it is
+    /// the file only where the run word reaches that path, or where a target the shell expands may be it - its literal
+    /// end the run word's - so a log written to a variable's path, or a script of the same name in another directory,
+    /// runs on both grounds, and the file it wrote does not.
+    /// </summary>
+    [Fact]
+    public void AFileTheStringWrote_IsTheScriptItRunsOnlyWhereTheRunWordMayReachIt()
+    {
+        using var tree = new MainTree();
+
+        foreach (var policy in new[] { tree.Side(), tree.Step() })
+        {
+            foreach (var command in new[]
+            {
+                "make > \"$LOGFILE\"; bash scripts/report.sh", "npm test 2>&1 | tee \"$LOG\"; bash scripts/report.sh",
+                "dotnet test > \"$OUT/test.log\"; ./build/bin/app", "make > \"$TMPDIR/log\" 2>&1; ./check.sh",
+                "echo x > out/test.sh; bash scripts/test.sh", "printf x > \"$D/run.sh\"; bash scripts/build.sh",
+            })
+            {
+                Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(policy.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
+            }
+
+            foreach (var (command, subject, word) in new[]
+            {
+                ("echo x > out/test.sh; bash out/test.sh", "bash out/test.sh", "out/test.sh"),
+                ("echo x > out/test.sh; bash ./out/../out/test.sh", "bash ./out/../out/test.sh", "./out/../out/test.sh"),
+                ("printf x > \"$D/run.sh\"; bash scripts/run.sh", "bash scripts/run.sh", "scripts/run.sh"),
+            })
+            {
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, $"this tool could not decide '{subject}' ('{word}' is a script file this command wrote before it runs it, whose text this does not read): it denies what it cannot decide"),
+                    policy.Run(command));
+            }
+        }
+    }
+
+    /// <summary>
+    /// What a find or an fd walk removes is read as the walk reaches it - its start points, its depth, its prunes and its
+    /// excludes, its name and kind filters, and its <c>-delete</c>, its <c>-exec</c> running a remover on what it finds
+    /// or fd's <c>-x</c> - against git's own and every place no command of an agent touches, as each stands: a walk that
+    /// may remove one is refused on both grounds, and one whose filters reach none runs.
+    /// </summary>
+    [Fact]
+    public void AWalkThatRemoves_IsRefusedOnlyWhereItMayReachWhatNoCommandTouches()
+    {
+        using var tree = new MainTree();
+        File.WriteAllText(Path.Combine(tree.Main, ".git", "config"), string.Empty);
+
+        foreach (var (policy, root) in new[] { (tree.Side(), tree.Main), (tree.Step(), tree.Worktree) })
+        {
+            var git = Path.Combine(root, ".git");
+
+            foreach (var (command, entry) in new[]
+            {
+                ("find . -exec rm -rf {} +", "."),
+                ("find . -name .git -exec rm -rf {} +", "./.git"),
+                ("find . -mindepth 1 -maxdepth 1 -exec rm -rf {} \\;", "./.git"),
+                ("fd -H -x rm -rf", "./.git"),
+                ("fd -Hx rm -rf", "./.git"),
+                ("find . -exec mv {} /tmp/ \\;", "."),
+            })
+            {
+                var whole = string.Join(' ', CommandAnalysis.Commands(command)[0].Whole);
+
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied(AgentPolicy.GitsOwnRule, AgentPolicySource.Builtin, $"'{whole}' may remove '{entry}' by its walk of '.', and '{entry}' is or holds git's own, '{git}': no command of an agent removes or moves one"),
+                    policy.Run(command));
+            }
+
+            foreach (var command in new[]
+            {
+                "find . -name '*.pyc' -delete", "find . -name .DS_Store -delete", "find . -maxdepth 1 -name '*.log' -delete",
+                "find . -path ./.git -prune -o -name '*.pyc' -delete", "find . -name '*.pyc' -exec rm {} +", "find . -type f -name '*.tmp' -exec rm -f {} \\;",
+                "find . -mtime +7 -name '*.log' -delete", "fd -e pyc -x rm", "find . -name '*.pyc' -print",
+            })
+            {
+                Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(policy.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
+            }
+        }
+
+        // What git's own directory holds is reached as it stands: its config by a name filter, its empty hooks by -empty.
+        Assert.Equal(
+            new AgentPolicyAnswer.Denied(AgentPolicy.GitsOwnRule, AgentPolicySource.Builtin, $"'find . -name config -exec rm {{}} +' may remove './.git/config' by its walk of '.', and './.git/config' lies in git's own, '{Path.Combine(tree.Main, ".git")}': no command of an agent removes or moves one"),
+            tree.Side().Run("find . -name config -exec rm {} +"));
+        Assert.Equal(
+            new AgentPolicyAnswer.Denied(AgentPolicy.GitsOwnRule, AgentPolicySource.Builtin, $"'find . -type d -empty -delete' may remove './.git/hooks' by its walk of '.', and './.git/hooks' lies in git's own, '{Path.Combine(tree.Main, ".git")}': no command of an agent removes or moves one"),
+            tree.Side().Run("find . -type d -empty -delete"));
+        Assert.Equal(AgentPolicyAnswer.Allow, tree.Step().Run("find . -type d -empty -delete"));
+        Assert.Equal(AgentPolicyAnswer.Allow, tree.Step().Run("find . -name config -exec rm {} +"));
+
+        // A prune keeps the walk out of what it prunes: git's own hooks are reached only past it.
+        Assert.Equal(AgentPolicyAnswer.Allow, tree.Side().Run("find . -path ./.git -prune -o -name hooks -exec rm -rf {} +"));
+        Assert.Equal(AgentPolicy.GitsOwnRule, Assert.IsType<AgentPolicyAnswer.Denied>(tree.Side().Run("find . -name hooks -exec rm -rf {} +")).Rule);
+        Assert.Equal(AgentPolicy.GitsOwnRule, Assert.IsType<AgentPolicyAnswer.Denied>(tree.Side().Run("fd -H hooks -x rm -rf")).Rule);
+    }
+
+    /// <summary>
+    /// ssh given no command runs a script only where its input is given one: a pipe, a redirect, a group's input, an
+    /// argument list's command with its input written - refused, but for a here-string's text, read as the script it is.
+    /// With none - the string's own first command - and with <c>-n</c> or <c>-W</c>, it runs nothing this does not read,
+    /// on both grounds; so does a shell given no script.
+    /// </summary>
+    [Fact]
+    public void SshWithNoCommand_RunsAScriptOnlyFromAnInputItIsGiven()
+    {
+        using var tree = new MainTree();
+
+        foreach (var policy in new[] { tree.Side(), tree.Step() })
+        {
+            // A here-string's text is the script ssh's shell reads, read as any is.
+            foreach (var command in new[] { "ssh -T git@github.com", "ssh -n host", "ssh -W host:22 jump", "ssh host < /dev/null", "echo x | ssh -n host", "ssh -T git@github.com 2>&1 | grep -q success", "bash", "wsl", "ssh localhost <<< 'make'" })
+            {
+                Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(policy.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
+            }
+
+            foreach (var command in new[] { "{ ssh localhost; } < script.sh", "echo x | (cd src; ssh localhost)", "echo x | while read l; do ssh localhost; done" })
+            {
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, $"this tool could not decide '{command}' ('ssh' reads the script it runs from its input, which this does not read): it denies what it cannot decide"),
+                    policy.Run(command));
+            }
+
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, "this tool could not decide 'ssh localhost' ('ssh' reads the script it runs from its input, which this does not read): it denies what it cannot decide"),
+                policy.Run(["ssh", "localhost"]));
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(["ssh", "localhost"], directory: null, inputGiven: false));
+        }
+    }
+
+    /// <summary>
+    /// The everyday commands the words policy once refused run on both grounds: a chain of moves, each to one place; a
+    /// PowerShell removal and move of what a directory holds; and on the side-task's ground, a git command that reads
+    /// only what git tracks given the tool's own directory, and a search that leaves it out.
+    /// </summary>
+    [Fact]
+    public void EverydayCommands_Run()
+    {
+        using var tree = new MainTree();
+        var side = tree.Side();
+
+        foreach (var policy in new[] { side, tree.Step() })
+        {
+            foreach (var command in new[]
+            {
+                "cd a && make && cd .. && cd b && make && cd .. && cd c && make && cd .. && cd d && make && cd .. && cd e && make && cd .. && cd f && make && cd ..",
+                "pwsh -c \"Remove-Item build/* -Recurse -Force\"", "pwsh -c \"Move-Item -Path build/* -Destination out\"",
+            })
+            {
+                Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(policy.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
+            }
+        }
+
+        foreach (var command in new[]
+        {
+            "git status -- .harness-config", "git diff -- .harness-config", "git log -- .harness-config", "git ls-files .harness-config",
+            "git grep foo -- .harness-config", "grep -rn x --exclude-dir=.harness-config .", "rg x --exclude-dir .harness-config",
+        })
+        {
+            Assert.True(side.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(side.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
+        }
+
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(side.Run("grep -rn x .harness-config")).Rule);
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(side.Run("git diff --no-index -- .harness-config /tmp/x")).Rule);
+    }
+
+    /// <summary>
+    /// A pathspec git expands itself is read as git reads it where the git command reaches what it does not track - add
+    /// <c>-f</c>, grep <c>--no-index</c>, clean, stash <c>-u</c>, diff <c>--no-index</c> - quoted or not, its magic read:
+    /// <c>:/</c> and <c>:(top)</c> the repository's root, <c>icase</c>, <c>glob</c>; so a slot or the state it reaches is
+    /// refused on the side-task's ground, and a clean from the root removes git's own. A git command that reads only what
+    /// git tracks keeps a quoted pattern as its text.
+    /// </summary>
+    [Fact]
+    public void AGitPathspec_IsReadAsGitReadsIt_WhereGitReachesWhatItDoesNotTrack()
+    {
+        using var tree = new MainTree();
+        Directory.CreateDirectory(Path.Combine(tree.Main, "src"));
+        var side = tree.Side();
+        var git = Path.Combine(tree.Main, ".git");
+
+        foreach (var command in new[]
+        {
+            "git add -f '.harness-config/runner/.sec*/k'", "git add -f ':(icase).HARNESS-CONFIG/runner/.SECRETS/k'",
+            "git add -f ':/.harness-config/runner/.secrets/k'", "git add -f ':(top).harness-config/runner/.secrets/k'",
+            "git add -f '*/.secrets/*'", "git add -f ':(glob)**/.secrets/*'", "git grep --no-index -e . -- '.harness-config/runner/.sec*'",
+            "git grep --no-index -- ':(glob)**/.secrets/*'", "git stash -u -- '.harness-config/runner/.sec*'",
+        })
+        {
+            Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command)).Rule);
+        }
+
+        foreach (var (command, whole) in new[]
+        {
+            ("git clean -fdx :/", "git clean -fdx :/"), ("git clean -fdx ':(top)'", "git clean -fdx :(top)"), ("cd src && git clean -fdx :/", "git clean -fdx :/"),
+            ("git -C src clean -fdx :/", "git -C src clean -fdx :/"),
+        })
+        {
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied(AgentPolicy.GitsOwnRule, AgentPolicySource.Builtin, $"'{whole}' removes or moves '.', which holds git's own, '{git}': no command of an agent removes or moves one"),
+                side.Run(command));
+        }
+
+        foreach (var command in new[] { "git clean -fdx ':(icase).HARNESS-CONFIG'", "git clean -fdx '*'" })
+        {
+            Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command));
+        }
+
+        // Started below the root, :/ is the root still, and a pathspec of its own place is that place.
+        Assert.Equal(
+            new AgentPolicyAnswer.Denied(AgentPolicy.GitsOwnRule, AgentPolicySource.Builtin, $"'git clean -fdx :/' removes or moves '.', which holds git's own, '{git}': no command of an agent removes or moves one"),
+            side.Run(["git", "clean", "-fdx", ":/"], "src"));
+        Assert.Equal(AgentPolicyAnswer.Allow, side.Run(["git", "clean", "-fdx", "."], "src"));
+
+        foreach (var command in new[] { "git diff -- '.*'", "git log -- '*.cs'", "git add -f build/out.txt", "git clean -fdx build", "git grep --no-index -e x -- 'src/*.cs'" })
+        {
+            Assert.True(side.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(side.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
+        }
+    }
+
+    /// <summary>
+    /// A program that runs a string as a shell's script - npx's and npm exec's <c>-c</c> and <c>--call</c>, concurrently's
+    /// and hyperfine's commands, watchexec's, nodemon's <c>--exec</c>, entr's with <c>-s</c> - has it read as the script it
+    /// is, as ssh's settings that run a command and a WSL distribution's own launcher have theirs, on both grounds - as
+    /// cmd's too, which runs it on Windows (<c>.gi^t</c> is <c>.git</c> there); a configuration file ssh reads its
+    /// settings from is refused as undecided, but for none.
+    /// </summary>
+    [Fact]
+    public void AStringAProgramRunsAsAShellsScript_IsReadAsTheScriptItIs()
+    {
+        using var tree = new MainTree();
+
+        foreach (var (policy, root) in new[] { (tree.Side(), tree.Main), (tree.Step(), tree.Worktree) })
+        {
+            foreach (var command in new[]
+            {
+                "npx -c 'rm -rf .git'", "npx --call 'rm -rf .git'", "npm exec -c 'rm -rf .git'", "npm exec --call='rm -rf .git'", "npm x -c 'rm -rf .git'",
+                "concurrently 'npm run a' 'rm -rf .git'", "hyperfine 'rm -rf .git'", "hyperfine --prepare 'rm -rf .git' 'ls'", "watchexec 'rm -rf .git'",
+                "nodemon --exec 'rm -rf .git'", "nodemon -x 'rm -rf .git'", "entr -s 'rm -rf .git' < list", "cargo watch -s 'rm -rf .git'",
+                "ssh -o ProxyCommand='rm -rf .git' h true", "ssh -o LocalCommand='rm -rf .git' -o PermitLocalCommand=yes h true",
+                "ssh -o KnownHostsCommand='rm -rf .git' h true", "ssh -o 'LocalCommand rm -rf .git' h true", "ssh -oRemoteCommand='rm -rf .git' h",
+                "ubuntu2204.exe run 'rm -rf .git'", "ubuntu -c 'rm -rf .git'", "debian.exe -c 'rm -rf .git'",
+                "npx -c 'rm -rf .gi^t'",
+            })
+            {
+                Assert.True(
+                    new AgentPolicyAnswer.Denied(AgentPolicy.GitsOwnRule, AgentPolicySource.Builtin, $"'rm -rf .git' writes '.git', git's own: written by git's verbs and this tool's, never by an agent's command") == policy.Run(command),
+                    $"'{command}' was answered {policy.Run(command)}");
+            }
+
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, "this tool could not decide 'ssh -F cfg localhost' ('ssh -F cfg localhost' reads its settings from 'cfg', whose ProxyCommand, LocalCommand and their kind run commands, which this does not read): it denies what it cannot decide"),
+                policy.Run("ssh -F cfg localhost"));
+
+            foreach (var command in new[]
+            {
+                "npx -c 'npm test'", "concurrently 'npm run watch' 'npm run serve'", "hyperfine 'make build'", "watchexec -e rs cargo test",
+                "nodemon --exec 'npm start'", "ssh -o ProxyCommand='nc %h %p' h true", "ssh -F /dev/null h true", "ubuntu run ls", "npx prettier --check .",
+            })
+            {
+                Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(policy.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The programs that write into a directory or a file they name - patch's <c>-d</c>, tar's <c>--one-top-level</c>,
+    /// xxd's output file - write git's own where they name it, refused on a step's ground; elsewhere they run.
+    /// </summary>
+    [Fact]
+    public void AnOutputItsOptionNames_IsTheWriteItIs()
+    {
+        using var tree = new MainTree();
+        var step = tree.Step();
+
+        foreach (var (command, whole, target) in new[]
+        {
+            ("patch -d ../../../.git/hooks -p0 < x.patch", "patch -d ../../../.git/hooks -p0 <x.patch", "../../../.git/hooks"),
+            ("patch --directory=../../../.git/hooks -p0 < x.patch", "patch --directory=../../../.git/hooks -p0 <x.patch", "../../../.git/hooks"),
+            ("tar -x --one-top-level=../../../.git/hooks -f a.tar", "tar -x --one-top-level=../../../.git/hooks -f a.tar", "../../../.git/hooks"),
+            ("xxd -r x ../../../.git/hooks/pre-commit", "xxd -r x ../../../.git/hooks/pre-commit", "../../../.git/hooks/pre-commit"),
+            ("xxd -r -ps x ../../../.git/hooks/pre-commit", "xxd -r -ps x ../../../.git/hooks/pre-commit", "../../../.git/hooks/pre-commit"),
+            ("xxd -r -cols 8 x ../../../.git/hooks/pre-commit", "xxd -r -cols 8 x ../../../.git/hooks/pre-commit", "../../../.git/hooks/pre-commit"),
+        })
+        {
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied(AgentPolicy.GitsOwnRule, AgentPolicySource.Builtin, $"'{whole}' writes '{target}', git's own: written by git's verbs and this tool's, never by an agent's command"),
+                step.Run(command));
+        }
+
+        foreach (var command in new[] { "patch -p1 < fix.patch", "patch -d src -p1 < fix.patch", "tar -xf a.tar --one-top-level=out", "xxd -r dump.hex out.bin", "xxd -l 64 file.bin" })
+        {
+            Assert.True(step.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(step.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
+        }
+    }
+
+    /// <summary>
+    /// env's long options are named by any prefix that begins one alone, as GNU env names them, read by the shared
+    /// reader: a split string, an unset, a cleared environment and a move by their prefixes are what they are; one that
+    /// begins none or more than one is refused as undecided, never taken for the program.
+    /// </summary>
+    [Fact]
+    public void EnvsLongOptions_AreReadByAnyPrefixThatNamesOneAlone()
+    {
+        using var tree = new MainTree();
+        var marker = AgentChildEnvironment.AgentMarker;
+        var refused = new AgentPolicyAnswer.Denied(SideTaskService.RunCommand, AgentPolicySource.Builtin, $"'{SideTaskService.RunCommand}' is refused: {SideTaskService.NoAgentStartsOne}");
+
+        foreach (var policy in new[] { tree.Side(), tree.Step() })
+        {
+            Assert.Equal(refused, policy.Run("env --spl='dssharness run-side-task'"));
+            Assert.Equal(refused, policy.Run("env --split-s 'dssharness run-side-task'"));
+
+            foreach (var (command, word) in new[] { ($"env --u {marker} dssharness build", marker), ($"env --unse={marker} dssharness build", $"--unse={marker}") })
+            {
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied(marker, AgentPolicySource.Builtin, $"'{command}' is refused: '{word}' sets or takes away {marker}, which marks every program an agent of this tool starts"),
+                    policy.Run(command));
+            }
+
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied(marker, AgentPolicySource.Builtin, $"'env --ignore-e dssharness build' is refused: 'env' starts what it runs with no environment, {marker} gone with the rest, which marks every program an agent of this tool starts"),
+                policy.Run("env --ignore-e dssharness build"));
+
+            foreach (var (command, option) in new[] { ("env --ign ls", "--ign"), ("env --frob x ls", "--frob") })
+            {
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, $"this tool could not decide '{command}' ('{option}' names no option of env's alone - none of them, or the start of more than one - which GNU env refuses and another env may take as one of its own, which this does not read): it denies what it cannot decide"),
+                    policy.Run(command));
+            }
+
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("env --chd=src ls"));
+        }
+
+        Assert.Equal(
+            new AgentPolicyAnswer.Denied(AgentPolicy.GitsOwnRule, AgentPolicySource.Builtin, "'cp /tmp/e pre-commit' writes 'pre-commit', git's own: written by git's verbs and this tool's, never by an agent's command"),
+            tree.Step().Run("env --chd=../../../.git/hooks cp /tmp/e pre-commit"));
     }
 
     /// <summary>

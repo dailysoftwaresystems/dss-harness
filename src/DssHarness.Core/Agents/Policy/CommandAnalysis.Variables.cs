@@ -40,10 +40,14 @@ public static partial class CommandAnalysis
     /// in the forms that set it or take it away, and only those: an assignment of it before a program; an <c>unset</c>'s
     /// or <c>unsetenv</c>'s word; env's <c>-u</c> and <c>--unset</c> in every spelling; a declaration of it
     /// (<c>export -n</c>, <c>declare +x</c>, <c>local</c>, <c>readonly</c>), or a name reference to it (<c>declare -n</c>);
-    /// <c>set</c>'s, <c>setenv</c>'s and <c>setx</c>'s name; a PowerShell item cmdlet's <c>env:</c> item of it. Each of
-    /// those places given what the shell expands - a variable, a substitution, an unset's pattern (zsh's <c>unset -m</c>)
-    /// - may be it; so may a PowerShell item cmdlet's path that begins with an expansion, and one given no path at all
-    /// (its items piped to it) where <paramref name="environmentDrive"/> says the string names the <c>env:</c> drive. A
+    /// <c>set</c>'s, <c>setenv</c>'s and <c>setx</c>'s name; the name read, mapfile, printf <c>-v</c>, getopts, wait
+    /// <c>-p</c>, vared, a for or a select set (<see cref="NamesSet"/>), and one an arithmetic assigns
+    /// (<see cref="ArithmeticAssigned"/>); a PowerShell item cmdlet's <c>env:</c> item of it. Each of those places given
+    /// what the shell expands - a variable, a substitution, an unset's pattern (zsh's <c>unset -m</c>) - may be it; so
+    /// may a PowerShell item cmdlet's path that begins with an expansion, an <c>env:</c> item named by a wildcard that may
+    /// match it - a relative path's wildcard where <paramref name="environmentDrive"/> says the string names the
+    /// <c>env:</c> drive, which a move may have made its place - and one given no path at all (its items piped to it)
+    /// there. A
     /// start with no environment (<c>env -i</c>, <c>env -</c>, <c>exec -c</c>) takes it with the rest. A word that only
     /// mentions the name - a search's, a message's, its value read - touches nothing. Null where the words do none of these.
     /// </summary>
@@ -165,6 +169,43 @@ public static partial class CommandAnalysis
             return (set.Word, VariableTouch.Named);
         }
 
+        // The shells' other forms that set a variable by its name: read's names and its array (-a, zsh's -A), mapfile's and
+        // readarray's array, printf -v's, getopts' name, wait -p's, zsh's vared and set -A, let's arithmetic, and a for's or
+        // a select's name - each given what the shell expands may be it.
+        foreach (var (word, at) in NamesSet(program, operands, words, environment))
+        {
+            if (Names(word) || Names(AssignedName(word)))
+            {
+                return (word, VariableTouch.Named);
+            }
+
+            if (Expands(at, word))
+            {
+                return (word, VariableTouch.MayBe);
+            }
+        }
+
+        // let's arithmetic, a ((...)) among it (read as let's): each name an expression assigns, one the shell expands
+        // there maybe this one.
+        if (Is(program, "let"))
+        {
+            foreach (var (word, _) in operands)
+            {
+                foreach (var assigned in ArithmeticAssigned(word))
+                {
+                    if (Names(assigned))
+                    {
+                        return (word, VariableTouch.Named);
+                    }
+
+                    if (assigned.StartsWith('$'))
+                    {
+                        return (word, VariableTouch.MayBe);
+                    }
+                }
+            }
+        }
+
         if (Is(program, EnvironmentWriters) || (powerShell && Is(program, SharedEnvironmentWriters)))
         {
             if (operands.FirstOrDefault(operand => EnvironmentReference().Match(operand.Word) is { Success: true } item && Names(item.Groups["name"].Value.TrimStart('\\', '/'))) is { Word: not null } item)
@@ -173,6 +214,19 @@ public static partial class CommandAnalysis
             }
 
             var paths = ItemPaths(program, operands);
+
+            // An env: item named by a wildcard that may match it, and - after a move into the env: drive - any path named so.
+            foreach (var (word, _) in paths)
+            {
+                var entry = EnvironmentReference().Match(word) is { Success: true } reference ? reference.Groups["name"].Value.TrimStart('\\', '/')
+                    : environmentDrive && !word.Contains(':', StringComparison.Ordinal) ? word.TrimStart('\\', '/')
+                    : null;
+
+                if (entry is not null && entry.IndexOfAny(['*', '?', '[']) >= 0 && WildcardMayMatch(entry, name))
+                {
+                    return (word, VariableTouch.MayBe);
+                }
+            }
 
             // A path PowerShell computes may name an env: item, and one given no path takes the items piped to it.
             if (paths.FirstOrDefault(operand => operand.Word.StartsWith('$') && Expands(operand.At, operand.Word)) is { Word: not null } computed)
@@ -187,6 +241,78 @@ public static partial class CommandAnalysis
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The words of the shells' forms that set a variable by the name they are given, other than an assignment, an unset,
+    /// a declaration or an arithmetic (<see cref="ArithmeticAssigned"/>): read's names and the array its <c>-a</c> (zsh's
+    /// <c>-A</c>) names, mapfile's and readarray's array, printf's <c>-v</c>, getopts' name, wait's <c>-p</c>, zsh's
+    /// <c>vared</c> and <c>set -A</c>, and the name a <c>for</c> or a <c>select</c> goes over its words by.
+    /// </summary>
+    private static IEnumerable<(string Word, int At)> NamesSet(string program, IReadOnlyList<(string Word, int At)> operands, IReadOnlyList<string> words, int environment)
+    {
+        // A short option's value: the rest of its word, or the next word.
+        IEnumerable<(string Word, int At)> Valued(char letter)
+        {
+            for (var index = 0; index < operands.Count; index++)
+            {
+                var (word, at) = operands[index];
+
+                if (word.Length > 1 && word[0] == '-' && word[1] != '-' && word.IndexOf(letter, 1) is var found and > 0)
+                {
+                    if (found + 1 < word.Length)
+                    {
+                        yield return (word[(found + 1)..], at);
+                    }
+                    else if (index + 1 < operands.Count)
+                    {
+                        yield return operands[index + 1];
+                    }
+                }
+            }
+        }
+
+        IEnumerable<(string Word, int At)> Plain() => operands.Where(operand => !operand.Word.StartsWith('-'));
+
+        return program switch
+        {
+            "read" => [.. Valued('a'), .. Valued('A'), .. Plain().Where(operand => !Valued('d').Concat(Valued('p')).Concat(Valued('t')).Concat(Valued('u')).Concat(Valued('i')).Concat(Valued('n')).Concat(Valued('N')).Contains(operand))],
+            "mapfile" or "readarray" => [.. Plain().Where(operand => !Valued('d').Concat(Valued('n')).Concat(Valued('O')).Concat(Valued('s')).Concat(Valued('u')).Concat(Valued('C')).Concat(Valued('c')).Contains(operand)).TakeLast(1)],
+            "printf" => Valued('v'),
+            "getopts" => Plain().Skip(1).Take(1),
+            "wait" => Valued('p'),
+            "vared" => Plain(),
+            "set" when operands.Any(operand => operand.Word == "-A") => Valued('A'),
+            "for" or "select" when environment + 1 < words.Count => [(words[environment + 1], environment + 1)],
+            _ => [],
+        };
+    }
+
+    /// <summary>
+    /// The names an arithmetic expression - let's, a <c>((...))</c>'s - assigns: each before an assignment's operator
+    /// (<c>=</c>, <c>+=</c>, <c>&lt;&lt;=</c> and their kind, an element's subscript between), and each a <c>++</c> or a
+    /// <c>--</c> stands against; a name the shell expands there (<c>$v</c>, <c>${v}</c>, <c>$(...)</c>) as it is spelled.
+    /// A name only read for its value (<c>i &lt; $n</c>, <c>a == b</c>) is none.
+    /// </summary>
+    /// <param name="expression">The expression.</param>
+    internal static IEnumerable<string> ArithmeticAssigned(string expression)
+        => ArithmeticAssignment().Matches(expression).Select(match => match.Groups["name"].Value);
+
+    /// <summary>A name an arithmetic expression assigns (<see cref="ArithmeticAssigned"/>).</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?<![A-Za-z0-9_$])(?<name>\$\{[^}]*\}|\$\([^)]*\)|\$[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\]\s*)?(?:(?:[-+*/%&|^]|<<|>>)?=(?!=)|\+\+|--)|(?:\+\+|--)\s*(?<name>\$\{[^}]*\}|\$\([^)]*\)|\$[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)")]
+    private static partial System.Text.RegularExpressions.Regex ArithmeticAssignment();
+
+    /// <summary>Whether PowerShell's wildcard <paramref name="pattern"/> - a star, a question mark, a bracket - may match <paramref name="name"/>, in any case.</summary>
+    private static bool WildcardMayMatch(string pattern, string name)
+    {
+        if (pattern.Contains('[', StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var expression = "^" + System.Text.RegularExpressions.Regex.Escape(pattern).Replace(@"\*", ".*", StringComparison.Ordinal).Replace(@"\?", ".", StringComparison.Ordinal) + "$";
+
+        return System.Text.RegularExpressions.Regex.IsMatch(name, expression, System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
     }
 
     /// <summary>The parameters of PowerShell's item cmdlets that take a path, by any prefix of two letters or more.</summary>
@@ -255,7 +381,55 @@ public static partial class CommandAnalysis
 
         var item = word.StartsWith('-') && word.IndexOf(':', StringComparison.Ordinal) is var colon and > 1 ? word[(colon + 1)..] : word;
 
-        return item.StartsWith("env:", StringComparison.OrdinalIgnoreCase);
+        return item.StartsWith("env:", StringComparison.OrdinalIgnoreCase)
+            || item.StartsWith("Environment::", StringComparison.OrdinalIgnoreCase)
+            || item.StartsWith(@"Microsoft.PowerShell.Core\Environment::", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The word among <paramref name="words"/> that names the variable <paramref name="name"/> where a command may set it
+    /// or take it away: any word that spells the name - in any case, wherever it stands in the word, an option's letters
+    /// glued before it - but where it is read for its value (<c>$NAME</c>, <c>${NAME}</c>), and but where it is only data:
+    /// every word of a program that runs none of its words (<see cref="RunsNoWords"/>, <c>printf</c> but with its
+    /// <c>-v</c>) or of a git command that reads only what git tracks (<see cref="ReadsTrackedOnly"/>), and a word that
+    /// holds a blank, which no name does. Null where none does.
+    /// </summary>
+    /// <param name="words">One command's words, its environment first, or a wrapper's words as they stood.</param>
+    /// <param name="name">The variable.</param>
+    public static string? NameSpelled(IReadOnlyList<string> words, string name)
+    {
+        ArgumentNullException.ThrowIfNull(words);
+        ArgumentNullException.ThrowIfNull(name);
+
+        var environment = EnvironmentOf(words);
+
+        if (environment < words.Count
+            && ((RunsNoWords(words[environment]) && !(Is(Name(words[environment]), "printf") && words.Skip(environment + 1).Any(word => word.StartsWith("-v", StringComparison.Ordinal))))
+                || ReadsTrackedOnly(words, environment)))
+        {
+            words = [.. words.Take(environment)];
+        }
+
+        return words.FirstOrDefault(word => !word.Any(char.IsWhiteSpace) && Spells(word));
+
+        bool Spells(string word)
+        {
+            for (var at = word.IndexOf(name, StringComparison.OrdinalIgnoreCase); at >= 0; at = word.IndexOf(name, at + 1, StringComparison.OrdinalIgnoreCase))
+            {
+                var end = at + name.Length;
+                // $NAME, ${NAME}, ${!NAME}, ${#NAME} and PowerShell's $env:NAME read its value.
+                var read = (at >= 1 && word[at - 1] == '$')
+                    || (at >= 2 && word[at - 1] is '{' or '!' or '#' && word.LastIndexOf("${", at, StringComparison.Ordinal) is var brace and >= 0 && brace >= at - 3)
+                    || (at >= 5 && word.AsSpan(at - 5, 5).Equals("$env:", StringComparison.OrdinalIgnoreCase));
+
+                if (!read && (end >= word.Length || !(char.IsAsciiLetterOrDigit(word[end]) || word[end] == '_')))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
     }
 
     /// <summary>
