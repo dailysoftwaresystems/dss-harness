@@ -2118,7 +2118,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
     public async Task AMessageGivenWhileATurnRuns_ThatIsNeverTaken_StallsTheStepAfterTheTurnsEnd()
     {
         using var kit = new Kit();
-        kit.Script([new JsonObject { ["slowMs"] = 2500 }, new JsonObject { ["untaken"] = true, ["ignoreEof"] = true }]);
+        kit.Script([new JsonObject { ["slowUntilHeld"] = true }, new JsonObject { ["untaken"] = true, ["ignoreEof"] = true }]);
         var run = kit.Run() with { Limits = new AgentLimits(30, 2.5m, null, StallSeconds: 1) };
         var sink = new Sink(@event =>
         {
