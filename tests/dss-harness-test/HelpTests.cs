@@ -1092,8 +1092,28 @@ public sealed partial class HelpTests
         Assert.Contains(
             "is held inside it, its own profile from the leg's ground, built as a launch's is: the machine read-only; every "
                 + "credential slot of the main checkout and every Claude Code directory hidden; the tree the leg works in - "
-                + "the step's tree or its copy under .legs - the run's records, a sweep's workers under .mutations, a temporary "
-                + "directory of its own and the declared tool caches written,",
+                + "the step's tree or its copy under .legs - a sweep's workers under .mutations, a temporary directory of its own "
+                + "and the declared tool caches written,",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The run's records are no place the work writes: every log, the ledger, the run's claim and its stop are the tool's "
+                + "own, written from what each phase prints. What the tool itself reads out of, or writes into, a place such work "
+                + "writes - a runner's kept outputs, a test's evidence kept on failure, a sweep's sites mutated and put back in "
+                + "its workers, a sync's every read, write, removal and listing in a copy - goes through no link below that "
+                + "place's root",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "where the leg's work is held inside it under required, each runs from the leg's own records, never in a tree, and "
+                + "one whose program or any argument names a place in the tree the leg works in, the run's or the main checkout - a "
+                + "compose file, a script - skips the leg (skipped-unavailable) before any set-up comes up;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a WSL distribution runs on this machine and reaches its drives under /mnt, written, its slots and every tree's git "
+                + "files among them, so a run's step whose legs' work is held inside the isolation skips such a leg under required "
+                + "(skipped-unavailable) and runs it there under preferred, its line saying so.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1151,6 +1171,13 @@ public sealed partial class HelpTests
             $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools.FileTools)}",
             $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeClient)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeClient.ReceiptBound)}",
             $"{nameof(DssHarness.Core.Git.GitOwnSettings)}.{nameof(DssHarness.Core.Git.GitOwnSettings.Apply)}",
+            $"{nameof(DssHarness.Core.Git.GitOwnSettings)}.{nameof(DssHarness.Core.Git.GitOwnSettings.Arguments)}",
+            $"{nameof(DssHarness.Core.Git.GitOwnSettings)}.{nameof(DssHarness.Core.Git.GitOwnSettings.NoRecursion)}",
+            nameof(DssHarness.Core.FileSystem.UnfollowedFiles),
+            $"{nameof(DssHarness.Core.FileSystem.UnfollowedFiles)}.{nameof(DssHarness.Core.FileSystem.UnfollowedFiles.LinkOnTheWay)}",
+            nameof(DssHarness.Core.Mutations.WorkerSite),
+            nameof(DssHarness.Core.SetUps.SetUpConfinement),
+            $"{nameof(DssHarness.Core.Agents.Isolation.ExecutionIsolation)}.{nameof(DssHarness.Core.Agents.Isolation.ExecutionIsolation.InDistribution)}",
             nameof(DssHarness.Core.Git.GitDirectoryPins),
             nameof(DssHarness.Core.Git.GitHooks),
             $"{nameof(DssHarness.Core.Agents.Isolation.ClaudeCodeDirectories)}.{nameof(DssHarness.Core.Agents.Isolation.ClaudeCodeDirectories.Of)}",

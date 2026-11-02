@@ -114,15 +114,21 @@ public sealed record LegRunRequest(
 /// <summary>
 /// Decides the operating system's isolation the work of one leg this machine runs is held inside
 /// (<see cref="LegRunRequest.Isolation"/>): each leg's own, for each works in a tree of its own - the step's tree, or its
-/// copy of it - and keeps its records in the run's directory.
+/// copy of it. The run's records it keeps are the tool's own, which nothing the leg runs writes.
 /// </summary>
 public interface ILegIsolation
 {
     /// <summary>The isolation the phases of the leg that works in <paramref name="legTree"/> run inside, or why none.</summary>
     /// <param name="legTree">The tree the leg works in.</param>
-    /// <param name="runDirectory">Where the run keeps the leg's records.</param>
     /// <param name="cancellationToken">Stops the questions of the trees.</param>
-    Task<Agents.Isolation.ExecutionIsolation> ForLegAsync(string legTree, string runDirectory, CancellationToken cancellationToken);
+    Task<Agents.Isolation.ExecutionIsolation> ForLegAsync(string legTree, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The isolation of the work of a leg placed in the WSL distribution <paramref name="distribution"/>: none, which the
+    /// configuration's mode refuses or runs saying so (<see cref="Agents.Isolation.ExecutionIsolation.InDistribution"/>).
+    /// </summary>
+    /// <param name="distribution">The distribution.</param>
+    Agents.Isolation.ExecutionIsolation ForDistribution(string distribution);
 }
 
 /// <summary>One unit of a leg's work asking its machine to take it: an arm of a sweep.</summary>
@@ -1054,6 +1060,16 @@ public sealed class LegRunService(
     private static string[] SetUpOption(HarnessContext context, PlacedLeg leg, LegRunRequest request)
         => request.Workload.SetUpsOf(context.Config, leg.Leg).Count > 0 ? [LegSetUps.Option] : [];
 
+    /// <summary>
+    /// What a set-up's lines - run outside the operating system's isolation - may not read where the leg's work is held
+    /// inside it under required (<paramref name="held"/>): the tree the leg works in, the run's and the main checkout,
+    /// each of which the agents wrote. Null where the leg holds no such isolation.
+    /// </summary>
+    private static SetUpConfinement? Confinement(HarnessContext context, PlacedLeg leg, Agents.Isolation.ExecutionIsolation? held)
+        => held is { Mode: Agents.Isolation.AgentIsolationMode.Required }
+            ? new SetUpConfinement([.. new[] { leg.HostTreeRoot, context.Layout.RepositoryRoot, context.Layout.MainCheckoutRoot }.Distinct(StringComparer.OrdinalIgnoreCase)])
+            : null;
+
     /// <summary>What <paramref name="leg"/> does once its lock is taken and, where it is heavy, its machine has taken it.</summary>
     private async Task<LegEntry> RunTakenLegAsync(
         HarnessContext context,
@@ -1073,6 +1089,22 @@ public sealed class LegRunService(
         // harness exists to prevent, wearing a green colour.
         if (leg.Dispatched && request.Here is null)
         {
+            // A WSL distribution runs on this machine outside its isolation, and reaches its drives - the slots and every
+            // tree's git files among them - under /mnt, written: where the run's step holds its legs' work inside the
+            // isolation, the leg is skipped under required, saying so, and runs there under preferred, its line saying so.
+            if (leg.Named.Kind == HostKind.Wsl && request.Isolation?.ForDistribution(leg.Named.Name) is { } distribution)
+            {
+                if (distribution.Refusal($"leg '{leg.Name}'") is { } refused)
+                {
+                    return Ended(leg, LegVerdict.SkippedUnavailable, refused, started);
+                }
+
+                if (distribution.Notice is { } outside)
+                {
+                    ledger.Transition(leg.Name, outside);
+                }
+            }
+
             // What one dispatched leg is given of its own, after the command's own options, and what reads the notes its
             // host writes while it runs: asked of it alone, here, once - no other leg is asked for.
             var own = request.RemoteArgumentsOf?.Invoke(leg) ?? [];
@@ -1166,7 +1198,7 @@ public sealed class LegRunService(
         // cannot be had for the leg's tree, the leg is skipped saying why; where it is preferred and there is none, the
         // leg's line says what runs outside it. Its temporary directory goes with the leg.
         ProcessIsolation? isolated = null;
-        using var held = request.Isolation is { } isolation ? await isolation.ForLegAsync(runsAs.HostTreeRoot, runDirectory, cancellationToken).ConfigureAwait(false) : null;
+        using var held = request.Isolation is { } isolation ? await isolation.ForLegAsync(runsAs.HostTreeRoot, cancellationToken).ConfigureAwait(false) : null;
 
         if (held is not null)
         {
@@ -1184,7 +1216,8 @@ public sealed class LegRunService(
         }
 
         // Every phase the work starts runs inside the leg's isolation, held for the work alone: a set-up's lines, brought
-        // up around it, run as the configuration gives them.
+        // up around it, run outside it as the configuration gives them - under required reading nothing the agents wrote
+        // (SetUpConfinement).
         async Task<LegEntry> Work(CancellationToken token)
         {
             using var holding = isolated is null ? null : PhaseIsolation.Enter(isolated);
@@ -1217,6 +1250,7 @@ public sealed class LegRunService(
                     (verdict, detail) => Ended(working, verdict, detail, started),
                     facts => ledger.SetUpsEnded(working.Name, facts),
                     Work,
+                    Confinement(context, runsAs, held),
                     cancellationToken)
                 .ConfigureAwait(false);
 

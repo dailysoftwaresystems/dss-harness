@@ -6,13 +6,19 @@ namespace DssHarness.Core.Mutations;
 
 /// <summary>
 /// The files of a worker's copy an arm mutates: read, written dated forward of everything the worker's last build left,
-/// and put back as they were.
+/// and put back as they were - never through a link below the worker's root, a place the worker's builds and runs write
+/// (<see cref="UnfollowedFiles"/>).
 /// </summary>
 internal interface IWorkerSite
 {
-    /// <summary>The bytes of <paramref name="path"/>, or <see langword="null"/> where it is no file.</summary>
+    /// <summary>
+    /// The bytes of <paramref name="path"/>, or <see langword="null"/> where nothing is there that a link leads from.
+    /// </summary>
+    /// <param name="worker">The worker's copy, which <paramref name="path"/> is below.</param>
     /// <param name="path">The file.</param>
-    byte[]? Read(string path);
+    /// <exception cref="IOException">A link stands on the way to it or at it, or it could not be read.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not read it.</exception>
+    byte[]? Read(string worker, string path);
 
     /// <summary>
     /// When a file of the worker written now must be dated, so the build that follows sees it changed: past the newest
@@ -24,11 +30,14 @@ internal interface IWorkerSite
     DateTime Stamp(string buildDirectory);
 
     /// <summary>Writes <paramref name="contents"/> to <paramref name="path"/>, dated <paramref name="stamp"/>.</summary>
+    /// <param name="worker">The worker's copy, which <paramref name="path"/> is below.</param>
     /// <param name="path">The file.</param>
     /// <param name="contents">What it holds after.</param>
     /// <param name="stamp">When it is dated, as <see cref="Stamp"/> gave it.</param>
     /// <param name="cancellationToken">Stops the write.</param>
-    Task WriteAsync(string path, byte[] contents, DateTime stamp, CancellationToken cancellationToken);
+    /// <exception cref="IOException">A link stands on the way to it, or it could not be written.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not write it.</exception>
+    Task WriteAsync(string worker, string path, byte[] contents, DateTime stamp, CancellationToken cancellationToken);
 
     /// <summary>
     /// Waits until the clock is past <paramref name="stamp"/>, so nothing a build writes after it is dated before the file
@@ -66,8 +75,20 @@ internal sealed class WorkerSite(IFileSystem fileSystem, TimeProvider clock) : I
     private readonly TimeProvider _clock = clock;
 
     /// <inheritdoc/>
-    public byte[]? Read(string path)
-        => _fileSystem.FileExists(path) ? _fileSystem.ReadAllBytes(path) : null;
+    public byte[]? Read(string worker, string path)
+    {
+        // A link is no file of the worker's, wherever it leads: refused naming it, never read as one, nor taken for none.
+        if (!_fileSystem.FileExists(path) && UnfollowedFiles.LinkOnTheWay(_fileSystem, worker, path, itself: true) is null)
+        {
+            return null;
+        }
+
+        using var read = UnfollowedFiles.OpenRead(_fileSystem, worker, path);
+        using var bytes = new MemoryStream();
+
+        read.CopyTo(bytes);
+        return bytes.ToArray();
+    }
 
     /// <inheritdoc/>
     public DateTime Stamp(string buildDirectory)
@@ -80,9 +101,9 @@ internal sealed class WorkerSite(IFileSystem fileSystem, TimeProvider clock) : I
     }
 
     /// <inheritdoc/>
-    public async Task WriteAsync(string path, byte[] contents, DateTime stamp, CancellationToken cancellationToken)
+    public async Task WriteAsync(string worker, string path, byte[] contents, DateTime stamp, CancellationToken cancellationToken)
     {
-        await _fileSystem.WriteAllBytesAtomicAsync(path, contents, cancellationToken).ConfigureAwait(false);
+        await UnfollowedFiles.WriteAsync(_fileSystem, worker, path, contents, cancellationToken).ConfigureAwait(false);
         _fileSystem.SetLastWriteTimeUtc(path, stamp);
     }
 

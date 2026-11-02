@@ -414,7 +414,7 @@ public sealed class RunnerRunServiceTests
                   - runs
                 persist: true
                 run: |
-                  "{{Child}}" "{{Exec}}" "{{Assembly}}" "{stepBuild}/runs" "{{target}}"
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" "{stepBuild}/runs" "{{target}}" "{{outside}}"
             """);
 
         var config = Config();
@@ -434,8 +434,9 @@ public sealed class RunnerRunServiceTests
 
         Assert.True(File.Exists(Path.Combine(kept, "kept.txt")), "what the directory itself holds is kept");
         Assert.False(File.Exists(Path.Combine(kept, "latest", "elsewhere.txt")), "the link was followed");
+        Assert.False(File.Exists(Path.Combine(kept, "pointer.txt")), "the file link was followed");
         Assert.Contains(
-            "'pack' asked to keep 'runs', which holds 1 directory link(s) that were not followed, so what they lead to is not in the kept copy: 'latest'",
+            "'pack' asked to keep 'runs', which holds 2 link(s) that were not followed, so what they lead to is not in the kept copy: 'pointer.txt', 'latest'",
             factory.StandardError.ToString(),
             StringComparison.Ordinal);
     }

@@ -150,7 +150,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             : await CountUnreferencedCommitsAsync(path, mainCheckoutRoot, head, administrativeDirectory, cancellationToken).ConfigureAwait(false);
 
         var repositories = new List<SubmoduleRepository>();
-        var populated = await CollectCheckedOutSubmodulesAsync(mainCheckoutRoot, path, string.Empty, index, repositories, cancellationToken)
+        var populated = await CollectCheckedOutSubmodulesAsync(mainCheckoutRoot, path, administrativeDirectory, string.Empty, index, repositories, changes, cancellationToken)
             .ConfigureAwait(false);
         await CollectModuleRepositoriesAsync(mainCheckoutRoot, Path.Combine(administrativeDirectory, "modules"), string.Empty, repositories, cancellationToken)
             .ConfigureAwait(false);
@@ -473,12 +473,23 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     /// included, and reports whether any is checked out. A submodule whose .git is a directory in the
     /// work tree keeps its repository there rather than among the worktree's modules.
     /// </summary>
+    /// <remarks>
+    /// The status of the tree a submodule is checked out in tells it by its commit alone
+    /// (<see cref="GitOwnSettings.SubmoduleCommits"/>), so each one's own changes are asked of it here, by its own
+    /// git - which runs its own configuration, a clean filter among it - only where its repository is one git keeps
+    /// among the modules of <paramref name="gitDirectory"/>, which git's own submodule commands write and no isolated
+    /// agent does. One whose repository is anywhere else - a directory of its work tree, or where a .git file there
+    /// points, either written by whatever writes the tree - is named a change never looked into: deleting it is never
+    /// taken for losing nothing.
+    /// </remarks>
     private async Task<bool> CollectCheckedOutSubmodulesAsync(
         string mainCheckoutRoot,
         string root,
+        string gitDirectory,
         string shownPrefix,
         IReadOnlyList<GitIndexEntry> index,
         List<SubmoduleRepository> repositories,
+        List<string> changes,
         CancellationToken cancellationToken)
     {
         var populated = false;
@@ -504,8 +515,19 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             await CollectModuleRepositoriesAsync(mainCheckoutRoot, Path.Combine(location.GitDirectory, "modules"), shown + "/", repositories, cancellationToken)
                 .ConfigureAwait(false);
 
+            if (!PathContainment.IsStrictlyInside(Path.Combine(gitDirectory, "modules"), location.GitDirectory, _platform.PathComparison))
+            {
+                changes.Remove(shown);
+                changes.Add($"{shown} (a submodule whose repository is not among its superproject's modules, so its work tree is never looked into)");
+            }
+            else if (!changes.Contains(shown, StringComparer.Ordinal)
+                && (await _gitClient.GetStatusAsync(directory, cancellationToken).ConfigureAwait(false)).Count > 0)
+            {
+                changes.Add(shown);
+            }
+
             var nested = await _gitClient.ListIndexAsync(directory, cancellationToken).ConfigureAwait(false);
-            await CollectCheckedOutSubmodulesAsync(mainCheckoutRoot, directory, shown + "/", nested, repositories, cancellationToken)
+            await CollectCheckedOutSubmodulesAsync(mainCheckoutRoot, directory, location.GitDirectory, shown + "/", nested, repositories, changes, cancellationToken)
                 .ConfigureAwait(false);
         }
 

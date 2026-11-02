@@ -381,7 +381,7 @@ public sealed class WorktreeDeletionTests
     public async Task AChangedSubmodule_IsRefused_EvenWhenConfigurationIgnoresIt()
     {
         // This setting hides the change from a plain status, and a worktree holding submodules is
-        // removed past git's own check, so only --ignore-submodules=none stands in the way.
+        // removed past git's own check, so only the submodule's own status stands in the way.
         using var temp = new TempDirectory();
         using var library = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -393,6 +393,33 @@ public sealed class WorktreeDeletionTests
 
         Assert.Equal(HarnessExit.Refused, outcome.Outcome.ExitCode);
         Assert.Contains("that would be lost: lib", outcome.Outcome.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A repository made in the worktree and put in its index as a submodule's entry - its .git a directory of the work
+    /// tree, its configuration naming a clean filter - is never asked about its work tree, so nothing of that
+    /// configuration runs, and the deletion is refused for it, named as never looked into.
+    /// </summary>
+    [Fact]
+    public async Task ARepositoryPlantedAsASubmodule_IsNeverLookedInto_AndRefusesTheDeletion()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var path = await CreateAsync(harness, temp, "planted");
+        var marker = outside.Combine("ran.txt");
+        await GitClientProtocolTests.PlantFilteredRepositoryAsync(harness, path, "sub", marker, cancellationToken);
+
+        var outcome = await harness.WorktreeService.DeleteAsync(temp.Path, "planted", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.False(File.Exists(marker), "The planted repository's clean filter ran.");
+        Assert.Equal(HarnessExit.Refused, outcome.Outcome.ExitCode);
+        Assert.Contains(
+            "1 uncommitted change(s) that would be lost: sub (a submodule whose repository is not among its superproject's modules, so its work tree is never looked into)",
+            outcome.Outcome.Message,
+            StringComparison.Ordinal);
+        Assert.True(Directory.Exists(path));
     }
 
     [Fact]

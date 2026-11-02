@@ -1089,7 +1089,7 @@ public sealed class LegRunServiceTests
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal(new ProcessIsolation(mechanism, IsolationProfile.Nothing), inside);
-        Assert.Equal([(temp.Path, RunDirectoryOf(outcome, json: true))], held.Asked);
+        Assert.Equal([temp.Path], held.Asked);
         Assert.Null(PhaseIsolation.Current);
 
         var refused = new LegIsolationAnswer(new ExecutionIsolation(IsolatedExecution.Legs, AgentIsolationMode.Required, null, null, "git could not say where it keeps its own files", "make sure git answers"));
@@ -1152,17 +1152,100 @@ public sealed class LegRunServiceTests
     /// <summary>An answer of a test's for the isolation of every leg's work, kept with what each leg asked.</summary>
     private sealed class LegIsolationAnswer(ExecutionIsolation answer) : ILegIsolation
     {
-        /// <summary>The tree each leg works in and the run's directory, as each asked.</summary>
-        public List<(string LegTree, string RunDirectory)> Asked { get; } = [];
+        /// <summary>The tree each leg works in, as each asked.</summary>
+        public List<string> Asked { get; } = [];
 
-        public Task<ExecutionIsolation> ForLegAsync(string legTree, string runDirectory, CancellationToken cancellationToken)
+        public Task<ExecutionIsolation> ForLegAsync(string legTree, CancellationToken cancellationToken)
         {
             lock (Asked)
             {
-                Asked.Add((legTree, runDirectory));
+                Asked.Add(legTree);
             }
 
             return Task.FromResult(answer);
+        }
+
+        public ExecutionIsolation ForDistribution(string distribution) => ExecutionIsolation.InDistribution(answer.Mode, distribution);
+    }
+
+    /// <summary>
+    /// A leg placed in a WSL distribution - on this machine, outside its isolation, reaching its drives under /mnt - is
+    /// skipped where its run's step holds its legs' work inside the isolation under required, its host never asked to run
+    /// it, and runs there under preferred, its line saying so; a leg of an ssh host runs under either.
+    /// </summary>
+    [Theory]
+    [InlineData("wsl", AgentIsolationMode.Required)]
+    [InlineData("wsl", AgentIsolationMode.Preferred)]
+    [InlineData("ssh", AgentIsolationMode.Required)]
+    public async Task AWslLeg_IsSkippedUnderRequired_AndRunsSayingSoUnderPreferred(string kind, string mode)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var asked = false;
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig
+            {
+                Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+                Ssh = { [HostName] = new SshHostConfig { RepositoryPath = HostTree } },
+            },
+            Legs =
+            {
+                ["remote"] = kind == "wsl"
+                    ? new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" }
+                    : new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Ssh = HostName },
+            },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            asked = true;
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "remote", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var inspector = new RecordingInspector(host => new HostReport
+        {
+            Host = host,
+            Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+            Processor = host.Kind == HostKind.Local ? harness.Platform.Processor : "x86_64",
+            Session = host.Kind == HostKind.Local ? null : Session(host),
+        });
+
+        var isolation = new LegIsolationAnswer(new ExecutionIsolation(IsolatedExecution.Legs, mode, new PassThroughMechanism(), IsolationProfile.Nothing, null, null));
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy, Isolation = isolation },
+            hosts: hosts);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+        var printed = harness.StandardOutput.ToString() + harness.StandardError.ToString();
+        const string Without = "the leg runs in the WSL distribution 'Ubuntu', which this machine's isolation does not hold and which reaches this machine's drives under /mnt";
+
+        Assert.Empty(isolation.Asked);
+
+        if (kind == "wsl" && mode == AgentIsolationMode.Required)
+        {
+            Assert.False(asked);
+            Assert.Equal(
+                ("skipped-unavailable", $"leg 'remote' is refused: agentPolicy.isolation is \"required\" and {Without}, so nothing the agents wrote is built, tested or run here; place the leg on this machine, or on a host reached over ssh"),
+                (leg.GetProperty("verdict").GetString(), leg.GetProperty("detail").GetString()));
+        }
+        else
+        {
+            Assert.True(asked);
+            Assert.Equal("passed", leg.GetProperty("verdict").GetString());
+            Assert.Equal(
+                kind == "wsl",
+                printed.Contains(
+                    $"remote: agentPolicy.isolation is \"preferred\" and {Without}, so what the agents wrote is built, tested and run here with no isolation of the operating system's; place the leg on this machine, or on a host reached over ssh",
+                    StringComparison.Ordinal));
         }
     }
 
@@ -3274,6 +3357,68 @@ public sealed class LegRunServiceTests
         Assert.Equal(
             [("up-a", false), ("down-a", true)],
             seen.Seen.Select(request => (request.Arguments.First(argument => argument.EndsWith("-a", StringComparison.Ordinal)), request.Bound)));
+    }
+
+    /// <summary>
+    /// Where a leg's work is held inside the isolation under required, a set-up's lines - run outside it - read nothing the
+    /// agents wrote: one that names a place in the tree skips the leg before any set-up comes up, nothing of it run; one
+    /// of a declared program that names none runs from the leg's own records, never in the tree.
+    /// </summary>
+    [Fact]
+    public async Task UnderRequired_ASetUpLineReadingTheTree_SkipsTheLeg_AndOneThatReadsNoneRunsFromTheLegsRecords()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+        var isolation = new LegIsolationAnswer(new ExecutionIsolation(IsolatedExecution.Legs, AgentIsolationMode.Required, new PassThroughMechanism(), IsolationProfile.Nothing, null, null));
+        var ran = false;
+
+        SetUpScripts.Write(temp.Path);
+
+        var skipped = Verdicts(await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a"))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a") with { SetUp = true }, Isolation = isolation },
+            work: leg =>
+            {
+                ran = true;
+                return new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed };
+            },
+            setUps: SetUpsFor(harness, state).SetUps));
+
+        var script = OperatingSystem.IsWindows() ? "scripts/mark.cmd" : "scripts/mark.sh";
+
+        Assert.False(ran);
+        Assert.Empty(SetUpScripts.Logged(temp.Path));
+        Assert.Equal(
+            ("skipped-unavailable", $"set-up 'a' up line '{script} up-a 0' names a place in '{temp.Path}', which the agents wrote, and a set-up's lines run outside the operating "
+                + "system's isolation, which agentPolicy.isolation \"required\" holds the leg's work in; nothing of the leg was run: bring what it serves up by hand, or "
+                + "name nothing of the tree in its lines"),
+            skipped["native"]);
+
+        var config = SetUpConfig(
+            harness,
+            ("b", new SetUpConfig
+            {
+                Up = SetUpLine.Keyed([new("windows", "cmd /c \"echo up-b>>marks.log\""), new("all", "sh -c \"echo up-b >> marks.log\"")]),
+                Down = SetUpLine.Keyed([new("windows", "cmd /c \"echo down-b>>marks.log\""), new("all", "sh -c \"echo down-b >> marks.log\"")]),
+            }));
+        config.Tools.Add(new ToolConfig { Name = "cmd" });
+        config.Tools.Add(new ToolConfig { Name = "sh" });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("b") with { SetUp = true }, Isolation = isolation },
+            setUps: SetUpsFor(harness, state).SetUps);
+
+        Assert.True(HarnessExit.Success == outcome.ExitCode, $"the run ended {outcome.ExitCode}: {outcome.Message}");
+        Assert.Equal(["up-b", "down-b"], File.ReadAllLines(Path.Combine(RunDirectoryOf(outcome, json: true), "native", "marks.log")).Select(line => line.Trim()));
+        Assert.False(File.Exists(Path.Combine(temp.Path, "marks.log")));
     }
 
     /// <summary>Naming set-ups changes no run that is not asked to set up: nothing is brought up or down.</summary>

@@ -981,9 +981,18 @@ would follow - fails the step, the leg, the commit or the push, naming it and th
 (`core.fsmonitor=false`), no object replaced (`GIT_NO_REPLACE_OBJECTS=1`) and, in a tree an isolated
 agent or execution works over - a worktree or the main checkout - with the git directories git
 named before it ran (`GIT_DIR`, `GIT_COMMON_DIR`), whatever the tree's own files say later
-(`GitOwnSettings`); otherwise it reads the repository's configuration as git does, its filters among
-it, which is why every configuration file is written by nobody. The user's own git, an editor and a
-prompt read the repository as it stands.
+(`GitOwnSettings`); and none of them runs a submodule's own configuration - a repository an agent
+made in its tree and put in the index is one, its clean filters among it: none recurses into a
+submodule (`submodule.recurse=false` but for a commit's and a push's, which run inside), and every
+status and diff tells a submodule by the commit its entry records against its HEAD
+(`--ignore-submodules=dirty`, given on the command line, which no `.gitmodules` outranks), never
+asking its own git about its work tree. So a submodule's own uncommitted edits are no change to a
+status of the tool's: deleting a worktree asks each checked-out submodule whose repository is among
+its superproject's modules for its own, and names one whose repository is anywhere else - a `.git`
+of its own in the work tree - as a change never looked into, which stops the deletion as any
+uncommitted change does. Otherwise a git of the tool's reads the repository's configuration as git
+does, its filters among it, which is why every configuration file is written by nobody. The user's
+own git, an editor and a prompt read the repository as it stands.
 
 Under bubblewrap the child has a user namespace of its own that allows no further one
 (`--disable-userns`) and a process namespace with its own `/proc`, so no command reaches another
@@ -1086,16 +1095,30 @@ run's `build`, `test`, `run` and `check-mutations` step that this machine runs -
 configure, build and test commands, a runner's steps, a sweep's arms - is held inside it, its own
 profile from the leg's ground (`ExecutionGrounds.OfLeg`), built as a launch's is: the machine
 read-only; every credential slot of the main checkout and every Claude Code directory hidden;
-the tree the leg works in - the step's tree or its copy under `.legs` - the run's records, a sweep's
-workers under `.mutations`, a temporary directory of its own and the declared tool caches written, and
-inside them git's code-running files, the configuration directory and the tool's state written by
-nobody. A runner's values and secrets reach its steps as values in their environment, read by this
+the tree the leg works in - the step's tree or its copy under `.legs` - a sweep's workers under
+`.mutations`, a temporary directory of its own and the declared tool caches written, and inside them
+git's code-running files, the configuration directory and the tool's state written by nobody. The
+run's records are no place the work writes: every log, the ledger, the run's claim and its stop are
+the tool's own, written from what each phase prints. What the tool itself reads out of, or writes
+into, a place such work writes - a runner's kept outputs, a test's evidence kept on failure, a sweep's
+sites mutated and put back in its workers, a sync's every read, write, removal and listing in a copy -
+goes through no link below that place's root
+(`UnfollowedFiles`): an entry on the way that is a link is refused, naming it, and an open file is
+held to where its path says by where the system names it, so a link the work put there never has the
+tool, outside, write over a file of the user's or carry what a hidden place holds to where the agents
+read. A runner's values and secrets reach its steps as values in their environment, read by this
 tool, never as the slot's files, which they cannot read. A set-up's lines are the configuration's and
-bring up what outlives the leg, and run as it gives them. A leg another machine runs - an ssh host, a
-WSL distribution - runs there as that machine's tool runs any leg, outside this machine's isolation:
-an ssh host holds none of this machine's slots, state or git's files, which a sync never carries; a
-WSL distribution reaches this machine's drives under `/mnt`, its slots among them, so where that
-matters keep an agents' run's legs on this machine or an ssh host. A run's `commit` and `push` run git
+bring up what outlives the leg, which no isolation outlives, so they run outside it: where the leg's
+work is held inside it under `required`, each runs from the leg's own records, never in a tree, and
+one whose program or any argument names a place in the tree the leg works in, the run's or the main
+checkout - a compose file, a script - skips the leg (`skipped-unavailable`) before any set-up comes up
+(`SetUpConfinement`); under `preferred` they run in the tree as the configuration gives them. A leg
+another machine runs - an ssh host, a WSL distribution - runs there as that machine's tool runs any
+leg, outside this machine's isolation: an ssh host holds none of this machine's slots, state or git's
+files, which a sync never carries; a WSL distribution runs on this machine and reaches its drives
+under `/mnt`, written, its slots and every tree's git files among them, so a run's step whose legs'
+work is held inside the isolation skips such a leg under `required` (`skipped-unavailable`) and runs
+it there under `preferred`, its line saying so. A run's `commit` and `push` run git
 and the repository's hooks - those git's directory holds, and those `core.hooksPath` points into the
 tree for, a husky directory, a pre-commit or lefthook configuration they read - inside it too, over
 the main checkout, which they write: its work tree and its `.git`, but git's code-running files, its

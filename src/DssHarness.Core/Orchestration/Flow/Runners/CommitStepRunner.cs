@@ -117,7 +117,18 @@ public sealed class CommitStepRunner(
 
         foreach (var path in weighed)
         {
-            var holds = await FileContentHash.OfFileAsync(fileSystem, Path.Combine(main, path.Path), cancellationToken).ConfigureAwait(false);
+            var full = Path.Combine(main, path.Path);
+            var holds = await FileContentHash.OfFileAsync(fileSystem, full, cancellationToken).ConfigureAwait(false);
+
+            // Where no file is, a path that holds anything else - a directory, a repository made there among what one may
+            // be - is no deletion a fold left, whatever HEAD holds: changed since. Staged, git rm would ask a repository
+            // there for the state of its work tree, which its own git answers by running its own configuration.
+            if (holds is null && fileSystem.KindOf(full) != PathKind.None)
+            {
+                changed.Add(path);
+                continue;
+            }
+
             var clean = differing?.Contains(path.Path) == false;
 
             // What its fold left, still to commit or committed by hand; else, held as HEAD holds it and not what the folds

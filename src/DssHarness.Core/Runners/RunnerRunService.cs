@@ -1533,7 +1533,7 @@ public sealed class RunnerRunService(
                         // samples emits a directory of them. Skipped here — which is what this did —
                         // it passed the witness, was never copied, and went with the build directory,
                         // leaving a passed run and no measurements.
-                        var unfollowed = KeepDirectory(source, destination);
+                        var unfollowed = KeepDirectory(scratch.Root, source, destination);
 
                         if (unfollowed.Count > 0)
                         {
@@ -1541,7 +1541,7 @@ public sealed class RunnerRunService(
                             // a later sync carries to every host as though it were the whole output.
                             _output.Warn(
                                 CommandName,
-                                $"'{phase.StepName}' asked to keep '{output}', which holds {ReportText.Counted(unfollowed.Count, "directory link")} "
+                                $"'{phase.StepName}' asked to keep '{output}', which holds {ReportText.Counted(unfollowed.Count, "link")} "
                                 + "that were not followed, so what they lead to is not in "
                                 + $"the kept copy: {string.Join(", ", unfollowed.Select(link => $"'{link}'"))}");
                         }
@@ -1554,8 +1554,10 @@ public sealed class RunnerRunService(
                         continue;
                     }
 
-                    _fileSystem.CreateDirectory(Path.GetDirectoryName(destination) ?? into);
-                    _fileSystem.CopyFile(source, destination, overwrite: true);
+                    // What the step's work wrote is read, and the copy written, from the tree's root down, never through a
+                    // link the work put on the way (UnfollowedFiles): the tool copies outside every isolation.
+                    UnfollowedFiles.CreateDirectory(_fileSystem, scratch.Root, Path.GetDirectoryName(destination) ?? into);
+                    UnfollowedFiles.Copy(_fileSystem, scratch.Root, source, scratch.Root, destination);
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
@@ -1609,32 +1611,42 @@ public sealed class RunnerRunService(
     }
 
     /// <summary>Copies a directory output, with everything under it.</summary>
+    /// <param name="root">The tree the action's directories are in, which the step's work writes.</param>
     /// <param name="source">The directory the step produced.</param>
     /// <param name="destination">Where it is kept.</param>
     /// <returns>
-    /// The directory links under it, relative to it, which were not followed: a link can lead out of
-    /// the output, or back into it and round again, so what it leads to is not copied - and is named
-    /// rather than left out without a word.
+    /// The links under it, relative to it, which were not followed: a link can lead out of the output - to a place the
+    /// step's work may not read - or back into it and round again, so what it leads to is not copied, and is named
+    /// rather than left out without a word. Where the output itself is reached through a link, every file is.
     /// </returns>
-    private IReadOnlyList<string> KeepDirectory(string source, string destination)
+    private List<string> KeepDirectory(string root, string source, string destination)
     {
-        _fileSystem.CreateDirectory(destination);
+        UnfollowedFiles.CreateDirectory(_fileSystem, root, destination);
+        var unfollowed = new List<string>();
 
         foreach (var file in _fileSystem.EnumerateFiles(source, recursive: true))
         {
             var relative = Path.GetRelativePath(source, file);
             var into = Path.Combine(destination, relative);
 
-            _fileSystem.CreateDirectory(Path.GetDirectoryName(into) ?? destination);
-            _fileSystem.CopyFile(file, into, overwrite: true);
+            if (UnfollowedFiles.LinkOnTheWay(_fileSystem, root, file, itself: true) is not null)
+            {
+                unfollowed.Add(relative.Replace('\\', '/'));
+                continue;
+            }
+
+            UnfollowedFiles.CreateDirectory(_fileSystem, root, Path.GetDirectoryName(into) ?? destination);
+            UnfollowedFiles.Copy(_fileSystem, root, file, root, into);
         }
 
-        return [.. _fileSystem.EnumerateDirectoryLinks(source).Select(link => Path.GetRelativePath(source, link).Replace('\\', '/'))];
+        unfollowed.AddRange(_fileSystem.EnumerateDirectoryLinks(source).Select(link => Path.GetRelativePath(source, link).Replace('\\', '/')));
+        return unfollowed;
     }
 
     /// <summary>
     /// The two run-keyed directories an action owns: where its steps write, and what survives.
     /// </summary>
+    /// <param name="Root">The tree both are in, which the steps' work writes: what is copied between them is read and written from it down.</param>
     /// <param name="Build">Where this run's steps write. Emptied when the action finishes.</param>
     /// <param name="Artifacts">Where this run's persisted outputs are kept.</param>
     /// <remarks>
@@ -1643,7 +1655,7 @@ public sealed class RunnerRunService(
     /// the roots would have two runs of itself sharing one directory, and the second would measure
     /// what the first left behind.
     /// </remarks>
-    private sealed record ActionScratch(string Build, string Artifacts);
+    private sealed record ActionScratch(string Root, string Build, string Artifacts);
 
     private sealed record RunnerSteps(
         IReadOnlyList<RunnerPhase> Phases,
@@ -1702,6 +1714,7 @@ public sealed class RunnerRunService(
     private static ActionScratch? ScratchFor(RunnerRunRequest request, string? actionDirectory)
         => actionDirectory is { Length: > 0 } owned
             ? new ActionScratch(
+                request.TreeRoot,
                 Path.Combine(request.TreeRoot, HarnessLayout.ActionBuildRelative(owned, request.RunId, request.Leg)),
                 Path.Combine(request.TreeRoot, HarnessLayout.ActionArtifactsRelative(owned, request.RunId, request.Leg)))
             : null;

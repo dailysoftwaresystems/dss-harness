@@ -285,20 +285,21 @@ public static class ExecutionGrounds
 
     /// <summary>
     /// The ground of one leg's phases on this machine: the tree it works in - the step's tree itself, or the leg's copy of
-    /// it - and its records written; the step's tree's git files and state, and the leg's own, written by nobody, but what
-    /// the leg writes inside them - its copy, and <paramref name="besides"/>.
+    /// it - written; the step's tree's git files and state, and the leg's own, written by nobody, but what the leg writes
+    /// inside them - its copy, and <paramref name="besides"/>. The run's records are none of it: every log, the ledger, the
+    /// run's claim and its stop are the tool's own, written from what each phase prints, so nothing a phase runs plants a
+    /// link the tool would then write through, or read a hidden place by.
     /// </summary>
     /// <param name="config">The configuration, whose worktrees root is among the state.</param>
     /// <param name="mainCheckout">The main checkout, whose slots are hidden.</param>
     /// <param name="tree">The tree the step works in.</param>
     /// <param name="legTree">The tree the leg works in: <paramref name="tree"/>, or its copy.</param>
-    /// <param name="runDirectory">Where the run keeps the leg's records, some of which its phases write.</param>
     /// <param name="besides">What else the leg's work writes inside the tool's state: a sweep's workers.</param>
-    public static ExecutionGround OfLeg(HarnessConfig config, string mainCheckout, string tree, string legTree, string runDirectory, IReadOnlyList<string> besides)
+    public static ExecutionGround OfLeg(HarnessConfig config, string mainCheckout, string tree, string legTree, IReadOnlyList<string> besides)
     {
         ArgumentNullException.ThrowIfNull(besides);
 
-        return Of(IsolatedExecution.Legs, config, mainCheckout, [tree, legTree], [legTree, runDirectory, .. besides]);
+        return Of(IsolatedExecution.Legs, config, mainCheckout, [tree, legTree], [legTree, .. besides]);
     }
 
     /// <summary>
@@ -371,6 +372,23 @@ public sealed record ExecutionIsolation(
     public string? Refusal(string what) => RefusalSaying(what, Kind == IsolatedExecution.Legs
         ? "nothing the agents wrote is built, tested or run here"
         : "no hook of the repository's runs over the agents' work here");
+
+    /// <summary>
+    /// The isolation of the work of a leg placed in the WSL distribution <paramref name="distribution"/> under
+    /// <paramref name="mode"/>: none. The distribution runs on this machine outside its isolation, and reaches this
+    /// machine's drives under <c>/mnt</c> as the user, written - the credential slots and every tree's git files among
+    /// them - so required refuses the leg, and preferred runs it there saying so.
+    /// </summary>
+    /// <param name="mode">The configuration's mode.</param>
+    /// <param name="distribution">The distribution, as the leg's host names it.</param>
+    public static ExecutionIsolation InDistribution(string mode, string distribution)
+        => new(
+            IsolatedExecution.Legs,
+            mode,
+            null,
+            null,
+            $"the leg runs in the WSL distribution '{distribution}', which this machine's isolation does not hold and which reaches this machine's drives under /mnt",
+            "place the leg on this machine, or on a host reached over ssh");
 }
 
 

@@ -103,13 +103,19 @@ internal static class TestChild
     /// <summary>
     /// Makes <c>arguments[0]</c> a directory holding one file and a link, <c>latest</c>, to the
     /// directory <c>arguments[1]</c>: what a step that keeps a directory of runs with a pointer to the
-    /// newest one produces.
+    /// newest one produces; and, where <c>arguments[2]</c> names a file, a link to it, <c>pointer.txt</c>.
     /// </summary>
     private static int LinkDirectory(string[] arguments)
     {
         Directory.CreateDirectory(arguments[0]);
         File.WriteAllText(Path.Combine(arguments[0], "kept.txt"), "kept");
         Directory.CreateSymbolicLink(Path.Combine(arguments[0], "latest"), arguments[1]);
+
+        if (arguments.Length > 2)
+        {
+            File.CreateSymbolicLink(Path.Combine(arguments[0], "pointer.txt"), arguments[2]);
+        }
+
         return 0;
     }
 

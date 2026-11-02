@@ -249,6 +249,30 @@ public sealed class CommitStepTests
     }
 
     /// <summary>
+    /// A path a fold deleted that holds a directory now - a repository made there among what one may be, whose own git a
+    /// removal staged over it would ask about its work tree - is changed since: refused, and nothing staged.
+    /// </summary>
+    [Fact]
+    public async Task ADeletionWhosePathHoldsADirectoryNow_IsChangedSince_AndNothingIsStaged()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var ledger = Ledger(kit);
+        var id = await ledger.IntendAsync(kit.Layout, kit.Main, "fold", 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Deleted = ["b.txt"] }, Token);
+        File.Delete(Path.Combine(kit.Main, "b.txt"));
+        await ledger.SettleAsync(kit.Layout, kit.Main, id, HarnessExit.Success);
+        Directory.CreateDirectory(Path.Combine(kit.Main, "b.txt"));
+        File.WriteAllText(Path.Combine(kit.Main, "b.txt", "inside.txt"), "made since\n");
+
+        var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
+
+        Assert.False(ended.Passed);
+        Assert.Equal(HarnessExit.Refused, ended.Exit);
+        Assert.Equal("'b.txt' (folded by 'fold') has changed since; commit or restore it, then resume. Nothing was staged.", ended.Error);
+        Assert.Contains("b.txt", (await kit.Harness.RunGitAsync(kit.Main, ["ls-files"], Token)).StandardOutput, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Where the configuration declares a template, the message is it filled from the step's variables and the defaults,
     /// the step's own message unused; a message that would be none fails the step 12 before anything is staged.
     /// </summary>

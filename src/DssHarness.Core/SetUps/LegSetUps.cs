@@ -27,6 +27,11 @@ namespace DssHarness.Core.SetUps;
 /// (<see cref="SetUpHolds"/>): the first brings it up, the last brings it down. Its lines run as a phase of the leg does,
 /// with the leg's environment, its log among the leg's records.
 /// </para>
+/// <para>
+/// A set-up's lines run outside the operating system's isolation, always: what an up line brings up outlives every
+/// isolation, and a container engine's socket is hidden inside one. Where the leg's work is held inside it under
+/// <c>required</c>, they read none of what the agents wrote (<see cref="SetUpConfinement"/>).
+/// </para>
 /// </remarks>
 /// <param name="setUps">Reads what a set-up's line starts.</param>
 /// <param name="holds">Shares a set-up among the legs that use it.</param>
@@ -143,6 +148,10 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
     /// tried - one named after a set-up that did not come up - did nothing, and is not told.
     /// </param>
     /// <param name="work">The leg's work.</param>
+    /// <param name="confinement">
+    /// Where the leg's work is held inside the operating system's isolation under <c>required</c>, the trees the agents
+    /// wrote, none of which a set-up's line - run outside it - may read; null where there is no such hold.
+    /// </param>
     /// <param name="cancellationToken">
     /// Stops the work. What came up is brought down all the same, until a little before the command line stops waiting,
     /// counted from the interruption, so each set-up still coming down then is said as not brought down.
@@ -164,6 +173,7 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
         Func<LegVerdict, string, LegEntry> failed,
         Action<IReadOnlyList<SetUpFact>> ended,
         Func<CancellationToken, Task<LegEntry>> work,
+        SetUpConfinement? confinement,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(config);
@@ -175,6 +185,14 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
         ArgumentNullException.ThrowIfNull(failed);
         ArgumentNullException.ThrowIfNull(ended);
         ArgumentNullException.ThrowIfNull(work);
+
+        // Every line both ways, before any set-up is held or comes up: a down line refused after its up line ran would
+        // leave up what nothing may bring down.
+        if (confinement is not null && Confined(config, leg, uses, confinement) is { } reads)
+        {
+            ended([]);
+            return failed(LegVerdict.SkippedUnavailable, reads);
+        }
 
         var tree = leg.HostTreeRoot;
 
@@ -220,7 +238,7 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
                 facts[taken.Fact] = new SetUpFact(taken.Name, SetUpFact.Failed, Inputs: taken.Values) { Detail = "stopped before it came up" };
                 progress($"bringing set-up '{taken.Name}'{SetUpValues.Said(taken.Values)} up");
 
-                var ran = await RunAsync(config, leg, taken, SetUpDirection.Up, runDirectory, () => taken.Started = true, cancellationToken).ConfigureAwait(false);
+                var ran = await RunAsync(config, leg, taken, SetUpDirection.Up, runDirectory, confinement, () => taken.Started = true, cancellationToken).ConfigureAwait(false);
 
                 if (ran is { } why)
                 {
@@ -239,7 +257,7 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
         {
             try
             {
-                await LetGoAsync(config, leg, runId, runDirectory, [.. held.OfType<Held>()], facts, progress, stopping.Token).ConfigureAwait(false);
+                await LetGoAsync(config, leg, runId, runDirectory, confinement, [.. held.OfType<Held>()], facts, progress, stopping.Token).ConfigureAwait(false);
             }
             finally
             {
@@ -259,6 +277,7 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
         PlacedLeg leg,
         RunId runId,
         string runDirectory,
+        SetUpConfinement? confinement,
         IReadOnlyList<Held> held,
         SetUpFact?[] facts,
         Action<string> progress,
@@ -302,7 +321,7 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
 
             progress($"bringing set-up '{taken.Name}' down");
 
-            var why = await RunAsync(config, leg, taken, SetUpDirection.Down, runDirectory, started: null, stopping).ConfigureAwait(false);
+            var why = await RunAsync(config, leg, taken, SetUpDirection.Down, runDirectory, confinement, started: null, stopping).ConfigureAwait(false);
 
             facts[taken.Fact] = why is null
                 ? fact with { Down = SetUpFact.BroughtDown }
@@ -318,10 +337,49 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
     }
 
     /// <summary>
+    /// Why a line of <paramref name="uses"/>, either way, would read a tree <paramref name="confinement"/> names - the leg
+    /// skipped for it - or null where none would. A line that cannot be resolved is said where it would run, as it always is.
+    /// </summary>
+    private string? Confined(HarnessConfig config, PlacedLeg leg, IReadOnlyList<SetUpUse> uses, SetUpConfinement confinement)
+    {
+        foreach (var use in uses)
+        {
+            if (Values(config, use, out var values) is not null)
+            {
+                continue;
+            }
+
+            foreach (var direction in Enum.GetValues<SetUpDirection>())
+            {
+                SetUpCommandLine line;
+
+                try
+                {
+                    line = _setUps.Resolve(config, use.Name, values, direction, leg.Os, leg.HostTreeRoot);
+                }
+                catch (HarnessException)
+                {
+                    continue;
+                }
+
+                if (confinement.Reads(line) is { } tree)
+                {
+                    return $"set-up '{use.Name}' {SetUpService.CommandName(direction)} line '{line.Line}' names a place in '{tree}', which the agents wrote, and a set-up's "
+                        + $"lines run outside the operating system's isolation, which agentPolicy.isolation \"{Agents.Isolation.AgentIsolationMode.Required}\" holds the leg's "
+                        + "work in; nothing of the leg was run: bring what it serves up by hand, or name nothing of the tree in its lines";
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Runs one of a set-up's lines as a phase of <paramref name="leg"/>: why it did not pass, or <see langword="null"/>
     /// where it did. A line that cannot be resolved or started is a reason, never an exception, and so is one stopped
     /// while it brings the set-up down; one stopped while it brings it up stops the leg. <c>started</c> is told just
-    /// before the line's program is asked to start.
+    /// before the line's program is asked to start. Under <paramref name="confinement"/> it runs from the leg's own
+    /// records, never in the tree.
     /// </summary>
     private async Task<string?> RunAsync(
         HarnessConfig config,
@@ -329,6 +387,7 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
         Held taken,
         SetUpDirection direction,
         string runDirectory,
+        SetUpConfinement? confinement,
         Action? started,
         CancellationToken cancellationToken)
     {
@@ -359,7 +418,9 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
                         FileName = line.FileName,
                         Arguments = line.Arguments,
                         LogFile = new LegRecords(runDirectory, leg.Name).PhaseLog(log),
-                        WorkingDirectory = leg.HostTreeRoot,
+
+                        // Its log's own directory, made before the line starts, where nothing the agents wrote is.
+                        WorkingDirectory = confinement is null ? leg.HostTreeRoot : new LegRecords(runDirectory, leg.Name).Directory,
                         Environment = PhaseEnvironment.Layered(leg.Environment),
                         ProgramDirectories = leg.Host.ProgramDirectories,
                         StallSeconds = config.Defaults.StallSeconds,

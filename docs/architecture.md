@@ -709,8 +709,13 @@ Without `--force`, every check runs before anything is touched. A refusal delete
 worktree, names everything it found on one line, each with its remedy, and exits 13:
 
 - **Uncommitted changes.** A modified, staged or untracked file git does not ignore, or a
-  changed submodule. Status runs with `--untracked-files=normal` and
-  `--ignore-submodules=none`, so configuration can hide neither. Status never compares a file
+  changed submodule. Status runs with `--untracked-files=normal` and tells a submodule by its
+  commit (`--ignore-submodules=dirty`, `GitOwnSettings`), so configuration can hide neither, and
+  never asks a submodule's own git about its work tree - which would run its configuration - from
+  there: each checked-out submodule whose repository is among its superproject's modules, which
+  git's own submodule commands write, is asked for its own changes; one whose repository is
+  anywhere else - a `.git` of its own in the work tree, which whatever writes the tree writes - is
+  a change never looked into. Status never compares a file
   marked assume-unchanged or skip-worktree, so those present on disk are compared on a copy of
   the index with the marks cleared, which applies git's own line-ending rules and never touches
   the real index. A skip-worktree file absent from disk, as a sparse checkout leaves it, is not
@@ -2386,17 +2391,24 @@ fetch and push fail there, a side-task's git over the main tree and a run's comm
 tree's git directories, a linked worktree's and a main checkout's alike, as git named them before the launch, are
 pinned for every later git of the tool's in it (`GitDirectoryPins`), so neither a `.git` file a command rewrote nor a
 `commondir` a main checkout's `.git` came to hold leads one elsewhere; and every git of the tool's runs with its own
-settings (`GitOwnSettings.Apply`, through `GIT_CONFIG_PARAMETERS` and its own variables, so no argument list changes):
-no file-system monitor (`core.fsmonitor=false`), whose command a repository's configuration names, no hooks but where
-it runs them on purpose (`GitHooks`), no object replaced (`GIT_NO_REPLACE_OBJECTS=1`), with `GIT_DIR`,
-`GIT_COMMON_DIR` and `GIT_WORK_TREE` from the pin where there is one - the repository's configuration otherwise read
-as git reads it, its filters among it, which is why every configuration file is written by nobody. What the work made
-in the trees' git directories is looked at once it has run under a mechanism, against what was there as the profile
-was built (`IsolationDecision.Afterward`, the held decision's `After`): a pointer made in a common directory or a
-linked worktree's git directory under it, or a replacement a `packed-refs` came to name - which a main checkout's
-`.git`, written whole, could take while its `refs/replace/` is sealed, and the user's own git, an editor or a prompt
-started outside would follow - ends what asked: `AgentRunner` fails the launch, `LegRunService` the leg,
-`CommitStepRunner` and `PushStepRunner` the step after git's own work, each naming it and the remedy.
+settings (`GitOwnSettings.Apply`, through `GIT_CONFIG_PARAMETERS` and its own variables): no file-system monitor
+(`core.fsmonitor=false`), whose command a repository's configuration names; no hooks but where it runs them on purpose
+(`GitHooks`); no recursion into a submodule but for those (`GitOwnSettings.NoRecursion`, `submodule.recurse=false`); no
+object replaced (`GIT_NO_REPLACE_OBJECTS=1`); with `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` from the pin where
+there is one; and every comparison of a work tree (`GitOwnSettings.Comparisons`: status, diff, diff-files, diff-index)
+given `--ignore-submodules=dirty` on its command line where it names nothing of submodules (`GitOwnSettings.Arguments`,
+which refuses one asking to look into a submodule's work tree) - a submodule told by the commit its entry records
+against its HEAD, never by asking its own git about its work tree, which would run the repository's own configuration,
+its clean filters among it: a repository an agent made in its tree and put in the index is such a submodule, its
+configuration the agent's. A default in the configuration would not hold: a `.gitmodules` file's `ignore`, a file of
+the tree, outranks it. The repository's configuration is otherwise read as git reads it, its filters among it, which is
+why every configuration file is written by nobody. What the work made in the trees' git directories is looked at once
+it has run under a mechanism, against what was there as the profile was built (`IsolationDecision.Afterward`, the held
+decision's `After`): a pointer made in a common directory or a linked worktree's git directory under it, or a
+replacement a `packed-refs` came to name - which a main checkout's `.git`, written whole, could take while its
+`refs/replace/` is sealed, and the user's own git, an editor or a prompt started outside would follow - ends what
+asked: `AgentRunner` fails the launch, `LegRunService` the leg, `CommitStepRunner` and `PushStepRunner` the step after
+git's own work, each naming it and the remedy.
 `agentPolicy.isolation` (`AgentIsolationMode`: `required` where nothing is said, any other word than the two a
 problem of the configuration) turns no mechanism into the launch's refusal (`LaunchIsolation.Refusal`: a step ends
 failed, 14; the advisor's advice is not obtained; `run-side-task` exits 14 having started nothing) - every mode but
@@ -2482,12 +2494,23 @@ launch's, from one base (`IsolationDecision`),
 with words of their own. A run's leg step (`LegStepRunner`) asks it for its tree before anything starts - none here
 under `required` ends the step 14, nothing run - and hands the leg service an `ILegIsolation`
 (`LegRunRequest.Isolation`, carried by each leg command's request) that asks it again for each leg this machine runs,
-of its own ground (`ExecutionGrounds.OfLeg`: the tree it works in, the run's records, and what
-`LegStepRunner.WritesBeside` names - a sweep's workers); `LegRunService` skips a leg whose own is refused
-(`skipped-unavailable`), says the notice on its line, and holds the rest for its work alone (`PhaseIsolation`, an
-ambient value each leg's flow holds), which `PhaseRunner` gives every phase that names none of its own and is not left
-running - a set-up's lines, run around the work, are never inside it. A leg another machine runs is that machine's,
-outside this one's isolation: the request never sends it. The step answers `isolation`
+of its own ground (`ExecutionGrounds.OfLeg`: the tree it works in, and what `LegStepRunner.WritesBeside` names - a
+sweep's workers - never the run's records, every one of which the tool writes itself from what each phase prints);
+`LegRunService` skips a leg whose own is refused (`skipped-unavailable`), says the notice on its line, and holds the
+rest for its work alone (`PhaseIsolation`, an ambient value each leg's flow holds), which `PhaseRunner` gives every
+phase that names none of its own and is not left running - a set-up's lines, run around the work, are never inside
+it: under `required` (`SetUpConfinement`) each runs from the leg's own records, and `LegSetUps` skips the leg before
+any set-up is held where a line, either way, names in its program or an argument a place in the leg's tree, the run's
+or the main checkout. A leg another machine runs is that machine's, outside this one's isolation: the request never
+sends it, but a leg placed in a WSL distribution, which reaches this machine's drives under `/mnt`, is decided there
+(`ILegIsolation.ForDistribution`, `ExecutionIsolation.InDistribution`): skipped under `required`, run saying so under
+`preferred`. What the tool reads out of, or writes into, a place such work writes - `RunnerRunService`'s kept outputs,
+`KeptOnFailure`'s evidence, `WorkerSite`'s sites a sweep mutates and puts back in a worker, `LocalSyncTransport`'s
+every read, write, removal, listing and emptied directory in a copy - goes through `UnfollowedFiles`, the one owner of
+it: every entry from the place's root down a directory, never
+a link (`UnfollowedFiles.LinkOnTheWay`), and an open file held to where its path says by where the system names it
+(`IFileSystem.FinalPathOf`, against `FinalPathOfDirectory` of the root), so a link put on the way in the instant after
+the look reaches nothing either; a write is atomic, its file begun removed where it stands elsewhere. The step answers `isolation`
 (`AgentIsolationRecord.ToOutput`, in `WorkflowStepTypes`' output of each leg step). The tool's own git runs none of
 the repository's hooks (`GitHooks`: every command `GitClient` runs is given `core.hooksPath` at the null device,
 `/dev/null`, `\\.\NUL` on Windows, through `GitOwnSettings.Apply` with the tool's other settings, but the subcommands
@@ -5747,11 +5770,12 @@ directory here cannot drift apart.
   adopt list — would quietly delete the rest with nobody asked at all. So a stopped takeover is its
   own state: it still needs `--adopt <host>`, and its refusal says plainly that what the earlier run
   removed is not in the list.
-- **A link the copy holds is named too.** A link sits in no manifest — the walk refuses to follow
-  one — so a file written at its name replaces it and reads as an ordinary write, and everything
-  behind a linked directory is outside any list a plan can build. Reported rather than guarded
-  against: a build directory pointed at another volume is ordinary, and refusing to write through
-  one would refuse `--pull build/...` — a path the reader named, inside the tree they named.
+- **A link the copy holds is named too, and never gone through.** A link sits in no manifest — the
+  walk refuses to follow one — so a file written at its name replaces it, and everything behind a
+  linked directory is outside any list a plan can build. A copy is a place a leg's work writes, and a
+  link there says nothing of what anybody meant, so no read, write, removal or listing of a sync -
+  `--pull` among them - goes through one below the copy's root (`UnfollowedFiles`): each is refused
+  naming the link, and a directory reached through one is never emptied.
 - **`--dry-run` shows the plan, and exits as the sync would.** For a directory the tool did not
   create, for one whose deletions are over the bound, and for a worktree's copy another worktree
   of the same name still holds, the dry run lists what the sync would do - the bound's own message

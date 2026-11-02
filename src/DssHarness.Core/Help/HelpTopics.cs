@@ -2304,7 +2304,11 @@ public static class HelpTopics
         builder.AppendLine("record of it names another directory or none, as after moving it by hand; and");
         builder.AppendLine("when git does not see it as a worktree of this repository. The refusal names");
         builder.AppendLine("everything it found, on one line. A tag made inside a submodule counts as kept,");
-        builder.AppendLine("and is lost with the submodule's repository.");
+        builder.AppendLine("and is lost with the submodule's repository. A checked-out submodule's own");
+        builder.AppendLine("changes are asked of it only where its repository is among its superproject's");
+        builder.AppendLine("modules: its own git runs its own configuration, which no other place is kept");
+        builder.AppendLine("from an agent, so one whose repository is anywhere else - a .git of its own in");
+        builder.AppendLine("the work tree - is named a change never looked into.");
         builder.AppendLine();
         builder.AppendLine("Without --force, when the check cannot be finished, because git cannot answer, a");
         builder.AppendLine("record cannot be read or its directory found, or, on Windows, a directory in it");
@@ -3225,16 +3229,27 @@ public static class HelpTopics
             + "build, test, run and check-mutations step that this machine runs - every phase it starts: configure, build and "
             + "test commands, a runner's steps, a sweep's arms - is held inside it, its own profile from the leg's ground, "
             + "built as a launch's is: the machine read-only; every credential slot of the main checkout and every Claude "
-            + "Code directory hidden; the tree the leg works in - the step's tree or its copy under .legs - the run's "
-            + "records, a sweep's workers under .mutations, a temporary directory of its own and the declared tool caches "
-            + "written, and inside them git's code-running files, the configuration directory and the tool's state written "
-            + "by nobody. A runner's values and secrets reach its steps as values "
+            + "Code directory hidden; the tree the leg works in - the step's tree or its copy under .legs - a sweep's "
+            + "workers under .mutations, a temporary directory of its own and the declared tool caches written, and inside "
+            + "them git's code-running files, the configuration directory and the tool's state written by nobody. The run's "
+            + "records are no place the work writes: every log, the ledger, the run's claim and its stop are the tool's own, "
+            + "written from what each phase prints. What the tool itself reads out of, or writes into, a place such work "
+            + "writes - a runner's kept outputs, a test's evidence kept on failure, a sweep's sites mutated and put back in "
+            + "its workers, a sync's every read, write, removal and listing in a copy - goes through no link below that "
+            + "place's root: an entry on the way that is a link is "
+            + "refused, naming it, and an open file is held to where its path says by where the system names it. A runner's "
+            + "values and secrets reach its steps as values "
             + "in their environment, read by this tool, never as the slot's files, which they cannot read. A set-up's lines "
-            + "are the configuration's and bring up what outlives the leg, and run as it gives them. A leg another machine "
-            + "runs - an ssh host, a WSL distribution - runs there as that machine's tool runs any leg, outside this machine's "
-            + "isolation: an ssh host holds none of this machine's slots, state or git's files, which a sync never carries; a "
-            + "WSL distribution reaches this machine's drives under /mnt, its slots among them, so where that matters keep "
-            + "an agents' run's legs on this machine or an ssh host. A run's commit and push run git and the repository's "
+            + "are the configuration's and bring up what outlives the leg, which no isolation outlives, so they run outside "
+            + "it: where the leg's work is held inside it under required, each runs from the leg's own records, never in a "
+            + "tree, and one whose program or any argument names a place in the tree the leg works in, the run's or the main "
+            + "checkout - a compose file, a script - skips the leg (skipped-unavailable) before any set-up comes up; under "
+            + "preferred they run in the tree as the configuration gives them. A leg another machine runs - an ssh host, a WSL "
+            + "distribution - runs there as that machine's tool runs any leg, outside this machine's isolation: an ssh host "
+            + "holds none of this machine's slots, state or git's files, which a sync never carries; a WSL distribution runs "
+            + "on this machine and reaches its drives under /mnt, written, its slots and every tree's git files among them, so "
+            + "a run's step whose legs' work is held inside the isolation skips such a leg under required "
+            + "(skipped-unavailable) and runs it there under preferred, its line saying so. A run's commit and push run git and the repository's "
             + "hooks - those git's directory holds, and those core.hooksPath points into the tree for, a husky directory, a "
             + "pre-commit or lefthook configuration they read - inside it too, over the main checkout, which they write: its "
             + "work tree and its .git, but git's code-running files, its pointers, replacements, alternates and submodules' "

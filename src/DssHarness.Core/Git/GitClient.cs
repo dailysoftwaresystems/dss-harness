@@ -242,13 +242,14 @@ public sealed partial class GitClient(
     /// <summary>
     /// The names <c>git diff --name-only</c> gives against <paramref name="commits"/> - the work tree against one, or two
     /// commits against each other - each as git holds it: a rename as its two names, as configuration may otherwise pair
-    /// them, and a submodule whose commit moved whatever configuration hides.
+    /// them, and a submodule whose commit moved whatever configuration hides, told by its commit alone
+    /// (<see cref="GitOwnSettings.SubmoduleCommits"/>).
     /// </summary>
     private async Task<IReadOnlyList<GitName>> ChangedNamesAsync(string directory, IReadOnlyList<string> commits, string doing, CancellationToken cancellationToken)
     {
         var result = await RunForBytesAsync(
             directory,
-            ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", .. commits, "--"],
+            ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", GitOwnSettings.SubmoduleCommits, .. commits, "--"],
             cancellationToken).ConfigureAwait(false);
 
         Ensure(result, doing);
@@ -265,7 +266,9 @@ public sealed partial class GitClient(
     /// Asked with <c>-z</c> and read as bytes, so no path is quoted or mangled and a name that is not UTF-8 is kept as git
     /// holds it. Untracked files and submodules are asked for explicitly, because configuration can hide both: under
     /// status.showUntrackedFiles=no a new file is not listed at all, and the tree reads as clean to a caller about to
-    /// discard it. <c>--no-optional-locks</c> keeps the question from writing anything: status otherwise refreshes the
+    /// discard it. A submodule is told by its commit alone (<see cref="GitOwnSettings.SubmoduleCommits"/>): one added,
+    /// removed or moved to another commit is listed, and its own work tree is never asked about, which would run its own
+    /// configuration. <c>--no-optional-locks</c> keeps the question from writing anything: status otherwise refreshes the
     /// index and writes it back whenever it can take the lock.
     /// <para>
     /// An untracked file that is a tracked one the disk spells otherwise is not listed, save the names
@@ -280,7 +283,7 @@ public sealed partial class GitClient(
     {
         var result = await RunForBytesAsync(
             directory,
-            ["--no-optional-locks", "status", "--porcelain", "-z", $"--untracked-files={untracked}", "--ignore-submodules=none"],
+            ["--no-optional-locks", "status", "--porcelain", "-z", $"--untracked-files={untracked}", GitOwnSettings.SubmoduleCommits],
             cancellationToken).ConfigureAwait(false);
 
         // An empty list must mean "nothing changed", never "the question failed": a caller reads it as a clean tree and
@@ -751,7 +754,7 @@ public sealed partial class GitClient(
             // compared, through the clean filters and the line-ending rules, and never listed for its stat alone.
             var differing = await RunCoreAsync(
                     directory,
-                    ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", "--"],
+                    ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", GitOwnSettings.SubmoduleCommits, "--"],
                     echoOutput: false,
                     untranslated: false,
                     index,
@@ -1972,8 +1975,11 @@ public sealed partial class GitClient(
 
         // Set once the inherited ones are gone, by their one owner (GitOwnSettings): no file-system monitor; none of the
         // repository's hooks but where a command runs them on purpose - a hook is the repository's code, which every other
-        // command would run outside the isolation as a side effect (GitHooks); and a tree an isolated agent works over read
-        // through the git directories git named before its launch, whatever its own files say now.
+        // command would run outside the isolation as a side effect (GitHooks); no recursion into a submodule, and no
+        // comparison that asks a submodule's own git about its work tree - a repository an agent made in its tree is
+        // configuration of its own, its filters among it; and a tree an isolated agent works over read through the git
+        // directories git named before its launch, whatever its own files say now.
+        arguments = GitOwnSettings.Arguments(arguments);
         GitOwnSettings.Apply(environment, _system, arguments, hooksRun: hooks is not null, directory, pins);
 
         if (untranslated)

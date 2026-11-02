@@ -191,13 +191,14 @@ internal sealed class MutationLegRunner(
 
     /// <summary>One site of an arm in a worker's copy: where it is, what it held, and what the mutation makes it.</summary>
     /// <param name="Declared">The site as the registry declares it.</param>
+    /// <param name="Worker">The worker's copy, below which nothing of the site is read or written through a link.</param>
     /// <param name="Path">Where it is in the worker's copy.</param>
     /// <param name="Pristine">What it holds unmutated, or <see langword="null"/> where it is no file.</param>
     /// <param name="Read">
     /// The file as the sweep's reading of the tree holds it, under the very spelling the registry names it by, which its
     /// putting back is checked against; <see langword="null"/> where the reading holds none so spelt.
     /// </param>
-    private sealed record SiteState(MutationSite Declared, string Path, byte[]? Pristine, SyncEntry? Read)
+    private sealed record SiteState(MutationSite Declared, string Worker, string Path, byte[]? Pristine, SyncEntry? Read)
     {
         /// <summary>What the mutation makes it, where its before-text occurs exactly once.</summary>
         public byte[]? Mutated { get; set; }
@@ -1326,8 +1327,9 @@ internal sealed class MutationLegRunner(
                 [
                     .. arm.Sites.Select(declared => new SiteState(
                         declared,
+                        worker,
                         InWorker(worker, declared.Site),
-                        _runner._site.Read(InWorker(worker, declared.Site)),
+                        _runner._site.Read(worker, InWorker(worker, declared.Site)),
                         _reading.Files.Entries.GetValueOrDefault(declared.Site))),
                 ];
                 flight = Preflight(arm, worker, sites, graph);
@@ -1480,7 +1482,7 @@ internal sealed class MutationLegRunner(
 
             byte[]? Text(string cited, bool before)
             {
-                var bytes = _runner._site.Read(InWorker(worker, cited));
+                var bytes = _runner._site.Read(worker, InWorker(worker, cited));
 
                 if (bytes is null)
                 {
@@ -1771,7 +1773,7 @@ internal sealed class MutationLegRunner(
             foreach (var (state, bytes) in writes)
             {
                 state.Touched = true;
-                await _runner._site.WriteAsync(state.Path, bytes, stamp, cancellationToken).ConfigureAwait(false);
+                await _runner._site.WriteAsync(state.Worker, state.Path, bytes, stamp, cancellationToken).ConfigureAwait(false);
             }
 
             await _runner._site.UntilPastAsync(stamp, cancellationToken).ConfigureAwait(false);
@@ -1798,7 +1800,7 @@ internal sealed class MutationLegRunner(
                 {
                     try
                     {
-                        await _runner._site.WriteAsync(state.Path, state.Pristine!, stamp, CancellationToken.None).ConfigureAwait(false);
+                        await _runner._site.WriteAsync(state.Worker, state.Path, state.Pristine!, stamp, CancellationToken.None).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
                     {
@@ -1813,7 +1815,7 @@ internal sealed class MutationLegRunner(
 
                 try
                 {
-                    held = _runner._site.Read(state.Path);
+                    held = _runner._site.Read(state.Worker, state.Path);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {

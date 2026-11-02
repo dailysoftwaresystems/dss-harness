@@ -39,13 +39,17 @@ public static class GitHooks
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
-        return Subcommand(arguments) is { } subcommand && Questions.Contains(subcommand, StringComparer.Ordinal)
+        return SubcommandAt(arguments) is >= 0 and var at && Questions.Contains(arguments[at], StringComparer.Ordinal)
             ? null
             : $"{PathKey}={Nowhere(system)}";
     }
 
-    /// <summary>The subcommand <paramref name="arguments"/> run: the first word past git's own options, each <c>-c</c> and <c>-C</c> with its value.</summary>
-    private static string? Subcommand(IReadOnlyList<string> arguments)
+    /// <summary>
+    /// Where among <paramref name="arguments"/> the subcommand they run is: the first word past git's own options, each
+    /// <c>-c</c> and <c>-C</c> with its value; -1 where there is none.
+    /// </summary>
+    /// <param name="arguments">The command's arguments.</param>
+    internal static int SubcommandAt(IReadOnlyList<string> arguments)
     {
         for (var at = 0; at < arguments.Count; at++)
         {
@@ -55,10 +59,10 @@ public static class GitHooks
             }
             else if (!arguments[at].StartsWith('-'))
             {
-                return arguments[at];
+                return at;
             }
         }
 
-        return null;
+        return -1;
     }
 }

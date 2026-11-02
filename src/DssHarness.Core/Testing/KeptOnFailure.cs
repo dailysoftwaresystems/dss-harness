@@ -107,6 +107,10 @@ public sealed record KeptOnFailure(
             return null;
         }
 
+        // What the test's work writes is the leg's tree, the build directory inside it among it, so every file is read from
+        // the tree's root down, never through a link the work put on the way (UnfollowedFiles); a build directory outside the
+        // tree, which the work writes nothing of, is the root of its own files.
+        var root = PathContainment.IsStrictlyInside(paths.TreeRoot, buildDirectory, StringComparison.OrdinalIgnoreCase) ? paths.TreeRoot : buildDirectory;
         var kept = new List<string>();
         var overCap = new List<string>();
         var unreadable = new List<string>();
@@ -214,8 +218,8 @@ public sealed record KeptOnFailure(
                 {
                     var full = Path.Combine(buildDirectory, relative);
 
-                    // Never through a link, wherever on the way from the build directory it stands.
-                    if (LinkOnTheWay(fileSystem, buildDirectory, relative) is not null)
+                    // Never through a link, wherever on the way from the tree's root it stands.
+                    if (UnfollowedFiles.LinkOnTheWay(fileSystem, root, full, itself: true) is not null)
                     {
                         links.Add(relative);
                     }
@@ -263,8 +267,8 @@ public sealed record KeptOnFailure(
             try
             {
                 // Never through a link, the file's own or a directory's on the way to it: what it leads to may lie outside the
-                // build directory, and is of any size.
-                if (LinkOnTheWay(fileSystem, buildDirectory, relative) is not null)
+                // build directory - a place the test's work may not read - and is of any size.
+                if (UnfollowedFiles.LinkOnTheWay(fileSystem, root, full, itself: true) is not null)
                 {
                     links.Add(relative);
                     continue;
@@ -276,7 +280,7 @@ public sealed record KeptOnFailure(
                 var room = capBytes - bytes;
                 long copied = 0;
 
-                await using (var read = fileSystem.OpenRead(full))
+                await using (var read = UnfollowedFiles.OpenRead(fileSystem, root, full))
                 {
                     if (read.CanSeek && read.Length > room)
                     {
@@ -313,30 +317,6 @@ public sealed record KeptOnFailure(
             UnreadableDirectories = unreadableDirectories,
             LeftAtStop = leftAtStop,
         };
-    }
-
-    /// <summary>
-    /// The first part of <paramref name="relative"/>, from the build directory down - the path itself among them - that is
-    /// a link, a symbolic link or a junction alike; null where none is. The one test of whether a keep goes through a link.
-    /// </summary>
-    /// <param name="fileSystem">Reads what each part is.</param>
-    /// <param name="buildDirectory">The build directory, which is never asked about itself.</param>
-    /// <param name="relative">A path below it, with forward slashes.</param>
-    private static string? LinkOnTheWay(IFileSystem fileSystem, string buildDirectory, string relative)
-    {
-        var parts = relative.Split('/', StringSplitOptions.RemoveEmptyEntries);
-
-        for (var count = 1; count <= parts.Length; count++)
-        {
-            var part = string.Join('/', parts.Take(count));
-
-            if (fileSystem.KindOf(Path.Combine(buildDirectory, part)) is PathKind.Link)
-            {
-                return part;
-            }
-        }
-
-        return null;
     }
 
     /// <summary>

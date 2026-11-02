@@ -144,6 +144,26 @@ public sealed class LegSetUpsTests
         Assert.Equal(["db (profile=dev)", "e2e"], workload.SetUpsOf(config, config.Legs["lin"]).Select(use => use.ToString()));
     }
 
+    /// <summary>
+    /// A set-up's line reads a tree the agents wrote where its program or any argument names the tree or a place in it,
+    /// spelled with either separator and in any case, inside an option's value too - never where it names a sibling whose
+    /// name the tree's begins, nor where it names no place at all.
+    /// </summary>
+    [Fact]
+    public void ALineReadsATree_WhereAWordNamesItOrAPlaceInIt_AndNeverASibling()
+    {
+        var tree = Path.Combine(Path.GetTempPath(), "work", "tree");
+        var confinement = new SetUpConfinement([tree]);
+        var inside = Path.Combine(tree, "compose.yml");
+
+        Assert.Equal(tree, confinement.Reads(new SetUpCommandLine("x", Path.Combine(tree, "scripts", "db.sh"), [])));
+        Assert.Equal(tree, confinement.Reads(new SetUpCommandLine("x", "docker", ["compose", $"--file={inside.Replace('\\', '/').ToUpperInvariant()}", "up"])));
+        Assert.Equal(tree, confinement.Reads(new SetUpCommandLine("x", "docker", ["run", "-v", $"{tree}:/src", "image"])));
+        Assert.Equal(tree, confinement.Reads(new SetUpCommandLine("x", "docker", ["build", tree + Path.DirectorySeparatorChar])));
+        Assert.Null(confinement.Reads(new SetUpCommandLine("x", "docker", ["run", "-v", $"{tree}-cache:/cache", "postgres:16"])));
+        Assert.Null(confinement.Reads(new SetUpCommandLine("x", "docker", ["compose", "up", "-d"])));
+    }
+
     private static List<string> Names(IEnumerable<SetUpUse> uses) => [.. uses.Select(use => use.Name)];
 
     private static LegWorkload Asked(bool Test) => new(Build: true, Test, []) { SetUp = true };

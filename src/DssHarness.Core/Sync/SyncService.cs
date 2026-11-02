@@ -921,15 +921,15 @@ public sealed class SyncService(
         }
 
         // Said on every sync, not only on a takeover. A copy this tool made can gain a link
-        // afterwards — a build script pointing a directory at scratch space is the ordinary way —
-        // and from then on every build and every test writes through it, to a place outside the
-        // directory anybody named, reported as an ordinary write. The takeover list covers the
+        // afterwards — a build script pointing a directory at scratch space is the ordinary way, and a
+        // leg's work may put one there to lead anywhere — and no write of a sync goes through it
+        // (UnfollowedFiles): the first that would is refused, naming it. The takeover list covers the
         // first sync into somebody else's directory; this covers all the rest.
         foreach (var link in plan.WritesThrough(destination.Links))
         {
             _output.Warn(
                 CommandName,
-                $"{transport.Host}: writing through '{link}', which is a link: what it points at is "
+                $"{transport.Host}: '{link}' is a link, which a sync never writes through: what it points at is "
                 + $"outside '{destinationRoot}' and is not in any list this command can build.");
         }
 

@@ -476,6 +476,26 @@ public sealed class TestServiceTests
     }
 
     /// <summary>
+    /// A build directory the test's work turned into a link inside the leg's tree - to a place that work may not read - keeps
+    /// nothing: every file is read from the tree's root down, so each is named a link and none of what it leads to is copied.
+    /// </summary>
+    [Fact]
+    public async Task ABuildDirectoryTurnedIntoALink_KeepsNothingOfWhereItLeads()
+    {
+        using var temp = new TempDirectory();
+        using var hidden = new TempDirectory();
+        hidden.WriteFile("credential.log", "a credential");
+
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("build"), hidden.Path));
+
+        var kept = await Keep(new HarnessFactory().FileSystem, temp, ["*.log"], capBytes: 1024);
+
+        Assert.Empty(kept.Kept);
+        Assert.Equal(["credential.log"], kept.Links);
+        Assert.False(Directory.Exists(temp.Combine("kept")) && Directory.EnumerateFileSystemEntries(temp.Combine("kept")).Any());
+    }
+
+    /// <summary>
     /// A stop that comes while the evidence crosses keeps what is already kept whole, ends the file it stopped in, and
     /// names every file it left - that one among them - rather than dropping them from every list.
     /// </summary>
@@ -523,6 +543,10 @@ public sealed class TestServiceTests
     {
         public override Stream OpenRead(string path)
             => Path.GetFullPath(path) == Path.GetFullPath(growing) ? new Unmeasured(new MemoryStream(new byte[bytes])) : base.OpenRead(path);
+
+        /// <summary>The growing file stands where its path says, as the system would name it open.</summary>
+        public override string FinalPathOf(Stream opened)
+            => opened is Unmeasured ? Path.Join(FinalPathOfDirectory(Path.GetDirectoryName(Path.GetFullPath(growing))!), Path.GetFileName(growing)) : base.FinalPathOf(opened);
 
         /// <summary>A stream read forward alone, which cannot say its length.</summary>
         private sealed class Unmeasured(Stream inner) : Stream

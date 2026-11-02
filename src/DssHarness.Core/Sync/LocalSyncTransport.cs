@@ -272,11 +272,13 @@ public sealed class LocalSyncTransport(
         byte[] contents,
         CancellationToken cancellationToken = default)
     {
+        var path = Resolve(root, relativePath);
+
         try
         {
-            await _fileSystem
-                .WriteAllBytesAtomicAsync(Resolve(root, relativePath), contents, cancellationToken)
-                .ConfigureAwait(false);
+            // Never through a link the copy holds on the way to it (UnfollowedFiles): a copy is a place a leg's work
+            // writes, and a link put there would have this write land wherever it leads.
+            await UnfollowedFiles.WriteAsync(_fileSystem, Home(root), path, contents, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -943,9 +945,10 @@ public sealed class LocalSyncTransport(
     }
 
     /// <inheritdoc/>
+    /// <remarks>Never through a link the copy holds on the way to it: a link at the file's own place is removed itself.</remarks>
     public Task DeleteFileAsync(string root, string relativePath, CancellationToken cancellationToken = default)
     {
-        _fileSystem.DeleteFile(Resolve(root, relativePath));
+        UnfollowedFiles.Delete(_fileSystem, Home(root), Resolve(root, relativePath));
         return Task.CompletedTask;
     }
 
@@ -974,7 +977,11 @@ public sealed class LocalSyncTransport(
             // cannot reach a directory beside the copy.
             var full = Resolve(root, directory);
 
-            if (!PathContainment.IsStrictlyInside(expanded, full, _platform.PathComparison) || !_fileSystem.DirectoryExists(full))
+            // A directory reached through a link the copy holds is none of the copy's: what is emptied there is wherever the
+            // link leads.
+            if (!PathContainment.IsStrictlyInside(expanded, full, _platform.PathComparison)
+                || UnfollowedFiles.LinkOnTheWay(_fileSystem, expanded, full, itself: true) is not null
+                || !_fileSystem.DirectoryExists(full))
             {
                 continue;
             }
@@ -1045,7 +1052,17 @@ public sealed class LocalSyncTransport(
 
         try
         {
-            return await _fileSystem.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            // Never through a link the copy holds, the file's own or one on the way to it (UnfollowedFiles): a copy is a
+            // place a leg's work writes, and a link put there would carry back what a place hidden from that work holds.
+            var read = UnfollowedFiles.OpenRead(_fileSystem, Home(root), path);
+
+            await using (read.ConfigureAwait(false))
+            {
+                using var bytes = new MemoryStream();
+                await read.CopyToAsync(bytes, cancellationToken).ConfigureAwait(false);
+
+                return bytes.ToArray();
+            }
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -1054,12 +1071,17 @@ public sealed class LocalSyncTransport(
                 $"'{relativePath}' is not in '{root}': nothing is at that path there.",
                 ex);
         }
+        catch (IOException ex)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, $"'{relativePath}' could not be read in '{root}': {ex.Message}.", ex);
+        }
     }
 
     /// <inheritdoc/>
     /// <remarks>
-    /// The directory named is walked as it is spelt, a link along its path followed as a file's is: a build directory
-    /// pointed at another volume is ordinary. Below it no link is followed, and each is named.
+    /// The directory named is walked only where no link the copy holds stands on the way to it or at it, as a file is read
+    /// only so: a copy is a place a leg's work writes, and a link there says nothing of what anybody meant. Below it no
+    /// link is followed, and each is named.
     /// </remarks>
     public Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default)
     {
@@ -1081,6 +1103,13 @@ public sealed class LocalSyncTransport(
     {
         var expanded = Home(root);
         var directory = Resolve(root, relativeDirectory);
+
+        if (UnfollowedFiles.LinkOnTheWay(_fileSystem, expanded, directory, itself: true) is { } link)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"'{named}' is reached through the link '{link}' in '{root}', which a pull never follows: a copy is a place a leg's work writes.");
+        }
 
         if (!_fileSystem.DirectoryExists(directory))
         {
@@ -1172,12 +1201,9 @@ public sealed class LocalSyncTransport(
         var expanded = Home(root);
         var full = Path.GetFullPath(Path.Combine(expanded, relativePath));
 
-        // Compared as spelled, deliberately. Following links here looked like a stronger guard and
-        // was a worse one: a build directory pointed at another volume is ordinary and withheld by
-        // default for exactly that reason, and resolving it refused '--pull build/...' — a path the
-        // reader named, inside the tree they named — with a message about leaving the tree. A link
-        // the copy holds is disclosed where the reader can act on it, in the list an adoption prints,
-        // rather than guarded here where it cannot be told from a path somebody meant.
+        // Compared as spelled, deliberately: a path that leaves the tree is told by its own words, and a link the copy
+        // holds on the way is refused by what reads, writes or removes there (UnfollowedFiles), naming the link, never
+        // as a path that left the tree.
         //
         // This machine's own comparison. Testing both would be no test at all: a path inside under
         // Ordinal is inside under OrdinalIgnoreCase too, so the pair reduces to the looser of them,

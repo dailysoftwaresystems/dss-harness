@@ -1564,6 +1564,42 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
+    /// A link a copy holds - one a leg's work could have put there, leading to a place hidden from that work - is never
+    /// gone through: a file read through it, a directory listed through it, a file written or removed through it and a
+    /// directory emptied through it are each refused or passed by, and what it leads to is neither carried back nor touched.
+    /// </summary>
+    [Fact]
+    public async Task ALinkACopyHolds_IsNeverGoneThrough_ByARead_AListing_AWriteOrARemoval()
+    {
+        using var copy = new TempDirectory();
+        using var hidden = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var transport = SyncKit.Transport(new HarnessFactory());
+        hidden.WriteFile("key.txt", "a credential");
+        Directory.CreateDirectory(hidden.Combine("empty"));
+
+        if (!TryLink(copy.Combine("out"), hidden.Path))
+        {
+            Assert.Skip("Creating a link needs a privilege this machine did not grant.");
+        }
+
+        var read = await Assert.ThrowsAsync<HarnessException>(() => transport.ReadFileAsync(copy.Path, "out/key.txt", cancellationToken));
+        var listed = await Assert.ThrowsAsync<HarnessException>(() => transport.ListFilesAsync(copy.Path, "out", cancellationToken));
+        var written = await Assert.ThrowsAsync<HarnessException>(() => transport.WriteFileAsync(copy.Path, "out/key.txt", "planted"u8.ToArray(), cancellationToken));
+        await Assert.ThrowsAsync<IOException>(() => transport.DeleteFileAsync(copy.Path, "out/key.txt", cancellationToken));
+        var emptied = await transport.RemoveEmptyDirectoriesAsync(copy.Path, ["out/empty"], cancellationToken);
+
+        Assert.Equal(
+            $"'out/key.txt' could not be read in '{copy.Path}': '{copy.Combine("out", "key.txt")}' is reached through the link '{copy.Combine("out")}', which the tool never follows in a place an isolated process writes.",
+            read.Message);
+        Assert.Equal($"'out/' is reached through the link '{copy.Combine("out")}' in '{copy.Path}', which a pull never follows: a copy is a place a leg's work writes.", listed.Message);
+        Assert.StartsWith($"'out/key.txt' could not be written to '{copy.Path}': '{copy.Combine("out", "key.txt")}' is reached through the link", written.Message, StringComparison.Ordinal);
+        Assert.Empty(emptied);
+        Assert.Equal("a credential", File.ReadAllText(hidden.Combine("key.txt")));
+        Assert.True(Directory.Exists(hidden.Combine("empty")));
+    }
+
+    /// <summary>
     /// A directory holding as many files as a pull brings back from one is listed, in the order of its paths; one whose
     /// files hold more together than a pull brings back from a directory, or one file no request can carry, is refused
     /// where it is, by its sizes alone, with no file read.
@@ -2483,12 +2519,13 @@ public sealed class SyncServiceTests
 
     /// <summary>
     /// A copy this tool made can gain a link afterwards — a build script pointing a directory at
-    /// scratch space is the ordinary way — and from then on every build and every test writes
-    /// through it, to somewhere outside the directory anybody named, reported as an ordinary write.
-    /// The takeover list covers the first sync into somebody else's directory; this covers the rest.
+    /// scratch space is the ordinary way, and a leg's work may put one there to lead anywhere — and a
+    /// sync never writes through it: the write is refused naming the link, nothing lands where it
+    /// leads, and the warning says why. The takeover list covers the first sync into somebody else's
+    /// directory; this covers the rest.
     /// </summary>
     [Fact]
-    public async Task AWriteThroughALink_IsSaidOnAnOrdinarySyncToo_NotOnlyWhenTakingOver()
+    public async Task AWriteThroughALink_IsRefusedOnAnOrdinarySyncToo_NotOnlyWhenTakingOver()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -2509,20 +2546,22 @@ public sealed class SyncServiceTests
                 Assert.Skip("Creating a link needs a privilege this machine did not grant.");
             }
 
-            // The writes land wherever the link points, so afterwards the copy does not hold what
-            // this tree holds and the verification says so. The warning is what explains why.
+            // No write goes through the link: the first one is refused, naming it. The warning is what explains why.
             var failure = await Assert.ThrowsAsync<HarnessException>(() => service.SyncAsync(
                 temp.Path, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken));
 
-            Assert.Contains("does not match this tree", failure.Message, StringComparison.Ordinal);
+            Assert.Contains(
+                $"is reached through the link '{Path.Combine(copy, "src")}', which the tool never follows in a place an isolated process writes",
+                failure.Message,
+                StringComparison.Ordinal);
 
             var said = harness.StandardError.ToString();
 
-            Assert.Contains("writing through 'src'", said, StringComparison.Ordinal);
+            Assert.Contains("'src' is a link, which a sync never writes through", said, StringComparison.Ordinal);
             Assert.Contains("is not in any list", said, StringComparison.Ordinal);
 
-            // And what the link points at holds the files, outside the directory anybody named.
-            Assert.True(File.Exists(Path.Combine(elsewhere, "a.c")));
+            // And nothing landed where the link points, outside the directory anybody named.
+            Assert.Empty(Directory.EnumerateFileSystemEntries(elsewhere));
         }
         finally
         {

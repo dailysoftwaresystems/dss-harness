@@ -41,7 +41,7 @@ public sealed class ExecutionIsolationTests
         var platform = new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism()));
         var isolation = new AgentIsolation(platform, kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
         var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
-        var ground = ExecutionGrounds.OfLeg(config, kit.Main, worktree, copy, records, [workers]);
+        var ground = ExecutionGrounds.OfLeg(config, kit.Main, worktree, copy, [workers]);
 
         var isolated = await isolation.ForExecutionAsync(config, ground, kit.Main, Token);
 
@@ -49,7 +49,6 @@ public sealed class ExecutionIsolationTests
         IReadOnlyList<IsolatedWrite> writes =
         [
             new(copy, Directory: true, Writable: true),
-            new(records, Directory: true, Writable: true),
             new(workers, Directory: true, Writable: true),
             new(caches, Directory: true, Writable: true),
             new(Path.Combine(copy, HarnessLayout.DirectoryName), Directory: true, Writable: false),
@@ -61,7 +60,8 @@ public sealed class ExecutionIsolationTests
 
         Assert.Equal(IsolatedExecution.Legs, ground.Kind);
         Assert.Equal([kit.Main, worktree, copy], ground.Trees);
-        Assert.Equal([copy, records, workers], ground.WritableRoots);
+        Assert.Equal([copy, workers], ground.WritableRoots);
+        Assert.DoesNotContain(isolated.Profile!.Writes, write => IsolationProfile.Covers(write.Path, records) && write.Writable);
         Assert.Equal(
             [.. ground.Trees.SelectMany(tree => HarnessLayout.StatePathsUnder(tree, OrchestrationKit.Settings.Root!)).Distinct(StringComparer.OrdinalIgnoreCase).Where(state => state != workers)],
             ground.StateDirectories);

@@ -246,8 +246,11 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
     private sealed class StepLegIsolation(IAgentIsolation isolation, HarnessConfig config, string mainCheckout, string tree, Func<string, IReadOnlyList<string>> besides) : ILegIsolation
     {
         /// <inheritdoc/>
-        public Task<ExecutionIsolation> ForLegAsync(string legTree, string runDirectory, CancellationToken cancellationToken)
-            => isolation.ForExecutionAsync(config, ExecutionGrounds.OfLeg(config, mainCheckout, tree, legTree, runDirectory, besides(legTree)), mainCheckout, cancellationToken);
+        public Task<ExecutionIsolation> ForLegAsync(string legTree, CancellationToken cancellationToken)
+            => isolation.ForExecutionAsync(config, ExecutionGrounds.OfLeg(config, mainCheckout, tree, legTree, besides(legTree)), mainCheckout, cancellationToken);
+
+        /// <inheritdoc/>
+        public ExecutionIsolation ForDistribution(string distribution) => ExecutionIsolation.InDistribution(AgentIsolationMode.Of(config), distribution);
     }
 
     /// <summary>Tells the engine what the leg service says of the step's legs, in the engine's words, and keeps the legs placed.</summary>
