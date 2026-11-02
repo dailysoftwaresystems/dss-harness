@@ -74,6 +74,9 @@ public sealed record Bubblewrap(string Program, string Version, IReadOnlyList<Is
     /// <summary>Nothing: each anchor is a mount point, which no child renames or removes, and what it holds is written as its rule says.</summary>
     public string? AnchorCost => null;
 
+    /// <summary>A rule is a mount alone: one whose place is not there is skipped, and a mount made over such a path puts a file of bubblewrap's own there, so an absent file is held by no rule.</summary>
+    public bool HoldsAnAbsentFile => false;
+
     /// <summary>The launch's own temporary directory is bound in the system's one's place.</summary>
     public bool OwnTemp => false;
 

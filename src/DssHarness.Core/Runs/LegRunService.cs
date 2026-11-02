@@ -1225,6 +1225,14 @@ public sealed class LegRunService(
                 ledger.Transition(runsAs.Name, outside);
             }
 
+            // A leg whose ground writes a linked worktree an earlier version of this tool made says so on its line, as a
+            // launch over one says it at its start: inside the isolation git add and git fetch fail there, and the remedy
+            // names the verbs that give the agent a repository of its own.
+            foreach (var legacy in held.LegacyWorktrees)
+            {
+                ledger.Transition(runsAs.Name, legacy);
+            }
+
             isolated = held.ForProcess;
         }
 

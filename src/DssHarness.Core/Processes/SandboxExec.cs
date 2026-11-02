@@ -156,6 +156,9 @@ public sealed class SandboxExec(string version, Func<string, string> realPath) :
     /// <summary>Nothing: each anchor's own removal alone is refused - a rename removes its name - and what it holds is written as its rule says.</summary>
     public string? AnchorCost => null;
 
+    /// <summary>The sandbox denies every write at the path a rule stands at, there or not, so a file that is not there is held against its creation.</summary>
+    public bool HoldsAnAbsentFile => true;
+
     /// <summary>The launch's own temporary directory is written and named to the child; the system's stays read-only.</summary>
     public bool OwnTemp => false;
 

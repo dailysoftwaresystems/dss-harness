@@ -925,14 +925,15 @@ Inside it the machine is read-only. Written are the agent's writable roots - its
 directory - and what git writes of a tree it writes: its own git directory alone. A main checkout's `.git`
 is written whole, and an agent's worktree a repository of its own, for git makes its lock files directly
 in it, but a main checkout's `commondir` - made naming the directory itself, which git takes as no
-pointer, where a file made would lead every git to another repository's own files - and its
-`worktrees/`; a linked worktree's own git directory is its directory under the common directory's
+pointer, where a file made would lead every git to another repository's own files, and never made in a
+repository that keeps its refs in a reftable, where any file there breaks every commit git makes on a
+branch - and its `worktrees/`; a linked worktree's own git directory is its directory under the common directory's
 `worktrees/`, and the common directory itself - its `objects/`, its `refs/` and `reftable/` wherever
 the repository keeps them, its `logs/` and Git LFS's `lfs/` where there is one - is read-only to the
 work: `git add`, `commit`, `fetch`, `rm` and `status` write the objects, the index and the refs in a
 main checkout and in an agent's repository, while in a linked worktree - an agent an earlier version
 made, a leg pinned to a plain worktree - `git add` and `git fetch` fail there, said at each launch
-over one; and in a main checkout what writes another worktree's git directory: `git worktree add`,
+over one and on each leg's line over one; and in a main checkout what writes another worktree's git directory: `git worktree add`,
 `move`, `remove` and `prune`, `git`
 gc where there are linked worktrees. The refs written are those of a repository whose git directory
 the work writes whole - the main checkout's over a side-task, a leg in place and a run's commit and
@@ -997,7 +998,11 @@ which git runs again once `core.hooksPath` is gone; the common directory's `conf
 `config.worktree` and `info/`; its `refs/replace/` and `objects/info/`, whose replacements and
 alternates would put other content in place of what every checkout reads; its own `commondir` -
 made, where a main checkout's `.git` holds none, naming that directory itself (`.`), which git takes
-as no pointer - and its `worktrees/`; each linked worktree's `config.worktree`, `commondir` and
+as no pointer, and in a repository that keeps its refs in a reftable, where any commondir file in a
+git directory the work writes breaks every commit git makes on a branch, never made and held absent
+instead - macOS's sandbox and MXC's container denying its creation with nothing at the path, and
+bubblewrap, whose every rule is a mount that holds no path that is not there, leaving the ground
+with no isolation - and its `worktrees/`; each linked worktree's `config.worktree`, `commondir` and
 `gitdir`; every linked worktree's `.git` file, the agent's own and every other git lists; and every
 git directory's `modules/` whole - the common one's and each linked worktree's - which holds the
 submodules' own git directories, so a submodule's git fails inside. Written by nobody too are every configuration file git
@@ -1012,7 +1017,10 @@ leave its name free to be made again, and a root put back as a link would lead t
 rules elsewhere. A launch has no isolation - which the mode below turns into a refusal or a notice -
 where its places cannot be held: git cannot say where a tree keeps its files (git 2.31 or newer
 answers) or list its repository's replacements, a main checkout's `.git` holds a `commondir`
-leading anywhere but to itself - to another repository's own files - a file git's configuration
+leading anywhere but to itself - to another repository's own files - or holds one at all, or none
+and the mechanism holds no path that is not there, in a repository that keeps its refs in a
+reftable, where any commondir file in a git directory the work writes breaks every commit git
+makes on a branch, a file git's configuration
 includes is not there inside a place the agent writes, where a command could make it (an empty file
 includes nothing), a link stands where the agent writes on the way to a guarded place, or, under
 bubblewrap, a guarded place stands on a file system that finds a name in any case - a Windows drive

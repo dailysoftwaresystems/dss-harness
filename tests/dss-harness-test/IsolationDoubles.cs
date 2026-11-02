@@ -103,6 +103,9 @@ internal sealed class PassThroughMechanism(string name = "test", string version 
     /// <inheritdoc/>
     public string? Leaves { get; init; }
 
+    /// <summary>Whether it holds a rule at a file that is not there; a test's default holds, as macOS's sandbox and MXC's container do.</summary>
+    public bool HoldsAnAbsentFile { get; init; } = true;
+
     /// <inheritdoc/>
     public string? AnchorCost { get; init; }
 

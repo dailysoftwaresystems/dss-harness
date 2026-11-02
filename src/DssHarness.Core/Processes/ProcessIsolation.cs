@@ -190,6 +190,13 @@ public interface IIsolationMechanism
     string? AnchorCost { get; }
 
     /// <summary>
+    /// Whether the mechanism holds a rule at a file that is not there, denying its creation while nothing stands at the
+    /// path for a child to read, as it holds one at a file that is. A mechanism whose every rule is a mount cannot: a
+    /// mount at a path that is not there either holds nothing or puts a file of its own there.
+    /// </summary>
+    bool HoldsAnAbsentFile { get; }
+
+    /// <summary>
     /// Whether the mechanism gives the child a temporary directory of its own, removed with it - so a profile names none
     /// (<see cref="IsolationProfile.Temp"/>) and sets no variable for one.
     /// </summary>

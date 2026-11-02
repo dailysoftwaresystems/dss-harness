@@ -2437,12 +2437,13 @@ declared caches. An agent that may run no command - the reporter - needs none (`
 nothing is probed. Otherwise the platform's mechanism, proved once per process (`IIsolationPlatform`), and a profile
 of the ground, the machine read-only: written, the ground's writable roots, what git writes of each of its trees that
 is itself one of them and its repository's top level (`AgentIsolation.GitPlacesAsync`: `rev-parse
---path-format=absolute --git-dir --git-common-dir --git-path hooks --show-toplevel`, git 2.31 or
+--path-format=absolute --git-dir --git-common-dir --git-path hooks --git-path reftable --show-toplevel`, git 2.31 or
 newer, so a leg's copy that is no repository of its own writes nothing of the repository above it) -
 each tree's own git directory alone (`AgentIsolation.GitWritten`): a main checkout's `.git` whole,
 and an agent's repository's, which is its repository's own common directory, for git makes its lock
 files directly in it, which no rule at a path grants one name at a time, but a main checkout's
-`commondir`, made naming itself, and its `worktrees/`, sealed below; a linked worktree's own git
+`commondir`, made naming itself - never made where the repository keeps its refs in a reftable, held
+absent instead - and its `worktrees/`, sealed below; a linked worktree's own git
 directory is its directory under the common directory's `worktrees/`, and the common directory
 itself - its `objects/`, `refs/` and `reftable/` wherever the repository keeps them, its `logs/` and
 `lfs/` where there is one - is read-only to the work, so `git add` and fetch fail inside the isolation
@@ -2485,7 +2486,14 @@ other content as git names them (the hooks git runs and the common directory's o
 `objects/info/`; its own `commondir` (`AgentIsolation.CommonDirectoryFile`), made where a main checkout's `.git`
 holds none naming that directory itself (`AgentIsolation.ItsOwnDirectory`, `.`), which git takes as no pointer while
 an empty one it refuses, so the one file of a main checkout's that would lead every git elsewhere is held as every
-other place is; its `worktrees/`, so a main checkout's work makes no worktree's git directory and writes no other's;
+other place is - but never made in a repository that keeps its refs in a reftable (`GitPlaces.Directories`' reftable,
+asked of git as the hooks directory is), for any commondir file in a git directory the work writes breaks every commit
+git makes on a branch, whatever it holds, git splitting the repository's refs over two stores the moment it reads one:
+there the path is held absent, its rule denying every command's making a file at it, which macOS's sandbox does by
+denying every write at the path and MXC's container by meeting the path alone, granting it read with nothing there, but
+which bubblewrap cannot - its every rule a mount, skipped at a path that is not there, and a mount made over one
+putting a file of bubblewrap's own there - so over such a repository's main checkout bubblewrap leaves the ground with
+no isolation, the remedy naming the migration to the files format; its `worktrees/`, so a main checkout's work makes no worktree's git directory and writes no other's;
 each linked worktree's `config.worktree`, `commondir` and `gitdir`; every linked worktree's `.git` file, the tree's
 own and each other `git worktree list` names, which a ground writing the directory it stands in - a worktree a person
 or another tool made inside the main checkout - would otherwise point at a repository of its own; every
@@ -2500,13 +2508,18 @@ whose holder is written and each writable root itself, which no command renames 
 path, so a directory above a guarded place moved away would take the place out from under its rule and leave its name
 free to make again - a `.git` moved aside and a new one with hooks of the agent's, run by the tool's own git outside.
 Every place is ruled at its real spelling. A place not there inside a written place and under no guarded one is made
-first - empty, but a `commondir`, made naming its own directory - so no command makes it inside and has it read or
+first - empty, but a `commondir`, made naming its own directory, and one in a repository that keeps its refs in a
+reftable never, its path held absent instead (`IIsolationMechanism.HoldsAnAbsentFile`) - so no command makes it inside
+and has it read or
 run outside later; a state file never is (`HarnessLayout.StateFileNames`), for the tool reads one as meaning
 something, and the words policy alone guards it. A launch has no isolation, said, where its places cannot be held: a
 git that cannot say where a tree keeps its files (`AgentIsolation.Unwhole`) or list its repository's replacements, a
 main checkout's `.git` holding a `commondir` that leads anywhere but to itself (`AgentIsolation.LeadsToItself`, read
 as git reads it, never through a link and never past a line's worth), which git's answers there would follow - a
-`gitdir` there git never follows from a main checkout, so it holds nothing back - a file git's configuration includes that is
+`gitdir` there git never follows from a main checkout, so it holds nothing back - a `commondir` there at all, or none
+and the mechanism holds no absent path, in a repository that keeps its refs in a reftable, where any file there breaks
+every commit on a branch and the remedy names its removal or the migration to the files format, a file git's
+configuration includes that is
 not there inside a written place, which a command could make, a link inside a written place on the way to a guarded
 one (`AgentIsolation.LinkOnTheWay`), which a command could replace with one leading elsewhere, or, under a mechanism
 whose rules hold the one spelling
@@ -2556,7 +2569,9 @@ bubblewrap on a kernel with no Landlock scope), from the same base (`IsolationDe
 whose ground writes a linked worktree - an agent an earlier version of this tool made - says at its start, the same
 way, that git add and fetch fail inside the isolation there and the remedy, one `Notice` per tree
 (`LaunchIsolation.LegacyWorktrees`, from the held decision's own finding of a written tree whose git directory is not
-its common directory). Every launch's
+its common directory), as a leg whose ground writes one says the same on its line
+(`ExecutionIsolation.LegacyWorktrees`, one line of the leg's ledger as its work starts,
+`LegRunService.RunTakenLegAsync`). Every launch's
 result carries what it ran under (`AgentRunResult.Isolation`, `result.json`'s `isolation`, an `AgentIsolationRecord`:
 the mode, and the mechanism with its version, what it leaves reached and what
 its anchors cost, or why there was none), and each side-task turn its own (`SideTaskTurn.Isolation`). The request

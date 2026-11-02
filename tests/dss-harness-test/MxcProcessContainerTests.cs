@@ -60,8 +60,8 @@ public sealed class MxcProcessContainerTests
             ],
             arguments);
         Assert.Equal(
-            (true, false, (string?)null, MxcProcessContainer.AnchorReadAlone, true, false, "MXC's container takes no command handed to it"),
-            (mechanism.HoldsEveryCase, mechanism.Scoped, mechanism.Leaves, mechanism.AnchorCost, mechanism.OwnTemp, mechanism.TakesHandedCommands, mechanism.Unnested));
+            (true, false, (string?)null, MxcProcessContainer.AnchorReadAlone, true, true, false, "MXC's container takes no command handed to it"),
+            (mechanism.HoldsEveryCase, mechanism.Scoped, mechanism.Leaves, mechanism.AnchorCost, mechanism.HoldsAnAbsentFile, mechanism.OwnTemp, mechanism.TakesHandedCommands, mechanism.Unnested));
     }
 
     /// <summary>
@@ -512,6 +512,45 @@ public sealed class MxcProcessContainerTests
 
         Assert.NotEqual(0, linked.ExitCode);
         Assert.False(File.Exists(Path.Combine(launch.Worktree, "hard")));
+    }
+
+    /// <summary>
+    /// A command inside the container over a side-task's main tree, a repository that keeps its refs in a reftable, finds
+    /// no commondir there - none is made - and makes none, the container denying the path its creation with nothing at it:
+    /// git outside still commits on a branch over the main checkout, which any commondir file there would break.
+    /// </summary>
+    [Fact]
+    public async Task OnWindows_ACommandInsideOverAReftableMain_MakesNoCommondir_AndCannotPlantIt_ForReal()
+    {
+        var version = Supported();
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var harness = new HarnessFactory();
+        var main = Directory.CreateDirectory(Path.Combine(temp.Path, "main")).FullName;
+        var made = await harness.GitClient.RunAsync(main, ["init", "--quiet", "--ref-format=reftable", "-b", "main", "."], cancellationToken: Token);
+
+        Assert.SkipUnless(made.Succeeded, $"this git keeps no refs in a reftable: {made.FailureMessage}");
+
+        await harness.RunGitAsync(main, ["config", "user.email", "test@example.com"], Token);
+        await harness.RunGitAsync(main, ["config", "user.name", "Test"], Token);
+        await harness.RunGitAsync(main, ["commit", "--quiet", "--allow-empty", "-m", "base"], Token);
+        var container = new MxcProcessContainer(version, (CliRunner.CliProgram, []));
+        var config = new HarnessConfig();
+        var layout = new HarnessLayout(main, main);
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(container)), harness.GitClient, harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var pointer = Path.Combine(main, ".git", Core.Agents.Isolation.AgentIsolation.CommonDirectoryFile);
+
+        var launched = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [], []), main, SideTaskLayout.Of(layout, "one").Directory, Token);
+        var commands = Assert.IsType<ProcessIsolation>(launched.ForCommands);
+
+        Assert.False(launched.Refused);
+        Assert.False(File.Exists(pointer), pointer);
+
+        var planted = await RealIsolation.InsideAsync(commands, main, Interpreter, "/d", "/c", "type", "nul", ">", pointer);
+
+        Assert.NotEqual(0, planted.ExitCode);
+        Assert.False(File.Exists(pointer), pointer);
+        Assert.True((await harness.RunGitAsync(main, ["commit", "--quiet", "--allow-empty", "-m", "outside"], Token)).Succeeded);
     }
 
     /// <summary>The system's command interpreter.</summary>

@@ -1126,6 +1126,28 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A leg whose ground writes a linked worktree an earlier version of this tool made says so on its line, as a launch
+    /// over one says it at its start: inside the isolation git add and git fetch fail there, and the remedy names the verbs
+    /// that give the agent a repository of its own.
+    /// </summary>
+    [Fact]
+    public async Task ALegOverALinkedWorktree_SaysOnItsLine_ThatGitAddAndFetchFailInside()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        const string Legacy = "'C:/repo/.worktrees/a1' is a linked worktree an earlier version made: git add and fetch fail there; delete-agent and a new agent give it a repository of its own";
+        var legacy = new LegIsolationAnswer(new ExecutionIsolation(IsolatedExecution.Legs, AgentIsolationMode.Required, new PassThroughMechanism(), IsolationProfile.Nothing, null, null) { LegacyWorktrees = [Legacy] });
+        var sink = new RecordingSink();
+
+        using (var output = new EventHarnessOutput(sink, OperationId.New()))
+        {
+            _ = await OutcomeAsync(temp, harness, OneLeg(harness), SshAndLocal(harness), new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy, Isolation = legacy }, output: output);
+        }
+
+        Assert.Contains(Legacy, sink.Seen.OfType<LegProgressed>().Where(@event => @event.Leg == "native").Select(@event => @event.Message));
+    }
+
+    /// <summary>
     /// The isolation of a leg whose work runs actions - its runner's, and each run check's runner's - is asked with what
     /// that work writes in the tree's configuration directory: each action's build directory for this run and this leg,
     /// once, and nothing else of it.

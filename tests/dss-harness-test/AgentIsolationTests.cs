@@ -77,7 +77,7 @@ public sealed class AgentIsolationTests
             ],
             arguments);
         Assert.Equal(("bubblewrap", "0.9.0", false, false, Bubblewrap.Unscoped), (mechanism.Name, mechanism.Version, mechanism.HoldsEveryCase, mechanism.Scoped, mechanism.Leaves));
-        Assert.Equal(((string?)null, false, true, (string?)null), (mechanism.AnchorCost, mechanism.OwnTemp, mechanism.TakesHandedCommands, mechanism.Unnested));
+        Assert.Equal((false, (string?)null, false, true, (string?)null), (mechanism.HoldsAnAbsentFile, mechanism.AnchorCost, mechanism.OwnTemp, mechanism.TakesHandedCommands, mechanism.Unnested));
         Assert.Null((mechanism with { Scoped = true }).Leaves);
     }
 
@@ -523,6 +523,120 @@ public sealed class AgentIsolationTests
         using var beside = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
 
         Assert.Equal((false, "test"), (beside.Refused, beside.Mechanism?.Name));
+    }
+
+    /// <summary>
+    /// A main checkout whose repository keeps its refs in a reftable is made no commondir of its own - any file there,
+    /// whatever it holds, breaks every commit git makes on a branch - the path held sealed with no file there: git commits
+    /// on a branch inside the isolation, and a replacement made in the reftable while it ran is answered once it has, as
+    /// git lists it there.
+    /// </summary>
+    [Fact]
+    public async Task AMainCheckoutOfAReftableRepository_IsMadeNoCommondir_ThePathHeldSealedAbsent_CommitsWorking_AndMainsReplacementAnswered()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var harness = new HarnessFactory();
+        var main = Directory.CreateDirectory(Path.Combine(temp.Path, "main")).FullName;
+        var made = await harness.GitClient.RunAsync(main, ["init", "--quiet", "--ref-format=reftable", "-b", "main", "."], cancellationToken: Token);
+
+        Assert.SkipUnless(made.Succeeded, $"this git keeps no refs in a reftable: {made.FailureMessage}");
+
+        await harness.RunGitAsync(main, ["config", "user.email", "test@example.com"], Token);
+        await harness.RunGitAsync(main, ["config", "user.name", "Test"], Token);
+        await harness.RunGitAsync(main, ["commit", "--quiet", "--allow-empty", "-m", "base"], Token);
+        var config = new HarnessConfig();
+        var layout = new HarnessLayout(main, main);
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), harness.GitClient, harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var ground = SideTaskPolicy.Ground(layout, config, [], []);
+        var git = Path.Combine(main, ".git");
+        var pointer = Path.Combine(git, AgentIsolation.CommonDirectoryFile);
+
+        using var isolated = await isolation.ForLaunchAsync(config, ground, main, SideTaskLayout.Of(layout, "one").Directory, Token);
+
+        Assert.Equal((false, "test"), (isolated.Refused, isolated.Mechanism?.Name));
+        Assert.False(File.Exists(pointer), pointer);
+        Assert.Contains(new IsolatedWrite(pointer, Directory: false, Writable: false), isolated.Commands!.Writes);
+
+        // The work's own commit on a branch, made inside: any commondir file there would end it with 'cannot lock
+        // references', so none is made.
+        var committed = await RealIsolation.InsideAsync(isolated.ForCommands!, main, "git", "commit", "--quiet", "--allow-empty", "-m", "inside");
+
+        Assert.Equal(0, committed.ExitCode);
+
+        // A replacement made in the reftable while it ran is answered once it has, the tool's own git listing it there.
+        var replaced = (await harness.RunGitAsync(main, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
+        await harness.RunGitAsync(main, ["commit", "--quiet", "--allow-empty", "-m", "in its place"], Token);
+        await harness.RunGitAsync(main, ["replace", replaced, "HEAD"], Token);
+        var name = $"refs/replace/{replaced}";
+
+        Assert.Equal(
+            $"'{git}' came to hold {name} while it ran: a replacement, which puts other content in place of an object for every git started outside that reads it - so nothing goes on over the trees; look at what it puts in place, and remove it with git update-ref -d {name}",
+            await isolated.AfterwardAsync(Token));
+    }
+
+    /// <summary>
+    /// A main checkout of a reftable repository that holds a commondir already - one an earlier version of this tool made -
+    /// leaves the launch with no isolation, saying what any file there breaks - every commit git makes on a branch, whatever
+    /// it holds - and naming its removal.
+    /// </summary>
+    [Fact]
+    public async Task AMainCheckoutOfAReftableRepositoryHoldingACommondir_LeavesTheLaunchWithNoIsolation()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var harness = new HarnessFactory();
+        var main = Directory.CreateDirectory(Path.Combine(temp.Path, "main")).FullName;
+        var made = await harness.GitClient.RunAsync(main, ["init", "--quiet", "--ref-format=reftable", "-b", "main", "."], cancellationToken: Token);
+
+        Assert.SkipUnless(made.Succeeded, $"this git keeps no refs in a reftable: {made.FailureMessage}");
+
+        var config = new HarnessConfig();
+        var layout = new HarnessLayout(main, main);
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), harness.GitClient, harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var ground = SideTaskPolicy.Ground(layout, config, [], []);
+        var pointer = Path.Combine(main, ".git", AgentIsolation.CommonDirectoryFile);
+
+        await File.WriteAllTextAsync(pointer, AgentIsolation.ItsOwnDirectory, Token);
+
+        using var isolated = await isolation.ForLaunchAsync(config, ground, main, SideTaskLayout.Of(layout, "one").Directory, Token);
+
+        Assert.Equal(
+            (true,
+                $"'side-task' is refused: agentPolicy.isolation is \"required\" and '{pointer}' is there, and the repository keeps its refs in a reftable, where any commondir file in a git directory the work writes breaks every commit git makes on a branch, whatever it holds - something made it, so no agent that may run a command starts here; remove '{pointer}', which nothing makes in a repository that keeps its refs in a reftable"),
+            (isolated.Refused, isolated.Refusal("'side-task'")));
+    }
+
+    /// <summary>
+    /// A main checkout of a reftable repository under a mechanism that holds no path that is not there - bubblewrap, whose
+    /// every rule is a mount - leaves the launch with no isolation, for whatever it mounted over the absent commondir would
+    /// put a file of its own there, and any file there breaks every commit on a branch; the remedy names the migration that
+    /// gives the repository a commondir naming itself instead.
+    /// </summary>
+    [Fact]
+    public async Task AMainCheckoutOfAReftableRepository_WhereTheMechanismHoldsNoAbsentPath_LeavesTheLaunchWithNoIsolation()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var harness = new HarnessFactory();
+        var main = Directory.CreateDirectory(Path.Combine(temp.Path, "main")).FullName;
+        var made = await harness.GitClient.RunAsync(main, ["init", "--quiet", "--ref-format=reftable", "-b", "main", "."], cancellationToken: Token);
+
+        Assert.SkipUnless(made.Succeeded, $"this git keeps no refs in a reftable: {made.FailureMessage}");
+
+        var config = new HarnessConfig();
+        var layout = new HarnessLayout(main, main);
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism("bubblewrap", "0.9.0") { HoldsAnAbsentFile = false })), harness.GitClient, harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var ground = SideTaskPolicy.Ground(layout, config, [], []);
+        var pointer = Path.Combine(main, ".git", AgentIsolation.CommonDirectoryFile);
+
+        using var isolated = await isolation.ForLaunchAsync(config, ground, main, SideTaskLayout.Of(layout, "one").Directory, Token);
+
+        Assert.Equal(
+            (true,
+                $"'side-task' is refused: agentPolicy.isolation is \"required\" and '{pointer}' cannot be held, for the repository keeps its refs in a reftable, where no commondir file may stand in a git directory the work writes, and bubblewrap holds no path that is not there - whatever it mounted over one would put a file of its own there, so no agent that may run a command starts here; put the repository's refs in the files format (git refs migrate --ref-format=files), where a main checkout's commondir naming itself breaks nothing"),
+            (isolated.Refused, isolated.Refusal("'side-task'")));
+        Assert.False(File.Exists(pointer), pointer);
     }
 
     /// <summary>
@@ -1151,6 +1265,8 @@ public sealed class AgentIsolationTests
         public bool Scoped { get; init; }
 
         public string? Leaves => null;
+
+        public bool HoldsAnAbsentFile => true;
 
         public string? AnchorCost => null;
 

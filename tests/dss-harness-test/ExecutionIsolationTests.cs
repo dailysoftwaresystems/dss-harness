@@ -94,8 +94,31 @@ public sealed class ExecutionIsolationTests
     }
 
     /// <summary>
-    /// Where git's own work signs or pushes through it - a push over ssh, a commit signed with an ssh key - a commit's or a
-    /// push's hooks reach the user's SSH agent's socket alone, at its real place; any other commit's or push's reach none,
+    /// A leg's ground over a linked worktree an earlier version of this tool made carries what the leg's line says as its
+    /// work starts: inside the isolation the work writes the tree's own git directory alone, so git add and git fetch fail
+    /// there, the remedy naming the verbs that give the agent a repository of its own - the same sentence a launch over one
+    /// says at its start.
+    /// </summary>
+    [Fact]
+    public async Task ALegsGroundOverALinkedWorktree_CarriesWhatItsLineSaysOfGitAddAndFetchFailingInside()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateLegacyAgentAsync("a1");
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+
+        using var legs = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfLeg(config, kit.Main, worktree, worktree, []), kit.Main, Token);
+
+        Assert.Equal(
+            [$"'{worktree}' is a linked worktree an earlier version made: git add and fetch fail there; delete-agent and a new agent give it a repository of its own"],
+            legs.LegacyWorktrees);
+    }
+
+    /// <summary>
+    /// Where git's own work signs or pushes through it - a push over ssh, a commit signed with an ssh key - a commit's or
+    /// a push's hooks reach the user's SSH agent's socket alone, at its real place; any other commit's or push's reach none,
     /// and a leg's work none.
     /// </summary>
     [Fact]

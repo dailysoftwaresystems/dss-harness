@@ -77,6 +77,9 @@ public sealed class MxcProcessContainer(string version, (string Program, IReadOn
     /// <inheritdoc/>
     public string? AnchorCost => AnchorReadAlone;
 
+    /// <summary>The container meets a place by its path alone, granting a sealed one read alone there or not, so a file that is not there is held against its creation.</summary>
+    public bool HoldsAnAbsentFile => true;
+
     /// <summary>MXC gives every container a temporary directory of its own, removed with it.</summary>
     public bool OwnTemp => true;
 

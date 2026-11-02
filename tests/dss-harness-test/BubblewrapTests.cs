@@ -496,6 +496,26 @@ public sealed class BubblewrapTests
     }
 
     /// <summary>
+    /// A sealed file that is not there is held by no rule of bubblewrap's: a bind at a place that is not there is skipped,
+    /// so a command inside makes the file - which is why a ground that needs one held, a reftable repository's commondir,
+    /// is refused under bubblewrap rather than run with the path open.
+    /// </summary>
+    [Fact]
+    public async Task ASealedFileThatIsNotThere_IsHeldByNoRule_ACommandInsideMakesIt()
+    {
+        using var temp = new TempDirectory();
+        var platform = RealIsolation.Platform();
+        var bubblewrap = Assert.IsType<Bubblewrap>(await ProvedAsync(platform, temp.Path));
+        var root = Directory.CreateDirectory(Path.Combine(temp.Path, "writable")).FullName;
+        var absent = Path.Combine(root, "sealed");
+        var isolation = new ProcessIsolation(bubblewrap, new IsolationProfile([], [new IsolatedWrite(root, Directory: true, Writable: true), new IsolatedWrite(absent, Directory: false, Writable: false)]));
+
+        var made = await RealIsolation.InsideAsync(isolation, root, "/bin/sh", "-c", ": > \"$1\"", "sh", absent);
+
+        Assert.Equal((0, true), (made.ExitCode, File.Exists(absent)));
+    }
+
+    /// <summary>
     /// The probe refuses a bubblewrap this user could replace - the program, or a directory above it, writable to them - for
     /// the tool runs it outside before anything is isolated: no mechanism, saying which and the remedy, and nothing asked.
     /// </summary>
