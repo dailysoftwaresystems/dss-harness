@@ -1319,7 +1319,7 @@ public sealed class AgentService(
 
             var details = new List<string>(RebaseLines(plan, applied: true));
 
-            if (await WorktreeService.WriteBaseCommitAsync(_gitClient, main, record.Worktree!, to, CancellationToken.None).ConfigureAwait(false) is { } unrecorded)
+            if (await WorktreeKeepalive.WriteBaseAsync(_gitClient, main, record.Worktree!, to, CancellationToken.None).ConfigureAwait(false) is { } unrecorded)
             {
                 details.Add($"its base is recorded in its record, and could not be in git's record of the worktree: {unrecorded.TrimEnd('.')}");
             }

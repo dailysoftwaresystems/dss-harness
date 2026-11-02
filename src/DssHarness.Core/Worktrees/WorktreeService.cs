@@ -163,12 +163,6 @@ public sealed class WorktreeService(
     /// <summary>The command a listing reports under, and the one spelling of its name.</summary>
     public const string ListCommand = "list-worktree";
 
-    /// <summary>
-    /// Where the commit a worktree was made from is recorded. Under <c>refs/harness/</c> rather than
-    /// under heads, tags or remotes, so the record can never be mistaken for somewhere work is kept.
-    /// </summary>
-    internal const string BaseCommitRefPrefix = "refs/harness/worktree-base/";
-
     private const int GenerateAttempts = 10;
 
     /// <summary>
@@ -385,18 +379,14 @@ public sealed class WorktreeService(
     }
 
     /// <summary>
-    /// Records the commit a worktree was made from, under <c>refs/harness/worktree-base/</c>, and
-    /// returns it.
+    /// Records the commit a worktree was made from (<see cref="WorktreeKeepalive"/>), and returns it.
     /// </summary>
     /// <remarks>
     /// A worktree's HEAD moves as work is committed in it, so after the first commit nothing says
     /// what tree it started from any more, and it can only be reproduced from the moment it
-    /// happened to be made. A ref is the record because git keeps it, it survives a clone of the
-    /// repository, and it is not one of the refs a deletion counts as keeping a commit alive: the
-    /// deletion check reads branches, tags, remote-tracking refs, the newest stash and other
-    /// worktrees' HEADs, so this record cannot quietly make lost work look safe.
-    /// A failure to record is reported and not fatal: the worktree exists, and refusing here would
-    /// leave one behind that the caller was not told about.
+    /// happened to be made. For a linked worktree a failure to record is reported and not fatal: the
+    /// worktree exists, its own HEAD keeps its commit alive, and refusing here would leave one behind
+    /// that the caller was not told about.
     /// </remarks>
     private async Task<string?> RecordBaseCommitAsync(
         HarnessLayout layout,
@@ -422,7 +412,7 @@ public sealed class WorktreeService(
         }
 
         // The commit is what the worktree was made from whether or not the record took: said, and still returned.
-        if (await WriteBaseCommitAsync(_gitClient, layout.MainCheckoutRoot, worktreeName, commit, cancellationToken).ConfigureAwait(false) is { } failure)
+        if (await WorktreeKeepalive.WriteBaseAsync(_gitClient, layout.MainCheckoutRoot, worktreeName, commit, cancellationToken).ConfigureAwait(false) is { } failure)
         {
             _output.Detail(CreateCommand, $"could not record the base commit: {failure}");
         }
@@ -430,72 +420,25 @@ public sealed class WorktreeService(
         return commit;
     }
 
-    /// <summary>
-    /// Records <paramref name="commit"/> as the commit the worktree named <paramref name="worktreeName"/> stands on, under
-    /// <c>refs/harness/worktree-base/</c>: once when it is made, and again each time an agent's base is moved.
-    /// </summary>
-    /// <param name="gitClient">Writes the ref.</param>
-    /// <param name="mainCheckoutRoot">The main checkout's root.</param>
-    /// <param name="worktreeName">The worktree's name under the worktrees root.</param>
-    /// <param name="commit">The commit.</param>
-    /// <param name="cancellationToken">Cancels the git process.</param>
-    /// <returns>Why the record could not be written; null where it was.</returns>
-    internal static async Task<string?> WriteBaseCommitAsync(
-        IGitClient gitClient,
-        string mainCheckoutRoot,
-        string worktreeName,
-        string commit,
-        CancellationToken cancellationToken)
-    {
-        var recorded = await gitClient
-            .RunAsync(mainCheckoutRoot, ["update-ref", BaseCommitRef(worktreeName), commit], cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-
-        return recorded.Succeeded ? null : recorded.FailureMessage;
-    }
-
-    /// <summary>Reads the recorded base commit of one worktree, or null when none was recorded.</summary>
-    /// <exception cref="HarnessException">
-    /// git could not be asked. Distinguished from "no such ref" on purpose: null here is reported as
-    /// a worktree made before the record existed, and a reader who sees that stops looking — when
-    /// what may have happened is that the record is there and git could not read it.
-    /// </exception>
-    private Task<string?> ReadBaseCommitAsync(
-        HarnessLayout layout,
-        string worktreeName,
-        CancellationToken cancellationToken)
-        => _gitClient.ResolveCommitAsync(layout.MainCheckoutRoot, BaseCommitRef(worktreeName), cancellationToken);
-
-    /// <summary>Removes the base commit record of a worktree that no longer exists.</summary>
+    /// <summary>Removes the records of the commit a worktree that no longer exists stood on (<see cref="WorktreeKeepalive.ForgetAsync"/>).</summary>
     private async Task ForgetBaseCommitAsync(
         HarnessLayout layout,
         string worktreeName,
         CancellationToken cancellationToken)
     {
-        // Left behind, the record would answer for a later worktree of the same name with the
-        // commit an earlier one started from.
-        var removed = await _gitClient
-            .RunAsync(
-                layout.MainCheckoutRoot,
-                ["update-ref", "-d", BaseCommitRef(worktreeName)],
-                cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!removed.Succeeded)
+        foreach (var (reference, why) in await WorktreeKeepalive.ForgetAsync(_gitClient, layout.MainCheckoutRoot, worktreeName, cancellationToken).ConfigureAwait(false))
         {
             // Said rather than swallowed. The deletion itself succeeded, so this is not a failure of
             // the command; what is left is a stale record that will answer for the next worktree of
             // this name, and nobody would otherwise know to remove it.
             _output.Warn(
                 DeleteCommand,
-                $"'{worktreeName}' was deleted, and the commit it was made from is still recorded at "
-                + $"'{BaseCommitRef(worktreeName)}': {removed.FailureMessage.TrimEnd('.')}. Remove it with "
-                + $"'git update-ref -d {BaseCommitRef(worktreeName)}', or the next worktree of this name "
+                $"'{worktreeName}' was deleted, and the commit it stood on is still recorded at "
+                + $"'{reference}': {why.TrimEnd('.')}. Remove it with "
+                + $"'git update-ref -d {reference}', or the next worktree of this name "
                 + "inherits it.");
         }
     }
-
-    private static string BaseCommitRef(string worktreeName) => BaseCommitRefPrefix + worktreeName;
 
     public async Task<WorktreeOutcome> DeleteAsync(
         string startDirectory,
@@ -1080,7 +1023,7 @@ public sealed class WorktreeService(
         {
             listings.Add(new WorktreeListing(
                 name,
-                await ReadBaseCommitAsync(context.Layout, name, cancellationToken).ConfigureAwait(false))
+                await WorktreeKeepalive.ReadBaseAsync(_gitClient, context.Layout.MainCheckoutRoot, name, cancellationToken).ConfigureAwait(false))
             {
                 Path = path,
             });

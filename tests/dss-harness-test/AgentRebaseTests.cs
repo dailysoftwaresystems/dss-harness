@@ -49,7 +49,7 @@ public sealed class AgentRebaseTests
         Assert.Contains($"log {kit.Layout.LogFile("ag")}", applied.Details!);
         Assert.Equal(to, kit.Record("ag").Base);
         Assert.Equal(to, await HeadAsync(worktree));
-        Assert.Equal(to, await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, WorktreeService.BaseCommitRefPrefix + "o1/ag", Token));
+        Assert.Equal(to, await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, WorktreeKeepalive.BasePrefix + "o1/ag", Token));
         Assert.Equal("two\ncommitted\n", OrchestrationKit.Read(worktree, "b.txt"));
         Assert.Equal("new\n", OrchestrationKit.Read(worktree, "docs/new.md"));
         Assert.False(File.Exists(Path.Combine(worktree, "docs", "x.md")));
