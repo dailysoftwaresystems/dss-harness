@@ -2323,6 +2323,16 @@ public static class HelpTopics
         builder.AppendLine("from an agent, so one whose repository is anywhere else - a .git of its own in");
         builder.AppendLine("the work tree - is named a change never looked into.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "An agent's repository of its own is weighed the same way, but for its commits: those made in it that no ref of "
+            + "the main checkout's reaches refuse its deletion, since its own store, deleted with it, is the only place they "
+            + "are, and the refusal names fold-agent for its changes and a fetch into the main checkout for its commits - a "
+            + "branch or a stash made in it would go with it. It has no lock and no record of git's: its directory is deleted "
+            + "whole, its read-only object files with it, and then the records of the commit it stood on, "
+            + "refs/harness/worktree-base/<address> and refs/harness/worktree-moving/<address>, which are forgotten too "
+            + "whenever its directory is already gone.");
+        builder.AppendLine();
         builder.AppendLine("Without --force, when the check cannot be finished, because git cannot answer, a");
         builder.AppendLine("record cannot be read or its directory found, or, on Windows, a directory in it");
         builder.AppendLine($"cannot be looked through for what holds it, nothing is deleted and it exits {HarnessExit.CommandFailed}.");

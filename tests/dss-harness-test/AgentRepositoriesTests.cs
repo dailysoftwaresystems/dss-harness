@@ -391,6 +391,170 @@ public sealed class AgentRepositoriesTests
         Assert.True(Directory.Exists(Path.Combine(kit.Worktree("a"), ".git")));
     }
 
+    /// <summary>
+    /// An agent's repository holding a change is not deleted, and nothing of it is removed: the refusal names the change and
+    /// what keeps it - a fold into the main tree - since a branch or a stash made in it would go with it.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentRepositoryWithAChange_IsRefused_NothingRemoved()
+    {
+        using var temp = new TempDirectory();
+        var (harness, main, path) = await InitializedAsync(temp);
+        var head = await harness.GitClient.ResolveCommitAsync(main, "HEAD", Token);
+        File.WriteAllText(Path.Combine(path, "README.md"), "changed\n");
+
+        var refused = await harness.WorktreeService.DeleteAsync(main, "o1/a", force: false, deleteEvidence: false, cancellationToken: Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
+        Assert.Equal(
+            "Worktree 'o1/a' was not deleted, because it has 1 uncommitted change(s) that would be lost: README.md (fold-agent brings them "
+            + "into the main tree, or pass --discard-uncommitted to delete them with the worktree); fix that, or pass --force to delete it anyway.",
+            refused.Outcome.Message);
+        Assert.Equal("changed\n", File.ReadAllText(Path.Combine(path, "README.md")));
+        Assert.True(Directory.Exists(Path.Combine(path, ".git")));
+        Assert.Equal(head, await harness.GitClient.ResolveCommitAsync(main, "refs/harness/worktree-base/o1/a", Token));
+    }
+
+    /// <summary>
+    /// A commit made inside an agent's repository, which no ref of the main checkout's reaches, is counted and refuses the
+    /// deletion: its own store, deleted with it, is the only place it is.
+    /// </summary>
+    [Fact]
+    public async Task ACommitMadeInside_IsCounted()
+    {
+        using var temp = new TempDirectory();
+        var (harness, main, path) = await InitializedAsync(temp);
+        File.WriteAllText(Path.Combine(path, "made.txt"), "made inside\n");
+        await harness.CommitAllAsync(path, "inside", Token);
+        var inside = (await harness.GitClient.ResolveCommitAsync(path, "HEAD", Token))!;
+
+        var refused = await harness.WorktreeService.DeleteAsync(main, "o1/a", force: false, deleteEvidence: false, cancellationToken: Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
+        Assert.Equal(
+            $"Worktree 'o1/a' was not deleted, because 1 commit(s) up to {inside[..12]} were made in its own repository, and no ref of the main "
+            + $"checkout's reaches them (run 'git -C {main} fetch {path} HEAD' and branch FETCH_HEAD there, or push them); fix that, or pass "
+            + "--force to delete it anyway.",
+            refused.Outcome.Message);
+        Assert.True(Directory.Exists(Path.Combine(path, ".git")));
+    }
+
+    /// <summary>
+    /// Its changes waived, an agent's repository is deleted whole, the changes counted in what is said, and both of its
+    /// keepalives go with it: nothing of it is left for them to keep.
+    /// </summary>
+    [Fact]
+    public async Task DiscardUncommitted_DeletesItAndItsKeepalive()
+    {
+        using var temp = new TempDirectory();
+        var (harness, main, path) = await InitializedAsync(temp);
+        File.WriteAllText(Path.Combine(path, "README.md"), "changed\n");
+        await harness.RunGitAsync(main, ["update-ref", "refs/harness/worktree-moving/o1/a", "HEAD"], Token);
+
+        var deleted = await harness.WorktreeService.DeleteAsync(main, "o1/a", force: false, deleteEvidence: false, discardUncommitted: true, Token);
+
+        Assert.True(deleted.Succeeded, deleted.Outcome.Message);
+        Assert.Equal("removed worktree 'o1/a'", deleted.Outcome.Message);
+        Assert.Equal([path, "discarded 1 uncommitted change(s): README.md"], deleted.Outcome.Details);
+        Assert.False(Directory.Exists(path));
+        Assert.Equal(string.Empty, (await harness.RunGitAsync(main, ["for-each-ref", "refs/harness/"], Token)).StandardOutput);
+    }
+
+    /// <summary>
+    /// The object files git writes read-only in an agent's own store go with it: git has no removal of its own for a
+    /// repository, and a deletion that stopped at one would leave half a repository behind.
+    /// </summary>
+    [Fact]
+    public async Task ItsReadOnlyPacks_AreDeleted()
+    {
+        using var temp = new TempDirectory();
+        var (harness, main, path) = await InitializedAsync(temp);
+        var head = (await harness.GitClient.ResolveCommitAsync(main, "HEAD", Token))!;
+        File.WriteAllText(Path.Combine(path, "made.txt"), "made inside\n");
+        await harness.CommitAllAsync(path, "inside", Token);
+        await harness.RunGitAsync(path, ["repack", "--quiet", "-a", "-d"], Token);
+        await harness.RunGitAsync(path, ["reset", "--quiet", "--hard", head], Token);
+
+        // The pack holding the commit made inside is there, and git made it read-only.
+        var pack = Assert.Single(Directory.GetFiles(Path.Combine(path, ".git", "objects", "pack"), "*.pack"));
+        Assert.True(OperatingSystem.IsWindows()
+            ? File.GetAttributes(pack).HasFlag(FileAttributes.ReadOnly)
+            : !File.GetUnixFileMode(pack).HasFlag(UnixFileMode.UserWrite));
+
+        var deleted = await harness.WorktreeService.DeleteAsync(main, "o1/a", force: false, deleteEvidence: false, cancellationToken: Token);
+
+        Assert.True(deleted.Succeeded, deleted.Outcome.Message);
+        Assert.Equal([path], deleted.Outcome.Details);
+        Assert.False(Directory.Exists(path));
+    }
+
+    /// <summary>
+    /// Whatever was done inside an agent's repository - commits, a branch and a tag made there, a ref named as one of the
+    /// main checkout's - and its deletion forced, the main checkout's refs are as they were before it was made, and its
+    /// store whole: nothing of the agent's repository ever reaches the main checkout.
+    /// </summary>
+    [Fact]
+    public async Task MainsRefsStandAsTheyWere()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeHarnessAsync(temp.Path, Token, new Core.Configuration.HarnessConfig { Worktrees = OrchestrationKit.Settings });
+        var main = (await harness.GitClient.GetMainWorktreeAsync(temp.Path, Token))!.Path;
+        var before = (await harness.RunGitAsync(main, ["for-each-ref"], Token)).StandardOutput;
+        var path = await MakeBelowRootAsync(harness, main);
+
+        File.WriteAllText(Path.Combine(path, "made.txt"), "made inside\n");
+        await harness.CommitAllAsync(path, "inside", Token);
+        await harness.RunGitAsync(path, ["branch", "master"], Token);
+        await harness.RunGitAsync(path, ["tag", "v1"], Token);
+        await harness.RunGitAsync(path, ["update-ref", "refs/heads/main", "HEAD"], Token);
+
+        var deleted = await harness.WorktreeService.DeleteAsync(main, "o1/a", force: true, deleteEvidence: false, cancellationToken: Token);
+
+        Assert.True(deleted.Succeeded, deleted.Outcome.Message);
+        Assert.Equal(before, (await harness.RunGitAsync(main, ["for-each-ref"], Token)).StandardOutput);
+        Assert.Equal(string.Empty, (await harness.RunGitAsync(main, ["fsck", "--no-dangling", "--no-progress"], Token)).StandardOutput);
+    }
+
+    /// <summary>
+    /// Forced, an agent's repository holding a change and a commit of its own is deleted unchecked, with its keepalive.
+    /// </summary>
+    [Fact]
+    public async Task Forced_DeletesIt()
+    {
+        using var temp = new TempDirectory();
+        var (harness, main, path) = await InitializedAsync(temp);
+        File.WriteAllText(Path.Combine(path, "made.txt"), "made inside\n");
+        await harness.CommitAllAsync(path, "inside", Token);
+        File.WriteAllText(Path.Combine(path, "README.md"), "changed\n");
+
+        var deleted = await harness.WorktreeService.DeleteAsync(main, "o1/a", force: true, deleteEvidence: false, cancellationToken: Token);
+
+        Assert.True(deleted.Succeeded, deleted.Outcome.Message);
+        Assert.Equal("removed worktree 'o1/a'", deleted.Outcome.Message);
+        Assert.Equal([path], deleted.Outcome.Details);
+        Assert.False(Directory.Exists(path));
+        Assert.Equal(string.Empty, (await harness.RunGitAsync(main, ["for-each-ref", "refs/harness/"], Token)).StandardOutput);
+    }
+
+    /// <summary>A repository run through init, its main checkout as git spells it, and an agent's repository made at o1/a below the worktrees root.</summary>
+    private static async Task<(HarnessFactory Harness, string Main, string Path)> InitializedAsync(TempDirectory temp)
+    {
+        var harness = new HarnessFactory();
+        await harness.InitializeHarnessAsync(temp.Path, Token, new Core.Configuration.HarnessConfig { Worktrees = OrchestrationKit.Settings });
+        var main = (await harness.GitClient.GetMainWorktreeAsync(temp.Path, Token))!.Path;
+        return (harness, main, await MakeBelowRootAsync(harness, main));
+    }
+
+    /// <summary>Makes the agent's repository at o1/a below the worktrees root, failing the test where it is not made.</summary>
+    private static async Task<string> MakeBelowRootAsync(HarnessFactory harness, string main)
+    {
+        var path = Path.Combine(new Core.Repository.HarnessLayout(main, main).WorktreesDirectoryUnder(OrchestrationKit.Settings.Root), "o1", "a");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        Assert.Null((await Repositories(harness).MakeAsync(main, Address, path, Token)).Failure);
+        return path;
+    }
+
     private static AgentRepositories Repositories(HarnessFactory harness, IGitClient? gitClient = null)
         => new(gitClient ?? harness.GitClient, harness.FileSystem, harness.Platform);
 

@@ -72,6 +72,12 @@ internal sealed record WorktreeFindings(
     bool HoldsSubmodules,
     string? MovedFrom = null)
 {
+    /// <summary>
+    /// Whether the worktree is an agent's repository of its own, whose <see cref="Commits"/> are those made in it that no
+    /// ref of the main checkout's reaches: deleting it deletes its store, where they alone are.
+    /// </summary>
+    public bool OwnRepository { get; init; }
+
     /// <summary>Whether anything was found that deleting without --force must not override.</summary>
     public bool StopsDeletion
         => Changes.Count > 0 || Commits > 0 || Submodules.Count > 0 || LockReason is not null || MovedFrom is not null;
@@ -145,13 +151,25 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             : new WorktreeIdentity(WorktreeMembership.OfAnotherRepository, null);
     }
 
-    /// <summary>Everything that stops deleting the worktree at <paramref name="path"/> without --force.</summary>
+    /// <summary>
+    /// Everything that stops deleting the worktree at <paramref name="path"/> without --force: one of git's linked worktrees,
+    /// or an agent's repository of its own, as <paramref name="identity"/> says.
+    /// </summary>
+    /// <remarks>
+    /// An agent's repository is weighed as a linked worktree is - its changes, the edits status cannot see, the work in its
+    /// submodules' repositories - but for its commits, which are those no ref of the main checkout's reaches: deleting it
+    /// deletes its own store, where they alone are. It has no lock and no record that could name another directory.
+    /// </remarks>
     public async Task<WorktreeFindings> FindAsync(
         string mainCheckoutRoot,
         string path,
-        string administrativeDirectory,
+        WorktreeIdentity identity,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(identity);
+
+        var administrativeDirectory = identity.AdministrativeDirectory!;
+        var ownRepository = identity.Membership == WorktreeMembership.AgentRepository;
         var status = await _gitClient.GetStatusAsync(path, cancellationToken).ConfigureAwait(false);
         var index = await _gitClient.ListIndexAsync(path, cancellationToken).ConfigureAwait(false);
 
@@ -159,8 +177,8 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         changes.AddRange(await FindHiddenEditsAsync(path, index, cancellationToken).ConfigureAwait(false));
 
         var head = await _gitClient.ResolveCommitAsync(path, "HEAD", cancellationToken).ConfigureAwait(false);
-        var commits = head is null
-            ? 0
+        var commits = head is null ? 0
+            : ownRepository ? await _gitClient.CountCommitsAsync(path, ["HEAD", "--all", "--not", "--alternate-refs"], cancellationToken).ConfigureAwait(false)
             : await CountUnreferencedCommitsAsync(path, mainCheckoutRoot, head, administrativeDirectory, cancellationToken).ConfigureAwait(false);
 
         var repositories = new List<SubmoduleRepository>();
@@ -176,17 +194,20 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
 
         // git removes, and lists, the directory its record names. When that is not this one, as
         // after moving the worktree by hand, git's removal would fail once every check had passed.
-        var recorded = ReadRecordedWorktree(administrativeDirectory);
-        var movedFrom = recorded is not null && PathsEqual(recorded, ResolveLinks(path)) ? null : recorded ?? string.Empty;
+        var recorded = ownRepository ? null : ReadRecordedWorktree(administrativeDirectory);
+        var movedFrom = ownRepository || (recorded is not null && PathsEqual(recorded, ResolveLinks(path))) ? null : recorded ?? string.Empty;
 
         return new WorktreeFindings(
             changes,
             commits,
             head,
             await FindSubmoduleLossesAsync(repositories, cancellationToken).ConfigureAwait(false),
-            ReadLockReason(administrativeDirectory),
+            ownRepository ? null : ReadLockReason(administrativeDirectory),
             holdsSubmodules,
-            movedFrom);
+            movedFrom)
+        {
+            OwnRepository = ownRepository,
+        };
     }
 
     /// <summary>

@@ -64,6 +64,9 @@ public interface IWorktreeService : IUseCase
     /// no .git of its own that holds worktrees below it - the directory named for an orchestrator, holding its agents' -
     /// is refused even with <paramref name="force"/>, since deleting it would delete each of them; one whose worktrees
     /// git cannot list is not deleted either. A worktree's own submodules and nested repositories never count.
+    /// An agent's repository of its own is weighed the same way but for its commits - those made in it that no ref of the
+    /// main checkout's reaches - and has no lock or record of git's; it is deleted as a directory. The records of the
+    /// commit a worktree stood on (<see cref="WorktreeKeepalive"/>) are forgotten once its directory is gone.
     /// </remarks>
     /// <exception cref="HarnessException">
     /// As for <see cref="CreateAsync"/>, or the path resolved outside the worktrees directory.
@@ -527,10 +530,9 @@ public sealed class WorktreeService(
                 return cleared;
             }
 
-            if (cleared is not null)
-            {
-                await ForgetBaseCommitAsync(layout, worktreeName, CancellationToken.None).ConfigureAwait(false);
-            }
+            // Nothing of the worktree is left for its keepalive to keep - an agent's repository deleted by hand leaves no
+            // record of git's at all - so the commit it stood on is forgotten either way.
+            await ForgetBaseCommitAsync(layout, worktreeName, CancellationToken.None).ConfigureAwait(false);
 
             // Nothing here, and nothing in git's record any more: deleted already, cleared just now, or never made. Copies
             // of it on hosts that could not be asked to remove them when it was deleted can still be there, and dealing
@@ -595,7 +597,7 @@ public sealed class WorktreeService(
             try
             {
                 findings = await inspector
-                    .FindAsync(layout.MainCheckoutRoot, path, identity.AdministrativeDirectory!, cancellationToken)
+                    .FindAsync(layout.MainCheckoutRoot, path, identity, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
@@ -705,7 +707,9 @@ public sealed class WorktreeService(
         {
             try
             {
-                outcome = force
+                outcome = identity.Membership == WorktreeMembership.AgentRepository
+                    ? RemoveRepository(worktreeName, path, checksRan: !force)
+                    : force
                     ? await RemoveForcedAsync(layout, worktreeName, path, identity.AdministrativeDirectory, inspector, stopping.Token).ConfigureAwait(false)
                     : await RemoveCheckedAsync(layout, worktreeName, path, identity.AdministrativeDirectory!, holdsSubmodules, discarded.Count > 0, stopping.Token).ConfigureAwait(false);
             }
@@ -1195,6 +1199,35 @@ public sealed class WorktreeService(
             + $"ended the command; run '{ToolPackage.Command} {DeleteCommand} {name}' again to finish clearing it."));
 
     /// <summary>
+    /// Removes an agent's repository: its directory and everything in it, its own git directory and the objects only it
+    /// holds among them, which no record of git's in the main checkout names. git has no removal of its own for one, so the
+    /// directory is deleted as a whole - its read-only object files with it, a link or junction in it as the link it is,
+    /// never what it leads to - and then looked for. Once begun it is never stopped part way by an interruption.
+    /// </summary>
+    /// <param name="name">The worktree's address.</param>
+    /// <param name="path">Its directory.</param>
+    /// <param name="checksRan">Whether every check passed before it began, which makes finishing it with --force safe.</param>
+    private WorktreeOutcome RemoveRepository(string name, string path, bool checksRan)
+    {
+        var finish = $"{(checksRan ? "Every check passed before removal began, so run" : "Run")} '{ToolPackage.Command} {DeleteCommand} {name} --force' to finish deleting it";
+
+        try
+        {
+            _fileSystem.DeleteDirectory(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Failed(
+                $"Worktree '{name}', an agent's repository, was not deleted whole: {ex.Message.TrimEnd('.')}. Part of it may already be gone. "
+                + $"Close whatever holds its files open, then {char.ToLowerInvariant(finish[0])}{finish[1..]}.");
+        }
+
+        return _fileSystem.DirectoryExists(path)
+            ? Failed($"Worktree '{name}', an agent's repository, was deleted, but '{ReportText.Printable(path)}' still exists. {finish}.")
+            : Removed(name, path);
+    }
+
+    /// <summary>
     /// Removes a worktree whose checks passed. Plain removal runs git's own check as well, which still
     /// catches a file changed since ours, a file added unless status.showUntrackedFiles is no, or a
     /// lock. git refuses every worktree that holds submodules, so for those it is told to go ahead,
@@ -1576,20 +1609,26 @@ public sealed class WorktreeService(
     {
         var reasons = new List<string>();
 
+        // An agent's repository is deleted with its own store: a branch or a stash made in it goes with it, so what keeps its
+        // work is the main tree, by a fold, or a fetch into the main checkout.
         if (findings.Changes.Count > 0)
         {
             reasons.Add(
                 $"it has {ReportText.Counted(findings.Changes.Count, "uncommitted change")} that would be lost: {ReportText.Listed(findings.Changes)} "
-                + "(commit them to a branch, run 'git stash -u', or pass --discard-uncommitted to delete them with the worktree)");
+                + (findings.OwnRepository
+                    ? "(fold-agent brings them into the main tree, or pass --discard-uncommitted to delete them with the worktree)"
+                    : "(commit them to a branch, run 'git stash -u', or pass --discard-uncommitted to delete them with the worktree)"));
         }
 
         if (findings.Commits > 0 && findings.Head is { } head)
         {
             var shortHead = ReportText.Commit(head);
 
-            reasons.Add(
-                $"{ReportText.Counted(findings.Commits, "commit")} up to {shortHead} are on no branch, tag, remote-tracking ref, newest stash or other worktree's HEAD "
-                + $"(run 'git branch <name> {shortHead}', or push them)");
+            reasons.Add(findings.OwnRepository
+                ? $"{ReportText.Counted(findings.Commits, "commit")} up to {shortHead} were made in its own repository, and no ref of the main checkout's reaches them "
+                    + $"(run 'git -C {ReportText.Printable(mainCheckoutRoot)} fetch {ReportText.Printable(path)} HEAD' and branch FETCH_HEAD there, or push them)"
+                : $"{ReportText.Counted(findings.Commits, "commit")} up to {shortHead} are on no branch, tag, remote-tracking ref, newest stash or other worktree's HEAD "
+                    + $"(run 'git branch <name> {shortHead}', or push them)");
         }
 
         foreach (var submodule in findings.Submodules)

@@ -857,6 +857,20 @@ history of a repository nested inside one included.
   git could not name that directory, by git's list. A record whose directory is already gone,
   as an interrupted delete or a directory removed by hand leaves it, is cleared once its lock,
   unreferenced commits and submodule repositories are checked, so the name can be used again.
+- An agent's repository of its own (see *Worktrees*) is weighed as a linked worktree is - its
+  changes, the edits status cannot see, its submodules' repositories - but for its commits: those
+  `git rev-list HEAD --all --not --alternate-refs` counts there, made in it and reached by no ref of
+  the main checkout's, refuse it, since its own store goes with it. The refusal names fold-agent
+  for its changes and a fetch into the main checkout for its commits, never a branch or a stash,
+  which would be made in the store being deleted. It has no lock and no record of git's, and git
+  no removal of its own for it: its directory is deleted whole (`WorktreeService.RemoveRepository`),
+  its read-only object files with it and a link in it as a link, and then looked for; a deletion
+  that cannot finish says part of it may be gone and names `--force` to finish it, safe where every
+  check passed. Forced, it is deleted the same way, unchecked.
+- The records of the commit a worktree stood on, `refs/harness/worktree-base/<address>` and
+  `refs/harness/worktree-moving/<address>` (`WorktreeKeepalive`), are forgotten once its directory
+  is gone, by this deletion or before it: left behind, they would keep that commit in the main
+  checkout's store for nothing and answer for a later worktree of the same address.
 
 An interruption stops the command cleanly only before its first destructive step. After that
 the deletion goes on, the command says at once that it is under way, and it waits up to two
