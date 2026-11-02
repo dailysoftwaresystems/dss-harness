@@ -2990,6 +2990,30 @@ public sealed class RunnerRunServiceTests
     };
 
     /// <summary>
+    /// A cleanDirectories entry reached through a link the leg's isolated work planted above it cleans nothing: the link is
+    /// refused and whatever it points to is left, the leg said which link it was - the one recursive delete held from the
+    /// tree, never from the cleaned directory's own place, for a directory the leg's own work writes could else point it
+    /// outside by a link no rule refused.
+    /// </summary>
+    [Fact]
+    public async Task ACleanedDirectoryReachedThroughALink_IsRefused_AndNothingOutsideTheTreeIsRemoved()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var victim = Directory.CreateDirectory(temp.Combine("outside", "victim")).FullName;
+        Directory.CreateDirectory(Path.Combine(victim, "scratch"));
+        await File.WriteAllTextAsync(Path.Combine(victim, "scratch", "precious.txt"), "precious", TestContext.Current.CancellationToken);
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("linked"), victim));
+
+        var runner = new RunnerConfig { CleanDirectories = ["linked/scratch"], Phases = [Phase("measure", "echo-args", ["measured"], successPattern: "measured")] };
+
+        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.True(File.Exists(Path.Combine(victim, "scratch", "precious.txt")), "the link's target was deleted through the link");
+    }
+
+    /// <summary>
     /// A run of <paramref name="runner"/> on the one leg, in <paramref name="temp"/>, whose host keeps its programs - as a
     /// host's report says where they are, after its PATH - in the directory of the dotnet running this suite, so a line
     /// naming <see cref="Child"/> starts that one where no PATH names any.

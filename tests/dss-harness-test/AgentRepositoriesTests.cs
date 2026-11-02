@@ -53,6 +53,32 @@ public sealed class AgentRepositoriesTests
     }
 
     /// <summary>
+    /// A main checkout this process has pinned - every isolated launch of the same run pins it - steers nothing of the
+    /// repository's making: git given the pin's own git directory there would take it for the init's target and make
+    /// nothing at the path, so the making runs in the repository it makes.
+    /// </summary>
+    [Fact]
+    public async Task AMainCheckoutTheToolHasPinned_StillGetsTheRepositoryMadeAtItsPath()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(temp.Path, Token);
+        var (main, path) = await PlaceAsync(harness, temp);
+        var git = Path.Combine(main, ".git");
+        var pins = new GitDirectoryPins();
+        pins.Pin(main, git, git);
+        var pinned = new GitClient(harness.ProcessRunner, harness.Output, localVariables: harness.LocalVariables, pins: pins);
+        var head = await harness.GitClient.ResolveCommitAsync(main, "HEAD", Token);
+
+        var made = await Repositories(harness, pinned).MakeAsync(main, Address, path, Token);
+
+        Assert.Null(made.Failure);
+        Assert.True(Directory.Exists(Path.Combine(path, ".git")));
+        Assert.Equal(head, made.BaseCommit);
+        Assert.Equal(head, await harness.GitClient.ResolveCommitAsync(main, "refs/harness/worktree-base/o1/a", Token));
+    }
+
+    /// <summary>
     /// Its configuration includes the main checkout's first, so filters, line endings, remotes and identity are the main
     /// checkout's, live; then what git init probed of the file system; then its own keys, which outrank both: no automatic
     /// housekeeping, the main checkout's large-file store, and the mark naming the main checkout and the agent.

@@ -1091,17 +1091,17 @@ public sealed class CleanServiceTests
         Assert.Equal(Workers.Holding(10), leg.GetProperty("space").GetProperty("workerBytes").GetInt64());
     }
 
-    /// <summary>The disk, on which one directory is gone once another has been moved: taken by somebody else meanwhile.</summary>
+    /// <summary>The disk, on which one directory is gone once another is being moved: taken by somebody else meanwhile.</summary>
     private sealed class TakenMeanwhile(IFileSystem inner, string moved, string taken) : PassThroughFileSystem(inner)
     {
-        public override void MoveDirectory(string source, string destination)
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
         {
-            if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(moved), StringComparison.OrdinalIgnoreCase))
+            if (asked is not null && string.Equals(Path.GetFullPath(asked), Path.GetFullPath(moved), StringComparison.OrdinalIgnoreCase))
             {
                 base.DeleteDirectory(taken);
             }
 
-            base.MoveDirectory(source, destination);
+            return base.Hold(anchor, directory, make, asked);
         }
     }
 
@@ -1213,14 +1213,16 @@ public sealed class CleanServiceTests
     /// <summary>A disk that will not remove one directory: something holds it, or it is not this user's to remove.</summary>
     private sealed class CannotRemove(IFileSystem inner, string directory, bool denied) : PassThroughFileSystem(inner)
     {
-        public override void DeleteDirectory(string path)
+        private readonly string _directory = directory;
+
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
         {
-            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase))
+            if (!make && asked is not null && string.Equals(Path.GetFullPath(asked), Path.GetFullPath(_directory), StringComparison.OrdinalIgnoreCase))
             {
                 throw denied ? new UnauthorizedAccessException("the disk would not let go.") : new IOException("the disk would not let go.");
             }
 
-            base.DeleteDirectory(path);
+            return base.Hold(anchor, directory, make, asked);
         }
     }
 

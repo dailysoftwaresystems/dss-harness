@@ -1391,7 +1391,22 @@ public sealed class RunnerRunService(
                 continue;
             }
 
-            _fileSystem.DeleteDirectory(path);
+            // Held from the tree, never from the directory's own place: a link the leg's isolated work put on the way to
+            // it is refused, as one resolving outside is skipped, and nothing of the tree deleted through it.
+            try
+            {
+                UnfollowedFiles.DeleteDirectory(_fileSystem, request.TreeRoot, path);
+            }
+            catch (LinkOnTheWayException link)
+            {
+                _output.Warn(
+                    CommandName,
+                    $"{request.Leg}: cleanDirectories names '{declared}', which is reached through the link '{link.Link}', "
+                    + "which the tool never follows; it was not deleted.");
+
+                continue;
+            }
+
             _output.Detail(CommandName, $"{request.Leg}: cleaned '{declared}'");
         }
     }

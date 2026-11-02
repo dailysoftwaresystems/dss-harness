@@ -131,26 +131,40 @@ public sealed class FlowPauseTests
                 return Task.FromResult(script(run));
             }
 
-            if (_gates.TryGetValue(run.Step.Name, out var gate))
+            if (!_gates.TryGetValue(run.Step.Name, out var gate))
             {
-                if (_deaf.Contains(run.Step.Name))
-                {
-                    return gate.Task;
-                }
-
-                return HearsTheRunAsync(run, gate, cancellationToken);
+                return Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
             }
 
-            return Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+            if (_deaf.Contains(run.Step.Name))
+            {
+                return gate.Task;
+            }
+
+            // The stop ends the step's task in the stop's own thread, before anything else the runner does: registered
+            // where the run begins, with no await before it, so no load on the machine leaves it to be attached late.
+            // An engine whose clock makes its drain pass at once then still finds the runner ended.
+            var ended = new TaskCompletionSource<FlowStepResult>();
+            _ = cancellationToken.Register(() => ended.TrySetResult(FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "stopped")), useSynchronizationContext: false);
+            _ = gate.Task.ContinueWith(done => ended.TrySetResult(done.Result), cancellationToken, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+            if (_heldTurns.TryGetValue(run.Step.Name, out var turning))
+            {
+                // The turn stays open until the run is stopped or the test ends it; the held turn is said to begin once
+                // the engine has asked for the handoff, as a client that took the question would say it.
+                var asked = run.Telling?.Handoff.WhenAsked ?? new TaskCompletionSource<DssHarness.Core.Agents.AgentHandoffAsked>().Task;
+                _ = asked.ContinueWith(_ => turning.TrySetResult(), cancellationToken, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                return ended.Task;
+            }
+
+            return AnswersAsync(run, gate, cancellationToken);
         }
 
         /// <summary>
         /// A step that hears the run answers the handoff the engine asks for, as a client does: the turn is answered and
-        /// the attempt ends - unless the test holds its turn open, when only a stop ends it. That turn's task is ended by
-        /// the stop itself, on the thread that stopped it, so that an engine whose clock makes its drain pass at once
-        /// still finds the runner ended - never a race between two thread-pool hops.
+        /// the attempt ends, unless the test ends the step first or a stop ends the run.
         /// </summary>
-        private async Task<FlowStepResult> HearsTheRunAsync(FlowStepRun run, TaskCompletionSource<FlowStepResult> gate, CancellationToken cancellationToken)
+        private async Task<FlowStepResult> AnswersAsync(FlowStepRun run, TaskCompletionSource<FlowStepResult> gate, CancellationToken cancellationToken)
         {
             var asked = run.Telling?.Handoff.WhenAsked ?? new TaskCompletionSource<DssHarness.Core.Agents.AgentHandoffAsked>().Task;
             var first = await Task.WhenAny(gate.Task, asked).WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -160,17 +174,7 @@ public sealed class FlowPauseTests
                 return await gate.Task.ConfigureAwait(false);
             }
 
-            if (!_heldTurns.TryGetValue(run.Step.Name, out var turning))
-            {
-                return FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "handed off");
-            }
-
-            // The turn stays open until the run is stopped - ended there, in the stop's own step - or the test ends it.
-            turning.TrySetResult();
-            var stopped = new TaskCompletionSource<FlowStepResult>();
-            _ = cancellationToken.Register(() => stopped.TrySetResult(FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "stopped")), useSynchronizationContext: false);
-            _ = gate.Task.ContinueWith(done => stopped.TrySetResult(done.Result), cancellationToken, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-            return await stopped.Task.ConfigureAwait(false);
+            return FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "handed off");
         }
 
         /// <summary>Every handoff turn asked, with what it was asked with.</summary>

@@ -228,9 +228,12 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
         CancellationToken cancellationToken)
     {
         // No template: a template's hooks and files are no part of an agent's repository. The files ref format, which every
-        // git reads, whatever the user's configuration asks of a new repository.
+        // git reads, whatever the user's configuration asks of a new repository. It runs in the repository it makes, not in
+        // the main checkout: a main checkout the tool has pinned - every launch of the same process pins it - would name its
+        // own git directory to git, and git would make the repository there, silently, instead of at this path.
+        _fileSystem.CreateDirectory(path);
         var made = await _gitClient
-            .RunAsync(mainCheckoutRoot, ["-c", "init.defaultRefFormat=files", "init", "--quiet", "--template=", $"--object-format={format}", path], cancellationToken: cancellationToken)
+            .RunAsync(path, ["-c", "init.defaultRefFormat=files", "init", "--quiet", "--template=", $"--object-format={format}"], cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
         if (!made.Succeeded)
