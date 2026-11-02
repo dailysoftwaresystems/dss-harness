@@ -114,7 +114,8 @@ public sealed class FlowPauseTests
         private readonly HashSet<string> _deaf = new(StringComparer.Ordinal);
 
         /// <inheritdoc/>
-        public async Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
+        /// <inheritdoc/>
+        public Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
         {
             Started.Add(run.Instance);
 
@@ -127,36 +128,49 @@ public sealed class FlowPauseTests
 
             if (_scripts.TryGetValue(run.Step.Name, out var script))
             {
-                return script(run);
+                return Task.FromResult(script(run));
             }
 
             if (_gates.TryGetValue(run.Step.Name, out var gate))
             {
                 if (_deaf.Contains(run.Step.Name))
                 {
-                    return await gate.Task.ConfigureAwait(false);
+                    return gate.Task;
                 }
 
-                // A step that hears the run answers the handoff the engine asks for, as a client does: the turn is
-                // answered and the attempt ends - unless the test holds its turn open, when only a stop ends it.
-                var asked = run.Telling?.Handoff.WhenAsked ?? new TaskCompletionSource<DssHarness.Core.Agents.AgentHandoffAsked>().Task;
-                var first = await Task.WhenAny(gate.Task, asked).WaitAsync(cancellationToken).ConfigureAwait(false);
+                return HearsTheRunAsync(run, gate, cancellationToken);
+            }
 
-                if (first == gate.Task)
-                {
-                    return await gate.Task.ConfigureAwait(false);
-                }
+            return Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        }
 
-                if (_heldTurns.TryGetValue(run.Step.Name, out var turning))
-                {
-                    turning.TrySetResult();
-                    return await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-                }
+        /// <summary>
+        /// A step that hears the run answers the handoff the engine asks for, as a client does: the turn is answered and
+        /// the attempt ends - unless the test holds its turn open, when only a stop ends it. That turn's task is ended by
+        /// the stop itself, on the thread that stopped it, so that an engine whose clock makes its drain pass at once
+        /// still finds the runner ended - never a race between two thread-pool hops.
+        /// </summary>
+        private async Task<FlowStepResult> HearsTheRunAsync(FlowStepRun run, TaskCompletionSource<FlowStepResult> gate, CancellationToken cancellationToken)
+        {
+            var asked = run.Telling?.Handoff.WhenAsked ?? new TaskCompletionSource<DssHarness.Core.Agents.AgentHandoffAsked>().Task;
+            var first = await Task.WhenAny(gate.Task, asked).WaitAsync(cancellationToken).ConfigureAwait(false);
 
+            if (first == gate.Task)
+            {
+                return await gate.Task.ConfigureAwait(false);
+            }
+
+            if (!_heldTurns.TryGetValue(run.Step.Name, out var turning))
+            {
                 return FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "handed off");
             }
 
-            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            // The turn stays open until the run is stopped - ended there, in the stop's own step - or the test ends it.
+            turning.TrySetResult();
+            var stopped = new TaskCompletionSource<FlowStepResult>();
+            _ = cancellationToken.Register(() => stopped.TrySetResult(FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "stopped")), useSynchronizationContext: false);
+            _ = gate.Task.ContinueWith(done => stopped.TrySetResult(done.Result), cancellationToken, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            return await stopped.Task.ConfigureAwait(false);
         }
 
         /// <summary>Every handoff turn asked, with what it was asked with.</summary>
