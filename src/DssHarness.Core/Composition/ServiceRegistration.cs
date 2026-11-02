@@ -242,7 +242,11 @@ public static class ServiceRegistration
             provider.GetRequiredService<Git.IGitClient>(),
             provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IHostPlatform>(),
-            pins: provider.GetRequiredService<GitDirectoryPins>()));
+            pins: provider.GetRequiredService<GitDirectoryPins>(),
+            claudeCode: new Agents.Isolation.ClaudeCodeDirectories(
+                provider.GetRequiredService<IFileSystem>(),
+                provider.GetRequiredService<IHostPlatform>(),
+                provider.GetRequiredService<DssHarness.Core.Secrets.AgentKeyStore>())));
 
         // A side-task: an agent outside every workflow, a conversation between a person and one agent over the main tree,
         // through the same runner every step is worked by. Its chat is the person's, on this machine, so no host serves

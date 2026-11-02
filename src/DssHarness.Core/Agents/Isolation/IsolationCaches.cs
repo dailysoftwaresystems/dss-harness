@@ -9,10 +9,12 @@ namespace DssHarness.Core.Agents.Isolation;
 /// without a check and its build files run, a crate's or a module's extracted sources are compiled as they lie, a wheel or
 /// an object file is used as it is. Written by an agent's commands, the user's own cache would carry what they planted
 /// into every build outside, so the user's caches stay read-only and isolated children share one of their own, which
-/// nothing outside the isolation reads. Cargo and Gradle keep their caches in a home of theirs, which the variable moves
-/// whole, so the user's own configuration there - a registry, a property - is not read inside; Maven's local repository
-/// has no variable of its own, so a Maven build inside finds the user's read-only and names another with
-/// <c>-Dmaven.repo.local</c>.
+/// nothing outside the isolation reads. Cargo, Gradle and Dart's pub keep their caches in a home of theirs, which the
+/// variable moves whole, so what the user keeps there - a registry, a property, a tool pub activated - is not read
+/// inside; Maven's local repository has no variable of its own, so a Maven build inside finds the
+/// user's read-only and names another with <c>-Dmaven.repo.local</c>. Moving <c>XDG_CACHE_HOME</c> moves what the user
+/// installed under it too: Playwright's browsers are read where they are (<see cref="Installed"/>), and everything else -
+/// Hugging Face's models, pre-commit's environments - is fetched again into the isolation's own.
 /// </summary>
 public static class IsolationCaches
 {
@@ -43,8 +45,43 @@ public static class IsolationCaches
         new("Go's builds", "GOCACHE", "go-build"),
         new("Gradle", "GRADLE_USER_HOME", "gradle"),
         new("ccache", "CCACHE_DIR", "ccache"),
+        new("pnpm's store", "npm_config_store_dir", "pnpm-store"),
+        new("Yarn 2 and later", "YARN_GLOBAL_FOLDER", "yarn-berry"),
+        new("Bun", "BUN_INSTALL_CACHE_DIR", "bun"),
+        new("Dart's and Flutter's pub", "PUB_CACHE", "pub"),
         new("every other cache the XDG directories place", "XDG_CACHE_HOME", "xdg"),
     ];
+
+    /// <summary>The variable Playwright finds its browsers by.</summary>
+    public const string PlaywrightBrowsersVariable = "PLAYWRIGHT_BROWSERS_PATH";
+
+    /// <summary>
+    /// What the user installed under the cache directory the isolation moves that a build reads as it lies, each read where
+    /// it is: on Linux, where <c>XDG_CACHE_HOME</c> places Playwright's browsers, <see cref="PlaywrightBrowsersVariable"/>
+    /// at the user's own <c>ms-playwright</c>, where it is there and the variable names none already - read alone, so a
+    /// browser installed inside fails. Elsewhere none: macOS's and Windows' Playwright keeps its browsers where the
+    /// isolation moves nothing.
+    /// </summary>
+    /// <param name="home">The user's home.</param>
+    /// <param name="platform">This machine's system.</param>
+    /// <param name="environment">Reads this process's environment.</param>
+    /// <param name="exists">Whether a directory is there.</param>
+    public static IReadOnlyList<KeyValuePair<string, string>> Installed(string home, PlatformId platform, Func<string, string?> environment, Func<string, bool> exists)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(home);
+        ArgumentNullException.ThrowIfNull(environment);
+        ArgumentNullException.ThrowIfNull(exists);
+
+        if (platform != PlatformId.Linux || environment(PlaywrightBrowsersVariable) is { Length: > 0 })
+        {
+            return [];
+        }
+
+        var cache = environment("XDG_CACHE_HOME") is { Length: > 0 } named && Path.IsPathFullyQualified(named) ? named : Path.Combine(home, ".cache");
+        var browsers = Path.Combine(cache, "ms-playwright");
+
+        return exists(browsers) ? [new(PlaywrightBrowsersVariable, browsers)] : [];
+    }
 
     /// <summary>
     /// The isolation's own directory on this machine: on Windows under <c>LOCALAPPDATA</c> where it names one whole, else

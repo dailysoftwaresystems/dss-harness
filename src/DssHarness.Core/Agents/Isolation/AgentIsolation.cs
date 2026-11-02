@@ -87,7 +87,8 @@ public sealed record AgentIsolationRecord(string Mode)
 /// The decision of the operating system's isolation for one thing that runs what an agent may have written - a launch of
 /// an agent, or one of the tool's own executions of an agent's work: the configuration's mode, the mechanism proved on
 /// this machine, or why there is none and what would give one. The one place either is refused, said and recorded, so the
-/// two never answer the same mode two ways. Disposed once it has run, it takes its temporary directory away.
+/// two never answer the same mode two ways; and, once it has run, the one question of whether anything goes on over what
+/// it ran over (<see cref="Afterward"/>). Disposed once it has run, it takes its temporary directory away.
 /// </summary>
 /// <param name="Mode">The configuration's mode (<see cref="AgentIsolationMode"/>).</param>
 /// <param name="Mechanism">The mechanism, proved on this machine; null where there is none.</param>
@@ -96,9 +97,13 @@ public sealed record AgentIsolationRecord(string Mode)
 public abstract record IsolationDecision(string Mode, IIsolationMechanism? Mechanism, string? Without, string? Remedy) : IDisposable
 {
     private Action? _release;
+    private readonly Func<string?>? _after;
 
     /// <summary>What takes its temporary directory away, once, as it is disposed; nothing where it has none.</summary>
     public Action? Release { init => _release = value; }
+
+    /// <summary>What looks, once it has run, at what it left in git's own directories (<see cref="Afterward"/>); nothing where it ran under no mechanism.</summary>
+    public Func<string?>? After { init => _after = value; }
 
     /// <summary>
     /// Whether it may not run: it needs the isolation, there is no mechanism to hold it, and the mode is anything but
@@ -116,6 +121,14 @@ public abstract record IsolationDecision(string Mode, IIsolationMechanism? Mecha
         None = Mechanism is null ? Without : null,
     };
 
+    /// <summary>
+    /// Asked once what it isolated has run, before anything of the tool's goes on over its trees: why nothing may - a
+    /// pointer git follows to another repository's own files made in a git directory of theirs while it ran, which every
+    /// git started outside would read its configuration and hooks from - as a sentence with the remedy; null where nothing
+    /// keeps it from going on.
+    /// </summary>
+    public string? Afterward() => _after?.Invoke();
+
     /// <inheritdoc/>
     public void Dispose()
     {
@@ -125,13 +138,19 @@ public abstract record IsolationDecision(string Mode, IIsolationMechanism? Mecha
 
     /// <summary>
     /// What is said where it runs with no mechanism though it needs one, under <see cref="AgentIsolationMode.Preferred"/>:
-    /// why there is none, <paramref name="so"/>, and what would give one. Null where it runs under one, or needs none.
+    /// why there is none, <paramref name="so"/>, and what would give one; and where it runs under a mechanism that leaves
+    /// something reached (<see cref="IIsolationMechanism.Leaves"/>) - bubblewrap on a kernel with no Landlock scope -
+    /// that <paramref name="runs"/> inside it and what it leaves. Null where it runs under one that leaves nothing, or needs
+    /// none.
     /// </summary>
-    /// <param name="so">What follows for it, as the sentence's middle says it.</param>
-    protected string? NoticeSaying(string so)
+    /// <param name="so">What follows for it with no mechanism, as the sentence's middle says it.</param>
+    /// <param name="runs">What runs inside a mechanism, as the sentence's opening says it.</param>
+    protected string? NoticeSaying(string so, string runs)
         => Mechanism is null && Remedy is not null && !Refused
             ? $"agentPolicy.isolation is \"{AgentIsolationMode.Preferred}\" and {Without}, so {so}; {Remedy}"
-            : null;
+            : Mechanism is { Leaves: { } leaves }
+                ? $"{runs} inside {Mechanism.Name}, which leaves {leaves} reached"
+                : null;
 
     /// <summary>
     /// The refusal of <paramref name="what"/> where it may not run (<see cref="Refused"/>), as a sentence: what is refused,
@@ -186,9 +205,10 @@ public sealed record LaunchIsolation(
 
     /// <summary>
     /// What every launch says where it starts on the words policy alone, its agent able to run a command: why there is no
-    /// mechanism, and what would give one. Null where it runs under one, or needs none.
+    /// mechanism, and what would give one; or, under a mechanism that leaves something reached, what. Null where it runs
+    /// under one that leaves nothing, or needs none.
     /// </summary>
-    public string? Notice => NoticeSaying("the agent's commands run on the words policy alone, with no isolation of the operating system's");
+    public string? Notice => NoticeSaying("the agent's commands run on the words policy alone, with no isolation of the operating system's", "the agent's commands run");
 
     /// <summary>
     /// The refusal of <paramref name="what"/> where the launch may not start (<see cref="IsolationDecision.Refused"/>), as a
@@ -241,7 +261,14 @@ public sealed record ExecutionGround(
     IReadOnlyList<string> Trees,
     IReadOnlyList<string> WritableRoots,
     IReadOnlyList<string> SlotDirectories,
-    IReadOnlyList<string> StateDirectories);
+    IReadOnlyList<string> StateDirectories)
+{
+    /// <summary>
+    /// Whether what it runs reaches the user's SSH agent: a push to a remote over ssh, or a commit the repository signs with
+    /// an ssh key (<see cref="GitSsh"/>) - and nothing else, so no other hook, and no leg's work, signs as the user.
+    /// </summary>
+    public bool ReachesSshAgent { get; init; }
+}
 
 /// <summary>The builder of every <see cref="ExecutionGround"/>: the one place each of the tool's executions of an agent's work is given its ground.</summary>
 public static class ExecutionGrounds
@@ -276,13 +303,15 @@ public static class ExecutionGrounds
 
     /// <summary>
     /// The ground of a commit's or a push's git in <paramref name="tree"/> with the repository's hooks: the tree written -
-    /// its work tree, and what git keeps of it but its code-running files - its slots hidden and its state sealed.
+    /// its work tree, and what git keeps of it but its code-running files - its slots hidden and its state sealed; the
+    /// user's SSH agent reached where git's own work needs it (<see cref="GitSsh"/>).
     /// </summary>
     /// <param name="config">The configuration, whose worktrees root is among the state.</param>
     /// <param name="mainCheckout">The main checkout, whose slots are hidden.</param>
     /// <param name="tree">The tree git works in.</param>
-    public static ExecutionGround OfHooks(HarnessConfig config, string mainCheckout, string tree)
-        => Of(IsolatedExecution.Hooks, config, mainCheckout, [tree], [tree]);
+    /// <param name="sshAgent">Whether git's own work signs or pushes through the user's SSH agent: a push over ssh, a commit signed with an ssh key.</param>
+    public static ExecutionGround OfHooks(HarnessConfig config, string mainCheckout, string tree, bool sshAgent)
+        => Of(IsolatedExecution.Hooks, config, mainCheckout, [tree], [tree]) with { ReachesSshAgent = sshAgent };
 
     private static ExecutionGround Of(IsolatedExecution kind, HarnessConfig config, string mainCheckout, IReadOnlyList<string> trees, IReadOnlyList<string> writable)
     {
@@ -330,11 +359,12 @@ public sealed record ExecutionIsolation(
 
     /// <summary>
     /// What is said wherever it runs with no mechanism under <see cref="AgentIsolationMode.Preferred"/>: why there is none,
-    /// what then runs outside, and what would give one. Null where it runs under one.
+    /// what then runs outside, and what would give one; or, under a mechanism that leaves something reached, what. Null
+    /// where it runs under one that leaves nothing.
     /// </summary>
-    public string? Notice => NoticeSaying(Kind == IsolatedExecution.Legs
-        ? "what the agents wrote is built, tested and run here with no isolation of the operating system's"
-        : "the repository's hooks run over the agents' work with no isolation of the operating system's");
+    public string? Notice => Kind == IsolatedExecution.Legs
+        ? NoticeSaying("what the agents wrote is built, tested and run here with no isolation of the operating system's", "what the agents wrote is built, tested and run")
+        : NoticeSaying("the repository's hooks run over the agents' work with no isolation of the operating system's", "the repository's hooks run");
 
     /// <summary>The refusal of <paramref name="what"/> where it may not run, as a sentence; null where it may.</summary>
     /// <param name="what">What is refused, as the refusal names it: <c>'step'</c>.</param>
@@ -387,26 +417,27 @@ internal sealed record IsolationGround(
     }
 
     /// <summary>
-    /// The ground of one of the tool's own executions: its trees and writable roots read as they stand, the tool's own
-    /// Claude Code directory hidden, no launch directory - and, for a commit's or a push's hooks, the user's SSH agent's
-    /// socket, the one a push over ssh signs with.
+    /// The ground of one of the tool's own executions: its trees and writable roots read as they stand, every Claude Code
+    /// directory hidden as from an agent's own launch, no launch directory - and, where git's own work signs or pushes
+    /// through it, the user's SSH agent's socket.
     /// </summary>
     /// <param name="ground">The execution's ground.</param>
-    /// <param name="claudeCode">The tool's own Claude Code directory.</param>
+    /// <param name="claudeCode">Every Claude Code directory on this machine (<see cref="ClaudeCodeDirectories"/>).</param>
     /// <param name="agentSocket">The user's SSH agent's socket, whole; null where there is none.</param>
-    public static IsolationGround Of(ExecutionGround ground, string claudeCode, string? agentSocket)
+    public static IsolationGround Of(ExecutionGround ground, IReadOnlyList<string> claudeCode, string? agentSocket)
     {
         ArgumentNullException.ThrowIfNull(ground);
+        ArgumentNullException.ThrowIfNull(claudeCode);
 
         return new(
             ground.Trees,
             ground.WritableRoots,
             [.. ground.Trees.Concat(ground.WritableRoots)],
             ground.SlotDirectories,
-            [claudeCode],
+            claudeCode,
             ground.StateDirectories,
             null,
-            ground.Kind == IsolatedExecution.Hooks && agentSocket is not null ? [agentSocket] : []);
+            ground.ReachesSshAgent && agentSocket is not null ? [agentSocket] : []);
     }
 }
 
@@ -439,33 +470,40 @@ public interface IAgentIsolation
 /// <summary>
 /// The owner of the operating system's isolation of what an agent runs, and of what the tool runs of an agent's work: the
 /// configuration's mode, this machine's mechanism as its platform proved it once, and each profile built from its ground -
-/// the machine read-only; written only the ground's writable roots, a tree's git directories where the tree itself is
-/// written, the launch's own temporary directory and the declared tool caches (<see cref="IsolationCaches"/>); neither read
-/// nor written the credential slots and the Claude Code directories; reached outside no Unix socket but those the ground
-/// names - a push's SSH agent's; and inside what is written, written by nobody git's code-running files and its pointers to
-/// its own directories, every configuration file git reads, each tree's configuration directory, the tool's state and the
-/// launch's own directory. Every place is ruled at its real spelling; one inside a written place that is not there is made
-/// empty first, so no command makes it and has it read or run outside later.
+/// the machine read-only; written only the ground's writable roots, what git writes of a tree that is itself written - by
+/// its kind (<see cref="GitWritten"/>) - the launch's own temporary directory and the declared tool caches
+/// (<see cref="IsolationCaches"/>); neither read nor written the credential slots and every Claude Code directory
+/// (<see cref="ClaudeCodeDirectories"/>); reached outside no Unix socket but the one the ground names - the user's SSH
+/// agent's, for a push over ssh or a commit signed with an ssh key; and inside what is written, written by nobody git's
+/// code-running files and its pointers to its own directories, every git directory's submodules, its replacements and
+/// its alternates, every configuration file git reads and every file one includes, each tree's configuration directory,
+/// the tool's state and the launch's own directory. Every place is ruled at its real spelling; one inside a written place
+/// that is not there is made empty first, so no command makes it and has it read or run outside later. Every git
+/// directory it names is pinned for every later git of the tool's in its tree, and what is made in them while the work
+/// runs is looked at once it has (<see cref="IsolationDecision.Afterward"/>).
 /// </summary>
 /// <remarks>
 /// A launch or an execution is given no isolation - which the mode turns into a refusal or a notice - where its places
-/// cannot be held: git cannot say where a tree keeps its files, a guarded place stands on a file system that ignores letter
-/// case and the mechanism holds the one spelling, or a link stands where the child writes on the way to a guarded place,
-/// which a command could replace with one leading elsewhere.
+/// cannot be held: git cannot say where a tree keeps its files, a main checkout's git directory holds a pointer to another
+/// repository's, a file git's configuration includes is not there inside a written place, a guarded place stands on a file
+/// system that ignores letter case and the mechanism holds the one spelling, or a link stands where the child writes on
+/// the way to a guarded place, which a command could replace with one leading elsewhere.
 /// </remarks>
 /// <param name="platform">Finds and proves this machine's mechanism, once per process.</param>
 /// <param name="git">Asks git where each tree keeps its own files.</param>
 /// <param name="fileSystem">Finds what each place is and where it leads, and makes one that is not there.</param>
 /// <param name="host">This machine: its home, and how it compares paths.</param>
-/// <param name="environment">Reads this process's environment, for where the user's cache directory, the tool's Claude Code directory and the user's SSH agent are; this process's own where left out.</param>
+/// <param name="environment">Reads this process's environment, for where the user's cache directory and the user's SSH agent are; this process's own where left out.</param>
 /// <param name="pins">Keeps each tree's git directories, as git named them, for every later git of this tool's in it; none where left out.</param>
+/// <param name="claudeCode">Every Claude Code directory on this machine, which an execution hides as a launch does; this machine's own alone, the slot unread, where left out.</param>
 public sealed class AgentIsolation(
     IIsolationPlatform platform,
     IGitClient git,
     IFileSystem fileSystem,
     IHostPlatform host,
     Func<string, string?>? environment = null,
-    GitDirectoryPins? pins = null) : IAgentIsolation
+    GitDirectoryPins? pins = null,
+    ClaudeCodeDirectories? claudeCode = null) : IAgentIsolation
 {
     /// <summary>The variable the user's SSH agent's socket is named by.</summary>
     public const string SshAgentSocketVariable = "SSH_AUTH_SOCK";
@@ -473,7 +511,11 @@ public sealed class AgentIsolation(
     /// <summary>The directory under a Claude Code directory that holds the shell snapshots its commands source, which stays read.</summary>
     public const string ShellSnapshots = "shell-snapshots";
 
+    /// <summary>The files git reads in a git directory as a pointer to another repository's own: a linked worktree's, which no main checkout's holds.</summary>
+    public static IReadOnlyList<string> GitPointers { get; } = ["commondir", "gitdir"];
+
     private readonly Func<string, string?> _environment = environment ?? Environment.GetEnvironmentVariable;
+    private readonly ClaudeCodeDirectories _claudeCode = claudeCode ?? new ClaudeCodeDirectories(fileSystem, host, keys: null, environment);
 
     /// <inheritdoc/>
     public async Task<LaunchIsolation> ForLaunchAsync(HarnessConfig config, AgentPolicyGround ground, string mainCheckout, string launchDirectory, CancellationToken cancellationToken)
@@ -488,27 +530,26 @@ public sealed class AgentIsolation(
 
         var held = await HeldAsync(config, IsolationGround.Of(ground, launchDirectory), mainCheckout, "make sure git 2.31 or newer answers in the agent's trees", cancellationToken).ConfigureAwait(false);
 
-        return new LaunchIsolation(held.Mode, held.Mechanism, held.Profile, held.Without, held.Remedy) { ClaudeCode = held.ClaudeCode, Release = held.Release };
+        return new LaunchIsolation(held.Mode, held.Mechanism, held.Profile, held.Without, held.Remedy) { ClaudeCode = held.ClaudeCode, Release = held.Release, After = held.After };
     }
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Its profile is built as an agent's command's is, from the same places: the slots and the tool's own Claude Code
-    /// directory hidden, git's code-running files of each tree, every configuration file git reads and the tool's state
-    /// written by nobody, the ground's own places written again inside them, the private temporary directory and the
-    /// declared caches written - for what it runs is the agents' work however it is started. A commit's or a push's hooks
-    /// reach the user's SSH agent's socket alone, so a push over ssh signs as the user's own does.
+    /// Its profile is built as an agent's command's is, from the same places: the slots and every Claude Code directory
+    /// hidden, git's code-running files of each tree, every configuration file git reads and the tool's state written by
+    /// nobody, the ground's own places written again inside them, the private temporary directory and the declared caches
+    /// written - for what it runs is the agents' work however it is started. Where git's own work signs or pushes through
+    /// it - a push over ssh, a commit signed with an ssh key - the user's SSH agent's socket is reached alone.
     /// </remarks>
     public async Task<ExecutionIsolation> ForExecutionAsync(HarnessConfig config, ExecutionGround ground, string mainCheckout, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(ground);
 
-        var claudeCode = new Orchestration.ClaudeTranscripts(fileSystem, host, _environment).ConfigDirectory;
         var socket = _environment(SshAgentSocketVariable) is { Length: > 0 } named && Path.IsPathFullyQualified(named) && fileSystem.KindOf(named) != PathKind.None ? Real(named) : null;
-        var held = await HeldAsync(config, IsolationGround.Of(ground, claudeCode, socket), mainCheckout, "make sure git 2.31 or newer answers in the trees the run works over", cancellationToken).ConfigureAwait(false);
+        var held = await HeldAsync(config, IsolationGround.Of(ground, _claudeCode.Of(config, mainCheckout), socket), mainCheckout, "make sure git 2.31 or newer answers in the trees the run works over", cancellationToken).ConfigureAwait(false);
 
-        return new ExecutionIsolation(ground.Kind, held.Mode, held.Mechanism, held.Profile, held.Without, held.Remedy) { Release = held.Release };
+        return new ExecutionIsolation(ground.Kind, held.Mode, held.Mechanism, held.Profile, held.Without, held.Remedy) { Release = held.Release, After = held.After };
     }
 
     /// <summary>
@@ -531,7 +572,7 @@ public sealed class AgentIsolation(
 
         if (gitPlaces.Unread is { } unread)
         {
-            return Held.None(mode, unread, unreadRemedy);
+            return Held.None(mode, unread, gitPlaces.Remedy ?? unreadRemedy);
         }
 
         var root = IsolationCaches.Root(host.HomeDirectory, host.Current, _environment);
@@ -560,32 +601,100 @@ public sealed class AgentIsolation(
             return Held.None(mode, unheld.Why, unheld.Remedy);
         }
 
-        // A linked worktree's own git directory is named by its .git file, which says it again to every later git: pinned as
-        // git named it now. The main checkout's .git is the directory itself, which nothing redirects.
-        foreach (var (tree, gitDirectory, commonDirectory) in gitPlaces.Directories.Where(directory => directory.GitDirectory != directory.CommonDirectory))
+        // Each tree's git directories, as git named them now, for every later git of the tool's in it: a linked worktree's
+        // .git file, and a commondir a main checkout's .git came to hold, would lead it elsewhere.
+        foreach (var (tree, gitDirectory, commonDirectory) in gitPlaces.Directories)
         {
             pins?.Pin(tree, gitDirectory, commonDirectory);
         }
 
-        return new Held(mode, mechanism, built.Profile, built.ClaudeCode, null, null, temp is null ? null : () => Removed(temp));
+        // What is made in the trees' git directories while the work runs is looked at once it has, against what is there now.
+        var commons = gitPlaces.Directories.Select(directory => directory.CommonDirectory).Distinct(StringComparer.FromComparison(host.PathComparison)).ToList();
+        var planted = PlantedUnder(commons);
+
+        return new Held(mode, mechanism, built.Profile, built.ClaudeCode, null, null, temp is null ? null : () => Removed(temp), () => PlantedSince(commons, planted));
     }
 
     /// <summary>A decision as the builder makes it, before it is a launch's or an execution's.</summary>
-    private sealed record Held(string Mode, IIsolationMechanism? Mechanism, IsolationProfile? Profile, IsolationProfile? ClaudeCode, string? Without, string? Remedy, Action? Release)
+    private sealed record Held(string Mode, IIsolationMechanism? Mechanism, IsolationProfile? Profile, IsolationProfile? ClaudeCode, string? Without, string? Remedy, Action? Release, Func<string?>? After = null)
     {
         public static Held None(string mode, string? why, string? remedy) => new(mode, null, null, null, why, remedy, null);
     }
 
+    /// <summary>What there is in git's own directories that git started outside follows to other content.</summary>
+    /// <param name="Pointers">Every pointer to another repository's own files (<see cref="GitPointers"/>).</param>
+    /// <param name="Replacements">Every replacement a <c>packed-refs</c> names, with the file that names it.</param>
+    private sealed record Planted(HashSet<string> Pointers, HashSet<(string File, string Ref)> Replacements);
+
+    /// <summary>
+    /// What there is in each of <paramref name="commons"/> that git started outside follows to other content: every pointer
+    /// to another repository's own files in it and in each linked worktree's git directory under it, and every replacement
+    /// its <c>packed-refs</c> names - the one place a main checkout's git directory, written whole, can name one in while
+    /// its <c>refs/replace/</c> is sealed.
+    /// </summary>
+    private Planted PlantedUnder(IReadOnlyList<string> commons)
+    {
+        var pointers = new HashSet<string>(StringComparer.FromComparison(host.PathComparison));
+        var replacements = new HashSet<(string File, string Ref)>();
+        var worktrees = commons.Select(common => Path.Combine(common, "worktrees")).Where(fileSystem.DirectoryExists).SelectMany(fileSystem.EnumerateDirectories);
+
+        foreach (var directory in commons.Concat(worktrees))
+        {
+            pointers.UnionWith(GitPointers.Select(name => Path.Combine(directory, name)).Where(fileSystem.FileExists));
+        }
+
+        foreach (var packed in commons.Select(common => Path.Combine(common, "packed-refs")).Where(fileSystem.FileExists))
+        {
+            using var reader = new StreamReader(fileSystem.OpenRead(packed));
+
+            while (reader.ReadLine() is { } line)
+            {
+                if (line.Split(' ', 2) is [_, var name] && name.StartsWith(ReplaceRefs, StringComparison.Ordinal))
+                {
+                    replacements.Add((packed, name.Trim()));
+                }
+            }
+        }
+
+        return new Planted(pointers, replacements);
+    }
+
+    /// <summary>Where git keeps the refs that put one object's content in place of another's.</summary>
+    private const string ReplaceRefs = "refs/replace/";
+
+    /// <summary>
+    /// Why nothing of the tool's may go on over the trees once the work has run: the first pointer made under
+    /// <paramref name="commons"/>, or the first replacement named there, that <paramref name="before"/> did not hold, as a
+    /// sentence with the remedy; null where none.
+    /// </summary>
+    private string? PlantedSince(IReadOnlyList<string> commons, Planted before)
+    {
+        var now = PlantedUnder(commons);
+
+        if (now.Pointers.Where(pointer => !before.Pointers.Contains(pointer)).Order(StringComparer.Ordinal).FirstOrDefault() is { } made)
+        {
+            return $"'{made}' was made while it ran: a pointer git follows to another repository's own files, its configuration and hooks among them, which every git started outside would read - so nothing goes on over the trees; look at where it leads, and remove it";
+        }
+
+        return now.Replacements.Where(replacement => !before.Replacements.Contains(replacement)).OrderBy(replacement => replacement.Ref, StringComparer.Ordinal).FirstOrDefault() is ({ } file, { } name)
+            ? $"'{file}' came to name {name} while it ran: a replacement, which puts other content in place of an object for every git started outside that reads it - so nothing goes on over the trees; look at what it puts in place, and remove it with git update-ref -d {name}"
+            : null;
+    }
+
     /// <summary>
     /// git's own places of each of <paramref name="trees"/>, as git names them: what a write must not reach - the hooks
-    /// directory git runs hooks from (<c>core.hooksPath</c> where it is set), the common directory's <c>config</c>,
-    /// <c>config.worktree</c> and <c>info/</c>, each linked worktree's <c>config.worktree</c> and its <c>commondir</c> and
-    /// <c>gitdir</c>, which say where its repository is, a tree's own <c>.git</c> where it is such a pointer, every
-    /// submodule's <c>hooks/</c> and <c>config</c> under <c>modules/</c>, and every configuration file git reads in the
-    /// tree, the user's and what each includes among them - and each tree's own and common git directory, where the tree is
-    /// its repository's top. Objects, the
-    /// index and the refs are none of them, so <c>git add</c>, <c>fetch</c> and the rest keep working. Or why git could not
-    /// say: an answer that is no whole path among it, which git before 2.31 gives.
+    /// directory git runs hooks from (<c>core.hooksPath</c> where it is set) and the common directory's own <c>hooks/</c>
+    /// beside it, which git runs from again once the setting is gone; the common directory's <c>config</c>,
+    /// <c>config.worktree</c> and <c>info/</c>; its <c>refs/replace/</c>, whose refs put other content in place of an
+    /// object every checkout reads, and <c>objects/info/</c>, whose alternates lend it another store's; each linked
+    /// worktree's <c>config.worktree</c> and its <c>commondir</c> and <c>gitdir</c>, which say where its repository is, a
+    /// tree's own <c>.git</c> where it is such a pointer; every git directory's <c>modules/</c> - the common one's and each
+    /// linked worktree's - whole, for it holds the submodules' own git directories,
+    /// their configuration and hooks; and every configuration file git reads in the tree, the user's and what each includes
+    /// among them - and each tree's own and common git directory, where the tree is its repository's top, with every file a
+    /// configuration file names to include, whether its condition holds now or not (<see cref="GitPlaces.Includes"/>). Or
+    /// why git could not say - an answer that is no whole path among it, which git before 2.31 gives - or why what it says
+    /// cannot be trusted: a main checkout's <c>.git</c> holding a pointer to another repository's own files.
     /// </summary>
     /// <param name="trees">The trees the agent touches.</param>
     /// <param name="cancellationToken">Stops git.</param>
@@ -593,11 +702,25 @@ public sealed class AgentIsolation(
     {
         ArgumentNullException.ThrowIfNull(trees);
 
+        var comparer = StringComparer.FromComparison(host.PathComparison);
         var places = new List<IsolatedPath>();
         var directories = new List<(string Tree, string GitDirectory, string CommonDirectory)>();
+        var read = new HashSet<string>(comparer);
+        var includes = new List<string>();
 
-        foreach (var tree in trees.Distinct(StringComparer.FromComparison(host.PathComparison)))
+        foreach (var tree in trees.Distinct(comparer))
         {
+            var dotGit = Path.Combine(tree, ".git");
+
+            // A main checkout's .git holding a pointer leads git - this tool's own unpinned among it - to another
+            // repository's own files: git's answers here would be that one's.
+            if (fileSystem.DirectoryExists(dotGit) && GitPointers.Select(name => Path.Combine(dotGit, name)).FirstOrDefault(fileSystem.FileExists) is { } pointer)
+            {
+                return GitPlaces.Not(
+                    $"'{pointer}' is a pointer git follows to another repository's own files, which a main checkout's git directory never holds - something made it",
+                    $"look at where '{pointer}' leads, and remove it");
+            }
+
             var answer = await git.RunAsync(tree, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--git-path", "hooks", "--show-toplevel"], cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (!answer.Succeeded || answer.OutputLines is not [var gitLine, var commonLine, var hooksLine, var topLine, ..])
@@ -615,16 +738,19 @@ public sealed class AgentIsolation(
 
             // A tree's git directories are its own only where it is its repository's top: a directory inside another's work
             // tree - a leg's copy that is no repository of its own - is answered by that one, whose git it never writes.
-            if (StringComparer.FromComparison(host.PathComparison).Equals(Real(Path.GetFullPath(topLine.Trim())), Real(tree)))
+            if (comparer.Equals(Real(Path.GetFullPath(topLine.Trim())), Real(tree)))
             {
                 directories.Add((tree, gitDirectory, common));
             }
+
             places.Add(new IsolatedPath(Path.GetFullPath(hooksLine.Trim()), Directory: true));
+            places.Add(new IsolatedPath(Path.Combine(common, "hooks"), Directory: true));
             places.Add(new IsolatedPath(Path.Combine(common, "config"), Directory: false));
             places.Add(new IsolatedPath(Path.Combine(common, "config.worktree"), Directory: false));
             places.Add(new IsolatedPath(Path.Combine(common, "info"), Directory: true));
-
-            var dotGit = Path.Combine(tree, ".git");
+            places.Add(new IsolatedPath(Path.Combine(common, "refs", "replace"), Directory: true));
+            places.Add(new IsolatedPath(Path.Combine(common, "objects", "info"), Directory: true));
+            places.Add(new IsolatedPath(Path.Combine(common, "modules"), Directory: true));
 
             if (fileSystem.FileExists(dotGit))
             {
@@ -640,10 +766,9 @@ public sealed class AgentIsolation(
                     places.Add(new IsolatedPath(Path.Combine(linked, "config.worktree"), Directory: false));
                     places.Add(new IsolatedPath(Path.Combine(linked, "commondir"), Directory: false));
                     places.Add(new IsolatedPath(Path.Combine(linked, "gitdir"), Directory: false));
+                    places.Add(new IsolatedPath(Path.Combine(linked, "modules"), Directory: true));
                 }
             }
-
-            places.AddRange(Submodules(Path.Combine(common, "modules")));
 
             var configuration = await git.RunAsync(tree, ["config", "--list", "--show-origin", "--includes", "-z"], cancellationToken: cancellationToken).ConfigureAwait(false);
 
@@ -652,10 +777,36 @@ public sealed class AgentIsolation(
                 return GitPlaces.Not($"git could not say which configuration files it reads in '{tree}' ({configuration.FailureMessage})");
             }
 
-            places.AddRange(ConfigurationFiles(configuration.StandardOutput, tree).Select(file => new IsolatedPath(file, Directory: false)));
+            var files = ConfigurationFiles(configuration.StandardOutput, tree);
+            read.UnionWith(files);
+            places.AddRange(files.Select(file => new IsolatedPath(file, Directory: false)));
+            includes.AddRange(IncludeTargets(configuration.StandardOutput, tree, host.HomeDirectory));
         }
 
-        return new GitPlaces([.. places.DistinctBy(place => place.Path, StringComparer.FromComparison(host.PathComparison))], directories, null);
+        // A file an include names that git reads nothing from now - its condition does not hold, or it is empty - is read
+        // for the files it would include in turn, each once.
+        var waiting = new Queue<string>(includes.Where(target => !read.Contains(target)));
+        var named = new HashSet<string>(includes, comparer);
+
+        while (trees.Count > 0 && waiting.TryDequeue(out var target))
+        {
+            if (!read.Add(target) || !fileSystem.FileExists(target))
+            {
+                continue;
+            }
+
+            var own = await git.RunAsync(trees[0], ["config", "--file", target, "--list", "--show-origin", "-z"], cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            foreach (var more in own.Succeeded ? IncludeTargets(own.StandardOutput, trees[0], host.HomeDirectory) : [])
+            {
+                if (named.Add(more))
+                {
+                    waiting.Enqueue(more);
+                }
+            }
+        }
+
+        return new GitPlaces([.. places.DistinctBy(place => place.Path, comparer)], directories, null) { Includes = [.. named] };
     }
 
     /// <summary>
@@ -666,6 +817,53 @@ public sealed class AgentIsolation(
     /// <param name="lines">git's lines.</param>
     public static string? Unwhole(IReadOnlyList<string> lines)
         => (lines ?? throw new ArgumentNullException(nameof(lines))).Select(line => line.Trim()).FirstOrDefault(line => !Path.IsPathFullyQualified(line));
+
+    /// <summary>
+    /// Every file an <c>include.path</c> or <c>includeIf.&lt;condition&gt;.path</c> of <c>git config --list --show-origin -z</c>
+    /// names, whole, as git takes it whether its condition holds or not: <c>~/</c> in the user's home, a relative path
+    /// against the directory of the file that names it - itself against <paramref name="tree"/> where git names it
+    /// relatively. One under another user's home, under git's own install, or named relatively by no file is none of them.
+    /// </summary>
+    /// <param name="answered">What git answered.</param>
+    /// <param name="tree">The tree git was asked in.</param>
+    /// <param name="home">The user's home.</param>
+    public static IReadOnlyList<string> IncludeTargets(string answered, string tree, string home)
+    {
+        ArgumentNullException.ThrowIfNull(answered);
+
+        const string FileOrigin = "file:";
+        var fields = answered.Split('\0');
+        var targets = new List<string>();
+
+        for (var at = 0; at + 1 < fields.Length; at += 2)
+        {
+            var (origin, entry) = (fields[at], fields[at + 1]);
+
+            if (entry.IndexOf('\n') is var split and > 0
+                && entry[..split] is var key
+                && (key == "include.path" || (key.StartsWith("includeif.", StringComparison.Ordinal) && key.EndsWith(".path", StringComparison.Ordinal)))
+                && entry[(split + 1)..] is { Length: > 0 } value)
+            {
+                var from = origin.StartsWith(FileOrigin, StringComparison.Ordinal) && origin.Length > FileOrigin.Length ? Path.GetFullPath(origin[FileOrigin.Length..], tree) : null;
+
+                string? target = value switch
+                {
+                    "~" => home,
+                    _ when value.StartsWith("~/", StringComparison.Ordinal) => Path.GetFullPath(Path.Combine(home, value[2..])),
+                    _ when value.StartsWith('~') || value.StartsWith("%(prefix)/", StringComparison.Ordinal) => null,
+                    _ when Path.IsPathFullyQualified(value) => Path.GetFullPath(value),
+                    _ => from is not null && Path.GetDirectoryName(from) is { } directory ? Path.GetFullPath(Path.Combine(directory, value)) : null,
+                };
+
+                if (target is not null)
+                {
+                    targets.Add(target);
+                }
+            }
+        }
+
+        return [.. targets.Distinct(StringComparer.Ordinal)];
+    }
 
     /// <summary>
     /// Every file <c>git config --list --show-origin -z</c> names as a source, whole: each entry's origin before its key,
@@ -695,12 +893,12 @@ public sealed class AgentIsolation(
     {
         var comparer = StringComparer.FromComparison(host.PathComparison);
 
-        // What is written: the ground's roots, the git directories of a tree that is itself written - its objects, index
-        // and refs, which git add and fetch write - and the tool caches.
+        // What is written: the ground's roots, what git writes of a tree that is itself written - its objects, index and
+        // refs, which git add and fetch write - and the tool caches.
         var written = ground.WritableRoots
             .Concat(gitPlaces.Directories
                 .Where(directory => ground.WritableRoots.Any(root => comparer.Equals(Real(root), Real(directory.Tree))))
-                .SelectMany(directory => new[] { directory.GitDirectory, directory.CommonDirectory }))
+                .SelectMany(GitWritten))
             .Append(caches)
             .Select(Real)
             .Distinct(comparer)
@@ -714,7 +912,25 @@ public sealed class AgentIsolation(
                 .Select(directory => (place: Path.TrimEndingDirectorySeparator(directory) + ".json", directory: false)))
             .ToList();
 
+        // A file git's configuration includes is held as it stands; one not there, where a command could make it, cannot be.
+        var included = new List<IsolatedPath>();
+
+        foreach (var target in gitPlaces.Includes)
+        {
+            if (fileSystem.FileExists(target) || fileSystem.DirectoryExists(target))
+            {
+                included.Add(new IsolatedPath(target, Directory: fileSystem.DirectoryExists(target)));
+            }
+            else if (Path.GetDirectoryName(target) is { Length: > 0 } holder && open.Writable(Real(holder)))
+            {
+                return (IsolationProfile.Nothing, IsolationProfile.Nothing, (
+                    $"git's configuration includes '{target}', which is not there, inside a place the agent writes: a command could make it, and every git started outside would read it",
+                    $"make '{target}' - an empty file includes nothing - or take its include out of git's configuration"));
+            }
+        }
+
         var sealedPlaces = gitPlaces.Places
+            .Concat(included)
             .Concat(ground.Trees.Select(tree => new IsolatedPath(Path.Combine(tree, HarnessLayout.DirectoryName), Directory: true)))
             .Concat(ground.StateDirectories.Select(State))
             .Concat(ground.LaunchDirectory is { } launch ? [new IsolatedPath(launch, Directory: true)] : [])
@@ -773,7 +989,7 @@ public sealed class AgentIsolation(
             Reads = [.. ground.Trees.Concat(ground.ReadRoots).Select(Real).Distinct(comparer)],
             Reopened = [.. ground.ClaudeCodeDirectories.Select(directory => Path.Combine(Real(directory), ShellSnapshots)).Distinct(comparer)],
             Temp = open.Temp,
-            Environment = [.. TempVariable(open.Temp), .. IsolationCaches.Environment(Real(caches))],
+            Environment = [.. TempVariable(open.Temp), .. IsolationCaches.Environment(Real(caches)), .. IsolationCaches.Installed(host.HomeDirectory, host.Current, _environment, fileSystem.DirectoryExists)],
             Sockets = [.. ground.Sockets.Select(Real).Distinct(comparer)],
         };
 
@@ -782,6 +998,28 @@ public sealed class AgentIsolation(
         var claudeCode = hidden.Where(entry => !ground.ClaudeCodeDirectories.Contains(entry.place, comparer) && !IsClaudeFile(entry.place)).Select(entry => Real(entry.place)).ToHashSet(comparer);
 
         return (profile, profile with { Hidden = [.. profile.Hidden.Where(place => claudeCode.Contains(place.Path))], Reopened = [] }, null);
+    }
+
+    /// <summary>
+    /// What git writes of a tree that is itself written, by its kind: a linked worktree's own git directory and, of the
+    /// common directory it shares, the objects, the refs, the logs - made where git has not made them yet, for it could
+    /// not inside - and Git LFS's objects where there are any, never the common directory itself, where a file made would
+    /// lead every git to another repository's own files (a <c>commondir</c>), nor its other worktrees; a main checkout's
+    /// git directory whole, for git makes its lock files directly in it, which no rule at a path grants one name at a time -
+    /// what is made there while the work runs is looked at once it has (<see cref="IsolationDecision.Afterward"/>).
+    /// </summary>
+    private IEnumerable<string> GitWritten((string Tree, string GitDirectory, string CommonDirectory) directory)
+    {
+        if (StringComparer.FromComparison(host.PathComparison).Equals(Real(directory.GitDirectory), Real(directory.CommonDirectory)))
+        {
+            return [directory.GitDirectory];
+        }
+
+        var logs = Path.Combine(directory.CommonDirectory, "logs");
+        var lfs = Path.Combine(directory.CommonDirectory, "lfs");
+        fileSystem.CreateDirectory(logs);
+
+        return [directory.GitDirectory, Path.Combine(directory.CommonDirectory, "objects"), Path.Combine(directory.CommonDirectory, "refs"), logs, .. fileSystem.DirectoryExists(lfs) ? [lfs] : Array.Empty<string>()];
     }
 
     /// <summary>The variable that names a child's temporary directory where the profile has one of its own; none where the mechanism gives it one.</summary>
@@ -877,39 +1115,6 @@ public sealed class AgentIsolation(
         return fileSystem.DirectoryExists(other) || fileSystem.FileExists(other);
     }
 
-    /// <summary>Every submodule's <c>hooks/</c> and <c>config</c> under <paramref name="modules"/>, at any depth - a git directory told by its <c>HEAD</c>, never walked into but for its own <c>modules/</c>.</summary>
-    private IEnumerable<IsolatedPath> Submodules(string modules)
-    {
-        var waiting = new Queue<string>();
-
-        if (fileSystem.DirectoryExists(modules))
-        {
-            waiting.Enqueue(modules);
-        }
-
-        while (waiting.TryDequeue(out var directory))
-        {
-            foreach (var child in fileSystem.EnumerateDirectories(directory))
-            {
-                if (fileSystem.FileExists(Path.Combine(child, "HEAD")))
-                {
-                    yield return new IsolatedPath(Path.Combine(child, "hooks"), Directory: true);
-                    yield return new IsolatedPath(Path.Combine(child, "config"), Directory: false);
-
-                    if (fileSystem.DirectoryExists(Path.Combine(child, "modules")))
-                    {
-                        waiting.Enqueue(Path.Combine(child, "modules"));
-                    }
-                }
-                else
-                {
-                    // A submodule's name may hold a separator: modules/libs/one is the git directory of libs/one.
-                    waiting.Enqueue(child);
-                }
-            }
-        }
-    }
-
     /// <summary>
     /// The name of a launch's temporary directory: the one its own directory names, so every launch of one step or one
     /// side-task shares it however often it is set up again, and short, for a Unix socket's path is; a fresh one for an
@@ -952,9 +1157,16 @@ public sealed class AgentIsolation(
 /// <param name="Unread">Why git could not say them; null where it did.</param>
 public sealed record GitPlaces(IReadOnlyList<IsolatedPath> Places, IReadOnlyList<(string Tree, string GitDirectory, string CommonDirectory)> Directories, string? Unread)
 {
+    /// <summary>Every file git's configuration names to include, whether its condition holds now or not, there or not.</summary>
+    public IReadOnlyList<string> Includes { get; init; } = [];
+
+    /// <summary>What would let git's places be read, where they could not be for a reason of their own; null for the asker's.</summary>
+    public string? Remedy { get; init; }
+
     /// <summary>git could not say them, and why.</summary>
     /// <param name="why">Why.</param>
-    public static GitPlaces Not(string why) => new([], [], why);
+    /// <param name="remedy">What would let them be read, where it is not the asker's own.</param>
+    public static GitPlaces Not(string why, string? remedy = null) => new([], [], why) { Remedy = remedy };
 }
 
 /// <summary>The order a profile's write rules are laid in, the one rule of it.</summary>

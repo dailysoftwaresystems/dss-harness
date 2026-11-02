@@ -28,14 +28,15 @@ internal sealed class TestIsolation(
 
     /// <summary>An execution's answer under a mechanism of the test's: <paramref name="mechanism"/>, and a profile that names each of the ground's writable roots.</summary>
     /// <param name="mechanism">The mechanism.</param>
-    public static TestIsolation Under(IIsolationMechanism mechanism)
+    /// <param name="after">What it answers once it has run (<see cref="IsolationDecision.Afterward"/>); nothing where left out.</param>
+    public static TestIsolation Under(IIsolationMechanism mechanism, Func<string?>? after = null)
         => new(execution: (config, ground) => new ExecutionIsolation(
             ground.Kind,
             AgentIsolationMode.Of(config),
             mechanism,
             new IsolationProfile([], [.. ground.WritableRoots.Select(root => new IsolatedWrite(root, Directory: true, Writable: true))]),
             null,
-            null));
+            null) { After = after });
 
     /// <summary>An execution's answer where this machine has no mechanism: refused under required, run outside under preferred.</summary>
     /// <param name="why">Why there is none.</param>
@@ -94,7 +95,7 @@ internal sealed class PassThroughMechanism(string name = "test", string version 
     public bool Scoped => false;
 
     /// <inheritdoc/>
-    public string? Leaves => null;
+    public string? Leaves { get; init; }
 
     /// <inheritdoc/>
     public string? AnchorCost { get; init; }

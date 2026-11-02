@@ -131,13 +131,14 @@ public sealed class AgentIsolationTests
 
     /// <summary>
     /// A step working in its worktree is given, by its launch's profile: the machine read-only; written its worktree, its
-    /// work directory, the git directories of the worktree it writes - its own and the common one - and the isolation's
-    /// tool caches, with its own temporary directory; hidden every credential slot there is and the Claude Code
-    /// directory and its .claude.json, the shell snapshots read again; written by nobody, inside what it writes, the
-    /// worktree's .git pointer and configuration directory, the tool's state in the worktree, git's code-running files and
-    /// pointers of the common directory and every linked worktree. A place not there inside what it writes is made first;
-    /// the launch's own directory, which no command writes, is not. Its records say the mechanism, its pins hold the
-    /// linked worktree's git directories, and its disposal takes the temporary directory away.
+    /// work directory, what git writes of a linked worktree - its own git directory, and the common directory's objects,
+    /// refs and logs, never the common directory itself - and the isolation's tool caches, with its own temporary
+    /// directory; hidden every credential slot there is and the Claude Code directory and its .claude.json, the shell
+    /// snapshots read again; written by nobody, inside what it writes, the worktree's .git pointer and configuration
+    /// directory, the tool's state in the worktree, its git directory's pointers, configuration and submodules, the common
+    /// directory's replacements and alternates. A place not there inside what it writes is made first; the launch's own
+    /// directory, which no command writes, is not. Its records say the mechanism, its pins hold the git directories of the
+    /// worktree and of the main checkout alike, and its disposal takes the temporary directory away.
     /// </summary>
     [Fact]
     public async Task AStepInItsWorktree_IsGivenTheMachineReadOnly_ItsRootsAndGitWritten_ItsGuardedPlacesSealed()
@@ -176,20 +177,21 @@ public sealed class AgentIsolationTests
             new(worktree, Directory: true, Writable: true),
             new(work, Directory: true, Writable: true),
             new(linked, Directory: true, Writable: true),
-            new(git, Directory: true, Writable: true),
+            new(Path.Combine(git, "objects"), Directory: true, Writable: true),
+            new(Path.Combine(git, "refs"), Directory: true, Writable: true),
+            new(Path.Combine(git, "logs"), Directory: true, Writable: true),
             new(caches, Directory: true, Writable: true),
             new(Path.Combine(worktree, ".git"), Directory: false, Writable: false),
             new(settings, Directory: true, Writable: false),
             .. ground.StateDirectories
                 .Where(state => IsolationProfile.Covers(worktree, state) && !IsolationProfile.Covers(settings, state) && Directory.Exists(state))
                 .Select(state => new IsolatedWrite(state, Directory: true, Writable: false)),
-            new(Path.Combine(git, "hooks"), Directory: true, Writable: false),
-            new(Path.Combine(git, "config"), Directory: false, Writable: false),
-            new(Path.Combine(git, "config.worktree"), Directory: false, Writable: false),
-            new(Path.Combine(git, "info"), Directory: true, Writable: false),
+            new(Path.Combine(git, "objects", "info"), Directory: true, Writable: false),
+            new(Path.Combine(git, "refs", "replace"), Directory: true, Writable: false),
             new(Path.Combine(linked, "config.worktree"), Directory: false, Writable: false),
             new(Path.Combine(linked, "commondir"), Directory: false, Writable: false),
             new(Path.Combine(linked, "gitdir"), Directory: false, Writable: false),
+            new(Path.Combine(linked, "modules"), Directory: true, Writable: false),
         ];
 
         Assert.Equal((AgentIsolationMode.Required, false, null, null), (isolated.Mode, isolated.Refused, isolated.Notice, isolated.Refusal("'think'")));
@@ -206,9 +208,10 @@ public sealed class AgentIsolationTests
         Assert.Equal([Path.Combine(claude, AgentIsolation.ShellSnapshots)], commands.Reopened);
         Assert.Equal(Path.Combine(root, IsolationCaches.TempDirectory), Path.GetDirectoryName(commands.Temp));
         Assert.Equal([new("TMPDIR", commands.Temp!), .. IsolationCaches.Environment(caches)], commands.Environment);
-        Assert.True(File.Exists(Path.Combine(git, "config.worktree")) && Directory.Exists(commands.Temp) && Directory.Exists(caches));
+        Assert.True(Directory.Exists(Path.Combine(linked, "modules")) && Directory.Exists(Path.Combine(git, "refs", "replace")) && Directory.Exists(commands.Temp) && Directory.Exists(caches));
+        Assert.False(File.Exists(Path.Combine(git, "config.worktree")) || Directory.Exists(Path.Combine(git, "modules")), "a place in the common directory itself, which no command writes, is made");
         Assert.False(Directory.Exists(launch), launch);
-        Assert.Equal((new GitDirectoryPin(worktree, linked, git), (GitDirectoryPin?)null), (pins.Of(worktree), pins.Of(kit.Main)));
+        Assert.Equal((new GitDirectoryPin(worktree, linked, git), new GitDirectoryPin(kit.Main, git, git)), (pins.Of(worktree), pins.Of(kit.Main)));
         Assert.Equal(new AgentIsolationRecord(AgentIsolationMode.Required) { Mechanism = "test", Version = "1.0" }, isolated.Record);
         Assert.Null(isolated.ForClaudeCode);
 
@@ -257,10 +260,13 @@ public sealed class AgentIsolationTests
     }
 
     /// <summary>
-    /// A side-task works over the main checkout, which it writes with its git directory: inside it, its git's code-running
-    /// files, its configuration directory and the tool's state are written by nobody, its slots hidden. Its records'
-    /// directory, beneath the sealed side-tasks directory, is never made - so a claim of its name finds none there - and a
-    /// state file that is not there is never made, for the tool reads it as meaning something.
+    /// A side-task works over the main checkout, which it writes with its git directory whole: inside it, its git's
+    /// code-running files - the hooks core.hooksPath names and the git directory's own beside them - its submodules, its
+    /// replacements, its alternates and a file its configuration includes only on another branch with the one that file
+    /// includes in turn, its configuration
+    /// directory and the tool's state are written by nobody, its slots hidden. Its records' directory, beneath the sealed
+    /// side-tasks directory, is never made - so a claim of its name finds none there - and a state file that is not there
+    /// is never made, for the tool reads it as meaning something.
     /// </summary>
     [Fact]
     public async Task ASideTask_WritesTheMainTree_ButItsGitsCodeItsConfigurationAndTheState_ItsRecordsNeverMade()
@@ -274,6 +280,13 @@ public sealed class AgentIsolationTests
         var ground = SideTaskPolicy.Ground(layout, config, []);
         var records = SideTaskLayout.Of(layout, "one").Directory;
 
+        // Hooks run from elsewhere, and a file included only on another branch, which includes another in turn: the common
+        // directory's own hooks and both files are held all the same.
+        await kit.Harness.RunGitAsync(kit.Main, ["config", "core.hooksPath", ".husky"], Token);
+        await kit.Harness.RunGitAsync(kit.Main, ["config", "includeIf.onbranch:elsewhere.path", "shared.config"], Token);
+        await File.WriteAllTextAsync(Path.Combine(kit.Main, ".git", "shared.config"), "[include]\n\tpath = deeper.config\n", Token);
+        await File.WriteAllTextAsync(Path.Combine(kit.Main, ".git", "deeper.config"), string.Empty, Token);
+
         using var isolated = await isolation.ForLaunchAsync(config, ground, kit.Main, records, Token);
 
         var writes = isolated.Commands!.Writes;
@@ -281,12 +294,218 @@ public sealed class AgentIsolationTests
         Assert.Equal(new IsolatedWrite(kit.Main, Directory: true, Writable: true), writes[0]);
         Assert.Contains(new IsolatedWrite(Path.Combine(kit.Main, ".git"), Directory: true, Writable: true), writes);
         Assert.Contains(new IsolatedWrite(Path.Combine(kit.Main, ".git", "hooks"), Directory: true, Writable: false), writes);
+        Assert.Contains(new IsolatedWrite(Path.Combine(kit.Main, ".husky"), Directory: true, Writable: false), writes);
+        Assert.Contains(new IsolatedWrite(Path.Combine(kit.Main, ".git", "modules"), Directory: true, Writable: false), writes);
+        Assert.Contains(new IsolatedWrite(Path.Combine(kit.Main, ".git", "refs", "replace"), Directory: true, Writable: false), writes);
+        Assert.Contains(new IsolatedWrite(Path.Combine(kit.Main, ".git", "objects", "info"), Directory: true, Writable: false), writes);
+        Assert.Contains(new IsolatedWrite(Path.Combine(kit.Main, ".git", "shared.config"), Directory: false, Writable: false), writes);
+        Assert.Contains(new IsolatedWrite(Path.Combine(kit.Main, ".git", "deeper.config"), Directory: false, Writable: false), writes);
         Assert.Contains(new IsolatedWrite(Path.Combine(kit.Main, HarnessLayout.DirectoryName), Directory: true, Writable: false), writes);
         Assert.Contains(new IsolatedWrite(Path.Combine(kit.Main, HarnessLayout.SideTasksDirectoryName), Directory: true, Writable: false), writes);
         Assert.DoesNotContain(writes, write => write.Path == records || Path.GetFileName(write.Path) == HarnessLayout.SyncedCopyMarkerName);
         Assert.False(Directory.Exists(records), records);
         Assert.False(File.Exists(Path.Combine(kit.Main, HarnessLayout.DirectoryName, HarnessLayout.SyncedCopyMarkerName)));
         Assert.Equal(AgentIsolationMode.Preferred, isolated.Record.Mode);
+    }
+
+    /// <summary>
+    /// A main checkout's git directory that holds a pointer to another repository's own files keeps a launch from any
+    /// isolation, with its own remedy; one made while a launch or an execution ran is what its decision answers once it
+    /// has, as is a new linked worktree's and a replacement its packed-refs came to name, and nothing where none was made.
+    /// </summary>
+    [Fact]
+    public async Task APointerInAMainCheckoutsGit_LeavesNoIsolation_AndOneMadeWhileItRan_IsAnsweredAfterward()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var ground = SideTaskPolicy.Ground(layout, config, []);
+        var records = SideTaskLayout.Of(layout, "one").Directory;
+        AgentIsolation Isolation() => new(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+
+        using var clean = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
+
+        Assert.Null(clean.Afterward());
+
+        var git = Path.Combine(kit.Main, ".git");
+        var linked = Directory.CreateDirectory(Path.Combine(git, "worktrees", "planted")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(linked, "gitdir"), "/elsewhere/.git", Token);
+
+        Assert.Equal(
+            $"'{Path.Combine(linked, "gitdir")}' was made while it ran: a pointer git follows to another repository's own files, its configuration and hooks among them, which every git started outside would read - so nothing goes on over the trees; look at where it leads, and remove it",
+            clean.Afterward());
+
+        Directory.Delete(linked, recursive: true);
+        using var hooks = await Isolation().ForExecutionAsync(config, ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: false), kit.Main, Token);
+        var pointer = Path.Combine(git, "commondir");
+
+        Assert.Null(hooks.Afterward());
+
+        await File.WriteAllTextAsync(pointer, "/elsewhere/.git", Token);
+
+        Assert.StartsWith($"'{pointer}' was made while it ran", clean.Afterward(), StringComparison.Ordinal);
+        Assert.StartsWith($"'{pointer}' was made while it ran", hooks.Afterward(), StringComparison.Ordinal);
+
+        // A replacement named in packed-refs - the one place a main checkout's git directory, written whole, names one in
+        // while refs/replace/ is sealed - is answered too; one there before the launch, or no replacement, is not.
+        File.Delete(pointer);
+        var packed = Path.Combine(git, "packed-refs");
+        var before = $"# pack-refs with: peeled fully-peeled sorted \n{new string('a', 40)} refs/heads/kept\n{new string('b', 40)} refs/replace/{new string('b', 40)}\n";
+        await File.WriteAllTextAsync(packed, before, Token);
+
+        using var replacing = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
+        var name = $"refs/replace/{new string('c', 40)}";
+        await File.AppendAllTextAsync(packed, $"{new string('d', 40)} refs/heads/other\n", Token);
+
+        Assert.Null(replacing.Afterward());
+
+        await File.AppendAllTextAsync(packed, $"{new string('e', 40)} {name}\n", Token);
+
+        Assert.Equal(
+            $"'{packed}' came to name {name} while it ran: a replacement, which puts other content in place of an object for every git started outside that reads it - so nothing goes on over the trees; look at what it puts in place, and remove it with git update-ref -d {name}",
+            replacing.Afterward());
+
+        File.Delete(packed);
+        await File.WriteAllTextAsync(pointer, "/elsewhere/.git", Token);
+
+        using var planted = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
+
+        Assert.Equal(
+            (true, (string?)null, $"'think' is refused: agentPolicy.isolation is \"required\" and '{pointer}' is a pointer git follows to another repository's own files, which a main checkout's git directory never holds - something made it, so no agent that may run a command starts here; look at where '{pointer}' leads, and remove it"),
+            (planted.Refused, planted.Mechanism?.Name, planted.Refusal("'think'")));
+    }
+
+    /// <summary>
+    /// The Claude Code directories an agent's launch and the tool's executions of its work are kept from are one list:
+    /// Claude Code's own default in the home, the tool's own, and the one the slot holds for the claude-code client's
+    /// logins - each hidden from a leg's work as from an agent's commands.
+    /// </summary>
+    [Fact]
+    public async Task EveryClaudeCodeDirectory_IsHiddenFromALaunchAndAnExecutionAlike()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var dot = Directory.CreateDirectory(Path.Combine(home.Path, ".claude")).FullName;
+        var own = Directory.CreateDirectory(Path.Combine(home.Path, "tool-claude")).FullName;
+        var login = Directory.CreateDirectory(Path.Combine(home.Path, "another-login")).FullName;
+        var slot = Path.Combine(kit.Main, ".harness-config", "workflows", ".env", "claude.env");
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", ".env", "claude.env"), $"CLAUDE_CONFIG_DIR={login}\n");
+        kit.Harness.FilePermissions.ProtectSecret(slot);
+        var platform = new HomedPlatform(home.Path);
+        var keys = new Core.Secrets.AgentKeyStore(kit.Harness.FileSystem, kit.Harness.FilePermissions, platform);
+        var directories = new ClaudeCodeDirectories(kit.Harness.FileSystem, platform, keys, name => name == "CLAUDE_CONFIG_DIR" ? own : null);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, platform, _ => null, claudeCode: directories);
+
+        using var legs = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfLegs(config, kit.Main, kit.Main), kit.Main, Token);
+
+        Assert.Equal([dot, own, login], directories.Of(config, kit.Main));
+        Assert.Equal([dot, own, login], legs.Profile!.Hidden.Where(place => !IsolationProfile.Covers(kit.Main, place.Path)).Select(place => place.Path));
+        Assert.Contains(login, new ReasonLaunch(kit.Harness.FileSystem, platform, keys, null, isolation).ClaudeDirectories(config, new HarnessLayout(kit.Main, kit.Main)));
+    }
+
+    /// <summary>
+    /// Every package manager's store a build fills is moved into the isolation's own - pnpm's, Yarn 2 and later's, Bun's
+    /// and pub's among npm's, Yarn 1's, pip's and the rest - and the README names each as the code declares it.
+    /// </summary>
+    [Fact]
+    public void EveryStoreABuildFills_IsDeclared_AndTheReadmeNamesEach()
+    {
+        var declared = IsolationCaches.Declared.Select(cache => cache.Variable).ToList();
+        var readme = Prose.Document("README.md");
+
+        Assert.Superset(new HashSet<string> { "npm_config_store_dir", "YARN_GLOBAL_FOLDER", "BUN_INSTALL_CACHE_DIR", "PUB_CACHE", "npm_config_cache", "YARN_CACHE_FOLDER" }, declared.ToHashSet());
+        Assert.All(declared, variable => Assert.Contains($"`{variable}`", readme, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// On Linux, where <c>XDG_CACHE_HOME</c> places Playwright's browsers and the isolation moves it, the browsers the user
+    /// installed are read where they are, a launch's commands told so; not where the variable names others already, nor
+    /// where there are none, nor on another system, whose Playwright keeps them where nothing is moved.
+    /// </summary>
+    [Fact]
+    public async Task PlaywrightsBrowsers_AreReadWhereTheUserInstalledThem_OnLinux()
+    {
+        var home = Path.GetFullPath("/h");
+        var xdg = Path.GetFullPath("/x");
+        var browsers = Path.Combine(home, ".cache", "ms-playwright");
+        bool There(string path) => path == browsers || path == Path.Combine(xdg, "ms-playwright");
+
+        Assert.Equal([new KeyValuePair<string, string>(IsolationCaches.PlaywrightBrowsersVariable, browsers)], IsolationCaches.Installed(home, PlatformId.Linux, _ => null, There));
+        Assert.Equal([new KeyValuePair<string, string>(IsolationCaches.PlaywrightBrowsersVariable, Path.Combine(xdg, "ms-playwright"))], IsolationCaches.Installed(home, PlatformId.Linux, name => name == "XDG_CACHE_HOME" ? xdg : null, There));
+        Assert.Empty(IsolationCaches.Installed(home, PlatformId.Linux, name => name == IsolationCaches.PlaywrightBrowsersVariable ? "/elsewhere" : null, There));
+        Assert.Empty(IsolationCaches.Installed(home, PlatformId.Linux, _ => null, _ => false));
+        Assert.Empty(IsolationCaches.Installed(home, PlatformId.MacOs, _ => null, There));
+
+        using var temp = new TempDirectory();
+        using var user = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var installed = Directory.CreateDirectory(Path.Combine(user.Path, ".cache", "ms-playwright")).FullName;
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, HostDoubles.Platform(PlatformId.Linux, home: user.Path), _ => null);
+
+        using var launched = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+
+        Assert.Equal(new KeyValuePair<string, string>(IsolationCaches.PlaywrightBrowsersVariable, installed), launched.Commands!.Environment[^1]);
+    }
+
+    /// <summary>
+    /// A file git's configuration includes that is not there, inside a place the agent writes, keeps the launch from any
+    /// isolation - a command could make it and every git started outside would read it - saying which and the remedy; one
+    /// outside every written place is none of its concern.
+    /// </summary>
+    [Fact]
+    public async Task AnIncludedFileNotThere_WhereTheAgentWrites_LeavesTheLaunchWithNoIsolation()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var ground = SideTaskPolicy.Ground(layout, config, []);
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        await kit.Harness.RunGitAsync(kit.Main, ["config", "include.path", "~/not-there.config"], Token);
+        await kit.Harness.RunGitAsync(kit.Main, ["config", "includeIf.onbranch:elsewhere.path", "../shared.config"], Token);
+        var target = Path.Combine(kit.Main, "shared.config");
+
+        using var isolated = await isolation.ForLaunchAsync(config, ground, kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+
+        Assert.Equal(
+            $"'side-task' is refused: agentPolicy.isolation is \"required\" and git's configuration includes '{target}', which is not there, inside a place the agent writes: a command could make it, and every git started outside would read it, so no agent that may run a command starts here; make '{target}' - an empty file includes nothing - or take its include out of git's configuration",
+            isolated.Refusal("'side-task'"));
+        Assert.False(File.Exists(target));
+    }
+
+    /// <summary>
+    /// The files git's configuration names to include, whether the condition holds or not: <c>~/</c> in the home, a relative
+    /// path against the directory of the file that names it, a whole path as it is; one under another's home, under git's
+    /// own install, or named relatively by no file, none.
+    /// </summary>
+    [Fact]
+    public void IncludeTargets_AreEveryIncludesFile_AsGitResolvesIt()
+    {
+        var tree = Path.GetFullPath("/r");
+        var home = Path.GetFullPath("/h");
+        var whole = Path.GetFullPath("/etc/extra.config");
+        var answered = string.Join('\0', [
+            "file:.git/config", "include.path\nshared.config",
+            "file:.git/config", "includeif.onbranch:main.path\n../team.config",
+            "file:" + Path.Combine(home, ".gitconfig"), "include.path\n~/work.config",
+            "file:" + Path.Combine(home, ".gitconfig"), "includeif.gitdir:~/src/.path\n" + whole,
+            "file:.git/config", "core.hookspath\n.husky",
+            "file:.git/config", "include.path\n~other/x.config",
+            "file:.git/config", "include.path\n%(prefix)/etc/x.config",
+            "command line:", "include.path\nrelative.config",
+            string.Empty,
+        ]);
+
+        Assert.Equal(
+            [Path.Combine(tree, ".git", "shared.config"), Path.Combine(tree, "team.config"), Path.Combine(home, "work.config"), whole],
+            AgentIsolation.IncludeTargets(answered, tree, home));
     }
 
     /// <summary>

@@ -47,8 +47,10 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
         return new AgentWorkspace(worktree, workDirectory, repository.MainCheckoutRoot, [], worktree ?? workDirectory, runDirectory);
     }
 
+    private readonly ClaudeCodeDirectories _claudeCode = new(fileSystem, platform, keys);
+
     /// <summary>The tool's own Claude Code directory on this machine: <c>CLAUDE_CONFIG_DIR</c> of its process where set, else <c>~/.claude</c>.</summary>
-    public string ToolClaudeDirectory => new ClaudeTranscripts(fileSystem, platform).ConfigDirectory;
+    public string ToolClaudeDirectory => _claudeCode.Own;
 
     /// <summary>The running order of <paramref name="resolution"/>'s entries, each with its credential read from the slot (<see cref="AgentStepOrder.Of"/>).</summary>
     /// <param name="providers">The configuration's providers and tiers, resolved.</param>
@@ -64,15 +66,17 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
 
     /// <summary>
     /// Every Claude Code directory the agent's ground keeps each of its actions from (<see cref="Agents.Policy.AgentStepGround"/>):
-    /// each one a client of the run's order reads, and the tool's own always, whatever client the run is on - its
-    /// credentials and its settings are this machine's, and no agent reads them.
+    /// every one on this machine the tool knows of, whatever client the run is on (<see cref="ClaudeCodeDirectories"/>) -
+    /// each one a client of the run's order reads among them - the same the tool's own executions of its work are kept
+    /// from: their credentials and their settings are this machine's, and no agent reads them.
     /// </summary>
-    /// <param name="order">The run's order.</param>
-    public IReadOnlyList<string> ClaudeDirectories(IReadOnlyList<AgentRunEntry> order)
+    /// <param name="config">The configuration, whose providers name the claude-code client's setting.</param>
+    /// <param name="layout">The repository, whose slot holds it.</param>
+    public IReadOnlyList<string> ClaudeDirectories(Configuration.HarnessConfig config, HarnessLayout layout)
     {
-        ArgumentNullException.ThrowIfNull(order);
+        ArgumentNullException.ThrowIfNull(layout);
 
-        return [.. order.Select(entry => entry.Credential?.ConfigDirectory).OfType<string>().Append(ToolClaudeDirectory).Distinct(StringComparer.Ordinal)];
+        return _claudeCode.Of(config, layout.MainCheckoutRoot);
     }
 
     /// <summary>

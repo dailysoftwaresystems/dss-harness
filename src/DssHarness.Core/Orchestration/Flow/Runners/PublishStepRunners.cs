@@ -72,8 +72,9 @@ public sealed class PushStepRunner(
         }
 
         // The push runs the repository's hooks, the agents' work among what they read: inside the isolation, decided before
-        // anything is pushed.
-        using var hooks = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfHooks(context.Config, context.Layout.MainCheckoutRoot, tree), context.Layout.MainCheckoutRoot, cancellationToken)
+        // anything is pushed - the user's SSH agent reached where the push goes over ssh.
+        var overSsh = await GitSsh.PushesOverSshAsync(git, tree, remote, cancellationToken).ConfigureAwait(false);
+        using var hooks = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfHooks(context.Config, context.Layout.MainCheckoutRoot, tree, overSsh), context.Layout.MainCheckoutRoot, cancellationToken)
             .ConfigureAwait(false);
 
         if (hooks.Refusal($"'{run.Instance}'") is { } refused)
@@ -82,6 +83,14 @@ public sealed class PushStepRunner(
         }
 
         var pushed = await publisher.PushAsync(tree, remote, commit, branch, WorkflowStepTypes.CommandLimitOf(run.Step), hooks.ForProcess, cancellationToken).ConfigureAwait(false);
+
+        // What the hooks made in the tree's git directory that no git may go on over ends the step.
+        if (hooks.Afterward() is { } made)
+        {
+            var done = pushed ? $"pushed {commit} to" : $"found {commit} already on";
+
+            return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, $"'{run.Instance}' {done} {remote}'s '{branch}', and {made}.", new JsonObject { ["isolation"] = hooks.Record.ToOutput() });
+        }
 
         return FlowStepResult.Ended(
             passed: true,

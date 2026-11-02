@@ -141,13 +141,21 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
                 await pump.PostOwnAsync(new RunStarted(step.Attempt)).ConfigureAwait(false);
 
-                // A launch that runs on the words policy alone says so at its start, every time, in its own stream.
+                // A launch that runs on the words policy alone, or inside a mechanism that leaves something reached, says so at
+                // its start, every time, in its own stream.
                 if (step.Isolation?.Notice is { } unisolated)
                 {
                     await pump.PostOwnAsync(new Notice(unisolated)).ConfigureAwait(false);
                 }
 
                 (var worked, thrown) = await WorkAsync(step, directory, mask, pump, cancellationToken).ConfigureAwait(false);
+
+                // What the agent's commands made in the trees' git directories that no git may go on over fails the run.
+                if (step.Isolation?.Afterward() is { } made)
+                {
+                    worked = worked.FailedFor(made);
+                }
+
                 result = worked;
 
                 // The end is made once every event before it has been handed over, for only then is it known whether the

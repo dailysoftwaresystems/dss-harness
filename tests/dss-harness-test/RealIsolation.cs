@@ -70,7 +70,7 @@ internal static class RealIsolation
         Directory.CreateDirectory(slot);
         var canary = Path.Combine(slot, "canary");
         await File.WriteAllTextAsync(canary, "secret", Token);
-        var launch = Path.Combine(kit.Layout.Directory, "steps", "think");
+        var launch = Directory.CreateDirectory(Path.Combine(kit.Layout.Directory, "steps", "think")).FullName;
         var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
         var ground = AgentStepGround.Of(
             config,

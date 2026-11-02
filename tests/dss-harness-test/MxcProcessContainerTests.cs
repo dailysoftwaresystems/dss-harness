@@ -196,7 +196,7 @@ public sealed class MxcProcessContainerTests
             Assert.StartsWith(Path.Combine(tree.Path, HarnessLayout.DirectoryName, HarnessLayout.RunsDirectoryName, "isolation-probe-"), asked.WorkingDirectory, StringComparison.Ordinal);
         });
         Assert.Equal(
-            [@"hidden\canary", @"HIDDEN\canary", @"open\sealed\w", @"open\SEALED\w", "w", @"open\w"],
+            [Path.Combine("hidden", "canary"), Path.Combine("HIDDEN", "canary"), Path.Combine("open", "sealed", "w"), Path.Combine("open", "SEALED", "w"), "w", Path.Combine("open", "w")],
             runner.Asked.Take(6).Select(asked => Path.GetRelativePath(asked.WorkingDirectory!, asked.Arguments[^1])));
         Assert.All(runner.Asked.Skip(6), asked => Assert.Same(IsolationProfile.Nothing, asked.Isolation!.Profile));
         Assert.Equal([node, git, sh], runner.Asked.Skip(6).Select(asked => asked.FileName));

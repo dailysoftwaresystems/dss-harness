@@ -57,8 +57,40 @@ public sealed class CommitStepTests
 
         Assert.True(ended.Passed, ended.Error);
         Assert.Equal(new IsolatedWrite(kit.Main, Directory: true, Writable: true), Assert.Single(Assert.Single(mechanism.Profiles).Writes));
-        Assert.Equal((IsolatedExecution.Hooks, kit.Main), (Assert.Single(under.Executions).Kind, under.Executions[0].WritableRoots[0]));
+        Assert.Equal((IsolatedExecution.Hooks, kit.Main, false), (Assert.Single(under.Executions).Kind, under.Executions[0].WritableRoots[0], under.Executions[0].ReachesSshAgent));
         Assert.Equal("""{"mode":"required","mechanism":"test","version":"1.0"}""", ended.Output!["isolation"]!.ToJsonString());
+    }
+
+    /// <summary>
+    /// A commit the repository signs with an ssh key reaches the user's SSH agent inside the isolation, and no other; and
+    /// what its hooks made in the main checkout's git directory that no git may go on over ends the step failed, the commit
+    /// made and named, before any other git of the tool's runs there.
+    /// </summary>
+    [Fact]
+    public async Task ACommitSignedWithAnSshKey_ReachesTheAgent_AndOneWhoseHooksMadeAPointer_EndsFailed()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        _ = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        var made = "'x' was made while it ran";
+        var under = TestIsolation.Under(new PassThroughMechanism(), () => made);
+
+        var ended = await Runner(kit, isolation: under).RunAsync(Run(kit, Step(), "fold"), Token);
+
+        Assert.Equal(
+            (false, HarnessExit.CommandFailed, $"'commit' made {DssHarness.Core.Output.ReportText.Commit(await HeadAsync(kit))}, and {made}."),
+            (ended.Passed, ended.Exit, ended.Error));
+        Assert.Equal("""{"isolation":{"mode":"required","mechanism":"test","version":"1.0"}}""", ended.Output!.ToJsonString());
+
+        using var signed = new TempDirectory();
+        var signs = await OrchestrationKit.PrepareAsync(signed);
+        _ = await FoldedAsync(signs, "fold", ("a.txt", "folded\n"));
+        await signs.Harness.RunGitAsync(signs.Main, ["config", "commit.gpgSign", "true"], Token);
+        await signs.Harness.RunGitAsync(signs.Main, ["config", "gpg.format", "ssh"], Token);
+        var signing = TestIsolation.UnavailableToExecutions("bubblewrap is not here", "install it");
+        _ = await Runner(signs, isolation: signing).RunAsync(Run(signs, Step(), "fold"), Token);
+
+        Assert.True(Assert.Single(signing.Executions).ReachesSshAgent);
     }
 
     /// <summary>

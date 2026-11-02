@@ -133,7 +133,7 @@ public sealed class ReporterRunner(
             new WorkflowStep { Name = "reporter", Type = "reason" },
             workspace,
             webSearchGiven: false,
-            _launch.ClaudeDirectories(order),
+            _launch.ClaudeDirectories(context.Config, context.Layout),
             readsOnly: true) with
         {
             ReporterRoot = layout.Directory,

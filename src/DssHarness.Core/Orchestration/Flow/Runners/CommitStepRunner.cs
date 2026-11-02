@@ -170,8 +170,10 @@ public sealed class CommitStepRunner(
         }
 
         // The commit runs the repository's hooks, the agents' work among what they read: inside the isolation, decided
-        // before anything is staged, so a step refused for want of it leaves the index as it found it.
-        using var hooks = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfHooks(context.Config, context.Layout.MainCheckoutRoot, main), context.Layout.MainCheckoutRoot, cancellationToken)
+        // before anything is staged, so a step refused for want of it leaves the index as it found it - the user's SSH agent
+        // reached where the commit is signed with an ssh key.
+        var signsWithSsh = await GitSsh.SignsCommitsWithSshAsync(git, main, cancellationToken).ConfigureAwait(false);
+        using var hooks = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfHooks(context.Config, context.Layout.MainCheckoutRoot, main, signsWithSsh), context.Layout.MainCheckoutRoot, cancellationToken)
             .ConfigureAwait(false);
 
         if (hooks.Refusal($"'{run.Instance}'") is { } unisolated)
@@ -214,6 +216,12 @@ public sealed class CommitStepRunner(
 
             ledger.Unstaged(layout, id);
             return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, $"'{run.Instance}': {refused.Message}; what it staged was unstaged: fix what git reported, then resume.", Isolated(hooks));
+        }
+
+        // What the hooks made in the main checkout's git directory that no git may go on over ends the step before any is.
+        if (hooks.Afterward() is { } made)
+        {
+            return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, $"'{run.Instance}' made {ReportText.Commit(sha)}, and {made}.", Isolated(hooks));
         }
 
         // The commit is held to the set: a hook may stage more into it, and git may leave a path of it out. One that is not

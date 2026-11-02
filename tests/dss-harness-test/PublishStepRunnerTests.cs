@@ -62,6 +62,39 @@ public sealed class PublishStepRunnerTests
     }
 
     /// <summary>
+    /// A push to a remote over ssh reaches the user's SSH agent inside the isolation, and one to any other remote none; and
+    /// what its hooks made in the tree's git directory that no git may go on over ends the step failed, saying what was
+    /// pushed, or that it was there already.
+    /// </summary>
+    [Fact]
+    public async Task APushOverSsh_ReachesTheAgent_AndOneWhoseHooksMadeAPointer_EndsFailed()
+    {
+        using var temp = new TempDirectory();
+        using var remote = new TempDirectory();
+        var kit = await PushingToAsync(temp, remote);
+        var made = "'x' was made while it ran";
+        var local = TestIsolation.Under(new PassThroughMechanism(), () => made);
+
+        var pushed = await Push(kit, isolation: local).RunAsync(Run(kit, PushStep()), Token);
+
+        Assert.Equal(
+            (false, HarnessExit.CommandFailed, $"'push' pushed {await HeadAsync(kit)} to origin's 'work', and {made}."),
+            (pushed.Passed, pushed.Exit, pushed.Error));
+        Assert.False(Assert.Single(local.Executions).ReachesSshAgent);
+
+        // Run again, the commit is there already, and the step says so.
+        var again = await Push(kit, isolation: TestIsolation.Under(new PassThroughMechanism(), () => made)).RunAsync(Run(kit, PushStep()), Token);
+
+        Assert.Equal($"'push' found {await HeadAsync(kit)} already on origin's 'work', and {made}.", again.Error);
+
+        await kit.Harness.RunGitAsync(kit.Main, ["remote", "add", "far", "git@example.com:team/r.git"], Token);
+        var far = TestIsolation.UnavailableToExecutions("bubblewrap is not here", "install it");
+        _ = await Push(kit, isolation: far).RunAsync(Run(kit, PushStep() with { Remote = "far" }), Token);
+
+        Assert.True(Assert.Single(far.Executions).ReachesSshAgent);
+    }
+
+    /// <summary>
     /// A push sends the commit HEAD names to the branch of its name on the remote the run's branch goes to and answers
     /// that it moved it; run again, it pushes what is pushed already and answers that it did not.
     /// </summary>

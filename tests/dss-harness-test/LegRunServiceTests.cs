@@ -1124,6 +1124,31 @@ public sealed class LegRunServiceTests
             sink.Seen.OfType<LegProgressed>().Where(@event => @event.Leg == "native").Select(@event => @event.Message));
     }
 
+    /// <summary>
+    /// A leg whose work ran inside a mechanism that leaves something reached says so on its line; and one whose work made
+    /// what no git may go on over in the trees' git directories fails, saying it, whatever its work answered.
+    /// </summary>
+    [Fact]
+    public async Task ALegInsideAMechanismThatLeavesSomething_SaysIt_AndOneWhoseWorkMadeAPointer_Fails()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        const string Made = "'x' was made while it ran";
+        var leaving = new LegIsolationAnswer(new ExecutionIsolation(IsolatedExecution.Legs, AgentIsolationMode.Required, new PassThroughMechanism("bubblewrap", "0.9.0") { Leaves = "abstract Unix sockets" }, IsolationProfile.Nothing, null, null) { After = () => Made });
+        var sink = new RecordingSink();
+        Dictionary<string, (string? Verdict, string? Detail)> verdicts;
+
+        using (var output = new EventHarnessOutput(sink, OperationId.New()))
+        {
+            verdicts = Verdicts(await OutcomeAsync(temp, harness, OneLeg(harness), SshAndLocal(harness), new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy, Isolation = leaving }, output: output));
+        }
+
+        Assert.Equal(("failed", Made), verdicts["native"]);
+        Assert.Contains(
+            "what the agents wrote is built, tested and run inside bubblewrap, which leaves abstract Unix sockets reached",
+            sink.Seen.OfType<LegProgressed>().Where(@event => @event.Leg == "native").Select(@event => @event.Message));
+    }
+
     /// <summary>An answer of a test's for the isolation of every leg's work, kept with what each leg asked.</summary>
     private sealed class LegIsolationAnswer(ExecutionIsolation answer) : ILegIsolation
     {

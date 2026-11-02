@@ -1222,6 +1222,12 @@ public sealed class LegRunService(
 
         entry = setUp is null ? entry : entry with { DeveloperEnvironment = setUp.Fact };
 
+        // What the leg's work made in the trees' git directories that no git may go on over fails the leg, saying it.
+        if (held?.Afterward() is { } made)
+        {
+            entry = entry with { Verdict = LegVerdict.Failed, Detail = made };
+        }
+
         // The remedy a leg in place that ended inputs-moved is owed: where the command could have run it on a copy, one
         // name says how. Never for a leg that worked in one, nor under a command that takes no such option, whose reader
         // the remedy would send nowhere - nor where the placement's own rule puts the leg in no copy of its own whatever

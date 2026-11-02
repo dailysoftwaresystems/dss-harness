@@ -101,15 +101,17 @@ public sealed partial class IsolationPlatform(
     /// <summary>
     /// What the probe's command says and ends with where everything was as it must be: <c>$1</c> the canary, <c>$2</c> it
     /// by another case of its directory's name, <c>$3</c> the place written by nobody, <c>$4</c> it by another case,
-    /// <c>$5</c> the open place, <c>$6</c> a file outside every open place.
+    /// <c>$5</c> the open place, <c>$6</c> a file outside every open place. Each write is <c>true</c>'s, a regular command,
+    /// never <c>:</c>'s: a redirection that fails on a special builtin ends a POSIX shell - dash, and bash as macOS's
+    /// <c>sh</c> - with 2, before it could say which place held.
     /// </summary>
     private const string ProbeScript =
         "if cat \"$1\" >/dev/null 2>&1; then echo 'the hidden canary was read'; exit 3; fi; "
         + "if cat \"$2\" >/dev/null 2>&1; then echo 'the hidden canary was read by another case of its name'; exit 4; fi; "
-        + "if : > \"$3/w\" 2>/dev/null; then echo 'the sealed place was written'; exit 5; fi; "
-        + "if : > \"$4/w\" 2>/dev/null; then echo 'the sealed place was written by another case of its name'; exit 6; fi; "
-        + "if : > \"$6\" 2>/dev/null; then echo 'a place outside every open one was written'; exit 7; fi; "
-        + ": > \"$5/w\" || { echo 'the open place was not written'; exit 8; }";
+        + "if true 2>/dev/null > \"$3/w\"; then echo 'the sealed place was written'; exit 5; fi; "
+        + "if true 2>/dev/null > \"$4/w\"; then echo 'the sealed place was written by another case of its name'; exit 6; fi; "
+        + "if true 2>/dev/null > \"$6\"; then echo 'a place outside every open one was written'; exit 7; fi; "
+        + "true > \"$5/w\" || { echo 'the open place was not written'; exit 8; }";
 
     /// <summary>What a probe that failed by another case of a name says, which its remedy is told by.</summary>
     private const string AnotherCase = "another case";

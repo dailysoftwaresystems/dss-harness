@@ -154,7 +154,7 @@ public sealed class AdvisorRunner(
             new WorkflowStep { Name = "advisor", Type = "reason" },
             workspace,
             webSearchGiven: false,
-            launch.ClaudeDirectories(order),
+            launch.ClaudeDirectories(context.Config, context.Layout),
             readsOnly: true);
 
         // The advice's agent may run commands that only read: where agentPolicy.isolation is required and this machine has

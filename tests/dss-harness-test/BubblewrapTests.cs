@@ -65,7 +65,7 @@ public sealed class BubblewrapTests
             var result = await writing;
 
             Assert.NotEqual(0, result.ExitCode);
-            Assert.Contains("Read-only file system", result.StandardError, StringComparison.Ordinal);
+            Assert.True(result.StandardError.Contains("Read-only file system", StringComparison.Ordinal), $"{place}: {result.StandardError}");
             Assert.False(File.Exists(place), place);
         }
 
@@ -77,9 +77,8 @@ public sealed class BubblewrapTests
     /// <summary>
     /// A command inside moves no directory above a guarded place, for a place moved away would take its rule with it and
     /// leave its name free to make again: the repository's git directory and the directory that holds the credential slots
-    /// stand in the main checkout, which the read-only machine keeps; and the directories of the git directory it writes
-    /// that hold the worktree's own pointers - the worktrees directory and the worktree's own - are each a mount point
-    /// inside, which the system keeps from being renamed.
+    /// stand in the main checkout, and the worktrees directory and the worktree's own git directory stand in the common
+    /// directory, which a worktree's work never writes - the read-only machine keeps each where it is.
     /// </summary>
     [Fact]
     public async Task ACommandInside_MovesNoDirectoryAboveAGuardedPlace()
@@ -94,12 +93,12 @@ public sealed class BubblewrapTests
         var worktrees = Path.Combine(git, "worktrees");
         var linked = Assert.Single(Directory.GetDirectories(worktrees));
 
-        foreach (var (anchor, said) in new[] { (git, "Read-only file system"), (config, "Read-only file system"), (worktrees, "Device or resource busy"), (linked, "Device or resource busy") })
+        foreach (var (anchor, said) in new[] { (git, "Read-only file system"), (config, "Read-only file system"), (worktrees, "Read-only file system"), (linked, "Read-only file system") })
         {
             var moved = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", "mv \"$1\" \"$1-moved\"", "sh", anchor);
 
             Assert.NotEqual(0, moved.ExitCode);
-            Assert.Contains(said, moved.StandardError, StringComparison.Ordinal);
+            Assert.True(moved.StandardError.Contains(said, StringComparison.Ordinal), $"{anchor}: {moved.StandardError}");
             Assert.True(Directory.Exists(anchor), anchor);
             Assert.False(Directory.Exists(anchor + "-moved"), anchor);
         }
@@ -153,7 +152,7 @@ public sealed class BubblewrapTests
         await File.WriteAllTextAsync(canary, "secret", Token);
         var config = new Core.Configuration.HarnessConfig { Worktrees = OrchestrationKit.Settings };
         var isolated = await new Core.Agents.Isolation.AgentIsolation(platform, kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path))
-            .ForExecutionAsync(config, Core.Agents.Isolation.ExecutionGrounds.OfHooks(config, kit.Main, kit.Main), kit.Main, Token);
+            .ForExecutionAsync(config, Core.Agents.Isolation.ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: false), kit.Main, Token);
         var hook = Path.Combine(kit.Main, ".git", "hooks", "pre-commit");
         await File.WriteAllTextAsync(hook, $"#!/bin/sh\ncat '{canary}' > hook-read.txt 2>&1\nexit 0\n", Token);
 

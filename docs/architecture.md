@@ -2336,21 +2336,32 @@ the three of a run). A launch and an execution of the tool's own reach one build
 over an `IsolationGround` made of either's ground), which keeps no list of its own beside the ground's and the
 declared caches. An agent that may run no command - the reporter - needs none (`LaunchIsolation.Unneeded`), and
 nothing is probed. Otherwise the platform's mechanism, proved once per process (`IIsolationPlatform`), and a profile
-of the ground, the machine read-only: written, the ground's writable roots, the git directories of each of its trees
-that is itself one of them and its repository's top level (`AgentIsolation.GitPlacesAsync`: `rev-parse
+of the ground, the machine read-only: written, the ground's writable roots, what git writes of each of its trees that
+is itself one of them and its repository's top level (`AgentIsolation.GitPlacesAsync`: `rev-parse
 --path-format=absolute --git-dir --git-common-dir --git-path hooks --show-toplevel`, git 2.31 or newer, so a leg's
-copy that is no repository of its own writes nothing of the repository above it) - so `git add`, commit and fetch
-write the objects, the index and the refs - the launch's own temporary directory under the isolation's own
-(`IsolationCaches.Root`, then `tmp/`; none where the mechanism gives one, `OwnTemp`) and the declared tool caches
-(`IsolationCaches.Declared`, each variable pointed into `caches/`; a cache is code a later build runs, so the user's
-own stay read-only); hidden, every credential slot (`AgentPolicyGround.SlotDirectories`) and every Claude Code
-directory (`ClaudeCodeDirectories`) with `~/.claude.json` beside `~/.claude`, the shell snapshots Claude Code sources
-read again (`Reopened`); written by nobody, git's code-running files and its pointers to its own directories as git
-names them (the hooks, the common directory's `config`, `config.worktree` and `info/`, each linked worktree's
-`config.worktree`, `commondir` and `gitdir`, a worktree's `.git` file, every submodule's `hooks/` and `config` under
-`modules/`), every configuration file git reads there (`git config --list --show-origin`), each tree's
-`.harness-config`, each state path (`StateDirectories`) and the launch's own directory - laid parent first, a place
-both sealed and writable staying sealed (`IsolationProfiles.Ordered`); anchored, every directory above a guarded place
+copy that is no repository of its own writes nothing of the repository above it), by the tree's kind
+(`AgentIsolation.GitWritten`): a linked worktree's own git directory and the common directory's `objects/`, `refs/`,
+`logs/` (made where git has not) and `lfs/` where there is one, never the common directory itself, where a
+`commondir` made would lead every git to another repository's own files, so a shallow repository's fetch, a rewrite
+of `packed-refs` and `git gc` fail there; a main checkout's `.git` whole, for git makes its lock files directly in
+it, which no rule at a path grants one name at a time - so `git add`, commit and fetch write the objects, the index
+and the refs - the launch's own temporary directory under the isolation's own (`IsolationCaches.Root`, then `tmp/`;
+none where the mechanism gives one, `OwnTemp`) and the declared tool caches (`IsolationCaches.Declared`, each variable
+pointed into `caches/`; a cache is code a later build runs, so the user's own stay read-only; on Linux Playwright's
+browsers, which the moved `XDG_CACHE_HOME` would hide, named where the user has them, `IsolationCaches.Installed`);
+hidden, every credential slot (`AgentPolicyGround.SlotDirectories`) and every Claude Code directory - one list for a
+launch and an execution alike, `ClaudeCodeDirectories.Of`: `~/.claude`, the tool's own and the one the slot names for
+the claude-code client's logins - with `~/.claude.json` beside `~/.claude`, the shell snapshots Claude Code sources
+read again (`Reopened`); written by nobody, git's code-running files and its pointers to its own directories and to
+other content as git names them (the hooks git runs and the common directory's own `hooks/`, which git runs again once
+`core.hooksPath` is gone; the common directory's `config`, `config.worktree`, `info/`, `refs/replace/` and
+`objects/info/`; each linked worktree's `config.worktree`, `commondir` and `gitdir`; a worktree's `.git` file; every
+git directory's `modules/` whole, the common one's and each linked worktree's, where git keeps a linked worktree's own),
+every configuration file git reads there (`git config --list --show-origin`) and every file one includes, whether its
+condition holds now or not (`GitPlaces.Includes`, `AgentIsolation.IncludeTargets`, an inactive one read with `git
+config --file` for what it includes in turn), each tree's `.harness-config`, each state path (`StateDirectories`) and
+the launch's own directory - laid parent first, a place both sealed and writable staying sealed
+(`IsolationProfiles.Ordered`); anchored, every directory above a guarded place
 whose holder is written and each writable root itself, which no command renames or removes
 (`IsolationProfile.Anchors`, a property of the profile, so no mechanism keeps a list of its own): a rule stands at a
 path, so a directory above a guarded place moved away would take the place out from under its rule and leave its name
@@ -2359,25 +2370,39 @@ Every place is ruled at its real spelling. A place not there inside a written pl
 empty first, so no command makes it inside and has it read or run outside later; a state file never is
 (`HarnessLayout.StateFileNames`), for the tool reads one as meaning something, and the words policy alone guards it. A
 launch has no isolation, said, where its places cannot be held: a git that cannot say where a tree keeps its files
-(`AgentIsolation.Unwhole`), a link inside a written place on the way to a guarded one (`AgentIsolation.LinkOnTheWay`),
-which a command could replace with one leading elsewhere, or, under a mechanism whose rules hold the one spelling
+(`AgentIsolation.Unwhole`), a main checkout's `.git` holding a pointer to another repository's own files
+(`AgentIsolation.GitPointers`), which git's answers there would follow, a file git's configuration includes that is
+not there inside a written place, which a command could make, a link inside a written place on the way to a guarded
+one (`AgentIsolation.LinkOnTheWay`), which a command could replace with one leading elsewhere, or, under a mechanism
+whose rules hold the one spelling
 (`HoldsEveryCase` false: bubblewrap), a guarded place on a file system that ignores letter case
 (`AgentIsolation.FoldsCase`). The anchors cost each mechanism what its type says (`AnchorCost`): nothing under
 bubblewrap, whose mount points keep `.git`'s own files writable, nor under macOS's sandbox, which refuses a
 directory's removal alone; under MXC's container, which refuses no rename alone, an anchor is read alone, so git makes
 no lock file in a `.git` that holds a sealed place, nor in a linked worktree's directory under it - git add, commit,
-fetch and push fail there, a side-task's git over the main tree and a run's commit and push steps among them. A linked
-worktree's git directories, as git named them before the launch, are pinned for every later git of the tool's in it
-(`GitDirectoryPins`), so a `.git` file a command rewrote leads none of them elsewhere; and every git of the tool's
-runs with its own settings (`GitOwnSettings.Apply`, through `GIT_CONFIG_PARAMETERS`, so no argument list changes): no
-file-system monitor (`core.fsmonitor=false`), whose command a repository's configuration names, and no hooks but where
-it runs them on purpose (`GitHooks`), with `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` from the pin where there is
-one. `agentPolicy.isolation` (`AgentIsolationMode`: `required` where nothing is said, any other word than the two a
+fetch and push fail there, a side-task's git over the main tree and a run's commit and push steps among them. Every
+tree's git directories, a linked worktree's and a main checkout's alike, as git named them before the launch, are
+pinned for every later git of the tool's in it (`GitDirectoryPins`), so neither a `.git` file a command rewrote nor a
+`commondir` a main checkout's `.git` came to hold leads one elsewhere; and every git of the tool's runs with its own
+settings (`GitOwnSettings.Apply`, through `GIT_CONFIG_PARAMETERS` and its own variables, so no argument list changes):
+no file-system monitor (`core.fsmonitor=false`), whose command a repository's configuration names, no hooks but where
+it runs them on purpose (`GitHooks`), no object replaced (`GIT_NO_REPLACE_OBJECTS=1`), with `GIT_DIR`,
+`GIT_COMMON_DIR` and `GIT_WORK_TREE` from the pin where there is one - the repository's configuration otherwise read
+as git reads it, its filters among it, which is why every configuration file is written by nobody. What the work made
+in the trees' git directories is looked at once it has run under a mechanism, against what was there as the profile
+was built (`IsolationDecision.Afterward`, the held decision's `After`): a pointer made in a common directory or a
+linked worktree's git directory under it, or a replacement a `packed-refs` came to name - which a main checkout's
+`.git`, written whole, could take while its `refs/replace/` is sealed, and the user's own git, an editor or a prompt
+started outside would follow - ends what asked: `AgentRunner` fails the launch, `LegRunService` the leg,
+`CommitStepRunner` and `PushStepRunner` the step after git's own work, each naming it and the remedy.
+`agentPolicy.isolation` (`AgentIsolationMode`: `required` where nothing is said, any other word than the two a
 problem of the configuration) turns no mechanism into the launch's refusal (`LaunchIsolation.Refusal`: a step ends
 failed, 14; the advisor's advice is not obtained; `run-side-task` exits 14 having started nothing) - every mode but
 `preferred` refuses - or, under `preferred`, its notice (`LaunchIsolation.Notice`), a `Notice` the runner says at the
-launch's start. Every launch's result carries what it ran under (`AgentRunResult.Isolation`, `result.json`'s
-`isolation`, an `AgentIsolationRecord`: the mode, and the mechanism with its version, what it leaves reached and what
+launch's start, as it says the one of a mechanism that leaves something reached (`IIsolationMechanism.Leaves`:
+bubblewrap on a kernel with no Landlock scope), from the same base (`IsolationDecision.NoticeSaying`). Every launch's
+result carries what it ran under (`AgentRunResult.Isolation`, `result.json`'s `isolation`, an `AgentIsolationRecord`:
+the mode, and the mechanism with its version, what it leaves reached and what
 its anchors cost, or why there was none), and each side-task turn its own (`SideTaskTurn.Isolation`). The request
 carries the launch's isolation (`AgentStepRequest.Isolation`, on to `AgentRun.Isolation`, what its processes run under
 - `LaunchIsolation.Processes`, `LaunchProcesses` - so a client is handed nothing it could end, the decision released
@@ -2413,14 +2438,19 @@ own files, stay open (`AgentPolicy.OpenVerbs`), every verb the tool lists in one
 The same owner decides the isolation of the tool's own executions of what the agents wrote
 (`IAgentIsolation.ForExecutionAsync`, an `ExecutionIsolation`, from an `ExecutionGround` that `ExecutionGrounds` alone
 builds, `IsolationGround.Of` making the builder's ground of it): the profile a launch's is - the machine read-only,
-the slots and the tool's own Claude Code directory hidden, git's code-running files of each tree, the configuration
-directory and the tool's state under each written by nobody, the ground's own places, a temporary directory of its own
-and the declared tool caches written - a state place the execution writes whole, a sweep's workers' slot, left
-unsealed, for the profile keeps a place both sealed and written sealed. The hooks' ground alone reaches a socket
-outside: the user's SSH agent's (`SSH_AUTH_SOCK`, taken at its real path where it is there), bound alone under
-bubblewrap - inside the hidden runtime directory or the launch's own `/tmp` among them - and reached alone under
-macOS's sandbox (`IsolationProfile.Sockets`), so a push over ssh signs with the user's agent and nothing else outside
-is reached; MXC is handed none. Its refusal, notice and record are a launch's, from one base (`IsolationDecision`),
+the slots and every Claude Code directory a launch hides (`ClaudeCodeDirectories.Of`) hidden, git's code-running files
+of each tree, the configuration directory and the tool's state under each written by nobody, the ground's own places,
+a temporary directory of its own and the declared tool caches written - a state place the execution writes whole, a
+sweep's workers' slot, left unsealed, for the profile keeps a place both sealed and written sealed. A hooks' ground
+alone reaches a socket outside, and only where git's own work needs it (`ExecutionGround.ReachesSshAgent`, set by
+`ExecutionGrounds.OfHooks` from what its caller asked of `GitSsh`: a push whose remote's push address is ssh's,
+`GitSsh.PushesOverSshAsync`, a commit the repository signs with an ssh key, `GitSsh.SignsCommitsWithSshAsync`): the
+user's SSH agent's (`SSH_AUTH_SOCK`, taken at its real path where it is there), bound alone under bubblewrap - inside
+the hidden runtime directory or the launch's own `/tmp` among them - and reached alone under macOS's sandbox
+(`IsolationProfile.Sockets`), so such a push or commit signs with the user's agent and nothing else outside is
+reached, and every other commit's, push's and leg's work reaches none; MXC is handed none. A commit signed with gpg or
+x509 reaches no gpg agent hidden with the runtime directory, and fails there. Its refusal, notice and record are a
+launch's, from one base (`IsolationDecision`),
 with words of their own. A run's leg step (`LegStepRunner`) asks it for its tree before anything starts - none here
 under `required` ends the step 14, nothing run - and hands the leg service an `ILegIsolation`
 (`LegRunRequest.Isolation`, carried by each leg command's request) that asks it again for each leg this machine runs,

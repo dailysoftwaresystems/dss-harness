@@ -100,6 +100,33 @@ public sealed class AgentRunnerTests
     }
 
     /// <summary>
+    /// A launch under a mechanism that leaves something reached says what at its start, as one under none does; and what its
+    /// agent's commands made in the trees' git directories that no git may go on over fails its run, saying it, in its
+    /// result and its record's end.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchUnderAMechanismThatLeavesSomething_SaysIt_AndOneThatMadeAPointer_Fails()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient { Script = (run, _, _) => Task.FromResult(Completed(run)) };
+        const string Made = "'x' was made while it ran";
+        var leaving = new DssHarness.Core.Agents.Isolation.LaunchIsolation(
+            "required",
+            new PassThroughMechanism("bubblewrap", "0.9.0") { Leaves = "abstract Unix sockets" },
+            DssHarness.Core.Processes.IsolationProfile.Nothing,
+            null,
+            null) { After = () => Made };
+        var seen = new List<AgentEvent>();
+
+        var result = await Runner(client).RunAsync(Step(temp) with { Isolation = leaving }, new Collecting(seen), TestContext.Current.CancellationToken);
+
+        Assert.Equal(["runStarted", "notice", "runFinished"], seen.Select(Kind));
+        Assert.Equal(new Notice("the agent's commands run inside bubblewrap, which leaves abstract Unix sockets reached") { At = seen[1].At, Seq = 2 }, seen[1]);
+        Assert.Equal((AgentRunStatus.Failed, Made), (result.Status, result.Error));
+        Assert.Equal((AgentRunStatus.Failed, Made), (((RunFinished)seen[2]).Status, ((RunFinished)seen[2]).Error));
+    }
+
+    /// <summary>
     /// A run the engine keeps elsewhere than an agent's steps - the run's reporter, whose attempt's files belong under
     /// the run's <c>asks/</c> - keeps its stream, its record and its first message there, by the directory its request
     /// names.

@@ -84,11 +84,12 @@ public sealed class ExecutionIsolationTests
     }
 
     /// <summary>
-    /// A commit's or a push's hooks reach the user's SSH agent's socket alone, at its real place - the one a push over ssh
-    /// signs with - while a leg's work reaches none; no agent's own command is given one.
+    /// Where git's own work signs or pushes through it - a push over ssh, a commit signed with an ssh key - a commit's or a
+    /// push's hooks reach the user's SSH agent's socket alone, at its real place; any other commit's or push's reach none,
+    /// and a leg's work none.
     /// </summary>
     [Fact]
-    public async Task AHooksExecution_ReachesTheUsersSshAgentAlone_ALegsWorkNone()
+    public async Task AHooksExecution_ReachesTheUsersSshAgentAlone_WhereGitSignsOrPushesThroughIt_ALegsWorkNone()
     {
         using var temp = new TempDirectory();
         using var home = new TempDirectory();
@@ -103,11 +104,76 @@ public sealed class ExecutionIsolationTests
             name => name == AgentIsolation.SshAgentSocketVariable ? socket : null);
         var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
 
-        using var hooks = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfHooks(config, kit.Main, kit.Main), kit.Main, Token);
+        using var hooks = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: true), kit.Main, Token);
+        using var unsigned = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: false), kit.Main, Token);
         using var legs = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfLegs(config, kit.Main, kit.Main), kit.Main, Token);
 
         Assert.Equal([socket], hooks.Profile!.Sockets);
+        Assert.Empty(unsigned.Profile!.Sockets);
         Assert.Empty(legs.Profile!.Sockets);
+    }
+
+    /// <summary>
+    /// git's own transport reads an address as ssh where it names ssh's scheme or is scp-like, and as none where it names
+    /// another scheme, a path, or a Windows drive.
+    /// </summary>
+    [Theory]
+    [InlineData("ssh://git@example.com/r.git", true)]
+    [InlineData("git+ssh://example.com/r.git", true)]
+    [InlineData("ssh+git://example.com/r.git", true)]
+    [InlineData("SSH://example.com/r.git", false)]
+    [InlineData("git@example.com:team/r.git", true)]
+    [InlineData("example.com:r.git", true)]
+    [InlineData("https://example.com/r.git", false)]
+    [InlineData("git://example.com/r.git", false)]
+    [InlineData("file:///srv/r.git", false)]
+    [InlineData("/srv/r.git", false)]
+    [InlineData("../r.git", false)]
+    [InlineData("./a:b", false)]
+    [InlineData(@"C:\repos\r.git", false)]
+    [InlineData("C:/repos/r.git", false)]
+    public void AnAddress_IsSshAsGitsTransportReadsIt(string address, bool ssh)
+        => Assert.Equal(ssh, GitSsh.IsSshAddress(address));
+
+    /// <summary>
+    /// A push reaches the agent where any address git pushes the remote to goes over ssh, its rewrites applied; a commit
+    /// where the repository signs commits with an ssh key, and not where it signs them with GnuPG or signs none.
+    /// </summary>
+    [Fact]
+    public async Task GitsOwnWork_ReachesTheAgent_ForAPushOverSsh_AndACommitSignedWithAnSshKeyAlone()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(temp.Path, Token);
+        var git = harness.GitClient;
+
+        async Task Run(params string[] arguments) => Assert.True((await git.RunAsync(temp.Path, arguments, cancellationToken: Token)).Succeeded);
+
+        await Run("remote", "add", "web", "https://example.com/r.git");
+        await Run("remote", "add", "both", "https://example.com/r.git");
+        await Run("remote", "set-url", "--add", "--push", "both", "https://example.com/r.git");
+        await Run("remote", "set-url", "--add", "--push", "both", "git@example.com:r.git");
+        await Run("remote", "add", "rewritten", "https://mirror.example/r.git");
+        await Run("config", "url.git@example.com:.pushInsteadOf", "https://mirror.example/");
+
+        Assert.Equal(
+            (false, true, true, true),
+            (await GitSsh.PushesOverSshAsync(git, temp.Path, "web", Token),
+                await GitSsh.PushesOverSshAsync(git, temp.Path, "both", Token),
+                await GitSsh.PushesOverSshAsync(git, temp.Path, "rewritten", Token),
+                await GitSsh.PushesOverSshAsync(git, temp.Path, "ssh://example.com/r.git", Token)));
+
+        var signs = new List<bool> { await GitSsh.SignsCommitsWithSshAsync(git, temp.Path, Token) };
+        await Run("config", "commit.gpgSign", "true");
+        signs.Add(await GitSsh.SignsCommitsWithSshAsync(git, temp.Path, Token));
+        await Run("config", "gpg.format", "openpgp");
+        signs.Add(await GitSsh.SignsCommitsWithSshAsync(git, temp.Path, Token));
+        await Run("config", "gpg.format", "ssh");
+        signs.Add(await GitSsh.SignsCommitsWithSshAsync(git, temp.Path, Token));
+        await Run("config", "commit.gpgSign", "no");
+        signs.Add(await GitSsh.SignsCommitsWithSshAsync(git, temp.Path, Token));
+
+        Assert.Equal([false, false, false, true, false], signs);
     }
 
     /// <summary>
@@ -120,7 +186,7 @@ public sealed class ExecutionIsolationTests
         var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
         var main = Path.Combine(Path.GetTempPath(), "repo");
 
-        var ground = ExecutionGrounds.OfHooks(config, main, main);
+        var ground = ExecutionGrounds.OfHooks(config, main, main, sshAgent: false);
 
         Assert.Equal(IsolatedExecution.Hooks, ground.Kind);
         Assert.Equal([main], ground.Trees);
@@ -143,9 +209,9 @@ public sealed class ExecutionIsolationTests
         var preferring = new HarnessConfig { AgentPolicy = new AgentPolicyConfig { Isolation = AgentIsolationMode.Preferred } };
 
         var legs = await isolation.ForExecutionAsync(new HarnessConfig(), ExecutionGrounds.OfLegs(new HarnessConfig(), temp.Path, temp.Path), temp.Path, Token);
-        var hooks = await isolation.ForExecutionAsync(new HarnessConfig(), ExecutionGrounds.OfHooks(new HarnessConfig(), temp.Path, temp.Path), temp.Path, Token);
+        var hooks = await isolation.ForExecutionAsync(new HarnessConfig(), ExecutionGrounds.OfHooks(new HarnessConfig(), temp.Path, temp.Path, sshAgent: false), temp.Path, Token);
         var preferredLegs = await isolation.ForExecutionAsync(preferring, ExecutionGrounds.OfLegs(preferring, temp.Path, temp.Path), temp.Path, Token);
-        var preferredHooks = await isolation.ForExecutionAsync(preferring, ExecutionGrounds.OfHooks(preferring, temp.Path, temp.Path), temp.Path, Token);
+        var preferredHooks = await isolation.ForExecutionAsync(preferring, ExecutionGrounds.OfHooks(preferring, temp.Path, temp.Path, sshAgent: false), temp.Path, Token);
 
         Assert.Equal(
             (true, "'build' is refused: agentPolicy.isolation is \"required\" and bubblewrap is not here, so nothing the agents wrote is built, tested or run here; install it", (string?)null),

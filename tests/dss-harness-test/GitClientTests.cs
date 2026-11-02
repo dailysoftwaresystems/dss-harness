@@ -2781,7 +2781,8 @@ public sealed class GitClientProtocolTests
         // invoked from a hook, or from a shell left in another checkout, would read and write a
         // repository nobody named: with GIT_COMMON_DIR naming another repository, deleting a worktree
         // was refused and left it registered. Every name the list gives is cleared, not three of them - git's variable for
-        // its command line's settings then holding the tool's own alone, never an inherited one.
+        // its command line's settings then holding the tool's own alone, never an inherited one, and the one that keeps
+        // objects from being replaced set.
         var (git, requests) = Scripted(Exited(0));
 
         await git.RunAsync("/repo", ["status"], cancellationToken: TestContext.Current.CancellationToken);
@@ -2790,11 +2791,12 @@ public sealed class GitClientProtocolTests
         var own = $"'core.fsmonitor=false' 'core.hooksPath={(OperatingSystem.IsWindows() ? @"\\.\NUL" : "/dev/null")}'";
 
         Assert.Contains(GitOwnSettings.ParametersVariable, LocalNames);
+        Assert.Contains(GitOwnSettings.NoReplaceVariable, LocalNames);
 
         foreach (var name in LocalNames)
         {
             Assert.True(environment.ContainsKey(name), $"{name} was not cleared.");
-            Assert.Equal(name == GitOwnSettings.ParametersVariable ? own : null, environment[name]);
+            Assert.Equal(name == GitOwnSettings.ParametersVariable ? own : name == GitOwnSettings.NoReplaceVariable ? "1" : null, environment[name]);
         }
     }
 
@@ -3131,10 +3133,10 @@ public sealed class GitClientProtocolTests
     }
 
     /// <summary>
-    /// Every git of the tool's own runs with no file-system monitor, and every one but a question with no hook - each set
-    /// in git's own variable for its command line's settings, once the inherited one is gone - while one that runs the
-    /// hooks on purpose keeps them; in the root of a tree whose git directories were pinned, git is given them, and in any
-    /// other directory none.
+    /// Every git of the tool's own runs with no file-system monitor and no object replaced, and every one but a question
+    /// with no hook - each set in git's own variables, once the inherited ones are gone - while one that runs the hooks on
+    /// purpose keeps them; in the root of a tree whose git directories were pinned, git is given them, and in any other
+    /// directory none.
     /// </summary>
     [Fact]
     public async Task EveryGitOfTheTools_RunsNoMonitor_NoHookButOnPurpose_AndInAPinnedTree_ItsPinnedDirectories()
@@ -3158,6 +3160,7 @@ public sealed class GitClientProtocolTests
             (requests[0].Environment!["GIT_CONFIG_PARAMETERS"], requests[0].Environment!["GIT_DIR"], requests[0].Environment!["GIT_COMMON_DIR"], requests[0].Environment!["GIT_WORK_TREE"]));
         Assert.Equal(("'core.fsmonitor=false'", (string?)null), (requests[1].Environment!["GIT_CONFIG_PARAMETERS"], requests[1].Environment!["GIT_DIR"]));
         Assert.Equal(("'core.fsmonitor=false'", (string?)null), (requests[2].Environment!["GIT_CONFIG_PARAMETERS"], requests[2].Environment!["GIT_DIR"]));
+        Assert.All(requests, request => Assert.Equal("1", request.Environment!["GIT_NO_REPLACE_OBJECTS"]));
         Assert.Equal(@"'core.fsmonitor=false' 'core.hooksPath=\\.\NUL'", GitOwnSettingsOn(PlatformId.Windows));
     }
 

@@ -918,22 +918,50 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Written are the agent's writable roots - its worktree, its work directory - the git directories of a tree it writes, "
-                + "its own and the common one, so git add, commit, fetch, rm and status write the objects, the index and the refs; a "
-                + "temporary directory of the launch's own, named by TMPDIR - on Linux the system's /tmp inside, so nothing another "
-                + "process keeps there is reached, on Windows MXC's own; and the declared tool caches,",
+            "Beneath the policy, the operating system isolates every command an agent runs, so a command spelt past a reader of "
+                + "words still reads no credential slot, and writes none of git's code-running files, none of its pointers to another "
+                + "repository and none of the tool's state - what it writes is the work itself, whose limits are said below.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Written are the agent's writable roots - its worktree, its work directory - what git writes of a tree it writes, by "
+                + "the tree's kind: for a linked worktree its own git directory and the common directory's objects/, refs/ and logs/ "
+                + "(and Git LFS's lfs/ where there is one), never the common directory itself, where a file made - a commondir - would "
+                + "lead every git to another repository's own files; for a main checkout its .git whole, for git makes its lock files "
+                + "directly in it - so git add, commit, fetch, rm and status write the objects, the index and the refs, while in a "
+                + "linked worktree what writes the common directory itself fails: a shallow repository's fetch, a rewrite of "
+                + "packed-refs, git gc; a temporary directory of the launch's own, named by TMPDIR - on Linux the system's /tmp inside, "
+                + "so nothing another process keeps there is reached, on Windows MXC's own; and the declared tool caches,",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
             string.Join(", ", DssHarness.Core.Agents.Isolation.IsolationCaches.Declared.Select(cache => $"{cache.Variable} ({cache.Tool})"))
-                + ". The user's own caches stay read-only, for a cache is code a later build runs as it lies;",
+                + ". The user's own caches stay read-only, for a cache is code a later build runs as it lies; Cargo, Gradle and pub "
+                + "keep theirs in a home the variable moves whole, so what the user keeps there - a registry, a property, a tool "
+                + "pub activated - is not read inside,",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Moving XDG_CACHE_HOME moves what the user installed under it too: on Linux Playwright's browsers are read where they "
+                + $"are ({DssHarness.Core.Agents.Isolation.IsolationCaches.PlaywrightBrowsersVariable} at the user's ms-playwright, "
+                + "where it is there and the variable names none already), so a browser installed inside fails; everything else there "
+                + "- Hugging Face's models, pre-commit's environments - is fetched again into the isolation's own.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
             "Hidden - an empty place under bubblewrap, refused by macOS's sandbox, denied by MXC's container - are every credential "
-                + "slot of the main checkout and every Claude Code directory with ~/.claude.json beside it - the shell snapshots Claude "
-                + "Code sources read again, and on Windows a claude-code launch's own read, below. Written by nobody, inside what is "
-                + "written, are git's code-running files and its pointers to its own directories",
+                + "slot of the main checkout and every Claude Code directory - ~/.claude, the tool's own and the one the slot names for "
+                + "the claude-code client's logins, one list for a launch and for the tool's executions alike - with ~/.claude.json "
+                + "beside each, the shell snapshots Claude Code sources read again, and on Windows a claude-code launch's own read, "
+                + "below. Written by nobody, inside what is written, are git's code-running files and its pointers to its own "
+                + "directories and to other content: the hooks git runs and the common directory's hooks/ beside them, which git runs "
+                + "again once core.hooksPath is gone; the common directory's config, config.worktree and info/; its refs/replace/ and "
+                + "objects/info/, whose replacements and alternates would put other content in place of what every checkout reads; "
+                + "each linked worktree's config.worktree, commondir and gitdir; a worktree's .git file; and every git directory's "
+                + "modules/ whole - the common one's and each linked worktree's - which holds the submodules' own git directories, so "
+                + "a submodule's git fails inside. Written by nobody too are every configuration file git says it reads there (git "
+                + "config --show-origin), every file one includes whether its condition holds now or not - an onbranch: a later "
+                + "checkout makes true among them -",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -941,16 +969,28 @@ public sealed partial class HelpTests
                 + "a place moved away would take its rule with it and leave its name free to be made again, and a root put back as a "
                 + "link would lead the next launch's rules elsewhere. A launch has no isolation - which the mode below turns into a "
                 + "refusal or a notice - where its places cannot be held: git cannot say where a tree keeps its files (git 2.31 or "
-                + "newer answers), a link stands where the agent writes on the way to a guarded place, or, under bubblewrap, a guarded "
-                + "place stands on a file system that finds a name in any case - a Windows drive under /mnt - where a mount holds one "
-                + "spelling alone. Every git of this tool's own runs with no file-system monitor",
+                + $"newer answers), a main checkout's .git holds a {string.Join(" or ", DssHarness.Core.Agents.Isolation.AgentIsolation.GitPointers)} "
+                + "- a pointer to another repository's own files, which no main checkout's holds - a file git's configuration "
+                + "includes is not there inside a place the agent writes, where a command could make it (an empty file includes "
+                + "nothing), a link stands where the agent writes on the way to a guarded place, or, under bubblewrap, a guarded place "
+                + "stands on a file system that finds a name in any case - a Windows drive under /mnt - where a mount holds one "
+                + "spelling alone. Once a launch or one of the tool's executions has run under a mechanism, the tool looks in the "
+                + "trees' git directories before anything of its own goes on over them: a pointer made there while it ran, or a "
+                + "replacement a packed-refs came to name - which a main checkout's .git, written whole, could take, and every git "
+                + "started outside would follow - fails the step, the leg, the commit or the push, naming it and the remedy. Every git "
+                + "of this tool's own runs with no file-system monitor, no object replaced "
+                + $"({DssHarness.Core.Git.GitOwnSettings.NoReplaceVariable}=1) and, in a tree an isolated agent or execution works "
+                + "over - a worktree or the main checkout - with the git directories git named before it ran (GIT_DIR, "
+                + "GIT_COMMON_DIR), whatever the tree's own files say later; otherwise it reads the repository's configuration as git "
+                + "does, its filters among it, which is why every configuration file is written by nobody.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
             "the user's runtime directory whole - their service manager, message bus and agents' sockets - and the container "
                 + "engines' sockets are hidden; where the kernel has Landlock's scope (Linux 6.12 or newer) the contained step enters "
                 + "it first, so no abstract Unix socket outside is reached and no process outside signalled, and where it has not, the "
-                + "record says so.",
+                + "record says so, and every launch, in its stream, and every leg, on its line, says as it starts what is left "
+                + "reached.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1014,7 +1054,9 @@ public sealed partial class HelpTests
                 + "and what its anchors cost, or why there was none. Where it ends: the machine stays readable as the user reads it - "
                 + "their ssh keys and every credential outside the slots among it, and on macOS the login keychain through the "
                 + "system's security service - the network is theirs, and what no rule at a path reaches - a hard link made before the "
-                + "launch, another path bound to the same files - is reached.",
+                + "launch, another path bound to the same files - is reached. git's object store, and Git LFS's, are written as git "
+                + "needs them, and git's checkout reads an object as it lies without hashing it again, so a command can put other "
+                + "content under a name the store already holds, which a checkout outside then writes.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1027,15 +1069,21 @@ public sealed partial class HelpTests
         // The tool's own executions of the agents' work inside the same isolation, the codes the mode turns into its own.
         Assert.Contains(
             "is held inside it, its own profile from the leg's ground, built as a launch's is: the machine read-only; every "
-                + "credential slot of the main checkout and the tool's own Claude Code directory hidden; the tree the leg works in - "
+                + "credential slot of the main checkout and every Claude Code directory hidden; the tree the leg works in - "
                 + "the step's tree or its copy under .legs - the run's records, a sweep's workers under .mutations, a temporary "
                 + "directory of its own and the declared tool caches written,",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "one over ssh reads the user's keys as the read-only machine shows them, and under bubblewrap and macOS's sandbox a "
-                + "commit's or a push's hooks reach the one Unix socket outside that is the user's SSH agent's (SSH_AUTH_SOCK), "
-                + "wherever it stands, and no other; MXC's container is handed none. Every other git command of this tool's runs none "
+            "one over ssh reads the user's keys as the read-only machine shows them. Under bubblewrap and macOS's sandbox a push to "
+                + "a remote over ssh (ssh://, git+ssh:// or host:path, as git reads its push address), and a commit the repository "
+                + "signs with an ssh key (commit.gpgsign with gpg.format ssh), reach the one Unix socket outside that is the user's SSH "
+                + $"agent's ({DssHarness.Core.Agents.Isolation.AgentIsolation.SshAgentSocketVariable}), wherever it stands - their "
+                + "hooks with them - and no other; every other commit and push, and every leg, reaches none, so a hook reaches the "
+                + "user's SSH agent only where git's own work does; MXC's container is handed none. A commit the repository signs with "
+                + "gpg or x509 reaches no agent of the user's where its socket is hidden - in the user's runtime directory under "
+                + "bubblewrap, and every one under macOS's sandbox and MXC's container - and fails there, as does one signed with an "
+                + "ssh key under MXC. Every other git command of this tool's runs none "
                 + "of the repository's hooks - core.hooksPath pointed at the null device, set as every git of the tool's sets its own "
                 + "settings, through GIT_CONFIG_PARAMETERS - so a fold, a refresh, a rebase, a sync or a question of the tool's never "
                 + "runs the agents' work as a side effect of a checkout, an index written or a ref moved;",
@@ -1076,6 +1124,14 @@ public sealed partial class HelpTests
             $"{nameof(DssHarness.Core.Git.GitOwnSettings)}.{nameof(DssHarness.Core.Git.GitOwnSettings.Apply)}",
             nameof(DssHarness.Core.Git.GitDirectoryPins),
             nameof(DssHarness.Core.Git.GitHooks),
+            $"{nameof(DssHarness.Core.Agents.Isolation.ClaudeCodeDirectories)}.{nameof(DssHarness.Core.Agents.Isolation.ClaudeCodeDirectories.Of)}",
+            $"{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation)}.{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation.GitPointers)}",
+            $"{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation)}.{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation.IncludeTargets)}",
+            $"{nameof(DssHarness.Core.Agents.Isolation.IsolationDecision)}.{nameof(DssHarness.Core.Agents.Isolation.IsolationDecision.Afterward)}",
+            $"{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches)}.{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches.Installed)}",
+            $"{nameof(DssHarness.Core.Agents.Isolation.ExecutionGround)}.{nameof(DssHarness.Core.Agents.Isolation.ExecutionGround.ReachesSshAgent)}",
+            $"{nameof(DssHarness.Core.Git.GitSsh)}.{nameof(DssHarness.Core.Git.GitSsh.PushesOverSshAsync)}",
+            $"{nameof(DssHarness.Core.Git.GitSsh)}.{nameof(DssHarness.Core.Git.GitSsh.SignsCommitsWithSshAsync)}",
         })
         {
             Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
