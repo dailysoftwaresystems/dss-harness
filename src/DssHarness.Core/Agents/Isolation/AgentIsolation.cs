@@ -993,10 +993,11 @@ public sealed class AgentIsolation(
 
             var gitDirectory = Path.GetFullPath(gitLine.Trim());
             var common = Path.GetFullPath(commonLine.Trim());
+            var top = Path.GetFullPath(topLine.Trim());
 
             // A tree's git directories are its own only where it is its repository's top: a directory inside another's work
             // tree - a leg's copy that is no repository of its own - is answered by that one, whose git it never writes.
-            if (comparer.Equals(Real(Path.GetFullPath(topLine.Trim())), Real(tree)))
+            if (comparer.Equals(Real(top), Real(tree)))
             {
                 directories.Add((tree, gitDirectory, common));
             }
@@ -1065,10 +1066,11 @@ public sealed class AgentIsolation(
                 return GitPlaces.Not($"git could not say which configuration files it reads in '{tree}' ({configuration.FailureMessage})");
             }
 
-            var files = ConfigurationFiles(configuration.StandardOutput, tree);
+            // git moves to the top of the work tree before it reads, so a file it names relatively is named from there.
+            var files = ConfigurationFiles(configuration.StandardOutput, top);
             read.UnionWith(files);
             places.AddRange(files.Select(file => new IsolatedPath(file, Directory: false)));
-            includes.AddRange(IncludeTargets(configuration.StandardOutput, tree, host.HomeDirectory));
+            includes.AddRange(IncludeTargets(configuration.StandardOutput, top, host.HomeDirectory));
         }
 
         // A file an include names that git reads nothing from now - its condition does not hold, or it is empty - is read
@@ -1144,13 +1146,16 @@ public sealed class AgentIsolation(
     /// <summary>
     /// Every file an <c>include.path</c> or <c>includeIf.&lt;condition&gt;.path</c> of <c>git config --list --show-origin -z</c>
     /// names, whole, as git takes it whether its condition holds or not: <c>~/</c> in the user's home, a relative path
-    /// against the directory of the file that names it - itself against <paramref name="tree"/> where git names it
+    /// against the directory of the file that names it - itself against <paramref name="top"/> where git names it
     /// relatively. One under another user's home, under git's own install, or named relatively by no file is none of them.
     /// </summary>
     /// <param name="answered">What git answered.</param>
-    /// <param name="tree">The tree git was asked in.</param>
+    /// <param name="top">
+    /// The top of the work tree git was asked in, which it moves to before it reads anything: a directory below it is
+    /// answered with the repository's own configuration named from there, as <c>.git/config</c>.
+    /// </param>
     /// <param name="home">The user's home.</param>
-    public static IReadOnlyList<string> IncludeTargets(string answered, string tree, string home)
+    public static IReadOnlyList<string> IncludeTargets(string answered, string top, string home)
     {
         ArgumentNullException.ThrowIfNull(answered);
 
@@ -1167,7 +1172,7 @@ public sealed class AgentIsolation(
                 && (key == "include.path" || (key.StartsWith("includeif.", StringComparison.Ordinal) && key.EndsWith(".path", StringComparison.Ordinal)))
                 && entry[(split + 1)..] is { Length: > 0 } value)
             {
-                var from = origin.StartsWith(FileOrigin, StringComparison.Ordinal) && origin.Length > FileOrigin.Length ? Path.GetFullPath(origin[FileOrigin.Length..], tree) : null;
+                var from = origin.StartsWith(FileOrigin, StringComparison.Ordinal) && origin.Length > FileOrigin.Length ? Path.GetFullPath(origin[FileOrigin.Length..], top) : null;
 
                 string? target = value switch
                 {
@@ -1190,11 +1195,14 @@ public sealed class AgentIsolation(
 
     /// <summary>
     /// Every file <c>git config --list --show-origin -z</c> names as a source, whole: each entry's origin before its key,
-    /// <c>file:</c> and the path - against <paramref name="tree"/> where git names it relatively.
+    /// <c>file:</c> and the path - against <paramref name="top"/> where git names it relatively.
     /// </summary>
     /// <param name="answered">What git answered.</param>
-    /// <param name="tree">The tree git was asked in.</param>
-    public static IReadOnlyList<string> ConfigurationFiles(string answered, string tree)
+    /// <param name="top">
+    /// The top of the work tree git was asked in, which it moves to before it reads anything: a directory below it is
+    /// answered with the repository's own configuration named from there, as <c>.git/config</c>.
+    /// </param>
+    public static IReadOnlyList<string> ConfigurationFiles(string answered, string top)
     {
         ArgumentNullException.ThrowIfNull(answered);
 
@@ -1204,7 +1212,7 @@ public sealed class AgentIsolation(
         return [.. fields
             .Where((_, at) => at % 2 == 0)
             .Where(origin => origin.StartsWith(FileOrigin, StringComparison.Ordinal) && origin.Length > FileOrigin.Length)
-            .Select(origin => Path.GetFullPath(origin[FileOrigin.Length..], tree))
+            .Select(origin => Path.GetFullPath(origin[FileOrigin.Length..], top))
             .Distinct(StringComparer.Ordinal)];
     }
 
@@ -1383,9 +1391,10 @@ public sealed class AgentIsolation(
     /// there (<paramref name="reftable"/>), for the <c>refs/</c> of such a repository is a stub git writes no ref in - the
     /// logs - made where git has not made them yet, for it could not inside - and Git LFS's objects where there are any,
     /// never the common directory itself, where a file made would lead every git to another repository's own files (a
-    /// <c>commondir</c>), nor its other worktrees; a main checkout's git directory whole, for git makes its lock files
-    /// directly in it, which no rule at a path grants one name at a time - but its <c>commondir</c>, made naming itself,
-    /// and its <c>worktrees/</c>, which hold no write (<see cref="GitPlacesAsync"/>); what is left there that no rule holds
+    /// <c>commondir</c>), nor its other worktrees; a main checkout's git directory whole - and an agent's repository's,
+    /// which is its repository's own common directory - for git makes its lock files directly in it, which no rule at a
+    /// path grants one name at a time - but a main checkout's <c>commondir</c>, made naming itself, and its
+    /// <c>worktrees/</c>, which hold no write (<see cref="GitPlacesAsync"/>); what is left there that no rule holds
     /// is looked at once the work has run (<see cref="IsolationDecision.AfterwardAsync"/>).
     /// </summary>
     private IEnumerable<string> GitWritten((string Tree, string GitDirectory, string CommonDirectory) directory, bool reftable)

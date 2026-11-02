@@ -678,14 +678,22 @@ does; one made with `--separate-git-dir` records none, and is then the tree aske
 lists that as no linked worktree. From a linked worktree of such a checkout, nothing says which
 checkout is the main one, and the command is refused, saying how to record it.
 
-`create-worktree` records the commit a worktree was made from, under
-`refs/harness/worktree-base/<name>`, and `list-worktree` reports it. A worktree's own HEAD moves
-with every commit made in it, so after the first one nothing else says what tree the worktree
-started from, and it can only be reproduced from the moment it happened to be made. The record is
-kept under `refs/harness/` rather than among heads, tags or remotes precisely so it can never be
-mistaken for somewhere work is kept: the deletion checks below read branches, tags,
-remote-tracking refs, the newest stash and other worktrees' HEADs, and this record is none of them.
-It is removed when the worktree is, so it can never answer for a later worktree of the same name.
+`create-worktree` and `create-agent` record the commit a worktree was made from, under
+`refs/harness/worktree-base/<name>`, and `list-worktree` reports it (`WorktreeKeepalive`, the one
+owner of these refs). A worktree's own HEAD moves with every commit made in it, so after the first
+one nothing else says what tree the worktree started from, and it can only be reproduced from the
+moment it happened to be made. The record is kept under `refs/harness/` rather than among heads,
+tags or remotes precisely so it can never be mistaken for somewhere work is kept: the deletion
+checks below read branches, tags, remote-tracking refs, the newest stash and other worktrees'
+HEADs, and this record is none of them. For an agent's repository it is also what keeps the commit
+alive: the repository borrows it from the main checkout's store and holds no ref the main
+checkout's gc reads, so it is written before anything of the repository is made, and nothing is
+made where it cannot be; while rebase-agent moves the agent's base, `refs/harness/worktree-moving/<name>`
+keeps the commit it moves to, written before the move records or writes anything and gone once the
+base's ref names it. A keepalive removed by hand, or by a rewrite of the main checkout's history,
+refuses every verb that works on the agent, naming the `git update-ref` that writes it again while
+the commit is there. The records are removed when the worktree is, so they can never answer for a
+later worktree of the same name.
 
 Every git command the harness runs, and the forge's command line, which runs git itself, starts
 without any variable git reads a repository from: every name `git rev-parse --local-env-vars`
@@ -704,7 +712,10 @@ taken, and the command fails without running git.
 
 An orchestrator's agents' worktrees sit below the directory named for it,
 `<root>/<orchestrator>/<agent>`, and are made by `create-agent` with the agent's records, never by
-`create-worktree`, which makes plain worktrees only. Each is named by its address,
+`create-worktree`, which makes plain worktrees only. Each is a git repository of its own, never one
+of git's linked worktrees: a linked worktree shares the main checkout's refs and object store, so
+whatever runs in it can move the main checkout's branches, write its tags and stash, and store
+other content under an object's id, which git verifies only when it receives objects. Each is named by its address,
 `orchestrator/agent`, wherever a person reads or types it: `list-worktree` lists it so,
 `delete-worktree` takes it, and the commit it was made from is recorded at
 `refs/harness/worktree-base/<orchestrator>/<agent>`. Plain worktrees and orchestrators share the
@@ -714,8 +725,8 @@ of its own that holds worktrees below it - an orchestrator's, holding its agents
 as one, `--force` or not: deleting it would delete each of them. A worktree's submodules and nested
 repositories are its own contents, and do not make it such a directory.
 
-An agent's worktree can also be a repository of its own (`AgentRepositories`): one that git records
-nowhere, whose own `.git/config` carries the mark naming this main checkout and the agent's address
+An agent's worktree is a repository of its own (`AgentRepositories`): one that git records
+nowhere, so the main checkout's `git worktree list` holds the main checkout alone, whose own `.git/config` carries the mark naming this main checkout and the agent's address
 (`harness.mainCheckout`, `harness.agent`, read by `AgentRepositoryMark` from that file alone, never
 through the main checkout's configuration it includes), and which borrows the main checkout's
 objects. It is taken for the agent's worktree only where all three hold at the address it sits at.
@@ -725,6 +736,40 @@ a mark itself or does not lend it its objects is refused, never taken for a main
 `list-worktree` lists it by its address, its `--json` saying `"kind": "repository"` of it and
 `"kind": "worktree"` of a linked one; delete-orchestrator and `delete-worktree <orchestrator>`
 count it among the worktrees below, never as a directory git records nothing at.
+
+It is made by `git init` - no template, the files ref format and the main checkout's object format
+- never by a clone, which would copy the main checkout's refs in as remote-tracking refs that
+dangle once its branches move on and its gc prunes, add a remote, and pick the ref format itself.
+Its `objects/info/alternates` names the main checkout's object directory as git spells it, so it
+reads every object the main checkout holds and writes only into its own store; its configuration
+includes the main checkout's first - filters, line endings, merge drivers, remotes, identity and
+`core.hooksPath` are the main checkout's, live - and then holds its own keys: what `git init`
+probed of the file system, `core.worktree` where the main checkout names one, no gc, maintenance
+or commit-graph of its own, the main checkout's large-file store (`lfs.storage`, so a file git-lfs
+keeps is checked out from there, and one changed inside the isolation cannot be added), a partial
+clone's extension, and the mark. The main checkout's `shallow` and `info/sparse-checkout` are
+copied, and its HEAD is checked out detached: no ref but its HEAD, no branch left in the main
+checkout. What git itself keeps of the main checkout does not apply in it: its `.git/hooks`
+(`core.hooksPath` still does), its branches (`git branch -a` lists none), an `includeIf` of its
+configuration is weighed against the repository. A partial clone's missing objects are fetched into
+the agent's own store. Its own objects go with it, and moving the main checkout breaks it, as it
+breaks a linked worktree. A repository whose making fails part way is taken back whole, its
+directory and its keepalive, and what could not be is said.
+
+Work comes back from it as files, never as objects: agents never commit (a HEAD moved off its
+base is refused by every verb), and fold-agent lists what changed from the repository's status
+and reads each file's bytes, while the base it compares them with is read from the main checkout's
+store, and every two-change question is asked with the main checkout as the tree. So an object the
+agent stores in its own repository under another object's id - content that does not hash to its
+name, which git there reads before the borrowed one - can only make the tool misjudge the agent's
+own changes, never write into the main checkout. rebase-agent writes only the repository: the
+commit it moves to is read through the alternates, by its id.
+
+An agent's record says `"tree": "repository"` (`AgentRecord.Tree`). A record that says nothing is
+an agent an earlier version made, whose worktree is one of git's linked worktrees: it is still read,
+folded, rebased and deleted as before, and nothing converts it - deleting it and making another
+agent gives a repository of its own. A tree of the other kind than its record names is refused as
+no worktree of the agent's, nothing read; list-orchestrator's `--json` says each agent's `kind`.
 
 ### What deleting one refuses
 
@@ -1232,12 +1277,13 @@ the main tree - unless the move being finished removed it, the new name written 
 (`MovingRemoved`: the old names the agent's index no longer holds once the git checking out what the move writes first
 ends, having written it all or stopped part way). git leaves the index and the disk alike after that checkout and after
 a `git rm` of the agent's session; a removal of the move's its record missed - a move killed between git and its
-record - is refused so, costing a refusal, never a file. The record names where the move goes (`Moving`) before
-anything is written; then each
+record - is refused so, costing a refusal, never a file. The main checkout keeps the commit the move goes to alive
+(`refs/harness/worktree-moving/<orchestrator>/<agent>`, exit 20 and nothing changed where it cannot) and the record
+names where the move goes (`Moving`) before anything is written; then each
 path the move takes is asked to hold what was measured there (`RebasePlan.Held`, `AgentFold.RequireTakenAsync`), so a
 file the agent's session wrote since stops the move, exit 21, before git writes anything, never written over; then the new
 base's paths are written, HEAD and the index move (`git reset --mixed`), then the record and the worktree's base ref
-name the new base: a move that stopped part way, exit 21, is finished where it was going by running rebase-agent
+name the new base, and the move's keepalive goes: a move that stopped part way, exit 21, is finished where it was going by running rebase-agent
 again - the command its last words name, with every `--merge` and `--settled` the move was given, a merge it wrote
 merged again to the same bytes - whatever the main tree committed since, and with what it wrote held as the new base holds it, a file the old
 base lacked included - and fold-agent, delete-agent, seed-agent and refresh-agent refuse the agent until then, naming
@@ -2398,8 +2444,8 @@ answers the last option back as a line, and opens no reftable repository at all)
 `reftable/` where the repository keeps its refs there (`GitPlaces.Reftables`; its `refs/` is then a stub git writes no
 ref in), `logs/` (made where git has not) and `lfs/` where there is one, never the common directory itself, where a
 `commondir` made would lead every git to another repository's own files, so a shallow repository's fetch, a rewrite
-of `packed-refs` and `git gc` fail there; a main checkout's `.git` whole, for git makes its lock files directly in
-it, which no rule at a path grants one name at a time, but its `commondir` and its `worktrees/`, sealed below - so
+of `packed-refs` and `git gc` fail there; a main checkout's `.git` whole, and an agent's repository's, for git makes its lock files directly in
+it, which no rule at a path grants one name at a time, but a main checkout's `commondir` and its `worktrees/`, sealed below - so
 `git add`, commit and fetch write the objects, the index and the refs, while `git worktree add`, `move`, `remove` and
 `prune` and a `git gc` that expires another worktree's reflog fail there. The refs so written are the repository's
 own, every branch, tag, stash and remote-tracking ref and their reflogs; the push step sends the commit the run's

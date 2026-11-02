@@ -115,6 +115,24 @@ public sealed record AgentRecord
     /// </summary>
     public string? Worktree { get; init; }
 
+    /// <summary>What <see cref="Tree"/> holds for an agent whose worktree is a repository of its own.</summary>
+    public const string TreeRepository = Worktrees.WorktreeListing.RepositoryKind;
+
+    /// <summary>
+    /// What kind of tree its worktree is: <see cref="TreeRepository"/>, a repository of its own borrowing the main
+    /// checkout's objects, which every agent made with a worktree since is given; or, null, one of git's linked worktrees,
+    /// as an earlier version of the tool made every agent's, whose record writes no <c>tree</c>. Absent for an agent that
+    /// reads the main tree.
+    /// </summary>
+    public string? Tree { get; init; }
+
+    /// <summary>
+    /// Whether its worktree is a repository of its own: what <see cref="Tree"/> spells, read here as a fact and written
+    /// nowhere.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool OwnRepository => Tree == TreeRepository;
+
     /// <summary>
     /// The worktrees root its worktree was made under, relative to the main checkout, as the configuration named it then:
     /// where its worktree is, whatever the configuration says later. Absent for an agent that reads the main tree, which
@@ -211,6 +229,11 @@ public sealed record AgentRecord
             return $"its access is '{Access}', and an agent's is '{AccessRead}' or '{AccessWrite}'";
         }
 
+        if (Tree is not null && Tree != TreeRepository)
+        {
+            return $"its tree is '{Tree}', and an agent's is '{TreeRepository}', or none for one of git's linked worktrees";
+        }
+
         if (Reads)
         {
             // An agent that reads the main tree holds none of what a worktree is made of, and a record that says any
@@ -223,6 +246,11 @@ public sealed record AgentRecord
             if (WorktreesRoot is { } root)
             {
                 return $"it reads the main tree, and records the worktrees root '{root}'";
+            }
+
+            if (Tree is { } tree)
+            {
+                return $"it reads the main tree, and records its worktree as a '{tree}'";
             }
 
             if (Base is { } from)

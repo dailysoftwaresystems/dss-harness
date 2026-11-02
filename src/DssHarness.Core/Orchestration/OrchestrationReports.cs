@@ -284,6 +284,7 @@ public static class OrchestrationReports
             ["model"] = record.Model,
             ["createdAt"] = Moment(record.CreatedAt),
             ["worktree"] = record.Worktree,
+            ["kind"] = record.Reads ? null : record.OwnRepository ? Worktrees.WorktreeListing.RepositoryKind : Worktrees.WorktreeListing.WorktreeKind,
             ["path"] = agent.WorktreePath,
             ["worktreeExists"] = agent.WorktreeExists,
             ["baseCommit"] = record.Base,

@@ -349,35 +349,56 @@ public sealed class WorktreeService(
 
         _fileSystem.CreateDirectory(parent);
 
-        // Worktrees are always created from the main checkout, so running this from
-        // inside a worktree adds a sibling rather than nesting one.
-        string[] arguments = settings.Detach
-            ? ["worktree", "add", "--detach", path]
-            : ["worktree", "add", path];
+        string? baseCommit;
 
-        var result = await _gitClient
-            .RunAsync(layout.MainCheckoutRoot, arguments, cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!result.Succeeded)
+        if (address.IsNested)
         {
-            return WorktreeOutcome.Failed(CommandOutcome.Failed(
-                HarnessExit.CommandFailed,
-                $"git refused to create the worktree: {result.FailureMessage}"));
-        }
+            // An orchestrator's agent's worktree is a repository of its own (AgentRepositories), never one of git's linked
+            // worktrees, which share the main checkout's refs and objects with whatever runs in them. Its making keeps the
+            // commit it is made at alive first, and takes back whatever it made where it fails.
+            var made = await new AgentRepositories(_gitClient, _fileSystem, _platform)
+                .MakeAsync(layout.MainCheckoutRoot, address, path, cancellationToken)
+                .ConfigureAwait(false);
 
-        // git's exit code is not taken as proof the tree exists. A hook, a filter
-        // driver or a scanner can remove it between git's success and this line, and
-        // reporting a path that is not there sends the user somewhere unrelated.
-        if (!_fileSystem.DirectoryExists(path))
+            if (made.Failure is { } failure)
+            {
+                return WorktreeOutcome.Failed(failure);
+            }
+
+            baseCommit = made.BaseCommit;
+        }
+        else
         {
-            return WorktreeOutcome.Failed(CommandOutcome.Failed(
-                HarnessExit.CommandFailed,
-                $"git reported success but '{path}' does not exist."));
-        }
+            // Worktrees are always created from the main checkout, so running this from
+            // inside a worktree adds a sibling rather than nesting one.
+            string[] arguments = settings.Detach
+                ? ["worktree", "add", "--detach", path]
+                : ["worktree", "add", path];
 
-        var baseCommit = await RecordBaseCommitAsync(layout, worktreeName, path, cancellationToken)
-            .ConfigureAwait(false);
+            var result = await _gitClient
+                .RunAsync(layout.MainCheckoutRoot, arguments, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!result.Succeeded)
+            {
+                return WorktreeOutcome.Failed(CommandOutcome.Failed(
+                    HarnessExit.CommandFailed,
+                    $"git refused to create the worktree: {result.FailureMessage}"));
+            }
+
+            // git's exit code is not taken as proof the tree exists. A hook, a filter
+            // driver or a scanner can remove it between git's success and this line, and
+            // reporting a path that is not there sends the user somewhere unrelated.
+            if (!_fileSystem.DirectoryExists(path))
+            {
+                return WorktreeOutcome.Failed(CommandOutcome.Failed(
+                    HarnessExit.CommandFailed,
+                    $"git reported success but '{path}' does not exist."));
+            }
+
+            baseCommit = await RecordBaseCommitAsync(layout, worktreeName, path, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         var details = baseCommit is null ? new List<string> { path } : [path, $"base {ReportText.Commit(baseCommit)}"];
 

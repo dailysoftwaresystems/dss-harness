@@ -167,7 +167,7 @@ public sealed class AgentIsolationTests
         using var temp = new TempDirectory();
         using var home = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
-        var worktree = await kit.CreateAgentAsync("a1");
+        var worktree = await kit.CreateLegacyAgentAsync("a1");
         var claude = Directory.CreateDirectory(Path.Combine(home.Path, ".claude")).FullName;
         await File.WriteAllTextAsync(claude + ".json", "{}", Token);
         var work = kit.Layout.WorkDirectory("a1");
@@ -499,7 +499,7 @@ public sealed class AgentIsolationTests
         using var temp = new TempDirectory();
         using var home = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
-        var worktree = await kit.CreateAgentAsync("a1");
+        var worktree = await kit.CreateLegacyAgentAsync("a1");
         var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
         var layout = new HarnessLayout(kit.Main, kit.Main);
         var git = Path.Combine(kit.Main, ".git");
@@ -744,6 +744,32 @@ public sealed class AgentIsolationTests
         Assert.Equal(
             [Path.Combine(tree, ".git", "shared.config"), Path.Combine(tree, "team.config"), Path.Combine(home, "work.config"), whole],
             AgentIsolation.IncludeTargets(answered, tree, home));
+    }
+
+    /// <summary>
+    /// A tree that is a directory below its repository's top - a leg's copy inside an agent's repository - is answered by
+    /// git from the top, where git moves before it reads: the repository's own configuration and what it includes
+    /// relatively are named there, never below the directory asked about.
+    /// </summary>
+    [Fact]
+    public async Task GitsPlaces_OfADirectoryBelowItsRepositorysTop_AreNamedFromTheTop()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var below = Directory.CreateDirectory(Path.Combine(kit.Main, "below", "deeper")).FullName;
+        await kit.Harness.RunGitAsync(kit.Main, ["config", "include.path", "shared.config"], Token);
+        await File.WriteAllTextAsync(Path.Combine(kit.Main, ".git", "shared.config"), string.Empty, Token);
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+
+        var places = await isolation.GitPlacesAsync([below], Token);
+
+        Assert.Null(places.Unread);
+        Assert.Contains(new IsolatedPath(Path.Combine(kit.Main, ".git", "config"), Directory: false), places.Places);
+        Assert.DoesNotContain(places.Places, place => IsolationProfile.Covers(below, place.Path));
+        Assert.Contains(Path.Combine(kit.Main, ".git", "shared.config"), places.Includes);
+        Assert.DoesNotContain(places.Includes, target => IsolationProfile.Covers(below, target));
+        Assert.Empty(places.Directories);
     }
 
     /// <summary>

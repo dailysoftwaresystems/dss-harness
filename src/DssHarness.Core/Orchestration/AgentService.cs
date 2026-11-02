@@ -341,6 +341,7 @@ public sealed class AgentService(
                 Model = model,
                 CreatedAt = now,
                 Worktree = address.Name,
+                Tree = AgentRecord.TreeRepository,
                 WorktreesRoot = PathPatterns.Normalize(context.Config.Worktrees.Root),
                 Session = session,
                 State = AgentStates.Live,
@@ -1257,6 +1258,18 @@ public sealed class AgentService(
                 return stop;
             }
 
+            // The commit the move goes to is kept alive in the main checkout before anything is recorded or written: an agent's
+            // repository borrows it from that store, and the main tree's branch can move past it while the move runs. Kept
+            // beside the base's keepalive, so the commit the worktree stands on is kept by one or the other at every moment.
+            if (await WorktreeKeepalive.WriteMovingAsync(_gitClient, main, record.Worktree!, to, CancellationToken.None).ConfigureAwait(false) is { } unkept)
+            {
+                return CommandOutcome.Failed(
+                    HarnessExit.CommandFailed,
+                    $"The base of {Lower(Agent(record))} was not moved: the commit it would move to, {OrchestrationReports.Base(to)}, could not be kept alive in "
+                    + $"the main checkout as '{WorktreeKeepalive.MovingRef(record.Worktree!)}': {unkept.TrimEnd('.')}. Nothing was changed.",
+                    [recordLine]);
+            }
+
             // Never interrupted from here. Where the move goes is recorded first, then what the new base brings is written,
             // then HEAD and the index move, then the record names the new base: stopped anywhere, its record says where it
             // was going and its worktree stands on one of the two commits, so running it again finishes it there - and every
@@ -1319,9 +1332,12 @@ public sealed class AgentService(
 
             var details = new List<string>(RebaseLines(plan, applied: true));
 
-            if (await WorktreeKeepalive.WriteBaseAsync(_gitClient, main, record.Worktree!, to, CancellationToken.None).ConfigureAwait(false) is { } unrecorded)
+            // Once its record names the new base, the main checkout keeps that commit as the base and the move's keepalive goes.
+            if (await WorktreeKeepalive.SettleAsync(_gitClient, main, record.Worktree!, to, CancellationToken.None).ConfigureAwait(false) is { } unsettled)
             {
-                details.Add($"its base is recorded in its record, and could not be in git's record of the worktree: {unrecorded.TrimEnd('.')}");
+                details.Add(
+                    $"its base is recorded in its record, and the main checkout's keepalives of it could not be settled: {unsettled.TrimEnd('.')}; "
+                    + $"'git update-ref {WorktreeKeepalive.BaseRef(record.Worktree!)} {to}' and 'git update-ref -d {WorktreeKeepalive.MovingRef(record.Worktree!)}' settle them");
             }
 
             if (to != head)
@@ -1502,9 +1518,22 @@ public sealed class AgentService(
         try
         {
             // Where HEAD and its base part says which comes first; a commit after the base that the main tree's history holds
-            // is the main tree's, put there by hand, where one it does not hold was made inside the agent.
-            parted = await _gitClient.MergeBaseAsync(main, head, [record.Base!], cancellationToken).ConfigureAwait(false);
-            inMain = parted == record.Base && await _gitClient.MergeBaseAsync(main, head, ["HEAD"], cancellationToken).ConfigureAwait(false) == head;
+            // is the main tree's, put there by hand, where one it does not hold was made inside the agent. Asked in the
+            // agent's own tree, which reads every object of the main checkout's through its alternates and holds what its own
+            // store made - a commit made inside a repository of its own reaches no store of the main checkout's - with the
+            // main tree's HEAD named by its id, for a tree of its own holds no ref of the main checkout's.
+            var mainHead = await _gitClient.ResolveCommitAsync(main, "HEAD", cancellationToken).ConfigureAwait(false);
+
+            if (mainHead is null)
+            {
+                return HeadMoved.Refusing(CommandOutcome.Failed(
+                    HarnessExit.CommandFailed,
+                    $"{Agent(record)}'s HEAD is {at}, and its base is {based}, and how its HEAD came off its base - moved by hand, or a commit made "
+                        + "inside it - cannot be told: the main checkout's HEAD names no commit. Nothing was changed."));
+            }
+
+            parted = await _gitClient.MergeBaseAsync(path, head, [record.Base!], cancellationToken).ConfigureAwait(false);
+            inMain = parted == record.Base && await _gitClient.MergeBaseAsync(path, head, [mainHead], cancellationToken).ConfigureAwait(false) == head;
         }
         catch (HarnessException ex)
         {
@@ -2141,7 +2170,7 @@ public sealed class AgentService(
 
                 try
                 {
-                    stamp = WorktreeStamp.Of(_fileSystem, target.Standing.AdministrativeDirectory!);
+                    stamp = WorktreeStamp.Of(_fileSystem, target.Standing.AdministrativeDirectory!, record.OwnRepository);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -2153,7 +2182,7 @@ public sealed class AgentService(
                 if (stamp is null)
                 {
                     return CommandOutcome.Refused(
-                        $"{was}. git names no '{WorktreeStamp.FileName}' in the git directory of '{path}', so whether it is the worktree closed then "
+                        $"{was}. git names no '{WorktreeStamp.FileOf(record.OwnRepository)}' in the git directory of '{path}', so whether it is the worktree closed then "
                         + $"or one made there since cannot be told. Nothing of it was read or removed: once what it holds is copied out, {removal} "
                         + $"removes it, and {again} then finishes this agent.");
                 }
@@ -2362,8 +2391,15 @@ public sealed class AgentService(
             lines.AddRange((removal.Outcome.Details ?? []).Select(detail => $"  {detail}"));
         }
 
+        // A worktree gone before delete-worktree was asked leaves the main checkout keeping the commit it stood on alive for
+        // nothing: forgotten here, as delete-worktree forgets it with the worktree. One that cannot be is what is left.
+        var unforgotten = removal is null
+            ? await WorktreeKeepalive.ForgetAsync(_gitClient, target.Context.Layout.MainCheckoutRoot, target.Address.Name, CancellationToken.None).ConfigureAwait(false)
+            : [];
+
         // The exit code alone is not proof.
         var left = await LeftAsync(target).ConfigureAwait(false);
+        left.AddRange(unforgotten.Select(kept => $"the main checkout still keeps the commit it stood on alive at '{kept.Ref}', which could not be removed: {kept.Why.TrimEnd('.')}"));
 
         if (removal is { Succeeded: false } && left.Count == 0)
         {
@@ -3008,7 +3044,8 @@ public sealed class AgentService(
     {
         try
         {
-            return (WorktreeStamp.Of(_fileSystem, target.Standing.AdministrativeDirectory!) ?? throw new IOException($"git names no '{WorktreeStamp.FileName}' in its git directory"), null);
+            return (WorktreeStamp.Of(_fileSystem, target.Standing.AdministrativeDirectory!, target.Record.OwnRepository)
+                ?? throw new IOException($"git names no '{WorktreeStamp.FileOf(target.Record.OwnRepository)}' in its git directory"), null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -3288,7 +3325,52 @@ public sealed class AgentService(
             return new AgentAt(CommandOutcome.Refused($"{Agent(record)} is not whole - making it stopped part way: {MakingUnfinished(record, seed: null)}."));
         }
 
+        if (record.OwnRepository && await UnkeptAsync(context, record, cancellationToken).ConfigureAwait(false) is { } unkept)
+        {
+            return new AgentAt(CommandOutcome.Refused(unkept));
+        }
+
         return found with { Path = path };
+    }
+
+    /// <summary>
+    /// Why the commit an agent's repository stands on is not kept alive in the main checkout's store, which the repository
+    /// borrows it from; null where it is: a keepalive ref - the base's, or a move's under way - names it there.
+    /// </summary>
+    /// <remarks>
+    /// Kept by nothing, the commit goes with the main checkout's next prune once its branch has moved on, and every question
+    /// asked of the agent's repository then answers "bad object" - never another commit's content. One removed by hand, or
+    /// by a rewrite of the main checkout's history, is said with the way back while the commit is still there.
+    /// </remarks>
+    private async Task<string?> UnkeptAsync(HarnessContext context, AgentRecord record, CancellationToken cancellationToken)
+    {
+        var main = context.Layout.MainCheckoutRoot;
+        var name = record.Worktree!;
+        var reference = WorktreeKeepalive.BaseRef(name);
+
+        try
+        {
+            if (await WorktreeKeepalive.ReadBaseAsync(_gitClient, main, name, cancellationToken).ConfigureAwait(false) == record.Base
+                || await WorktreeKeepalive.ReadMovingAsync(_gitClient, main, name, cancellationToken).ConfigureAwait(false) == record.Base)
+            {
+                return null;
+            }
+
+            var there = await _gitClient.ResolveCommitAsync(main, record.Base!, cancellationToken).ConfigureAwait(false) is not null;
+
+            return $"{Agent(record)}: the main checkout keeps nothing alive at '{reference}' for {OrchestrationReports.Base(record.Base!)}, the commit its "
+                + "repository stands on and borrows from the main checkout's store. Nothing was read, written or removed: "
+                + (there
+                    ? $"'git -C {ReportText.Printable(main)} update-ref {reference} {record.Base}' keeps it again, while it is there"
+                    : $"the commit is gone from the main checkout's store, so {OrchestrationReports.Line(WorktreeService.DeleteCommand, name, "--force")} removes its "
+                        + $"repository, once what it holds is copied out, and {OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name, "--apply --discard-uncommitted")} then drops the agent")
+                + ".";
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+        {
+            return $"{Agent(record)}: whether the main checkout keeps alive the commit its repository stands on, {OrchestrationReports.Base(record.Base!)}, "
+                + $"cannot be told: {ex.Message.TrimEnd('.')}. Nothing was read, written or removed.";
+        }
     }
 
     /// <summary>
@@ -3340,11 +3422,16 @@ public sealed class AgentService(
         }
 
         // A husk is never read: a directory with no .git of its own is answered for by the main checkout that contains it,
-        // whose HEAD and uncommitted changes would be read as the agent's.
-        return identity.Membership switch
+        // whose HEAD and uncommitted changes would be read as the agent's. A tree is the agent's only as the kind its record
+        // names: a repository of its own where the record says so, one of git's linked worktrees where an earlier version's
+        // record says nothing - one of the other kind there is not the tree the agent was made with.
+        return (identity.Membership, record.OwnRepository) switch
         {
-            WorktreeMembership.OfThisRepository => new WorktreeStanding(Standing.Registered, identity.AdministrativeDirectory, null),
-            WorktreeMembership.OfAnotherRepository => new WorktreeStanding(Standing.Foreign, null, "it is a repository of its own"),
+            (WorktreeMembership.AgentRepository, true) or (WorktreeMembership.OfThisRepository, false) => new WorktreeStanding(Standing.Registered, identity.AdministrativeDirectory, null),
+            (WorktreeMembership.OfThisRepository, true) => new WorktreeStanding(Standing.Foreign, null, "it is one of git's linked worktrees, and its record says it was made a repository of its own"),
+            (WorktreeMembership.AgentRepository, false) => new WorktreeStanding(Standing.Foreign, null, "it is a repository of its own, and its record says it was made one of git's linked worktrees"),
+            (WorktreeMembership.OfAnotherRepository, true) => new WorktreeStanding(Standing.Foreign, null, "it is a repository whose own configuration names no agent of this main checkout at its address, or which does not borrow this main checkout's objects"),
+            (WorktreeMembership.OfAnotherRepository, false) => new WorktreeStanding(Standing.Foreign, null, "it is a repository of its own"),
             _ when WorktreeInspector.HoldsOwnGit(_fileSystem, path) => new WorktreeStanding(Standing.Unreadable, null, "its .git is there, and git cannot read the worktree from it"),
             _ => new WorktreeStanding(Standing.Husk, null, "it holds no .git of its own, and git answers for it with the main checkout"),
         };

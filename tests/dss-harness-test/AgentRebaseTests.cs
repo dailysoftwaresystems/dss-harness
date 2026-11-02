@@ -627,27 +627,6 @@ public sealed class AgentRebaseTests
         Assert.Contains("0 inherited path(s) left out; 0 path(s) are its own:", (await kit.FoldAsync("ag", apply: false)).Details!);
     }
 
-    /// <summary>A move whose record in git cannot be written still stands, its record naming the new base, and says so.</summary>
-    [Fact]
-    public async Task ABaseRefThatCannotBeWritten_IsSaid_AndTheMoveStands()
-    {
-        using var temp = new TempDirectory();
-        var kit = await OrchestrationKit.PrepareAsync(temp);
-        await kit.CreateAgentAsync("ag");
-        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
-        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
-        var git = new InterceptingGitClient(kit.Harness.GitClient)
-        {
-            InsteadOfRun = arguments => arguments[0] == "update-ref" ? new Core.Git.GitCommandResult(1, string.Empty, "fatal: cannot lock ref") : null,
-        };
-
-        var applied = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
-
-        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
-        Assert.Contains("its base is recorded in its record, and could not be in git's record of the worktree: fatal: cannot lock ref", applied.Details!);
-        Assert.Equal(await HeadAsync(kit.Main), kit.Record("ag").Base);
-    }
-
     /// <summary>An agent whose base is the main tree's HEAD already is said to be, and nothing is written.</summary>
     [Fact]
     public async Task AnAgentOnTheMainTreesHead_IsSaidToBe()

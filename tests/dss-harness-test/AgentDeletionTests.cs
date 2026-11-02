@@ -201,7 +201,7 @@ public sealed class AgentDeletionTests
         OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
         var agents = kit.Harness.Agents(new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")), kit.Harness.AnchorRegistryService);
         Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token)).ExitCode);
-        File.Delete(Path.Combine(worktree, ".git"));
+        Directory.Delete(Path.Combine(worktree, ".git"), recursive: true);
         var kept = Directory.GetDirectories(kit.Layout.EvidenceDirectory("ag")).Length;
 
         var dry = await kit.DeleteAsync("ag", apply: false);
@@ -273,7 +273,7 @@ public sealed class AgentDeletionTests
     }
 
     /// <summary>
-    /// A live agent whose worktree's identity cannot be read - git names no commondir in its git directory - fails its
+    /// A live agent whose worktree's identity cannot be read - its repository's alternates file cannot be read - fails its
     /// deletion before anything is written, and its dry run fails the same, in the apply's words: which git worktree it is
     /// is what an --apply reads first, and a worktree whose identity cannot be read is never closed.
     /// </summary>
@@ -284,8 +284,8 @@ public sealed class AgentDeletionTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
-        var commondir = Path.Combine(Directory.GetDirectories(Path.Combine(kit.Main, ".git", "worktrees")).Single(), "commondir");
-        var agents = kit.Harness.Agents(new UnknowableFileSystem(kit.Harness.FileSystem, commondir), kit.Harness.AnchorRegistryService);
+        var stamp = Path.Combine(worktree, ".git", WorktreeStamp.RepositoryFileName);
+        var agents = kit.Harness.Agents(new UnknowableFileSystem(kit.Harness.FileSystem, stamp), kit.Harness.AnchorRegistryService);
 
         var dry = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token);
         var failed = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
@@ -310,8 +310,8 @@ public sealed class AgentDeletionTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
-        var commondir = Path.Combine(Directory.GetDirectories(Path.Combine(kit.Main, ".git", "worktrees")).Single(), "commondir");
-        var agents = kit.Harness.Agents(new UnknowableFileSystem(kit.Harness.FileSystem, commondir), kit.Harness.AnchorRegistryService);
+        var stamp = Path.Combine(worktree, ".git", WorktreeStamp.RepositoryFileName);
+        var agents = kit.Harness.Agents(new UnknowableFileSystem(kit.Harness.FileSystem, stamp), kit.Harness.AnchorRegistryService);
 
         await using var held = await HoldTheWorktreeAsync(kit, worktree);
 
@@ -1328,7 +1328,7 @@ public sealed class AgentDeletionTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
         await kit.Harness.InitializeGitRepositoryAsync(Directory.CreateDirectory(Path.Combine(worktree, "nested")).FullName, Token);
-        File.Delete(Path.Combine(worktree, ".git"));
+        Directory.Delete(Path.Combine(worktree, ".git"), recursive: true);
 
         var removed = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: true, deleteEvidence: true, cancellationToken: Token);
 
